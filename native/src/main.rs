@@ -8,6 +8,7 @@ mod folder_index;
 mod format;
 mod icons;
 mod scanner;
+mod sftp;
 #[cfg(windows)]
 mod shell_clipboard;
 #[cfg(windows)]

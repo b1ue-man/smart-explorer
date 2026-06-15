@@ -228,10 +228,7 @@ pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
     let r = root.trim();
     let lower = r.to_ascii_lowercase();
     if lower.starts_with("sftp://") {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "SFTP-Backend ist in dieser Version noch nicht verfügbar",
-        ))
+        Ok(Arc::new(crate::sftp::backend_from_url(r)?))
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

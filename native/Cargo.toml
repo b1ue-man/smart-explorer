@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -20,6 +20,14 @@ trash = "5"
 # webpki-roots — so it cross-compiles on windows-gnu without NASM/CMake and
 # needs no OS cert store. See docs/GOTCHAS.md (aws-lc-rs trap).
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# SFTP backend (sftp.rs). russh's DEFAULT crypto is aws-lc-rs (needs NASM/CMake,
+# breaks on GNU) — so default-features=false + ring. See docs/GOTCHAS.md.
+russh = { version = "0.61", default-features = false, features = ["ring", "flate2"] }
+russh-sftp = "2"
+# Multi-thread runtime: a worker thread drives russh's background connection
+# task continuously, so the blocking Backend bridge (rt.block_on per op) is
+# robust without an always-running dedicated thread. See sftp.rs.
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "io-util", "time"] }
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
