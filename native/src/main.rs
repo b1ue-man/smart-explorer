@@ -9,6 +9,7 @@ mod folder_index;
 mod format;
 mod icons;
 mod net;
+mod rscan;
 mod scanner;
 mod sftp;
 #[cfg(windows)]
