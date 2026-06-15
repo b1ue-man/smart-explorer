@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.5.0**. Distribution: per-user NSIS installer + self-update from a
+release: **0.5.1**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -108,7 +108,14 @@ The remote layer (roadmap points 1–5) is COMPLETE.
   module + a Connect protocol; OAuth ones additionally need a registered app
   client id + a loopback/PKCE consent flow (no per-provider app credentials are
   bundled, so they're scaffolding, not shipped).
-- Local↔remote sync (rclone-bisync-style; one-way first).
+- ✅ **Local↔remote sync — one-way (0.5.1)** `sync.rs`: a mirror engine over the
+  `Backend` interface, so any pairing works (local→SFTP, WebDAV→local, …). Copy
+  when missing / size-differs / src-newer; optional `delete_extra` (mirror) and
+  `dry_run`; streaming copy with explicit flush so remote upload errors surface.
+  3 host tests (mirror+update, delete orphans, dry-run) run Local↔Local end to
+  end. Minimal UI: sidebar "⇅ Spiegeln nach…" mirrors the current location
+  (local or remote) into a chosen local folder. Bidirectional/bisync is a
+  follow-up on the same engine.
 - Win11 main-menu context entry (needs a signed package — see GOTCHAS).
 
 ## Build & release

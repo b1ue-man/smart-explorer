@@ -299,6 +299,10 @@ pub struct App {
     connecting: bool,
     connect_form: crate::connect::ConnectForm,
     connect_rx: Option<Receiver<crate::connect::ConnectResult>>,
+
+    // One-way mirror of the current location to a chosen folder.
+    sync_rx: Option<Receiver<crate::sync::SyncMsg>>,
+    sync_running: bool,
 }
 
 #[cfg(windows)]
@@ -477,6 +481,9 @@ impl App {
             connecting: false,
             connect_form: crate::connect::ConnectForm::default(),
             connect_rx: None,
+
+            sync_rx: None,
+            sync_running: false,
         }
     }
 
@@ -1554,6 +1561,62 @@ impl App {
             }
             crate::connect::ConnectResult::Err(e) => {
                 self.error_msg = Some(format!("Verbindung fehlgeschlagen: {}", e));
+            }
+        }
+    }
+
+    /// One-way mirror the current location (local or remote) into `dest_local`.
+    fn start_mirror(&mut self, dest_local: String) {
+        if self.root_path.is_empty() || self.sync_running {
+            return;
+        }
+        let src: crate::vfs::BackendHandle = match &self.remote {
+            Some(rs) => rs.backend.clone(),
+            None => Arc::new(crate::vfs::LocalBackend::new(&self.root_path)),
+        };
+        let dst: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
+        let (tx, rx) = unbounded();
+        crate::sync::start_sync(
+            src,
+            self.root_path.clone(),
+            dst,
+            dest_local,
+            crate::sync::SyncOptions {
+                delete_extra: false,
+                dry_run: false,
+            },
+            tx,
+        );
+        self.sync_rx = Some(rx);
+        self.sync_running = true;
+        self.notice = Some(("⇅ Spiegelung gestartet…".to_string(), std::time::Instant::now()));
+    }
+
+    fn drain_sync(&mut self) {
+        let msg = match self.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(m) => m,
+            None => return,
+        };
+        match msg {
+            crate::sync::SyncMsg::Progress(_) => {}
+            crate::sync::SyncMsg::Done(r) => {
+                self.sync_rx = None;
+                self.sync_running = false;
+                if r.stats.errors > 0 {
+                    self.error_msg = Some(format!(
+                        "Spiegelung: {} kopiert, {} Fehler",
+                        r.stats.copied, r.stats.errors
+                    ));
+                }
+                self.notice = Some((
+                    format!(
+                        "✓ Spiegelung fertig: {} kopiert, {} übersprungen ({} MB)",
+                        r.stats.copied,
+                        r.stats.skipped,
+                        r.stats.bytes / 1_048_576
+                    ),
+                    std::time::Instant::now(),
+                ));
             }
         }
     }
@@ -3113,6 +3176,24 @@ impl App {
             self.connect_saved(&c);
         }
 
+        // One-way mirror of the current location to a local folder (backup).
+        if !self.root_path.is_empty() {
+            if self.sync_running {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Spiegelung läuft…");
+                });
+            } else if ui
+                .small_button("⇅ Spiegeln nach…")
+                .on_hover_text("Aktuellen Ordner (lokal oder remote) einseitig in einen lokalen Zielordner spiegeln")
+                .clicked()
+            {
+                if let Some(dest) = rfd::FileDialog::new().pick_folder() {
+                    self.start_mirror(dest.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("UPDATE").small().color(Color32::from_gray(140)));
@@ -4392,6 +4473,7 @@ impl eframe::App for App {
         self.drain_clip_prepare();
         self.drain_update();
         self.drain_connect();
+        self.drain_sync();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
