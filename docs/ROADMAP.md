@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.4**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.5**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -78,7 +78,10 @@ To-do, in order:
      the same `ScanMessage`s as the local scanner over the same channel, via
      `vfs::Backend::list_dir`. Hot local scanner untouched. 2 host tests walk a
      real tree through `LocalBackend`.
-   - 5b — credential + saved-connection store (`keyring`).
+   - ✅ **5b (0.4.5) `creds.rs`** — secrets in the OS keyring (Windows Credential
+     Manager via `keyring windows-native`; in-memory off-Windows), connection
+     metadata (protocol/host/port/user/auth/root/label, no secret) in a TSV file
+     in appdata. `SavedConnection` + `to_target()` URL/UNC builder. 6 host tests.
    - 5c — Connect dialog + app wiring (navigation routes remote roots through
      `rscan`, reusing the live backend; watcher disabled for remote).
 

@@ -3,6 +3,7 @@
 
 mod app;
 mod copy;
+mod creds;
 mod filter;
 mod ftp;
 mod folder_index;
