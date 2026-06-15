@@ -50,6 +50,10 @@ jobs:
       - name: Release build
         run: cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer
 
+      - name: Build context-menu COM DLL
+        working-directory: native/explorer-command
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
       - name: Stage update feed
         run: |
           mkdir -p out

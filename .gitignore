@@ -1,5 +1,6 @@
 # Rust build output (huge, regenerable)
 native/target/
+native/explorer-command/target/
 
 # Built binaries & generated installer artifacts
 *.exe

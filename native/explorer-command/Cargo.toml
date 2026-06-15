@@ -1,0 +1,32 @@
+[package]
+name = "smart_explorer_command"
+version = "0.1.0"
+edition = "2021"
+description = "IExplorerCommand handler for the Smart Explorer Windows 11 modern context menu"
+
+# A separate crate from the main app (which is a bin) so this builds an isolated
+# in-proc COM DLL. The app does not depend on it; it is packaged + signed
+# separately. See ../../docs/WIN11_CONTEXT_MENU.md.
+[lib]
+name = "smart_explorer_command"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The `#[implement]` macro expands to `::windows_core::…`, so it must be a direct
+# dependency by that name (same as the main crate).
+windows-core = "0.58"
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
