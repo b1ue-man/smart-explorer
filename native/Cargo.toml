@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -16,6 +16,11 @@ globset = "0.4"
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 trash = "5"
+# Blocking HTTP client for the git/HTTPS update feed (updater.rs). `tls` pulls
+# rustls backed by **ring** (verified: no aws-lc-sys in the tree) + bundled
+# webpki-roots — so it cross-compiles on windows-gnu without NASM/CMake and
+# needs no OS cert store. See docs/GOTCHAS.md (aws-lc-rs trap).
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

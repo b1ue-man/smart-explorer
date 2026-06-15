@@ -24,9 +24,12 @@ cargo build --release
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 # Feed aktualisieren (EXE zuerst, version.txt zuletzt — Clients sehen die neue
-# Version erst, wenn die EXE schon vollstaendig da ist)
+# Version erst, wenn die EXE schon vollstaendig da ist). Dateiname
+# smart_explorer.exe (ohne Leerzeichen) ist identisch zum Git/HTTPS-Feed unter
+# release-native\update-feed, der ins Repo committet und ueber
+# raw.githubusercontent.com ausgeliefert wird ("Git als Update-Quelle").
 New-Item -ItemType Directory -Force $Feed | Out-Null
-Copy-Item "target\release\smart_explorer.exe" "$Feed\Smart Explorer.exe" -Force
+Copy-Item "target\release\smart_explorer.exe" "$Feed\smart_explorer.exe" -Force
 Set-Content "$Feed\version.txt" $version -Encoding ascii
 Write-Host "Feed aktualisiert: $Feed (v$version)"
 

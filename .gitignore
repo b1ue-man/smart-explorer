@@ -1,12 +1,18 @@
 # Rust build output (huge, regenerable)
 native/target/
 
-# Built binaries & generated installer/feed artifacts
+# Built binaries & generated installer artifacts
 *.exe
 release-native/Smart Explorer*.exe
-release-native/update-feed/
 
 # OS / editor cruft
 Thumbs.db
 .DS_Store
 *.swp
+
+# EXCEPTION: the git update feed IS committed — it is the update location.
+# Installs pull release-native/update-feed/{version.txt,smart_explorer.exe}
+# over raw.githubusercontent.com. (Negation must come after the *.exe rule.)
+!release-native/update-feed/
+!release-native/update-feed/version.txt
+!release-native/update-feed/smart_explorer.exe

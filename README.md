@@ -36,11 +36,24 @@ cd native && cargo build --release
 ## Release veröffentlichen
 
 1. `version` in `native/Cargo.toml` erhöhen
-2. `cd native; .\publish-update.ps1` (PowerShell)
+2. Feed bauen + aktualisieren:
+   - Windows: `cd native; .\publish-update.ps1` (baut zusätzlich den Installer)
+   - Linux/macOS/WSL (Cross-Compile): `native/publish-feed.sh`
+3. `release-native/update-feed/` (`version.txt` + `smart_explorer.exe`) committen
+   und pushen — damit ist die neue Version über den Git-Feed live.
 
 Installierte Instanzen prüfen den Feed bei jedem Start und updaten sich
-automatisch (EXE-Tausch + Neustart). Feed-Pfad ist in der App änderbar
-(Sidebar → UPDATE) oder in `%APPDATA%\smart_explorer\update_source.txt`.
+automatisch (EXE-Tausch + Neustart).
+
+**Update-Quelle (Feed)** — einstellbar in der App (Sidebar → UPDATE) oder in
+`%APPDATA%\smart_explorer\update_source.txt`. Erlaubt ist entweder:
+
+- ein **Ordner** (lokal oder `\\server\share`-Netzlaufwerk), oder
+- eine **https-URL** bzw. ein **GitHub-Repo-Link** (z. B.
+  `https://github.com/b1ue-man/smart-explorer`) — dann lädt die App
+  `version.txt` + `smart_explorer.exe` direkt aus `release-native/update-feed/`
+  über `raw.githubusercontent.com`. So lässt sich **das Git als Update-Quelle**
+  setzen; jeder Push veröffentlicht ein Update.
 
 ## Daten der App
 
