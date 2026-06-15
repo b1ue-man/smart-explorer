@@ -32,6 +32,7 @@ pub enum Protocol {
     Sftp,
     Ftp,
     Ftps,
+    Webdav,
     Share,
 }
 
@@ -41,6 +42,7 @@ impl Protocol {
             Protocol::Sftp => "sftp",
             Protocol::Ftp => "ftp",
             Protocol::Ftps => "ftps",
+            Protocol::Webdav => "webdav",
             Protocol::Share => "share",
         }
     }
@@ -49,6 +51,7 @@ impl Protocol {
             "sftp" => Some(Protocol::Sftp),
             "ftp" => Some(Protocol::Ftp),
             "ftps" => Some(Protocol::Ftps),
+            "webdav" => Some(Protocol::Webdav),
             "share" => Some(Protocol::Share),
             _ => None,
         }
@@ -57,6 +60,7 @@ impl Protocol {
         match self {
             Protocol::Sftp => 22,
             Protocol::Ftp | Protocol::Ftps => 21,
+            Protocol::Webdav => 443,
             Protocol::Share => 0,
         }
     }

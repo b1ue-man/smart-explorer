@@ -4046,6 +4046,7 @@ impl App {
                         Protocol::Sftp => "SFTP",
                         Protocol::Ftp => "FTP",
                         Protocol::Ftps => "FTPS",
+                        Protocol::Webdav => "WebDAV (HTTPS)",
                         Protocol::Share => "Netzlaufwerk (UNC)",
                     })
                     .show_ui(ui, |ui| {
@@ -4053,6 +4054,7 @@ impl App {
                             (Protocol::Sftp, "SFTP"),
                             (Protocol::Ftp, "FTP"),
                             (Protocol::Ftps, "FTPS"),
+                            (Protocol::Webdav, "WebDAV (HTTPS)"),
                             (Protocol::Share, "Netzlaufwerk (UNC)"),
                         ] {
                             if ui.selectable_label(f.protocol == p, lbl).clicked() {
