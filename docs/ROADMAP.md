@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.2**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.3**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -65,9 +65,13 @@ To-do, in order:
    (`retr_as_buffer` / `put_file` on flush+drop). Standalone module — edits are
    `mod ftp;` + one `backend_for` arm. 6 host unit tests (URL parse + ring TLS
    config build). Browsing wires up in the connect-UI step (5).
-4. **Network drives**: UNC `\\server\share` already works through `LocalBackend`
-   (std::fs); add authenticated connect-by-address (WNetAddConnection2W). Local
-   network *discovery* is unreliable on Win11 — see plan.
+4. ✅ **Network drives** (`net.rs`) — 0.4.3. `\\server\share` UNC + mapped drives
+   already browse through `LocalBackend` (std::fs); added authenticated
+   connect-by-address via `WNetAddConnection2W` (mpr.dll), released on drop
+   (`NetConnection`). Windows-only FFI is cfg-gated with a non-Windows stub, so
+   the path helpers (`is_unc`, `share_root`) are host-tested (4 tests) and the
+   FFI is cross-compiled. Discovery deliberately omitted (unreliable on Win11 —
+   GOTCHAS). Standalone module (`mod net;`); wires into the connect UI (5).
 5. **Connect UI** (protocol/host/port/user/auth) + credential storage
    (`keyring` → Windows Credential Manager).
 

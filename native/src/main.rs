@@ -8,6 +8,7 @@ mod ftp;
 mod folder_index;
 mod format;
 mod icons;
+mod net;
 mod scanner;
 mod sftp;
 #[cfg(windows)]
