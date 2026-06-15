@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.5**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.6**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -82,8 +82,19 @@ To-do, in order:
      Manager via `keyring windows-native`; in-memory off-Windows), connection
      metadata (protocol/host/port/user/auth/root/label, no secret) in a TSV file
      in appdata. `SavedConnection` + `to_target()` URL/UNC builder. 6 host tests.
-   - 5c — Connect dialog + app wiring (navigation routes remote roots through
-     `rscan`, reusing the live backend; watcher disabled for remote).
+   - ✅ **5c (0.4.6) Connect dialog + app wiring** — `connect.rs` builds the right
+     backend off the UI thread from a `ConnectForm` (or a saved connection +
+     keyring secret). app.rs gained a sidebar **VERBINDEN** section (new/​saved
+     connections, disconnect) and a Connect dialog. Navigation routing is a
+     single central edit in `start_scan_navigated`: remote sessions walk via
+     `rscan`, local/UNC paths keep the std::fs scanner — decided by path style
+     (`is_local_style`), so no per-handler edits. Shares authenticate via
+     `net::NetConnection` (kept alive) and browse the UNC locally. This is the
+     first build where the remote stack is reachable (not LTO-stripped).
+     **Remote browsing is live; remote write-ops (copy/delete/rename of remote
+     entries) are a follow-up — they still go through std::fs.** 4 connect tests.
+
+The remote layer (roadmap points 1–5) is COMPLETE.
 
 ## Later (not planned in detail)
 
