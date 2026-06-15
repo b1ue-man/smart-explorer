@@ -4,6 +4,7 @@
 mod app;
 mod copy;
 mod filter;
+mod ftp;
 mod folder_index;
 mod format;
 mod icons;

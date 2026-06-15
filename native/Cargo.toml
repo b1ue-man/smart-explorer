@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -28,6 +28,14 @@ russh-sftp = "2"
 # task continuously, so the blocking Backend bridge (rt.block_on per op) is
 # robust without an always-running dedicated thread. See sftp.rs.
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "io-util", "time"] }
+# FTP/FTPS backend (ftp.rs). Blocking FtpStream (no runtime). rustls (NOT
+# native-tls) to avoid schannel/OpenSSL FFI on GNU. See docs/GOTCHAS.md.
+suppaftp = { version = "6", default-features = false, features = ["rustls"] }
+# Explicit ring-backed rustls ClientConfig for FTPS (no aws-lc); webpki-roots
+# bundles the trust store (no OS cert dependency). Shared 0.23 build with
+# ureq/russh/suppaftp.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
