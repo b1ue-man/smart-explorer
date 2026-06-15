@@ -1,8 +1,9 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.3.8**. Distribution: per-user NSIS installer + self-update from a
-feed (see [`native/README.md`](../native/README.md)).
+release: **0.3.9**. Distribution: per-user NSIS installer + self-update from a
+feed — a local/UNC folder **or an http(s)/git URL** (see
+[`native/README.md`](../native/README.md)).
 
 ## Done (shipped)
 
@@ -18,6 +19,12 @@ feed (see [`native/README.md`](../native/README.md)).
   see GOTCHAS). Native shell context menu (`shell_menu.rs`).
 - Self-update from a feed with restart prompt **and rollback** to previously
   installed versions (`updater.rs`); versions archived to `<install>/versions/`.
+- **Git/HTTPS update source** (0.3.9): the update feed can be an http(s) URL or a
+  GitHub repo link — the app self-updates straight from the repo's
+  `release-native/update-feed/` over `raw.githubusercontent.com`. Same
+  `version.txt` + `smart_explorer.exe` layout as the folder feed; transport is
+  the only difference (`Feed` enum in `updater.rs`, `ureq`/rustls-ring). A
+  `.github/workflows/build.yml` cross-compiles the Windows exe on every push.
 - Shell integration (`shell_register.rs`): per-user, reversible
   "Open in Smart Explorer" context-menu verb + launch-path argument.
 

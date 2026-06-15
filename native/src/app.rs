@@ -426,9 +426,7 @@ impl App {
 
             update_rx: Some(urx),
             update_ready: None,
-            update_feed_draft: crate::updater::update_source()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            update_feed_draft: crate::updater::update_source_str().unwrap_or_default(),
             pending_initial_path: initial_path,
             #[cfg(windows)]
             integration_ctx_menu: crate::shell_register::context_menu_enabled(),
@@ -2982,11 +2980,14 @@ impl App {
         );
         ui.add(
             egui::TextEdit::singleline(&mut self.update_feed_draft)
-                .hint_text("Update-Feed-Ordner…")
+                .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
                 .desired_width(f32::INFINITY),
         )
         .on_hover_text(
-            "Ordner mit version.txt und Smart Explorer.exe — lokal oder Netzlaufwerk. Beim Start wird automatisch geprüft.",
+            "Quelle mit version.txt und smart_explorer.exe. Entweder ein Ordner \
+             (lokal/Netzlaufwerk) ODER eine https-URL bzw. ein GitHub-Repo-Link \
+             (z. B. https://github.com/b1ue-man/smart-explorer) — dann updatet \
+             sich die App direkt aus dem Git. Beim Start wird automatisch geprüft.",
         );
         ui.horizontal(|ui| {
             if ui.small_button("Speichern").clicked() {

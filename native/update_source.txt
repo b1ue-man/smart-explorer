@@ -1,1 +1,1 @@
-C:\Users\Silas\Desktop\fun-projects\smartExplorer\release-native\update-feed
+https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed

@@ -1,8 +1,12 @@
-// Self-update against a local (or UNC) update feed.
+// Self-update against an update feed. The feed is EITHER a folder (local disk
+// or `\\server\share` UNC) OR an http(s) URL — e.g. the project's own git repo
+// served over raw.githubusercontent.com ("set the git as update location":
+// point the source at `release-native/update-feed/` in the repo and every push
+// publishes an update).
 //
-// Feed layout (a plain folder):
-//   <feed>/version.txt          — e.g. "0.2.1" (first line)
-//   <feed>/Smart Explorer.exe   — the new binary
+// Feed layout (identical for both transports):
+//   <feed>/version.txt          — e.g. "0.3.9" (first line)
+//   <feed>/smart_explorer.exe   — the new binary (also "Smart Explorer.exe")
 //
 // Feed location resolution, first hit wins:
 //   1. %APPDATA%\smart_explorer\update_source.txt   (user override, editable in the UI)
@@ -19,7 +23,8 @@
 // On the next start `cleanup_old_binaries` deletes the *_old.exe leftover.
 
 use crossbeam_channel::Sender;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub enum UpdateMsg {
     /// Feed reachable, no newer version. Only sent for manual checks.
@@ -49,28 +54,151 @@ fn last_applied_path() -> PathBuf {
     appdata_dir().join("last_applied_update.txt")
 }
 
-/// Resolve the configured update feed folder, if any.
-pub fn update_source() -> Option<PathBuf> {
-    let read_feed = |p: &PathBuf| -> Option<PathBuf> {
+/// The raw configured update source string (folder path OR http(s) URL),
+/// first hit wins. Used by the UI text field and the transport classifier.
+pub fn update_source_str() -> Option<String> {
+    let read = |p: &PathBuf| -> Option<String> {
         let s = std::fs::read_to_string(p).ok()?;
-        let line = s.lines().next()?.trim();
+        let line = s.lines().next()?.trim().to_string();
         if line.is_empty() {
             None
         } else {
-            Some(PathBuf::from(line))
+            Some(line)
         }
     };
-    if let Some(p) = read_feed(&override_path()) {
-        return Some(p);
+    if let Some(s) = read(&override_path()) {
+        return Some(s);
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if let Some(p) = read_feed(&dir.join("update_source.txt")) {
-                return Some(p);
+            if let Some(s) = read(&dir.join("update_source.txt")) {
+                return Some(s);
             }
         }
     }
     None
+}
+
+// ─── Update transport: local folder feed OR http(s)/git feed ──────────────
+//
+// Both layouts are identical (`<base>/version.txt` + `<base>/smart_explorer.exe`);
+// only the transport differs, so all the version-compare / rename-dance /
+// rollback machinery below is shared. Adding a transport here never touches the
+// update flow in `check_and_apply`.
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
+
+enum Feed {
+    Local(PathBuf),
+    Http(String), // base URL, no trailing slash
+}
+
+impl Feed {
+    fn display(&self) -> String {
+        match self {
+            Feed::Local(p) => p.display().to_string(),
+            Feed::Http(u) => u.clone(),
+        }
+    }
+
+    /// First non-empty line of the feed's `version.txt`.
+    fn read_version(&self) -> Result<String, String> {
+        let raw = match self {
+            Feed::Local(dir) => std::fs::read_to_string(dir.join("version.txt"))
+                .map_err(|e| format!("Update-Feed nicht lesbar ({}): {}", dir.display(), e))?,
+            Feed::Http(base) => http_get_string(&format!("{base}/version.txt"))?,
+        };
+        Ok(raw.lines().next().unwrap_or("").trim().to_string())
+    }
+
+    /// Obtain the new binary as a local file ready for `swap_in`. HTTP feeds
+    /// download to a temp file in appdata.
+    fn fetch_exe(&self) -> Result<PathBuf, String> {
+        match self {
+            Feed::Local(dir) => ["Smart Explorer.exe", "smart_explorer.exe"]
+                .iter()
+                .map(|n| dir.join(n))
+                .find(|p| p.exists())
+                .ok_or_else(|| format!("Keine EXE im Update-Feed {} gefunden", dir.display())),
+            Feed::Http(base) => {
+                let dest = appdata_dir().join("update_download.exe");
+                let _ = std::fs::remove_file(&dest);
+                let mut last_err = String::new();
+                for name in ["smart_explorer.exe", "Smart%20Explorer.exe"] {
+                    match http_download(&format!("{base}/{name}"), &dest) {
+                        Ok(()) => return Ok(dest),
+                        Err(e) => last_err = e,
+                    }
+                }
+                Err(format!("Download der EXE fehlgeschlagen: {}", last_err))
+            }
+        }
+    }
+
+    fn is_http(&self) -> bool {
+        matches!(self, Feed::Http(_))
+    }
+}
+
+/// Translate the configured source string into a transport.
+fn classify_feed(raw: &str) -> Feed {
+    let s = raw.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Feed::Http(normalize_http_feed(s))
+    } else {
+        Feed::Local(PathBuf::from(s))
+    }
+}
+
+/// Accept a bare GitHub repo URL as shorthand for its raw update-feed folder,
+/// so a user can paste the repository link as the update location:
+///   https://github.com/<owner>/<repo>            → the `main` branch feed
+///   https://github.com/<owner>/<repo>/tree/<ref> → that ref's feed
+/// Anything else is used verbatim (trailing slash trimmed).
+fn normalize_http_feed(url: &str) -> String {
+    const FEED_SUBDIR: &str = "release-native/update-feed";
+    let trimmed = url.trim().trim_end_matches('/');
+    if let Some(rest) = trimmed
+        .strip_prefix("https://github.com/")
+        .or_else(|| trimmed.strip_prefix("http://github.com/"))
+    {
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            let owner = parts[0];
+            let repo = parts[1].trim_end_matches(".git");
+            let branch = if parts.len() >= 4 && parts[2] == "tree" {
+                parts[3]
+            } else {
+                "main"
+            };
+            return format!(
+                "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{FEED_SUBDIR}"
+            );
+        }
+    }
+    trimmed.to_string()
+}
+
+fn http_get_string(url: &str) -> Result<String, String> {
+    let resp = ureq::get(url)
+        .timeout(HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format!("HTTP {}: {}", url, e))?;
+    resp.into_string()
+        .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
+}
+
+fn http_download(url: &str, dest: &Path) -> Result<(), String> {
+    let resp = ureq::get(url)
+        .timeout(HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format!("HTTP {}: {}", url, e))?;
+    let mut reader = resp.into_reader();
+    let mut file = std::fs::File::create(dest)
+        .map_err(|e| format!("Temp-Datei {}: {}", dest.display(), e))?;
+    std::io::copy(&mut reader, &mut file).map_err(|e| format!("Download {}: {}", url, e))?;
+    Ok(())
 }
 
 /// Persist a user-chosen feed folder (empty string removes the override).
@@ -310,20 +438,15 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
     if !manual && is_auto_update_paused() {
         return Ok(None);
     }
-    let feed = match update_source() {
-        Some(f) => f,
+    let raw = match update_source_str() {
+        Some(s) => s,
         None => {
             return Ok(if manual { Some(UpdateMsg::NoFeed) } else { None });
         }
     };
+    let feed = classify_feed(&raw);
 
-    let feed_version = std::fs::read_to_string(feed.join("version.txt"))
-        .map_err(|e| format!("Update-Feed nicht lesbar ({}): {}", feed.display(), e))?
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let feed_version = feed.read_version()?;
     if feed_version.is_empty() {
         return Err(format!("version.txt im Feed {} ist leer", feed.display()));
     }
@@ -349,18 +472,17 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
         }
     }
 
-    // Locate the new binary in the feed
-    let candidates = ["Smart Explorer.exe", "smart_explorer.exe"];
-    let new_exe = candidates
-        .iter()
-        .map(|n| feed.join(n))
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("Keine EXE im Update-Feed {} gefunden", feed.display()))?;
-
-    // Archive the version we're replacing so it can be rolled back to, then
-    // swap in the new binary.
+    // Obtain the new binary (downloaded for http feeds), archive the version
+    // we're replacing so it can be rolled back to, then swap it in.
+    let new_exe = feed.fetch_exe()?;
     archive_binary(current);
-    let cur_exe = swap_in(&new_exe)?;
+    let swap_result = swap_in(&new_exe);
+    // A downloaded temp binary is consumed by swap_in (copied to pending);
+    // remove it regardless of outcome.
+    if feed.is_http() {
+        let _ = std::fs::remove_file(&new_exe);
+    }
+    let cur_exe = swap_result?;
 
     // We're now on the latest — clear any rollback pin and record the version.
     resume_auto_update();
@@ -392,6 +514,37 @@ mod tests {
         for v in mk {
             let _ = std::fs::remove_file(vd.join(format!("Smart Explorer {}.exe", v)));
         }
+    }
+
+    #[test]
+    fn github_repo_url_becomes_raw_feed() {
+        assert_eq!(
+            normalize_http_feed("https://github.com/b1ue-man/smart-explorer"),
+            "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed"
+        );
+        // trailing slash + .git suffix tolerated
+        assert_eq!(
+            normalize_http_feed("https://github.com/b1ue-man/smart-explorer.git/"),
+            "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed"
+        );
+        // explicit branch via /tree/<ref>
+        assert_eq!(
+            normalize_http_feed("https://github.com/o/r/tree/dev"),
+            "https://raw.githubusercontent.com/o/r/dev/release-native/update-feed"
+        );
+        // a non-github URL is passed through verbatim (trailing slash trimmed)
+        assert_eq!(
+            normalize_http_feed("https://example.com/feed/"),
+            "https://example.com/feed"
+        );
+    }
+
+    #[test]
+    fn classify_distinguishes_transports() {
+        assert!(matches!(classify_feed("https://example.com/f"), Feed::Http(_)));
+        assert!(matches!(classify_feed("http://host/f"), Feed::Http(_)));
+        assert!(matches!(classify_feed(r"C:\Users\x\feed"), Feed::Local(_)));
+        assert!(matches!(classify_feed(r"\\server\share"), Feed::Local(_)));
     }
 
     #[test]

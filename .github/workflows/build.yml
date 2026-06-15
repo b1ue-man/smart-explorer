@@ -1,0 +1,66 @@
+name: build
+
+# Builds the Windows release on every push using the SAME cross-compile path
+# that is verified locally (ubuntu + mingw-w64 + x86_64-pc-windows-gnu). This is
+# the "build a release for each commit" gate. On a version tag (v*) it also
+# publishes a GitHub Release carrying the exe, so installs configured to update
+# from the git can pull it.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-gnu:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64 linker
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Check (windows target)
+        run: cargo check --target x86_64-pc-windows-gnu
+
+      - name: Compile test harness (windows target)
+        run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
+
+      - name: Release build
+        run: cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer
+
+      - name: Stage update feed
+        run: |
+          mkdir -p out
+          cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
+          sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1 > out/version.txt
+          echo "Built version $(cat out/version.txt)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-explorer-windows
+          path: native/out
+
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            native/out/smart_explorer.exe
+            native/out/version.txt
