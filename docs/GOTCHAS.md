@@ -67,7 +67,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   self-signed cert means asking every user to trust it (non-starter / needs
   admin). Not shippable for an unsigned per-user app without buying a
   code-signing cert (e.g. Azure Trusted Signing). The Rust COM DLL itself is
-  feasible; the signing+packaging is the wall. Deferred.
+  feasible; the signing+packaging is the wall. **Update (0.5.2):** the COM half
+  is now BUILT — `native/explorer-command/` is a cdylib that implements
+  `IExplorerCommand` + `IClassFactory` and exports `DllGetClassObject` /
+  `DllCanUnloadNow`; it compiles + links to a real PE DLL on windows-gnu. The
+  sparse-package `AppxManifest.xml` is written too. Everything up to **signing**
+  is done; signing remains the wall. See `docs/WIN11_CONTEXT_MENU.md`.
 
 ## Updater
 

@@ -116,7 +116,17 @@ The remote layer (roadmap points 1–5) is COMPLETE.
   end. Minimal UI: sidebar "⇅ Spiegeln nach…" mirrors the current location
   (local or remote) into a chosen local folder. Bidirectional/bisync is a
   follow-up on the same engine.
-- Win11 main-menu context entry (needs a signed package — see GOTCHAS).
+- ✅ **Win11 main-menu context entry — done to the signing wall (0.5.2)**
+  `native/explorer-command/`: a standalone cdylib implementing `IExplorerCommand`
+  + `IClassFactory`, exporting the COM in-proc server entry points; compiles +
+  links to a real PE DLL on windows-gnu (verified exports). Sparse-package
+  `AppxManifest.xml` wires the CLSID into the modern menu (Directory / Background
+  / Drive). The only remaining step is signing the package with a machine-trusted
+  cert — the documented, external wall (GOTCHAS). Full build/sign/install steps
+  in `docs/WIN11_CONTEXT_MENU.md`.
+
+**The full roadmap — points 1–5 and all three "Later" items — is complete (every
+item shipped, or done to its documented external blocker).**
 
 ## Build & release
 
