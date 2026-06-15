@@ -1,0 +1,12 @@
+# Rust build output (huge, regenerable)
+native/target/
+
+# Built binaries & generated installer/feed artifacts
+*.exe
+release-native/Smart Explorer*.exe
+release-native/update-feed/
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+*.swp

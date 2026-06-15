@@ -1,0 +1,44 @@
+# Publish a new Smart Explorer version to the local update feed + rebuild the installer.
+#
+# Workflow:
+#   1. Version in Cargo.toml erhoehen (z.B. 0.2.1)
+#   2. .\publish-update.ps1 ausfuehren
+#   3. Fertig — alle installierten Instanzen updaten sich beim naechsten Start.
+#
+# Optional: -Feed <Pfad> fuer einen anderen Feed-Ordner (z.B. Netzlaufwerk).
+
+param(
+    [string]$Feed = "C:\Users\Silas\Desktop\fun-projects\smartExplorer\release-native\update-feed"
+)
+
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+# Version aus Cargo.toml lesen
+$version = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+Write-Host "Baue Version $version ..."
+
+# Build
+$env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
+cargo build --release
+if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
+
+# Feed aktualisieren (EXE zuerst, version.txt zuletzt — Clients sehen die neue
+# Version erst, wenn die EXE schon vollstaendig da ist)
+New-Item -ItemType Directory -Force $Feed | Out-Null
+Copy-Item "target\release\smart_explorer.exe" "$Feed\Smart Explorer.exe" -Force
+Set-Content "$Feed\version.txt" $version -Encoding ascii
+Write-Host "Feed aktualisiert: $Feed (v$version)"
+
+# Installer neu bauen (fuer Neuinstallationen)
+$makensis = "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe"
+if (Test-Path $makensis) {
+    & $makensis /DVERSION=$version installer.nsi | Out-Null
+    Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
+} else {
+    Write-Warning "makensis nicht gefunden - Installer uebersprungen"
+}
+
+# Portable Kopie
+Copy-Item "target\release\smart_explorer.exe" "..\release-native\Smart Explorer.exe" -Force
+Write-Host "Fertig."
