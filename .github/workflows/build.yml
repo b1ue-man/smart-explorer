@@ -2,9 +2,10 @@ name: build
 
 # Builds the Windows release on every push using the SAME cross-compile path
 # that is verified locally (ubuntu + mingw-w64 + x86_64-pc-windows-gnu). This is
-# the "build a release for each commit" gate. On a version tag (v*) it also
-# publishes a GitHub Release carrying the exe, so installs configured to update
-# from the git can pull it.
+# the "build a release for each commit" gate. It publishes a GitHub Release
+# (carrying the exe + the context-menu DLL) on a version tag (v*) OR on a manual
+# `workflow_dispatch` — the latter creates the tag at the dispatched commit, so
+# releases can be cut even where the git host doesn't accept tag pushes.
 
 on:
   push:
@@ -55,21 +56,40 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Stage update feed
+        id: stage
         run: |
           mkdir -p out
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
-          sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1 > out/version.txt
-          echo "Built version $(cat out/version.txt)"
+          cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
+          ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
+          printf '%s\n' "$ver" > out/version.txt
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Built version $ver"
 
       - uses: actions/upload-artifact@v4
         with:
           name: smart-explorer-windows
           path: native/out
 
-      - name: Publish GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
+          # On a manual dispatch (no tag ref), create the tag at this commit.
+          tag_name: v${{ steps.stage.outputs.version }}
+          name: Smart Explorer ${{ steps.stage.outputs.version }}
+          body: |
+            Self-contained Windows x64 build (no installer needed).
+
+            - `smart_explorer.exe` — the app (also the self-update payload; the
+              app pulls it from `release-native/update-feed/` over the git feed).
+            - `smart_explorer_command.dll` — the Win11 modern context-menu
+              IExplorerCommand handler (needs signing to register; see
+              `docs/WIN11_CONTEXT_MENU.md`).
+
+            Built by CI via the verified ubuntu + mingw-w64 +
+            `x86_64-pc-windows-gnu` cross-compile.
           files: |
             native/out/smart_explorer.exe
+            native/out/smart_explorer_command.dll
             native/out/version.txt
