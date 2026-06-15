@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.3.9**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.0**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -41,8 +41,13 @@ Target spec (from the project owner):
   but the interface must be designed so they can be added later.
 
 To-do, in order:
-1. **`vfs.rs` — the `Backend` interface + `LocalBackend`** (refactor of today's
-   `std::fs` code in `scanner.rs`/`copy.rs`). The linchpin. Effort M.
+1. ✅ **`vfs.rs` — the `Backend` interface + `LocalBackend`** (0.4.0). Shipped as
+   a self-contained, host-tested module: `Scheme`, `VfsMeta`, the blocking
+   `Backend` trait, `LocalBackend` (mirrors today's `std::fs`), `backend_for()`
+   dispatch, `is_remote_root()`. Kept isolated from the hot local scan/copy loops
+   on purpose (one-line `mod vfs;` edit); the remote scan/copy paths route
+   through it as each backend lands. `FileEntry.scheme` is added when the first
+   remote backend is wired (step 2) so it can be tested against a real backend.
 2. **SFTP backend** (`sftp.rs`) via `russh` + `russh-sftp`, password + keyfile.
 3. **FTP/FTPS backend** (`ftp.rs`) via `suppaftp`.
 4. **Network drives**: UNC `\\server\share` already works through `LocalBackend`

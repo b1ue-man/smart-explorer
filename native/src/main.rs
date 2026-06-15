@@ -16,6 +16,7 @@ mod shell_register;
 mod shell_menu;
 mod types;
 mod updater;
+mod vfs;
 #[cfg(windows)]
 mod virtual_clipboard;
 
