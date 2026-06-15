@@ -29,6 +29,7 @@ pub enum Scheme {
     Local,
     Sftp,
     Ftp,
+    Webdav,
 }
 
 /// Backend-neutral directory entry / file metadata. Fields a remote backend

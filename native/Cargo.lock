@@ -3526,6 +3526,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
 name = "russh"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3973,8 +3979,9 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smart_explorer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
+ "base64",
  "chrono",
  "crossbeam-channel",
  "eframe",
@@ -3985,6 +3992,7 @@ dependencies = [
  "rayon",
  "regex",
  "rfd",
+ "roxmltree",
  "russh",
  "russh-sftp",
  "rustls",

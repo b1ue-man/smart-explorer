@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.6**. Distribution: per-user NSIS installer + self-update from a
+release: **0.5.0**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -96,10 +96,18 @@ To-do, in order:
 
 The remote layer (roadmap points 1–5) is COMPLETE.
 
-## Later (not planned in detail)
+## Later (not planned in detail) — in progress
 
-- Cloud backends (Google Drive / OneDrive / Dropbox / S3 / WebDAV) on the same
-  `Backend` interface — likely via `opendal` + `oauth2` loopback/PKCE.
+- ✅ **Cloud backends — WebDAV (0.5.0)** `webdav.rs`: full `vfs::Backend` over the
+  verified ring-rustls `ureq` (no opendal/reqwest → avoids the aws-lc/native-tls
+  trap on windows-gnu). PROPFIND (Depth 1) listings parsed with `roxmltree`;
+  GET/PUT/DELETE/MKCOL/MOVE/COPY. HTTP Basic auth, added as a Connect-dialog
+  protocol. Covers Nextcloud/ownCloud/any WebDAV. 3 host tests (multistatus
+  parse, path encode/decode, HTTP-date). **S3 and OAuth providers (Google Drive
+  / OneDrive / Dropbox) slot onto the same interface the same way** — a new
+  module + a Connect protocol; OAuth ones additionally need a registered app
+  client id + a loopback/PKCE consent flow (no per-provider app credentials are
+  bundled, so they're scaffolding, not shipped).
 - Local↔remote sync (rclone-bisync-style; one-way first).
 - Win11 main-menu context entry (needs a signed package — see GOTCHAS).
 

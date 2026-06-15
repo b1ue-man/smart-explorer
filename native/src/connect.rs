@@ -280,6 +280,34 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                 Err(e) => ConnectResult::Err(e.to_string()),
             }
         }
+        Protocol::Webdav => {
+            let password = secret.clone().unwrap_or_else(|| form.password.clone());
+            let root = norm_root(&form.root);
+            let cfg = crate::webdav::WebdavConfig {
+                https: true,
+                host: form.host.trim().to_string(),
+                port,
+                user: form.user.trim().to_string(),
+                password: password.clone(),
+                root: root.clone(),
+            };
+            match crate::webdav::WebdavBackend::connect(cfg) {
+                Ok(be) => {
+                    persist(&form, port, Some(&password));
+                    let label = label_for(&form, port);
+                    ConnectResult::Ok(Connected {
+                        remote: Some(RemoteState {
+                            backend: Arc::new(be),
+                            label: label.clone(),
+                        }),
+                        net: None,
+                        target: root,
+                        label,
+                    })
+                }
+                Err(e) => ConnectResult::Err(e.to_string()),
+            }
+        }
         Protocol::Share => {
             let unc = form.unc.trim().to_string();
             let password = secret.clone().unwrap_or_else(|| form.password.clone());

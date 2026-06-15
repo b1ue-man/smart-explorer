@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.4.6"
+version = "0.5.0"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -40,6 +40,11 @@ webpki-roots = "0.26"
 # (windows-native, pure FFI). No platform backend off-Windows → in-memory mock,
 # so the crate still builds + tests on the host.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# WebDAV cloud backend (webdav.rs): WebDAV is HTTP, so it reuses the verified
+# ring-rustls ureq above. roxmltree parses PROPFIND multistatus XML (tiny, pure
+# Rust); base64 for HTTP Basic auth (already in the tree via rustls).
+roxmltree = "0.20"
+base64 = "0.22"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
