@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -36,6 +36,10 @@ suppaftp = { version = "6", default-features = false, features = ["rustls"] }
 # ureq/russh/suppaftp.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "0.26"
+# Secret storage for saved connections (creds.rs). Windows → Credential Manager
+# (windows-native, pure FFI). No platform backend off-Windows → in-memory mock,
+# so the crate still builds + tests on the host.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
