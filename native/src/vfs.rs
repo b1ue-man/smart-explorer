@@ -230,10 +230,7 @@ pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
     if lower.starts_with("sftp://") {
         Ok(Arc::new(crate::sftp::backend_from_url(r)?))
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "FTP-Backend ist in dieser Version noch nicht verfügbar",
-        ))
+        Ok(Arc::new(crate::ftp::backend_from_url(r)?))
     } else {
         Ok(Arc::new(LocalBackend::new(r)))
     }
