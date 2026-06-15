@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.3**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.4**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -73,7 +73,14 @@ To-do, in order:
    FFI is cross-compiled. Discovery deliberately omitted (unreliable on Win11 —
    GOTCHAS). Standalone module (`mod net;`); wires into the connect UI (5).
 5. **Connect UI** (protocol/host/port/user/auth) + credential storage
-   (`keyring` → Windows Credential Manager).
+   (`keyring` → Windows Credential Manager). Built in three isolated releases:
+   - ✅ **5a (0.4.4) `rscan.rs`** — backend-driven walk for remote roots; streams
+     the same `ScanMessage`s as the local scanner over the same channel, via
+     `vfs::Backend::list_dir`. Hot local scanner untouched. 2 host tests walk a
+     real tree through `LocalBackend`.
+   - 5b — credential + saved-connection store (`keyring`).
+   - 5c — Connect dialog + app wiring (navigation routes remote roots through
+     `rscan`, reusing the live backend; watcher disabled for remote).
 
 ## Later (not planned in detail)
 
