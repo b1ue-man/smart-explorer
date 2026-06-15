@@ -39,6 +39,11 @@ jobs:
       - name: Check (windows target)
         run: cargo check --target x86_64-pc-windows-gnu
 
+      - name: Unit tests (host)
+        # The crate is host-buildable (rfd xdg-portal on non-Windows), so the
+        # full unit-test suite runs here — no display needed.
+        run: cargo test --bin smart_explorer
+
       - name: Compile test harness (windows target)
         run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
 
