@@ -303,6 +303,9 @@ pub struct App {
     // One-way mirror of the current location to a chosen folder.
     sync_rx: Option<Receiver<crate::sync::SyncMsg>>,
     sync_running: bool,
+
+    /// Cached saved-connection list (avoids reading connections.txt per frame).
+    saved_connections: Vec<crate::creds::SavedConnection>,
 }
 
 #[cfg(windows)]
@@ -484,6 +487,8 @@ impl App {
 
             sync_rx: None,
             sync_running: false,
+
+            saved_connections: crate::creds::load_connections(),
         }
     }
 
@@ -834,7 +839,6 @@ impl App {
         self.band_press = None;
         self.band_active = false;
         self.root_path = root.to_string_lossy().replace('\\', "/");
-        self.add_recent(&self.root_path.clone());
 
         let (tx, rx) = unbounded();
         let max_depth = if self.recursive { None } else { Some(1) };
@@ -846,6 +850,10 @@ impl App {
         let stay_remote = self.remote.is_some() && !is_local_style(&self.root_path);
         if !stay_remote {
             self.remote = None;
+            // "Recent" is for local quick-access; remote locations live in the
+            // saved-connections list instead (a remote path would fail a later
+            // local scan).
+            self.add_recent(&self.root_path.clone());
         }
         let handle = match self.remote.as_ref() {
             Some(rs) => crate::rscan::start_scan_backend(
@@ -1552,6 +1560,9 @@ impl App {
                     self.net_conn = Some(nc);
                 }
                 self.show_connect = false;
+                // A "save" during connect wrote connections.txt on the worker
+                // thread; refresh the cached list so it shows immediately.
+                self.saved_connections = crate::creds::load_connections();
                 self.notice = Some((
                     format!("✓ Verbunden: {}", c.label),
                     std::time::Instant::now(),
@@ -3149,11 +3160,10 @@ impl App {
             self.connect_form = crate::connect::ConnectForm::default();
             self.show_connect = true;
         }
-        // Saved connections — click to connect, × to forget.
-        let saved = crate::creds::load_connections();
+        // Saved connections — click to connect, × to forget (cached list).
         let mut to_remove: Option<String> = None;
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
-        for c in &saved {
+        for c in &self.saved_connections {
             ui.horizontal(|ui| {
                 if ui
                     .add(egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small()).frame(false))
@@ -3171,6 +3181,7 @@ impl App {
         }
         if let Some(acc) = to_remove {
             let _ = crate::creds::remove_connection(&acc);
+            self.saved_connections = crate::creds::load_connections();
         }
         if let Some(c) = to_connect {
             self.connect_saved(&c);
