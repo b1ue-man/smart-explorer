@@ -3,7 +3,15 @@
 Schneller nativer Datei-Explorer für Windows (Rust + egui). Filtert Dateien/Ordner
 über die gesamte Ordnertiefe (Name/Regex/Glob, Größe, Datum via Kalender, Typ),
 kopiert gefiltert mit Strukturerhalt (auch über die Windows-Zwischenablage in den
-Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs, Shell-Kontextmenü.
+Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextmenü.
+
+## 📋 Für neue Entwickler — zuerst lesen
+
+| Doc | Inhalt |
+|---|---|
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status, To-dos, was als Nächstes kommt |
+| [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Vollständiger, verifizierter Implementierungsplan für den Netzwerk-Layer (Vfs-Interface + SFTP/FTP/Netzlaufwerke) |
+| [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | Verifizierte Sackgassen & Fallen — **vor dem „Verbessern" lesen** |
 
 ## Struktur
 
