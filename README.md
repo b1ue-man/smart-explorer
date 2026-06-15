@@ -5,12 +5,19 @@ Schneller nativer Datei-Explorer für Windows (Rust + egui). Filtert Dateien/Ord
 kopiert gefiltert mit Strukturerhalt (auch über die Windows-Zwischenablage in den
 Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextmenü.
 
+**Remote/Cloud (ab 0.4.x):** durchsucht **SFTP**, **FTP/FTPS**, **WebDAV**
+(Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
+einheitliche `Backend`-Schnittstelle (Sidebar → **VERBINDEN**); Zugangsdaten im
+Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
+den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
+
 ## 📋 Für neue Entwickler — zuerst lesen
 
 | Doc | Inhalt |
 |---|---|
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status, To-dos, was als Nächstes kommt |
-| [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Vollständiger, verifizierter Implementierungsplan für den Netzwerk-Layer (Vfs-Interface + SFTP/FTP/Netzlaufwerke) |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status — **Roadmap vollständig** (Remote-Layer, Cloud/WebDAV, Sync, Win11-Menü) |
+| [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Verifizierter Implementierungsplan für den Netzwerk-Layer (umgesetzt: `vfs.rs` + `sftp.rs`/`ftp.rs`/`webdav.rs`/`net.rs`/`rscan.rs`/`connect.rs`/`creds.rs`/`sync.rs`) |
+| [`docs/WIN11_CONTEXT_MENU.md`](docs/WIN11_CONTEXT_MENU.md) | Win11-Modern-Kontextmenü: COM-DLL (`explorer-command/`) gebaut; offen ist nur die Signierung |
 | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | Verifizierte Sackgassen & Fallen — **vor dem „Verbessern" lesen** |
 
 ## Struktur
@@ -18,8 +25,10 @@ Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextm
 | Pfad | Inhalt |
 |---|---|
 | `native/` | Rust-Quellcode (das aktuelle Programm) |
+| `native/explorer-command/` | Separate COM-DLL (`IExplorerCommand`) für das Win11-Modern-Kontextmenü |
 | `native/installer.nsi` | NSIS-Installer-Skript |
 | `native/publish-update.ps1` | Neue Version bauen + in Update-Feed veröffentlichen |
+| `native/publish-feed.sh` | Cross-Compile-Build + Git-Feed aktualisieren (Linux/macOS/WSL) |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
 | `release-native/update-feed/` | Update-Feed: `version.txt` + `Smart Explorer.exe` |
