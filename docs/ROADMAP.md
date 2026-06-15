@@ -1,7 +1,7 @@
 # Smart Explorer — Roadmap & Status
 
 Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.4.0**. Distribution: per-user NSIS installer + self-update from a
+release: **0.4.1**. Distribution: per-user NSIS installer + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
 [`native/README.md`](../native/README.md)).
 
@@ -48,7 +48,15 @@ To-do, in order:
    on purpose (one-line `mod vfs;` edit); the remote scan/copy paths route
    through it as each backend lands. `FileEntry.scheme` is added when the first
    remote backend is wired (step 2) so it can be tested against a real backend.
-2. **SFTP backend** (`sftp.rs`) via `russh` + `russh-sftp`, password + keyfile.
+2. ✅ **SFTP backend** (`sftp.rs`) — 0.4.1. `russh 0.61` + `russh-sftp 2.3`
+   (ring crypto, verified no aws-lc; cross-compiles windows-gnu), password +
+   keyfile auth, host-key TOFU (`known_hosts_sftp.txt`). Async↔sync bridge via a
+   private multi-thread tokio runtime + `block_on` per op; `File` adapted to
+   `std::io::{Read,Write}`. Implements `vfs::Backend`; `backend_for` routes
+   `sftp://`. Standalone module — only existing-file edits are `mod sftp;` and
+   one `backend_for` arm. URL parsing + refusal-without-credentials unit-tested
+   (5 tests); live network exercised by the API (no sshd in the build sandbox).
+   Browsing wires up in the connect-UI step (5).
 3. **FTP/FTPS backend** (`ftp.rs`) via `suppaftp`.
 4. **Network drives**: UNC `\\server\share` already works through `LocalBackend`
    (std::fs); add authenticated connect-by-address (WNetAddConnection2W). Local
