@@ -287,6 +287,18 @@ pub struct App {
     /// polls the OS key state and signals over this channel, waking the UI.
     clip_key_rx: Option<crossbeam_channel::Receiver<ClipKey>>,
     clip_key_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+
+    // ─── Remote connections (SFTP/FTP/network shares) ───────────────────
+    /// Active SFTP/FTP session; while set, navigation walks the backend via
+    /// `rscan` instead of std::fs. `None` for local (incl. UNC shares).
+    remote: Option<crate::connect::RemoteState>,
+    /// Live authenticated network-share connection, kept alive while browsing
+    /// the UNC path (which is read locally through std::fs).
+    net_conn: Option<crate::net::NetConnection>,
+    show_connect: bool,
+    connecting: bool,
+    connect_form: crate::connect::ConnectForm,
+    connect_rx: Option<Receiver<crate::connect::ConnectResult>>,
 }
 
 #[cfg(windows)]
@@ -299,6 +311,17 @@ enum ClipKey {
 #[cfg(not(windows))]
 #[derive(Clone, Copy)]
 enum ClipKey {}
+
+/// Whether a forward-slash path is a LOCAL path (drive letter `X:/…` or a UNC
+/// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
+/// drive prefix, so this distinguishes "stay on the remote backend" from
+/// "switch back to the local std::fs scanner".
+fn is_local_style(path: &str) -> bool {
+    let p = path.trim_start();
+    let b = p.as_bytes();
+    let has_drive = b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic();
+    has_drive || p.starts_with("//") || p.starts_with("\\\\")
+}
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
@@ -447,6 +470,13 @@ impl App {
 
             clip_key_rx: None,
             clip_key_cancel: None,
+
+            remote: None,
+            net_conn: None,
+            show_connect: false,
+            connecting: false,
+            connect_form: crate::connect::ConnectForm::default(),
+            connect_rx: None,
         }
     }
 
@@ -801,7 +831,24 @@ impl App {
 
         let (tx, rx) = unbounded();
         let max_depth = if self.recursive { None } else { Some(1) };
-        let handle = start_scan(root, false, max_depth, tx);
+        // Route remote roots through the backend walk; local roots (incl. drive
+        // letters and UNC) keep the fast std::fs path. Decided centrally here by
+        // path style, so every navigation entry point is handled without edits:
+        // an active remote session stays remote as long as the target isn't a
+        // local-style path; otherwise we drop back to local.
+        let stay_remote = self.remote.is_some() && !is_local_style(&self.root_path);
+        if !stay_remote {
+            self.remote = None;
+        }
+        let handle = match self.remote.as_ref() {
+            Some(rs) => crate::rscan::start_scan_backend(
+                rs.backend.clone(),
+                self.root_path.clone(),
+                max_depth,
+                tx,
+            ),
+            None => start_scan(root, false, max_depth, tx),
+        };
         self.scan_rx = Some(rx);
         self.scan_handle = Some(handle);
         self.scan_running = true;
@@ -1464,6 +1511,51 @@ impl App {
         let (tx, rx) = unbounded();
         self.update_rx = Some(rx);
         crate::updater::check_async(tx, true);
+    }
+
+    // ─── Remote connections ─────────────────────────────────────────────
+
+    /// Start connecting with the current form (off the UI thread).
+    fn begin_connect(&mut self, form: crate::connect::ConnectForm, secret: Option<String>) {
+        self.connecting = true;
+        self.error_msg = None;
+        self.connect_rx = Some(crate::connect::spawn_connect(form, secret));
+    }
+
+    /// Connect to a saved connection: pre-fill from metadata + load its secret.
+    fn connect_saved(&mut self, c: &crate::creds::SavedConnection) {
+        let form = crate::connect::ConnectForm::from_saved(c);
+        let secret = crate::creds::get_secret(&c.account());
+        self.begin_connect(form, secret);
+    }
+
+    fn drain_connect(&mut self) {
+        let msg = match self.connect_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(m) => m,
+            None => return,
+        };
+        self.connect_rx = None;
+        self.connecting = false;
+        match msg {
+            crate::connect::ConnectResult::Ok(c) => {
+                // SFTP/FTP set a remote backend; a share clears it (browsed
+                // locally) but keeps the auth connection alive.
+                self.remote = c.remote;
+                if let Some(nc) = c.net {
+                    self.net_conn = Some(nc);
+                }
+                self.show_connect = false;
+                self.notice = Some((
+                    format!("✓ Verbunden: {}", c.label),
+                    std::time::Instant::now(),
+                ));
+                let pb = PathBuf::from(c.target.replace('/', std::path::MAIN_SEPARATOR_STR));
+                self.start_scan(pb);
+            }
+            crate::connect::ConnectResult::Err(e) => {
+                self.error_msg = Some(format!("Verbindung fehlgeschlagen: {}", e));
+            }
+        }
     }
 
     // ─── View ───────────────────────────────────────────────────────────
@@ -2971,6 +3063,56 @@ impl App {
             }
         }
 
+        // ─── Remote connections ───────────────────────────────────────
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("VERBINDEN").small().color(Color32::from_gray(140)));
+            if self.remote.is_some() || self.net_conn.is_some() {
+                if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
+                    self.remote = None;
+                    self.net_conn = None;
+                    self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
+                }
+            }
+        });
+        if let Some(rs) = &self.remote {
+            ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
+        }
+        if ui
+            .small_button("＋ Neue Verbindung")
+            .on_hover_text("SFTP / FTP / FTPS / Netzlaufwerk")
+            .clicked()
+        {
+            self.connect_form = crate::connect::ConnectForm::default();
+            self.show_connect = true;
+        }
+        // Saved connections — click to connect, × to forget.
+        let saved = crate::creds::load_connections();
+        let mut to_remove: Option<String> = None;
+        let mut to_connect: Option<crate::creds::SavedConnection> = None;
+        for c in &saved {
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small()).frame(false))
+                    .on_hover_text(c.to_target())
+                    .clicked()
+                {
+                    to_connect = Some(c.clone());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("×").on_hover_text("Entfernen").clicked() {
+                        to_remove = Some(c.account());
+                    }
+                });
+            });
+        }
+        if let Some(acc) = to_remove {
+            let _ = crate::creds::remove_connection(&acc);
+        }
+        if let Some(c) = to_connect {
+            self.connect_saved(&c);
+        }
+
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("UPDATE").small().color(Color32::from_gray(140)));
@@ -3883,6 +4025,136 @@ impl App {
         }
     }
 
+    fn ui_connect_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_connect {
+            return;
+        }
+        use crate::creds::Protocol;
+        let mut do_connect = false;
+        let mut close = false;
+        let mut open = true;
+        egui::Window::new("Verbinden (SFTP / FTP / Netzlaufwerk)")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([440.0, 0.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                let f = &mut self.connect_form;
+                egui::ComboBox::from_label("Protokoll")
+                    .selected_text(match f.protocol {
+                        Protocol::Sftp => "SFTP",
+                        Protocol::Ftp => "FTP",
+                        Protocol::Ftps => "FTPS",
+                        Protocol::Share => "Netzlaufwerk (UNC)",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (p, lbl) in [
+                            (Protocol::Sftp, "SFTP"),
+                            (Protocol::Ftp, "FTP"),
+                            (Protocol::Ftps, "FTPS"),
+                            (Protocol::Share, "Netzlaufwerk (UNC)"),
+                        ] {
+                            if ui.selectable_label(f.protocol == p, lbl).clicked() {
+                                f.protocol = p;
+                                if p != Protocol::Share && f.port.trim().is_empty() {
+                                    f.port = p.default_port().to_string();
+                                }
+                            }
+                        }
+                    });
+                ui.add_space(4.0);
+
+                egui::Grid::new("connect_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        if f.protocol == Protocol::Share {
+                            ui.label("Freigabe (UNC)");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut f.unc)
+                                    .hint_text(r"\\server\share")
+                                    .desired_width(f32::INFINITY),
+                            );
+                            ui.end_row();
+                            ui.label("Benutzer");
+                            ui.add(egui::TextEdit::singleline(&mut f.user).desired_width(f32::INFINITY));
+                            ui.end_row();
+                            ui.label("Passwort");
+                            ui.add(egui::TextEdit::singleline(&mut f.password).password(true).desired_width(f32::INFINITY));
+                            ui.end_row();
+                        } else {
+                            ui.label("Host");
+                            ui.add(egui::TextEdit::singleline(&mut f.host).hint_text("host.example.com").desired_width(f32::INFINITY));
+                            ui.end_row();
+                            ui.label("Port");
+                            ui.add(egui::TextEdit::singleline(&mut f.port).desired_width(70.0));
+                            ui.end_row();
+                            ui.label("Benutzer");
+                            ui.add(egui::TextEdit::singleline(&mut f.user).desired_width(f32::INFINITY));
+                            ui.end_row();
+                            ui.label("Startpfad");
+                            ui.add(egui::TextEdit::singleline(&mut f.root).hint_text("/").desired_width(f32::INFINITY));
+                            ui.end_row();
+                        }
+                    });
+
+                if f.protocol == Protocol::Sftp {
+                    ui.checkbox(&mut f.use_key, "Mit Schlüsseldatei anmelden");
+                }
+                if f.protocol == Protocol::Sftp && f.use_key {
+                    ui.horizontal(|ui| {
+                        ui.label("Schlüssel");
+                        ui.add(egui::TextEdit::singleline(&mut f.keyfile).desired_width(220.0));
+                        if ui.button("…").clicked() {
+                            if let Some(p) = rfd::FileDialog::new().pick_file() {
+                                f.keyfile = p.to_string_lossy().replace('\\', "/");
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Passphrase");
+                        ui.add(egui::TextEdit::singleline(&mut f.passphrase).password(true).desired_width(220.0));
+                    });
+                } else if f.protocol != Protocol::Share {
+                    ui.horizontal(|ui| {
+                        ui.label("Passwort");
+                        ui.add(egui::TextEdit::singleline(&mut f.password).password(true).desired_width(f32::INFINITY));
+                    });
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut f.save, "Speichern");
+                    ui.add(egui::TextEdit::singleline(&mut f.label).hint_text("Bezeichnung (optional)").desired_width(f32::INFINITY));
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if self.connecting {
+                        ui.spinner();
+                        ui.label("Verbinde…");
+                    } else {
+                        if ui.button(RichText::new("Verbinden").strong()).clicked() {
+                            do_connect = true;
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            close = true;
+                        }
+                    }
+                });
+            });
+        if !open {
+            close = true;
+        }
+        if do_connect {
+            let form = self.connect_form.clone();
+            self.begin_connect(form, None);
+        } else if close && !self.connecting {
+            self.show_connect = false;
+        }
+    }
+
     fn ui_help_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
         egui::Window::new("Tastenkürzel")
@@ -4117,6 +4389,7 @@ impl eframe::App for App {
         self.drain_trash();
         self.drain_clip_prepare();
         self.drain_update();
+        self.drain_connect();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -4512,6 +4785,9 @@ impl eframe::App for App {
         }
         if self.update_ready.is_some() {
             self.ui_update_dialog(ctx);
+        }
+        if self.show_connect {
+            self.ui_connect_dialog(ctx);
         }
 
         // Repaint while background work is active
