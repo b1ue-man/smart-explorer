@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -44,6 +44,7 @@ webpki-roots = "0.26"
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_WNet",
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
