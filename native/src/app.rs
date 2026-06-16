@@ -3086,7 +3086,12 @@ impl App {
         // layout (CfAPI mode — see cfsync.rs). Both then download + watch + launch.
         let dest = match self.remote_open_mode {
             RemoteOpenMode::Temp => open_temp_path(&name),
-            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &path),
+            RemoteOpenMode::CfApi => {
+                // Register the connection folder as a native CfAPI sync root
+                // (best-effort) so it's OS-managed like OneDrive.
+                crate::cfsync::register_root(&crate::cfsync::conn_root_dir(&label));
+                crate::cfsync::local_path(&label, &self.root_path, &path)
+            }
         };
         self.remote_edits.retain(|e| e.temp != dest);
         if self.remote_edits.len() < 50 {
@@ -3139,6 +3144,10 @@ impl App {
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
+            }
+            // In CfAPI mode, mark the hydrated file as an in-sync placeholder.
+            if self.remote_open_mode == RemoteOpenMode::CfApi {
+                crate::cfsync::mark_in_sync(&pb);
             }
             self.open_path(&p);
         }
@@ -3852,6 +3861,67 @@ impl App {
                 ));
             }
             Err(e) => self.error_msg = Some(format!("Ordner erstellen: {}", e)),
+        }
+    }
+
+    /// Create a new empty editable file (`base.ext`) in the current folder, with
+    /// a unique name. Local: created + opened for editing. Remote: created via
+    /// the backend off-thread (open it afterwards by double-click).
+    fn create_new_file(&mut self, base: &str, ext: &str) {
+        if self.root_path.is_empty() {
+            return;
+        }
+        // Remote view → create via the backend (threaded).
+        if let Some(rs) = &self.remote {
+            if self.remote_op_rx.is_some() {
+                return;
+            }
+            let backend = rs.backend.clone();
+            let root = self.root_path.trim_end_matches('/').to_string();
+            let (base, ext) = (base.to_string(), ext.to_string());
+            let (tx, rx) = unbounded();
+            self.remote_op_rx = Some(rx);
+            std::thread::Builder::new()
+                .name("remote-newfile".into())
+                .spawn(move || {
+                    use std::io::Write;
+                    let mut name = format!("{}.{}", base, ext);
+                    let mut i = 2;
+                    while backend.exists(&format!("{}/{}", root, name)) && i < 1000 {
+                        name = format!("{} ({}).{}", base, i, ext);
+                        i += 1;
+                    }
+                    let path = format!("{}/{}", root, name);
+                    let r = (|| -> Result<(), String> {
+                        let mut w = backend.open_write(&path).map_err(|e| e.to_string())?;
+                        w.flush().map_err(|e| e.to_string())?;
+                        Ok(())
+                    })();
+                    let _ = tx.send(
+                        r.map(|_| format!("✓ Datei erstellt: {}", name))
+                            .map_err(|e| format!("Datei erstellen: {}", e)),
+                    );
+                })
+                .ok();
+            self.notice = Some(("Datei wird erstellt…".to_string(), std::time::Instant::now()));
+            return;
+        }
+        // Local view.
+        let base_dir = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let mut target = base_dir.join(format!("{}.{}", base, ext));
+        let mut i = 2;
+        while target.exists() {
+            target = base_dir.join(format!("{} ({}).{}", base, i, ext));
+            i += 1;
+        }
+        match std::fs::File::create(&target) {
+            Ok(_) => {
+                self.rescan();
+                let nm = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.notice = Some((format!("✓ Datei erstellt: {}", nm), std::time::Instant::now()));
+                self.open_path(&target.to_string_lossy().replace('\\', "/"));
+            }
+            Err(e) => self.error_msg = Some(format!("Datei erstellen: {}", e)),
         }
     }
 
@@ -5263,12 +5333,40 @@ impl App {
             {
                 self.trash_selected();
             }
-            if ui
-                .add_enabled(!self.root_path.is_empty(), egui::Button::new("➕").small())
-                .on_hover_text("Neuer Ordner (Ctrl+Shift+N)")
-                .clicked()
-            {
-                self.create_new_folder();
+            // "Neu" dropdown: folder + various editable file types.
+            enum NewKind {
+                Folder,
+                File(&'static str, &'static str),
+            }
+            let mut new_kind: Option<NewKind> = None;
+            ui.add_enabled_ui(!self.root_path.is_empty(), |ui| {
+                ui.menu_button("➕ Neu", |ui| {
+                    if ui.button("📁 Ordner").clicked() {
+                        new_kind = Some(NewKind::Folder);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    for (label, base, ext) in [
+                        ("📄 Textdatei (.txt)", "Neue Textdatei", "txt"),
+                        ("📝 Markdown (.md)", "Neue Notiz", "md"),
+                        ("📊 CSV (.csv)", "Neue Tabelle", "csv"),
+                        ("🔧 JSON (.json)", "Neue Datei", "json"),
+                        ("🌐 HTML (.html)", "Neue Seite", "html"),
+                        ("</> Code (.rs)", "Neue Datei", "rs"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            new_kind = Some(NewKind::File(base, ext));
+                            ui.close_menu();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Neu: Ordner oder Datei (Ctrl+Shift+N = Ordner)");
+            });
+            match new_kind {
+                Some(NewKind::Folder) => self.create_new_folder(),
+                Some(NewKind::File(base, ext)) => self.create_new_file(base, ext),
+                None => {}
             }
             // Star the current folder
             let starred = !self.root_path.is_empty() && self.is_favorite(&self.root_prefix());
