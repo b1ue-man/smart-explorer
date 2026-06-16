@@ -419,6 +419,22 @@ pub struct App {
     cloud_secret_draft: String,
     cloud_auth_rx: Option<Receiver<Result<(), String>>>,
     cloud_authing: bool,
+
+    // ─── Peer file sharing (#21) ─────────────────────────────────────────
+    share: Option<crate::share::ShareService>,
+    show_share: bool,
+    /// Rendezvous server "host:port" (persisted) + device name + drafts.
+    share_server: String,
+    share_server_draft: String,
+    share_device_draft: String,
+    /// Code typed to connect/join, and the code we generated to display.
+    share_code_input: String,
+    share_my_code: String,
+    share_room: bool,
+    share_roster: Vec<crate::share::RemoteDevice>,
+    share_incoming: Vec<(u64, String, Vec<(String, u64)>)>,
+    share_status: String,
+    share_progress: Option<(u64, u64)>,
 }
 
 /// Draft state for the add/edit sync-setup dialog. Number fields are kept as
@@ -548,6 +564,27 @@ struct BisyncCtx {
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
+fn share_server_path() -> PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let d = base.join("smart_explorer");
+    let _ = std::fs::create_dir_all(&d);
+    d.join("share_server.txt")
+}
+
+fn load_share_server() -> String {
+    std::fs::read_to_string(share_server_path())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "Mein Gerät".to_string())
+}
+
 /// Stream a remote file to a temp copy and return its local path (for opening
 /// remote files in their associated app). Overwrites a prior copy of the same
 /// name so re-opening picks up fresh content.
@@ -852,6 +889,19 @@ impl App {
                 .client_secret,
             cloud_auth_rx: None,
             cloud_authing: false,
+
+            share: None,
+            show_share: false,
+            share_server: load_share_server(),
+            share_server_draft: load_share_server(),
+            share_device_draft: default_device_name(),
+            share_code_input: String::new(),
+            share_my_code: String::new(),
+            share_room: false,
+            share_roster: Vec::new(),
+            share_incoming: Vec::new(),
+            share_status: String::new(),
+            share_progress: None,
         }
     }
 
@@ -2980,6 +3030,254 @@ impl App {
         let _ = local;
     }
 
+    // ─── Peer file sharing (#21) ─────────────────────────────────────────
+
+    /// Start the share service if a rendezvous server is configured. Returns
+    /// whether a service is available.
+    fn ensure_share(&mut self) -> bool {
+        if self.share.is_some() {
+            return true;
+        }
+        let server = self.share_server.trim().to_string();
+        if server.is_empty() {
+            self.share_status = "Kein Server eingetragen (Einstellungen → TEILEN)".to_string();
+            return false;
+        }
+        let device = if self.share_device_draft.trim().is_empty() {
+            default_device_name()
+        } else {
+            self.share_device_draft.trim().to_string()
+        };
+        match crate::share::ShareService::start(server, device) {
+            Ok(svc) => {
+                self.share = Some(svc);
+                true
+            }
+            Err(e) => {
+                self.error_msg = Some(format!("Teilen-Dienst: {}", e));
+                false
+            }
+        }
+    }
+
+    fn share_cmd(&mut self, c: crate::share::ShareCmd) {
+        if self.ensure_share() {
+            if let Some(svc) = &self.share {
+                svc.cmd(c);
+            }
+        }
+    }
+
+    fn drain_share(&mut self) {
+        let events: Vec<crate::share::ShareEvent> = match &self.share {
+            Some(svc) => svc.events.try_iter().collect(),
+            None => return,
+        };
+        for ev in events {
+            use crate::share::ShareEvent as E;
+            match ev {
+                E::Status(s) => self.share_status = s,
+                E::Error(e) => {
+                    self.share_status = format!("Fehler: {}", e);
+                    self.error_msg = Some(format!("Teilen: {}", e));
+                }
+                E::Roster(r) => self.share_roster = r,
+                E::Incoming { id, from, files } => {
+                    self.share_incoming.push((id, from, files));
+                    self.show_share = true;
+                }
+                E::Progress { done, total } => self.share_progress = Some((done, total)),
+                E::Received { count, dir } => {
+                    self.share_progress = None;
+                    self.share_status = format!("✓ {} empfangen → {}", count, dir);
+                    self.notice = Some((
+                        format!("📥 {} Datei(en) empfangen", count),
+                        std::time::Instant::now(),
+                    ));
+                }
+                E::Sent { count } => {
+                    self.share_progress = None;
+                    self.share_status = format!("✓ {} gesendet", count);
+                }
+            }
+        }
+    }
+
+    /// Local file paths in the current selection (sharing sends local files;
+    /// remote selections aren't supported yet).
+    fn selected_local_files(&self) -> Vec<String> {
+        if self.remote.is_some() {
+            return Vec::new();
+        }
+        self.entries
+            .iter()
+            .filter(|e| !e.is_dir && self.selection.contains(&e.path))
+            .map(|e| e.path.replace('/', std::path::MAIN_SEPARATOR_STR))
+            .collect()
+    }
+
+    fn ui_share(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_share;
+        let mut pair_show = false;
+        let mut pair_connect = false;
+        let mut room_join = false;
+        let mut leave = false;
+        let mut send = false;
+        let mut answer: Option<(u64, bool)> = None;
+
+        let roster = self.share_roster.clone();
+        let incoming = self.share_incoming.clone();
+        let status = self.share_status.clone();
+        let progress = self.share_progress;
+        let my_code = self.share_my_code.clone();
+        let fingerprint = self.share.as_ref().map(|s| s.fingerprint.clone()).unwrap_or_default();
+        let sel = self.selected_local_files().len();
+
+        egui::Window::new("📡 Teilen — Geräte & Räume")
+            .open(&mut open)
+            .resizable(true)
+            .default_size([460.0, 520.0])
+            .show(ctx, |ui| {
+                if self.share_server.trim().is_empty() {
+                    ui.colored_label(
+                        Color32::from_rgb(255, 185, 120),
+                        "Kein Rendezvous-Server eingetragen.",
+                    );
+                    ui.label("Einstellungen → TEILEN: Server-Adresse (host:port) setzen.");
+                    return;
+                }
+                if !fingerprint.is_empty() {
+                    ui.label(
+                        RichText::new(format!("Dieses Gerät: {}", fingerprint))
+                            .small()
+                            .color(Color32::from_gray(140)),
+                    );
+                }
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("DIREKT KOPPELN").small().color(Color32::from_gray(140)));
+                ui.horizontal(|ui| {
+                    if ui.button("Code anzeigen").on_hover_text("Erzeugt einen Code; das andere Gerät gibt ihn ein").clicked() {
+                        pair_show = true;
+                    }
+                    if !my_code.is_empty() {
+                        ui.label(RichText::new(&my_code).monospace().strong().size(18.0));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.share_code_input).hint_text("Code vom anderen Gerät").desired_width(160.0));
+                    if ui.button("Verbinden").clicked() {
+                        pair_connect = true;
+                    }
+                });
+
+                ui.add_space(8.0);
+                ui.label(RichText::new("RAUM").small().color(Color32::from_gray(140)));
+                ui.horizontal(|ui| {
+                    if ui.button("Raum erstellen").clicked() {
+                        room_join = true; // generates a code below
+                    }
+                    if ui.button("Beitreten").clicked() {
+                        room_join = true;
+                    }
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Verbundene Geräte ({})", roster.len())).strong());
+                    if !roster.is_empty() && ui.small_button("Verlassen").clicked() {
+                        leave = true;
+                    }
+                });
+                if roster.is_empty() {
+                    ui.colored_label(Color32::from_gray(140), "(noch keine — Code teilen oder Raum beitreten)");
+                }
+                for d in &roster {
+                    ui.label(format!("● {}  ({})", d.device, d.fingerprint));
+                }
+
+                ui.add_space(6.0);
+                if ui
+                    .add_enabled(sel > 0 && !roster.is_empty(), egui::Button::new(format!("⮝ {} ausgewählte Datei(en) senden", sel)))
+                    .on_hover_text("Sendet die in der Liste markierten lokalen Dateien an alle verbundenen Geräte")
+                    .clicked()
+                {
+                    send = true;
+                }
+                if sel == 0 {
+                    ui.label(RichText::new("Markiere lokale Dateien in der Liste, um sie zu senden.").small().color(Color32::from_gray(120)));
+                }
+
+                if let Some((done, total)) = progress {
+                    let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+                    ui.add(egui::ProgressBar::new(frac).show_percentage());
+                }
+                if !status.is_empty() {
+                    ui.label(RichText::new(&status).small().color(Color32::from_gray(150)));
+                }
+
+                if !incoming.is_empty() {
+                    ui.separator();
+                    ui.label(RichText::new("EINGEHEND").small().color(Color32::from_gray(140)));
+                    for (id, from, files) in &incoming {
+                        let total: u64 = files.iter().map(|(_, s)| *s).sum();
+                        ui.label(format!("{} möchte {} Datei(en) senden ({})", from, files.len(), format_bytes(total)));
+                        ui.horizontal(|ui| {
+                            if ui.button("Annehmen").clicked() {
+                                answer = Some((*id, true));
+                            }
+                            if ui.button("Ablehnen").clicked() {
+                                answer = Some((*id, false));
+                            }
+                        });
+                    }
+                }
+            });
+        self.show_share = open;
+
+        if pair_show {
+            let code = crate::share::gen_code();
+            self.share_my_code = code.clone();
+            self.share_room = false;
+            self.share_cmd(crate::share::ShareCmd::Pair(code));
+        }
+        if pair_connect {
+            let code = self.share_code_input.trim().to_string();
+            if !code.is_empty() {
+                self.share_my_code.clear();
+                self.share_cmd(crate::share::ShareCmd::Pair(code));
+            }
+        }
+        if room_join {
+            let code = if self.share_code_input.trim().is_empty() {
+                let c = crate::share::gen_code();
+                self.share_my_code = c.clone();
+                c
+            } else {
+                self.share_code_input.trim().to_string()
+            };
+            self.share_room = true;
+            self.share_cmd(crate::share::ShareCmd::JoinRoom(code));
+        }
+        if leave {
+            self.share_roster.clear();
+            self.share_my_code.clear();
+            self.share_cmd(crate::share::ShareCmd::Leave);
+        }
+        if send {
+            let files = self.selected_local_files();
+            if files.is_empty() {
+                self.error_msg = Some("Keine lokalen Dateien ausgewählt.".to_string());
+            } else {
+                self.share_cmd(crate::share::ShareCmd::Send(files));
+            }
+        }
+        if let Some((id, accept)) = answer {
+            self.share_incoming.retain(|(i, _, _)| *i != id);
+            self.share_cmd(crate::share::ShareCmd::Answer { id, accept });
+        }
+    }
+
     fn drain_upload(&mut self) {
         let res = match self.upload_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
@@ -4434,6 +4732,13 @@ impl App {
                 ui.set_min_width(350.0);
                 self.ui_menu_settings(ui);
             });
+            if ui
+                .selectable_label(self.show_share, "📡 Teilen")
+                .on_hover_text("Dateien direkt an gekoppelte Geräte / in Räume senden (P2P, verschlüsselt)")
+                .clicked()
+            {
+                self.show_share = !self.show_share;
+            }
             ui.separator();
             if ui
                 .add_enabled(has_sel, egui::Button::new("🗑").small())
@@ -5630,6 +5935,33 @@ impl App {
 
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         self.ui_menu_cloud(ui);
+
+        // ─── Teilen (peer file sharing) ───────────────────────────────
+        ui.add_space(12.0);
+        ui.label(RichText::new("TEILEN (P2P)").small().color(Color32::from_gray(140)));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.share_server_draft)
+                .hint_text("Rendezvous-Server  host:port")
+                .desired_width(f32::INFINITY),
+        )
+        .on_hover_text(
+            "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
+             nur die Verbindung — die Dateien gehen direkt zwischen den Geräten, \
+             Ende-zu-Ende-verschlüsselt.",
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut self.share_device_draft)
+                .hint_text("Gerätename")
+                .desired_width(f32::INFINITY),
+        );
+        if ui.small_button("Speichern").clicked() {
+            self.share_server = self.share_server_draft.trim().to_string();
+            let _ = std::fs::write(share_server_path(), &self.share_server);
+            // Restart the service so the new server/name take effect.
+            self.share = None;
+            self.notice = Some(("✓ Teilen-Einstellungen gespeichert".to_string(), std::time::Instant::now()));
+        }
+
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("UPDATE").small().color(Color32::from_gray(140)));
@@ -7000,6 +7332,7 @@ impl eframe::App for App {
         self.drain_file_open();
         self.drain_upload();
         self.drain_clip_download();
+        self.drain_share();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -7413,6 +7746,9 @@ impl eframe::App for App {
         if self.picker.is_some() {
             self.ui_picker(ctx);
         }
+        if self.show_share {
+            self.ui_share(ctx);
+        }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
 
@@ -7452,8 +7788,12 @@ impl eframe::App for App {
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
+            || self.share_progress.is_some()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if self.share.is_some() {
+            // Poll for incoming share offers / roster changes at a calm cadence.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
 }
