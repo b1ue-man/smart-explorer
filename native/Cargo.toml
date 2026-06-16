@@ -82,6 +82,10 @@ windows-sys = { version = "0.59", features = [
 # virtual-file IDataObject (filter-aware clipboard).
 windows-core = "0.58"
 winreg = "0.52"
+# Native Cloud Files API provider for on-demand remote placeholders (#30).
+# Safe wrapper around CfAPI (same `windows` 0.58); used by real sync engines.
+cloud-filter = "0.0.6"
+nt-time = "0.8"
 windows = { version = "0.58", features = [
     "implement",
     "Win32_Foundation",
