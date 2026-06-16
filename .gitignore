@@ -17,3 +17,7 @@ Thumbs.db
 !release-native/update-feed/
 !release-native/update-feed/version.txt
 !release-native/update-feed/smart_explorer.exe
+# EXCEPTION: ship the installer + portable exe so they're downloadable from the
+# repo (and referenced by the README). The Release attaches them too.
+!release-native/Smart Explorer Setup *.exe
+!release-native/Smart Explorer.exe

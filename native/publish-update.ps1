@@ -33,10 +33,11 @@ Copy-Item "target\release\smart_explorer.exe" "$Feed\smart_explorer.exe" -Force
 Set-Content "$Feed\version.txt" $version -Encoding ascii
 Write-Host "Feed aktualisiert: $Feed (v$version)"
 
-# Installer neu bauen (fuer Neuinstallationen)
+# Installer neu bauen (fuer Neuinstallationen). EXE_SRC zeigt auf den nativen
+# Windows-Build (installer.nsi defaultet auf den gnu-Cross-Pfad).
 $makensis = "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe"
 if (Test-Path $makensis) {
-    & $makensis /DVERSION=$version installer.nsi | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "installer.nsi" | Out-Null
     Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
 } else {
     Write-Warning "makensis nicht gefunden - Installer uebersprungen"

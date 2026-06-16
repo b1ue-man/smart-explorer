@@ -26,8 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mingw-w64 linker
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: Install mingw-w64 linker + NSIS (installer)
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 nsis
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,7 +55,7 @@ jobs:
         working-directory: native/explorer-command
         run: cargo build --release --target x86_64-pc-windows-gnu
 
-      - name: Stage update feed
+      - name: Stage feed + build installer
         id: stage
         run: |
           mkdir -p out
@@ -64,7 +64,10 @@ jobs:
           ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
           printf '%s\n' "$ver" > out/version.txt
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Built version $ver"
+          # NSIS installer (per-user; sets the Git update source + context menu).
+          makensis -DVERSION="$ver" installer.nsi
+          cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
+          echo "Built version $ver (exe + dll + installer)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,17 +89,22 @@ jobs:
           tag_name: v${{ steps.stage.outputs.version }}
           name: Smart Explorer ${{ steps.stage.outputs.version }}
           body: |
-            Self-contained Windows x64 build (no installer needed).
+            Windows x64. No admin needed.
 
-            - `smart_explorer.exe` — the app (also the self-update payload; the
-              app pulls it from `release-native/update-feed/` over the git feed).
-            - `smart_explorer_command.dll` — the Win11 modern context-menu
+            - **Smart Explorer Setup <version>.exe** — installer. Sets up
+              auto-update (Git feed) + the right-click "In Smart Explorer öffnen"
+              verb. Recommended.
+            - **smart_explorer.exe** — portable app (also the self-update
+              payload). To auto-update, set the update source to this repo URL in
+              the app (Sidebar → UPDATE).
+            - **smart_explorer_command.dll** — Win11 modern context-menu
               IExplorerCommand handler (needs signing to register; see
               `docs/WIN11_CONTEXT_MENU.md`).
 
             Built by CI via the verified ubuntu + mingw-w64 +
             `x86_64-pc-windows-gnu` cross-compile.
           files: |
+            native/out/Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe
             native/out/smart_explorer.exe
             native/out/smart_explorer_command.dll
             native/out/version.txt
