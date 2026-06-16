@@ -45,6 +45,13 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 # Rust); base64 for HTTP Basic auth (already in the tree via rustls).
 roxmltree = "0.20"
 base64 = "0.22"
+# Cloud/OAuth (cloud.rs, #19): JSON for the Drive REST API + token responses,
+# SHA-256 for the PKCE code-challenge, and OS randomness for the verifier/state.
+# All pure Rust — no native libs, so the windows-gnu cross-compile is unaffected.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+getrandom = "0.2"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the

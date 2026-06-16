@@ -400,6 +400,12 @@ pub struct App {
         >,
     >,
     job_connect_pending: Option<crate::syncjobs::SyncJob>,
+
+    // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
+    cloud_client_id_draft: String,
+    cloud_secret_draft: String,
+    cloud_auth_rx: Option<Receiver<Result<(), String>>>,
+    cloud_authing: bool,
 }
 
 /// Draft state for the add/edit sync-setup dialog. Number fields are kept as
@@ -722,6 +728,13 @@ impl App {
             picker: None,
             job_connect_rx: None,
             job_connect_pending: None,
+
+            cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
+                .client_id,
+            cloud_secret_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
+                .client_secret,
+            cloud_auth_rx: None,
+            cloud_authing: false,
         }
     }
 
@@ -2197,6 +2210,27 @@ impl App {
             }
             Err(e) => {
                 self.error_msg = Some(format!("Remote-Sync: {}", e));
+            }
+        }
+    }
+
+    /// Result of an interactive cloud authorize (#19, slice 1).
+    fn drain_cloud_auth(&mut self) {
+        let res = match self.cloud_auth_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+        self.cloud_auth_rx = None;
+        self.cloud_authing = false;
+        match res {
+            Ok(()) => {
+                self.notice = Some((
+                    "✓ Google Drive verbunden".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(e) => {
+                self.error_msg = Some(format!("Cloud-Anmeldung: {}", e));
             }
         }
     }
@@ -5060,7 +5094,80 @@ impl App {
         }
     }
 
+    /// Cloud (Google Drive) connect — #19 slice 1: configure the OAuth client
+    /// ID and run the authorize flow. Browsing/sync over Drive arrives once the
+    /// `gdrive.rs` backend lands (slice 2).
+    fn ui_menu_cloud(&mut self, ui: &mut egui::Ui) {
+        use crate::cloud::Provider;
+        let p = Provider::GDrive;
+        ui.add_space(12.0);
+        ui.label(RichText::new("CLOUD (GOOGLE DRIVE)").small().color(Color32::from_gray(140)));
+        if crate::cloud::is_connected(p) {
+            ui.colored_label(Color32::from_rgb(120, 200, 255), "● Verbunden");
+            if ui.small_button("Trennen").clicked() {
+                crate::cloud::disconnect(p);
+                self.notice = Some(("Google Drive getrennt".to_string(), std::time::Instant::now()));
+            }
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut self.cloud_client_id_draft)
+                .hint_text("OAuth Client-ID (…apps.googleusercontent.com)")
+                .desired_width(f32::INFINITY),
+        )
+        .on_hover_text(
+            "Aus deinem eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
+             Anleitung: docs/CLOUD_OAUTH_PLAN.md. Eine Desktop-App kann kein \
+             gemeinsames Geheimnis ausliefern — daher dein eigener Client.",
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut self.cloud_secret_draft)
+                .hint_text("Client-Secret (von Google, falls vergeben)")
+                .password(true)
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal(|ui| {
+            if self.cloud_authing {
+                ui.spinner();
+                ui.label("Browser-Anmeldung läuft…");
+            } else if ui
+                .small_button("Mit Google verbinden")
+                .on_hover_text("Speichert die Client-ID und öffnet den Browser zur Anmeldung")
+                .clicked()
+            {
+                let cfg = crate::cloud::ClientConfig {
+                    client_id: self.cloud_client_id_draft.trim().to_string(),
+                    client_secret: self.cloud_secret_draft.trim().to_string(),
+                };
+                if cfg.client_id.is_empty() {
+                    self.error_msg = Some("Bitte zuerst die Client-ID eintragen.".to_string());
+                } else {
+                    let _ = crate::cloud::save_config(p, &cfg);
+                    let (tx, rx) = unbounded();
+                    self.cloud_auth_rx = Some(rx);
+                    self.cloud_authing = true;
+                    std::thread::Builder::new()
+                        .name("cloud-auth".into())
+                        .spawn(move || {
+                            let _ = tx.send(crate::cloud::authorize(p).map(|_| ()));
+                        })
+                        .ok();
+                    self.notice = Some((
+                        "Browser zur Google-Anmeldung geöffnet…".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
+        });
+        ui.label(
+            RichText::new("Durchsuchen/Sync über Drive folgt (Backend in Arbeit).")
+                .small()
+                .color(Color32::from_gray(120)),
+        );
+        ui.separator();
+    }
+
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
+        self.ui_menu_cloud(ui);
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("UPDATE").small().color(Color32::from_gray(140)));
@@ -6434,6 +6541,7 @@ impl eframe::App for App {
         self.drain_bisync();
         self.drain_job_connect();
         self.drain_picker_connect();
+        self.drain_cloud_auth();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }

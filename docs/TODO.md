@@ -28,11 +28,23 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via keyring creds). | ✅ | 0.5.14 |
 | 18 | Trackpad **inertia scroll stuttered**; now repaints while egui animates the smooth-scroll so it glides to a smooth stop. | ✅ | 0.5.14 |
 
+## In progress
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 — needs your client ID + a real Windows run to verify the live flow |
+
 ## Open / upcoming
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 19 | **Cloud integrations** (Google Drive first) via **OAuth** — new `Backend` impls + PKCE OAuth flow, tokens in keyring. **Designed:** see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md). **Blocked on one input:** a Google OAuth *Client ID* you create (a desktop app can't ship a usable shared secret / pass Drive verification — each publisher uses their own project). Code can be built dormant; the live flow needs that client ID + a real Windows test. | next | plan written; awaiting your Google OAuth client ID to wire/verify |
+| 19.2 | **Google Drive `Backend`** (`gdrive.rs`): list/stat/read, then write/mkdir/rename/remove → browse Drive in the sidebar/picker and two-way-sync it (GUI + daemon). Drive is ID-addressed → path→id cache. | next | unblocked to build; live calls need the client ID from 19.1 |
+| 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out |
+
+**One input still needed from you:** a Google OAuth *Client ID* (Desktop type)
+from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
+A desktop app can't ship a usable shared secret or pass Drive verification, so
+each publisher uses their own client. With it, slice 1 authorizes end-to-end.
 
 ## Notes
 
