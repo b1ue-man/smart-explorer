@@ -27,7 +27,10 @@ pub fn sync_base() -> PathBuf {
     base.join("Smart Explorer")
 }
 
-fn san(s: &str) -> String {
+/// Sanitize one path segment to a valid NTFS name. Used by both the local-path
+/// builder (open side) and the CfAPI placeholder display name (callback side) so
+/// the two always agree on what a file is called on disk.
+pub fn san(s: &str) -> String {
     let out: String = s
         .chars()
         .map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
