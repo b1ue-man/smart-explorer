@@ -35,6 +35,12 @@ SetCompressor /SOLID lzma
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
+; Liability notice the user must accept before installing.
+LicenseText "Bitte lesen und akzeptieren Sie die folgenden Hinweise."
+LicenseData "../DISCLAIMER.txt"
+LicenseForceSelection checkbox "Ich habe die Hinweise gelesen und akzeptiere sie"
+
+Page license
 Page directory
 Page instfiles
 
