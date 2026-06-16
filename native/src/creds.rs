@@ -224,6 +224,18 @@ pub fn save_connection(c: &SavedConnection) -> std::io::Result<()> {
     save_connections_to(&connections_path(), &conns)
 }
 
+/// Move a saved connection to the most-recent position (end of the file) so
+/// the sidebar can show the freshest connections first and overflow the rest.
+/// No-op if the account isn't saved.
+pub fn touch_connection(account: &str) {
+    let mut conns = load_connections();
+    if let Some(pos) = conns.iter().position(|x| x.account() == account) {
+        let c = conns.remove(pos);
+        conns.push(c);
+        let _ = save_connections_to(&connections_path(), &conns);
+    }
+}
+
 /// Remove a saved connection by account and drop its stored secret.
 pub fn remove_connection(account: &str) -> std::io::Result<()> {
     let mut conns = load_connections();
