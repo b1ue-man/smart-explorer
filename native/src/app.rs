@@ -52,6 +52,20 @@ struct TabState {
     /// Per-tab authenticated network-share connection (kept alive while the tab
     /// browses the UNC path).
     net_conn: Option<crate::net::NetConnection>,
+    // ── Per-tab filter / search / sort (so each tab — and each split pane —
+    //    filters independently) ──
+    filter: FilterDef,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    text_draft: String,
+    ext_draft: String,
+    size_min_draft: String,
+    size_max_draft: String,
+    filter_pending_at: Option<Instant>,
+    mtime_min_date: Option<chrono::NaiveDate>,
+    mtime_max_date: Option<chrono::NaiveDate>,
+    btime_min_date: Option<chrono::NaiveDate>,
+    btime_max_date: Option<chrono::NaiveDate>,
 }
 
 fn empty_progress() -> ScanProgress {
@@ -84,6 +98,18 @@ impl Default for TabState {
             view_dirty: false,
             remote: None,
             net_conn: None,
+            filter: FilterDef::new(),
+            sort_key: SortKey::Path,
+            sort_dir: SortDir::Asc,
+            text_draft: String::new(),
+            ext_draft: String::new(),
+            size_min_draft: String::new(),
+            size_max_draft: String::new(),
+            filter_pending_at: None,
+            mtime_min_date: None,
+            mtime_max_date: None,
+            btime_min_date: None,
+            btime_max_date: None,
         }
     }
 }
@@ -590,6 +616,18 @@ impl App {
         std::mem::swap(&mut t.view_dirty, &mut self.view_dirty);
         std::mem::swap(&mut t.remote, &mut self.remote);
         std::mem::swap(&mut t.net_conn, &mut self.net_conn);
+        std::mem::swap(&mut t.filter, &mut self.filter);
+        std::mem::swap(&mut t.sort_key, &mut self.sort_key);
+        std::mem::swap(&mut t.sort_dir, &mut self.sort_dir);
+        std::mem::swap(&mut t.text_draft, &mut self.text_draft);
+        std::mem::swap(&mut t.ext_draft, &mut self.ext_draft);
+        std::mem::swap(&mut t.size_min_draft, &mut self.size_min_draft);
+        std::mem::swap(&mut t.size_max_draft, &mut self.size_max_draft);
+        std::mem::swap(&mut t.filter_pending_at, &mut self.filter_pending_at);
+        std::mem::swap(&mut t.mtime_min_date, &mut self.mtime_min_date);
+        std::mem::swap(&mut t.mtime_max_date, &mut self.mtime_max_date);
+        std::mem::swap(&mut t.btime_min_date, &mut self.btime_min_date);
+        std::mem::swap(&mut t.btime_max_date, &mut self.btime_max_date);
         self.tabs[i] = t;
     }
 
@@ -704,9 +742,11 @@ impl App {
                         });
                         ui.separator();
                         if focused {
+                            self.ui_pane_search(ui);
                             self.ui_table(ui);
                         } else {
                             self.swap_with_tab(tab_idx);
+                            self.ui_pane_search(ui);
                             self.ui_table(ui);
                             self.swap_with_tab(tab_idx);
                             // Click anywhere in this pane focuses it.
@@ -761,6 +801,45 @@ impl App {
         if self.active_tab > i {
             self.active_tab -= 1;
         }
+    }
+
+    /// Compact per-pane name filter/search, shown at the top of each split pane
+    /// so the two panes filter independently. Operates on the currently
+    /// swapped-in tab's filter (each pane is rendered inside its own swap), and
+    /// commits + recomputes immediately for that pane.
+    fn ui_pane_search(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("🔍");
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.text_draft)
+                    .hint_text("Filtern (Name/Regex/Glob)…")
+                    .desired_width(f32::INFINITY),
+            );
+            if resp.changed() {
+                self.filter.text = self.text_draft.clone();
+                self.recompute_view();
+            }
+            // Cycle the match mode (substring → regex → glob) so each pane can
+            // choose its own.
+            let mode_label = match self.filter.text_mode {
+                crate::types::TextMode::Substring => "abc",
+                crate::types::TextMode::Regex => ".*",
+                crate::types::TextMode::Glob => "*?",
+            };
+            if ui.small_button(mode_label).on_hover_text("Modus: Text / Regex / Glob").clicked() {
+                self.filter.text_mode = match self.filter.text_mode {
+                    crate::types::TextMode::Substring => crate::types::TextMode::Regex,
+                    crate::types::TextMode::Regex => crate::types::TextMode::Glob,
+                    crate::types::TextMode::Glob => crate::types::TextMode::Substring,
+                };
+                self.recompute_view();
+            }
+            if !self.text_draft.is_empty() && ui.small_button("×").on_hover_text("Filter löschen").clicked() {
+                self.text_draft.clear();
+                self.filter.text.clear();
+                self.recompute_view();
+            }
+        });
     }
 
     fn tab_title(&self, i: usize) -> String {
