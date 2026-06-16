@@ -27,6 +27,20 @@ mkdir -p "$feed"
 cp "$exe" "$feed/smart_explorer.exe"
 printf '%s\n' "$version" > "$feed/version.txt"
 
+# Standalone share rendezvous server (Linux + Windows) — routes peer-sharing
+# discovery only; ships alongside the app so users can self-host it.
+share_src="$repo_root/share-server"
+if [ -d "$share_src" ]; then
+  share_out="$rel/share-server"
+  mkdir -p "$share_out"
+  ( cd "$share_src"
+    cargo build --release --target "$target" --bin se-share-server
+    cargo build --release --bin se-share-server )
+  cp "$share_src/target/$target/release/se-share-server.exe" "$share_out/se-share-server.exe"
+  cp "$share_src/target/release/se-share-server" "$share_out/se-share-server-linux"
+  echo "Share server staged: $share_out (windows + linux)"
+fi
+
 # Portable exe + NSIS installer (per-user, sets up update source + context menu).
 cp "$exe" "$rel/Smart Explorer.exe"
 if command -v makensis >/dev/null 2>&1; then
