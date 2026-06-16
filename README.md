@@ -11,6 +11,44 @@ einheitliche `Backend`-Schnittstelle (Sidebar → **VERBINDEN**); Zugangsdaten i
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
 den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
+---
+
+## ⬇️ Installieren
+
+Kein Admin, kein Setup-Zwang. Zwei Wege:
+
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.3.exe`](release-native/Smart%20Explorer%20Setup%200.5.3.exe)
+   (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
+   Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
+   Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
+   öffnen" — **und stellt Auto-Update auf den Git-Feed ein. Danach musst du nichts
+   konfigurieren, Updates kommen automatisch.**
+2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
+   herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
+   die Update-Quelle setzen (siehe unten).
+
+## 🔄 Updates bekommen — *das hier eintragen*
+
+Die App prüft bei **jedem Start** automatisch auf eine neuere Version und
+aktualisiert sich selbst (EXE-Tausch + Neustart). Damit das geht, muss **eine
+Update-Quelle** gesetzt sein. Der **Installer macht das schon** — bei der
+portablen EXE trägst du sie einmal selbst ein:
+
+> **App → linke Sidebar → Abschnitt `UPDATE` → in das Textfeld genau das eintragen:**
+>
+> ```
+> https://github.com/b1ue-man/smart-explorer
+> ```
+>
+> **→ „Speichern" klicken. Fertig.** Beim nächsten Start (oder „Jetzt prüfen")
+> zieht die App die neueste Version aus dem Git.
+
+Das ist alles. (Technisch lädt die App `version.txt` + `smart_explorer.exe` aus
+[`release-native/update-feed/`](release-native/update-feed) über
+`raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
+Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
+`%APPDATA%\smart_explorer\update_source.txt`.
+
 ## 📋 Für neue Entwickler — zuerst lesen
 
 | Doc | Inhalt |
