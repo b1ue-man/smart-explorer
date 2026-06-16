@@ -20,6 +20,7 @@ mod icons;
 mod net;
 mod rscan;
 mod scanner;
+mod share;
 mod sftp;
 mod sync;
 mod syncjobs;
