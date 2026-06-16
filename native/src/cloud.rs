@@ -248,16 +248,38 @@ fn now_secs() -> i64 {
 }
 
 fn post_token(url: &str, form: &[(&str, &str)]) -> Result<Tokens, String> {
+    // Skip empty fields: a public PKCE client has no secret, and sending
+    // `client_secret=` makes Google answer 400 invalid_client.
     let body: String = form
         .iter()
+        .filter(|(_, v)| !v.is_empty())
         .map(|(k, v)| format!("{}={}", url_enc(k), url_enc(v)))
         .collect::<Vec<_>>()
         .join("&");
-    let resp = ureq::post(url)
+    let text = match ureq::post(url)
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&body)
-        .map_err(|e| e.to_string())?;
-    let text = resp.into_string().map_err(|e| e.to_string())?;
+    {
+        Ok(r) => r.into_string().map_err(|e| e.to_string())?,
+        // ureq surfaces 4xx/5xx as Err(Status) — read Google's JSON error so the
+        // real cause (redirect_uri_mismatch, invalid_grant, invalid_client, …)
+        // is shown instead of a bare "status code 400".
+        Err(ureq::Error::Status(code, r)) => {
+            let raw = r.into_string().unwrap_or_default();
+            let detail = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|v| {
+                    let e = v.get("error").and_then(|x| x.as_str()).unwrap_or("");
+                    let d = v.get("error_description").and_then(|x| x.as_str()).unwrap_or("");
+                    let combined = format!("{} {}", e, d);
+                    let combined = combined.trim().to_string();
+                    if combined.is_empty() { None } else { Some(combined) }
+                })
+                .unwrap_or(raw);
+            return Err(format!("HTTP {}: {}", code, detail));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     let access = v
         .get("access_token")
