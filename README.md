@@ -20,11 +20,8 @@ den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 Sie, dass Ihnen dies bewusst ist.
 
 Lizenz: **[MIT](LICENSE)** — frei nutzbar, und wie für freie Software üblich
-**„WIE BESEHEN" ("AS IS"), ohne Gewährleistung und ohne Haftung** im gesetzlich
-zulässigen Umfang. Bei dieser unentgeltlichen Bereitstellung greifen in
-Deutschland zusätzlich die gesetzlichen Haftungserleichterungen (§§ 521 ff. BGB;
-zwingende Haftung — Vorsatz, grobe Fahrlässigkeit, Leben/Körper/Gesundheit,
-Produkthaftungsgesetz — bleibt unberührt).
+**„WIE BESEHEN" ("AS IS"), ohne Gewährleistung; eine Haftung ist im gesetzlich
+zulässigen Umfang ausgeschlossen.**
 
 **Nutzung auf eigene Gefahr — erstellen Sie Sicherungskopien.** Kurzhinweis:
 [`DISCLAIMER.txt`](DISCLAIMER.txt) (wird im Installer und beim ersten Start

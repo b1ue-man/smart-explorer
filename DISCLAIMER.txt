@@ -7,11 +7,7 @@ dies bewusst ist.
 
 Die Software ist FREI und steht unter der MIT-Lizenz (siehe Datei LICENSE). Sie
 wird "WIE BESEHEN" ("AS IS") OHNE JEGLICHE GEWAEHRLEISTUNG bereitgestellt; eine
-Haftung ist im gesetzlich zulaessigen Umfang ausgeschlossen. Bei dieser
-unentgeltlichen Ueberlassung gelten zudem die gesetzlichen
-Haftungserleichterungen (§§ 521 ff. BGB). Zwingende Haftung (z. B. fuer Vorsatz,
-grobe Fahrlaessigkeit, die Verletzung von Leben, Koerper oder Gesundheit sowie
-nach dem Produkthaftungsgesetz) bleibt unberuehrt.
+Haftung ist im gesetzlich zulaessigen Umfang ausgeschlossen.
 
 Die Nutzung erfolgt auf eigene Gefahr — bitte erstellen Sie vorher
 Sicherungskopien Ihrer Daten.
