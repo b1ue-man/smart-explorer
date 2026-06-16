@@ -32,7 +32,15 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 
 | # | Item | State | Notes |
 |---|---|---|---|
-| 24 | **Remote file-op parity** + bug fixes — C: drive loads in picker (drive-relative fix); **delete** (→ backend trash/unlink), **new folder** (→ mkdir_all), **rename** (→ backend.rename), and a **right-click context menu for remotes** (open/download/copy/rename/delete/new-folder/path/refresh). | 🚧 0.5.24 | open: remote drag-drop, file-ops matrix, temp-watch+CfAPI open toggle |
+| 24 | **Remote file-op parity** + bug fixes — C: drive loads in picker; delete/new-folder/rename via backend; right-click menu for remotes. | ✅ | 0.5.24 |
+| 25 | **Remote edit + save-back, toggleable** — open a remote file, edit, save → uploaded back. Two modes (Einstellungen → REMOTE-DATEIEN ÖFFNEN): **Temp-Kopie** (ephemeral) and **CfAPI/Platzhalter** (persistent per-connection sync folder mirroring the remote). Native on-demand CfAPI placeholders = documented next Windows-tested layer. File-ops matrix: [`docs/FILE_OPS_MATRIX.md`](FILE_OPS_MATRIX.md). | ✅ | 0.5.25 |
+
+## Open
+
+| # | Item | Prio | Notes |
+|---|---|---|---|
+| 26 | **Remote drag-drop** — drag rows between tabs/panes to/from remotes (download/upload/cross-backend); drag remote files OUT to Explorer (materialize via temp + OLE). | next | §C of FILE_OPS_MATRIX |
+| 27 | **Native CfAPI placeholders** — CfRegisterSyncRoot + on-demand FETCH_DATA hydration + OS save notifications on the cfsync folder (Windows-tested). | later | REMOTE_EDIT.md |
 | 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
 | 19.2 | **Google Drive `Backend`** (`gdrive.rs`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, multipart upload. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16 |
 | 19.4 | **Self-setup instructions** — the app is not a hosted service: each user creates their own Google OAuth client. In-app collapsible guide + console link in Settings, full walkthrough in [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md), README note. Covers the Desktop-app loopback (no redirect URI) and the Testing-mode 7-day-token caveat. | ✅ | 0.5.17 |
