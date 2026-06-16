@@ -255,6 +255,24 @@ pub struct App {
     /// otherwise one drag-box would select in both panes.
     band_suppressed: bool,
 
+    // ─── File drag (between tabs/panes; out to Explorer on Windows) ──────
+    /// Absolute forward-slash source paths being dragged (empty = no drag).
+    drag_files: Vec<String>,
+    drag_active: bool,
+    /// Tab the drag started from (drop onto the same tab is a no-op).
+    drag_source_tab: usize,
+    /// Once we've handed an active drag to the OS (drag-out), don't re-trigger.
+    drag_out_started: bool,
+    /// Per-frame: rect of each tab's header label, for drop routing.
+    tab_header_rects: Vec<(usize, egui::Rect)>,
+    /// Per-frame: (tab index, rect) of each split pane, for drop routing.
+    pane_rects: Vec<(usize, egui::Rect)>,
+    /// Tab index whose `ui_table` is rendering right now (focused tab, or the
+    /// parked pane during its swapped render) — so a drag knows its source.
+    current_render_tab: usize,
+    /// False until we've revealed the window (maximized) after the first paint.
+    shown: bool,
+
     pending_scroll_row: Option<usize>,
 
     // Type-to-jump
@@ -566,6 +584,14 @@ impl App {
 
             band_press: None,
             band_active: false,
+            drag_files: Vec::new(),
+            drag_active: false,
+            drag_source_tab: 0,
+            drag_out_started: false,
+            tab_header_rects: Vec::new(),
+            pane_rects: Vec::new(),
+            current_render_tab: 0,
+            shown: false,
             band_base: HashSet::new(),
             band_suppressed: false,
             pending_scroll_row: None,
@@ -799,6 +825,8 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if !self.split || self.tabs.len() < 2 {
                 self.split = self.split && self.tabs.len() >= 2;
+                self.pane_rects.clear();
+                self.current_render_tab = self.active_tab;
                 self.ui_table(ui);
                 return;
             }
@@ -842,6 +870,9 @@ impl App {
                 full.min.y..=full.max.y,
                 egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
             );
+            // Remember each pane's rect (+ its tab) so a drag can drop onto the
+            // other pane, not just the tab header.
+            self.pane_rects = vec![(panes[0], rects[0]), (panes[1], rects[1])];
 
             for (slot, &rect) in rects.iter().enumerate() {
                 let tab_idx = panes[slot];
@@ -874,10 +905,12 @@ impl App {
                         });
                         ui.separator();
                         if focused {
+                            self.current_render_tab = tab_idx;
                             self.ui_pane_search(ui);
                             self.ui_table(ui);
                         } else {
                             self.swap_with_tab(tab_idx);
+                            self.current_render_tab = tab_idx;
                             self.ui_pane_search(ui);
                             self.band_suppressed = true; // band belongs to the focused pane
                             self.ui_table(ui);
@@ -1036,11 +1069,23 @@ impl App {
             New,
         }
         let mut action: Option<TabAction> = None;
+        let dragging = self.drag_active;
+        let mut header_rects: Vec<(usize, egui::Rect)> = Vec::new();
         ui.horizontal(|ui| {
             for i in 0..self.tabs.len() {
                 let selected = i == self.active_tab;
                 let title = self.tab_title(i);
                 let resp = ui.selectable_label(selected, title);
+                header_rects.push((i, resp.rect));
+                // Highlight a tab as a drop target while files are being dragged
+                // from another tab.
+                if dragging && i != self.drag_source_tab && resp.hovered() {
+                    ui.painter().rect_stroke(
+                        resp.rect.expand(1.0),
+                        3.0,
+                        egui::Stroke::new(2.0, Color32::from_rgb(120, 200, 255)),
+                    );
+                }
                 if resp.clicked() && !selected {
                     action = Some(TabAction::Switch(i));
                 }
@@ -1065,6 +1110,7 @@ impl App {
                 action = Some(TabAction::New);
             }
         });
+        self.tab_header_rects = header_rects;
         match action {
             Some(TabAction::Switch(i)) => self.switch_tab(i),
             Some(TabAction::Close(i)) => self.close_tab(i),
@@ -3078,6 +3124,130 @@ impl App {
         ));
     }
 
+    /// Which tab a screen point drops onto — a tab header, or (in split) a
+    /// pane. None if over neither.
+    fn drop_target_tab(&self, p: egui::Pos2) -> Option<usize> {
+        if let Some((i, _)) = self.tab_header_rects.iter().find(|(_, r)| r.contains(p)) {
+            return Some(*i);
+        }
+        if let Some((i, _)) = self.pane_rects.iter().find(|(_, r)| r.contains(p)) {
+            return Some(*i);
+        }
+        None
+    }
+
+    /// Copy (or move with Shift) the dragged files into tab `t`'s folder.
+    fn drop_files_into_tab(&mut self, t: usize, move_files: bool) {
+        let (dest_str, is_remote) = if t == self.active_tab {
+            (self.root_path.clone(), self.remote.is_some())
+        } else {
+            match self.tabs.get(t) {
+                Some(x) => (x.root_path.clone(), x.remote.is_some()),
+                None => return,
+            }
+        };
+        if dest_str.is_empty() || is_remote || !is_local_style(&dest_str) {
+            self.error_msg = Some("Ziel-Tab ist kein lokaler Ordner.".to_string());
+            return;
+        }
+        let dest_fwd = dest_str.trim_end_matches('/').to_string();
+        // Skip files already directly in the destination (dropping onto their
+        // own folder would just make "name (2)" copies).
+        let files: Vec<String> = std::mem::take(&mut self.drag_files)
+            .into_iter()
+            .filter(|p| p.rsplit_once('/').map(|(par, _)| par) != Some(dest_fwd.as_str()))
+            .collect();
+        if files.is_empty() {
+            self.notice = Some((
+                "Dateien sind bereits im Ziel-Ordner.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let n = files.len();
+        let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
+        self.copy_paths_into(files, dest, move_files);
+        self.notice = Some((
+            format!(
+                "{} Element(e) werden in „{}“ {}…",
+                n,
+                dest_fwd.rsplit('/').next().unwrap_or(&dest_fwd),
+                if move_files { "verschoben" } else { "kopiert" }
+            ),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Drive an active internal file drag each frame: paint a cursor chip,
+    /// route a drop onto another tab/pane, and (Windows) hand the drag off to
+    /// Explorer once the pointer leaves the window.
+    fn handle_file_drag(&mut self, ctx: &egui::Context) {
+        if !self.drag_active {
+            return;
+        }
+        let (down, released, pos, shift) = ctx.input(|i| {
+            (
+                i.pointer.primary_down(),
+                i.pointer.any_released(),
+                i.pointer.latest_pos(),
+                i.modifiers.shift,
+            )
+        });
+
+        // Drag OUT to Explorer (Windows): once the pointer leaves the window
+        // while still dragging, hand the files to the OS drag loop (blocks until
+        // the drop completes), then refresh in case it was a move.
+        #[cfg(windows)]
+        if down && !self.drag_out_started {
+            if let Some(p) = pos {
+                if !ctx.screen_rect().contains(p) {
+                    self.drag_out_started = true;
+                    self.drag_active = false;
+                    let files = std::mem::take(&mut self.drag_files);
+                    crate::dragout::drag_out(&files);
+                    self.rescan();
+                    return;
+                }
+            }
+        }
+
+        if down {
+            // Floating chip near the cursor.
+            if let Some(p) = pos {
+                let n = self.drag_files.len();
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::new("file_drag_chip"),
+                ));
+                let text = format!(
+                    "📄 {} Element(e){}",
+                    n,
+                    if shift { " — verschieben" } else { "" }
+                );
+                let galley =
+                    painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+                let pad = egui::vec2(8.0, 4.0);
+                let origin = p + egui::vec2(14.0, 8.0);
+                let rect = egui::Rect::from_min_size(origin, galley.size() + pad * 2.0);
+                painter.rect_filled(rect, 4.0, Color32::from_rgb(40, 90, 140));
+                painter.galley(origin + pad, galley, Color32::WHITE);
+            }
+            ctx.request_repaint();
+            return;
+        }
+
+        // Released inside the window → route to a target tab/pane.
+        if released {
+            if let Some(t) = pos.and_then(|p| self.drop_target_tab(p)) {
+                if t != self.drag_source_tab {
+                    self.drop_files_into_tab(t, shift);
+                }
+            }
+            self.drag_active = false;
+            self.drag_files.clear();
+        }
+    }
+
     /// Full-window hint shown while files are dragged over the app.
     fn ui_drop_overlay(&self, ctx: &egui::Context) {
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -4567,6 +4737,9 @@ impl App {
         let mut row_dblclick: Option<usize> = None;
         let mut row_rclick: Option<usize> = None;
         let mut sort_clicked: Option<SortKey> = None;
+        // Entry index of a row whose drag just started this frame (file drag to
+        // another tab/pane or out to Explorer). Resolved after the table.
+        let mut drag_start: Option<usize> = None;
         // (row index, name-cell rect) of rendered rows — used for rubber-band
         // geometry below.
         let mut visible_rows: Vec<(usize, egui::Rect)> = Vec::new();
@@ -4641,12 +4814,20 @@ impl App {
                         if resp.secondary_clicked() {
                             row_rclick = Some(entry_idx);
                         }
+                        // Dragging a row begins a file drag (resolved after the
+                        // table). The rubber-band bails when a drag is active, so
+                        // these don't fight.
+                        if resp.drag_started() {
+                            drag_start = Some(entry_idx);
+                        }
                     };
 
                     let handle_cell = |ui: &mut egui::Ui, content: &str, right_align: bool| {
                         let cell_w = ui.available_width();
-                        let (rect, resp) = ui
-                            .allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(cell_w, row_h),
+                            egui::Sense::click_and_drag(),
+                        );
                         let color = if selected {
                             ui.visuals().selection.stroke.color
                         } else {
@@ -4659,8 +4840,10 @@ impl App {
                     // ─── Name (with indent + native icon) ──────────────
                     row.col(|ui| {
                         let cell_w = ui.available_width();
-                        let (rect, resp) = ui
-                            .allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(cell_w, row_h),
+                            egui::Sense::click_and_drag(),
+                        );
                         visible_rows.push((row_index, rect));
                         let indent = display_depth.min(32) as f32 * 14.0;
                         let color = if selected {
@@ -4751,6 +4934,28 @@ impl App {
                     });
                 });
             });
+
+        // A row drag started → capture the files (the whole selection if the
+        // dragged row is part of it, otherwise just that row). Local files only
+        // (remote items would need a download to drop elsewhere).
+        if let Some(idx) = drag_start {
+            if !self.drag_active && self.remote.is_none() {
+                let dragged = self.entries[idx].path.clone();
+                let files: Vec<String> = if self.selection.contains(&dragged) {
+                    self.selection.iter().map(|p| p.to_string()).collect()
+                } else {
+                    vec![dragged.to_string()]
+                };
+                let files: Vec<String> =
+                    files.into_iter().filter(|p| is_local_style(p)).collect();
+                if !files.is_empty() {
+                    self.drag_files = files;
+                    self.drag_active = true;
+                    self.drag_source_tab = self.current_render_tab;
+                    self.drag_out_started = false;
+                }
+            }
+        }
 
         if let Some(k) = sort_clicked {
             if self.sort_key == k {
@@ -5737,6 +5942,16 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Pump background channels
         self.drain_scan();
+
+        // Maximize once, after the first frame is laid out, so the app opens as
+        // a proper maximized window without the builder-`maximized` flashbang
+        // (see main.rs).
+        if !self.shown {
+            self.shown = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            ctx.request_repaint();
+        }
+
         self.drain_inactive_tabs();
         self.drain_copy();
         self.drain_index();
@@ -6166,6 +6381,9 @@ impl eframe::App for App {
             self.ui_drop_overlay(ctx);
             ctx.request_repaint();
         }
+
+        // Internal file drag (between tabs/panes; out to Explorer on Windows).
+        self.handle_file_drag(ctx);
 
         // Repaint while background work is active
         if self.scan_running

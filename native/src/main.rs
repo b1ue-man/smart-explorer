@@ -6,6 +6,8 @@ mod autostart;
 mod bisync;
 mod connect;
 mod daemon;
+#[cfg(windows)]
+mod dragout;
 mod copy;
 mod creds;
 mod filter;
@@ -75,12 +77,12 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            // Open maximized so the window is fully on-screen and ready to use.
-            // Previously the default size was nearly the full screen but the
-            // window opened with an offset, landing partly off-screen and
-            // forcing the user to drag it in before maximizing. The inner_size
-            // is the restore (un-maximized) size.
-            .with_maximized(true)
+            // Open at a sensible, on-screen size and maximize on the first
+            // painted frame (see App::update) rather than via the builder's
+            // `maximized`: that showed a white, default-sized window for a beat
+            // and then jumped to maximized — the "flashbang" the user saw. This
+            // also fixes the earlier partly-off-screen placement. inner_size is
+            // the restore (un-maximized) size.
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([900.0, 600.0])
             .with_title("Smart Explorer"),
