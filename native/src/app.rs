@@ -5166,9 +5166,9 @@ impl App {
         }
     }
 
-    /// Cloud (Google Drive) connect — #19 slice 1: configure the OAuth client
-    /// ID and run the authorize flow. Browsing/sync over Drive arrives once the
-    /// `gdrive.rs` backend lands (slice 2).
+    /// Cloud (Google Drive) connect (#19): configure your OWN Google OAuth
+    /// client ID and run the authorize flow. Smart Explorer is not a hosted
+    /// service — each user supplies their own client (see docs/CLOUD_SETUP.md).
     fn ui_menu_cloud(&mut self, ui: &mut egui::Ui) {
         use crate::cloud::Provider;
         let p = Provider::GDrive;
@@ -5192,9 +5192,8 @@ impl App {
                 .desired_width(f32::INFINITY),
         )
         .on_hover_text(
-            "Aus deinem eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
-             Anleitung: docs/CLOUD_OAUTH_PLAN.md. Eine Desktop-App kann kein \
-             gemeinsames Geheimnis ausliefern — daher dein eigener Client.",
+            "Aus DEINEM eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
+             Diese App ist kein Dienst — siehe Anleitung unten / docs/CLOUD_SETUP.md.",
         );
         ui.add(
             egui::TextEdit::singleline(&mut self.cloud_secret_draft)
@@ -5235,11 +5234,37 @@ impl App {
                 }
             }
         });
-        ui.label(
-            RichText::new("Durchsuchen/Sync über Drive folgt (Backend in Arbeit).")
-                .small()
-                .color(Color32::from_gray(120)),
-        );
+        // Inline setup guide — the user runs their own Google project; this app
+        // hosts nothing. Full version: docs/CLOUD_SETUP.md.
+        egui::CollapsingHeader::new("ℹ Einrichtung (eigenes Google-Projekt)")
+            .id_salt("cloud_setup_help")
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Smart Explorer ist kein Cloud-Dienst — du nutzt dein eigenes \
+                         Google-Konto. Einmalig (~5 min):",
+                    )
+                    .small(),
+                );
+                for line in [
+                    "1. Google Cloud Console → Projekt anlegen.",
+                    "2. APIs & Dienste → Bibliothek → „Google Drive API“ aktivieren.",
+                    "3. OAuth-Zustimmungsbildschirm → Extern; dich als Testnutzer hinzufügen.",
+                    "4. Anmeldedaten → OAuth-Client-ID → Typ „Desktop-App“ (keine Redirect-URI nötig).",
+                    "5. Client-ID (+ ggf. Secret) oben einfügen → „Mit Google verbinden“.",
+                ] {
+                    ui.label(RichText::new(line).small().color(Color32::from_gray(180)));
+                }
+                ui.hyperlink_to("→ Google Cloud Console öffnen", "https://console.cloud.google.com");
+                ui.label(
+                    RichText::new(
+                        "Hinweis: Im „Testing“-Modus laufen die Tokens nach ~7 Tagen ab — \
+                         dann einfach erneut verbinden. Details: docs/CLOUD_SETUP.md.",
+                    )
+                    .small()
+                    .color(Color32::from_gray(140)),
+                );
+            });
         ui.separator();
     }
 

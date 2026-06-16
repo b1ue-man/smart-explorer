@@ -11,6 +11,11 @@ einheitliche `Backend`-Schnittstelle (Sidebar → **VERBINDEN**); Zugangsdaten i
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
 den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
+**Google Drive (ab 0.5.16):** durchsuchen und **synchronisieren** über denselben
+`Backend`-Mechanismus. Smart Explorer ist **kein Cloud-Dienst** — du hinterlegst
+einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
+[`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)); Einstellungen → **CLOUD (GOOGLE DRIVE)**.
+
 ---
 
 ## ⚠️ Lizenz & Hinweis
@@ -72,6 +77,7 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status — **Roadmap vollständig** (Remote-Layer, Cloud/WebDAV, Sync, Win11-Menü) |
 | [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Verifizierter Implementierungsplan für den Netzwerk-Layer (umgesetzt: `vfs.rs` + `sftp.rs`/`ftp.rs`/`webdav.rs`/`net.rs`/`rscan.rs`/`connect.rs`/`creds.rs`/`sync.rs`) |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | **Release- & Update-Flow von A bis Z** (bauen → Feed → GitHub-Release → Selbst-Update); inkl. „Repo muss public sein" |
+| [`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md) | **Google Drive einrichten** mit deinem eigenen Google-Projekt (OAuth Client-ID) — die App ist kein Dienst |
 | [`docs/WIN11_CONTEXT_MENU.md`](docs/WIN11_CONTEXT_MENU.md) | Win11-Modern-Kontextmenü: COM-DLL (`explorer-command/`) gebaut; offen ist nur die Signierung |
 | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | Verifizierte Sackgassen & Fallen — **vor dem „Verbessern" lesen** |
 
