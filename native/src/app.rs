@@ -3093,9 +3093,11 @@ impl App {
         let dest = match self.remote_open_mode {
             RemoteOpenMode::Temp => open_temp_path(&name),
             RemoteOpenMode::CfApi => {
-                // Register the connection folder as a native CfAPI sync root
-                // (best-effort) so it's OS-managed like OneDrive.
-                crate::cfsync::register_root(&crate::cfsync::conn_root_dir(&label));
+                // Persistent per-connection sync folder mirroring the remote. (We
+                // do NOT register it as a native CfAPI sync root: doing so without
+                // a connected provider makes Windows' cloud filter reject normal
+                // file creation — "invalid name request". Native on-demand
+                // placeholders need a full CfConnectSyncRoot provider, see #30.)
                 crate::cfsync::local_path(&label, &self.root_path, &path)
             }
         };
@@ -3150,10 +3152,6 @@ impl App {
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
-            }
-            // In CfAPI mode, mark the hydrated file as an in-sync placeholder.
-            if self.remote_open_mode == RemoteOpenMode::CfApi {
-                crate::cfsync::mark_in_sync(&pb);
             }
             self.open_path(&p);
         }
@@ -4581,13 +4579,51 @@ impl App {
                 self.start_remote_download(be, files, dest_fwd);
             }
             // remote → remote
-            (Some(_), Some(_)) => {
-                self.error_msg = Some(
-                    "Remote → Remote per Drag&Drop wird noch nicht unterstützt (erst herunterladen)."
-                        .to_string(),
-                );
+            // remote → remote (cross-backend: download to temp, then upload)
+            (Some(src), Some(tgt)) => {
+                self.start_remote_to_remote(src, files, tgt, dest_fwd);
             }
         }
+    }
+
+    /// Copy remote `files` into another remote folder by streaming each through a
+    /// temp file (download from `src`, upload to `tgt`/dest). Off the UI thread;
+    /// reuses the transfer result channel.
+    fn start_remote_to_remote(
+        &mut self,
+        src: crate::vfs::BackendHandle,
+        files: Vec<String>,
+        tgt: crate::vfs::BackendHandle,
+        dest_root: String,
+    ) {
+        if self.upload_rx.is_some() {
+            self.notice = Some(("Es läuft bereits eine Übertragung…".to_string(), std::time::Instant::now()));
+            return;
+        }
+        let n = files.len();
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("remote-to-remote".into())
+            .spawn(move || {
+                let mut copied = 0u64;
+                let mut errors = Vec::new();
+                for p in &files {
+                    let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                    let tmp = open_temp_path(name);
+                    let dest = format!("{}/{}", dest_root.trim_end_matches('/'), name);
+                    let r = download_to(&*src, p, &tmp)
+                        .and_then(|_| upload_file(&*tgt, &tmp, &dest));
+                    match r {
+                        Ok(_) => copied += 1,
+                        Err(e) => errors.push(format!("{}: {}", name, e)),
+                    }
+                    let _ = std::fs::remove_file(&tmp);
+                }
+                let _ = tx.send((copied, errors));
+            })
+            .ok();
+        self.upload_rx = Some(rx);
+        self.notice = Some((format!("⇄ Übertrage {} Element(e) (Remote→Remote)…", n), std::time::Instant::now()));
     }
 
     /// Download remote `files` into a local folder, off the UI thread (reuses
@@ -6610,11 +6646,12 @@ impl App {
             )
             .changed()
             | ui
-                .radio_value(&mut mode, RemoteOpenMode::CfApi, "CfAPI-Platzhalter (Windows)")
+                .radio_value(&mut mode, RemoteOpenMode::CfApi, "Persistenter Sync-Ordner")
                 .on_hover_text(
-                    "Stellt Remote-Dateien als echte lokale Platzhalter dar (wie OneDrive): \
-                     beim Öffnen geladen, beim Speichern direkt zurückgeschrieben — der Pfad \
-                     ist der Remote-Pfad, kein Hantieren mit Temp-Dateien. Nur Windows.",
+                    "Spiegelt Remote-Dateien an einem festen lokalen Pfad \
+                     (%USERPROFILE%\\Smart Explorer\\<Verbindung>\\…), der die Remote-Struktur \
+                     abbildet; Änderungen werden beim Speichern automatisch zurückgeladen. \
+                     (Native OneDrive-Platzhalter mit Hydrierung-auf-Abruf folgen, #30.)",
                 )
                 .changed();
         if changed {
