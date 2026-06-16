@@ -435,6 +435,11 @@ enum ClipKey {}
 /// used by the installer's accept page).
 const DISCLAIMER_TEXT: &str = include_str!("../../DISCLAIMER.txt");
 
+/// How many saved (set-up-once) remote connections stay pinned on the sidebar.
+/// The freshest are shown there; any older ones overflow into the "Verbindung"
+/// menu so the sidebar can't grow without bound.
+const SIDEBAR_CONN_CAP: usize = 10;
+
 /// Format a unix-millis timestamp as local "YYYY-MM-DD HH:MM".
 fn fmt_ms(ms: i64) -> String {
     use chrono::TimeZone;
@@ -1807,6 +1812,10 @@ impl App {
     fn connect_saved(&mut self, c: &crate::creds::SavedConnection) {
         let form = crate::connect::ConnectForm::from_saved(c);
         let secret = crate::creds::get_secret(&c.account());
+        // Bump to most-recent so the sidebar keeps the freshest connections up
+        // front and overflows the stale ones into the menu.
+        crate::creds::touch_connection(&c.account());
+        self.saved_connections = crate::creds::load_connections();
         self.begin_connect(form, secret);
     }
 
@@ -3726,7 +3735,94 @@ impl App {
             }
         }
 
-        // ─── Remote connections ───────────────────────────────────────
+        // ─── Remote connections (set-up-once; freshest pinned here) ─────
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("VERBINDUNGEN").small().color(Color32::from_gray(140)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("＋")
+                    .on_hover_text("Neue Verbindung (SFTP / FTP / FTPS / Netzlaufwerk)")
+                    .clicked()
+                {
+                    self.connect_form = crate::connect::ConnectForm::default();
+                    self.show_connect = true;
+                }
+            });
+        });
+
+        let mut disconnect = false;
+        let mut to_connect: Option<crate::creds::SavedConnection> = None;
+        let mut to_remove: Option<String> = None;
+
+        // Active connection indicator + one-click disconnect.
+        if let Some(rs) = &self.remote {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
+                        disconnect = true;
+                    }
+                });
+            });
+        } else if self.net_conn.is_some() {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::from_rgb(120, 200, 255), "● Netzlaufwerk");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
+                        disconnect = true;
+                    }
+                });
+            });
+        }
+
+        // Saved connections, newest first, capped — click to connect, × forget.
+        let conns: Vec<crate::creds::SavedConnection> =
+            self.saved_connections.iter().rev().cloned().collect();
+        if conns.is_empty() {
+            ui.colored_label(Color32::from_gray(120), "(noch keine gespeichert)");
+        }
+        for c in conns.iter().take(SIDEBAR_CONN_CAP) {
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small())
+                            .frame(false),
+                    )
+                    .on_hover_text(c.to_target())
+                    .clicked()
+                {
+                    to_connect = Some(c.clone());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("×").on_hover_text("Entfernen").clicked() {
+                        to_remove = Some(c.account());
+                    }
+                });
+            });
+        }
+        if conns.len() > SIDEBAR_CONN_CAP {
+            ui.colored_label(
+                Color32::from_gray(120),
+                format!(
+                    "+{} ältere im Menü „Verbindung“",
+                    conns.len() - SIDEBAR_CONN_CAP
+                ),
+            );
+        }
+
+        if disconnect {
+            self.remote = None;
+            self.net_conn = None;
+            self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
+        }
+        if let Some(acc) = to_remove {
+            let _ = crate::creds::remove_connection(&acc);
+            self.saved_connections = crate::creds::load_connections();
+        }
+        if let Some(c) = to_connect {
+            self.connect_saved(&c);
+        }
     }
 
     fn ui_menu_connect(&mut self, ui: &mut egui::Ui) {
@@ -3752,24 +3848,44 @@ impl App {
             self.connect_form = crate::connect::ConnectForm::default();
             self.show_connect = true;
         }
-        // Saved connections — click to connect, × to forget (cached list).
+        // Established connections live on the sidebar (most recent first). Only
+        // the overflow — older ones beyond the sidebar cap — appears here, so
+        // the menu stays uncluttered but no saved connection is ever hidden.
         let mut to_remove: Option<String> = None;
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
-        for c in &self.saved_connections {
-            ui.horizontal(|ui| {
-                if ui
-                    .add(egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small()).frame(false))
-                    .on_hover_text(c.to_target())
-                    .clicked()
-                {
-                    to_connect = Some(c.clone());
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text("Entfernen").clicked() {
-                        to_remove = Some(c.account());
+        let conns: Vec<crate::creds::SavedConnection> =
+            self.saved_connections.iter().rev().cloned().collect();
+        if conns.len() > SIDEBAR_CONN_CAP {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("WEITERE (ältere)")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
+            for c in conns.iter().skip(SIDEBAR_CONN_CAP) {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small())
+                                .frame(false),
+                        )
+                        .on_hover_text(c.to_target())
+                        .clicked()
+                    {
+                        to_connect = Some(c.clone());
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("×").on_hover_text("Entfernen").clicked() {
+                            to_remove = Some(c.account());
+                        }
+                    });
                 });
-            });
+            }
+        } else if !conns.is_empty() {
+            ui.colored_label(
+                Color32::from_gray(120),
+                "Gespeicherte Verbindungen: in der Sidebar links.",
+            );
         }
         if let Some(acc) = to_remove {
             let _ = crate::creds::remove_connection(&acc);
