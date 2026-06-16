@@ -3099,8 +3099,20 @@ impl App {
                 backend.clone(),
                 self.root_path.trim_end_matches('/'),
             ) {
-                Ok(_) => {
-                    let dest = crate::cfsync::local_path(&label, &self.root_path, &path);
+                Ok(local_root) => {
+                    // The placeholder's on-disk name must match what the provider
+                    // creates in fetch_placeholders (download_name → Google-Docs
+                    // get a .docx/.xlsx extension), else the open finds nothing.
+                    let local_name = backend.download_name(&path, &name);
+                    let dest = crate::cfsync::local_path_named(
+                        &label,
+                        &self.root_path,
+                        &path,
+                        &local_name,
+                    );
+                    // Placeholders populate on directory enumeration, not on a
+                    // direct leaf open — walk the parents so `dest` exists first.
+                    crate::cfprovider::populate_to(&local_root, &dest);
                     self.remote_edits.retain(|e| e.temp != dest);
                     if self.remote_edits.len() < 50 {
                         self.remote_edits.push(RemoteEdit {
@@ -3113,11 +3125,22 @@ impl App {
                             uploading: false,
                         });
                     }
-                    self.notice = Some((
-                        format!("☁ Öffne „{}“ (CfAPI-Platzhalter)…", name),
-                        std::time::Instant::now(),
-                    ));
-                    self.open_path(&dest.to_string_lossy().replace('\\', "/"));
+                    if dest.exists() {
+                        self.notice = Some((
+                            format!("☁ Öffne „{}“ (CfAPI-Platzhalter)…", name),
+                            std::time::Instant::now(),
+                        ));
+                        self.open_path(&dest.to_string_lossy().replace('\\', "/"));
+                    } else {
+                        // Population didn't yield the placeholder — tell the user
+                        // instead of failing silently.
+                        self.error_msg = Some(format!(
+                            "CfAPI: Platzhalter für „{}“ wurde nicht erzeugt (Ordner: {}). \
+                             Tipp: in den Einstellungen auf „Temp-Kopie“ wechseln.",
+                            name,
+                            local_root.to_string_lossy()
+                        ));
+                    }
                     return;
                 }
                 Err(e) => {

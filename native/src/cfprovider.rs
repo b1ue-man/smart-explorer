@@ -131,6 +131,34 @@ impl SyncFilter for RemoteFilter {
     }
 }
 
+/// Force on-demand population of every directory level from the sync root down
+/// to `target`'s parent, so the leaf placeholder exists before we open it.
+///
+/// CfAPI only materializes placeholders in `fetch_placeholders`, which the OS
+/// invokes on directory **enumeration**. Opening a leaf that was never browsed
+/// finds nothing on disk → `ShellExecute` is a silent no-op. Reading each
+/// ancestor directory (FindFirstFile under the hood) triggers population of that
+/// level synchronously, so by the end the target placeholder exists.
+pub fn populate_to(local_root: &Path, target: &Path) {
+    fn drain(dir: &Path) {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for _ in rd.flatten() {}
+        }
+    }
+    let parent = match target.parent() {
+        Some(p) => p,
+        None => return,
+    };
+    drain(local_root);
+    if let Ok(rel) = parent.strip_prefix(local_root) {
+        let mut dir = local_root.to_path_buf();
+        for seg in rel.components() {
+            dir = dir.join(seg);
+            drain(&dir);
+        }
+    }
+}
+
 /// Keep connections alive for the process lifetime (drop = disconnect).
 fn registry() -> &'static Mutex<HashMap<String, Connection<RemoteFilter>>> {
     static R: OnceLock<Mutex<HashMap<String, Connection<RemoteFilter>>>> = OnceLock::new();
