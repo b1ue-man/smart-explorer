@@ -21,12 +21,14 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 14 | **Established connections pinned to the sidebar**, freshest first; overflow (>10) into the Verbindung menu | ✅ | 0.5.10 |
 | 4 | **Background sync daemon** (`--sync-daemon`, logon autostart, runs due setups with app closed) + heartbeat/status + on/off toggle | ✅ | 0.5.11 |
 | 15 | Window opened partly off-screen at near-full size → **open maximized** by default | ✅ | 0.5.11 |
+| 6a | Drag-and-drop **into the app**: drop OS files (Explorer/desktop) onto a folder view → copy (Shift = move); full-window drop hint | ✅ | 0.5.12 |
 
 ## Open
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 6 | **Native Windows drag-and-drop**: into the app (egui dropped_files), between tabs, and **out to Explorer** (OLE `DoDragDrop` + `IDataObject`/`IDropSource` — the hard part) | — | drop-in/between-tabs first; drag-out via COM |
+| 6b | Drag files **between tabs/panes** (internal egui DnD) — needs care: the rubber-band gesture also starts on press inside the table, so a row-drag source must be disambiguated from band-select | — | refactor the band/press gating in `ui_table` |
+| 6c | Drag files **out to Explorer** (OLE `DoDragDrop` + `IDataObject`/`IDropSource`, CF_HDROP) — the hard, Win32-only part; runs a modal loop on the UI thread and can't be verified in this headless env | — | isolate in a Windows-only module; needs the window HWND |
 
 ## Notes
 

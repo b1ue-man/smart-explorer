@@ -2993,6 +2993,118 @@ impl App {
     #[cfg(not(windows))]
     fn clipboard_paste_files(&mut self) {}
 
+    // ─── Drag-and-drop into the app ─────────────────────────────────────
+
+    /// Copy (or move) OS paths into `dest`, on the copy worker. Conflicts
+    /// auto-rename so a drop never overwrites. Shared by the OS drop handler.
+    fn copy_paths_into(&mut self, paths: Vec<String>, dest: PathBuf, move_files: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.copy_progress.as_ref().map(|p| !p.done).unwrap_or(false) {
+            self.error_msg = Some("Es läuft bereits ein Kopiervorgang.".to_string());
+            return;
+        }
+        let common_parent = PathBuf::from(&paths[0])
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let opts = CopyOptions {
+            root: common_parent,
+            dest,
+            preserve_structure: true,
+            conflict: Conflict::Rename,
+            mode: if move_files { CopyMode::Move } else { CopyMode::Copy },
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let h = start_copy_from_paths(paths, opts, tx);
+        self.copy_handle = Some(h);
+        self.copy_rx = Some(rx);
+        self.copy_progress = Some(CopyProgress {
+            files_done: 0,
+            files_total: 0,
+            bytes_done: 0,
+            bytes_total: 0,
+            elapsed_ms: 0,
+            current_path: String::new(),
+            errors: 0,
+            done: false,
+        });
+        self.copy_refresh_after = true;
+    }
+
+    /// Whether the current view can accept dropped files (a local folder).
+    fn drop_target(&self) -> Option<String> {
+        if self.root_path.is_empty() || self.remote.is_some() || !is_local_style(&self.root_path) {
+            None
+        } else {
+            Some(self.root_path.clone())
+        }
+    }
+
+    /// Handle files dropped onto the window from the OS (Explorer, desktop, …).
+    /// They land in the current folder — copy by default, move with Shift held.
+    fn handle_os_drop(&mut self, ctx: &egui::Context) {
+        let (paths, shift) = ctx.input(|i| {
+            let p: Vec<String> = i
+                .raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.as_ref())
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            (p, i.modifiers.shift)
+        });
+        if paths.is_empty() {
+            return;
+        }
+        let dest = match self.drop_target() {
+            Some(p) => PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)),
+            None => {
+                self.error_msg =
+                    Some("Ablegen nur in einem lokalen Ordner möglich.".to_string());
+                return;
+            }
+        };
+        let n = paths.len();
+        self.copy_paths_into(paths, dest, shift);
+        self.notice = Some((
+            format!(
+                "📥 {} Element(e) werden {}…",
+                n,
+                if shift { "verschoben" } else { "kopiert" }
+            ),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Full-window hint shown while files are dragged over the app.
+    fn ui_drop_overlay(&self, ctx: &egui::Context) {
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("drop_overlay"),
+        ));
+        let rect = ctx.screen_rect();
+        painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 110));
+        let (text, color) = match self.drop_target() {
+            Some(p) => (
+                format!("📥 Hier ablegen → {}\n(Umschalt = verschieben)", p),
+                Color32::from_rgb(150, 220, 255),
+            ),
+            None => (
+                "Ablegen nur in einem lokalen Ordner möglich".to_string(),
+                Color32::from_rgb(255, 185, 120),
+            ),
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(22.0),
+            color,
+        );
+    }
+
     // ─── Context menus ──────────────────────────────────────────────────
 
     #[cfg(windows)]
@@ -5641,6 +5753,10 @@ impl eframe::App for App {
         }
         self.maybe_save_index();
 
+        // Files dropped onto the window from the OS (Explorer/desktop) → land
+        // in the current folder. Processed once per frame.
+        self.handle_os_drop(ctx);
+
         // Open the command-line path on the first frame (folder double-click /
         // "Open in Smart Explorer" / default-manager handoff). A file path
         // opens its parent folder.
@@ -6044,6 +6160,12 @@ impl eframe::App for App {
         }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
+
+        // Drag-over hint while the OS is dragging files onto the window.
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            self.ui_drop_overlay(ctx);
+            ctx.request_repaint();
+        }
 
         // Repaint while background work is active
         if self.scan_running
