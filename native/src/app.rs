@@ -3121,20 +3121,26 @@ impl App {
                     return;
                 }
                 Err(e) => {
-                    self.notice = Some((
-                        format!("CfAPI nicht verfügbar ({}), nutze Temp-Kopie", e),
-                        std::time::Instant::now(),
-                    ));
-                    // fall through to the temp/persistent-folder download path
+                    // Clean failure — surface the real CfAPI error; never write
+                    // into the (possibly half-registered) sync folder. The user
+                    // can switch to Temp mode in Settings if needed.
+                    self.error_msg = Some(format!("CfAPI: {}", e));
+                    return;
                 }
             }
         }
 
-        // Temp mode (and non-Windows CfApi = persistent folder): download to the
-        // local destination, watch it for saves, and launch.
+        // Temp mode: download to a temp copy, watch it for saves, launch.
+        // `download_name` gives Google-Docs files the right extension (.docx/…).
+        // (On Windows, CfApi is fully handled above and returns; off-Windows
+        // CfApi uses the persistent mirror folder.)
+        let local_name = backend.download_name(&path, &name);
         let dest = match self.remote_open_mode {
-            RemoteOpenMode::Temp => open_temp_path(&name),
-            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &path),
+            RemoteOpenMode::Temp => open_temp_path(&local_name),
+            #[cfg(windows)]
+            RemoteOpenMode::CfApi => unreachable!("CfApi handled in the provider branch on Windows"),
+            #[cfg(not(windows))]
+            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &local_name),
         };
         self.remote_edits.retain(|e| e.temp != dest);
         if self.remote_edits.len() < 50 {

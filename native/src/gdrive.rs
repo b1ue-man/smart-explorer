@@ -24,6 +24,39 @@ const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 fn err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, e.to_string())
 }
+
+/// Export MIME type for a Google-Docs editors file (None = a normal binary file
+/// that downloads directly via alt=media).
+fn export_format(mime: &str) -> Option<&'static str> {
+    Some(match mime {
+        "application/vnd.google-apps.document" => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        "application/vnd.google-apps.spreadsheet" => {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        "application/vnd.google-apps.presentation" => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+        "application/vnd.google-apps.drawing" => "image/png",
+        m if m.starts_with("application/vnd.google-apps.") && m != FOLDER_MIME => {
+            "application/pdf"
+        }
+        _ => return None,
+    })
+}
+
+/// File extension matching `export_format`.
+fn export_ext(mime: &str) -> Option<&'static str> {
+    Some(match mime {
+        "application/vnd.google-apps.document" => "docx",
+        "application/vnd.google-apps.spreadsheet" => "xlsx",
+        "application/vnd.google-apps.presentation" => "pptx",
+        "application/vnd.google-apps.drawing" => "png",
+        m if m.starts_with("application/vnd.google-apps.") && m != FOLDER_MIME => "pdf",
+        _ => return None,
+    })
+}
 fn not_found(p: &str) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, format!("nicht gefunden: {}", p))
 }
@@ -75,6 +108,9 @@ pub struct GDriveBackend {
     tokens: Mutex<cloud::Tokens>,
     /// path (forward-slash, no trailing slash; "" == root) → fileId
     ids: Mutex<HashMap<String, String>>,
+    /// path → mimeType (so we know which files are Google-Docs editors that
+    /// must be exported instead of downloaded).
+    mimes: Mutex<HashMap<String, String>>,
     root: String,
 }
 
@@ -88,8 +124,23 @@ impl GDriveBackend {
         Ok(GDriveBackend {
             tokens: Mutex::new(tokens),
             ids: Mutex::new(ids),
+            mimes: Mutex::new(HashMap::new()),
             root: norm(root),
         })
+    }
+
+    /// The Drive mimeType for `path` (cached from list_dir, else a stat call).
+    fn mime_of(&self, path: &str) -> Option<String> {
+        let key = norm(path);
+        if let Some(m) = self.mimes.lock().unwrap().get(&key).cloned() {
+            return Some(m);
+        }
+        let id = self.resolve(&key).ok()?;
+        let url = format!("{}/files/{}?fields=mimeType", API, id);
+        let v = self.get_json(&url).ok()?;
+        let m = v["mimeType"].as_str()?.to_string();
+        self.mimes.lock().unwrap().insert(key, m.clone());
+        Some(m)
     }
 
     fn bearer(&self) -> VfsResult<String> {
@@ -306,6 +357,12 @@ impl Backend for GDriveBackend {
                         } else {
                             format!("{}/{}", base, m.name)
                         };
+                        if let Some(mime) = f["mimeType"].as_str() {
+                            self.mimes
+                                .lock()
+                                .unwrap()
+                                .insert(child_path.clone(), mime.to_string());
+                        }
                         self.ids.lock().unwrap().insert(child_path, fid.to_string());
                     }
                     out.push(m);
@@ -345,7 +402,16 @@ impl Backend for GDriveBackend {
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         let id = self.resolve(path)?;
         let auth = self.bearer()?;
-        match ureq::get(&format!("{}/files/{}?alt=media", API, id))
+        // Google-Docs editors files (Docs/Sheets/Slides/Drawings) have no binary
+        // content and 403 on alt=media ("fileNotDownloadable") — they must be
+        // EXPORTED to an Office/PDF format instead.
+        let mime = self.mime_of(path).unwrap_or_default();
+        let url = if let Some(fmt) = export_format(&mime) {
+            format!("{}/files/{}/export?mimeType={}", API, id, cloud_urlenc(fmt))
+        } else {
+            format!("{}/files/{}?alt=media", API, id)
+        };
+        match ureq::get(&url)
             .set("Authorization", &format!("Bearer {}", auth))
             .call()
         {
@@ -354,6 +420,19 @@ impl Backend for GDriveBackend {
                 Err(drive_err(code, resp.into_string().unwrap_or_default()))
             }
             Err(e) => Err(err(e)),
+        }
+    }
+
+    /// The filename to save a download as. Google-Docs editors files carry no
+    /// extension, so append the export format's extension (.docx/.xlsx/…) so the
+    /// downloaded copy opens in the right app.
+    fn download_name(&self, path: &str, name: &str) -> String {
+        let mime = self.mime_of(path).unwrap_or_default();
+        match export_ext(&mime) {
+            Some(ext) if !name.to_lowercase().ends_with(&format!(".{}", ext)) => {
+                format!("{}.{}", name, ext)
+            }
+            _ => name.to_string(),
         }
     }
 

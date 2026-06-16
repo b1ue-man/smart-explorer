@@ -109,7 +109,15 @@ impl SyncFilter for RemoteFilter {
             }
             .created(now)
             .written(now);
-            let mut pf = PlaceholderFile::new(&m.name)
+            // Display name: backends that transform on read (Google-Docs export)
+            // give the placeholder the right extension; blob keeps the real
+            // remote path so fetch_data downloads the correct item.
+            let display = if m.is_dir {
+                m.name.clone()
+            } else {
+                self.backend.download_name(&child_remote, &m.name)
+            };
+            let mut pf = PlaceholderFile::new(&display)
                 .mark_in_sync()
                 .metadata(md)
                 .blob(child_remote.into_bytes());
@@ -172,9 +180,15 @@ pub fn ensure_mounted(
         remote_root: remote_root.trim_end_matches('/').to_string(),
         local_root: local_root.clone(),
     };
-    let conn = Session::new()
-        .connect(&local_root, filter)
-        .map_err(|e| e.to_string())?;
+    let conn = match Session::new().connect(&local_root, filter) {
+        Ok(c) => c,
+        Err(e) => {
+            // Don't leave a registered-but-unconnected sync root behind — the
+            // cloud filter would then reject normal file ops in that folder.
+            let _ = sync_root_id.unregister();
+            return Err(e.to_string());
+        }
+    };
     registry().lock().unwrap().insert(key, conn);
     Ok(local_root)
 }

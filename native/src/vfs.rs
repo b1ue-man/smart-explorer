@@ -66,6 +66,13 @@ pub trait Backend: Send + Sync {
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>>;
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>>;
 
+    /// The local filename a download of `path` should be saved as. Defaults to
+    /// `name`; backends that transform content on read (e.g. Google Drive
+    /// exporting a Doc to .docx) override this to add the right extension.
+    fn download_name(&self, _path: &str, name: &str) -> String {
+        name.to_string()
+    }
+
     /// Copy within THIS backend. The default streams read→write; `LocalBackend`
     /// overrides with `std::fs::copy`. Cross-backend copies are the caller's job
     /// (read from src backend, write to dst backend).
