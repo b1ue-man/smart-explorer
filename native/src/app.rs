@@ -353,6 +353,9 @@ pub struct App {
     bisync_ctx: Option<BisyncCtx>,
     bisync_conflicts: Vec<crate::bisync::Conflict>,
     show_bisync_conflicts: bool,
+    /// Cancel flags so a running mirror / two-way sync can be stopped.
+    sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[cfg(windows)]
@@ -569,6 +572,8 @@ impl App {
             bisync_ctx: None,
             bisync_conflicts: Vec::new(),
             show_bisync_conflicts: false,
+            sync_cancel: None,
+            bisync_cancel: None,
         }
     }
 
@@ -1003,6 +1008,10 @@ impl App {
         self.view_dirty = false;
         self.band_press = None;
         self.band_active = false;
+        // Opening a folder clears the NAME search so the new folder is fully
+        // visible; other filters (type/size/date/ext) are kept on purpose.
+        self.filter.text.clear();
+        self.text_draft.clear();
         self.root_path = root.to_string_lossy().replace('\\', "/");
 
         let (tx, rx) = unbounded();
@@ -1752,7 +1761,7 @@ impl App {
         };
         let dst: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
         let (tx, rx) = unbounded();
-        crate::sync::start_sync(
+        let h = crate::sync::start_sync(
             src,
             self.root_path.clone(),
             dst,
@@ -1763,6 +1772,7 @@ impl App {
             },
             tx,
         );
+        self.sync_cancel = Some(h.cancel);
         self.sync_rx = Some(rx);
         self.sync_running = true;
         self.notice = Some(("⇅ Spiegelung gestartet…".to_string(), std::time::Instant::now()));
@@ -1778,6 +1788,7 @@ impl App {
             crate::sync::SyncMsg::Done(r) => {
                 self.sync_rx = None;
                 self.sync_running = false;
+                self.sync_cancel = None;
                 if r.stats.errors > 0 {
                     self.error_msg = Some(format!(
                         "Spiegelung: {} kopiert, {} Fehler",
@@ -1822,12 +1833,15 @@ impl App {
         });
         let (tx, rx) = unbounded();
         let opts = crate::bisync::BisyncOptions::default();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_t = cancel.clone();
         std::thread::Builder::new()
             .name("bisync".into())
             .spawn(move || {
-                let _ = tx.send(crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, 30));
+                let _ = tx.send(crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, 30, &cancel_t));
             })
             .ok();
+        self.bisync_cancel = Some(cancel);
         self.bisync_rx = Some(rx);
         self.bisync_running = true;
         self.notice = Some((
@@ -1843,6 +1857,7 @@ impl App {
         };
         self.bisync_rx = None;
         self.bisync_running = false;
+        self.bisync_cancel = None;
         if let Some(ctx) = self.bisync_ctx.as_mut() {
             ctx.baseline = out.baseline;
         }
@@ -2932,7 +2947,14 @@ impl App {
                                         "Ordner wählen oder Pfad eingeben (Ctrl+L)",
                                     );
                                 } else {
-                                    let mut acc = String::new();
+                                    // Keep the leading separator(s) so absolute
+                                    // remote paths ("/home/…") and UNC ("//srv/…")
+                                    // stay absolute when a crumb is clicked —
+                                    // otherwise the root became relative and
+                                    // failed with "Wurzel kann nicht gelesen werden".
+                                    let lead: String =
+                                        prefix.chars().take_while(|&c| c == '/').collect();
+                                    let mut acc = lead;
                                     let segs: Vec<&str> =
                                         prefix.split('/').filter(|s| !s.is_empty()).collect();
                                     for (i, seg) in segs.iter().enumerate() {
@@ -2984,38 +3006,21 @@ impl App {
             ui.separator();
 
             let has_sel = !self.selection.is_empty();
-            if ui
-                .add_enabled(
-                    has_sel,
-                    egui::Button::new(format!("📋 Kopieren ({})", self.selection.len())),
-                )
-                .on_hover_text("Ctrl+C — mit aktivem Filter werden nur passende Dateien (inkl. Struktur) kopiert")
-                .clicked()
-            {
-                self.clipboard_copy_files(false);
-            }
-            if ui
-                .add_enabled(has_sel, egui::Button::new("✂"))
-                .on_hover_text("Ctrl+X — Ausschneiden")
-                .clicked()
-            {
-                self.clipboard_copy_files(true);
-            }
-            if ui
-                .add_enabled(!self.root_path.is_empty(), egui::Button::new("📥"))
-                .on_hover_text("Ctrl+V — Einfügen")
-                .clicked()
-            {
-                self.clipboard_paste_files();
-            }
-            if ui
-                .add_enabled(has_sel, egui::Button::new("➡ Nach…"))
-                .on_hover_text("Kopieren/Verschieben mit Filter und Strukturerhalt")
-                .clicked()
-            {
-                self.copy_mode_pending = CopyMode::Copy;
-                self.copy_open = true;
-            }
+            // Grouped feature menus (moved off the sidebar). Copy/cut/paste stay
+            // on Ctrl+C/X/V and the right-click menu — out of the nav bar.
+            ui.menu_button("🔌 Verbindung", |ui| {
+                ui.set_min_width(330.0);
+                self.ui_menu_connect(ui);
+            });
+            ui.menu_button("⇄ Sync", |ui| {
+                ui.set_min_width(330.0);
+                self.ui_menu_sync(ui);
+            });
+            ui.menu_button("⚙ Einstellungen", |ui| {
+                ui.set_min_width(350.0);
+                self.ui_menu_settings(ui);
+            });
+            ui.separator();
             if ui
                 .add_enabled(has_sel, egui::Button::new("🗑").small())
                 .on_hover_text("Entf — in Papierkorb")
@@ -3480,6 +3485,9 @@ impl App {
         }
 
         // ─── Remote connections ───────────────────────────────────────
+    }
+
+    fn ui_menu_connect(&mut self, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("VERBINDEN").small().color(Color32::from_gray(140)));
@@ -3528,18 +3536,30 @@ impl App {
         if let Some(c) = to_connect {
             self.connect_saved(&c);
         }
+    }
 
+    fn ui_menu_sync(&mut self, ui: &mut egui::Ui) {
         // One-way mirror of the current location to a local folder (backup).
         if !self.root_path.is_empty() {
             if self.sync_running {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Spiegelung läuft…");
+                    if ui.button("⏹ Stop").clicked() {
+                        if let Some(c) = &self.sync_cancel {
+                            c.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
                 });
             } else if self.bisync_running {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("2-Wege-Sync läuft…");
+                    if ui.button("⏹ Stop").clicked() {
+                        if let Some(c) = &self.bisync_cancel {
+                            c.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
                 });
             } else {
                 if ui
@@ -3562,7 +3582,9 @@ impl App {
                 }
             }
         }
+    }
 
+    fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("UPDATE").small().color(Color32::from_gray(140)));
@@ -3695,6 +3717,7 @@ impl App {
             );
         }
     }
+
 
     fn ui_table(&mut self, ui: &mut egui::Ui) {
         use egui_extras::{Column, TableBuilder};

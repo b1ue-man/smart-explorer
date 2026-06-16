@@ -19,6 +19,7 @@ use crate::vfs::Backend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Size + mtime signature of one file on one side.
@@ -115,10 +116,13 @@ fn parent_of(path: &str) -> Option<String> {
 }
 
 /// Recursively list files (not dirs) of a backend subtree → rel → Sig.
-pub fn walk_files(be: &dyn Backend, root: &str) -> io::Result<Tree> {
+pub fn walk_files(be: &dyn Backend, root: &str, cancel: &AtomicBool) -> io::Result<Tree> {
     let mut out = Tree::new();
     let mut stack = vec![root.to_string()];
     while let Some(dir) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         for m in be.list_dir(&dir)? {
             let p = join(&dir, &m.name);
             if m.is_dir {
@@ -270,9 +274,13 @@ pub fn apply(
     opts: BisyncOptions,
     versions_dir: &PathBuf,
     errors: &mut Vec<(String, String)>,
+    cancel: &AtomicBool,
 ) -> BisyncStats {
     let mut st = BisyncStats::default();
     for act in actions {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         if opts.dry_run {
             match act {
                 Action::CopyAtoB(_) => st.a_to_b += 1,
@@ -485,12 +493,13 @@ pub fn run(
     root_b: &str,
     opts: BisyncOptions,
     retain_days: u64,
+    cancel: &AtomicBool,
 ) -> Outcome {
     let pair = pair_id(root_a, root_b);
     let bpath = baseline_path(&pair);
     let vdir = versions_dir(&pair);
     let base = load_baseline(&bpath);
-    let at = match walk_files(a, root_a) {
+    let at = match walk_files(a, root_a, cancel) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -499,7 +508,7 @@ pub fn run(
             }
         }
     };
-    let bt = match walk_files(b, root_b) {
+    let bt = match walk_files(b, root_b, cancel) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -508,11 +517,14 @@ pub fn run(
             }
         }
     };
+    if cancel.load(Ordering::Relaxed) {
+        return Outcome::default();
+    }
     let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
     let mut errors = Vec::new();
-    let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors);
-    let at2 = walk_files(a, root_a).unwrap_or(at);
-    let bt2 = walk_files(b, root_b).unwrap_or(bt);
+    let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
+    let at2 = walk_files(a, root_a, cancel).unwrap_or(at);
+    let bt2 = walk_files(b, root_b, cancel).unwrap_or(bt);
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
     if !opts.dry_run {
         let _ = save_baseline(&bpath, &nb);
@@ -582,14 +594,15 @@ mod tests {
         opts: BisyncOptions,
         vdir: &PathBuf,
     ) -> (BisyncStats, Vec<Conflict>, Baseline) {
-        let at = walk_files(a, ra).unwrap();
-        let bt = walk_files(b, rb).unwrap();
+        let cancel = AtomicBool::new(false);
+        let at = walk_files(a, ra, &cancel).unwrap();
+        let bt = walk_files(b, rb, &cancel).unwrap();
         let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
         let mut errs = Vec::new();
-        let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs);
+        let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
         // re-walk for an accurate baseline after writes
-        let at2 = walk_files(a, ra).unwrap();
-        let bt2 = walk_files(b, rb).unwrap();
+        let at2 = walk_files(a, ra, &cancel).unwrap();
+        let bt2 = walk_files(b, rb, &cancel).unwrap();
         let nb = update_baseline(base, &at2, &bt2, &actions, &converged, &conflicts);
         (st, conflicts, nb)
     }
