@@ -222,16 +222,31 @@ fn parse_ver(s: &str) -> (u64, u64, u64) {
     (next(), next(), next())
 }
 
-fn old_binary_path(cur_exe: &std::path::Path) -> PathBuf {
+/// Filename prefix for the renamed-out running binary (`<stem>_old`).
+fn old_binary_prefix(cur_exe: &std::path::Path) -> String {
     let stem = cur_exe
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "smart_explorer".into());
-    cur_exe.with_file_name(format!("{}_old.exe", stem))
+    format!("{}_old", stem)
 }
 
-/// Delete leftovers from a previous update (best effort, with retries since
-/// the old process may still be exiting).
+/// A **unique** path to rename the running binary to. Using a timestamp instead
+/// of a fixed `<stem>_old.exe` is what makes the rename dance robust: a previous
+/// `_old` left locked by a still-running process (e.g. a lingering sync daemon)
+/// no longer collides, so renaming the running exe can't hit ACCESS_DENIED
+/// (os error 5) on an existing, locked destination.
+fn new_old_binary_path(cur_exe: &std::path::Path) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    cur_exe.with_file_name(format!("{}_{}.exe", old_binary_prefix(cur_exe), nanos))
+}
+
+/// Delete leftovers from previous updates (best effort, with retries since an
+/// old process — the prior GUI or a lingering daemon — may still hold one).
+/// Sweeps every `<stem>_old*.exe`, including the legacy fixed name.
 pub fn cleanup_old_binaries() {
     std::thread::Builder::new()
         .name("update-cleanup".into())
@@ -240,12 +255,24 @@ pub fn cleanup_old_binaries() {
                 Ok(e) => e,
                 Err(_) => return,
             };
-            let old = old_binary_path(&exe);
-            if !old.exists() {
-                return;
-            }
+            let dir = match exe.parent() {
+                Some(d) => d.to_path_buf(),
+                None => return,
+            };
+            let prefix = old_binary_prefix(&exe);
             for _ in 0..10 {
-                if std::fs::remove_file(&old).is_ok() {
+                let mut any_left = false;
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    for e in rd.flatten() {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with(&prefix) && name.ends_with(".exe")
+                            && std::fs::remove_file(e.path()).is_err()
+                        {
+                            any_left = true; // still locked — try again shortly
+                        }
+                    }
+                }
+                if !any_left {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -360,10 +387,10 @@ fn swap_in(new_exe: &std::path::Path) -> Result<PathBuf, String> {
     let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let stem = exe_stem(&cur_exe);
     let pending = cur_exe.with_file_name(format!("{}_update_pending.exe", stem));
-    let old = old_binary_path(&cur_exe);
+    // A fresh, unique destination — never an existing (possibly locked) file.
+    let old = new_old_binary_path(&cur_exe);
 
     std::fs::copy(new_exe, &pending).map_err(|e| format!("Kopieren fehlgeschlagen: {}", e))?;
-    let _ = std::fs::remove_file(&old);
     std::fs::rename(&cur_exe, &old).map_err(|e| {
         let _ = std::fs::remove_file(&pending);
         format!("Programmdatei kann nicht ersetzt werden ({}): {}", cur_exe.display(), e)

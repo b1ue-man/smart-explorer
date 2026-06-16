@@ -56,6 +56,16 @@ pub fn local_path(conn_label: &str, conn_root: &str, remote_path: &str) -> PathB
     p
 }
 
+/// Like `local_path` but with an explicit leaf file name — used for CfAPI where
+/// the placeholder's on-disk name can differ from the remote item's name (e.g.
+/// Google-Docs exports get a `.docx`/`.xlsx` extension via `download_name`). The
+/// leaf must match the placeholder name the provider creates, or the open finds
+/// nothing.
+pub fn local_path_named(conn_label: &str, conn_root: &str, remote_path: &str, leaf: &str) -> PathBuf {
+    let parent = remote_path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+    local_path(conn_label, conn_root, parent).join(san(leaf))
+}
+
 // ── native Windows Cloud Files API (best-effort) ─────────────────────────────
 //
 // Register the per-connection folder as a real CfAPI **sync root** so the OS
