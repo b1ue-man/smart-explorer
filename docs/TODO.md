@@ -22,13 +22,17 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 4 | **Background sync daemon** (`--sync-daemon`, logon autostart, runs due setups with app closed) + heartbeat/status + on/off toggle | ✅ | 0.5.11 |
 | 15 | Window opened partly off-screen at near-full size → **open maximized** by default | ✅ | 0.5.11 |
 | 6a | Drag-and-drop **into the app**: drop OS files (Explorer/desktop) onto a folder view → copy (Shift = move); full-window drop hint | ✅ | 0.5.12 |
+| 6b | Drag files **between tabs/panes**: drag rows onto a tab header or the other split pane → copy (Shift = move); cursor chip + drop-target highlight. Band-select stays intact (it bails while a drag is active). | ✅ | 0.5.13 |
+| 6c | Drag files **out to Explorer** (Windows): OLE `DoDragDrop` + minimal CF_HDROP `IDataObject`/`IDropSource` (`dragout.rs`); kicks in when an internal drag leaves the window. Isolated + best-effort (failure aborts the out-drag, never crashes). | ✅ | 0.5.13 |
+| 16 | Maximize regression: builder-`maximized` showed a white default-size window then jumped → "flashbang". Now opens at a sane size and maximizes on the first painted frame. | ✅ | 0.5.13 |
 
-## Open
+## Roadmap complete
 
-| # | Item | Prio | Notes |
-|---|---|---|---|
-| 6b | Drag files **between tabs/panes** (internal egui DnD) — needs care: the rubber-band gesture also starts on press inside the table, so a row-drag source must be disambiguated from band-select | — | refactor the band/press gating in `ui_table` |
-| 6c | Drag files **out to Explorer** (OLE `DoDragDrop` + `IDataObject`/`IDropSource`, CF_HDROP) — the hard, Win32-only part; runs a modal loop on the UI thread and can't be verified in this headless env | — | isolate in a Windows-only module; needs the window HWND |
+All tracked requests (#1–#16) are shipped. `dragout.rs` (#6c) is Win32 COM
+that can't be exercised in the headless build env — it compiles for the
+Windows target and is written to the canonical CF_HDROP pattern, but its
+runtime behaviour wants a real Windows smoke-test. Everything is wrapped so a
+COM failure silently aborts the out-drag without affecting the app.
 
 ## Notes
 
