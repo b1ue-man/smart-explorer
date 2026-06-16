@@ -46,6 +46,12 @@ struct TabState {
     forward: Vec<String>,
     failed_paths: Vec<(String, String)>,
     view_dirty: bool,
+    /// Per-tab remote session (SFTP/FTP/WebDAV). Lives here so opening/closing
+    /// another tab can't touch this tab's connection.
+    remote: Option<crate::connect::RemoteState>,
+    /// Per-tab authenticated network-share connection (kept alive while the tab
+    /// browses the UNC path).
+    net_conn: Option<crate::net::NetConnection>,
 }
 
 fn empty_progress() -> ScanProgress {
@@ -76,6 +82,8 @@ impl Default for TabState {
             forward: Vec::new(),
             failed_paths: Vec::new(),
             view_dirty: false,
+            remote: None,
+            net_conn: None,
         }
     }
 }
@@ -580,6 +588,8 @@ impl App {
         std::mem::swap(&mut t.forward, &mut self.forward);
         std::mem::swap(&mut t.failed_paths, &mut self.failed_paths);
         std::mem::swap(&mut t.view_dirty, &mut self.view_dirty);
+        std::mem::swap(&mut t.remote, &mut self.remote);
+        std::mem::swap(&mut t.net_conn, &mut self.net_conn);
         self.tabs[i] = t;
     }
 
@@ -720,10 +730,15 @@ impl App {
 
     fn new_tab(&mut self) {
         let cur = self.root_path.clone();
+        // A fresh tab has no backend; if the current tab is remote, open the new
+        // one at a LOCAL default instead of the (unreachable-without-backend)
+        // remote path. The current tab's connection is parked with its TabState
+        // by switch_tab and is unaffected.
+        let cur_is_remote = self.remote.is_some();
         self.tabs.push(TabState::default());
         let idx = self.tabs.len() - 1;
         self.switch_tab(idx);
-        let target = if cur.is_empty() {
+        let target = if cur.is_empty() || cur_is_remote {
             self.home.clone()
         } else {
             PathBuf::from(cur.replace('/', std::path::MAIN_SEPARATOR_STR))
@@ -749,23 +764,46 @@ impl App {
     }
 
     fn tab_title(&self, i: usize) -> String {
-        let p = if i == self.active_tab {
-            &self.root_path
+        // Per-tab path + connection (active tab's live in the App fields).
+        let (p, remote_label, is_share) = if i == self.active_tab {
+            (
+                &self.root_path,
+                self.remote.as_ref().map(|r| r.label.as_str()),
+                self.net_conn.is_some(),
+            )
         } else {
-            &self.tabs[i].root_path
+            let t = &self.tabs[i];
+            (
+                &t.root_path,
+                t.remote.as_ref().map(|r| r.label.as_str()),
+                t.net_conn.is_some(),
+            )
         };
-        if p.is_empty() {
+        if p.is_empty() && remote_label.is_none() {
             return "Neuer Tab".to_string();
         }
         let t = p.trim_end_matches('/');
         let base = t.rsplit('/').next().unwrap_or(t);
-        let s = if base.is_empty() { t } else { base };
-        if s.chars().count() > 20 {
-            let mut out: String = s.chars().take(19).collect();
+        let base = if base.is_empty() { t } else { base };
+
+        // Remote/share tabs get a marker + the connection name, so they're
+        // identifiable (the bare folder name isn't enough).
+        let title = if let Some(label) = remote_label {
+            // "sftp://user@host:port" -> "user@host:port"
+            let host = label.split("://").nth(1).unwrap_or(label);
+            format!("🌐 {host} · {base}")
+        } else if is_share {
+            format!("🖧 {base}")
+        } else {
+            base.to_string()
+        };
+
+        if title.chars().count() > 24 {
+            let mut out: String = title.chars().take(23).collect();
             out.push('…');
             out
         } else {
-            s.to_string()
+            title
         }
     }
 
