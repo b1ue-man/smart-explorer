@@ -342,6 +342,13 @@ pub struct App {
 
     /// Cached saved-connection list (avoids reading connections.txt per frame).
     saved_connections: Vec<crate::creds::SavedConnection>,
+
+    // ─── Two-way sync (bisync) + conflict resolution ─────────────────────
+    bisync_rx: Option<Receiver<crate::bisync::Outcome>>,
+    bisync_running: bool,
+    bisync_ctx: Option<BisyncCtx>,
+    bisync_conflicts: Vec<crate::bisync::Conflict>,
+    show_bisync_conflicts: bool,
 }
 
 #[cfg(windows)]
@@ -358,6 +365,27 @@ enum ClipKey {}
 /// First-run liability notice (single source: the repo's DISCLAIMER.txt, also
 /// used by the installer's accept page).
 const DISCLAIMER_TEXT: &str = include_str!("../../DISCLAIMER.txt");
+
+/// Format a unix-millis timestamp as local "YYYY-MM-DD HH:MM".
+fn fmt_ms(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// Live context for a two-way sync, kept so its conflicts can be resolved
+/// against the same backends afterwards.
+struct BisyncCtx {
+    a: crate::vfs::BackendHandle,
+    root_a: String,
+    b: crate::vfs::BackendHandle,
+    root_b: String,
+    pair: String,
+    baseline: crate::bisync::Baseline,
+}
 
 /// Whether a forward-slash path is a LOCAL path (drive letter `X:/…` or a UNC
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
@@ -530,6 +558,12 @@ impl App {
             sync_running: false,
 
             saved_connections: crate::creds::load_connections(),
+
+            bisync_rx: None,
+            bisync_running: false,
+            bisync_ctx: None,
+            bisync_conflicts: Vec::new(),
+            show_bisync_conflicts: false,
         }
     }
 
@@ -1753,6 +1787,183 @@ impl App {
                     std::time::Instant::now(),
                 ));
             }
+        }
+    }
+
+    /// Two-way sync the current location with `dest_local` (safe defaults: both
+    /// directions, strict file-level conflicts, reversible, 30-day version
+    /// retention). Conflicts come back for resolution.
+    fn start_bisync(&mut self, dest_local: String) {
+        if self.root_path.is_empty() || self.bisync_running {
+            return;
+        }
+        let a: crate::vfs::BackendHandle = match &self.remote {
+            Some(rs) => rs.backend.clone(),
+            None => Arc::new(crate::vfs::LocalBackend::new(&self.root_path)),
+        };
+        let root_a = self.root_path.clone();
+        let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
+        let root_b = dest_local;
+        let pair = crate::bisync::pair_id(&root_a, &root_b);
+        self.bisync_ctx = Some(BisyncCtx {
+            a: a.clone(),
+            root_a: root_a.clone(),
+            b: b.clone(),
+            root_b: root_b.clone(),
+            pair,
+            baseline: crate::bisync::Baseline::new(),
+        });
+        let (tx, rx) = unbounded();
+        let opts = crate::bisync::BisyncOptions::default();
+        std::thread::Builder::new()
+            .name("bisync".into())
+            .spawn(move || {
+                let _ = tx.send(crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, 30));
+            })
+            .ok();
+        self.bisync_rx = Some(rx);
+        self.bisync_running = true;
+        self.notice = Some((
+            "⇄ 2-Wege-Sync läuft…".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
+    fn drain_bisync(&mut self) {
+        let out = match self.bisync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(o) => o,
+            None => return,
+        };
+        self.bisync_rx = None;
+        self.bisync_running = false;
+        if let Some(ctx) = self.bisync_ctx.as_mut() {
+            ctx.baseline = out.baseline;
+        }
+        self.bisync_conflicts = out.conflicts;
+        let s = out.stats;
+        if !out.errors.is_empty() {
+            self.error_msg = Some(format!("Sync: {} Fehler", out.errors.len()));
+        }
+        self.notice = Some((
+            format!(
+                "⇄ Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
+                s.a_to_b,
+                s.b_to_a,
+                s.deleted,
+                self.bisync_conflicts.len(),
+                s.bytes / 1_048_576
+            ),
+            std::time::Instant::now(),
+        ));
+        if !self.bisync_conflicts.is_empty() {
+            self.show_bisync_conflicts = true;
+        }
+        // The current view may have changed on disk.
+        if !self.root_path.is_empty() {
+            self.rescan();
+        }
+    }
+
+    /// Resolve conflict `idx` by keeping side A (→ overwrites B) or side B.
+    fn resolve_conflict(&mut self, idx: usize, keep_a: bool) {
+        if idx >= self.bisync_conflicts.len() {
+            return;
+        }
+        let rel = self.bisync_conflicts[idx].rel.clone();
+        let ctx = match self.bisync_ctx.as_mut() {
+            Some(c) => c,
+            None => return,
+        };
+        match crate::bisync::resolve(
+            &*ctx.a, &ctx.root_a, &*ctx.b, &ctx.root_b, &rel, keep_a, &ctx.pair,
+        ) {
+            Ok((sa, sb)) => {
+                ctx.baseline.insert(rel, (sa, sb));
+            }
+            Err(e) => {
+                self.error_msg = Some(format!("Konfliktlösung: {}", e));
+                return;
+            }
+        }
+        self.bisync_conflicts.remove(idx);
+        if self.bisync_conflicts.is_empty() {
+            self.finish_bisync_conflicts();
+        }
+    }
+
+    /// Persist the updated baseline once all conflicts are handled.
+    fn finish_bisync_conflicts(&mut self) {
+        if let Some(ctx) = &self.bisync_ctx {
+            let path = crate::bisync::baseline_path(&ctx.pair);
+            let _ = crate::bisync::save_baseline(&path, &ctx.baseline);
+        }
+        self.show_bisync_conflicts = false;
+        if !self.root_path.is_empty() {
+            self.rescan();
+        }
+    }
+
+    fn ui_bisync_conflicts(&mut self, ctx: &egui::Context) {
+        if !self.show_bisync_conflicts {
+            return;
+        }
+        if self.bisync_conflicts.is_empty() {
+            self.finish_bisync_conflicts();
+            return;
+        }
+        let mut keep_a: Option<usize> = None;
+        let mut keep_b: Option<usize> = None;
+        let mut skip: Option<usize> = None;
+        let mut close = false;
+        let mut all_a = false;
+        let mut all_b = false;
+        let conflicts = self.bisync_conflicts.clone();
+        egui::Window::new(format!("⚠ Sync-Konflikte ({})", conflicts.len()))
+            .collapsible(false)
+            .resizable(true)
+            .default_size([620.0, 420.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Beide Seiten wurden geändert. Wähle, welche Version gilt — die andere wird vorher reversibel gesichert.");
+                ui.horizontal(|ui| {
+                    if ui.button("Alle: ← A behalten").clicked() { all_a = true; }
+                    if ui.button("Alle: B behalten →").clicked() { all_b = true; }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, c) in conflicts.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let a = c.a.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms))).unwrap_or_else(|| "—".into());
+                            let b = c.b.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms))).unwrap_or_else(|| "—".into());
+                            if ui.small_button("← A").on_hover_text(format!("A: {a}")).clicked() { keep_a = Some(i); }
+                            if ui.small_button("B →").on_hover_text(format!("B: {b}")).clicked() { keep_b = Some(i); }
+                            if ui.small_button("⏭").on_hover_text("Vorerst überspringen").clicked() { skip = Some(i); }
+                            ui.label(&c.rel);
+                        });
+                    }
+                });
+                ui.add_space(6.0);
+                if ui.button("Schließen (Rest später)").clicked() { close = true; }
+            });
+        if all_a || all_b {
+            // resolve all in index order; removals shrink the vec, so resolve 0 repeatedly
+            while !self.bisync_conflicts.is_empty() {
+                self.resolve_conflict(0, all_a);
+            }
+        } else if let Some(i) = keep_a {
+            self.resolve_conflict(i, true);
+        } else if let Some(i) = keep_b {
+            self.resolve_conflict(i, false);
+        } else if let Some(i) = skip {
+            if i < self.bisync_conflicts.len() {
+                self.bisync_conflicts.remove(i);
+            }
+            if self.bisync_conflicts.is_empty() {
+                self.finish_bisync_conflicts();
+            }
+        }
+        if close {
+            self.finish_bisync_conflicts();
         }
     }
 
@@ -3318,13 +3529,29 @@ impl App {
                     ui.spinner();
                     ui.label("Spiegelung läuft…");
                 });
-            } else if ui
-                .small_button("⇅ Spiegeln nach…")
-                .on_hover_text("Aktuellen Ordner (lokal oder remote) einseitig in einen lokalen Zielordner spiegeln")
-                .clicked()
-            {
-                if let Some(dest) = rfd::FileDialog::new().pick_folder() {
-                    self.start_mirror(dest.to_string_lossy().replace('\\', "/"));
+            } else if self.bisync_running {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("2-Wege-Sync läuft…");
+                });
+            } else {
+                if ui
+                    .small_button("⇅ Spiegeln nach…")
+                    .on_hover_text("Aktuellen Ordner (lokal oder remote) EINSEITIG in einen lokalen Zielordner spiegeln (Backup)")
+                    .clicked()
+                {
+                    if let Some(dest) = rfd::FileDialog::new().pick_folder() {
+                        self.start_mirror(dest.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+                if ui
+                    .small_button("⇄ 2-Wege-Sync…")
+                    .on_hover_text("Sicher in BEIDE Richtungen abgleichen: nur tatsächlich geänderte Dateien werden übertragen, beidseitige Änderungen werden als Konflikt gemeldet (nichts wird stillschweigend überschrieben), Änderungen sind reversibel.")
+                    .clicked()
+                {
+                    if let Some(dest) = rfd::FileDialog::new().pick_folder() {
+                        self.start_bisync(dest.to_string_lossy().replace('\\', "/"));
+                    }
                 }
             }
         }
@@ -4653,6 +4880,7 @@ impl eframe::App for App {
         self.drain_update();
         self.drain_connect();
         self.drain_sync();
+        self.drain_bisync();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -5052,6 +5280,7 @@ impl eframe::App for App {
         if self.show_connect {
             self.ui_connect_dialog(ctx);
         }
+        self.ui_bisync_conflicts(ctx);
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
 
