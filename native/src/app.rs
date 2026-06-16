@@ -685,6 +685,19 @@ fn upload_paths(
     (copied, errors)
 }
 
+/// A bare drive letter like `C:` is **drive-relative** on Windows (it means
+/// "current dir on C:"), so `read_dir("C:")` lists the wrong folder. Normalize
+/// it to the drive root `C:/`.
+fn ensure_dir_root(p: &str) -> String {
+    let t = p.trim();
+    let b = t.as_bytes();
+    if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        format!("{}/", t)
+    } else {
+        t.to_string()
+    }
+}
+
 pub(crate) fn is_local_style(path: &str) -> bool {
     let p = path.trim_start();
     let b = p.as_bytes();
@@ -4112,7 +4125,7 @@ impl App {
     fn picker_list(&mut self) {
         let (backend, cwd) = match &self.picker {
             Some(p) => match &p.backend {
-                Some(b) => (b.clone(), p.cwd.clone()),
+                Some(b) => (b.clone(), ensure_dir_root(&p.cwd)),
                 None => return,
             },
             None => return,
@@ -4145,10 +4158,9 @@ impl App {
             p.is_remote = false;
             p.endpoint_prefix = String::new();
             p.conn_label = String::new();
-            p.cwd = root.replace('\\', "/").trim_end_matches('/').to_string();
-            if p.cwd.is_empty() {
-                p.cwd = "/".into();
-            }
+            let c = root.replace('\\', "/");
+            let c = c.trim_end_matches('/');
+            p.cwd = if c.is_empty() { "/".into() } else { ensure_dir_root(c) };
             p.connecting = false;
             p.connect_rx = None;
         }

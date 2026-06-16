@@ -136,6 +136,18 @@ fn meta_to_vfs(name: String, meta: &std::fs::Metadata) -> VfsMeta {
 
 /// Forward-slash path → OS path (no-op separator-wise on Unix).
 fn to_os(path: &str) -> PathBuf {
+    // A bare drive letter ("C:") is *drive-relative* on Windows — it means the
+    // current directory on that drive, so `read_dir("C:")` lists the wrong
+    // folder. Normalize it to the drive root ("C:/") so the local backend (and
+    // thus the picker, sync, etc.) sees the actual root.
+    let b = path.as_bytes();
+    let rooted;
+    let path = if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        rooted = format!("{}/", path);
+        rooted.as_str()
+    } else {
+        path
+    };
     if std::path::MAIN_SEPARATOR == '/' {
         PathBuf::from(path)
     } else {
