@@ -2157,6 +2157,16 @@ impl App {
                 ));
                 self.update_ready = Some((version, exe));
             }
+            UpdateMsg::AppliedViaWorker { version } => {
+                // The exe couldn't be replaced in place; a worker will do it
+                // after we exit. Sentinel empty path = "just close, don't
+                // relaunch" (the worker relaunches).
+                self.notice = Some((
+                    format!("⬆ Update auf v{} bereit (Neustart wendet es an)", version),
+                    std::time::Instant::now(),
+                ));
+                self.update_ready = Some((version, PathBuf::new()));
+            }
             UpdateMsg::UpToDate { feed_version } => {
                 self.notice = Some((
                     format!(
@@ -7716,7 +7726,11 @@ impl App {
                 });
             });
         if restart {
-            let _ = std::process::Command::new(&exe).arg("--updated").spawn();
+            // Empty exe = the worker path: it relaunches after we exit, so just
+            // close. Otherwise the new binary is already in place — relaunch it.
+            if !exe.as_os_str().is_empty() {
+                let _ = std::process::Command::new(&exe).arg("--updated").spawn();
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else if later {
             self.update_ready = None;

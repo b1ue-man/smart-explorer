@@ -33,6 +33,10 @@ pub enum UpdateMsg {
     NoFeed,
     /// New binary swapped in — relaunch `exe` with --updated and exit.
     Applied { version: String, exe: PathBuf },
+    /// In-place swap couldn't replace the running exe (locked); a detached
+    /// worker was launched that will replace + relaunch after we exit. The app
+    /// should just close — do NOT relaunch (the worker does).
+    AppliedViaWorker { version: String },
     /// Only sent for manual checks; automatic checks fail silently.
     Error(String),
 }
@@ -403,6 +407,119 @@ fn swap_in(new_exe: &std::path::Path) -> Result<PathBuf, String> {
     Ok(cur_exe)
 }
 
+/// Spawn a process fully detached: no console window, and (on Windows) broken
+/// away from any job object so it outlives this process. Used for the update
+/// worker and relaunch.
+fn spawn_detached(exe: &std::path::Path, args: &[&str]) -> std::io::Result<()> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+        // Some job objects forbid breakaway → retry without that flag.
+        let mut c2 = std::process::Command::new(exe);
+        c2.args(args).creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        return c2.spawn().map(|_| ());
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.spawn().map(|_| ())
+    }
+}
+
+/// Fallback when the in-place swap can't replace the running exe: stage the new
+/// binary to a temp location and launch IT as a detached worker that waits for
+/// us (our PID) to exit, then copies itself over the target and relaunches it.
+/// The worker never runs from the file it replaces, so locks can't block it.
+fn apply_via_worker(new_exe: &std::path::Path) -> Result<(), String> {
+    let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let worker = std::env::temp_dir().join(format!("se_update_worker_{}.exe", nanos));
+    std::fs::copy(new_exe, &worker).map_err(|e| format!("Worker stagen: {}", e))?;
+    let pid = std::process::id().to_string();
+    spawn_detached(
+        &worker,
+        &["--apply-update", &cur_exe.to_string_lossy(), &pid],
+    )
+    .map_err(|e| format!("Worker starten: {}", e))?;
+    Ok(())
+}
+
+/// Worker entry point (`--apply-update <target> <parent_pid>`). Runs from a temp
+/// copy of the NEW binary; waits for the parent to exit, replaces `target` with
+/// itself, relaunches it, and exits. Best-effort — on failure the target keeps
+/// the old (working) binary, so a botched update can never brick the app.
+pub fn run_apply_worker(args: &[String]) {
+    let i = match args.iter().position(|a| a == "--apply-update") {
+        Some(i) => i,
+        None => return,
+    };
+    let target = match args.get(i + 1) {
+        Some(t) => PathBuf::from(t),
+        None => return,
+    };
+    let parent_pid: u32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let src = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    wait_for_pid_exit(parent_pid, Duration::from_secs(30));
+
+    // Replace the target, retrying while it may still be briefly locked.
+    let mut replaced = false;
+    for _ in 0..60 {
+        if std::fs::copy(&src, &target).is_ok() {
+            replaced = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if replaced {
+        let _ = spawn_detached(&target, &["--updated"]);
+    }
+}
+
+/// Wait until process `pid` has exited, or `timeout` elapses. On Windows this
+/// waits on the process handle; elsewhere it polls. pid 0 = skip.
+fn wait_for_pid_exit(pid: u32, timeout: Duration) {
+    if pid == 0 {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        unsafe {
+            let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if !h.is_null() {
+                WaitForSingleObject(h, timeout.as_millis() as u32);
+                CloseHandle(h);
+                return;
+            }
+        }
+        // OpenProcess failed (already gone / no rights) → small settle delay.
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = timeout;
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
 /// Revert to an archived binary. Archives the version we're leaving (so the
 /// user can go forward again), swaps the old binary in, and pins so the
 /// auto-updater won't undo the rollback. Returns the exe to relaunch.
@@ -503,21 +620,43 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
     // we're replacing so it can be rolled back to, then swap it in.
     let new_exe = feed.fetch_exe()?;
     archive_binary(current);
-    let swap_result = swap_in(&new_exe);
-    // A downloaded temp binary is consumed by swap_in (copied to pending);
-    // remove it regardless of outcome.
+    // Primary: in-place rename-dance swap (works on a running exe via a unique
+    // _old name). Fallback: if the target can't be replaced (locked by AV / a
+    // lingering process), hand off to a detached worker that waits for THIS
+    // process to exit, then replaces the exe and relaunches it.
+    let (msg, applied_in_place) = match swap_in(&new_exe) {
+        Ok(cur_exe) => (
+            UpdateMsg::Applied {
+                version: feed_version.clone(),
+                exe: cur_exe,
+            },
+            true,
+        ),
+        Err(swap_err) => {
+            apply_via_worker(&new_exe)
+                .map_err(|e| format!("Swap fehlgeschlagen ({}); Worker: {}", swap_err, e))?;
+            (
+                UpdateMsg::AppliedViaWorker {
+                    version: feed_version.clone(),
+                },
+                false,
+            )
+        }
+    };
+    // A downloaded temp binary is consumed (swap_in copies to pending; the
+    // worker copies to its own staging) — remove it regardless of outcome.
     if feed.is_http() {
         let _ = std::fs::remove_file(&new_exe);
     }
-    let cur_exe = swap_result?;
 
-    // We're now on the latest — clear any rollback pin and record the version.
+    // We're now on the latest — clear any rollback pin. Only record the version
+    // as applied for the in-place path; if the worker hasn't run yet and later
+    // fails, we must still re-detect the update rather than think it's done.
     resume_auto_update();
-    let _ = std::fs::write(last_applied_path(), &feed_version);
-    Ok(Some(UpdateMsg::Applied {
-        version: feed_version,
-        exe: cur_exe,
-    }))
+    if applied_in_place {
+        let _ = std::fs::write(last_applied_path(), &feed_version);
+    }
+    Ok(Some(msg))
 }
 
 #[cfg(test)]
