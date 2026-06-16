@@ -3087,13 +3087,21 @@ impl App {
         let backend = rs.backend.clone();
         let label = rs.label.clone();
 
+        // Files whose bytes are *transformed* on read (Google-Docs exported to
+        // .docx/.xlsx/…) have an unknown, non-zero size that the backend reports
+        // as 0. A CfAPI placeholder created with size 0 hydrates to an EMPTY
+        // file, so those MUST go through Temp mode (full download of the exported
+        // bytes). `download_name != name` is exactly the transform signal.
+        #[cfg(windows)]
+        let is_transformed = backend.download_name(&path, &name) != name;
+
         // CfAPI mode on Windows: mount the connection as a native Cloud-Files
         // sync root (cloud-filter provider). The placeholder path resolves to the
         // remote item; the OS populates parents and hydrates on open via the
         // provider's fetch_data → backend.open_read. We only register an
         // edit-watch for save-back and launch the path (no manual download).
         #[cfg(windows)]
-        if self.remote_open_mode == RemoteOpenMode::CfApi {
+        if self.remote_open_mode == RemoteOpenMode::CfApi && !is_transformed {
             match crate::cfprovider::ensure_mounted(
                 &label,
                 backend.clone(),
@@ -3160,8 +3168,11 @@ impl App {
         let local_name = backend.download_name(&path, &name);
         let dest = match self.remote_open_mode {
             RemoteOpenMode::Temp => open_temp_path(&local_name),
+            // On Windows the CfApi branch above handles non-transformed files and
+            // returns; we only reach here in CfApi mode for transformed files
+            // (Google-Docs exports), which fall back to a temp copy.
             #[cfg(windows)]
-            RemoteOpenMode::CfApi => unreachable!("CfApi handled in the provider branch on Windows"),
+            RemoteOpenMode::CfApi => open_temp_path(&local_name),
             #[cfg(not(windows))]
             RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &local_name),
         };

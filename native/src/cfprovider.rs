@@ -30,6 +30,16 @@ fn cerr<E: std::fmt::Display>(_e: E) -> CloudErrorKind {
     CloudErrorKind::Unsuccessful
 }
 
+/// Unix milliseconds → NT `FileTime` (100-ns ticks since 1601). 0/negative =
+/// unknown → fall back to now. (UNIX_EPOCH = 116_444_736_000_000_000 ticks.)
+fn ft_from_ms(ms: i64) -> FileTime {
+    if ms <= 0 {
+        return FileTime::now();
+    }
+    let ticks = 116_444_736_000_000_000u64.saturating_add((ms as u64).saturating_mul(10_000));
+    FileTime::new(ticks)
+}
+
 struct RemoteFilter {
     backend: BackendHandle,
     remote_root: String,
@@ -68,24 +78,35 @@ impl SyncFilter for RemoteFilter {
             String::from_utf8_lossy(blob).to_string()
         };
         let range = info.required_file_range();
+        // CfAPI requires every TRANSFER_DATA chunk's Offset to be 4 KiB-aligned,
+        // and its Length 4 KiB-aligned UNLESS the chunk ends at EoF (a short
+        // read = genuine EoF, which is exempt). So serve an aligned superset of
+        // the required range: start rounded down, end rounded up to 4 KiB. A raw
+        // (unaligned) write is rejected with 0x8007017C and stalls the open.
+        const ALIGN: u64 = 4096;
+        let start = range.start & !(ALIGN - 1);
+        let end = range.end.saturating_add(ALIGN - 1) & !(ALIGN - 1);
+        let want = end.saturating_sub(start);
         let mut r = self.backend.open_read(&remote).map_err(cerr)?;
 
-        // Skip to the requested start offset.
-        let mut to_skip = range.start;
+        // Skip to the aligned start offset.
+        let mut to_skip = start;
         let mut sink = [0u8; 8192];
         while to_skip > 0 {
-            let want = to_skip.min(sink.len() as u64) as usize;
-            let n = r.read(&mut sink[..want]).map_err(cerr)?;
+            let chunk = to_skip.min(sink.len() as u64) as usize;
+            let n = r.read(&mut sink[..chunk]).map_err(cerr)?;
             if n == 0 {
                 break;
             }
             to_skip -= n as u64;
         }
-        // Read the requested length and hand it to the OS.
-        let len = range.end.saturating_sub(range.start);
+        // Read up to the aligned length; a short read lands exactly on EoF, whose
+        // unaligned final length the OS permits.
         let mut buf = Vec::new();
-        r.take(len).read_to_end(&mut buf).map_err(cerr)?;
-        ticket.write_at(&buf, range.start).map_err(cerr)?;
+        r.take(want).read_to_end(&mut buf).map_err(cerr)?;
+        if !buf.is_empty() {
+            ticket.write_at(&buf, start).map_err(cerr)?;
+        }
         Ok(())
     }
 
@@ -97,7 +118,6 @@ impl SyncFilter for RemoteFilter {
     ) -> CResult<()> {
         let remote_dir = self.remote_of(&request.path());
         let metas = self.backend.list_dir(&remote_dir).map_err(cerr)?;
-        let now = FileTime::now();
         let base = remote_dir.trim_end_matches('/');
         let mut placeholders: Vec<PlaceholderFile> = Vec::with_capacity(metas.len());
         for m in metas {
@@ -107,20 +127,28 @@ impl SyncFilter for RemoteFilter {
             } else {
                 Metadata::file().size(m.size)
             }
-            .created(now)
-            .written(now);
+            .created(ft_from_ms(m.btime_ms))
+            .written(ft_from_ms(m.mtime_ms));
             // Display name: backends that transform on read (Google-Docs export)
-            // give the placeholder the right extension; blob keeps the real
-            // remote path so fetch_data downloads the correct item.
-            let display = if m.is_dir {
+            // give it the right extension; then sanitize with the SAME `san` the
+            // open side uses (cfsync::local_path_named) so the placeholder we
+            // create and the path the app launches always agree — and so the
+            // name can't contain an interior NUL (which would panic across the
+            // FFI callback boundary). The blob keeps the true remote path.
+            let raw = if m.is_dir {
                 m.name.clone()
             } else {
                 self.backend.download_name(&child_remote, &m.name)
             };
-            let mut pf = PlaceholderFile::new(&display)
-                .mark_in_sync()
-                .metadata(md)
-                .blob(child_remote.into_bytes());
+            let display = crate::cfsync::san(&raw);
+            let mut pf = PlaceholderFile::new(&display).mark_in_sync().metadata(md);
+            // FileIdentity is capped at 4 KiB; a longer remote path would panic
+            // the crate's assert inside the callback. Skip the blob in that case
+            // (fetch_data falls back to mapping the local path).
+            let blob = child_remote.into_bytes();
+            if blob.len() <= 4096 {
+                pf = pf.blob(blob);
+            }
             if !m.is_dir {
                 pf = pf.has_no_children();
             }
@@ -166,11 +194,21 @@ fn registry() -> &'static Mutex<HashMap<String, Connection<RemoteFilter>>> {
 }
 
 fn provider_id(label: &str) -> String {
+    // Must be injective (distinct labels → distinct ids, or two connections
+    // collide on one sync root) AND bounded (the assembled SyncRootId is capped
+    // at 174 chars, and SyncRootIdBuilder::new panics over 255). A readable
+    // prefix plus an FNV-1a hash of the FULL label satisfies both.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in label.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
     let safe: String = label
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(24)
         .collect();
-    format!("SmartExplorer_{}", safe)
+    format!("SmartExplorer_{}_{:016x}", safe, h)
 }
 
 /// Mount `remote_root` of `backend` as a CfAPI sync root at the per-connection
@@ -190,7 +228,9 @@ pub fn ensure_mounted(
     let sid = SecurityId::current_user().map_err(|e| e.to_string())?;
     let pid = provider_id(label);
     let sync_root_id = SyncRootIdBuilder::new(&pid).user_security_id(sid).build();
+    let mut did_register = false;
     if !sync_root_id.is_registered().map_err(|e| e.to_string())? {
+        did_register = true;
         // Registration requires a non-empty icon resource ("<module>,<index>");
         // an empty one fails with E_INVALIDARG ("icon cannot be empty"). We ship
         // no embedded icon, so use a standard folder icon from shell32.dll.
@@ -219,7 +259,11 @@ pub fn ensure_mounted(
         Err(e) => {
             // Don't leave a registered-but-unconnected sync root behind — the
             // cloud filter would then reject normal file ops in that folder.
-            let _ = sync_root_id.unregister();
+            // Only undo OUR registration; a root that already existed (another
+            // connection / a prior session) must not be torn down here.
+            if did_register {
+                let _ = sync_root_id.unregister();
+            }
             return Err(e.to_string());
         }
     };
