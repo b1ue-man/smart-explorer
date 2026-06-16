@@ -13,9 +13,10 @@
 
 use crate::cloud::{self, Provider};
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
+use std::time::Duration;
 
 const API: &str = "https://www.googleapis.com/drive/v3";
 const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
@@ -81,27 +82,67 @@ fn drive_err(code: u16, body: String) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("HTTP {}: {}", code, msg))
 }
 
-/// Parse a ureq result as JSON, surfacing the error body on 4xx/5xx.
-fn resp_json(r: Result<ureq::Response, ureq::Error>) -> VfsResult<serde_json::Value> {
-    match r {
-        Ok(resp) => {
-            let s = resp.into_string().map_err(err)?;
-            if s.trim().is_empty() {
-                Ok(serde_json::Value::Null)
-            } else {
-                serde_json::from_str(&s).map_err(err)
-            }
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            Err(drive_err(code, resp.into_string().unwrap_or_default()))
-        }
-        Err(e) => Err(err(e)),
-    }
+/// Drive returns 429 / 5xx on transient overload and 403 with a
+/// `rateLimitExceeded`/`userRateLimitExceeded`/`quotaExceeded` reason when a
+/// user runs many requests at once (exactly the 27k-file parallel-sync case).
+/// Those are safe to retry with backoff; everything else is a hard error.
+fn is_rate_limited(code: u16, body: &str) -> bool {
+    matches!(code, 429 | 500 | 502 | 503 | 504)
+        || (code == 403 && (body.contains("ateLimitExceeded") || body.contains("uotaExceeded")))
 }
 
-/// Like `resp_json` but discards the body — for calls we only need to succeed.
-fn check(r: Result<ureq::Response, ureq::Error>) -> VfsResult<()> {
-    resp_json(r).map(|_| ())
+/// Execute a Drive request, returning the streaming response. Retries transient
+/// failures (rate-limit / 5xx / transport) with exponential backoff so the
+/// parallel sync engine can drive high concurrency without falling over. The
+/// closure rebuilds the request each attempt (ureq requests aren't reusable).
+fn open_stream<F>(f: F) -> VfsResult<ureq::Response>
+where
+    F: Fn() -> Result<ureq::Response, ureq::Error>,
+{
+    let mut delay = Duration::from_millis(400);
+    let mut last: Option<io::Error> = None;
+    for attempt in 0..6 {
+        match f() {
+            Ok(resp) => return Ok(resp),
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if attempt < 5 && is_rate_limited(code, &body) {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_secs(16));
+                    last = Some(drive_err(code, body));
+                    continue;
+                }
+                return Err(drive_err(code, body));
+            }
+            Err(e) => {
+                if attempt < 5 {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_secs(16));
+                    last = Some(err(e));
+                    continue;
+                }
+                return Err(err(e));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| err("retry exhausted")))
+}
+
+/// `open_stream` + read the whole body to a string (for JSON endpoints).
+fn send_retry<F>(f: F) -> VfsResult<String>
+where
+    F: Fn() -> Result<ureq::Response, ureq::Error>,
+{
+    open_stream(f)?.into_string().map_err(err)
+}
+
+/// Parse a (possibly empty) JSON body.
+fn parse_json(s: String) -> VfsResult<serde_json::Value> {
+    if s.trim().is_empty() {
+        Ok(serde_json::Value::Null)
+    } else {
+        serde_json::from_str(&s).map_err(err)
+    }
 }
 
 pub struct GDriveBackend {
@@ -111,6 +152,14 @@ pub struct GDriveBackend {
     /// path → mimeType (so we know which files are Google-Docs editors that
     /// must be exported instead of downloaded).
     mimes: Mutex<HashMap<String, String>>,
+    /// Directories whose children are fully known (enumerated by `list_dir`, or
+    /// freshly created and therefore empty). For such a parent, a path NOT in
+    /// `ids` is known-absent → we can create it directly and skip the per-file
+    /// existence probe. This halves the round-trips during a large first sync.
+    listed: Mutex<HashSet<String>>,
+    /// Serializes folder creation so concurrent transfers can't create the same
+    /// directory twice (Drive happily makes duplicate same-name folders).
+    create_lock: Mutex<()>,
     root: String,
 }
 
@@ -125,6 +174,8 @@ impl GDriveBackend {
             tokens: Mutex::new(tokens),
             ids: Mutex::new(ids),
             mimes: Mutex::new(HashMap::new()),
+            listed: Mutex::new(HashSet::new()),
+            create_lock: Mutex::new(()),
             root: norm(root),
         })
     }
@@ -153,7 +204,8 @@ impl GDriveBackend {
 
     fn get_json(&self, url: &str) -> VfsResult<serde_json::Value> {
         let auth = self.bearer()?;
-        resp_json(ureq::get(url).set("Authorization", &format!("Bearer {}", auth)).call())
+        let bearer = format!("Bearer {}", auth);
+        parse_json(send_retry(|| ureq::get(url).set("Authorization", &bearer).call())?)
     }
 
     /// Resolve a forward-slash path to a Drive fileId (walking + caching).
@@ -227,6 +279,9 @@ impl GDriveBackend {
     }
 
     /// Ensure a folder path exists, returning the deepest folder's id.
+    /// Thread-safe: concurrent transfers may need the same folder, so the
+    /// find-or-create of each level is serialized (parents are resolved first,
+    /// outside the lock, to avoid re-entrancy).
     fn ensure_dir(&self, path: &str) -> VfsResult<String> {
         let key = norm(path);
         if key.is_empty() {
@@ -237,7 +292,21 @@ impl GDriveBackend {
         }
         let (parent, name) = split_parent(&key);
         let parent_id = self.ensure_dir(&parent)?;
-        if let Some(id) = self.find_child(&parent_id, name)? {
+
+        let _g = self.create_lock.lock().unwrap();
+        // Re-check under the lock — another thread may have just created it.
+        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+            return Ok(id);
+        }
+        // If the parent's children are fully known and this folder isn't among
+        // them, it's known-absent → skip the existence query.
+        let known_absent = self.listed.lock().unwrap().contains(&parent);
+        let existing = if known_absent {
+            None
+        } else {
+            self.find_child(&parent_id, name)?
+        };
+        if let Some(id) = existing {
             self.ids.lock().unwrap().insert(key, id.clone());
             return Ok(id);
         }
@@ -248,14 +317,18 @@ impl GDriveBackend {
             "parents": [parent_id],
         });
         let auth = self.bearer()?;
-        let v = resp_json(
+        let bearer = format!("Bearer {}", auth);
+        let payload = body.to_string();
+        let v = parse_json(send_retry(|| {
             ureq::post(&format!("{}/files?fields=id", API))
-                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
-                .send_string(&body.to_string()),
-        )?;
+                .send_string(&payload)
+        })?)?;
         let id = v["id"].as_str().ok_or_else(|| err("kein id nach mkdir"))?.to_string();
-        self.ids.lock().unwrap().insert(key, id.clone());
+        self.ids.lock().unwrap().insert(key.clone(), id.clone());
+        // A brand-new folder has no children → its contents are fully known.
+        self.listed.lock().unwrap().insert(key);
         Ok(id)
     }
 
@@ -264,7 +337,20 @@ impl GDriveBackend {
         let key = norm(path);
         let (parent, name) = split_parent(&key);
         let parent_id = self.ensure_dir(&parent)?;
-        let existing = self.find_child(&parent_id, name)?;
+        // Existence: a cached id means update; otherwise, if the parent's
+        // children are fully known (first sync into a fresh/empty folder), a
+        // missing cache entry means it's a new file → create without the extra
+        // existence probe (one fewer round-trip per file across 27k files).
+        let existing = match self.ids.lock().unwrap().get(&key).cloned() {
+            Some(id) => Some(id),
+            None => {
+                if self.listed.lock().unwrap().contains(&parent) {
+                    None
+                } else {
+                    self.find_child(&parent_id, name)?
+                }
+            }
+        };
         let boundary = "se_boundary_4f8a2c1d";
         let meta = if existing.is_some() {
             serde_json::json!({ "name": name })
@@ -282,23 +368,27 @@ impl GDriveBackend {
         body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
         let auth = self.bearer()?;
+        let bearer = format!("Bearer {}", auth);
         let ct = format!("multipart/related; boundary={}", boundary);
-        let v = match existing {
-            Some(id) => resp_json(
-                ureq::request(
-                    "PATCH",
-                    &format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id),
-                )
-                .set("Authorization", &format!("Bearer {}", auth))
-                .set("Content-Type", &ct)
-                .send_bytes(&body),
-            )?,
-            None => resp_json(
-                ureq::post(&format!("{}?uploadType=multipart&fields=id", UPLOAD))
-                    .set("Authorization", &format!("Bearer {}", auth))
-                    .set("Content-Type", &ct)
-                    .send_bytes(&body),
-            )?,
+        let v = match &existing {
+            Some(id) => {
+                let url = format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id);
+                parse_json(send_retry(|| {
+                    ureq::request("PATCH", &url)
+                        .set("Authorization", &bearer)
+                        .set("Content-Type", &ct)
+                        .send_bytes(&body)
+                })?)?
+            }
+            None => {
+                let url = format!("{}?uploadType=multipart&fields=id", UPLOAD);
+                parse_json(send_retry(|| {
+                    ureq::post(&url)
+                        .set("Authorization", &bearer)
+                        .set("Content-Type", &ct)
+                        .send_bytes(&body)
+                })?)?
+            }
         };
         if let Some(id) = v["id"].as_str() {
             self.ids.lock().unwrap().insert(key, id.to_string());
@@ -309,12 +399,15 @@ impl GDriveBackend {
     fn trash(&self, path: &str) -> VfsResult<()> {
         let id = self.resolve(path)?;
         let auth = self.bearer()?;
-        check(
-            ureq::request("PATCH", &format!("{}/files/{}", API, id))
-                .set("Authorization", &format!("Bearer {}", auth))
+        let bearer = format!("Bearer {}", auth);
+        let url = format!("{}/files/{}", API, id);
+        let payload = serde_json::json!({ "trashed": true }).to_string();
+        send_retry(|| {
+            ureq::request("PATCH", &url)
+                .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
-                .send_string(&serde_json::json!({ "trashed": true }).to_string()),
-        )?;
+                .send_string(&payload)
+        })?;
         self.ids.lock().unwrap().remove(&norm(path));
         Ok(())
     }
@@ -373,6 +466,9 @@ impl Backend for GDriveBackend {
                 break;
             }
         }
+        // This directory's children are now fully enumerated → future creates
+        // here can skip the existence probe (see `upload`/`ensure_dir`).
+        self.listed.lock().unwrap().insert(norm(path));
         Ok(out)
     }
 
@@ -411,16 +507,9 @@ impl Backend for GDriveBackend {
         } else {
             format!("{}/files/{}?alt=media", API, id)
         };
-        match ureq::get(&url)
-            .set("Authorization", &format!("Bearer {}", auth))
-            .call()
-        {
-            Ok(resp) => Ok(Box::new(resp.into_reader())),
-            Err(ureq::Error::Status(code, resp)) => {
-                Err(drive_err(code, resp.into_string().unwrap_or_default()))
-            }
-            Err(e) => Err(err(e)),
-        }
+        let bearer = format!("Bearer {}", auth);
+        let resp = open_stream(|| ureq::get(&url).set("Authorization", &bearer).call())?;
+        Ok(Box::new(resp.into_reader()))
     }
 
     /// The filename to save a download as. Google-Docs editors files carry no
@@ -454,6 +543,7 @@ impl Backend for GDriveBackend {
         let src_parent_id = self.ensure_dir(&src_parent)?;
         let dst_parent_id = self.ensure_dir(&dst_parent)?;
         let auth = self.bearer()?;
+        let bearer = format!("Bearer {}", auth);
         let mut url = format!("{}/files/{}?fields=id", API, id);
         if src_parent_id != dst_parent_id {
             url.push_str(&format!(
@@ -461,12 +551,13 @@ impl Backend for GDriveBackend {
                 dst_parent_id, src_parent_id
             ));
         }
-        check(
+        let payload = serde_json::json!({ "name": dst_name }).to_string();
+        send_retry(|| {
             ureq::request("PATCH", &url)
-                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
-                .send_string(&serde_json::json!({ "name": dst_name }).to_string()),
-        )?;
+                .send_string(&payload)
+        })?;
         let mut ids = self.ids.lock().unwrap();
         ids.remove(&norm(src));
         ids.insert(norm(dst), id);
@@ -484,7 +575,11 @@ impl Backend for GDriveBackend {
     }
 
     fn parallelism(&self) -> usize {
-        4 // Drive rate-limits; keep concurrency modest.
+        // Per-file transfers are latency-bound (each is a couple of HTTPS
+        // round-trips), so concurrency is the dominant throughput lever for
+        // many-small-files syncs. Drive tolerates this well and `open_stream`
+        // backs off on the rare rate-limit response.
+        16
     }
 }
 

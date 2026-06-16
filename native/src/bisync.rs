@@ -19,7 +19,8 @@ use crate::vfs::Backend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Size + mtime signature of one file on one side.
@@ -176,43 +177,95 @@ pub fn empty_globset() -> globset::GlobSet {
 
 /// Recursively list files (not dirs) of a backend subtree → rel → Sig,
 /// honouring the hidden/ignore filter.
+///
+/// The walk is breadth-first and **fans out each level across the backend's
+/// `parallelism()`** — decisive for remotes like Drive where every `list_dir`
+/// is a network round-trip and a 27k-file tree spans hundreds of folders.
+/// Backends that report `parallelism() == 1` (SFTP/FTP) stay effectively
+/// serial. Local uses all cores.
 pub fn walk_files(
     be: &dyn Backend,
     root: &str,
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> io::Result<Tree> {
-    let mut out = Tree::new();
-    let mut stack = vec![root.to_string()];
-    while let Some(dir) = stack.pop() {
+    let par = be.parallelism().max(1);
+    let out: Mutex<Tree> = Mutex::new(Tree::new());
+    let mut level = vec![root.to_string()];
+
+    while !level.is_empty() {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        for m in be.list_dir(&dir)? {
-            if !filter.include_hidden && m.hidden {
-                continue;
+        let next: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let first_err: Mutex<Option<io::Error>> = Mutex::new(None);
+        let idx = AtomicUsize::new(0);
+        let workers = par.min(level.len()).max(1);
+
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    if cancel.load(Ordering::Relaxed) || first_err.lock().unwrap().is_some() {
+                        break;
+                    }
+                    let i = idx.fetch_add(1, Ordering::Relaxed);
+                    if i >= level.len() {
+                        break;
+                    }
+                    let dir = &level[i];
+                    match be.list_dir(dir) {
+                        Ok(entries) => {
+                            let mut files: Vec<(String, Sig)> = Vec::new();
+                            let mut dirs: Vec<String> = Vec::new();
+                            for m in entries {
+                                if !filter.include_hidden && m.hidden {
+                                    continue;
+                                }
+                                let p = join(dir, &m.name);
+                                let rel = rel_of(&p, root);
+                                if filter.ignore.is_match(&rel) {
+                                    continue;
+                                }
+                                if m.is_dir {
+                                    if !m.is_symlink {
+                                        dirs.push(p);
+                                    }
+                                } else {
+                                    files.push((
+                                        rel,
+                                        Sig {
+                                            size: m.size,
+                                            mtime_ms: m.mtime_ms,
+                                        },
+                                    ));
+                                }
+                            }
+                            if !files.is_empty() {
+                                let mut o = out.lock().unwrap();
+                                o.extend(files);
+                            }
+                            if !dirs.is_empty() {
+                                next.lock().unwrap().extend(dirs);
+                            }
+                        }
+                        Err(e) => {
+                            let mut slot = first_err.lock().unwrap();
+                            if slot.is_none() {
+                                *slot = Some(e);
+                            }
+                            break;
+                        }
+                    }
+                });
             }
-            let p = join(&dir, &m.name);
-            let rel = rel_of(&p, root);
-            if filter.ignore.is_match(&rel) {
-                continue;
-            }
-            if m.is_dir {
-                if !m.is_symlink {
-                    stack.push(p);
-                }
-            } else {
-                out.insert(
-                    rel,
-                    Sig {
-                        size: m.size,
-                        mtime_ms: m.mtime_ms,
-                    },
-                );
-            }
+        });
+
+        if let Some(e) = first_err.into_inner().unwrap() {
+            return Err(e);
         }
+        level = next.into_inner().unwrap();
     }
-    Ok(out)
+    Ok(out.into_inner().unwrap())
 }
 
 /// Decide the actions + conflicts from the two current trees and the baseline.
@@ -335,8 +388,65 @@ fn back_up(be: &dyn Backend, path: &str, rel: &str, versions_dir: &PathBuf) -> i
     Ok(())
 }
 
+/// Execute one planned action (copy with reversible backup, or delete),
+/// returning its contribution to the run stats. Network-bound and side-effect
+/// free w.r.t. shared state, so many run concurrently in `apply`.
+fn run_one(
+    act: &Action,
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    versions_dir: &PathBuf,
+) -> io::Result<BisyncStats> {
+    let mut st = BisyncStats::default();
+    match act {
+        Action::CopyAtoB(rel) => {
+            let dp = join(root_b, rel);
+            if opts.reversible && b.exists(&dp) {
+                let _ = back_up(b, &dp, rel, versions_dir);
+            }
+            st.bytes += copy_between(a, &join(root_a, rel), b, &dp)?;
+            st.a_to_b += 1;
+        }
+        Action::CopyBtoA(rel) => {
+            let dp = join(root_a, rel);
+            if opts.reversible && a.exists(&dp) {
+                let _ = back_up(a, &dp, rel, versions_dir);
+            }
+            st.bytes += copy_between(b, &join(root_b, rel), a, &dp)?;
+            st.b_to_a += 1;
+        }
+        Action::DeleteB(rel) => {
+            let p = join(root_b, rel);
+            if opts.reversible {
+                let _ = back_up(b, &p, rel, versions_dir);
+            }
+            b.remove_file(&p)?;
+            st.deleted += 1;
+        }
+        Action::DeleteA(rel) => {
+            let p = join(root_a, rel);
+            if opts.reversible {
+                let _ = back_up(a, &p, rel, versions_dir);
+            }
+            a.remove_file(&p)?;
+            st.deleted += 1;
+        }
+    }
+    Ok(st)
+}
+
 /// Apply the planned actions, with reversible backups. Returns stats; errors are
 /// counted (and the rel/message collected) rather than aborting.
+///
+/// Transfers run **concurrently** up to `min(a, b).parallelism()` — the slower
+/// side caps it, so SFTP/FTP (which report 1) stay serial while local↔Drive
+/// runs many files at once. This is the headline fix for the "27k small files
+/// at 0.1 Mbit/s" case: those transfers are latency-bound, not bandwidth-bound.
+/// Destination folders are created lazily by `copy_between`; the backends'
+/// `mkdir_all` is concurrency-safe (Drive serializes folder creation).
 pub fn apply(
     actions: &[Action],
     a: &dyn Backend,
@@ -348,63 +458,68 @@ pub fn apply(
     errors: &mut Vec<(String, String)>,
     cancel: &AtomicBool,
 ) -> BisyncStats {
-    let mut st = BisyncStats::default();
-    for act in actions {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        if opts.dry_run {
+    if opts.dry_run {
+        let mut st = BisyncStats::default();
+        for act in actions {
             match act {
                 Action::CopyAtoB(_) => st.a_to_b += 1,
                 Action::CopyBtoA(_) => st.b_to_a += 1,
                 Action::DeleteA(_) | Action::DeleteB(_) => st.deleted += 1,
             }
-            continue;
         }
-        let res: io::Result<()> = (|| {
-            match act {
-                Action::CopyAtoB(rel) => {
-                    let dp = join(root_b, rel);
-                    if opts.reversible && b.exists(&dp) {
-                        let _ = back_up(b, &dp, rel, versions_dir);
-                    }
-                    let n = copy_between(a, &join(root_a, rel), b, &dp)?;
-                    st.a_to_b += 1;
-                    st.bytes += n;
-                }
-                Action::CopyBtoA(rel) => {
-                    let dp = join(root_a, rel);
-                    if opts.reversible && a.exists(&dp) {
-                        let _ = back_up(a, &dp, rel, versions_dir);
-                    }
-                    let n = copy_between(b, &join(root_b, rel), a, &dp)?;
-                    st.b_to_a += 1;
-                    st.bytes += n;
-                }
-                Action::DeleteB(rel) => {
-                    let p = join(root_b, rel);
-                    if opts.reversible {
-                        let _ = back_up(b, &p, rel, versions_dir);
-                    }
-                    b.remove_file(&p)?;
-                    st.deleted += 1;
-                }
-                Action::DeleteA(rel) => {
-                    let p = join(root_a, rel);
-                    if opts.reversible {
-                        let _ = back_up(a, &p, rel, versions_dir);
-                    }
-                    a.remove_file(&p)?;
-                    st.deleted += 1;
-                }
-            }
-            Ok(())
-        })();
-        if let Err(e) = res {
-            st.errors += 1;
-            errors.push((format!("{:?}", act), e.to_string()));
-        }
+        return st;
     }
+
+    let par = a
+        .parallelism()
+        .min(b.parallelism())
+        .max(1)
+        .min(actions.len().max(1));
+
+    let merged: Mutex<(BisyncStats, Vec<(String, String)>)> =
+        Mutex::new((BisyncStats::default(), Vec::new()));
+    let idx = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..par {
+            scope.spawn(|| {
+                let mut local = BisyncStats::default();
+                let mut local_errs: Vec<(String, String)> = Vec::new();
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let i = idx.fetch_add(1, Ordering::Relaxed);
+                    if i >= actions.len() {
+                        break;
+                    }
+                    let act = &actions[i];
+                    match run_one(act, a, root_a, b, root_b, opts, versions_dir) {
+                        Ok(s) => {
+                            local.a_to_b += s.a_to_b;
+                            local.b_to_a += s.b_to_a;
+                            local.deleted += s.deleted;
+                            local.bytes += s.bytes;
+                        }
+                        Err(e) => {
+                            local.errors += 1;
+                            local_errs.push((format!("{:?}", act), e.to_string()));
+                        }
+                    }
+                }
+                let mut m = merged.lock().unwrap();
+                m.0.a_to_b += local.a_to_b;
+                m.0.b_to_a += local.b_to_a;
+                m.0.deleted += local.deleted;
+                m.0.bytes += local.bytes;
+                m.0.errors += local.errors;
+                m.1.extend(local_errs);
+            });
+        }
+    });
+
+    let (st, errs) = merged.into_inner().unwrap();
+    errors.extend(errs);
     st
 }
 
@@ -596,8 +711,17 @@ pub fn run(
     let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
     let mut errors = Vec::new();
     let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
-    let at2 = walk_files(a, root_a, cancel, filter).unwrap_or(at);
-    let bt2 = walk_files(b, root_b, cancel, filter).unwrap_or(bt);
+    // Re-walk to capture real post-write signatures (e.g. the destination's new
+    // mtime), so the baseline doesn't re-detect just-synced files. Skipped on a
+    // dry run, where nothing changed.
+    let (at2, bt2) = if opts.dry_run {
+        (at, bt)
+    } else {
+        (
+            walk_files(a, root_a, cancel, filter).unwrap_or(at),
+            walk_files(b, root_b, cancel, filter).unwrap_or(bt),
+        )
+    };
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
     if !opts.dry_run {
         let _ = save_baseline(&bpath, &nb);
