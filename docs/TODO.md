@@ -45,6 +45,7 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 20.3 | **Ctrl+C a remote file → paste in Explorer** — downloads the selected remote files to temp and puts those local paths on the clipboard as CF_HDROP (eager). | ✅ | 0.5.21 |
 | 20.4 | Drag remote files **out** to Explorer via OLE (deferred `CFSTR_FILECONTENTS`), and drag remote→tab. Ctrl+C already covers copy-out; this is the drag gesture. | later | COM-heavy; eager temp-copy on drag-start could be a simpler first cut |
 | 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out on a real account |
+| 21 | **Device-to-device sharing** (Quick Share / AirDrop / own pairing) — **evaluated**: see [`docs/SHARING_EVAL.md`](SHARING_EVAL.md). AirDrop ❌ on Windows (AWDL needs monitor mode); Quick Share ✅ same-LAN (ref `rquickshare`); **own paired E2E share via your server ✅ recommended** (works across networks). Awaiting your go + which paths. | next | decision needed before implementation plan |
 
 **One input still needed from you:** a Google OAuth *Client ID* (Desktop type)
 from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
