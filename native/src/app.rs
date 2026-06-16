@@ -250,6 +250,10 @@ pub struct App {
     band_press: Option<(f32, f32)>, // (screen x, screen y) at press
     band_active: bool,
     band_base: HashSet<Arc<str>>,
+    /// Set while rendering the NON-focused split pane so its `ui_table` ignores
+    /// the rubber-band gesture (which belongs to the focused pane only) —
+    /// otherwise one drag-box would select in both panes.
+    band_suppressed: bool,
 
     pending_scroll_row: Option<usize>,
 
@@ -493,6 +497,7 @@ impl App {
             band_press: None,
             band_active: false,
             band_base: HashSet::new(),
+            band_suppressed: false,
             pending_scroll_row: None,
 
             type_jump: String::new(),
@@ -781,7 +786,9 @@ impl App {
                         } else {
                             self.swap_with_tab(tab_idx);
                             self.ui_pane_search(ui);
+                            self.band_suppressed = true; // band belongs to the focused pane
                             self.ui_table(ui);
+                            self.band_suppressed = false;
                             self.swap_with_tab(tab_idx);
                             // Click anywhere in this pane focuses it.
                             let pressed = ui.input(|i| i.pointer.any_pressed());
@@ -4007,7 +4014,7 @@ impl App {
         // touch the selection that the row handlers just set.
         let row_hit = row_click.is_some() || row_dblclick.is_some() || row_rclick.is_some();
 
-        if primary_pressed && !anything_dragged {
+        if primary_pressed && !anything_dragged && !self.band_suppressed {
             if let Some(p) = ptr_pos {
                 if body_viewport.contains(p) {
                     // Store the press in SCREEN coordinates so the drag-distance
@@ -4024,7 +4031,7 @@ impl App {
             }
         }
 
-        if let Some((press_x, press_y)) = self.band_press {
+        if let Some((press_x, press_y)) = self.band_press.filter(|_| !self.band_suppressed) {
             if anything_dragged {
                 // A column-resize (or other) drag claimed the pointer.
                 self.band_press = None;
