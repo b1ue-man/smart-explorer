@@ -410,8 +410,11 @@ pub struct App {
     /// In-flight upload of clipboard/dropped files into a remote folder.
     /// Result is (files uploaded, errors).
     upload_rx: Option<Receiver<(u64, Vec<String>)>>,
-    /// In-flight remote mkdir (new folder on a remote). Ok(notice) / Err(msg).
-    mkdir_rx: Option<Receiver<Result<String, String>>>,
+    /// In-flight one-shot remote op (new folder, rename, download-to).
+    /// Ok(notice)/Err(msg); the worker includes the op context in both.
+    remote_op_rx: Option<Receiver<Result<String, String>>>,
+    /// Open egui context menu for a remote entry: (screen pos, entry index).
+    remote_ctx: Option<(egui::Pos2, usize)>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
     clip_download_rx: Option<Receiver<Vec<String>>>,
@@ -896,7 +899,8 @@ impl App {
             job_connect_pending: None,
             file_open_rx: Vec::new(),
             upload_rx: None,
-            mkdir_rx: None,
+            remote_op_rx: None,
+            remote_ctx: None,
             clip_download_rx: None,
 
             cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
@@ -3331,18 +3335,139 @@ impl App {
         }
     }
 
-    fn drain_mkdir(&mut self) {
-        let res = match self.mkdir_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+    fn drain_remote_op(&mut self) {
+        let res = match self.remote_op_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
             None => return,
         };
-        self.mkdir_rx = None;
+        self.remote_op_rx = None;
         match res {
             Ok(msg) => {
                 self.notice = Some((msg, std::time::Instant::now()));
                 self.rescan();
             }
-            Err(e) => self.error_msg = Some(format!("Ordner erstellen: {}", e)),
+            // The worker already includes the operation context in the message.
+            Err(e) => self.error_msg = Some(e),
+        }
+    }
+
+    /// Our own right-click menu for a remote entry (the Windows shell menu can't
+    /// act on remote paths). Each action routes through the backend.
+    fn ui_remote_ctx(&mut self, ctx: &egui::Context) {
+        let (pos, idx) = match self.remote_ctx {
+            Some(v) => v,
+            None => return,
+        };
+        if idx >= self.entries.len() {
+            self.remote_ctx = None;
+            return;
+        }
+        let e = &self.entries[idx];
+        let path = e.path.to_string();
+        let name = e.name.to_string();
+        let is_dir = e.is_dir;
+
+        #[derive(Clone, Copy)]
+        enum A { Open, DownloadTo, CopyClip, Rename, Delete, NewFolder, CopyPath, Refresh }
+        let mut act: Option<A> = None;
+        let area = egui::Area::new(egui::Id::new("remote_ctx_menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    if ui.button(if is_dir { "📂 Öffnen" } else { "📄 Öffnen" }).clicked() {
+                        act = Some(A::Open);
+                    }
+                    if !is_dir {
+                        if ui.button("⬇ Herunterladen nach…").clicked() {
+                            act = Some(A::DownloadTo);
+                        }
+                        if ui.button("📋 In Zwischenablage kopieren").clicked() {
+                            act = Some(A::CopyClip);
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("✎ Umbenennen").clicked() {
+                        act = Some(A::Rename);
+                    }
+                    if ui.button("🗑 Löschen").clicked() {
+                        act = Some(A::Delete);
+                    }
+                    ui.separator();
+                    if ui.button("＋ Neuer Ordner").clicked() {
+                        act = Some(A::NewFolder);
+                    }
+                    if ui.button("⧉ Pfad kopieren").clicked() {
+                        act = Some(A::CopyPath);
+                    }
+                    if ui.button("⟳ Aktualisieren").clicked() {
+                        act = Some(A::Refresh);
+                    }
+                });
+            });
+        let dismiss = ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            || (ctx.input(|i| i.pointer.any_pressed())
+                && ctx
+                    .input(|i| i.pointer.interact_pos())
+                    .map(|p| !area.response.rect.contains(p))
+                    .unwrap_or(false));
+        let act = match act {
+            Some(a) => {
+                self.remote_ctx = None;
+                a
+            }
+            None => {
+                if dismiss {
+                    self.remote_ctx = None;
+                }
+                return;
+            }
+        };
+        match act {
+            A::Open => self.activate_entry(idx),
+            A::Refresh => self.rescan(),
+            A::NewFolder => self.create_new_folder(),
+            A::Delete => self.trash_selected(),
+            A::CopyClip => self.clipboard_copy_files(false),
+            A::CopyPath => ctx.copy_text(path),
+            A::Rename => {
+                self.rename_open = Some((path, name));
+                self.rename_focus = true;
+            }
+            A::DownloadTo => {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    if let Some(rs) = &self.remote {
+                        if self.remote_op_rx.is_none() {
+                            let backend = rs.backend.clone();
+                            let dest = dir.join(&name);
+                            let (tx, rx) = unbounded();
+                            self.remote_op_rx = Some(rx);
+                            self.notice = Some((
+                                format!("⬇ Lade „{}“ herunter…", name),
+                                std::time::Instant::now(),
+                            ));
+                            std::thread::Builder::new()
+                                .name("remote-download".into())
+                                .spawn(move || {
+                                    let r = (|| -> Result<(), String> {
+                                        let mut rd =
+                                            backend.open_read(&path).map_err(|e| e.to_string())?;
+                                        let mut f = std::fs::File::create(&dest)
+                                            .map_err(|e| e.to_string())?;
+                                        std::io::copy(&mut rd, &mut f).map_err(|e| e.to_string())?;
+                                        Ok(())
+                                    })();
+                                    let _ = tx.send(
+                                        r.map(|_| format!("✓ Heruntergeladen: {}", name))
+                                            .map_err(|e| format!("Herunterladen: {}", e)),
+                                    );
+                                })
+                                .ok();
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3491,13 +3616,13 @@ impl App {
         }
         // Remote view → create via the backend (off the UI thread).
         if let Some(rs) = &self.remote {
-            if self.mkdir_rx.is_some() {
+            if self.remote_op_rx.is_some() {
                 return;
             }
             let backend = rs.backend.clone();
             let base = self.root_path.trim_end_matches('/').to_string();
             let (tx, rx) = unbounded();
-            self.mkdir_rx = Some(rx);
+            self.remote_op_rx = Some(rx);
             std::thread::Builder::new()
                 .name("remote-mkdir".into())
                 .spawn(move || {
@@ -3512,7 +3637,7 @@ impl App {
                         backend
                             .mkdir_all(&path)
                             .map(|_| format!("✓ Ordner erstellt: {}", name))
-                            .map_err(|e| e.to_string()),
+                            .map_err(|e| format!("Ordner erstellen: {}", e)),
                     );
                 })
                 .ok();
@@ -3626,6 +3751,39 @@ impl App {
         };
         let draft = draft.trim().to_string();
         if draft.is_empty() {
+            return;
+        }
+        // Remote view → rename via the backend (off the UI thread).
+        if let Some(rs) = &self.remote {
+            if draft.contains('/') || draft.contains('\\') {
+                self.error_msg = Some("Name darf keine Schrägstriche enthalten.".to_string());
+                return;
+            }
+            let old_fwd = path.clone();
+            let parent = old_fwd.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+            let new_fwd = if parent.is_empty() {
+                draft.clone()
+            } else {
+                format!("{}/{}", parent, draft)
+            };
+            if new_fwd == old_fwd || self.remote_op_rx.is_some() {
+                return;
+            }
+            let backend = rs.backend.clone();
+            let (tx, rx) = unbounded();
+            self.remote_op_rx = Some(rx);
+            std::thread::Builder::new()
+                .name("remote-rename".into())
+                .spawn(move || {
+                    let _ = tx.send(
+                        backend
+                            .rename(&old_fwd, &new_fwd)
+                            .map(|_| format!("✓ Umbenannt: {}", draft))
+                            .map_err(|e| format!("Umbenennen: {}", e)),
+                    );
+                })
+                .ok();
+            self.selection.clear();
             return;
         }
         let old = PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -6503,9 +6661,19 @@ impl App {
                 self.selection.insert(path_arc.clone());
                 self.last_anchor = Some(path_arc.clone());
             }
-            let path = path_arc.to_string();
-            let ctx = ui.ctx().clone();
-            self.show_shell_menu_for(&path, &ctx);
+            // Remotes have no Windows shell menu (those paths aren't local) — show
+            // our own egui context menu instead.
+            if self.remote.is_some() {
+                let pos = ui
+                    .ctx()
+                    .input(|i| i.pointer.interact_pos())
+                    .unwrap_or_else(|| ui.min_rect().center());
+                self.remote_ctx = Some((pos, idx));
+            } else {
+                let path = path_arc.to_string();
+                let ctx = ui.ctx().clone();
+                self.show_shell_menu_for(&path, &ctx);
+            }
         }
 
         // ─── Rubber-band selection + empty-space interactions ─────────────
@@ -7428,7 +7596,7 @@ impl eframe::App for App {
         self.drain_cloud_auth();
         self.drain_file_open();
         self.drain_upload();
-        self.drain_mkdir();
+        self.drain_remote_op();
         self.drain_clip_download();
         self.drain_share();
         if self.icon_cache.drain(ctx) {
@@ -7847,6 +8015,9 @@ impl eframe::App for App {
         if self.show_share {
             self.ui_share(ctx);
         }
+        if self.remote_ctx.is_some() {
+            self.ui_remote_ctx(ctx);
+        }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
 
@@ -7883,7 +8054,7 @@ impl eframe::App for App {
             || self.band_active
             || !self.file_open_rx.is_empty()
             || self.upload_rx.is_some()
-            || self.mkdir_rx.is_some()
+            || self.remote_op_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
