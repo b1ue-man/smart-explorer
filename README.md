@@ -16,6 +16,13 @@ den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
 [`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)); Einstellungen → **CLOUD (GOOGLE DRIVE)**.
 
+**Teilen / P2P (ab 0.5.23):** Dateien direkt an gekoppelte Geräte oder in **Räume**
+senden — **Ende-zu-Ende-verschlüsselt, direkt zwischen den Geräten**. Der
+mitgelieferte **`se-share-server`** (Linux + Windows, in
+[`release-native/share-server/`](release-native/share-server)) vermittelt nur die
+Verbindung (Discovery), nie die Dateien. Toolbar → **📡 Teilen**; Server in
+Einstellungen → **TEILEN**. Plan: [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
+
 ---
 
 ## ⚠️ Lizenz & Hinweis
@@ -38,7 +45,7 @@ angezeigt). Keine Rechtsberatung.
 
 Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.22.exe`](release-native/Smart%20Explorer%20Setup%200.5.22.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.23.exe`](release-native/Smart%20Explorer%20Setup%200.5.23.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
