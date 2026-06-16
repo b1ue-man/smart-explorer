@@ -89,20 +89,20 @@ jobs:
           tag_name: v${{ steps.stage.outputs.version }}
           name: Smart Explorer ${{ steps.stage.outputs.version }}
           body: |
-            Windows x64. No admin needed.
+            **Smart Explorer ${{ steps.stage.outputs.version }}** — Windows x64, no admin needed.
 
-            - **Smart Explorer Setup <version>.exe** — installer. Sets up
-              auto-update (Git feed) + the right-click "In Smart Explorer öffnen"
-              verb. Recommended.
+            - **Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe** —
+              installer (recommended). Sets up auto-update from the Git feed and
+              the right-click "In Smart Explorer öffnen" verb.
             - **smart_explorer.exe** — portable app (also the self-update
-              payload). To auto-update, set the update source to this repo URL in
-              the app (Sidebar → UPDATE).
+              payload). For auto-update, set the update source to this repo's URL
+              in the app (Sidebar → UPDATE), or use the installer.
             - **smart_explorer_command.dll** — Win11 modern context-menu
               IExplorerCommand handler (needs signing to register; see
               `docs/WIN11_CONTEXT_MENU.md`).
 
-            Built by CI via the verified ubuntu + mingw-w64 +
-            `x86_64-pc-windows-gnu` cross-compile.
+            Built by CI (ubuntu + mingw-w64 + `x86_64-pc-windows-gnu`). Update +
+            release flow: `docs/RELEASING.md`.
           files: |
             native/out/Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe
             native/out/smart_explorer.exe
