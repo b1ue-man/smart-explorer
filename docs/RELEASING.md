@@ -62,7 +62,9 @@ user can pull updates.
 `build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
 `x86_64-pc-windows-gnu`, the verified cross-compile): check → host tests →
 release build → COM DLL → build installer (NSIS) → upload artifact → publish the
-Release.
+Release. Before publishing it **fails the release if the committed feed
+`version.txt` ≠ `Cargo.toml`** — so a release can never ship while the
+auto-update feed is stale (forces step 2–3 above).
 
 ## The update feed (what the app reads)
 
