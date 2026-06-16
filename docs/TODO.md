@@ -32,7 +32,7 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 19 | **Cloud integrations** (Google Drive, etc.) via **OAuth** — new backends behind the same `Backend` trait + an OAuth flow (browser consent, token storage in keyring, refresh). Picks up the remote-layer + picker work. | next | user-requested; start after the current batch |
+| 19 | **Cloud integrations** (Google Drive first) via **OAuth** — new `Backend` impls + PKCE OAuth flow, tokens in keyring. **Designed:** see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md). **Blocked on one input:** a Google OAuth *Client ID* you create (a desktop app can't ship a usable shared secret / pass Drive verification — each publisher uses their own project). Code can be built dormant; the live flow needs that client ID + a real Windows test. | next | plan written; awaiting your Google OAuth client ID to wire/verify |
 
 ## Notes
 
