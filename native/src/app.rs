@@ -356,6 +356,68 @@ pub struct App {
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+
+    // ─── Saved sync setups (persistent jobs) ─────────────────────────────
+    /// Loaded once at start, kept in sync with sync/jobs.tsv after edits/runs.
+    sync_jobs: Vec<crate::syncjobs::SyncJob>,
+    show_sync_jobs: bool,
+    /// Open add/edit dialog (None = closed).
+    job_editor: Option<JobEditor>,
+    /// Id of the job whose run is currently in flight (so its `last_run`
+    /// gets stamped on completion). None = ad-hoc run, nothing to stamp.
+    running_job: Option<String>,
+}
+
+/// Draft state for the add/edit sync-setup dialog. Number fields are kept as
+/// strings so a half-typed value doesn't snap back.
+struct JobEditor {
+    /// Some(id) when editing an existing job, None for a new one.
+    id: Option<String>,
+    name: String,
+    source: String,
+    target: String,
+    direction: crate::bisync::Direction,
+    conflict: crate::bisync::ConflictMode,
+    retain_days: String,
+    interval_min: String,
+    include_hidden: bool,
+    /// One glob per line.
+    ignore: String,
+    enabled: bool,
+}
+
+impl JobEditor {
+    fn blank(source: String, target: String) -> Self {
+        JobEditor {
+            id: None,
+            name: String::new(),
+            source,
+            target,
+            direction: crate::bisync::Direction::Both,
+            conflict: crate::bisync::ConflictMode::FileLevel,
+            retain_days: "30".into(),
+            interval_min: "0".into(),
+            include_hidden: true,
+            ignore: String::new(),
+            enabled: true,
+        }
+    }
+
+    fn from_job(j: &crate::syncjobs::SyncJob) -> Self {
+        JobEditor {
+            id: Some(j.id.clone()),
+            name: j.name.clone(),
+            source: j.source.clone(),
+            target: j.target.clone(),
+            direction: j.direction,
+            conflict: j.conflict,
+            retain_days: j.retain_days.to_string(),
+            interval_min: j.interval_min.to_string(),
+            include_hidden: j.include_hidden,
+            ignore: j.ignore.join("\n"),
+            enabled: j.enabled,
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -574,6 +636,11 @@ impl App {
             show_bisync_conflicts: false,
             sync_cancel: None,
             bisync_cancel: None,
+
+            sync_jobs: crate::syncjobs::load(),
+            show_sync_jobs: false,
+            job_editor: None,
+            running_job: None,
         }
     }
 
@@ -745,6 +812,10 @@ impl App {
             }
             let panes = self.panes;
             let mut focus_to: Option<usize> = None;
+            // Set by either pane's header right-click → run after the loop to
+            // avoid borrowing self while rendering.
+            let mut sync_panes_req = false;
+            let mut save_setup_req = false;
 
             // Manual two-pane split with hard clipping per pane — egui's
             // `columns` doesn't clip, so the wide table bled into the other
@@ -775,14 +846,26 @@ impl App {
                     ui.push_id(("pane", tab_idx), |ui| {
                         let title = self.tab_title(tab_idx);
                         ui.horizontal(|ui| {
-                            if focused {
-                                ui.label(RichText::new(format!("● {}", title)).strong());
+                            let resp = if focused {
+                                ui.label(RichText::new(format!("● {}", title)).strong())
                             } else {
                                 ui.label(
                                     RichText::new(format!("○ {}", title))
                                         .color(Color32::from_gray(150)),
-                                );
-                            }
+                                )
+                            };
+                            // Right-click either pane header → sync the two open
+                            // folders (the split-view sync the user asked for).
+                            resp.context_menu(|ui| {
+                                if ui.button("⇄ Diese beiden Ordner synchronisieren").clicked() {
+                                    sync_panes_req = true;
+                                    ui.close_menu();
+                                }
+                                if ui.button("＋ Als Sync-Setup speichern…").clicked() {
+                                    save_setup_req = true;
+                                    ui.close_menu();
+                                }
+                            });
                         });
                         ui.separator();
                         if focused {
@@ -810,6 +893,15 @@ impl App {
             }
             if let Some(t) = focus_to {
                 self.switch_tab(t);
+            }
+            if sync_panes_req {
+                self.sync_split_panes();
+            }
+            if save_setup_req {
+                let (_, root_a) = self.pane_backend(panes[0]);
+                let (_, root_b) = self.pane_backend(panes[1]);
+                self.job_editor = Some(JobEditor::blank(root_a, root_b));
+                self.show_sync_jobs = true;
             }
         });
     }
@@ -1812,7 +1904,7 @@ impl App {
     /// directions, strict file-level conflicts, reversible, 30-day version
     /// retention). Conflicts come back for resolution.
     fn start_bisync(&mut self, dest_local: String) {
-        if self.root_path.is_empty() || self.bisync_running {
+        if self.root_path.is_empty() {
             return;
         }
         let a: crate::vfs::BackendHandle = match &self.remote {
@@ -1821,7 +1913,43 @@ impl App {
         };
         let root_a = self.root_path.clone();
         let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
-        let root_b = dest_local;
+        self.launch_bisync(
+            a,
+            root_a,
+            b,
+            dest_local,
+            crate::bisync::BisyncOptions::default(),
+            30,
+            true,
+            Vec::new(),
+            None,
+        );
+    }
+
+    /// The single two-way-sync launcher used by the ad-hoc button, saved jobs,
+    /// and the split-view "sync these two folders" action. Builds the ignore
+    /// globset inside the worker (GlobSet isn't `Send`-cheap to pass), runs
+    /// `bisync::run`, and stamps `running_job` so completion can mark the job.
+    #[allow(clippy::too_many_arguments)]
+    fn launch_bisync(
+        &mut self,
+        a: crate::vfs::BackendHandle,
+        root_a: String,
+        b: crate::vfs::BackendHandle,
+        root_b: String,
+        opts: crate::bisync::BisyncOptions,
+        retain_days: u64,
+        include_hidden: bool,
+        ignore: Vec<String>,
+        job_id: Option<String>,
+    ) {
+        if self.bisync_running {
+            self.notice = Some((
+                "Es läuft bereits ein Sync — bitte warten.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
         let pair = crate::bisync::pair_id(&root_a, &root_b);
         self.bisync_ctx = Some(BisyncCtx {
             a: a.clone(),
@@ -1832,22 +1960,130 @@ impl App {
             baseline: crate::bisync::Baseline::new(),
         });
         let (tx, rx) = unbounded();
-        let opts = crate::bisync::BisyncOptions::default();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel_t = cancel.clone();
         std::thread::Builder::new()
             .name("bisync".into())
             .spawn(move || {
-                let _ = tx.send(crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, 30, &cancel_t));
+                let mut gb = globset::GlobSetBuilder::new();
+                for pat in &ignore {
+                    let pat = pat.trim();
+                    if pat.is_empty() {
+                        continue;
+                    }
+                    if let Ok(g) = globset::Glob::new(pat) {
+                        gb.add(g);
+                    }
+                }
+                let gs = gb.build().unwrap_or_else(|_| crate::bisync::empty_globset());
+                let f = crate::bisync::WalkFilter {
+                    include_hidden,
+                    ignore: &gs,
+                };
+                let _ = tx.send(crate::bisync::run(
+                    &*a, &root_a, &*b, &root_b, opts, retain_days, &cancel_t, &f,
+                ));
             })
             .ok();
         self.bisync_cancel = Some(cancel);
         self.bisync_rx = Some(rx);
         self.bisync_running = true;
+        self.running_job = job_id;
         self.notice = Some((
             "⇄ 2-Wege-Sync läuft…".to_string(),
             std::time::Instant::now(),
         ));
+    }
+
+    /// Run a saved sync setup now. Builds local backends from the stored
+    /// source/target paths (remote endpoints in saved jobs aren't supported yet
+    /// — they need re-auth) and launches with the job's settings.
+    fn run_job(&mut self, id: &str) {
+        let job = match self.sync_jobs.iter().find(|j| j.id == id) {
+            Some(j) => j.clone(),
+            None => return,
+        };
+        if !is_local_style(&job.source) || !is_local_style(&job.target) {
+            self.error_msg = Some(
+                "Gespeicherte Jobs unterstützen derzeit nur lokale Pfade / Netzlaufwerke \
+                 (Remote-Verbindungen brauchen erneute Anmeldung)."
+                    .to_string(),
+            );
+            return;
+        }
+        let a: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.source));
+        let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.target));
+        let opts = crate::bisync::BisyncOptions {
+            direction: job.direction,
+            conflict: job.conflict,
+            reversible: true,
+            dry_run: false,
+        };
+        self.launch_bisync(
+            a,
+            job.source.clone(),
+            b,
+            job.target.clone(),
+            opts,
+            job.retain_days,
+            job.include_hidden,
+            job.ignore.clone(),
+            Some(job.id.clone()),
+        );
+    }
+
+    /// Backend + root for a tab index, honouring whether it's the focused tab
+    /// (state in the App fields) or a parked split pane (state in `self.tabs`),
+    /// and local vs. remote. Used by the split-view "sync these folders" action.
+    fn pane_backend(&self, tab_idx: usize) -> (crate::vfs::BackendHandle, String) {
+        if tab_idx == self.active_tab {
+            let root = self.root_path.clone();
+            let be: crate::vfs::BackendHandle = match &self.remote {
+                Some(rs) => rs.backend.clone(),
+                None => Arc::new(crate::vfs::LocalBackend::new(&root)),
+            };
+            (be, root)
+        } else {
+            let t = &self.tabs[tab_idx];
+            let root = t.root_path.clone();
+            let be: crate::vfs::BackendHandle = match &t.remote {
+                Some(rs) => rs.backend.clone(),
+                None => Arc::new(crate::vfs::LocalBackend::new(&root)),
+            };
+            (be, root)
+        }
+    }
+
+    /// Two-way sync the two split panes' folders (right-click action). Safe
+    /// defaults; works across local/remote since each pane's live backend is
+    /// reused directly.
+    fn sync_split_panes(&mut self) {
+        if !self.split {
+            return;
+        }
+        let (a_idx, b_idx) = (self.panes[0], self.panes[1]);
+        let (a, root_a) = self.pane_backend(a_idx);
+        let (b, root_b) = self.pane_backend(b_idx);
+        if root_a.is_empty() || root_b.is_empty() {
+            self.error_msg =
+                Some("Beide Fenster müssen einen Ordner geöffnet haben.".to_string());
+            return;
+        }
+        if root_a == root_b {
+            self.error_msg = Some("Beide Fenster zeigen denselben Ordner.".to_string());
+            return;
+        }
+        self.launch_bisync(
+            a,
+            root_a,
+            b,
+            root_b,
+            crate::bisync::BisyncOptions::default(),
+            30,
+            true,
+            Vec::new(),
+            None,
+        );
     }
 
     fn drain_bisync(&mut self) {
@@ -1858,6 +2094,12 @@ impl App {
         self.bisync_rx = None;
         self.bisync_running = false;
         self.bisync_cancel = None;
+        // Stamp the saved job (if this run came from one) so its schedule and
+        // "last run" reflect reality, then refresh the cached list.
+        if let Some(id) = self.running_job.take() {
+            crate::syncjobs::mark_run(&id);
+            self.sync_jobs = crate::syncjobs::load();
+        }
         if let Some(ctx) = self.bisync_ctx.as_mut() {
             ctx.baseline = out.baseline;
         }
@@ -3582,6 +3824,321 @@ impl App {
                 }
             }
         }
+        // ─── Saved sync setups (persist across restarts) ──────────────────
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("⚙ Sync-Setups…")
+                .on_hover_text("Gespeicherte Sync-Aufträge verwalten (Quelle, Ziel, Methode, Zeitplan) — bleiben nach Neustart erhalten")
+                .clicked()
+            {
+                self.show_sync_jobs = true;
+            }
+            let n = self.sync_jobs.len();
+            if n > 0 {
+                ui.colored_label(Color32::from_gray(140), format!("({n})"));
+            }
+        });
+        // Quick-create from the current location.
+        if !self.root_path.is_empty()
+            && ui
+                .small_button("＋ Setup aus aktuellem Ordner…")
+                .on_hover_text("Neues Sync-Setup mit dem aktuellen Ordner als Quelle anlegen")
+                .clicked()
+        {
+            let src = if is_local_style(&self.root_path) {
+                self.root_path.clone()
+            } else {
+                String::new()
+            };
+            self.job_editor = Some(JobEditor::blank(src, String::new()));
+            self.show_sync_jobs = true;
+        }
+    }
+
+    /// Saved-setups manager: list jobs with run / edit / delete / enable, plus
+    /// "new". This is the rich overview the user asked for (source → target,
+    /// method, schedule). Persists to sync/jobs.tsv on every change.
+    fn ui_sync_jobs(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_sync_jobs;
+        let mut run_id: Option<String> = None;
+        let mut edit_id: Option<String> = None;
+        let mut del_id: Option<String> = None;
+        let mut toggle_id: Option<String> = None;
+        let mut new_blank = false;
+        let jobs = self.sync_jobs.clone();
+        egui::Window::new("⚙ Sync-Setups")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([640.0, 440.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("＋ Neues Setup").clicked() {
+                        new_blank = true;
+                    }
+                    ui.label(
+                        RichText::new("Quelle ⇄ Ziel, Methode, Zeitplan — bleibt nach Neustart erhalten.")
+                            .small()
+                            .color(Color32::from_gray(140)),
+                    );
+                });
+                ui.separator();
+                if jobs.is_empty() {
+                    ui.add_space(8.0);
+                    ui.colored_label(
+                        Color32::from_gray(140),
+                        "Noch keine Setups. „＋ Neues Setup“ anlegen oder im Split-View zwei Ordner per Rechtsklick verbinden.",
+                    );
+                    return;
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for j in &jobs {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
+                                if !j.enabled {
+                                    ui.colored_label(Color32::from_gray(130), "⏸ deaktiviert");
+                                }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("✕").on_hover_text("Setup löschen").clicked() {
+                                        del_id = Some(j.id.clone());
+                                    }
+                                    if ui.small_button("✎ Bearbeiten").clicked() {
+                                        edit_id = Some(j.id.clone());
+                                    }
+                                    let enable_label = if j.enabled { "⏸ Aus" } else { "▶ Ein" };
+                                    if ui.small_button(enable_label).on_hover_text("Zeitplan aktivieren/deaktivieren").clicked() {
+                                        toggle_id = Some(j.id.clone());
+                                    }
+                                    if !self.bisync_running
+                                        && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()
+                                    {
+                                        run_id = Some(j.id.clone());
+                                    }
+                                });
+                            });
+                            ui.label(
+                                RichText::new(format!("{}  →  {}", j.source, j.target))
+                                    .small()
+                                    .color(Color32::from_gray(170)),
+                            );
+                            let sched = if j.interval_min == 0 {
+                                "manuell".to_string()
+                            } else {
+                                format!("alle {} min", j.interval_min)
+                            };
+                            let last = if j.last_run == 0 {
+                                "nie".to_string()
+                            } else {
+                                fmt_ms(j.last_run * 1000)
+                            };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {} · {} Tage Verlauf · {} · zuletzt: {}",
+                                    j.direction.label(),
+                                    j.conflict.label(),
+                                    j.retain_days,
+                                    sched,
+                                    last
+                                ))
+                                .small()
+                                .color(Color32::from_gray(140)),
+                            );
+                        });
+                    }
+                });
+            });
+        self.show_sync_jobs = open;
+        if new_blank {
+            self.job_editor = Some(JobEditor::blank(String::new(), String::new()));
+        }
+        if let Some(id) = edit_id {
+            if let Some(j) = self.sync_jobs.iter().find(|j| j.id == id) {
+                self.job_editor = Some(JobEditor::from_job(j));
+            }
+        }
+        if let Some(id) = toggle_id {
+            if let Some(j) = self.sync_jobs.iter_mut().find(|j| j.id == id) {
+                j.enabled = !j.enabled;
+                let job = j.clone();
+                let _ = crate::syncjobs::upsert(&job);
+                self.sync_jobs = crate::syncjobs::load();
+            }
+        }
+        if let Some(id) = del_id {
+            let _ = crate::syncjobs::remove(&id);
+            self.sync_jobs = crate::syncjobs::load();
+        }
+        if let Some(id) = run_id {
+            self.run_job(&id);
+        }
+    }
+
+    /// Add/edit dialog for a single sync setup (the "rich" setup menu: source,
+    /// target, method = direction + conflict handling, retention, schedule,
+    /// hidden-file handling, ignore globs).
+    fn ui_job_editor(&mut self, ctx: &egui::Context) {
+        let mut ed = match self.job_editor.take() {
+            Some(e) => e,
+            None => return,
+        };
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+        let title = if ed.id.is_some() { "✎ Sync-Setup bearbeiten" } else { "＋ Neues Sync-Setup" };
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([560.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Grid::new("job_editor_grid")
+                    .num_columns(2)
+                    .spacing([10.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(egui::TextEdit::singleline(&mut ed.name).hint_text("z. B. Dokumente sichern").desired_width(360.0));
+                        ui.end_row();
+
+                        ui.label("Quelle (A)");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.source).hint_text("lokaler Ordner / Netzlaufwerk").desired_width(300.0));
+                            if ui.button("📂").on_hover_text("Ordner wählen").clicked() {
+                                if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                                    ed.source = p.to_string_lossy().replace('\\', "/");
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Ziel (B)");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.target).hint_text("lokaler Ordner / Netzlaufwerk").desired_width(300.0));
+                            if ui.button("📂").on_hover_text("Ordner wählen").clicked() {
+                                if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                                    ed.target = p.to_string_lossy().replace('\\', "/");
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Richtung").on_hover_text("Methode: in welche Richtung abgeglichen wird");
+                        egui::ComboBox::from_id_salt("job_dir")
+                            .selected_text(ed.direction.label())
+                            .show_ui(ui, |ui| {
+                                for d in [
+                                    crate::bisync::Direction::Both,
+                                    crate::bisync::Direction::AtoB,
+                                    crate::bisync::Direction::BtoA,
+                                ] {
+                                    ui.selectable_value(&mut ed.direction, d, d.label());
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label("Konflikte").on_hover_text("Was passiert, wenn beide Seiten geändert wurden");
+                        egui::ComboBox::from_id_salt("job_conf")
+                            .selected_text(ed.conflict.label())
+                            .show_ui(ui, |ui| {
+                                for c in [
+                                    crate::bisync::ConflictMode::FileLevel,
+                                    crate::bisync::ConflictMode::NewerWins,
+                                ] {
+                                    ui.selectable_value(&mut ed.conflict, c, c.label());
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label("Verlauf (Tage)").on_hover_text("Wie lange reversible Sicherungen überschriebener Dateien aufbewahrt werden");
+                        ui.add(egui::TextEdit::singleline(&mut ed.retain_days).desired_width(80.0));
+                        ui.end_row();
+
+                        ui.label("Zeitplan (min)").on_hover_text("Automatisch alle N Minuten ausführen (0 = nur manuell)");
+                        ui.add(egui::TextEdit::singleline(&mut ed.interval_min).desired_width(80.0));
+                        ui.end_row();
+
+                        ui.label("Versteckte Dateien");
+                        ui.checkbox(&mut ed.include_hidden, "einbeziehen");
+                        ui.end_row();
+
+                        ui.label("Ignorieren").on_hover_text("Glob-Muster, eines pro Zeile (z. B. **/*.tmp, node_modules/**)");
+                        ui.add(egui::TextEdit::multiline(&mut ed.ignore).hint_text("**/*.tmp\nnode_modules/**").desired_rows(3).desired_width(360.0));
+                        ui.end_row();
+
+                        ui.label("Aktiv");
+                        ui.checkbox(&mut ed.enabled, "Zeitplan aktiv");
+                        ui.end_row();
+                    });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("✔ Speichern").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if cancel || !open {
+            // Dropped (taken at top) — leaving job_editor as None closes it.
+            return;
+        }
+        if save {
+            if ed.source.trim().is_empty() || ed.target.trim().is_empty() {
+                self.error_msg = Some("Quelle und Ziel dürfen nicht leer sein.".to_string());
+                self.job_editor = Some(ed); // keep the dialog open
+                return;
+            }
+            let name = if ed.name.trim().is_empty() {
+                let base = ed.source.trim_end_matches('/').rsplit('/').next().unwrap_or("Sync");
+                base.to_string()
+            } else {
+                ed.name.trim().to_string()
+            };
+            let ignore: Vec<String> = ed
+                .ignore
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            let mut job = match &ed.id {
+                // Editing: preserve id + last_run from the stored job.
+                Some(id) => {
+                    let mut j = self
+                        .sync_jobs
+                        .iter()
+                        .find(|j| &j.id == id)
+                        .cloned()
+                        .unwrap_or_else(|| crate::syncjobs::SyncJob::new(name.clone(), ed.source.clone(), ed.target.clone()));
+                    j.name = name.clone();
+                    j.source = ed.source.trim().to_string();
+                    j.target = ed.target.trim().to_string();
+                    j
+                }
+                None => crate::syncjobs::SyncJob::new(name.clone(), ed.source.trim().to_string(), ed.target.trim().to_string()),
+            };
+            job.direction = ed.direction;
+            job.conflict = ed.conflict;
+            job.retain_days = ed.retain_days.trim().parse().unwrap_or(30);
+            job.interval_min = ed.interval_min.trim().parse().unwrap_or(0);
+            job.include_hidden = ed.include_hidden;
+            job.ignore = ignore;
+            job.enabled = ed.enabled;
+            match crate::syncjobs::upsert(&job) {
+                Ok(_) => {
+                    self.sync_jobs = crate::syncjobs::load();
+                    self.notice = Some((format!("✓ Setup „{}“ gespeichert", job.name), std::time::Instant::now()));
+                }
+                Err(e) => {
+                    self.error_msg = Some(format!("Setup speichern: {}", e));
+                    self.job_editor = Some(ed);
+                }
+            }
+            return;
+        }
+        // Still open, nothing pressed — keep the editor for the next frame.
+        self.job_editor = Some(ed);
     }
 
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
@@ -5311,6 +5868,12 @@ impl eframe::App for App {
             self.ui_connect_dialog(ctx);
         }
         self.ui_bisync_conflicts(ctx);
+        if self.show_sync_jobs {
+            self.ui_sync_jobs(ctx);
+        }
+        if self.job_editor.is_some() {
+            self.ui_job_editor(ctx);
+        }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
 
