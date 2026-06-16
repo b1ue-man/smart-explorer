@@ -254,6 +254,10 @@ pub struct App {
     /// the rubber-band gesture (which belongs to the focused pane only) —
     /// otherwise one drag-box would select in both panes.
     band_suppressed: bool,
+    /// Last time a scroll input arrived — drives a short full-rate repaint tail
+    /// so trackpad scrolling glides to a smooth stop (egui smooths the delta
+    /// over frames but doesn't request those frames itself).
+    last_scroll_at: Option<Instant>,
 
     // ─── File drag (between tabs/panes; out to Explorer on Windows) ──────
     /// Absolute forward-slash source paths being dragged (empty = no drag).
@@ -636,6 +640,7 @@ impl App {
 
             band_press: None,
             band_active: false,
+            last_scroll_at: None,
             drag_files: Vec::new(),
             drag_active: false,
             drag_source_tab: 0,
@@ -7069,12 +7074,20 @@ impl eframe::App for App {
         // Internal file drag (between tabs/panes; out to Explorer on Windows).
         self.handle_file_drag(ctx);
 
-        // Keep painting while egui is still animating a smooth/inertial scroll
-        // (trackpad flick) so it glides to a smooth stop instead of stuttering
-        // — without this the app only repaints on discrete scroll events, which
-        // makes the momentum tail look choppy.
-        if ctx.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO) {
-            ctx.request_repaint();
+        // Trackpad scrolling: egui spreads each scroll delta over several frames
+        // (exponential smoothing) but does NOT request those frames itself, so a
+        // reactive app only repaints on the discrete OS events → the glide
+        // stalls and stutters. Keep painting at full rate during scrolling and
+        // for a short tail afterwards, so the smoothing runs to a clean stop.
+        if ctx.input(|i| i.raw_scroll_delta != egui::Vec2::ZERO || i.smooth_scroll_delta != egui::Vec2::ZERO) {
+            self.last_scroll_at = Some(std::time::Instant::now());
+        }
+        if let Some(t) = self.last_scroll_at {
+            if t.elapsed() < std::time::Duration::from_millis(900) {
+                ctx.request_repaint();
+            } else {
+                self.last_scroll_at = None;
+            }
         }
 
         // Repaint while background work is active
