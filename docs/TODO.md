@@ -25,14 +25,25 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 6b | Drag files **between tabs/panes**: drag rows onto a tab header or the other split pane → copy (Shift = move); cursor chip + drop-target highlight. Band-select stays intact (it bails while a drag is active). | ✅ | 0.5.13 |
 | 6c | Drag files **out to Explorer** (Windows): OLE `DoDragDrop` + minimal CF_HDROP `IDataObject`/`IDropSource` (`dragout.rs`); kicks in when an internal drag leaves the window. Isolated + best-effort (failure aborts the out-drag, never crashes). | ✅ | 0.5.13 |
 | 16 | Maximize regression: builder-`maximized` showed a white default-size window then jumped → "flashbang". Now opens at a sane size and maximizes on the first painted frame. | ✅ | 0.5.13 |
+| 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via keyring creds). | ✅ | 0.5.14 |
+| 18 | Trackpad **inertia scroll stuttered**; now repaints while egui animates the smooth-scroll so it glides to a smooth stop. | ✅ | 0.5.14 |
 
-## Roadmap complete
+## Open / upcoming
 
-All tracked requests (#1–#16) are shipped. `dragout.rs` (#6c) is Win32 COM
-that can't be exercised in the headless build env — it compiles for the
-Windows target and is written to the canonical CF_HDROP pattern, but its
-runtime behaviour wants a real Windows smoke-test. Everything is wrapped so a
-COM failure silently aborts the out-drag without affecting the app.
+| # | Item | Prio | Notes |
+|---|---|---|---|
+| 19 | **Cloud integrations** (Google Drive, etc.) via **OAuth** — new backends behind the same `Backend` trait + an OAuth flow (browser consent, token storage in keyring, refresh). Picks up the remote-layer + picker work. | next | user-requested; start after the current batch |
+
+## Notes
+
+- **In-app picker (#17):** `PickerState` in app.rs drives a modal that lists Home
+  + drives + saved connections; local nav is instant `std::fs`, remote connects
+  async then lists via `Backend::list_dir`. "Choose" returns a local path or a
+  `proto://user@host:port/path` endpoint. `connect::resolve_endpoint` re-opens
+  the matching saved connection (by protocol+user+host+port) using the keyring
+  secret — so remote jobs run both interactively (off-thread) and in the daemon.
+- **#6c drag-out** is Win32 COM (`dragout.rs`) compiled for Windows but not
+  runtime-exercised here; wrapped so any COM failure silently aborts the drag.
 
 ## Notes
 

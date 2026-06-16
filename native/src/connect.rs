@@ -329,9 +329,141 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
     }
 }
 
+// ─── Sync endpoints (local path OR saved-connection remote URL) ──────────────
+
+/// Is this endpoint a remote URL (`sftp://…`, `ftp://…`, `ftps://…`,
+/// `webdav://…`) rather than a local/UNC path? Used by the sync runner and the
+/// in-app picker to decide whether a saved connection must be re-opened.
+pub fn is_remote_url(s: &str) -> bool {
+    let s = s.trim();
+    ["sftp://", "ftp://", "ftps://", "webdav://"]
+        .iter()
+        .any(|p| s.starts_with(p))
+}
+
+/// Parse `proto://user@host:port/path` → its parts (path keeps its leading `/`).
+fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16, String)> {
+    let s = s.trim();
+    let (scheme, rest) = s.split_once("://")?;
+    let proto = Protocol::parse(scheme)?;
+    // rest = user@host:port/path  (path optional)
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    let (user, hostport) = match authority.rsplit_once('@') {
+        Some((u, hp)) => (u.to_string(), hp),
+        None => (String::new(), authority),
+    };
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().unwrap_or_else(|_| proto.default_port())),
+        None => (hostport.to_string(), proto.default_port()),
+    };
+    Some((proto, user, host, port, if path.is_empty() { "/".into() } else { path }))
+}
+
+/// Build the saved-connection-backed endpoint URL for a chosen remote folder.
+pub fn remote_endpoint(c: &SavedConnection, path: &str) -> String {
+    let p = if path.is_empty() { "/" } else { path };
+    format!(
+        "{}://{}@{}:{}{}",
+        c.protocol.as_str(),
+        c.user,
+        c.host,
+        c.port,
+        p
+    )
+}
+
+/// Open a saved connection at `path` (synchronous; blocks on the network — call
+/// off the UI thread). Reuses the connection's stored credentials (keyring).
+/// Returns the live backend + the navigated root path.
+pub fn open_saved_at(c: &SavedConnection, path: &str) -> Result<(BackendHandle, String), String> {
+    if !c.protocol.is_url() {
+        // Share: the UNC is browsed locally once authenticated.
+        let secret = crate::creds::get_secret(&c.account());
+        let mut form = ConnectForm::from_saved(c);
+        form.save = false;
+        match do_connect(form, secret) {
+            ConnectResult::Ok(conn) => Ok((
+                Arc::new(crate::vfs::LocalBackend::new(&conn.target)),
+                conn.target,
+            )),
+            ConnectResult::Err(e) => Err(e),
+        }
+    } else {
+        let secret = crate::creds::get_secret(&c.account());
+        let mut form = ConnectForm::from_saved(c);
+        form.root = if path.is_empty() { "/".into() } else { path.to_string() };
+        form.save = false;
+        match do_connect(form, secret) {
+            ConnectResult::Ok(conn) => match conn.remote {
+                Some(rs) => Ok((rs.backend, conn.target)),
+                None => Err("Endpoint ist keine Remote-Verbindung".into()),
+            },
+            ConnectResult::Err(e) => Err(e),
+        }
+    }
+}
+
+/// Resolve a sync endpoint into a live backend + root. Local/UNC paths →
+/// `LocalBackend`; remote URLs → re-open the matching saved connection. Blocks
+/// on the network for remote endpoints, so run it off the UI thread.
+pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Err("Leerer Pfad".into());
+    }
+    if !is_remote_url(endpoint) {
+        return Ok((
+            Arc::new(crate::vfs::LocalBackend::new(endpoint)),
+            endpoint.to_string(),
+        ));
+    }
+    let (proto, user, host, port, path) =
+        parse_remote_url(endpoint).ok_or_else(|| "Ungültige Remote-Adresse".to_string())?;
+    let conns = crate::creds::load_connections();
+    let c = conns
+        .iter()
+        .find(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port)
+        .ok_or_else(|| {
+            "Keine gespeicherte Verbindung für diese Remote-Adresse gefunden — bitte zuerst verbinden"
+                .to_string()
+        })?;
+    open_saved_at(c, &path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_url_detection_and_parse() {
+        assert!(is_remote_url("sftp://u@h:22/x"));
+        assert!(is_remote_url("webdav://u@h:443/dav"));
+        assert!(!is_remote_url("C:/local"));
+        assert!(!is_remote_url(r"\\srv\share"));
+        let (p, u, h, port, path) = parse_remote_url("sftp://bob@example.com:2222/home/bob").unwrap();
+        assert_eq!(p, Protocol::Sftp);
+        assert_eq!(u, "bob");
+        assert_eq!(h, "example.com");
+        assert_eq!(port, 2222);
+        assert_eq!(path, "/home/bob");
+    }
+
+    #[test]
+    fn remote_endpoint_builds_url() {
+        let c = SavedConnection {
+            protocol: Protocol::Sftp,
+            host: "h".into(),
+            port: 22,
+            user: "u".into(),
+            auth: AuthKind::Password,
+            root: "/".into(),
+            label: String::new(),
+        };
+        assert_eq!(remote_endpoint(&c, "/data"), "sftp://u@h:22/data");
+    }
 
     #[test]
     fn norm_root_rules() {

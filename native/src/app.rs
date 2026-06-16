@@ -384,6 +384,22 @@ pub struct App {
     /// Id of the job whose run is currently in flight (so its `last_run`
     /// gets stamped on completion). None = ad-hoc run, nothing to stamp.
     running_job: Option<String>,
+
+    // ─── In-app folder picker (local + saved remote connections) ─────────
+    picker: Option<PickerState>,
+    /// Resolving a remote job's endpoints off the UI thread before a run.
+    job_connect_rx: Option<
+        Receiver<
+            Result<
+                (
+                    (crate::vfs::BackendHandle, String),
+                    (crate::vfs::BackendHandle, String),
+                ),
+                String,
+            >,
+        >,
+    >,
+    job_connect_pending: Option<crate::syncjobs::SyncJob>,
 }
 
 /// Draft state for the add/edit sync-setup dialog. Number fields are kept as
@@ -436,6 +452,36 @@ impl JobEditor {
             enabled: j.enabled,
         }
     }
+}
+
+/// Which sync-setup field the in-app folder picker fills in.
+#[derive(Clone, Copy, PartialEq)]
+enum PickerField {
+    Source,
+    Target,
+}
+
+/// In-app folder picker (#17): browse local drives AND saved remote
+/// connections through the same `Backend` abstraction and choose a folder —
+/// so a sync setup's source/target can point at a saved connection's remote
+/// location without typing it. The chosen value is a local path or a
+/// `proto://user@host:port/path` endpoint the sync runner re-opens.
+struct PickerState {
+    field: PickerField,
+    /// Live backend for the current location (None = root list / not connected).
+    backend: Option<crate::vfs::BackendHandle>,
+    is_remote: bool,
+    /// "" for local; "proto://user@host:port" for remote, to build the endpoint.
+    endpoint_prefix: String,
+    conn_label: String,
+    /// Absolute forward-slash directory currently shown.
+    cwd: String,
+    /// Sub-folders of `cwd` (name only), sorted.
+    entries: Vec<String>,
+    error: Option<String>,
+    /// Async connect for a saved connection.
+    connect_rx: Option<Receiver<crate::connect::ConnectResult>>,
+    connecting: bool,
 }
 
 #[cfg(windows)]
@@ -672,6 +718,10 @@ impl App {
             show_sync_jobs: false,
             job_editor: None,
             running_job: None,
+
+            picker: None,
+            job_connect_rx: None,
+            job_connect_pending: None,
         }
     }
 
@@ -2050,41 +2100,105 @@ impl App {
         ));
     }
 
-    /// Run a saved sync setup now. Builds local backends from the stored
-    /// source/target paths (remote endpoints in saved jobs aren't supported yet
-    /// — they need re-auth) and launches with the job's settings.
+    /// Run a saved sync setup now. Local↔local resolves instantly; if either
+    /// endpoint is a saved-connection remote URL it's re-opened off the UI
+    /// thread first (so the window doesn't freeze), then launched.
     fn run_job(&mut self, id: &str) {
+        if self.bisync_running || self.job_connect_rx.is_some() {
+            self.notice = Some((
+                "Es läuft bereits ein Sync — bitte warten.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
         let job = match self.sync_jobs.iter().find(|j| j.id == id) {
             Some(j) => j.clone(),
             None => return,
         };
-        if !is_local_style(&job.source) || !is_local_style(&job.target) {
-            self.error_msg = Some(
-                "Gespeicherte Jobs unterstützen derzeit nur lokale Pfade / Netzlaufwerke \
-                 (Remote-Verbindungen brauchen erneute Anmeldung)."
-                    .to_string(),
-            );
-            return;
-        }
-        let a: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.source));
-        let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.target));
         let opts = crate::bisync::BisyncOptions {
             direction: job.direction,
             conflict: job.conflict,
             reversible: true,
             dry_run: false,
         };
-        self.launch_bisync(
-            a,
-            job.source.clone(),
-            b,
-            job.target.clone(),
-            opts,
-            job.retain_days,
-            job.include_hidden,
-            job.ignore.clone(),
-            Some(job.id.clone()),
-        );
+        // Pure local: resolve inline (no network) and launch immediately.
+        if !crate::connect::is_remote_url(&job.source)
+            && !crate::connect::is_remote_url(&job.target)
+        {
+            let a: crate::vfs::BackendHandle =
+                Arc::new(crate::vfs::LocalBackend::new(&job.source));
+            let b: crate::vfs::BackendHandle =
+                Arc::new(crate::vfs::LocalBackend::new(&job.target));
+            self.launch_bisync(
+                a,
+                job.source.clone(),
+                b,
+                job.target.clone(),
+                opts,
+                job.retain_days,
+                job.include_hidden,
+                job.ignore.clone(),
+                Some(job.id.clone()),
+            );
+            return;
+        }
+        // Remote endpoint(s): re-open the saved connection(s) off-thread.
+        let (src, tgt) = (job.source.clone(), job.target.clone());
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("job-connect".into())
+            .spawn(move || {
+                let res = (|| {
+                    let a = crate::connect::resolve_endpoint(&src)?;
+                    let b = crate::connect::resolve_endpoint(&tgt)?;
+                    Ok::<_, String>((a, b))
+                })();
+                let _ = tx.send(res);
+            })
+            .ok();
+        self.job_connect_rx = Some(rx);
+        self.job_connect_pending = Some(job);
+        self.notice = Some((
+            "Verbinde mit Remote-Ziel…".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Once a remote job's endpoints are open, launch the sync (UI thread).
+    fn drain_job_connect(&mut self) {
+        let res = match self.job_connect_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+        self.job_connect_rx = None;
+        let job = match self.job_connect_pending.take() {
+            Some(j) => j,
+            None => return,
+        };
+        match res {
+            Ok(((a, root_a), (b, root_b))) => {
+                let opts = crate::bisync::BisyncOptions {
+                    direction: job.direction,
+                    conflict: job.conflict,
+                    reversible: true,
+                    dry_run: false,
+                };
+                self.launch_bisync(
+                    a,
+                    root_a,
+                    b,
+                    root_b,
+                    opts,
+                    job.retain_days,
+                    job.include_hidden,
+                    job.ignore.clone(),
+                    Some(job.id.clone()),
+                );
+            }
+            Err(e) => {
+                self.error_msg = Some(format!("Remote-Sync: {}", e));
+            }
+        }
     }
 
     /// Backend + root for a tab index, honouring whether it's the focused tab
@@ -3245,6 +3359,349 @@ impl App {
             }
             self.drag_active = false;
             self.drag_files.clear();
+        }
+    }
+
+    // ─── In-app folder picker (#17) ─────────────────────────────────────
+
+    /// Open the picker to fill a sync-setup field, starting from `initial`
+    /// (local path → browse there; remote URL or empty → start at the roots).
+    fn open_picker(&mut self, field: PickerField, initial: &str) {
+        let mut st = PickerState {
+            field,
+            backend: None,
+            is_remote: false,
+            endpoint_prefix: String::new(),
+            conn_label: String::new(),
+            cwd: String::new(),
+            entries: Vec::new(),
+            error: None,
+            connect_rx: None,
+            connecting: false,
+        };
+        // A local starting folder opens directly; remote/empty starts at roots.
+        if !initial.trim().is_empty()
+            && !crate::connect::is_remote_url(initial)
+            && is_local_style(initial)
+        {
+            st.backend = Some(Arc::new(crate::vfs::LocalBackend::new("/")));
+            st.cwd = initial.replace('\\', "/").trim_end_matches('/').to_string();
+            if st.cwd.is_empty() {
+                st.cwd = "/".into();
+            }
+        }
+        self.picker = Some(st);
+        if self.picker.as_ref().map(|s| s.backend.is_some()).unwrap_or(false) {
+            self.picker_list();
+        }
+    }
+
+    /// (Re)list the current picker folder via its backend (folders only).
+    fn picker_list(&mut self) {
+        let (backend, cwd) = match &self.picker {
+            Some(p) => match &p.backend {
+                Some(b) => (b.clone(), p.cwd.clone()),
+                None => return,
+            },
+            None => return,
+        };
+        let res = backend.list_dir(&cwd);
+        if let Some(p) = self.picker.as_mut() {
+            match res {
+                Ok(metas) => {
+                    let mut dirs: Vec<String> = metas
+                        .into_iter()
+                        .filter(|m| m.is_dir)
+                        .map(|m| m.name)
+                        .collect();
+                    dirs.sort_by_key(|n| n.to_lowercase());
+                    p.entries = dirs;
+                    p.error = None;
+                }
+                Err(e) => {
+                    p.entries.clear();
+                    p.error = Some(e.to_string());
+                }
+            }
+        }
+    }
+
+    /// Open a local drive / folder root in the picker.
+    fn picker_open_local(&mut self, root: &str) {
+        if let Some(p) = self.picker.as_mut() {
+            p.backend = Some(Arc::new(crate::vfs::LocalBackend::new("/")));
+            p.is_remote = false;
+            p.endpoint_prefix = String::new();
+            p.conn_label = String::new();
+            p.cwd = root.replace('\\', "/").trim_end_matches('/').to_string();
+            if p.cwd.is_empty() {
+                p.cwd = "/".into();
+            }
+            p.connecting = false;
+            p.connect_rx = None;
+        }
+        self.picker_list();
+    }
+
+    /// Open a saved connection in the picker (async connect; keeps creds).
+    fn picker_open_connection(&mut self, c: &crate::creds::SavedConnection) {
+        let form = crate::connect::ConnectForm::from_saved(c);
+        let secret = crate::creds::get_secret(&c.account());
+        let rx = crate::connect::spawn_connect(form, secret);
+        if let Some(p) = self.picker.as_mut() {
+            p.connect_rx = Some(rx);
+            p.connecting = true;
+            p.error = None;
+            p.conn_label = c.display();
+            p.is_remote = c.protocol.is_url();
+            p.endpoint_prefix = if c.protocol.is_url() {
+                format!("{}://{}@{}:{}", c.protocol.as_str(), c.user, c.host, c.port)
+            } else {
+                String::new()
+            };
+        }
+    }
+
+    fn drain_picker_connect(&mut self) {
+        let msg = match self
+            .picker
+            .as_ref()
+            .and_then(|p| p.connect_rx.as_ref())
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            Some(m) => m,
+            None => return,
+        };
+        let mut do_list = false;
+        if let Some(p) = self.picker.as_mut() {
+            p.connect_rx = None;
+            p.connecting = false;
+            match msg {
+                crate::connect::ConnectResult::Ok(c) => {
+                    // SFTP/FTP/WebDAV → remote backend; share → browse the UNC
+                    // locally once authenticated.
+                    if let Some(rs) = c.remote {
+                        p.backend = Some(rs.backend);
+                        p.is_remote = true;
+                    } else {
+                        p.backend = Some(Arc::new(crate::vfs::LocalBackend::new(&c.target)));
+                        p.is_remote = false;
+                        p.endpoint_prefix = String::new();
+                    }
+                    p.cwd = c.target;
+                    do_list = true;
+                }
+                crate::connect::ConnectResult::Err(e) => {
+                    p.error = Some(format!("Verbindung fehlgeschlagen: {}", e));
+                }
+            }
+        }
+        if do_list {
+            self.picker_list();
+        }
+    }
+
+    /// Parent of a picker directory (None at a drive/remote root).
+    fn picker_parent(p: &str) -> Option<String> {
+        let t = p.trim_end_matches('/');
+        if t.is_empty() || t == "/" {
+            return None;
+        }
+        if t.len() == 2 && t.ends_with(':') {
+            return None; // drive root "C:"
+        }
+        match t.rsplit_once('/') {
+            Some((par, _)) => {
+                if par.is_empty() {
+                    Some("/".into())
+                } else if par.len() == 2 && par.ends_with(':') {
+                    Some(format!("{}/", par))
+                } else {
+                    Some(par.to_string())
+                }
+            }
+            None => None,
+        }
+    }
+
+    /// The value the picker would return for the current folder.
+    fn picker_value(p: &PickerState) -> String {
+        if p.is_remote {
+            format!("{}{}", p.endpoint_prefix, p.cwd)
+        } else {
+            p.cwd.clone()
+        }
+    }
+
+    fn ui_picker(&mut self, ctx: &egui::Context) {
+        if self.picker.is_none() {
+            return;
+        }
+        let mut open = true;
+        let mut close = false;
+        let mut choose = false;
+        let mut enter: Option<String> = None;
+        let mut go_up = false;
+        let mut open_local: Option<String> = None;
+        let mut open_conn: Option<crate::creds::SavedConnection> = None;
+
+        let st = self.picker.as_ref().unwrap();
+        let title = match st.field {
+            PickerField::Source => "📂 Quelle wählen",
+            PickerField::Target => "📂 Ziel wählen",
+        };
+        let home = self.home.to_string_lossy().replace('\\', "/");
+        let drives = self.drive_info.clone();
+        let conns = self.saved_connections.clone();
+        let connecting = st.connecting;
+        let error = st.error.clone();
+        let cwd = st.cwd.clone();
+        let entries = st.entries.clone();
+        let conn_label = st.conn_label.clone();
+        let value_preview = Self::picker_value(st);
+        let has_loc = st.backend.is_some();
+
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([720.0, 460.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // ── Left: places ──
+                    ui.vertical(|ui| {
+                        ui.set_min_width(200.0);
+                        ui.label(RichText::new("ORTE").small().color(Color32::from_gray(140)));
+                        if ui.selectable_label(false, "🏠 Home").clicked() {
+                            open_local = Some(home.clone());
+                        }
+                        for (d, _f, _t) in &drives {
+                            if ui.selectable_label(false, format!("💽 {}", d)).clicked() {
+                                open_local = Some(d.clone());
+                            }
+                        }
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("VERBINDUNGEN")
+                                .small()
+                                .color(Color32::from_gray(140)),
+                        );
+                        if conns.is_empty() {
+                            ui.colored_label(Color32::from_gray(120), "(keine)");
+                        }
+                        for c in &conns {
+                            if ui
+                                .selectable_label(false, format!("🖧 {}", c.display()))
+                                .on_hover_text(c.to_target())
+                                .clicked()
+                            {
+                                open_conn = Some(c.clone());
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // ── Right: current folder ──
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("⬆ Hoch").clicked() {
+                                go_up = true;
+                            }
+                            if !conn_label.is_empty() {
+                                ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", conn_label));
+                            }
+                        });
+                        ui.label(
+                            RichText::new(if cwd.is_empty() { "—".to_string() } else { cwd.clone() })
+                                .monospace()
+                                .color(Color32::from_gray(180)),
+                        );
+                        ui.separator();
+                        if connecting {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Verbinde…");
+                            });
+                        } else if let Some(e) = &error {
+                            ui.colored_label(Color32::from_rgb(255, 140, 120), e);
+                        } else if !has_loc {
+                            ui.colored_label(
+                                Color32::from_gray(140),
+                                "Links einen Ort oder eine Verbindung wählen.",
+                            );
+                        }
+                        egui::ScrollArea::vertical()
+                            .id_salt("picker_list")
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for name in &entries {
+                                    if ui
+                                        .selectable_label(false, format!("📁 {}", name))
+                                        .double_clicked()
+                                    {
+                                        enter = Some(name.clone());
+                                    }
+                                }
+                                if has_loc && entries.is_empty() && error.is_none() && !connecting {
+                                    ui.colored_label(Color32::from_gray(120), "(keine Unterordner)");
+                                }
+                            });
+                    });
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let can_choose = has_loc && !connecting && !cwd.is_empty();
+                    if ui
+                        .add_enabled(can_choose, egui::Button::new("✔ Diesen Ordner wählen"))
+                        .clicked()
+                    {
+                        choose = true;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        close = true;
+                    }
+                    if can_choose {
+                        ui.colored_label(Color32::from_gray(140), value_preview.clone());
+                    }
+                });
+            });
+
+        // Apply deferred actions (outside the borrow of self.picker).
+        if let Some(name) = enter {
+            if let Some(p) = self.picker.as_mut() {
+                p.cwd = format!("{}/{}", p.cwd.trim_end_matches('/'), name);
+            }
+            self.picker_list();
+        }
+        if go_up {
+            let parent = self.picker.as_ref().and_then(|p| Self::picker_parent(&p.cwd));
+            if let Some(par) = parent {
+                if let Some(p) = self.picker.as_mut() {
+                    p.cwd = par;
+                }
+                self.picker_list();
+            }
+        }
+        if let Some(root) = open_local {
+            self.picker_open_local(&root);
+        }
+        if let Some(c) = open_conn {
+            self.picker_open_connection(&c);
+        }
+        if choose {
+            if let Some(p) = self.picker.take() {
+                let value = Self::picker_value(&p);
+                if let Some(ed) = self.job_editor.as_mut() {
+                    match p.field {
+                        PickerField::Source => ed.source = value,
+                        PickerField::Target => ed.target = value,
+                    }
+                }
+            }
+        } else if close || !open {
+            self.picker = None;
         }
     }
 
@@ -4436,6 +4893,10 @@ impl App {
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
+        // Set when a "Durchsuchen" button is clicked → open the in-app picker
+        // after `ed` is restored to self.job_editor (so the picker can write
+        // back into it). Carries the field + its current value as a start point.
+        let mut pick: Option<(PickerField, String)> = None;
         let title = if ed.id.is_some() { "✎ Sync-Setup bearbeiten" } else { "＋ Neues Sync-Setup" };
         egui::Window::new(title)
             .open(&mut open)
@@ -4453,22 +4914,26 @@ impl App {
 
                         ui.label("Quelle (A)");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut ed.source).hint_text("lokaler Ordner / Netzlaufwerk").desired_width(300.0));
-                            if ui.button("📂").on_hover_text("Ordner wählen").clicked() {
-                                if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                                    ed.source = p.to_string_lossy().replace('\\', "/");
-                                }
+                            ui.add(egui::TextEdit::singleline(&mut ed.source).hint_text("lokaler Ordner / Netzlaufwerk / Verbindung").desired_width(280.0));
+                            if ui
+                                .button("📂")
+                                .on_hover_text("Im Explorer wählen — lokale Laufwerke oder gespeicherte Verbindungen")
+                                .clicked()
+                            {
+                                pick = Some((PickerField::Source, ed.source.clone()));
                             }
                         });
                         ui.end_row();
 
                         ui.label("Ziel (B)");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut ed.target).hint_text("lokaler Ordner / Netzlaufwerk").desired_width(300.0));
-                            if ui.button("📂").on_hover_text("Ordner wählen").clicked() {
-                                if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                                    ed.target = p.to_string_lossy().replace('\\', "/");
-                                }
+                            ui.add(egui::TextEdit::singleline(&mut ed.target).hint_text("lokaler Ordner / Netzlaufwerk / Verbindung").desired_width(280.0));
+                            if ui
+                                .button("📂")
+                                .on_hover_text("Im Explorer wählen — lokale Laufwerke oder gespeicherte Verbindungen")
+                                .clicked()
+                            {
+                                pick = Some((PickerField::Target, ed.target.clone()));
                             }
                         });
                         ui.end_row();
@@ -4589,6 +5054,10 @@ impl App {
         }
         // Still open, nothing pressed — keep the editor for the next frame.
         self.job_editor = Some(ed);
+        // Now that job_editor is restored, the picker can write back into it.
+        if let Some((field, initial)) = pick {
+            self.open_picker(field, &initial);
+        }
     }
 
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
@@ -5963,6 +6432,8 @@ impl eframe::App for App {
         self.drain_connect();
         self.drain_sync();
         self.drain_bisync();
+        self.drain_job_connect();
+        self.drain_picker_connect();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -6373,6 +6844,9 @@ impl eframe::App for App {
         if self.job_editor.is_some() {
             self.ui_job_editor(ctx);
         }
+        if self.picker.is_some() {
+            self.ui_picker(ctx);
+        }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
 
@@ -6384,6 +6858,14 @@ impl eframe::App for App {
 
         // Internal file drag (between tabs/panes; out to Explorer on Windows).
         self.handle_file_drag(ctx);
+
+        // Keep painting while egui is still animating a smooth/inertial scroll
+        // (trackpad flick) so it glides to a smooth stop instead of stuttering
+        // — without this the app only repaints on discrete scroll events, which
+        // makes the momentum tail look choppy.
+        if ctx.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO) {
+            ctx.request_repaint();
+        }
 
         // Repaint while background work is active
         if self.scan_running
