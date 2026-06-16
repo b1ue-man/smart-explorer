@@ -29,6 +29,28 @@ Verdict: a Windows app cannot speak real AirDrop. We would only ever interop wit
 Apple devices by routing through a Mac/Linux box running OWL — not viable for a
 shipping Windows tool. **Recommend dropping AirDrop.**
 
+### Update — the 2025 "Quick Share ↔ AirDrop" interop (researched)
+
+Late 2025: Google added AirDrop interop to **Quick Share** (Pixel 10 first, then
+Samsung/OPPO/OnePlus/Xiaomi/…). Android can now send to / receive from Apple's
+**AirDrop "Everyone for 10 minutes"** mode, direct P2P, no server. **This does
+not change our verdict**, because:
+
+- It's **Google's own closed reverse-engineering of AirDrop, built into Android's
+  Quick Share client** (no Apple partnership, spec still unpublished). Nothing was
+  released that a third party could build against — "Windows developers can't
+  build compatible implementations even if they wanted to."
+- The transport is still **AWDL** (proprietary Apple peer-to-peer Wi-Fi). Android
+  reaches it via OS-level radio support; **Windows exposes no AWDL / Wi-Fi-Aware
+  API to apps**, and the owl/OpenDrop monitor-mode route isn't viable on Windows.
+- The realistic "AirDrop on Windows" answer is **Google's official Quick Share
+  *for Windows* app** (which is gaining AirDrop bridging) — i.e. a separate app,
+  not something we implement. Our own Quick Share implementation (below) talks to
+  **Android**, and would **not** inherit the AirDrop bridge.
+
+So: still ❌ for us to implement. If "reach iPhones from Windows" matters, the
+pragmatic route is to point users at Google's Quick Share for Windows, not build it.
+
 ## 2. Quick Share / Nearby Share (real protocol) — ✅ feasible (same Wi-Fi)
 
 Google's Quick Share (ex-"Nearby Share") is reverse-engineered and reimplemented
@@ -61,20 +83,45 @@ This is the best fit for us: an **own protocol** we control, reusing the existin
 `vfs::Backend` + transfer code, with your **server as a rendezvous/relay** so it
 works **across networks** (the thing AirDrop and stock Quick Share can't do).
 
+**Design constraint from the maintainer:** the server is a **router/rendezvous
+ONLY — never a file-transfer gate.** All file bytes go **directly device-to-device
+(P2P)**. The server exists purely because, without a fixed point, two devices on
+different networks can't *find* each other; it must never see or forward content.
+
 Architecture options:
 - **LAN fast path:** mDNS discovery + a direct TLS/Noise TCP connection
-  (no server needed when both are on the same network).
-- **WAN path (your server):** the server is a **signaling/rendezvous** point
-  (your DNS routing maps a stable name → current device endpoints) and, when a
-  direct NAT-traversal connection can't be made, a **relay** (TURN-style). With
-  **WebRTC data channels** you get NAT traversal + DTLS encryption "for free";
-  your server is the STUN/TURN + signaling. A plain relay (server forwards
-  ciphertext) is simpler to build and fine to start.
+  (no server involved at all when both are on the same network).
+- **WAN path (your server = signaling + STUN only):** the server is a
+  **rendezvous/signaling** point — your DNS routing maps a stable device name →
+  its current public endpoint — plus a **STUN**-style reflector so each side
+  learns its own NAT-mapped address. The two devices then **hole-punch a direct
+  connection** (ICE / UDP hole punching; WebRTC data channels do exactly this and
+  give DTLS E2E for free). The server brokers the handshake and **drops out** —
+  payload never traverses it.
+  - *Caveat (honest):* with **no TURN relay**, **symmetric-NAT ↔ symmetric-NAT**
+    pairs (some carrier-grade/corporate networks) can't be hole-punched and the
+    transfer simply won't establish. That's the price of "server is router only."
+    We surface a clear "couldn't establish a direct connection" message rather
+    than silently relaying. (A relay could be an explicit, opt-in later fallback.)
 - **Pairing:** short-code **PAKE** (SPAKE2) or a **QR code** carrying a
   pre-shared key; after first pairing, **pin each device's public key** (TOFU) so
-  later transfers are silent-but-authenticated.
+  later transfers are silent-but-authenticated. The server only ever holds public
+  routing info, never keys or content.
 - **Reuse:** received/sent bytes flow through the same streaming code we already
   use for sync/upload.
+
+### Bonus idea (maintainer's) — peer runs Smart Explorer as a "remote agent"
+
+Instead of treating the far device as a dumb byte store, **run Smart Explorer on
+both ends** and let the remote instance act as an **agent**: it executes the
+filesystem operations *locally* (directory scan, deep filter, fuzzy index/search)
+and sends back only the **results** over the P2P channel. This is a natural new
+`vfs::Backend` ("peer agent") whose `list_dir`/scan/search calls are RPCs to the
+peer rather than raw file reads — so browsing/searching a remote machine is as
+fast as local (the heavy walk happens on the machine that owns the disk; only
+compact result rows cross the wire), and actual file bytes still transfer
+directly only when opened/copied. Big UX win and it fits our architecture cleanly;
+worth designing in from the start of the `share`/`peer` module.
 
 ### Dangers to mitigate (and how)
 | Risk | Mitigation |
@@ -97,10 +144,13 @@ mitigable with standard crypto (PAKE + Noise/DTLS).
 
 ## Recommendation & rough effort
 1. **Drop AirDrop** (impossible on Windows).
-2. **Build the own paired share** (LAN direct + WAN via your server). Phase it:
-   (a) LAN mDNS + Noise + accept-prompt + quarantine; (b) add your server as
-   rendezvous/relay for WAN; (c) PAKE/QR pairing + key pinning + unpair. Medium-
-   large effort; isolated as a new `share` module + a small server component.
+2. **Build the own paired share** (LAN direct + WAN via your server as **router
+   only**, content always direct P2P). Phase it: (a) LAN mDNS + Noise + accept-
+   prompt + quarantine; (b) your server as **signaling + STUN** so WAN peers
+   hole-punch a **direct** connection (no relay); (c) PAKE/QR pairing + key
+   pinning + unpair; (d) the **peer-agent `Backend`** so the far Smart Explorer
+   runs scans/filters/searches locally and streams back results. Medium-large
+   effort; isolated as a new `share`/`peer` module + a small signaling server.
 3. **Optionally add Quick Share interop** later for same-network Android sends,
    referencing `rquickshare` (license-permitting).
 
