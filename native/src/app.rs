@@ -263,6 +263,9 @@ pub struct App {
     /// Absolute forward-slash source paths being dragged (empty = no drag).
     drag_files: Vec<String>,
     drag_active: bool,
+    /// Backend the drag started from when the source view is remote (None =
+    /// local). Lets a drop download/upload/cross-copy as needed.
+    drag_src: Option<crate::vfs::BackendHandle>,
     /// Tab the drag started from (drop onto the same tab is a no-op).
     drag_source_tab: usize,
     /// Once we've handed an active drag to the OS (drag-out), don't re-trigger.
@@ -883,6 +886,7 @@ impl App {
             last_scroll_at: None,
             drag_files: Vec::new(),
             drag_active: false,
+            drag_src: None,
             drag_source_tab: 0,
             drag_out_started: false,
             tab_header_rects: Vec::new(),
@@ -3667,10 +3671,10 @@ impl App {
         self.upload_rx = None;
         let (copied, errors) = res;
         if !errors.is_empty() {
-            self.error_msg = Some(format!("Upload: {} Fehler (z. B. {})", errors.len(), errors[0]));
+            self.error_msg = Some(format!("Übertragung: {} Fehler (z. B. {})", errors.len(), errors[0]));
         }
         self.notice = Some((
-            format!("✓ {} hochgeladen", copied),
+            format!("✓ {} übertragen", copied),
             std::time::Instant::now(),
         ));
         // Show the newly uploaded files.
@@ -4406,27 +4410,28 @@ impl App {
         None
     }
 
-    /// Copy (or move with Shift) the dragged files into tab `t`'s folder.
+    /// Drop the dragged files into tab `t`'s folder. Handles every combination
+    /// of local/remote source and target: local→local copy/move, local→remote
+    /// upload, remote→local download. Remote→remote isn't supported yet.
     fn drop_files_into_tab(&mut self, t: usize, move_files: bool) {
-        let (dest_str, is_remote) = if t == self.active_tab {
-            (self.root_path.clone(), self.remote.is_some())
+        // Target backend: Some(handle) if the target tab is a remote view.
+        let (dest_str, tgt_backend) = if t == self.active_tab {
+            (self.root_path.clone(), self.remote.as_ref().map(|rs| rs.backend.clone()))
         } else {
             match self.tabs.get(t) {
-                Some(x) => (x.root_path.clone(), x.remote.is_some()),
+                Some(x) => (x.root_path.clone(), x.remote.as_ref().map(|rs| rs.backend.clone())),
                 None => return,
             }
         };
-        if dest_str.is_empty() || is_remote || !is_local_style(&dest_str) {
-            self.error_msg = Some("Ziel-Tab ist kein lokaler Ordner.".to_string());
+        if dest_str.is_empty() {
             return;
         }
         let dest_fwd = dest_str.trim_end_matches('/').to_string();
-        // Skip files already directly in the destination (dropping onto their
-        // own folder would just make "name (2)" copies).
         let files: Vec<String> = std::mem::take(&mut self.drag_files)
             .into_iter()
             .filter(|p| p.rsplit_once('/').map(|(par, _)| par) != Some(dest_fwd.as_str()))
             .collect();
+        let src_backend = self.drag_src.take();
         if files.is_empty() {
             self.notice = Some((
                 "Dateien sind bereits im Ziel-Ordner.".to_string(),
@@ -4435,17 +4440,71 @@ impl App {
             return;
         }
         let n = files.len();
-        let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
-        self.copy_paths_into(files, dest, move_files);
-        self.notice = Some((
-            format!(
-                "{} Element(e) werden in „{}“ {}…",
-                n,
-                dest_fwd.rsplit('/').next().unwrap_or(&dest_fwd),
-                if move_files { "verschoben" } else { "kopiert" }
-            ),
-            std::time::Instant::now(),
-        ));
+        match (src_backend, tgt_backend) {
+            // local → local
+            (None, None) => {
+                if !is_local_style(&dest_fwd) {
+                    self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
+                    return;
+                }
+                let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
+                self.copy_paths_into(files, dest, move_files);
+                self.notice = Some((format!("{} Element(e) werden kopiert…", n), std::time::Instant::now()));
+            }
+            // local → remote (upload)
+            (None, Some(be)) => {
+                self.start_remote_upload(files, be, dest_fwd);
+            }
+            // remote → local (download)
+            (Some(be), None) => {
+                if !is_local_style(&dest_fwd) {
+                    self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
+                    return;
+                }
+                self.start_remote_download(be, files, dest_fwd);
+            }
+            // remote → remote
+            (Some(_), Some(_)) => {
+                self.error_msg = Some(
+                    "Remote → Remote per Drag&Drop wird noch nicht unterstützt (erst herunterladen)."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    /// Download remote `files` into a local folder, off the UI thread (reuses
+    /// the upload result channel for the completion notice).
+    fn start_remote_download(
+        &mut self,
+        backend: crate::vfs::BackendHandle,
+        files: Vec<String>,
+        dest_local: String,
+    ) {
+        if self.upload_rx.is_some() {
+            self.notice = Some(("Es läuft bereits eine Übertragung…".to_string(), std::time::Instant::now()));
+            return;
+        }
+        let n = files.len();
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("remote-download-multi".into())
+            .spawn(move || {
+                let mut copied = 0u64;
+                let mut errors = Vec::new();
+                for p in &files {
+                    let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                    let dest = std::path::Path::new(&dest_local).join(name);
+                    match download_to(&*backend, p, &dest) {
+                        Ok(_) => copied += 1,
+                        Err(e) => errors.push(format!("{}: {}", name, e)),
+                    }
+                }
+                let _ = tx.send((copied, errors));
+            })
+            .ok();
+        self.upload_rx = Some(rx);
+        self.notice = Some((format!("⬇ Lade {} Element(e) herunter…", n), std::time::Instant::now()));
     }
 
     /// Drive an active internal file drag each frame: paint a cursor chip,
@@ -4474,6 +4533,19 @@ impl App {
                     self.drag_out_started = true;
                     self.drag_active = false;
                     let files = std::mem::take(&mut self.drag_files);
+                    // Remote source → materialize to temp copies first (Explorer
+                    // needs real local paths). May briefly block on the download.
+                    let files = if let Some(be) = self.drag_src.take() {
+                        files
+                            .iter()
+                            .filter_map(|p| {
+                                let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                                download_to(&*be, p, &open_temp_path(name)).ok()
+                            })
+                            .collect()
+                    } else {
+                        files
+                    };
                     crate::dragout::drag_out(&files);
                     self.rescan();
                     return;
@@ -4515,6 +4587,7 @@ impl App {
             }
             self.drag_active = false;
             self.drag_files.clear();
+            self.drag_src = None;
         }
     }
 
@@ -6778,18 +6851,22 @@ impl App {
         // dragged row is part of it, otherwise just that row). Local files only
         // (remote items would need a download to drop elsewhere).
         if let Some(idx) = drag_start {
-            if !self.drag_active && self.remote.is_none() {
+            if !self.drag_active {
                 let dragged = self.entries[idx].path.clone();
-                let files: Vec<String> = if self.selection.contains(&dragged) {
+                let mut files: Vec<String> = if self.selection.contains(&dragged) {
                     self.selection.iter().map(|p| p.to_string()).collect()
                 } else {
                     vec![dragged.to_string()]
                 };
-                let files: Vec<String> =
-                    files.into_iter().filter(|p| is_local_style(p)).collect();
+                // From a local view we only carry local paths; from a remote view
+                // the paths are remote and `drag_src` is the source backend.
+                if self.remote.is_none() {
+                    files.retain(|p| is_local_style(p));
+                }
                 if !files.is_empty() {
                     self.drag_files = files;
                     self.drag_active = true;
+                    self.drag_src = self.remote.as_ref().map(|rs| rs.backend.clone());
                     self.drag_source_tab = self.current_render_tab;
                     self.drag_out_started = false;
                 }
