@@ -55,6 +55,7 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 |---|---|
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status — **Roadmap vollständig** (Remote-Layer, Cloud/WebDAV, Sync, Win11-Menü) |
 | [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Verifizierter Implementierungsplan für den Netzwerk-Layer (umgesetzt: `vfs.rs` + `sftp.rs`/`ftp.rs`/`webdav.rs`/`net.rs`/`rscan.rs`/`connect.rs`/`creds.rs`/`sync.rs`) |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | **Release- & Update-Flow von A bis Z** (bauen → Feed → GitHub-Release → Selbst-Update); inkl. „Repo muss public sein" |
 | [`docs/WIN11_CONTEXT_MENU.md`](docs/WIN11_CONTEXT_MENU.md) | Win11-Modern-Kontextmenü: COM-DLL (`explorer-command/`) gebaut; offen ist nur die Signierung |
 | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | Verifizierte Sackgassen & Fallen — **vor dem „Verbessern" lesen** |
 
@@ -82,25 +83,28 @@ cd native && cargo build --release
 
 ## Release veröffentlichen
 
-1. `version` in `native/Cargo.toml` erhöhen
-2. Feed bauen + aktualisieren:
-   - Windows: `cd native; .\publish-update.ps1` (baut zusätzlich den Installer)
-   - Linux/macOS/WSL (Cross-Compile): `native/publish-feed.sh`
-3. `release-native/update-feed/` (`version.txt` + `smart_explorer.exe`) committen
-   und pushen — damit ist die neue Version über den Git-Feed live.
+Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) steht in
+**[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
-Installierte Instanzen prüfen den Feed bei jedem Start und updaten sich
-automatisch (EXE-Tausch + Neustart).
+1. `version` in `native/Cargo.toml` erhöhen, committen.
+2. Bauen + Artefakte stagen: `native/publish-feed.sh` (Linux/WSL/macOS) bzw.
+   `cd native; .\publish-update.ps1` (Windows) — erzeugt Feed, portable EXE und
+   NSIS-Installer.
+3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
+   `main` ausgeliefert — erst dann ist das Update live).
+4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released
+   auf `v*`). Hängt EXE + Installer + DLL + `version.txt` an.
+
+> **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
+> **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
+> RELEASING.md.
 
 **Update-Quelle (Feed)** — einstellbar in der App (Sidebar → UPDATE) oder in
-`%APPDATA%\smart_explorer\update_source.txt`. Erlaubt ist entweder:
-
-- ein **Ordner** (lokal oder `\\server\share`-Netzlaufwerk), oder
-- eine **https-URL** bzw. ein **GitHub-Repo-Link** (z. B.
-  `https://github.com/b1ue-man/smart-explorer`) — dann lädt die App
-  `version.txt` + `smart_explorer.exe` direkt aus `release-native/update-feed/`
-  über `raw.githubusercontent.com`. So lässt sich **das Git als Update-Quelle**
-  setzen; jeder Push veröffentlicht ein Update.
+`%APPDATA%\smart_explorer\update_source.txt`. Erlaubt: ein **Ordner**
+(lokal/`\\server\share`), eine **https-URL** oder ein **GitHub-Repo-Link**
+(`https://github.com/b1ue-man/smart-explorer` → wird auf den `main`-Feed
+übersetzt). Installierte Instanzen prüfen den Feed bei jedem Start und updaten
+sich automatisch (EXE-Tausch + Neustart).
 
 ## Daten der App
 
