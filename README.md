@@ -13,29 +13,22 @@ den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
 ---
 
-## ⚠️ Hinweis, Gewährleistung & Haftung
+## ⚠️ Lizenz & Hinweis
 
 **Dieses Programm wurde vollständig mit [Claude](https://www.anthropic.com)
 (einer KI von Anthropic) entwickelt.** Mit der Installation/Nutzung bestätigen
 Sie, dass Ihnen dies bewusst ist.
 
-Die Software wird **unentgeltlich und „wie besehen" ("AS IS")** ohne Gewähr
-bereitgestellt. Die Haftung ist nach deutschem Recht **gestuft** (so wie üblich
-und nach § 309 Nr. 7 BGB zwingend):
+Lizenz: **[MIT](LICENSE)** — frei nutzbar, und wie für freie Software üblich
+**„WIE BESEHEN" ("AS IS"), ohne Gewährleistung und ohne Haftung** im gesetzlich
+zulässigen Umfang. Bei dieser unentgeltlichen Bereitstellung greifen in
+Deutschland zusätzlich die gesetzlichen Haftungserleichterungen (§§ 521 ff. BGB;
+zwingende Haftung — Vorsatz, grobe Fahrlässigkeit, Leben/Körper/Gesundheit,
+Produkthaftungsgesetz — bleibt unberührt).
 
-- **unbeschränkt** für Vorsatz, grobe Fahrlässigkeit sowie Verletzung von Leben,
-  Körper oder Gesundheit;
-- bei **einfacher Fahrlässigkeit** nur bei Verletzung wesentlicher
-  Vertragspflichten und begrenzt auf den vorhersehbaren, vertragstypischen
-  Schaden;
-- **im Übrigen — soweit gesetzlich zulässig — ausgeschlossen** (insbesondere
-  Datenverlust/-beschädigung);
-- Produkthaftungsgesetz und ausdrückliche Garantien bleiben unberührt.
-
-**Nutzung auf eigene Verantwortung — erstellen Sie Sicherungskopien** (§ 254
-BGB). Vollständiger Wortlaut: **[`DISCLAIMER.txt`](DISCLAIMER.txt)** (wird auch
-im Installer und beim ersten Start angezeigt). Dies ist **keine Rechtsberatung**;
-für eine verbindliche Beurteilung wenden Sie sich an eine Anwältin/einen Anwalt.
+**Nutzung auf eigene Gefahr — erstellen Sie Sicherungskopien.** Kurzhinweis:
+[`DISCLAIMER.txt`](DISCLAIMER.txt) (wird im Installer und beim ersten Start
+angezeigt). Keine Rechtsberatung.
 
 ---
 
@@ -97,6 +90,8 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
 | `release-native/update-feed/` | Update-Feed: `version.txt` + `Smart Explorer.exe` |
+| `LICENSE` | MIT-Lizenz (frei, AS-IS, ohne Gewähr/Haftung) |
+| `DISCLAIMER.txt` | Kurzhinweis (KI-Bau + Lizenzverweis), im Installer/ersten Start |
 | `archive/electron-v1-quellcode.zip` | Quellcode der alten Electron-Version (v1) |
 
 ## Bauen

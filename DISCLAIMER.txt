@@ -1,53 +1,20 @@
-Smart Explorer — Hinweis, Gewaehrleistung & Haftung
-====================================================
+Smart Explorer — Hinweis
+=========================
 
-Bitte vor Installation und Nutzung lesen.
-
-1. KI-Hinweis
 Dieses Programm wurde VOLLSTAENDIG mit Claude (einer KI von Anthropic)
 entwickelt. Mit der Installation und/oder Nutzung bestaetigen Sie, dass Ihnen
-dieser Umstand bewusst ist.
+dies bewusst ist.
 
-2. Bereitstellung / Gewaehrleistung
-Die Software wird UNENTGELTLICH und "wie besehen" ("AS IS") zur Verfuegung
-gestellt. Eine Gewaehr fuer Mangelfreiheit, Eignung fuer einen bestimmten Zweck
-oder einen ununterbrochenen, fehlerfreien Betrieb wird — soweit gesetzlich
-zulaessig — nicht uebernommen. Bei unentgeltlicher Ueberlassung haftet der
-Herausgeber fuer Sach- und Rechtsmaengel nur, soweit er einen Mangel arglistig
-verschwiegen hat (vgl. §§ 521 ff. BGB).
+Die Software ist FREI und steht unter der MIT-Lizenz (siehe Datei LICENSE). Sie
+wird "WIE BESEHEN" ("AS IS") OHNE JEGLICHE GEWAEHRLEISTUNG bereitgestellt; eine
+Haftung ist im gesetzlich zulaessigen Umfang ausgeschlossen. Bei dieser
+unentgeltlichen Ueberlassung gelten zudem die gesetzlichen
+Haftungserleichterungen (§§ 521 ff. BGB). Zwingende Haftung (z. B. fuer Vorsatz,
+grobe Fahrlaessigkeit, die Verletzung von Leben, Koerper oder Gesundheit sowie
+nach dem Produkthaftungsgesetz) bleibt unberuehrt.
 
-3. Haftung
-Die Haftung des Herausgebers richtet sich nach den gesetzlichen Vorschriften mit
-folgenden Massgaben:
- a) Fuer Schaeden aus der Verletzung des Lebens, des Koerpers oder der Gesundheit
-    sowie fuer Vorsatz und grobe Fahrlaessigkeit haftet der Herausgeber
-    unbeschraenkt nach den gesetzlichen Vorschriften.
- b) Bei einfacher Fahrlaessigkeit haftet der Herausgeber nur bei Verletzung einer
-    wesentlichen Vertragspflicht (Kardinalpflicht) und der Hoehe nach begrenzt
-    auf den vertragstypischen, vorhersehbaren Schaden.
- c) Im Uebrigen ist die Haftung — soweit gesetzlich zulaessig — ausgeschlossen;
-    dies gilt insbesondere fuer mittelbare Schaeden, Folgeschaeden, entgangenen
-    Gewinn sowie fuer den Verlust oder die Beschaedigung von Daten.
- d) Die Haftung nach dem Produkthaftungsgesetz (ProdHaftG) sowie aus einer
-    ausdruecklich uebernommenen Garantie bleibt unberuehrt.
+Die Nutzung erfolgt auf eigene Gefahr — bitte erstellen Sie vorher
+Sicherungskopien Ihrer Daten.
 
-4. Eigenverantwortung / Datensicherung
-Die Nutzung erfolgt auf eigene Verantwortung. Erstellen Sie vor der Nutzung —
-insbesondere vor Kopier-, Verschiebe-, Loesch- und Synchronisierungsvorgaengen —
-stets Sicherungskopien Ihrer Daten. Eine unterlassene zumutbare Datensicherung
-kann als Mitverschulden zu beruecksichtigen sein (§ 254 BGB).
-
-5. Kein Rechtsrat
-Dieser Text wurde nach bestem Wissen anhand in Deutschland ueblicher Vorgaben
-erstellt, stellt jedoch KEINE Rechtsberatung dar. Fuer eine verbindliche
-Beurteilung im Einzelfall wenden Sie sich an eine Rechtsanwaeltin / einen
-Rechtsanwalt.
-
-------------------------------------------------------------------------------
-EN (non-binding summary): Free software, provided "AS IS". Liability for intent,
-gross negligence and injury to life/body/health is UNLIMITED per statute; for
-simple negligence it is limited to breach of essential ("cardinal") duties and
-the foreseeable, contract-typical damage; otherwise excluded as far as legally
-permitted (incl. loss of or damage to data). The Product Liability Act and any
-expressly given guarantee remain unaffected. Keep backups (§ 254 BGB). This is
-not legal advice.
+Dies ist keine Rechtsberatung. Der vollstaendige Lizenz- und
+Gewaehrleistungstext steht in der Datei LICENSE.
