@@ -52,6 +52,14 @@ fn main() -> eframe::Result<()> {
     updater::archive_current_version();
     let args: Vec<String> = std::env::args().collect();
 
+    // Update worker: a temp copy of the new binary, launched by a failed
+    // in-place swap. Waits for the parent to exit, replaces the target exe,
+    // relaunches it. Opens no window.
+    if args.iter().any(|a| a == "--apply-update") {
+        updater::run_apply_worker(&args);
+        return Ok(());
+    }
+
     // Headless background sync (logon autostart). Runs the daemon loop and
     // never opens a window. The same exe, so self-update keeps it current.
     if args.iter().any(|a| a == "--sync-daemon") {
