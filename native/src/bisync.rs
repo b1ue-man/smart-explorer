@@ -42,12 +42,59 @@ pub enum Direction {
     Both,
 }
 
+impl Direction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Direction::AtoB => "a2b",
+            Direction::BtoA => "b2a",
+            Direction::Both => "both",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Direction> {
+        match s {
+            "a2b" => Some(Direction::AtoB),
+            "b2a" => Some(Direction::BtoA),
+            "both" => Some(Direction::Both),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Direction::AtoB => "Quelle → Ziel (einseitig)",
+            Direction::BtoA => "Ziel → Quelle (einseitig)",
+            Direction::Both => "Beide Richtungen",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConflictMode {
     /// Strict (default): a file changed on BOTH sides is a conflict.
     FileLevel,
     /// No conflicts — the newer mtime wins.
     NewerWins,
+}
+
+impl ConflictMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConflictMode::FileLevel => "strict",
+            ConflictMode::NewerWins => "newer",
+        }
+    }
+    pub fn parse(s: &str) -> Option<ConflictMode> {
+        match s {
+            "strict" => Some(ConflictMode::FileLevel),
+            "newer" => Some(ConflictMode::NewerWins),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            ConflictMode::FileLevel => "Streng: beidseitige Änderung = Konflikt (sicher)",
+            ConflictMode::NewerWins => "Neuere gewinnt (kein Konflikt)",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -115,8 +162,26 @@ fn parent_of(path: &str) -> Option<String> {
     t.rfind('/').map(|i| if i == 0 { "/".into() } else { t[..i].into() })
 }
 
-/// Recursively list files (not dirs) of a backend subtree → rel → Sig.
-pub fn walk_files(be: &dyn Backend, root: &str, cancel: &AtomicBool) -> io::Result<Tree> {
+/// What to skip while walking (hidden files, ignore globs matched on the
+/// relative path). `default_filter()` includes everything.
+pub struct WalkFilter<'a> {
+    pub include_hidden: bool,
+    pub ignore: &'a globset::GlobSet,
+}
+
+/// An empty filter (include everything) — handy for tests / "no settings".
+pub fn empty_globset() -> globset::GlobSet {
+    globset::GlobSetBuilder::new().build().unwrap()
+}
+
+/// Recursively list files (not dirs) of a backend subtree → rel → Sig,
+/// honouring the hidden/ignore filter.
+pub fn walk_files(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+) -> io::Result<Tree> {
     let mut out = Tree::new();
     let mut stack = vec![root.to_string()];
     while let Some(dir) = stack.pop() {
@@ -124,14 +189,21 @@ pub fn walk_files(be: &dyn Backend, root: &str, cancel: &AtomicBool) -> io::Resu
             break;
         }
         for m in be.list_dir(&dir)? {
+            if !filter.include_hidden && m.hidden {
+                continue;
+            }
             let p = join(&dir, &m.name);
+            let rel = rel_of(&p, root);
+            if filter.ignore.is_match(&rel) {
+                continue;
+            }
             if m.is_dir {
                 if !m.is_symlink {
                     stack.push(p);
                 }
             } else {
                 out.insert(
-                    rel_of(&p, root),
+                    rel,
                     Sig {
                         size: m.size,
                         mtime_ms: m.mtime_ms,
@@ -494,12 +566,13 @@ pub fn run(
     opts: BisyncOptions,
     retain_days: u64,
     cancel: &AtomicBool,
+    filter: &WalkFilter,
 ) -> Outcome {
     let pair = pair_id(root_a, root_b);
     let bpath = baseline_path(&pair);
     let vdir = versions_dir(&pair);
     let base = load_baseline(&bpath);
-    let at = match walk_files(a, root_a, cancel) {
+    let at = match walk_files(a, root_a, cancel, filter) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -508,7 +581,7 @@ pub fn run(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel) {
+    let bt = match walk_files(b, root_b, cancel, filter) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -523,8 +596,8 @@ pub fn run(
     let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
     let mut errors = Vec::new();
     let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
-    let at2 = walk_files(a, root_a, cancel).unwrap_or(at);
-    let bt2 = walk_files(b, root_b, cancel).unwrap_or(bt);
+    let at2 = walk_files(a, root_a, cancel, filter).unwrap_or(at);
+    let bt2 = walk_files(b, root_b, cancel, filter).unwrap_or(bt);
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
     if !opts.dry_run {
         let _ = save_baseline(&bpath, &nb);
@@ -595,14 +668,16 @@ mod tests {
         vdir: &PathBuf,
     ) -> (BisyncStats, Vec<Conflict>, Baseline) {
         let cancel = AtomicBool::new(false);
-        let at = walk_files(a, ra, &cancel).unwrap();
-        let bt = walk_files(b, rb, &cancel).unwrap();
+        let gs = empty_globset();
+        let f = WalkFilter { include_hidden: true, ignore: &gs };
+        let at = walk_files(a, ra, &cancel, &f).unwrap();
+        let bt = walk_files(b, rb, &cancel, &f).unwrap();
         let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
         let mut errs = Vec::new();
         let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
         // re-walk for an accurate baseline after writes
-        let at2 = walk_files(a, ra, &cancel).unwrap();
-        let bt2 = walk_files(b, rb, &cancel).unwrap();
+        let at2 = walk_files(a, ra, &cancel, &f).unwrap();
+        let bt2 = walk_files(b, rb, &cancel, &f).unwrap();
         let nb = update_baseline(base, &at2, &bt2, &actions, &converged, &conflicts);
         (st, conflicts, nb)
     }

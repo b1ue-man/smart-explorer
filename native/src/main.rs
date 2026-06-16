@@ -16,6 +16,7 @@ mod rscan;
 mod scanner;
 mod sftp;
 mod sync;
+mod syncjobs;
 #[cfg(windows)]
 mod shell_clipboard;
 #[cfg(windows)]
