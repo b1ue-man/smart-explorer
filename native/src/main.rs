@@ -2,8 +2,10 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 mod app;
+mod autostart;
 mod bisync;
 mod connect;
+mod daemon;
 mod copy;
 mod creds;
 mod filter;
@@ -41,6 +43,13 @@ fn main() -> eframe::Result<()> {
     updater::archive_current_version();
     let args: Vec<String> = std::env::args().collect();
 
+    // Headless background sync (logon autostart). Runs the daemon loop and
+    // never opens a window. The same exe, so self-update keeps it current.
+    if args.iter().any(|a| a == "--sync-daemon") {
+        daemon::run_daemon();
+        return Ok(());
+    }
+
     // Uninstaller hook: undo all shell integration (reversible by design) and
     // exit without opening a window, so removing the app can't leave a folder
     // handler pointing at a deleted exe.
@@ -66,6 +75,12 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
+            // Open maximized so the window is fully on-screen and ready to use.
+            // Previously the default size was nearly the full screen but the
+            // window opened with an offset, landing partly off-screen and
+            // forcing the user to drag it in before maximizing. The inner_size
+            // is the restore (un-maximized) size.
+            .with_maximized(true)
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([900.0, 600.0])
             .with_title("Smart Explorer"),

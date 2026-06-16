@@ -19,22 +19,26 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 9 | **Rich sync-setup menu** (source/target/method/settings); jobs manager + add/edit dialog; quick-setup; **split-view right-click → sync the two open folders / save as setup** | ✅ | 0.5.10 |
 | 12 | Sync setups **persist across restart** (`%APPDATA%/smart_explorer/sync/jobs.tsv`) | ✅ | 0.5.10 |
 | 14 | **Established connections pinned to the sidebar**, freshest first; overflow (>10) into the Verbindung menu | ✅ | 0.5.10 |
+| 4 | **Background sync daemon** (`--sync-daemon`, logon autostart, runs due setups with app closed) + heartbeat/status + on/off toggle | ✅ | 0.5.11 |
+| 15 | Window opened partly off-screen at near-full size → **open maximized** by default | ✅ | 0.5.11 |
 
 ## Open
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 4 | **Background sync service/worker** (runs when app closed) + remaining sync settings wiring. Worker = same exe via `--sync-daemon` scheduled task, so self-update covers it. Job model (interval/hidden/ignore) + `due()` already in `syncjobs.rs`. | — | builds on #3 engine + #9 jobs (both done) |
 | 6 | **Native Windows drag-and-drop**: into the app (egui dropped_files), between tabs, and **out to Explorer** (OLE `DoDragDrop` + `IDataObject`/`IDropSource` — the hard part) | — | drop-in/between-tabs first; drag-out via COM |
 
-## Notes for #4 (next up)
+## Notes
 
-- `syncjobs::SyncJob` already carries `interval_min`, `include_hidden`, `ignore`
-  and a `due(now)` test-covered scheduler check; `run_job()` in app.rs runs one
-  by id. The daemon is a headless loop: `--sync-daemon` → load jobs → for each
-  `due()` job run a bisync (no UI) → `mark_run` → sleep → repeat.
-- Autostart: register the scheduled task / `Run` key pointing at the installed
-  exe with `--sync-daemon`. Self-update already swaps that exe.
+- **Background daemon (#4):** `daemon.rs` is a headless loop started by a per-user
+  `HKCU\…\Run` entry (`autostart.rs`) → `--sync-daemon`. Loads jobs, runs every
+  `due()` one via the same `bisync::run` (local↔local; remote needs re-auth so
+  it's skipped), `mark_run`, writes `sync/daemon.heartbeat` for the GUI status,
+  honours a `sync/daemon.stop` sentinel. Single-instance via heartbeat freshness.
+  Self-update swaps the one exe, so the daemon updates on next logon.
+- **Drag-and-drop (#6, next):** drop INTO the app via egui `RawInput.dropped_files`
+  (cross-platform, easy); between tabs internally; drag OUT to Explorer needs OLE
+  `DoDragDrop` + `IDataObject`/`IDropSource` (Win32, the hard part).
 
 ## Design notes
 
