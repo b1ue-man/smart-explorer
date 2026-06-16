@@ -37,12 +37,16 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 
 | 26 | **Remote drag-drop** — drag rows between tabs/panes: local→local copy, **local→remote upload**, **remote→local download**, and **drag remote files OUT to Explorer** (materialize via temp + OLE). Remote→remote deferred. | ✅ | 0.5.26 |
 
+| 27 | **Native CfAPI** — CfRegisterSyncRoot (folder = OS-managed sync root) + CfConvertToPlaceholder/CfSetInSyncState (mark hydrated files in-sync), best-effort, in CfAPI mode. | ✅ (eager) | 0.5.27; on-demand FETCH_DATA hydration still TODO (#30) |
+| 29 | **"Neu" dropdown** — New button is now a menu: Ordner + editable files (.txt/.md/.csv/.json/.html/.rs), created locally (opened to edit) or via the backend on remotes. | ✅ | 0.5.27 |
+
 ## Open
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 27 | **Native CfAPI placeholders** — CfRegisterSyncRoot + on-demand FETCH_DATA hydration + OS save notifications on the cfsync folder (Windows-tested). | later | REMOTE_EDIT.md |
+| 30 | **On-demand CfAPI hydration** — CfConnectSyncRoot FETCH_DATA callback (lazy download) instead of eager. | later | needs Windows test |
 | 28 | **Remote→remote drag** (cross-backend copy via temp). | later | §C of FILE_OPS_MATRIX |
+| Q | **Quick Share interop** (Android, same-LAN: mDNS + BLE + UKEY2 + protobuf). | in progress | SHARING_EVAL.md; AirDrop stays infeasible on Windows |
 | 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
 | 19.2 | **Google Drive `Backend`** (`gdrive.rs`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, multipart upload. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16 |
 | 19.4 | **Self-setup instructions** — the app is not a hosted service: each user creates their own Google OAuth client. In-app collapsible guide + console link in Settings, full walkthrough in [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md), README note. Covers the Desktop-app loopback (no redirect URI) and the Testing-mode 7-day-token caveat. | ✅ | 0.5.17 |
