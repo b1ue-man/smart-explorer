@@ -28,6 +28,49 @@ fn not_found(p: &str) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, format!("nicht gefunden: {}", p))
 }
 
+/// Turn a Drive API error response into a readable io::Error (Drive returns
+/// `{"error":{"code":403,"message":"…","errors":[{"reason":"…"}]}}`), so the
+/// user sees e.g. "HTTP 403: … (accessNotConfigured)" instead of "status 403".
+fn drive_err(code: u16, body: String) -> io::Error {
+    let msg = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            v["error"]["message"].as_str().map(|m| {
+                let reason = v["error"]["errors"][0]["reason"].as_str().unwrap_or("");
+                if reason.is_empty() {
+                    m.to_string()
+                } else {
+                    format!("{} ({})", m, reason)
+                }
+            })
+        })
+        .unwrap_or(body);
+    io::Error::new(io::ErrorKind::Other, format!("HTTP {}: {}", code, msg))
+}
+
+/// Parse a ureq result as JSON, surfacing the error body on 4xx/5xx.
+fn resp_json(r: Result<ureq::Response, ureq::Error>) -> VfsResult<serde_json::Value> {
+    match r {
+        Ok(resp) => {
+            let s = resp.into_string().map_err(err)?;
+            if s.trim().is_empty() {
+                Ok(serde_json::Value::Null)
+            } else {
+                serde_json::from_str(&s).map_err(err)
+            }
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            Err(drive_err(code, resp.into_string().unwrap_or_default()))
+        }
+        Err(e) => Err(err(e)),
+    }
+}
+
+/// Like `resp_json` but discards the body — for calls we only need to succeed.
+fn check(r: Result<ureq::Response, ureq::Error>) -> VfsResult<()> {
+    resp_json(r).map(|_| ())
+}
+
 pub struct GDriveBackend {
     tokens: Mutex<cloud::Tokens>,
     /// path (forward-slash, no trailing slash; "" == root) → fileId
@@ -57,12 +100,9 @@ impl GDriveBackend {
         Ok(t.access_token.clone())
     }
 
-    fn get(&self, url: &str) -> VfsResult<ureq::Response> {
+    fn get_json(&self, url: &str) -> VfsResult<serde_json::Value> {
         let auth = self.bearer()?;
-        ureq::get(url)
-            .set("Authorization", &format!("Bearer {}", auth))
-            .call()
-            .map_err(err)
+        resp_json(ureq::get(url).set("Authorization", &format!("Bearer {}", auth)).call())
     }
 
     /// Resolve a forward-slash path to a Drive fileId (walking + caching).
@@ -107,7 +147,7 @@ impl GDriveBackend {
             API,
             cloud_urlenc(&q)
         );
-        let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+        let v = self.get_json(&url)?;
         Ok(v["files"]
             .as_array()
             .and_then(|a| a.first())
@@ -157,13 +197,12 @@ impl GDriveBackend {
             "parents": [parent_id],
         });
         let auth = self.bearer()?;
-        let v: serde_json::Value = ureq::post(&format!("{}/files?fields=id", API))
-            .set("Authorization", &format!("Bearer {}", auth))
-            .set("Content-Type", "application/json")
-            .send_string(&body.to_string())
-            .map_err(err)?
-            .into_json()
-            .map_err(err)?;
+        let v = resp_json(
+            ureq::post(&format!("{}/files?fields=id", API))
+                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string()),
+        )?;
         let id = v["id"].as_str().ok_or_else(|| err("kein id nach mkdir"))?.to_string();
         self.ids.lock().unwrap().insert(key, id.clone());
         Ok(id)
@@ -193,24 +232,22 @@ impl GDriveBackend {
 
         let auth = self.bearer()?;
         let ct = format!("multipart/related; boundary={}", boundary);
-        let v: serde_json::Value = match existing {
-            Some(id) => ureq::request(
-                "PATCH",
-                &format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id),
-            )
-            .set("Authorization", &format!("Bearer {}", auth))
-            .set("Content-Type", &ct)
-            .send_bytes(&body)
-            .map_err(err)?
-            .into_json()
-            .map_err(err)?,
-            None => ureq::post(&format!("{}?uploadType=multipart&fields=id", UPLOAD))
+        let v = match existing {
+            Some(id) => resp_json(
+                ureq::request(
+                    "PATCH",
+                    &format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id),
+                )
                 .set("Authorization", &format!("Bearer {}", auth))
                 .set("Content-Type", &ct)
-                .send_bytes(&body)
-                .map_err(err)?
-                .into_json()
-                .map_err(err)?,
+                .send_bytes(&body),
+            )?,
+            None => resp_json(
+                ureq::post(&format!("{}?uploadType=multipart&fields=id", UPLOAD))
+                    .set("Authorization", &format!("Bearer {}", auth))
+                    .set("Content-Type", &ct)
+                    .send_bytes(&body),
+            )?,
         };
         if let Some(id) = v["id"].as_str() {
             self.ids.lock().unwrap().insert(key, id.to_string());
@@ -221,11 +258,12 @@ impl GDriveBackend {
     fn trash(&self, path: &str) -> VfsResult<()> {
         let id = self.resolve(path)?;
         let auth = self.bearer()?;
-        ureq::request("PATCH", &format!("{}/files/{}", API, id))
-            .set("Authorization", &format!("Bearer {}", auth))
-            .set("Content-Type", "application/json")
-            .send_string(&serde_json::json!({ "trashed": true }).to_string())
-            .map_err(err)?;
+        check(
+            ureq::request("PATCH", &format!("{}/files/{}", API, id))
+                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Content-Type", "application/json")
+                .send_string(&serde_json::json!({ "trashed": true }).to_string()),
+        )?;
         self.ids.lock().unwrap().remove(&norm(path));
         Ok(())
     }
@@ -257,7 +295,7 @@ impl Backend for GDriveBackend {
             if let Some(t) = &page_token {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
             }
-            let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+            let v = self.get_json(&url)?;
             if let Some(files) = v["files"].as_array() {
                 let base = norm(path);
                 for f in files {
@@ -300,18 +338,23 @@ impl Backend for GDriveBackend {
             "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime",
             API, id
         );
-        let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+        let v = self.get_json(&url)?;
         Ok(Self::meta_from_json(&v))
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         let id = self.resolve(path)?;
         let auth = self.bearer()?;
-        let resp = ureq::get(&format!("{}/files/{}?alt=media", API, id))
+        match ureq::get(&format!("{}/files/{}?alt=media", API, id))
             .set("Authorization", &format!("Bearer {}", auth))
             .call()
-            .map_err(err)?;
-        Ok(Box::new(resp.into_reader()))
+        {
+            Ok(resp) => Ok(Box::new(resp.into_reader())),
+            Err(ureq::Error::Status(code, resp)) => {
+                Err(drive_err(code, resp.into_string().unwrap_or_default()))
+            }
+            Err(e) => Err(err(e)),
+        }
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
@@ -339,11 +382,12 @@ impl Backend for GDriveBackend {
                 dst_parent_id, src_parent_id
             ));
         }
-        ureq::request("PATCH", &url)
-            .set("Authorization", &format!("Bearer {}", auth))
-            .set("Content-Type", "application/json")
-            .send_string(&serde_json::json!({ "name": dst_name }).to_string())
-            .map_err(err)?;
+        check(
+            ureq::request("PATCH", &url)
+                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Content-Type", "application/json")
+                .send_string(&serde_json::json!({ "name": dst_name }).to_string()),
+        )?;
         let mut ids = self.ids.lock().unwrap();
         ids.remove(&norm(src));
         ids.insert(norm(dst), id);
