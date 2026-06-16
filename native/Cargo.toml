@@ -57,6 +57,10 @@ getrandom = "0.2"
 # aws-lc) keyed by a PSK derived from the pairing/room code via HKDF.
 snow = "0.9"
 hkdf = "0.12"
+# Quick Share (quickshare.rs, #Q): mDNS discovery/advertisement of the Nearby
+# Share service so Android devices appear on the LAN. Pure Rust (if-addrs +
+# socket2), cross-compiles clean.
+mdns-sd = "0.11"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
