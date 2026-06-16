@@ -204,6 +204,8 @@ pub struct App {
     icon_cache: crate::icons::IconCache,
     /// Whether the keyboard-shortcut cheat sheet overlay is open.
     show_help: bool,
+    /// First-run disclaimer / liability notice (shown until acknowledged).
+    show_disclaimer: bool,
 
     last_view_recompute: Instant,
     /// Entries arrived but the view hasn't been rebuilt yet (throttled during
@@ -319,6 +321,10 @@ enum ClipKey {
 #[derive(Clone, Copy)]
 enum ClipKey {}
 
+/// First-run liability notice (single source: the repo's DISCLAIMER.txt, also
+/// used by the installer's accept page).
+const DISCLAIMER_TEXT: &str = include_str!("../../DISCLAIMER.txt");
+
 /// Whether a forward-slash path is a LOCAL path (drive letter `X:/…` or a UNC
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
@@ -418,6 +424,7 @@ impl App {
             favorites,
             icon_cache: crate::icons::IconCache::new(),
             show_help: false,
+            show_disclaimer: !appdata_file("disclaimer_ack.txt").exists(),
             last_view_recompute: Instant::now(),
             view_dirty: false,
 
@@ -4249,6 +4256,50 @@ impl App {
         }
     }
 
+    /// First-run liability notice. Modal-ish (foreground, dimmed backdrop);
+    /// must be acknowledged once. The acceptance is recorded in appdata so it
+    /// doesn't reappear.
+    fn ui_disclaimer(&mut self, ctx: &egui::Context) {
+        if !self.show_disclaimer {
+            return;
+        }
+        // Dim everything behind the notice.
+        egui::Area::new(egui::Id::new("disclaimer_backdrop"))
+            .order(egui::Order::Background)
+            .show(ctx, |ui| {
+                let r = ui.ctx().screen_rect();
+                ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(200));
+            });
+        let mut accept = false;
+        egui::Window::new("Hinweis & Haftungsausschluss")
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([560.0, 0.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                    ui.label(DISCLAIMER_TEXT);
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(RichText::new("Verstanden — auf eigenes Risiko fortfahren").strong())
+                        .clicked()
+                    {
+                        accept = true;
+                    }
+                    if ui.button("Beenden").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+        if accept {
+            let _ = std::fs::write(appdata_file("disclaimer_ack.txt"), "1");
+            self.show_disclaimer = false;
+        }
+    }
+
     fn ui_help_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
         egui::Window::new("Tastenkürzel")
@@ -4884,6 +4935,8 @@ impl eframe::App for App {
         if self.show_connect {
             self.ui_connect_dialog(ctx);
         }
+        // Liability notice on top of everything, on first run.
+        self.ui_disclaimer(ctx);
 
         // Repaint while background work is active
         if self.scan_running

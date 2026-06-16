@@ -13,6 +13,32 @@ den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
 ---
 
+## ⚠️ Hinweis, Gewährleistung & Haftung
+
+**Dieses Programm wurde vollständig mit [Claude](https://www.anthropic.com)
+(einer KI von Anthropic) entwickelt.** Mit der Installation/Nutzung bestätigen
+Sie, dass Ihnen dies bewusst ist.
+
+Die Software wird **unentgeltlich und „wie besehen" ("AS IS")** ohne Gewähr
+bereitgestellt. Die Haftung ist nach deutschem Recht **gestuft** (so wie üblich
+und nach § 309 Nr. 7 BGB zwingend):
+
+- **unbeschränkt** für Vorsatz, grobe Fahrlässigkeit sowie Verletzung von Leben,
+  Körper oder Gesundheit;
+- bei **einfacher Fahrlässigkeit** nur bei Verletzung wesentlicher
+  Vertragspflichten und begrenzt auf den vorhersehbaren, vertragstypischen
+  Schaden;
+- **im Übrigen — soweit gesetzlich zulässig — ausgeschlossen** (insbesondere
+  Datenverlust/-beschädigung);
+- Produkthaftungsgesetz und ausdrückliche Garantien bleiben unberührt.
+
+**Nutzung auf eigene Verantwortung — erstellen Sie Sicherungskopien** (§ 254
+BGB). Vollständiger Wortlaut: **[`DISCLAIMER.txt`](DISCLAIMER.txt)** (wird auch
+im Installer und beim ersten Start angezeigt). Dies ist **keine Rechtsberatung**;
+für eine verbindliche Beurteilung wenden Sie sich an eine Anwältin/einen Anwalt.
+
+---
+
 ## ⬇️ Installieren
 
 Kein Admin, kein Setup-Zwang. Zwei Wege:
