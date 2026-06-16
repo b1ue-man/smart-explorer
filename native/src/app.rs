@@ -410,6 +410,9 @@ pub struct App {
     /// In-flight upload of clipboard/dropped files into a remote folder.
     /// Result is (files uploaded, errors).
     upload_rx: Option<Receiver<(u64, Vec<String>)>>,
+    /// In-flight download of selected remote files to temp for a Ctrl+C →
+    /// Explorer paste. Result is the local temp paths to put on the clipboard.
+    clip_download_rx: Option<Receiver<Vec<String>>>,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     cloud_client_id_draft: String,
@@ -841,6 +844,7 @@ impl App {
             job_connect_pending: None,
             file_open_rx: Vec::new(),
             upload_rx: None,
+            clip_download_rx: None,
 
             cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
                 .client_id,
@@ -2946,6 +2950,36 @@ impl App {
         ));
     }
 
+    /// Once selected remote files have downloaded to temp, put them on the
+    /// Windows clipboard as CF_HDROP so they paste into Explorer.
+    fn drain_clip_download(&mut self) {
+        let local = match self.clip_download_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(v) => v,
+            None => return,
+        };
+        self.clip_download_rx = None;
+        if local.is_empty() {
+            self.error_msg = Some("Zwischenablage: Download fehlgeschlagen".to_string());
+            return;
+        }
+        #[cfg(windows)]
+        match crate::shell_clipboard::write_files(&local, crate::shell_clipboard::DROPEFFECT_COPY) {
+            Ok(_) => {
+                self.virtual_clip = None;
+                self.notice = Some((
+                    format!(
+                        "✓ {} Datei(en) kopiert — in Explorer einfügbar (Ctrl+V)",
+                        local.len()
+                    ),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(e) => self.error_msg = Some(format!("Zwischenablage: {}", e)),
+        }
+        #[cfg(not(windows))]
+        let _ = local;
+    }
+
     fn drain_upload(&mut self) {
         let res = match self.upload_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
@@ -3269,6 +3303,44 @@ impl App {
                 "Nichts ausgewählt — bitte erst Dateien markieren".to_string(),
                 std::time::Instant::now(),
             ));
+            return;
+        }
+        // Remote selection → download the files to temp, then put those local
+        // paths on the clipboard so they paste into Explorer (or back into us).
+        if let Some(rs) = &self.remote {
+            let files: Vec<(String, String)> = self
+                .entries
+                .iter()
+                .filter(|e| !e.is_dir && self.selection.contains(&e.path))
+                .map(|e| (e.path.to_string(), e.name.to_string()))
+                .collect();
+            if files.is_empty() {
+                self.notice = Some((
+                    "Remote: nur Dateien können in die Zwischenablage kopiert werden (keine Ordner).".to_string(),
+                    std::time::Instant::now(),
+                ));
+                return;
+            }
+            let backend = rs.backend.clone();
+            let n = files.len();
+            let (tx, rx) = unbounded();
+            self.clip_download_rx = Some(rx);
+            self.notice = Some((
+                format!("⬇ Bereite {} Datei(en) für die Zwischenablage vor…", n),
+                std::time::Instant::now(),
+            ));
+            std::thread::Builder::new()
+                .name("clip-download".into())
+                .spawn(move || {
+                    let mut local = Vec::new();
+                    for (path, name) in &files {
+                        if let Ok(p) = download_to_temp(&*backend, path, name) {
+                            local.push(p);
+                        }
+                    }
+                    let _ = tx.send(local);
+                })
+                .ok();
             return;
         }
         let has_dir = self
@@ -6885,6 +6957,7 @@ impl eframe::App for App {
         self.drain_cloud_auth();
         self.drain_file_open();
         self.drain_upload();
+        self.drain_clip_download();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -7334,6 +7407,7 @@ impl eframe::App for App {
             || self.band_active
             || !self.file_open_rx.is_empty()
             || self.upload_rx.is_some()
+            || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
         {
