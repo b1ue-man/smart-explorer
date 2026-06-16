@@ -3087,19 +3087,54 @@ impl App {
         let backend = rs.backend.clone();
         let label = rs.label.clone();
 
-        // The local destination depends on the open mode: an ephemeral temp copy,
-        // or a stable per-connection sync-folder path that mirrors the remote
-        // layout (CfAPI mode — see cfsync.rs). Both then download + watch + launch.
+        // CfAPI mode on Windows: mount the connection as a native Cloud-Files
+        // sync root (cloud-filter provider). The placeholder path resolves to the
+        // remote item; the OS populates parents and hydrates on open via the
+        // provider's fetch_data → backend.open_read. We only register an
+        // edit-watch for save-back and launch the path (no manual download).
+        #[cfg(windows)]
+        if self.remote_open_mode == RemoteOpenMode::CfApi {
+            match crate::cfprovider::ensure_mounted(
+                &label,
+                backend.clone(),
+                self.root_path.trim_end_matches('/'),
+            ) {
+                Ok(_) => {
+                    let dest = crate::cfsync::local_path(&label, &self.root_path, &path);
+                    self.remote_edits.retain(|e| e.temp != dest);
+                    if self.remote_edits.len() < 50 {
+                        self.remote_edits.push(RemoteEdit {
+                            temp: dest.clone(),
+                            backend: backend.clone(),
+                            remote_path: path.clone(),
+                            name: name.clone(),
+                            baseline_mtime: i64::MAX, // sentinel: arm on first sight
+                            seen_mtime: 0,
+                            uploading: false,
+                        });
+                    }
+                    self.notice = Some((
+                        format!("☁ Öffne „{}“ (CfAPI-Platzhalter)…", name),
+                        std::time::Instant::now(),
+                    ));
+                    self.open_path(&dest.to_string_lossy().replace('\\', "/"));
+                    return;
+                }
+                Err(e) => {
+                    self.notice = Some((
+                        format!("CfAPI nicht verfügbar ({}), nutze Temp-Kopie", e),
+                        std::time::Instant::now(),
+                    ));
+                    // fall through to the temp/persistent-folder download path
+                }
+            }
+        }
+
+        // Temp mode (and non-Windows CfApi = persistent folder): download to the
+        // local destination, watch it for saves, and launch.
         let dest = match self.remote_open_mode {
             RemoteOpenMode::Temp => open_temp_path(&name),
-            RemoteOpenMode::CfApi => {
-                // Persistent per-connection sync folder mirroring the remote. (We
-                // do NOT register it as a native CfAPI sync root: doing so without
-                // a connected provider makes Windows' cloud filter reject normal
-                // file creation — "invalid name request". Native on-demand
-                // placeholders need a full CfConnectSyncRoot provider, see #30.)
-                crate::cfsync::local_path(&label, &self.root_path, &path)
-            }
+            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &path),
         };
         self.remote_edits.retain(|e| e.temp != dest);
         if self.remote_edits.len() < 50 {
@@ -3170,7 +3205,18 @@ impl App {
         let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String)> = Vec::new();
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
-            if m == 0 || m == e.baseline_mtime {
+            if m == 0 {
+                continue;
+            }
+            // Sentinel: first time we actually see the file (e.g. after CfAPI
+            // hydration), just baseline it — don't treat the initial content as
+            // an edit to re-upload.
+            if e.baseline_mtime == i64::MAX {
+                e.baseline_mtime = m;
+                e.seen_mtime = m;
+                continue;
+            }
+            if m == e.baseline_mtime {
                 continue;
             }
             if m == e.seen_mtime {
@@ -6646,12 +6692,12 @@ impl App {
             )
             .changed()
             | ui
-                .radio_value(&mut mode, RemoteOpenMode::CfApi, "Persistenter Sync-Ordner")
+                .radio_value(&mut mode, RemoteOpenMode::CfApi, "Cloud-Platzhalter (CfAPI, Windows)")
                 .on_hover_text(
-                    "Spiegelt Remote-Dateien an einem festen lokalen Pfad \
-                     (%USERPROFILE%\\Smart Explorer\\<Verbindung>\\…), der die Remote-Struktur \
-                     abbildet; Änderungen werden beim Speichern automatisch zurückgeladen. \
-                     (Native OneDrive-Platzhalter mit Hydrierung-auf-Abruf folgen, #30.)",
+                    "Windows: bindet die Verbindung als nativen Cloud-Files-Sync-Root ein \
+                     (wie OneDrive) — Ordner erscheinen unter %USERPROFILE%\\Smart Explorer\\\
+                     <Verbindung>\\…, werden auf Abruf befüllt und beim Öffnen hydriert; \
+                     Speichern lädt zurück. Außerhalb von Windows: persistenter Spiegel-Ordner.",
                 )
                 .changed();
         if changed {
