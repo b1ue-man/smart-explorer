@@ -336,9 +336,23 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
 /// in-app picker to decide whether a saved connection must be re-opened.
 pub fn is_remote_url(s: &str) -> bool {
     let s = s.trim();
-    ["sftp://", "ftp://", "ftps://", "webdav://"]
+    ["sftp://", "ftp://", "ftps://", "webdav://", "gdrive://"]
         .iter()
         .any(|p| s.starts_with(p))
+}
+
+/// Open Google Drive at `path` as a backend (uses the stored OAuth token).
+/// Blocks on the network — call off the UI thread.
+pub fn open_gdrive(path: &str) -> Result<(BackendHandle, String), String> {
+    let be = crate::gdrive::GDriveBackend::connect(path)?;
+    let root = if path.trim().is_empty() { "/".to_string() } else { path.to_string() };
+    Ok((Arc::new(be), root))
+}
+
+/// Build the `gdrive://` endpoint string for a chosen Drive folder.
+pub fn gdrive_endpoint(path: &str) -> String {
+    let p = path.trim_start_matches('/');
+    format!("gdrive:///{}", p)
 }
 
 /// Parse `proto://user@host:port/path` → its parts (path keeps its leading `/`).
@@ -419,6 +433,11 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
             Arc::new(crate::vfs::LocalBackend::new(endpoint)),
             endpoint.to_string(),
         ));
+    }
+    // Google Drive: gdrive:///<path> → re-open from the stored OAuth token.
+    if let Some(rest) = endpoint.strip_prefix("gdrive://") {
+        let path = format!("/{}", rest.trim_start_matches('/'));
+        return open_gdrive(&path);
     }
     let (proto, user, host, port, path) =
         parse_remote_url(endpoint).ok_or_else(|| "Ungültige Remote-Adresse".to_string())?;

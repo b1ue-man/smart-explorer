@@ -32,14 +32,14 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 
 | # | Item | State | Notes |
 |---|---|---|---|
-| 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 — needs your client ID + a real Windows run to verify the live flow |
+| 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
+| 19.2 | **Google Drive `Backend`** (`gdrive.rs`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, multipart upload. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16 — needs your client ID + a real Windows run to verify the live REST calls |
 
 ## Open / upcoming
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 19.2 | **Google Drive `Backend`** (`gdrive.rs`): list/stat/read, then write/mkdir/rename/remove → browse Drive in the sidebar/picker and two-way-sync it (GUI + daemon). Drive is ID-addressed → path→id cache. | next | unblocked to build; live calls need the client ID from 19.1 |
-| 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out |
+| 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out on a real account |
 
 **One input still needed from you:** a Google OAuth *Client ID* (Desktop type)
 from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).

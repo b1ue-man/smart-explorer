@@ -2235,6 +2235,68 @@ impl App {
         }
     }
 
+    /// Open Google Drive as the active remote and browse it (reuses the normal
+    /// connect drain → sidebar/scan path). Connects off the UI thread.
+    fn open_gdrive_browse(&mut self) {
+        if !crate::cloud::is_connected(crate::cloud::Provider::GDrive) {
+            self.error_msg = Some("Google Drive ist nicht verbunden.".to_string());
+            return;
+        }
+        let (tx, rx) = unbounded();
+        self.connect_rx = Some(rx);
+        self.connecting = true;
+        std::thread::Builder::new()
+            .name("gdrive-open".into())
+            .spawn(move || {
+                let res = match crate::connect::open_gdrive("/") {
+                    Ok((be, root)) => crate::connect::ConnectResult::Ok(crate::connect::Connected {
+                        remote: Some(crate::connect::RemoteState {
+                            backend: be,
+                            label: "Google Drive".to_string(),
+                        }),
+                        net: None,
+                        target: root,
+                        label: "Google Drive".to_string(),
+                    }),
+                    Err(e) => crate::connect::ConnectResult::Err(e),
+                };
+                let _ = tx.send(res);
+            })
+            .ok();
+        self.notice = Some(("Verbinde mit Google Drive…".to_string(), std::time::Instant::now()));
+    }
+
+    /// Open Google Drive inside the picker (so a sync folder can be chosen on
+    /// Drive). Connects off the UI thread via the picker's connect channel.
+    fn picker_open_gdrive(&mut self) {
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("gdrive-pick".into())
+            .spawn(move || {
+                let res = match crate::connect::open_gdrive("/") {
+                    Ok((be, root)) => crate::connect::ConnectResult::Ok(crate::connect::Connected {
+                        remote: Some(crate::connect::RemoteState {
+                            backend: be,
+                            label: "Google Drive".to_string(),
+                        }),
+                        net: None,
+                        target: root,
+                        label: "Google Drive".to_string(),
+                    }),
+                    Err(e) => crate::connect::ConnectResult::Err(e),
+                };
+                let _ = tx.send(res);
+            })
+            .ok();
+        if let Some(p) = self.picker.as_mut() {
+            p.connect_rx = Some(rx);
+            p.connecting = true;
+            p.is_remote = true;
+            p.endpoint_prefix = "gdrive://".to_string();
+            p.conn_label = "Google Drive".to_string();
+        }
+    }
+
     /// Backend + root for a tab index, honouring whether it's the focused tab
     /// (state in the App fields) or a parked split pane (state in `self.tabs`),
     /// and local vs. remote. Used by the split-view "sync these folders" action.
@@ -3594,6 +3656,8 @@ impl App {
         let conn_label = st.conn_label.clone();
         let value_preview = Self::picker_value(st);
         let has_loc = st.backend.is_some();
+        let gdrive_connected = crate::cloud::is_connected(crate::cloud::Provider::GDrive);
+        let mut open_gdrive = false;
 
         egui::Window::new(title)
             .open(&mut open)
@@ -3620,8 +3684,13 @@ impl App {
                                 .small()
                                 .color(Color32::from_gray(140)),
                         );
-                        if conns.is_empty() {
+                        if conns.is_empty() && !gdrive_connected {
                             ui.colored_label(Color32::from_gray(120), "(keine)");
+                        }
+                        if gdrive_connected
+                            && ui.selectable_label(false, "☁ Google Drive").clicked()
+                        {
+                            open_gdrive = true;
                         }
                         for c in &conns {
                             if ui
@@ -3723,6 +3792,9 @@ impl App {
         }
         if let Some(c) = open_conn {
             self.picker_open_connection(&c);
+        }
+        if open_gdrive {
+            self.picker_open_gdrive();
         }
         if choose {
             if let Some(p) = self.picker.take() {
@@ -5103,11 +5175,16 @@ impl App {
         ui.add_space(12.0);
         ui.label(RichText::new("CLOUD (GOOGLE DRIVE)").small().color(Color32::from_gray(140)));
         if crate::cloud::is_connected(p) {
-            ui.colored_label(Color32::from_rgb(120, 200, 255), "● Verbunden");
-            if ui.small_button("Trennen").clicked() {
-                crate::cloud::disconnect(p);
-                self.notice = Some(("Google Drive getrennt".to_string(), std::time::Instant::now()));
-            }
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::from_rgb(120, 200, 255), "● Verbunden");
+                if ui.small_button("☁ Drive öffnen").on_hover_text("Google Drive durchsuchen").clicked() {
+                    self.open_gdrive_browse();
+                }
+                if ui.small_button("Trennen").clicked() {
+                    crate::cloud::disconnect(p);
+                    self.notice = Some(("Google Drive getrennt".to_string(), std::time::Instant::now()));
+                }
+            });
         }
         ui.add(
             egui::TextEdit::singleline(&mut self.cloud_client_id_draft)
