@@ -465,7 +465,7 @@ struct BisyncCtx {
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
-fn is_local_style(path: &str) -> bool {
+pub(crate) fn is_local_style(path: &str) -> bool {
     let p = path.trim_start();
     let b = p.as_bytes();
     let has_drive = b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic();
@@ -3970,6 +3970,58 @@ impl App {
             self.job_editor = Some(JobEditor::blank(src, String::new()));
             self.show_sync_jobs = true;
         }
+
+        // ─── Background sync (runs setups on their schedule, app closed) ──
+        ui.separator();
+        ui.label(RichText::new("HINTERGRUND").small().color(Color32::from_gray(140)));
+        let mut bg = crate::autostart::is_enabled();
+        if ui
+            .checkbox(&mut bg, "Beim Anmelden im Hintergrund synchronisieren")
+            .on_hover_text(
+                "Startet einen unsichtbaren Dienst (dieselbe App via Autostart), der \
+                 gespeicherte Setups mit Zeitplan automatisch ausführt — auch wenn das \
+                 Fenster geschlossen ist. Updates erfassen den Dienst automatisch.",
+            )
+            .changed()
+        {
+            if bg {
+                match crate::autostart::enable() {
+                    Ok(_) => {
+                        crate::daemon::clear_stop();
+                        crate::autostart::spawn_daemon_now();
+                        self.notice = Some((
+                            "✓ Hintergrund-Sync aktiviert".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    Err(e) => self.error_msg = Some(format!("Autostart: {}", e)),
+                }
+            } else {
+                let _ = crate::autostart::disable();
+                crate::daemon::request_stop();
+                self.notice = Some((
+                    "Hintergrund-Sync deaktiviert".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+        }
+        if crate::daemon::is_running() {
+            let age = crate::daemon::last_heartbeat_age().unwrap_or(0);
+            ui.colored_label(
+                Color32::from_rgb(120, 200, 255),
+                format!("● Dienst aktiv (vor {age}s)"),
+            );
+        } else if bg {
+            ui.colored_label(
+                Color32::from_gray(150),
+                "Dienst startet beim nächsten Anmelden.",
+            );
+        }
+        ui.label(
+            RichText::new("Hintergrund-Setups: lokale Pfade, Zeitplan > 0 min.")
+                .small()
+                .color(Color32::from_gray(120)),
+        );
     }
 
     /// Saved-setups manager: list jobs with run / edit / delete / enable, plus
