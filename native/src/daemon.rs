@@ -95,20 +95,25 @@ fn log(msg: &str) {
     }
 }
 
-fn is_local(path: &str) -> bool {
-    crate::app::is_local_style(path)
-}
-
-/// Run one due job to completion (synchronously). Saved jobs are local↔local
-/// (remote endpoints need re-auth, which a headless process can't do), so we
-/// skip anything else rather than fail.
+/// Run one due job to completion (synchronously). Endpoints are resolved the
+/// same way the GUI does — local paths directly, remote URLs by re-opening the
+/// matching saved connection (credentials live in the OS keyring, so a headless
+/// process can reconnect).
 fn run_one(job: &SyncJob) {
-    if !is_local(&job.source) || !is_local(&job.target) {
-        log(&format!("skip '{}' (remote endpoint not supported headless)", job.name));
-        return;
-    }
-    let a = std::sync::Arc::new(crate::vfs::LocalBackend::new(&job.source));
-    let b = std::sync::Arc::new(crate::vfs::LocalBackend::new(&job.target));
+    let (a, root_a) = match crate::connect::resolve_endpoint(&job.source) {
+        Ok(x) => x,
+        Err(e) => {
+            log(&format!("skip '{}': source {}", job.name, e));
+            return;
+        }
+    };
+    let (b, root_b) = match crate::connect::resolve_endpoint(&job.target) {
+        Ok(x) => x,
+        Err(e) => {
+            log(&format!("skip '{}': target {}", job.name, e));
+            return;
+        }
+    };
     let opts = crate::bisync::BisyncOptions {
         direction: job.direction,
         conflict: job.conflict,
@@ -122,7 +127,7 @@ fn run_one(job: &SyncJob) {
         ignore: &gs,
     };
     let out = crate::bisync::run(
-        &*a, &job.source, &*b, &job.target, opts, job.retain_days, &cancel, &filter,
+        &*a, &root_a, &*b, &root_b, opts, job.retain_days, &cancel, &filter,
     );
     crate::syncjobs::mark_run(&job.id);
     log(&format!(
