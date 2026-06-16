@@ -40,12 +40,14 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 27 | **Native CfAPI** — CfRegisterSyncRoot (folder = OS-managed sync root) + CfConvertToPlaceholder/CfSetInSyncState (mark hydrated files in-sync), best-effort, in CfAPI mode. | ✅ (eager) | 0.5.27; on-demand FETCH_DATA hydration still TODO (#30) |
 | 29 | **"Neu" dropdown** — New button is now a menu: Ordner + editable files (.txt/.md/.csv/.json/.html/.rs), created locally (opened to edit) or via the backend on remotes. | ✅ | 0.5.27 |
 
+| 28 | **Remote→remote drag** — cross-backend copy by streaming each file through a temp (download from source backend → upload to target). | ✅ | 0.5.29 |
+| 31 | **Fix:** CfAPI mode broke file-open ("invalid name request", os -2145452027) — registering a sync root without a connected provider made Windows' cloud filter reject file creation. Removed the `CfRegisterSyncRoot`/placeholder calls; the mode is now a plain **persistent sync folder** (relabeled in Settings, "Platzhalter" wording dropped). | ✅ | 0.5.29 |
+
 ## Open
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
-| 30 | **On-demand CfAPI hydration** — CfConnectSyncRoot FETCH_DATA callback (lazy download) instead of eager. | later | needs Windows test |
-| 28 | **Remote→remote drag** (cross-backend copy via temp). | later | §C of FILE_OPS_MATRIX |
+| 30 | **Native CfAPI placeholders (done right)** — `CfConnectSyncRoot` + a connected provider with on-demand FETCH_DATA hydration, THEN CfRegisterSyncRoot is safe. `cfsync::register_root`/`mark_in_sync` kept for this. | later | needs Windows test |
 | Q1 | **Quick Share LAN discovery** — browse/advertise the `_FC9F5ED42C8A._tcp` mDNS service; nearby Android/Windows Quick Share devices show in 📡 Teilen. | ✅ | 0.5.28 (quickshare.rs) |
 | Q2 | **Quick Share transfer** — Nearby Connections UKEY2 + protobuf OfflineFrames (+ BLE wake). Needs real-device iteration; own paired share already covers transfer. | later | docs/QUICKSHARE.md; AirDrop infeasible on Windows |
 | 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
