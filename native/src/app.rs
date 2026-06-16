@@ -407,6 +407,9 @@ pub struct App {
     /// In-flight "download a remote file to temp, then open it" jobs (one per
     /// double-clicked remote file). Result is the local temp path to launch.
     file_open_rx: Vec<Receiver<Result<String, String>>>,
+    /// In-flight upload of clipboard/dropped files into a remote folder.
+    /// Result is (files uploaded, errors).
+    upload_rx: Option<Receiver<(u64, Vec<String>)>>,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     cloud_client_id_draft: String,
@@ -558,6 +561,88 @@ fn download_to_temp(
     let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+fn rjoin(root: &str, name: &str) -> String {
+    format!("{}/{}", root.trim_end_matches('/'), name)
+}
+
+/// Stream one local file to `dest` on the backend (creating parent dirs). The
+/// `flush()` is essential — the Drive backend uploads on flush.
+fn upload_file(be: &dyn crate::vfs::Backend, src: &std::path::Path, dest: &str) -> Result<(), String> {
+    use std::io::Write;
+    if let Some((parent, _)) = dest.rsplit_once('/') {
+        let _ = be.mkdir_all(parent);
+    }
+    let mut r = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut w = be.open_write(dest).map_err(|e| e.to_string())?;
+    std::io::copy(&mut r, &mut w).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn upload_dir(
+    be: &dyn crate::vfs::Backend,
+    dir: &std::path::Path,
+    dest: &str,
+    copied: &mut u64,
+    errors: &mut Vec<String>,
+) {
+    if let Err(e) = be.mkdir_all(dest) {
+        errors.push(format!("{}: {}", dest, e));
+        return;
+    }
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            errors.push(format!("{}: {}", dir.display(), e));
+            return;
+        }
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let child = rjoin(dest, &name);
+        let path = entry.path();
+        if path.is_dir() {
+            upload_dir(be, &path, &child, copied, errors);
+        } else {
+            match upload_file(be, &path, &child) {
+                Ok(_) => *copied += 1,
+                Err(e) => errors.push(format!("{}: {}", name, e)),
+            }
+        }
+    }
+}
+
+/// Upload a set of local paths (files/folders) into `dest_root` on the backend.
+/// Returns (files uploaded, error messages). Conflicts overwrite by name.
+fn upload_paths(
+    be: &dyn crate::vfs::Backend,
+    paths: &[String],
+    dest_root: &str,
+) -> (u64, Vec<String>) {
+    let mut copied = 0u64;
+    let mut errors = Vec::new();
+    for p in paths {
+        let src = std::path::PathBuf::from(p);
+        let base = src
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if base.is_empty() {
+            continue;
+        }
+        let dest = rjoin(dest_root, &base);
+        if src.is_dir() {
+            upload_dir(be, &src, &dest, &mut copied, &mut errors);
+        } else {
+            match upload_file(be, &src, &dest) {
+                Ok(_) => copied += 1,
+                Err(e) => errors.push(format!("{}: {}", base, e)),
+            }
+        }
+    }
+    (copied, errors)
 }
 
 pub(crate) fn is_local_style(path: &str) -> bool {
@@ -755,6 +840,7 @@ impl App {
             job_connect_rx: None,
             job_connect_pending: None,
             file_open_rx: Vec::new(),
+            upload_rx: None,
 
             cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
                 .client_id,
@@ -2828,6 +2914,58 @@ impl App {
         }
     }
 
+    /// Upload local `paths` (files and/or folders, recursively) into the remote
+    /// folder `dest_root` via `backend`, off the UI thread. Used by Ctrl+V and
+    /// drag-drop into a remote view.
+    fn start_remote_upload(
+        &mut self,
+        paths: Vec<String>,
+        backend: crate::vfs::BackendHandle,
+        dest_root: String,
+    ) {
+        if self.upload_rx.is_some() {
+            self.notice = Some((
+                "Es läuft bereits ein Upload — bitte warten.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let n = paths.len();
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("remote-upload".into())
+            .spawn(move || {
+                let r = upload_paths(&*backend, &paths, &dest_root);
+                let _ = tx.send(r);
+            })
+            .ok();
+        self.upload_rx = Some(rx);
+        self.notice = Some((
+            format!("⬆ Lade {} Element(e) hoch…", n),
+            std::time::Instant::now(),
+        ));
+    }
+
+    fn drain_upload(&mut self) {
+        let res = match self.upload_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+        self.upload_rx = None;
+        let (copied, errors) = res;
+        if !errors.is_empty() {
+            self.error_msg = Some(format!("Upload: {} Fehler (z. B. {})", errors.len(), errors[0]));
+        }
+        self.notice = Some((
+            format!("✓ {} hochgeladen", copied),
+            std::time::Instant::now(),
+        ));
+        // Show the newly uploaded files.
+        if self.remote.is_some() && !self.root_path.is_empty() {
+            self.rescan();
+        }
+    }
+
     /// The path the keyboard actions should act on: cursor first, else the
     /// first selected entry.
     fn focus_path(&self) -> Option<String> {
@@ -3243,6 +3381,23 @@ impl App {
             ));
             return;
         }
+        // Remote view → upload the clipboard's files into the current remote
+        // folder via the backend (instead of a local std::fs copy).
+        if let Some(rs) = &self.remote {
+            let paths = match crate::shell_clipboard::read_files() {
+                Some((p, _)) if !p.is_empty() => p,
+                _ => {
+                    self.notice = Some((
+                        "Ctrl+V: Zwischenablage enthält keine Dateien".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    return;
+                }
+            };
+            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
+            return;
+        }
+
         let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
 
         // Fast path: the clipboard still holds OUR filtered virtual files —
@@ -3372,12 +3527,15 @@ impl App {
         self.copy_refresh_after = true;
     }
 
-    /// Whether the current view can accept dropped files (a local folder).
+    /// Whether the current view can accept dropped files — a local folder, or a
+    /// remote folder (files are uploaded via the backend).
     fn drop_target(&self) -> Option<String> {
-        if self.root_path.is_empty() || self.remote.is_some() || !is_local_style(&self.root_path) {
+        if self.root_path.is_empty() {
             None
-        } else {
+        } else if self.remote.is_some() || is_local_style(&self.root_path) {
             Some(self.root_path.clone())
+        } else {
+            None
         }
     }
 
@@ -3395,6 +3553,11 @@ impl App {
             (p, i.modifiers.shift)
         });
         if paths.is_empty() {
+            return;
+        }
+        // Remote view → upload the dropped files into the current remote folder.
+        if let Some(rs) = &self.remote {
+            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
             return;
         }
         let dest = match self.drop_target() {
@@ -6721,6 +6884,7 @@ impl eframe::App for App {
         self.drain_picker_connect();
         self.drain_cloud_auth();
         self.drain_file_open();
+        self.drain_upload();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -7169,6 +7333,7 @@ impl eframe::App for App {
             || self.index_building
             || self.band_active
             || !self.file_open_rx.is_empty()
+            || self.upload_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
         {

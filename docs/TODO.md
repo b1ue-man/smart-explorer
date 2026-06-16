@@ -41,7 +41,7 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | # | Item | Prio | Notes |
 |---|---|---|---|
 | 20.1 | **Open remote files directly** — double-click / Enter on a file on any remote (SFTP/FTP/WebDAV/Drive) downloads it to a temp copy off-thread and launches it in its associated app. | ✅ | 0.5.19 |
-| 20.2 | **Ctrl+V into a remote folder** — paste OS-clipboard files (CF_HDROP) into the current remote folder via the backend (upload). | next | reuse shell_clipboard read + a remote-upload worker |
+| 20.2 | **Ctrl+V / drag-drop into a remote folder** — paste OS-clipboard files (or drop them) into the current remote folder; uploaded recursively via the backend (flush-on-write so Drive uploads correctly). | ✅ | 0.5.20 |
 | 20.3 | **Ctrl+C a remote file → paste in Explorer** — put a CF_HDROP on the clipboard pointing at a temp download (eager) or a virtual `CFSTR_FILECONTENTS` data object (deferred). | next | virtual data object is the COM-heavy part |
 | 20.4 | Drag remote files in/out (extend #6 drag to remote, materialize via temp). | later | builds on 20.2/20.3 |
 | 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out on a real account |
