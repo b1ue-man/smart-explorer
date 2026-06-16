@@ -52,6 +52,7 @@ Section "Install"
   Sleep 400
 
   File "/oname=${EXE_NAME}" "${EXE_SRC}"
+  File "../LICENSE"
 
   ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
   ; update_source.txt ships the raw.githubusercontent feed URL, so a fresh
@@ -113,6 +114,7 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\${VERB}"
 
   Delete "$INSTDIR\${EXE_NAME}"
+  Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"
   Delete "$INSTDIR\update_source.txt"
