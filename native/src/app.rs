@@ -404,6 +404,9 @@ pub struct App {
         >,
     >,
     job_connect_pending: Option<crate::syncjobs::SyncJob>,
+    /// In-flight "download a remote file to temp, then open it" jobs (one per
+    /// double-clicked remote file). Result is the local temp path to launch.
+    file_open_rx: Vec<Receiver<Result<String, String>>>,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     cloud_client_id_draft: String,
@@ -539,6 +542,24 @@ struct BisyncCtx {
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
+/// Stream a remote file to a temp copy and return its local path (for opening
+/// remote files in their associated app). Overwrites a prior copy of the same
+/// name so re-opening picks up fresh content.
+fn download_to_temp(
+    be: &dyn crate::vfs::Backend,
+    path: &str,
+    name: &str,
+) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("smart_explorer_open");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe = name.replace(['/', '\\', ':'], "_");
+    let dest = dir.join(if safe.trim().is_empty() { "datei".to_string() } else { safe });
+    let mut r = be.open_read(path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 pub(crate) fn is_local_style(path: &str) -> bool {
     let p = path.trim_start();
     let b = p.as_bytes();
@@ -733,6 +754,7 @@ impl App {
             picker: None,
             job_connect_rx: None,
             job_connect_pending: None,
+            file_open_rx: Vec::new(),
 
             cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
                 .client_id,
@@ -2733,20 +2755,76 @@ impl App {
     }
 
     fn open_selection(&mut self) {
-        let targets: Vec<(String, bool)> = self
+        let targets: Vec<(String, String, bool)> = self
             .entries
             .iter()
             .filter(|e| self.selection.contains(&e.path))
-            .map(|e| (e.path.to_string(), e.is_dir))
+            .map(|e| (e.path.to_string(), e.name.to_string(), e.is_dir))
             .collect();
-        if targets.len() == 1 && targets[0].1 {
+        if targets.len() == 1 && targets[0].2 {
             let p = PathBuf::from(targets[0].0.replace('/', std::path::MAIN_SEPARATOR_STR));
             self.start_scan(p);
             return;
         }
-        for (p, is_dir) in targets.iter().filter(|(_, d)| !d).take(10) {
-            let _ = is_dir;
-            self.open_path(p);
+        for (p, name, _) in targets.into_iter().filter(|(_, _, d)| !*d).take(10) {
+            self.open_file(p, name);
+        }
+    }
+
+    /// Open one entry by index: navigate into a folder, or open a file.
+    fn activate_entry(&mut self, idx: usize) {
+        if idx >= self.entries.len() {
+            return;
+        }
+        let e = &self.entries[idx];
+        if e.is_dir {
+            let p = PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            self.start_scan(p);
+            return;
+        }
+        let (path, name) = (e.path.to_string(), e.name.to_string());
+        self.open_file(path, name);
+    }
+
+    /// Open a file in its associated app. Local files launch directly; a remote
+    /// file is downloaded to a temp copy off the UI thread, then launched when
+    /// ready (so double-click "just works" on SFTP/FTP/WebDAV/Drive too).
+    fn open_file(&mut self, path: String, name: String) {
+        match &self.remote {
+            Some(rs) => {
+                let backend = rs.backend.clone();
+                let (tx, rx) = unbounded();
+                self.notice = Some((format!("⬇ Öffne „{}“…", name), std::time::Instant::now()));
+                std::thread::Builder::new()
+                    .name("remote-open".into())
+                    .spawn(move || {
+                        let _ = tx.send(download_to_temp(&*backend, &path, &name));
+                    })
+                    .ok();
+                self.file_open_rx.push(rx);
+            }
+            None => self.open_path(&path),
+        }
+    }
+
+    /// Launch any remote files that finished downloading to temp.
+    fn drain_file_open(&mut self) {
+        if self.file_open_rx.is_empty() {
+            return;
+        }
+        let mut pending = Vec::new();
+        let mut to_open = Vec::new();
+        for rx in std::mem::take(&mut self.file_open_rx) {
+            match rx.try_recv() {
+                Ok(Ok(p)) => to_open.push(p),
+                Ok(Err(e)) => self.error_msg = Some(format!("Datei öffnen: {}", e)),
+                Err(crossbeam_channel::TryRecvError::Empty) => pending.push(rx),
+                Err(_) => {}
+            }
+        }
+        self.file_open_rx = pending;
+        for p in to_open {
+            self.open_path(&p);
         }
     }
 
@@ -5709,14 +5787,7 @@ impl App {
         }
 
         if let Some(idx) = row_dblclick {
-            let e = &self.entries[idx];
-            if e.is_dir {
-                let p = PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-                self.start_scan(p);
-            } else {
-                let p = e.path.clone();
-                self.open_path(&p);
-            }
+            self.activate_entry(idx);
         }
 
         if let Some(idx) = row_rclick {
@@ -6649,6 +6720,7 @@ impl eframe::App for App {
         self.drain_job_connect();
         self.drain_picker_connect();
         self.drain_cloud_auth();
+        self.drain_file_open();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -7096,6 +7168,9 @@ impl eframe::App for App {
             || matches!(&self.copy_progress, Some(p) if !p.done)
             || self.index_building
             || self.band_active
+            || !self.file_open_rx.is_empty()
+            || self.job_connect_rx.is_some()
+            || self.cloud_authing
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
