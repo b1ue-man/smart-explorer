@@ -7,6 +7,7 @@ mod bisync;
 mod cloud;
 mod connect;
 mod daemon;
+mod gdrive;
 #[cfg(windows)]
 mod dragout;
 mod copy;

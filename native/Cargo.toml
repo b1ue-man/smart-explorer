@@ -19,7 +19,7 @@ trash = "5"
 # rustls backed by **ring** (verified: no aws-lc-sys in the tree) + bundled
 # webpki-roots — so it cross-compiles on windows-gnu without NASM/CMake and
 # needs no OS cert store. See docs/GOTCHAS.md (aws-lc-rs trap).
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 # SFTP backend (sftp.rs). russh's DEFAULT crypto is aws-lc-rs (needs NASM/CMake,
 # breaks on GNU) — so default-features=false + ring. See docs/GOTCHAS.md.
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2"] }

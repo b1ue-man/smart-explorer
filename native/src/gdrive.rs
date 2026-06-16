@@ -1,0 +1,470 @@
+//! Google Drive backend (#19, slice 2) — `impl vfs::Backend` over the Drive v3
+//! REST API, so Drive plugs into the same browse/scan/sync machinery as SFTP &
+//! co. Auth (PKCE OAuth, token refresh) lives in `cloud.rs`; this module only
+//! makes authenticated REST calls.
+//!
+//! Drive is **ID-addressed**, not path-addressed, so we keep a `path → fileId`
+//! cache and resolve lazily from the My-Drive root (`"root"`). Forward-slash
+//! paths are the app's convention; `"/"` is the Drive root.
+//!
+//! NOTE: this code follows the documented Drive v3 API but cannot be exercised
+//! in the headless build env (no OAuth client). It compiles for host +
+//! windows-gnu and is gated behind an explicit, user-configured connection.
+
+use crate::cloud::{self, Provider};
+use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+use std::collections::HashMap;
+use std::io::{self, Read, Write};
+use std::sync::Mutex;
+
+const API: &str = "https://www.googleapis.com/drive/v3";
+const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
+const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+
+fn err<E: std::fmt::Display>(e: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, e.to_string())
+}
+fn not_found(p: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, format!("nicht gefunden: {}", p))
+}
+
+pub struct GDriveBackend {
+    tokens: Mutex<cloud::Tokens>,
+    /// path (forward-slash, no trailing slash; "" == root) → fileId
+    ids: Mutex<HashMap<String, String>>,
+    root: String,
+}
+
+impl GDriveBackend {
+    /// Build from the stored refresh token (must already be connected via
+    /// `cloud::authorize`). `root` is the forward-slash start folder.
+    pub fn connect(root: &str) -> Result<Self, String> {
+        let tokens = cloud::refresh_access(Provider::GDrive)?;
+        let mut ids = HashMap::new();
+        ids.insert(String::new(), "root".to_string());
+        Ok(GDriveBackend {
+            tokens: Mutex::new(tokens),
+            ids: Mutex::new(ids),
+            root: norm(root),
+        })
+    }
+
+    fn bearer(&self) -> VfsResult<String> {
+        let mut t = self.tokens.lock().unwrap();
+        if now_secs() >= t.expires_at {
+            *t = cloud::refresh_access(Provider::GDrive).map_err(err)?;
+        }
+        Ok(t.access_token.clone())
+    }
+
+    fn get(&self, url: &str) -> VfsResult<ureq::Response> {
+        let auth = self.bearer()?;
+        ureq::get(url)
+            .set("Authorization", &format!("Bearer {}", auth))
+            .call()
+            .map_err(err)
+    }
+
+    /// Resolve a forward-slash path to a Drive fileId (walking + caching).
+    fn resolve(&self, path: &str) -> VfsResult<String> {
+        let key = norm(path);
+        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+            return Ok(id);
+        }
+        // Walk segment by segment from the deepest cached ancestor.
+        let segs: Vec<&str> = key.split('/').filter(|s| !s.is_empty()).collect();
+        let mut cur_id = "root".to_string();
+        let mut cur_path = String::new();
+        for seg in segs {
+            let next_path = if cur_path.is_empty() {
+                seg.to_string()
+            } else {
+                format!("{}/{}", cur_path, seg)
+            };
+            if let Some(id) = self.ids.lock().unwrap().get(&next_path).cloned() {
+                cur_id = id;
+                cur_path = next_path;
+                continue;
+            }
+            let child = self
+                .find_child(&cur_id, seg)?
+                .ok_or_else(|| not_found(&next_path))?;
+            self.ids.lock().unwrap().insert(next_path.clone(), child.clone());
+            cur_id = child;
+            cur_path = next_path;
+        }
+        Ok(cur_id)
+    }
+
+    fn find_child(&self, parent_id: &str, name: &str) -> VfsResult<Option<String>> {
+        let q = format!(
+            "'{}' in parents and name = '{}' and trashed = false",
+            parent_id,
+            name.replace('\'', "\\'")
+        );
+        let url = format!(
+            "{}/files?q={}&fields=files(id,name)&pageSize=1",
+            API,
+            cloud_urlenc(&q)
+        );
+        let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+        Ok(v["files"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|f| f["id"].as_str())
+            .map(|s| s.to_string()))
+    }
+
+    fn meta_from_json(f: &serde_json::Value) -> VfsMeta {
+        let is_dir = f["mimeType"].as_str() == Some(FOLDER_MIME);
+        VfsMeta {
+            name: f["name"].as_str().unwrap_or_default().to_string(),
+            is_dir,
+            is_symlink: false,
+            size: f["size"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
+            mtime_ms: f["modifiedTime"]
+                .as_str()
+                .and_then(parse_rfc3339_ms)
+                .unwrap_or(0),
+            btime_ms: f["createdTime"]
+                .as_str()
+                .and_then(parse_rfc3339_ms)
+                .unwrap_or(0),
+            hidden: false,
+            system: false,
+        }
+    }
+
+    /// Ensure a folder path exists, returning the deepest folder's id.
+    fn ensure_dir(&self, path: &str) -> VfsResult<String> {
+        let key = norm(path);
+        if key.is_empty() {
+            return Ok("root".to_string());
+        }
+        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+            return Ok(id);
+        }
+        let (parent, name) = split_parent(&key);
+        let parent_id = self.ensure_dir(&parent)?;
+        if let Some(id) = self.find_child(&parent_id, name)? {
+            self.ids.lock().unwrap().insert(key, id.clone());
+            return Ok(id);
+        }
+        // Create the folder.
+        let body = serde_json::json!({
+            "name": name,
+            "mimeType": FOLDER_MIME,
+            "parents": [parent_id],
+        });
+        let auth = self.bearer()?;
+        let v: serde_json::Value = ureq::post(&format!("{}/files?fields=id", API))
+            .set("Authorization", &format!("Bearer {}", auth))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string())
+            .map_err(err)?
+            .into_json()
+            .map_err(err)?;
+        let id = v["id"].as_str().ok_or_else(|| err("kein id nach mkdir"))?.to_string();
+        self.ids.lock().unwrap().insert(key, id.clone());
+        Ok(id)
+    }
+
+    /// Upload bytes to `path` (create or update). Used by `DriveWriter::flush`.
+    fn upload(&self, path: &str, data: &[u8]) -> VfsResult<()> {
+        let key = norm(path);
+        let (parent, name) = split_parent(&key);
+        let parent_id = self.ensure_dir(&parent)?;
+        let existing = self.find_child(&parent_id, name)?;
+        let boundary = "se_boundary_4f8a2c1d";
+        let meta = if existing.is_some() {
+            serde_json::json!({ "name": name })
+        } else {
+            serde_json::json!({ "name": name, "parents": [parent_id] })
+        };
+        let mut body: Vec<u8> = Vec::with_capacity(data.len() + 256);
+        let head = format!(
+            "--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{m}\r\n--{b}\r\nContent-Type: application/octet-stream\r\n\r\n",
+            b = boundary,
+            m = meta
+        );
+        body.extend_from_slice(head.as_bytes());
+        body.extend_from_slice(data);
+        body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+        let auth = self.bearer()?;
+        let ct = format!("multipart/related; boundary={}", boundary);
+        let v: serde_json::Value = match existing {
+            Some(id) => ureq::request(
+                "PATCH",
+                &format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id),
+            )
+            .set("Authorization", &format!("Bearer {}", auth))
+            .set("Content-Type", &ct)
+            .send_bytes(&body)
+            .map_err(err)?
+            .into_json()
+            .map_err(err)?,
+            None => ureq::post(&format!("{}?uploadType=multipart&fields=id", UPLOAD))
+                .set("Authorization", &format!("Bearer {}", auth))
+                .set("Content-Type", &ct)
+                .send_bytes(&body)
+                .map_err(err)?
+                .into_json()
+                .map_err(err)?,
+        };
+        if let Some(id) = v["id"].as_str() {
+            self.ids.lock().unwrap().insert(key, id.to_string());
+        }
+        Ok(())
+    }
+
+    fn trash(&self, path: &str) -> VfsResult<()> {
+        let id = self.resolve(path)?;
+        let auth = self.bearer()?;
+        ureq::request("PATCH", &format!("{}/files/{}", API, id))
+            .set("Authorization", &format!("Bearer {}", auth))
+            .set("Content-Type", "application/json")
+            .send_string(&serde_json::json!({ "trashed": true }).to_string())
+            .map_err(err)?;
+        self.ids.lock().unwrap().remove(&norm(path));
+        Ok(())
+    }
+}
+
+impl Backend for GDriveBackend {
+    fn scheme(&self) -> Scheme {
+        Scheme::GDrive
+    }
+    fn root_display(&self) -> String {
+        if self.root.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", self.root)
+        }
+    }
+
+    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        let id = self.resolve(path)?;
+        let mut out = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let q = format!("'{}' in parents and trashed = false", id);
+            let mut url = format!(
+                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime)&pageSize=1000",
+                API,
+                cloud_urlenc(&q)
+            );
+            if let Some(t) = &page_token {
+                url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
+            }
+            let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+            if let Some(files) = v["files"].as_array() {
+                let base = norm(path);
+                for f in files {
+                    let m = Self::meta_from_json(f);
+                    if let Some(fid) = f["id"].as_str() {
+                        let child_path = if base.is_empty() {
+                            m.name.clone()
+                        } else {
+                            format!("{}/{}", base, m.name)
+                        };
+                        self.ids.lock().unwrap().insert(child_path, fid.to_string());
+                    }
+                    out.push(m);
+                }
+            }
+            page_token = v["nextPageToken"].as_str().map(|s| s.to_string());
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        let key = norm(path);
+        if key.is_empty() {
+            return Ok(VfsMeta {
+                name: "/".into(),
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                mtime_ms: 0,
+                btime_ms: 0,
+                hidden: false,
+                system: false,
+            });
+        }
+        let id = self.resolve(&key)?;
+        let url = format!(
+            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime",
+            API, id
+        );
+        let v: serde_json::Value = self.get(&url)?.into_json().map_err(err)?;
+        Ok(Self::meta_from_json(&v))
+    }
+
+    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        let id = self.resolve(path)?;
+        let auth = self.bearer()?;
+        let resp = ureq::get(&format!("{}/files/{}?alt=media", API, id))
+            .set("Authorization", &format!("Bearer {}", auth))
+            .call()
+            .map_err(err)?;
+        Ok(Box::new(resp.into_reader()))
+    }
+
+    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        Ok(Box::new(DriveWriter {
+            backend: self as *const _,
+            path: norm(path),
+            buf: Vec::new(),
+            done: false,
+        }))
+    }
+
+    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let id = self.resolve(src)?;
+        let src_key = norm(src);
+        let dst_key = norm(dst);
+        let (src_parent, _) = split_parent(&src_key);
+        let (dst_parent, dst_name) = split_parent(&dst_key);
+        let src_parent_id = self.ensure_dir(&src_parent)?;
+        let dst_parent_id = self.ensure_dir(&dst_parent)?;
+        let auth = self.bearer()?;
+        let mut url = format!("{}/files/{}?fields=id", API, id);
+        if src_parent_id != dst_parent_id {
+            url.push_str(&format!(
+                "&addParents={}&removeParents={}",
+                dst_parent_id, src_parent_id
+            ));
+        }
+        ureq::request("PATCH", &url)
+            .set("Authorization", &format!("Bearer {}", auth))
+            .set("Content-Type", "application/json")
+            .send_string(&serde_json::json!({ "name": dst_name }).to_string())
+            .map_err(err)?;
+        let mut ids = self.ids.lock().unwrap();
+        ids.remove(&norm(src));
+        ids.insert(norm(dst), id);
+        Ok(())
+    }
+
+    fn remove_file(&self, path: &str) -> VfsResult<()> {
+        self.trash(path)
+    }
+    fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        self.trash(path)
+    }
+    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        self.ensure_dir(path).map(|_| ())
+    }
+
+    fn parallelism(&self) -> usize {
+        4 // Drive rate-limits; keep concurrency modest.
+    }
+}
+
+/// Buffers written bytes and uploads to Drive on `flush` (so bisync's
+/// `copy_between`, which flushes, surfaces upload errors) — and as a safety net
+/// on drop if flush was never called.
+struct DriveWriter {
+    backend: *const GDriveBackend,
+    path: String,
+    buf: Vec<u8>,
+    done: bool,
+}
+// The pointer is only used synchronously while the owning backend is alive
+// (the writer never outlives the copy call); Send is needed for Box<dyn Write+Send>.
+unsafe impl Send for DriveWriter {}
+
+impl DriveWriter {
+    fn flush_upload(&mut self) -> io::Result<()> {
+        if self.done {
+            return Ok(());
+        }
+        let be = unsafe { &*self.backend };
+        be.upload(&self.path, &self.buf)?;
+        self.done = true;
+        Ok(())
+    }
+}
+
+impl Write for DriveWriter {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_upload()
+    }
+}
+impl Drop for DriveWriter {
+    fn drop(&mut self) {
+        let _ = self.flush_upload();
+    }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+fn norm(path: &str) -> String {
+    path.trim().trim_matches('/').to_string()
+}
+
+fn split_parent(key: &str) -> (String, &str) {
+    match key.rsplit_once('/') {
+        Some((par, name)) => (par.to_string(), name),
+        None => (String::new(), key),
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Minimal URL-component encoder (reuses the same rules as cloud.rs).
+fn cloud_urlenc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// RFC 3339 (e.g. "2024-06-01T12:34:56.000Z") → unix millis (best effort).
+fn parse_rfc3339_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn norm_and_split() {
+        assert_eq!(norm("/a/b/"), "a/b");
+        assert_eq!(norm("/"), "");
+        let (p, n) = split_parent("a/b/c");
+        assert_eq!(p, "a/b");
+        assert_eq!(n, "c");
+        let (p, n) = split_parent("x");
+        assert_eq!(p, "");
+        assert_eq!(n, "x");
+    }
+
+    #[test]
+    fn rfc3339_parses() {
+        assert!(parse_rfc3339_ms("2024-06-01T12:34:56Z").unwrap() > 0);
+        assert!(parse_rfc3339_ms("not a date").is_none());
+    }
+}
