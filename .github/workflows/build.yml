@@ -74,6 +74,23 @@ jobs:
           name: smart-explorer-windows
           path: native/out
 
+      - name: Verify committed feed matches the version (release only)
+        # The flow guarantee: a release can't go out while the committed feed
+        # (what installed apps auto-update from) lags Cargo.toml. Forces
+        # "run publish-feed.sh + commit release-native/" before releasing.
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          github.event_name == 'workflow_dispatch' ||
+          startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          ver="${{ steps.stage.outputs.version }}"
+          feed="$(cat ../release-native/update-feed/version.txt 2>/dev/null || echo '')"
+          if [ "$feed" != "$ver" ]; then
+            echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh and commit release-native/ before releasing."
+            exit 1
+          fi
+          echo "Feed matches Cargo.toml ($ver)."
+
       - name: Publish GitHub Release
         # Fires on a v* tag, a manual dispatch, OR a push to a release/** branch.
         # The branch path is the one that works where the git host rejects tag
