@@ -38,7 +38,7 @@ angezeigt). Keine Rechtsberatung.
 
 Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.19.exe`](release-native/Smart%20Explorer%20Setup%200.5.19.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.20.exe`](release-native/Smart%20Explorer%20Setup%200.5.20.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
