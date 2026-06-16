@@ -19,6 +19,7 @@ mod folder_index;
 mod format;
 mod icons;
 mod net;
+mod quickshare;
 mod rscan;
 mod scanner;
 mod share;

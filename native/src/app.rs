@@ -449,6 +449,10 @@ pub struct App {
     share_incoming: Vec<(u64, String, Vec<(String, u64)>)>,
     share_status: String,
     share_progress: Option<(u64, u64)>,
+
+    // Quick Share (Android) LAN discovery — started lazily when Teilen opens.
+    quickshare: Option<crate::quickshare::QuickShare>,
+    qs_devices: Vec<crate::quickshare::QsDevice>,
 }
 
 /// Draft state for the add/edit sync-setup dialog. Number fields are kept as
@@ -1006,6 +1010,8 @@ impl App {
             share_incoming: Vec::new(),
             share_status: String::new(),
             share_progress: None,
+            quickshare: None,
+            qs_devices: Vec::new(),
         }
     }
 
@@ -3326,6 +3332,24 @@ impl App {
         }
     }
 
+    /// Lazily start Quick Share LAN discovery while the Teilen view is open, and
+    /// drain discovered devices.
+    fn drain_quickshare(&mut self) {
+        if self.show_share && self.quickshare.is_none() {
+            let name = if self.share_device_draft.trim().is_empty() {
+                default_device_name()
+            } else {
+                self.share_device_draft.trim().to_string()
+            };
+            self.quickshare = crate::quickshare::QuickShare::start(&name);
+        }
+        if let Some(qs) = &self.quickshare {
+            for list in qs.events.try_iter() {
+                self.qs_devices = list;
+            }
+        }
+    }
+
     fn drain_share(&mut self) {
         let events: Vec<crate::share::ShareEvent> = match &self.share {
             Some(svc) => svc.events.try_iter().collect(),
@@ -3390,6 +3414,7 @@ impl App {
         let my_code = self.share_my_code.clone();
         let fingerprint = self.share.as_ref().map(|s| s.fingerprint.clone()).unwrap_or_default();
         let sel = self.selected_local_files().len();
+        let qs_devices = self.qs_devices.clone();
 
         egui::Window::new("📡 Teilen — Geräte & Räume")
             .open(&mut open)
@@ -3473,6 +3498,28 @@ impl App {
                 if !status.is_empty() {
                     ui.label(RichText::new(&status).small().color(Color32::from_gray(150)));
                 }
+
+                // Quick Share (Android) devices seen on the LAN.
+                ui.separator();
+                egui::CollapsingHeader::new(format!("📱 Quick Share (LAN) — {} gefunden", qs_devices.len()))
+                    .id_salt("qs_devices")
+                    .show(ui, |ui| {
+                        if qs_devices.is_empty() {
+                            ui.colored_label(Color32::from_gray(140), "(Suche… Android: Quick Share auf „Alle“ stellen)");
+                        }
+                        for d in &qs_devices {
+                            ui.label(format!("📱 {}  {}", d.name, d.addr));
+                        }
+                        ui.label(
+                            RichText::new(
+                                "Übertragung zu/von Quick Share ist in Arbeit (UKEY2/Protobuf, \
+                                 siehe docs/QUICKSHARE.md). Für Geräte mit Smart Explorer nutze \
+                                 oben Direkt koppeln / Raum.",
+                            )
+                            .small()
+                            .color(Color32::from_gray(120)),
+                        );
+                    });
 
                 if !incoming.is_empty() {
                     ui.separator();
@@ -7990,6 +8037,7 @@ impl eframe::App for App {
         self.drain_remote_op();
         self.drain_clip_download();
         self.drain_share();
+        self.drain_quickshare();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }
@@ -8452,7 +8500,7 @@ impl eframe::App for App {
             || self.share_progress.is_some()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        } else if self.share.is_some() || !self.remote_edits.is_empty() {
+        } else if self.share.is_some() || !self.remote_edits.is_empty() || self.quickshare.is_some() {
             // Poll for incoming share offers / roster changes at a calm cadence.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
