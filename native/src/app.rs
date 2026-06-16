@@ -410,6 +410,8 @@ pub struct App {
     /// In-flight upload of clipboard/dropped files into a remote folder.
     /// Result is (files uploaded, errors).
     upload_rx: Option<Receiver<(u64, Vec<String>)>>,
+    /// In-flight remote mkdir (new folder on a remote). Ok(notice) / Err(msg).
+    mkdir_rx: Option<Receiver<Result<String, String>>>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
     clip_download_rx: Option<Receiver<Vec<String>>>,
@@ -894,6 +896,7 @@ impl App {
             job_connect_pending: None,
             file_open_rx: Vec::new(),
             upload_rx: None,
+            mkdir_rx: None,
             clip_download_rx: None,
 
             cloud_client_id_draft: crate::cloud::load_config(crate::cloud::Provider::GDrive)
@@ -2855,6 +2858,43 @@ impl App {
         if self.selection.is_empty() {
             return;
         }
+        // Remote view → delete via the backend (SFTP/FTP/WebDAV unlink; Drive
+        // moves to its trash). std::fs/the recycle bin can't touch remote paths.
+        if let Some(rs) = &self.remote {
+            let backend = rs.backend.clone();
+            let items: Vec<(String, bool)> = self
+                .entries
+                .iter()
+                .filter(|e| self.selection.contains(&e.path))
+                .map(|e| (e.path.to_string(), e.is_dir))
+                .collect();
+            let removed: HashSet<Arc<str>> = self.selection.drain().collect();
+            self.entries.retain(|e| !removed.contains(&e.path));
+            self.cursor = None;
+            self.recompute_view();
+            let (tx, rx) = unbounded();
+            self.trash_rx = Some(rx);
+            std::thread::Builder::new()
+                .name("remote-delete".into())
+                .spawn(move || {
+                    let mut first_err: Option<String> = None;
+                    for (p, is_dir) in &items {
+                        let r = if *is_dir {
+                            backend.remove_dir(p)
+                        } else {
+                            backend.remove_file(p)
+                        };
+                        if let Err(e) = r {
+                            if first_err.is_none() {
+                                first_err = Some(e.to_string());
+                            }
+                        }
+                    }
+                    let _ = tx.send(first_err);
+                })
+                .ok();
+            return;
+        }
         let paths: Vec<PathBuf> = self
             .selection
             .iter()
@@ -3291,6 +3331,21 @@ impl App {
         }
     }
 
+    fn drain_mkdir(&mut self) {
+        let res = match self.mkdir_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+        self.mkdir_rx = None;
+        match res {
+            Ok(msg) => {
+                self.notice = Some((msg, std::time::Instant::now()));
+                self.rescan();
+            }
+            Err(e) => self.error_msg = Some(format!("Ordner erstellen: {}", e)),
+        }
+    }
+
     fn drain_upload(&mut self) {
         let res = match self.upload_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
@@ -3432,6 +3487,36 @@ impl App {
 
     fn create_new_folder(&mut self) {
         if self.root_path.is_empty() {
+            return;
+        }
+        // Remote view → create via the backend (off the UI thread).
+        if let Some(rs) = &self.remote {
+            if self.mkdir_rx.is_some() {
+                return;
+            }
+            let backend = rs.backend.clone();
+            let base = self.root_path.trim_end_matches('/').to_string();
+            let (tx, rx) = unbounded();
+            self.mkdir_rx = Some(rx);
+            std::thread::Builder::new()
+                .name("remote-mkdir".into())
+                .spawn(move || {
+                    let mut name = "Neuer Ordner".to_string();
+                    let mut i = 2;
+                    while backend.exists(&format!("{}/{}", base, name)) && i < 1000 {
+                        name = format!("Neuer Ordner ({})", i);
+                        i += 1;
+                    }
+                    let path = format!("{}/{}", base, name);
+                    let _ = tx.send(
+                        backend
+                            .mkdir_all(&path)
+                            .map(|_| format!("✓ Ordner erstellt: {}", name))
+                            .map_err(|e| e.to_string()),
+                    );
+                })
+                .ok();
+            self.notice = Some(("Ordner wird erstellt…".to_string(), std::time::Instant::now()));
             return;
         }
         let base = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -7343,6 +7428,7 @@ impl eframe::App for App {
         self.drain_cloud_auth();
         self.drain_file_open();
         self.drain_upload();
+        self.drain_mkdir();
         self.drain_clip_download();
         self.drain_share();
         if self.icon_cache.drain(ctx) {
@@ -7797,6 +7883,7 @@ impl eframe::App for App {
             || self.band_active
             || !self.file_open_rx.is_empty()
             || self.upload_rx.is_some()
+            || self.mkdir_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
