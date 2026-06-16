@@ -75,3 +75,25 @@ Gated/opt-in so existing users are unaffected.
 If a working "edit & save back" is wanted *before* CfAPI lands, the temp-watch
 (option 1) is the only thing shippable today — but it carries the UX downsides
 above. Recommendation: go straight to CfAPI rather than ship-then-replace.
+
+---
+
+## SHIPPED STATUS (0.5.25)
+
+Both open modes exist and are **user-toggleable** (Einstellungen → REMOTE-DATEIEN
+ÖFFNEN); save-back works in both:
+
+- **Temp-Kopie** — `open_temp_path` in `%TEMP%`, watched by `RemoteEdit` /
+  `poll_remote_edits`, re-uploaded via `upload_file` on save (1.5 s debounce).
+  Ephemeral, universal.
+- **CfAPI / Platzhalter** — `cfsync::local_path`: a **persistent per-connection
+  sync folder** `%USERPROFILE%\Smart Explorer\<conn>\<remote layout>`, hydrated
+  eagerly and watched by the same save-back mechanism. The path is stable and
+  mirrors the remote.
+
+**Still to land (needs a real Windows test):** the *native* Cloud Files API layer
+on top of that folder — `CfRegisterSyncRoot` + `CfConnectSyncRoot` FETCH_DATA
+hydration (`CfExecute` TRANSFER_DATA) + OS save notifications — so files become
+true on-demand **placeholders** (download lazily, show the OneDrive-style status)
+instead of eager copies. The `cfsync` folder is exactly the sync-root location
+that layer will register; it's gated behind the toggle and Windows-only.

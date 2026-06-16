@@ -407,6 +407,12 @@ pub struct App {
     /// In-flight "download a remote file to temp, then open it" jobs (one per
     /// double-clicked remote file). Result is the local temp path to launch.
     file_open_rx: Vec<Receiver<Result<String, String>>>,
+    /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
+    remote_open_mode: RemoteOpenMode,
+    /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
+    remote_edits: Vec<RemoteEdit>,
+    edit_save_rx: Vec<Receiver<(PathBuf, Result<(), String>)>>,
+    last_edit_poll: Instant,
     /// In-flight upload of clipboard/dropped files into a remote folder.
     /// Result is (files uploaded, errors).
     upload_rx: Option<Receiver<(u64, Vec<String>)>>,
@@ -569,13 +575,43 @@ struct BisyncCtx {
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
-fn share_server_path() -> PathBuf {
+/// How a remote file is opened/edited: a temp copy watched for save-back, or a
+/// native Windows Cloud-Files placeholder (CfAPI). User-toggleable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RemoteOpenMode {
+    Temp,
+    CfApi,
+}
+
+fn app_data_file(name: &str) -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     let d = base.join("smart_explorer");
     let _ = std::fs::create_dir_all(&d);
-    d.join("share_server.txt")
+    d.join(name)
+}
+
+fn load_remote_open_mode() -> RemoteOpenMode {
+    match std::fs::read_to_string(app_data_file("remote_open_mode.txt"))
+        .map(|s| s.trim().to_string())
+        .as_deref()
+    {
+        Ok("cfapi") => RemoteOpenMode::CfApi,
+        _ => RemoteOpenMode::Temp,
+    }
+}
+
+fn save_remote_open_mode(m: RemoteOpenMode) {
+    let v = match m {
+        RemoteOpenMode::Temp => "temp",
+        RemoteOpenMode::CfApi => "cfapi",
+    };
+    let _ = std::fs::write(app_data_file("remote_open_mode.txt"), v);
+}
+
+fn share_server_path() -> PathBuf {
+    app_data_file("share_server.txt")
 }
 
 fn load_share_server() -> String {
@@ -598,14 +634,54 @@ fn download_to_temp(
     path: &str,
     name: &str,
 ) -> Result<String, String> {
-    let dir = std::env::temp_dir().join("smart_explorer_open");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let safe = name.replace(['/', '\\', ':'], "_");
-    let dest = dir.join(if safe.trim().is_empty() { "datei".to_string() } else { safe });
+    download_to(be, path, &open_temp_path(name))
+}
+
+/// Stream a remote file to an explicit local `dest` (creating parents). Returns
+/// the local path string for launching.
+fn download_to(
+    be: &dyn crate::vfs::Backend,
+    path: &str,
+    dest: &std::path::Path,
+) -> Result<String, String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let mut r = be.open_read(path).map_err(|e| e.to_string())?;
-    let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// Local temp path a remote file is downloaded to for opening/editing.
+fn open_temp_path(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("smart_explorer_open");
+    let _ = std::fs::create_dir_all(&dir);
+    let safe = name.replace(['/', '\\', ':'], "_");
+    dir.join(if safe.trim().is_empty() { "datei".to_string() } else { safe })
+}
+
+fn file_mtime_ms(p: &std::path::Path) -> i64 {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// A remote file opened for editing in **temp mode**: the temp copy is watched
+/// and re-uploaded to `remote_path` on the backend whenever it's saved.
+struct RemoteEdit {
+    temp: PathBuf,
+    backend: crate::vfs::BackendHandle,
+    remote_path: String,
+    name: String,
+    /// Last mtime uploaded/downloaded — a change above this is a save.
+    baseline_mtime: i64,
+    /// mtime seen last poll (1-cycle debounce so we don't upload mid-write).
+    seen_mtime: i64,
+    uploading: bool,
 }
 
 fn rjoin(root: &str, name: &str) -> String {
@@ -898,6 +974,10 @@ impl App {
             job_connect_rx: None,
             job_connect_pending: None,
             file_open_rx: Vec::new(),
+            remote_open_mode: load_remote_open_mode(),
+            remote_edits: Vec::new(),
+            edit_save_rx: Vec::new(),
+            last_edit_poll: Instant::now(),
             upload_rx: None,
             remote_op_rx: None,
             remote_ctx: None,
@@ -2987,21 +3067,48 @@ impl App {
     /// file is downloaded to a temp copy off the UI thread, then launched when
     /// ready (so double-click "just works" on SFTP/FTP/WebDAV/Drive too).
     fn open_file(&mut self, path: String, name: String) {
-        match &self.remote {
-            Some(rs) => {
-                let backend = rs.backend.clone();
-                let (tx, rx) = unbounded();
-                self.notice = Some((format!("⬇ Öffne „{}“…", name), std::time::Instant::now()));
-                std::thread::Builder::new()
-                    .name("remote-open".into())
-                    .spawn(move || {
-                        let _ = tx.send(download_to_temp(&*backend, &path, &name));
-                    })
-                    .ok();
-                self.file_open_rx.push(rx);
+        let rs = match &self.remote {
+            Some(rs) => rs,
+            None => {
+                self.open_path(&path);
+                return;
             }
-            None => self.open_path(&path),
+        };
+        let backend = rs.backend.clone();
+        let label = rs.label.clone();
+
+        // The local destination depends on the open mode: an ephemeral temp copy,
+        // or a stable per-connection sync-folder path that mirrors the remote
+        // layout (CfAPI mode — see cfsync.rs). Both then download + watch + launch.
+        let dest = match self.remote_open_mode {
+            RemoteOpenMode::Temp => open_temp_path(&name),
+            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &path),
+        };
+        self.remote_edits.retain(|e| e.temp != dest);
+        if self.remote_edits.len() < 50 {
+            self.remote_edits.push(RemoteEdit {
+                temp: dest.clone(),
+                backend: backend.clone(),
+                remote_path: path.clone(),
+                name: name.clone(),
+                baseline_mtime: i64::MAX, // real value set once downloaded
+                seen_mtime: 0,
+                uploading: false,
+            });
         }
+        let (tx, rx) = unbounded();
+        self.notice = Some((
+            format!("⬇ Öffne „{}“ (Speichern landet auf dem Remote)…", name),
+            std::time::Instant::now(),
+        ));
+        let dest_t = dest.clone();
+        std::thread::Builder::new()
+            .name("remote-open".into())
+            .spawn(move || {
+                let _ = tx.send(download_to(&*backend, &path, &dest_t));
+            })
+            .ok();
+        self.file_open_rx.push(rx);
     }
 
     /// Launch any remote files that finished downloading to temp.
@@ -3021,8 +3128,89 @@ impl App {
         }
         self.file_open_rx = pending;
         for p in to_open {
+            // Baseline the edit-watch to the freshly downloaded content so we
+            // don't immediately re-upload it; only the user's saves count.
+            let pb = PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let m = file_mtime_ms(&pb);
+            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
+                e.baseline_mtime = m;
+                e.seen_mtime = m;
+            }
             self.open_path(&p);
         }
+    }
+
+    /// Poll temp-mode edit copies; re-upload to the remote when one is saved
+    /// (mtime advances and is stable for one ~1.5s cycle = a completed write).
+    fn poll_remote_edits(&mut self) {
+        if self.remote_edits.is_empty() {
+            return;
+        }
+        if self.last_edit_poll.elapsed() < std::time::Duration::from_millis(1500) {
+            return;
+        }
+        self.last_edit_poll = std::time::Instant::now();
+        let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String)> = Vec::new();
+        for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
+            let m = file_mtime_ms(&e.temp);
+            if m == 0 || m == e.baseline_mtime {
+                continue;
+            }
+            if m == e.seen_mtime {
+                e.uploading = true;
+                e.baseline_mtime = m;
+                launch.push((e.temp.clone(), e.backend.clone(), e.remote_path.clone(), e.name.clone()));
+            } else {
+                e.seen_mtime = m;
+            }
+        }
+        for (temp, be, remote, name) in launch {
+            let (tx, rx) = unbounded();
+            self.edit_save_rx.push(rx);
+            self.notice = Some((
+                format!("↑ Speichere „{}“ auf dem Remote…", name),
+                std::time::Instant::now(),
+            ));
+            std::thread::Builder::new()
+                .name("remote-edit-save".into())
+                .spawn(move || {
+                    let r = upload_file(&*be, &temp, &remote);
+                    let _ = tx.send((temp, r));
+                })
+                .ok();
+        }
+    }
+
+    fn drain_edit_saves(&mut self) {
+        if self.edit_save_rx.is_empty() {
+            return;
+        }
+        let mut pending = Vec::new();
+        for rx in std::mem::take(&mut self.edit_save_rx) {
+            match rx.try_recv() {
+                Ok((temp, res)) => {
+                    if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
+                        e.uploading = false;
+                        match res {
+                            Ok(()) => {
+                                self.notice = Some((
+                                    format!("✓ „{}“ auf dem Remote gespeichert", e.name),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                            Err(err) => {
+                                e.baseline_mtime = 0; // let a later save retry
+                                self.error_msg =
+                                    Some(format!("Remote speichern „{}“: {}", e.name, err));
+                            }
+                        }
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => pending.push(rx),
+                Err(_) => {}
+            }
+        }
+        self.edit_save_rx = pending;
     }
 
     /// Upload local `paths` (files and/or folders, recursively) into the remote
@@ -6191,6 +6379,32 @@ impl App {
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         self.ui_menu_cloud(ui);
 
+        // ─── Remote-Dateien öffnen (temp vs CfAPI) ────────────────────
+        ui.add_space(12.0);
+        ui.label(RichText::new("REMOTE-DATEIEN ÖFFNEN").small().color(Color32::from_gray(140)));
+        let mut mode = self.remote_open_mode;
+        let changed = ui
+            .radio_value(&mut mode, RemoteOpenMode::Temp, "Temp-Kopie (überall)")
+            .on_hover_text(
+                "Lädt die Datei in eine temporäre Kopie, öffnet sie in der zugehörigen \
+                 App und lädt Änderungen beim Speichern automatisch auf das Remote zurück. \
+                 Funktioniert mit jeder App und jedem Backend.",
+            )
+            .changed()
+            | ui
+                .radio_value(&mut mode, RemoteOpenMode::CfApi, "CfAPI-Platzhalter (Windows)")
+                .on_hover_text(
+                    "Stellt Remote-Dateien als echte lokale Platzhalter dar (wie OneDrive): \
+                     beim Öffnen geladen, beim Speichern direkt zurückgeschrieben — der Pfad \
+                     ist der Remote-Pfad, kein Hantieren mit Temp-Dateien. Nur Windows.",
+                )
+                .changed();
+        if changed {
+            self.remote_open_mode = mode;
+            save_remote_open_mode(mode);
+            self.notice = Some(("✓ Remote-Öffnen-Modus gespeichert".to_string(), std::time::Instant::now()));
+        }
+
         // ─── Teilen (peer file sharing) ───────────────────────────────
         ui.add_space(12.0);
         ui.label(RichText::new("TEILEN (P2P)").small().color(Color32::from_gray(140)));
@@ -7595,6 +7809,8 @@ impl eframe::App for App {
         self.drain_picker_connect();
         self.drain_cloud_auth();
         self.drain_file_open();
+        self.poll_remote_edits();
+        self.drain_edit_saves();
         self.drain_upload();
         self.drain_remote_op();
         self.drain_clip_download();
@@ -8061,7 +8277,7 @@ impl eframe::App for App {
             || self.share_progress.is_some()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        } else if self.share.is_some() {
+        } else if self.share.is_some() || !self.remote_edits.is_empty() {
             // Poll for incoming share offers / roster changes at a calm cadence.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
