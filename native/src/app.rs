@@ -4917,6 +4917,8 @@ impl App {
         let mut disconnect = false;
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
         let mut to_remove: Option<String> = None;
+        let mut open_gdrive = false;
+        let mut disc_gdrive = false;
 
         // Active connection indicator + one-click disconnect.
         if let Some(rs) = &self.remote {
@@ -4934,6 +4936,36 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
                         disconnect = true;
+                    }
+                });
+            });
+        }
+
+        // Pinned Google Drive — stays here whenever Drive is connected, even
+        // with no tab open on it (click to browse, × to disconnect).
+        let gdrive_active = self
+            .remote
+            .as_ref()
+            .map(|rs| rs.backend.scheme() == crate::vfs::Scheme::GDrive)
+            .unwrap_or(false);
+        if crate::cloud::is_connected(crate::cloud::Provider::GDrive) {
+            ui.horizontal(|ui| {
+                let txt = RichText::new("☁ Google Drive").small();
+                let txt = if gdrive_active {
+                    txt.color(Color32::from_rgb(120, 200, 255))
+                } else {
+                    txt
+                };
+                if ui
+                    .add(egui::Button::new(txt).frame(false))
+                    .on_hover_text("Google Drive durchsuchen")
+                    .clicked()
+                {
+                    open_gdrive = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("×").on_hover_text("Google Drive trennen").clicked() {
+                        disc_gdrive = true;
                     }
                 });
             });
@@ -4985,6 +5017,16 @@ impl App {
         }
         if let Some(c) = to_connect {
             self.connect_saved(&c);
+        }
+        if open_gdrive {
+            self.open_gdrive_browse();
+        }
+        if disc_gdrive {
+            crate::cloud::disconnect(crate::cloud::Provider::GDrive);
+            if gdrive_active {
+                self.remote = None;
+            }
+            self.notice = Some(("Google Drive getrennt".to_string(), std::time::Instant::now()));
         }
     }
 
