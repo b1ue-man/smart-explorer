@@ -163,10 +163,16 @@ pub fn ensure_mounted(
     let pid = provider_id(label);
     let sync_root_id = SyncRootIdBuilder::new(&pid).user_security_id(sid).build();
     if !sync_root_id.is_registered().map_err(|e| e.to_string())? {
+        // Registration requires a non-empty icon resource ("<module>,<index>");
+        // an empty one fails with E_INVALIDARG ("icon cannot be empty"). We ship
+        // no embedded icon, so use a standard folder icon from shell32.dll.
+        let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let icon = format!("{}\\System32\\shell32.dll,4", sysroot);
         sync_root_id
             .register(
                 SyncRootInfo::default()
                     .with_display_name(label)
+                    .with_icon(icon)
                     .with_hydration_type(HydrationType::Full)
                     .with_population_type(PopulationType::Full)
                     .with_version("1.0.0")
