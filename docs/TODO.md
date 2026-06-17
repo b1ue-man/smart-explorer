@@ -92,8 +92,8 @@ Analytics needs its **own lightweight recursive scan**:
 ### Phases (dependency-ordered)
 | # | Item | State | Notes |
 |---|---|---|---|
-| A0 | **Dedicated analytics scanner** (lightweight, low-mem, depth-capped agg) — replaces reuse of the heavy `entries` | ⬜ | the must-fix above; prerequisite for everything below |
-| A0b | **Consolidate drill + recursive** into *one scan, in-memory drill*: `analytics_root` decoupled from the explorer's `root_path`; drill = re-root the compact tree (no re-scan, nested); recursive = the single data-depth control; "reveal in explorer" is the only thing that moves the main view | ⬜ | resolves the drill/recursive duplication; absorbs nested-treemap idea |
+| A0 | **Dedicated analytics scanner** (`analytics.rs`): compact size tree — each node stores only its own name + size + is_dir + children (full paths reconstructed on descent), parallel walk, size-only metadata. Far lower RAM + faster than the rich main scanner. Paths kept to full depth (no cap — confirmed WizTree keeps them too). | ✅ | 0.5.55 |
+| A0b | **Consolidate drill + recursive** into *one scan, in-memory drill*: own scan tree decoupled from the explorer's `root_path`; drill = move `analytics_focus` within the tree (no re-scan, nested) with a clickable breadcrumb + ↑; the `recursive`-prompt is gone; "📂 Im Explorer öffnen" / file-reveal is the only thing that moves the main view | ✅ | 0.5.55 |
 | A1 | Interaction + charts: click category/type bar → filter; size + age histograms; CSV export | ⬜ | builds on A0/A0b |
 | A2 | **Find & reclaim**: duplicate finder (size-group → hash via sync MD5, 1-click delete) + large-stale + empty files/folders + cleanup targets (node_modules/.git/caches/logs) | ⬜ | highest user value |
 | A3 | Scale: "scan whole drive" with live-filling treemap; all-drives dashboard; snapshots / growth-over-time (persist aggregation, diff) | ⬜ | needs stable aggregation format from A0 |
