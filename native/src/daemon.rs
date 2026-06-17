@@ -195,9 +195,7 @@ fn run_one(job: &SyncJob) {
         include_hidden: job.include_hidden,
         ignore: &gs,
     };
-    let out = crate::bisync::run(
-        &*a, &root_a, &*b, &root_b, opts, job.retain_days, &cancel, &filter,
-    );
+    let out = crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, &cancel, &filter);
     crate::syncjobs::mark_run(&job.id);
     log(&format!(
         "ran '{}' [{}]: {}→ {}← {}del {}conf {}err",

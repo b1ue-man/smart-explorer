@@ -210,6 +210,72 @@ impl CompareMode {
     }
 }
 
+/// How the reversible versions store is pruned (Group F). Versions are
+/// timestamped snapshots of overwritten/deleted files; the scheme decides which
+/// snapshots to keep.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VersioningScheme {
+    /// Keep snapshots newer than `days`.
+    Days,
+    /// Keep the newest `count` snapshots.
+    Count,
+    /// Time-Machine-style thinning: all <1d, 1/day <30d, 1/week beyond.
+    Staggered,
+    /// Grandfather-father-son: 1/hour 24h, 1/day 7d, 1/week 4w, 1/month 12m.
+    Gfs,
+}
+
+impl VersioningScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VersioningScheme::Days => "days",
+            VersioningScheme::Count => "count",
+            VersioningScheme::Staggered => "staggered",
+            VersioningScheme::Gfs => "gfs",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "days" => VersioningScheme::Days,
+            "count" => VersioningScheme::Count,
+            "staggered" => VersioningScheme::Staggered,
+            "gfs" => VersioningScheme::Gfs,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            VersioningScheme::Days => "Nach Tagen (N Tage aufbewahren)",
+            VersioningScheme::Count => "Nach Anzahl (letzte N Versionen)",
+            VersioningScheme::Staggered => "Gestaffelt (Time-Machine-Stil)",
+            VersioningScheme::Gfs => "GFS (Std/Tag/Woche/Monat)",
+        }
+    }
+    pub const ALL: [VersioningScheme; 4] = [
+        VersioningScheme::Days,
+        VersioningScheme::Count,
+        VersioningScheme::Staggered,
+        VersioningScheme::Gfs,
+    ];
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Versioning {
+    pub scheme: VersioningScheme,
+    pub days: u64,
+    pub count: u64,
+}
+
+impl Default for Versioning {
+    fn default() -> Self {
+        Versioning {
+            scheme: VersioningScheme::Days,
+            days: 30,
+            count: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BisyncOptions {
     pub direction: Direction,
@@ -223,12 +289,20 @@ pub struct BisyncOptions {
     /// Group C: comparison method + mtime tolerance (ms) for MtimeSize.
     pub compare: CompareMode,
     pub modify_window_ms: i64,
+    /// Group F: versions-store pruning, recycle-bin deletes, delete safety guard.
+    pub versioning: Versioning,
+    /// Send deletes to the OS Recycle Bin instead of removing (local paths only).
+    pub use_recycle: bool,
+    /// Abort the run if it would delete more than this many files (0 = no limit).
+    pub max_delete: u64,
+    /// …or more than this percent of the side's files (0 = no limit).
+    pub max_delete_pct: u8,
 }
 
 impl Default for BisyncOptions {
     fn default() -> Self {
         // The safe default: two-way, strict conflicts, reversible, real run,
-        // propagate deletes, exact size+mtime compare.
+        // propagate deletes, exact size+mtime compare, 30-day versions.
         BisyncOptions {
             direction: Direction::Both,
             conflict: ConflictMode::FileLevel,
@@ -238,6 +312,10 @@ impl Default for BisyncOptions {
             move_files: false,
             compare: CompareMode::MtimeSize,
             modify_window_ms: 0,
+            versioning: Versioning::default(),
+            use_recycle: false,
+            max_delete: 0,
+            max_delete_pct: 0,
         }
     }
 }
@@ -624,6 +702,17 @@ pub fn plan(
     (actions, conflicts, converged)
 }
 
+/// Delete a file, optionally to the OS Recycle Bin (local paths only). For a
+/// remote path (or if trashing fails) it falls back to the backend's hard delete.
+fn delete_file(be: &dyn Backend, path: &str, use_recycle: bool) -> io::Result<()> {
+    if use_recycle && !path.contains("://") && std::path::Path::new(path).exists() {
+        if trash::delete(path).is_ok() {
+            return Ok(());
+        }
+    }
+    be.remove_file(path)
+}
+
 /// Stream-copy one file between backends, creating the destination parent.
 fn copy_between(
     src: &dyn Backend,
@@ -713,7 +802,7 @@ fn run_one(
             if opts.reversible {
                 let _ = back_up(b, &p, rel, versions_dir);
             }
-            b.remove_file(&p)?;
+            delete_file(b, &p, opts.use_recycle)?;
             st.deleted += 1;
         }
         Action::DeleteA(rel) => {
@@ -721,7 +810,7 @@ fn run_one(
             if opts.reversible {
                 let _ = back_up(a, &p, rel, versions_dir);
             }
-            a.remove_file(&p)?;
+            delete_file(a, &p, opts.use_recycle)?;
             st.deleted += 1;
         }
         Action::KeepBothAtoB(rel) => {
@@ -950,24 +1039,95 @@ pub fn save_baseline(path: &std::path::Path, bl: &Baseline) -> io::Result<()> {
     std::fs::write(path, body)
 }
 
-/// Prune version snapshots older than `keep_days` (0 = keep forever).
-pub fn prune_versions(versions: &std::path::Path, keep_days: u64) {
-    if keep_days == 0 {
-        return;
-    }
-    let cutoff = SystemTime::now()
+/// Prune the version snapshots per the configured scheme. Snapshots are the
+/// timestamp-named subdirectories of the versions store.
+pub fn prune_versions(versions: &std::path::Path, v: &Versioning) {
+    let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
-        .saturating_sub(keep_days * 86_400);
+        .unwrap_or(0);
+    let mut snaps: Vec<(u64, PathBuf)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(versions) {
         for e in rd.flatten() {
             if let Some(ts) = e.file_name().to_str().and_then(|s| s.parse::<u64>().ok()) {
-                if ts < cutoff {
-                    let _ = std::fs::remove_dir_all(e.path());
+                snaps.push((ts, e.path()));
+            }
+        }
+    }
+    snaps.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+
+    match v.scheme {
+        VersioningScheme::Days => {
+            if v.days == 0 {
+                return; // keep forever
+            }
+            let cutoff = now.saturating_sub(v.days * 86_400);
+            for (ts, p) in &snaps {
+                if *ts < cutoff {
+                    let _ = std::fs::remove_dir_all(p);
                 }
             }
         }
+        VersioningScheme::Count => {
+            if v.count == 0 {
+                return;
+            }
+            for (i, (_, p)) in snaps.iter().enumerate() {
+                if i >= v.count as usize {
+                    let _ = std::fs::remove_dir_all(p);
+                }
+            }
+        }
+        VersioningScheme::Staggered => keep_per_bucket(&snaps, now, staggered_bucket),
+        VersioningScheme::Gfs => keep_per_bucket(&snaps, now, gfs_bucket),
+    }
+}
+
+/// Keep the newest snapshot in each time bucket; delete the rest (a `None`
+/// bucket means "too old — delete"). `snaps` must be newest-first.
+fn keep_per_bucket(
+    snaps: &[(u64, PathBuf)],
+    now: u64,
+    bucket: impl Fn(u64, u64) -> Option<String>,
+) {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (ts, p) in snaps {
+        match bucket(*ts, now) {
+            Some(key) => {
+                if !seen.insert(key) {
+                    let _ = std::fs::remove_dir_all(p);
+                }
+            }
+            None => {
+                let _ = std::fs::remove_dir_all(p);
+            }
+        }
+    }
+}
+
+fn staggered_bucket(ts: u64, now: u64) -> Option<String> {
+    let age = now.saturating_sub(ts);
+    if age < 86_400 {
+        Some(format!("s{ts}")) // <1d: keep all (unique key)
+    } else if age < 30 * 86_400 {
+        Some(format!("d{}", ts / 86_400)) // 1/day
+    } else {
+        Some(format!("w{}", ts / (7 * 86_400))) // 1/week
+    }
+}
+
+fn gfs_bucket(ts: u64, now: u64) -> Option<String> {
+    let age = now.saturating_sub(ts);
+    if age < 86_400 {
+        Some(format!("h{}", ts / 3_600)) // 1/hour for 24h
+    } else if age < 7 * 86_400 {
+        Some(format!("d{}", ts / 86_400)) // 1/day for 7d
+    } else if age < 28 * 86_400 {
+        Some(format!("w{}", ts / (7 * 86_400))) // 1/week for 4w
+    } else if age < 365 * 86_400 {
+        Some(format!("m{}", ts / (30 * 86_400))) // 1/month for 12m
+    } else {
+        None // older than a year — drop
     }
 }
 
@@ -998,7 +1158,6 @@ pub fn run(
     b: &dyn Backend,
     root_b: &str,
     opts: BisyncOptions,
-    retain_days: u64,
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Outcome {
@@ -1029,6 +1188,40 @@ pub fn run(
         return Outcome::default();
     }
     let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
+
+    // Delete-safety guard: refuse to apply if the plan would remove more files
+    // than the configured limit (protects against a vanished/remounted side
+    // looking like a mass deletion). Aborts the whole run — nothing is touched.
+    let deletes = actions
+        .iter()
+        .filter(|a| matches!(a, Action::DeleteA(_) | Action::DeleteB(_)))
+        .count() as u64;
+    let total = at.len().max(bt.len()) as u64;
+    let pct_limit = if opts.max_delete_pct > 0 {
+        total * opts.max_delete_pct as u64 / 100
+    } else {
+        u64::MAX
+    };
+    let abs_limit = if opts.max_delete > 0 {
+        opts.max_delete
+    } else {
+        u64::MAX
+    };
+    if !opts.dry_run && deletes > 0 && (deletes > abs_limit || deletes > pct_limit) {
+        return Outcome {
+            errors: vec![(
+                "abgebrochen".into(),
+                format!(
+                    "Sicherheitsstopp: {} Löschungen überschreiten das Limit \
+                     (max {} Dateien / {}%). Nichts wurde geändert.",
+                    deletes, opts.max_delete, opts.max_delete_pct
+                ),
+            )],
+            baseline: base,
+            ..Default::default()
+        };
+    }
+
     let mut errors = Vec::new();
     let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
     // Re-walk to capture real post-write signatures (e.g. the destination's new
@@ -1045,7 +1238,7 @@ pub fn run(
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
     if !opts.dry_run {
         let _ = save_baseline(&bpath, &nb);
-        prune_versions(&vdir, retain_days);
+        prune_versions(&vdir, &opts.versioning);
     }
     Outcome {
         stats: st,
@@ -1387,5 +1580,64 @@ mod tests {
         // Under the default mtime+size compare, the mtime gap is a real diff.
         let (actions2, _c2, _v2) = plan(&a, &b, &base, BisyncOptions::default());
         assert!(!actions2.is_empty() || true, "mtime differs under default");
+    }
+
+    #[test]
+    fn prune_count_keeps_newest_n() {
+        let v = tmp("pv");
+        for ts in [100u64, 200, 300, 400] {
+            let d = v.join(ts.to_string());
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("x"), b"x").unwrap();
+        }
+        prune_versions(
+            &v,
+            &Versioning {
+                scheme: VersioningScheme::Count,
+                days: 0,
+                count: 2,
+            },
+        );
+        assert!(v.join("400").exists() && v.join("300").exists());
+        assert!(!v.join("200").exists() && !v.join("100").exists());
+        std::fs::remove_dir_all(&v).ok();
+    }
+
+    #[test]
+    fn max_delete_guard_aborts_mass_deletion() {
+        let a = tmp("gda");
+        let b = tmp("gdb");
+        for n in ["1", "2", "3"] {
+            std::fs::write(a.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let (ra, rb) = (fwd(&a), fwd(&b));
+        let (ba, bb) = (LocalBackend::new(&ra), LocalBackend::new(&rb));
+        let cancel = AtomicBool::new(false);
+        let gs = empty_globset();
+        let f = WalkFilter {
+            include_hidden: true,
+            ignore: &gs,
+        };
+        // First run copies the 3 files A→B and records the baseline.
+        let o1 = super::run(&ba, &ra, &bb, &rb, BisyncOptions::default(), &cancel, &f);
+        assert_eq!(o1.errors.len(), 0);
+        assert!(b.join("f1.txt").exists());
+        // Delete all on A; a sync with max_delete=1 must abort and touch nothing.
+        for n in ["1", "2", "3"] {
+            std::fs::remove_file(a.join(format!("f{n}.txt"))).unwrap();
+        }
+        let opts = BisyncOptions {
+            max_delete: 1,
+            ..Default::default()
+        };
+        let o2 = super::run(&ba, &ra, &bb, &rb, opts, &cancel, &f);
+        assert!(!o2.errors.is_empty(), "guard reports an abort");
+        assert!(b.join("f1.txt").exists(), "nothing deleted when aborted");
+        let pair = pair_id(&ra, &rb);
+        let _ = std::fs::remove_file(baseline_path(&pair));
+        let _ = std::fs::remove_dir_all(versions_dir(&pair));
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 }
