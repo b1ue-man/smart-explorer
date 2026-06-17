@@ -188,12 +188,7 @@ fn run_one(job: &SyncJob) {
             return;
         }
     };
-    let opts = crate::bisync::BisyncOptions {
-        direction: job.direction,
-        conflict: job.conflict,
-        reversible: true,
-        dry_run: false,
-    };
+    let opts = job.opts(false);
     let cancel = AtomicBool::new(false);
     let gs = job.glob_set();
     let filter = crate::bisync::WalkFilter {

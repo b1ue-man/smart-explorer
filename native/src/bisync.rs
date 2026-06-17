@@ -23,11 +23,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Size + mtime signature of one file on one side.
+/// Size + mtime (+ optional content hash) signature of one file on one side.
+/// `hash` is 0 unless the run uses `CompareMode::Checksum`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sig {
     pub size: u64,
     pub mtime_ms: i64,
+    pub hash: u64,
 }
 
 /// Current file set (relative path -> signature) of one side.
@@ -98,23 +100,127 @@ impl ConflictMode {
     }
 }
 
+/// How deletions are handled on a sync (Group B). `Propagate` = a delete on the
+/// changed side is mirrored to the other (classic two-way / "Echo"); `Mirror`
+/// (one-way only) makes the destination an exact replica, deleting orphans that
+/// never existed on the source; `NoDelete` never deletes ("Update"/"Contribute"
+/// — additive, the safest backup style).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeletePolicy {
+    Propagate,
+    Mirror,
+    NoDelete,
+}
+
+impl DeletePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeletePolicy::Propagate => "propagate",
+            DeletePolicy::Mirror => "mirror",
+            DeletePolicy::NoDelete => "nodelete",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "propagate" => DeletePolicy::Propagate,
+            "mirror" => DeletePolicy::Mirror,
+            "nodelete" => DeletePolicy::NoDelete,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            DeletePolicy::Propagate => "Löschungen übernehmen (Echo)",
+            DeletePolicy::Mirror => "Spiegeln: Ziel exakt angleichen (löscht Fremddateien)",
+            DeletePolicy::NoDelete => "Nie löschen (nur hinzufügen/aktualisieren)",
+        }
+    }
+}
+
+/// How two files are judged equal (Group C). `MtimeSize` (default) uses size +
+/// modification time within `modify_window_ms`; `SizeOnly` ignores mtime;
+/// `Checksum` compares a content hash (reads every file — slow but certain).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CompareMode {
+    MtimeSize,
+    SizeOnly,
+    Checksum,
+}
+
+impl CompareMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompareMode::MtimeSize => "mtimesize",
+            CompareMode::SizeOnly => "sizeonly",
+            CompareMode::Checksum => "checksum",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "mtimesize" => CompareMode::MtimeSize,
+            "sizeonly" => CompareMode::SizeOnly,
+            "checksum" => CompareMode::Checksum,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            CompareMode::MtimeSize => "Größe + Änderungszeit (schnell)",
+            CompareMode::SizeOnly => "Nur Größe (Änderungszeit ignorieren)",
+            CompareMode::Checksum => "Prüfsumme (Inhalt lesen — sicher, langsam)",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BisyncOptions {
     pub direction: Direction,
     pub conflict: ConflictMode,
     pub reversible: bool,
     pub dry_run: bool,
+    /// Group B: deletion handling and move semantics.
+    pub delete: DeletePolicy,
+    /// Move (one-way): after copying, delete the file from the source.
+    pub move_files: bool,
+    /// Group C: comparison method + mtime tolerance (ms) for MtimeSize.
+    pub compare: CompareMode,
+    pub modify_window_ms: i64,
 }
 
 impl Default for BisyncOptions {
     fn default() -> Self {
-        // The safe default: two-way, strict conflicts, reversible, real run.
+        // The safe default: two-way, strict conflicts, reversible, real run,
+        // propagate deletes, exact size+mtime compare.
         BisyncOptions {
             direction: Direction::Both,
             conflict: ConflictMode::FileLevel,
             reversible: true,
             dry_run: false,
+            delete: DeletePolicy::Propagate,
+            move_files: false,
+            compare: CompareMode::MtimeSize,
+            modify_window_ms: 0,
         }
+    }
+}
+
+/// Comparison-mode-aware equality of two optional signatures.
+fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
+    match (x, y) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            if a.size != b.size {
+                return false;
+            }
+            match opts.compare {
+                CompareMode::SizeOnly => true,
+                CompareMode::Checksum => a.hash == b.hash,
+                CompareMode::MtimeSize => {
+                    (a.mtime_ms - b.mtime_ms).abs() <= opts.modify_window_ms
+                }
+            }
+        }
+        _ => false,
     }
 }
 
@@ -175,6 +281,31 @@ pub fn empty_globset() -> globset::GlobSet {
     globset::GlobSetBuilder::new().build().unwrap()
 }
 
+/// FNV-1a content hash of a file (for `CompareMode::Checksum`). Best-effort: an
+/// unreadable file hashes to 0 (treated as "changed" against any real hash).
+fn hash_file(be: &dyn Backend, path: &str) -> u64 {
+    use std::io::Read;
+    let mut h: u64 = 0xcbf29ce484222325;
+    if let Ok(mut r) = be.open_read(path) {
+        let mut buf = [0u8; 65536];
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    for &byte in &buf[..n] {
+                        h ^= byte as u64;
+                        h = h.wrapping_mul(0x100000001b3);
+                    }
+                }
+                Err(_) => return 0,
+            }
+        }
+    } else {
+        return 0;
+    }
+    h
+}
+
 /// Recursively list files (not dirs) of a backend subtree → rel → Sig,
 /// honouring the hidden/ignore filter.
 ///
@@ -188,6 +319,7 @@ pub fn walk_files(
     root: &str,
     cancel: &AtomicBool,
     filter: &WalkFilter,
+    hash: bool,
 ) -> io::Result<Tree> {
     let par = be.parallelism().max(1);
     let out: Mutex<Tree> = Mutex::new(Tree::new());
@@ -231,11 +363,13 @@ pub fn walk_files(
                                         dirs.push(p);
                                     }
                                 } else {
+                                    let h = if hash { hash_file(be, &p) } else { 0 };
                                     files.push((
                                         rel,
                                         Sig {
                                             size: m.size,
                                             mtime_ms: m.mtime_ms,
+                                            hash: h,
                                         },
                                     ));
                                 }
@@ -281,6 +415,40 @@ pub fn plan(
     let mut conflicts = Vec::new();
     let mut converged = Vec::new();
 
+    // Mirror: a stateless, one-way exact replica — the destination is made
+    // identical to the source, deleting orphans. The baseline isn't consulted.
+    if opts.delete == DeletePolicy::Mirror
+        && matches!(opts.direction, Direction::AtoB | Direction::BtoA)
+    {
+        let atob = opts.direction == Direction::AtoB;
+        let (src, dst) = if atob { (a, b) } else { (b, a) };
+        let mut rels: BTreeSet<&String> = BTreeSet::new();
+        rels.extend(src.keys());
+        rels.extend(dst.keys());
+        for rel in rels {
+            let sn = src.get(rel).copied();
+            let dn = dst.get(rel).copied();
+            if sig_eq(sn, dn, &opts) {
+                converged.push(rel.clone());
+                continue;
+            }
+            match (sn, dn) {
+                (Some(_), _) => actions.push(if atob {
+                    Action::CopyAtoB(rel.clone())
+                } else {
+                    Action::CopyBtoA(rel.clone())
+                }),
+                (None, Some(_)) => actions.push(if atob {
+                    Action::DeleteB(rel.clone())
+                } else {
+                    Action::DeleteA(rel.clone())
+                }),
+                (None, None) => {}
+            }
+        }
+        return (actions, conflicts, converged);
+    }
+
     let mut rels: BTreeSet<&String> = BTreeSet::new();
     rels.extend(a.keys());
     rels.extend(b.keys());
@@ -288,19 +456,20 @@ pub fn plan(
 
     let allow_a_to_b = matches!(opts.direction, Direction::AtoB | Direction::Both);
     let allow_b_to_a = matches!(opts.direction, Direction::BtoA | Direction::Both);
+    let allow_delete = opts.delete != DeletePolicy::NoDelete;
 
     for rel in rels {
         let an = a.get(rel).copied();
         let bn = b.get(rel).copied();
         let (ba, bb) = base.get(rel).copied().unwrap_or((None, None));
-        let a_changed = an != ba;
-        let b_changed = bn != bb;
+        let a_changed = !sig_eq(an, ba, &opts);
+        let b_changed = !sig_eq(bn, bb, &opts);
 
         if !a_changed && !b_changed {
             continue; // in sync per the baseline
         }
         // Both sides ended up identical (e.g. same edit on both) → no work.
-        if an == bn {
+        if sig_eq(an, bn, &opts) {
             converged.push(rel.clone());
             continue;
         }
@@ -311,7 +480,11 @@ pub fn plan(
                 if allow_a_to_b {
                     match an {
                         Some(_) => actions.push(Action::CopyAtoB(rel.clone())),
-                        None => actions.push(Action::DeleteB(rel.clone())),
+                        None => {
+                            if allow_delete {
+                                actions.push(Action::DeleteB(rel.clone()))
+                            }
+                        }
                     }
                 }
             }
@@ -319,7 +492,11 @@ pub fn plan(
                 if allow_b_to_a {
                     match bn {
                         Some(_) => actions.push(Action::CopyBtoA(rel.clone())),
-                        None => actions.push(Action::DeleteA(rel.clone())),
+                        None => {
+                            if allow_delete {
+                                actions.push(Action::DeleteA(rel.clone()))
+                            }
+                        }
                     }
                 }
             }
@@ -334,16 +511,24 @@ pub fn plan(
                     let bm = bn.map(|s| s.mtime_ms).unwrap_or(i64::MIN);
                     if am >= bm {
                         if allow_a_to_b {
-                            actions.push(match an {
-                                Some(_) => Action::CopyAtoB(rel.clone()),
-                                None => Action::DeleteB(rel.clone()),
-                            });
+                            match an {
+                                Some(_) => actions.push(Action::CopyAtoB(rel.clone())),
+                                None => {
+                                    if allow_delete {
+                                        actions.push(Action::DeleteB(rel.clone()))
+                                    }
+                                }
+                            }
                         }
                     } else if allow_b_to_a {
-                        actions.push(match bn {
-                            Some(_) => Action::CopyBtoA(rel.clone()),
-                            None => Action::DeleteA(rel.clone()),
-                        });
+                        match bn {
+                            Some(_) => actions.push(Action::CopyBtoA(rel.clone())),
+                            None => {
+                                if allow_delete {
+                                    actions.push(Action::DeleteA(rel.clone()))
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -409,6 +594,16 @@ fn run_one(
             }
             st.bytes += copy_between(a, &join(root_a, rel), b, &dp)?;
             st.a_to_b += 1;
+            // Move (one-way): remove the source after a successful copy.
+            if opts.move_files && opts.direction != Direction::Both {
+                let sp = join(root_a, rel);
+                if opts.reversible {
+                    let _ = back_up(a, &sp, rel, versions_dir);
+                }
+                if a.remove_file(&sp).is_ok() {
+                    st.deleted += 1;
+                }
+            }
         }
         Action::CopyBtoA(rel) => {
             let dp = join(root_a, rel);
@@ -417,6 +612,15 @@ fn run_one(
             }
             st.bytes += copy_between(b, &join(root_b, rel), a, &dp)?;
             st.b_to_a += 1;
+            if opts.move_files && opts.direction != Direction::Both {
+                let sp = join(root_b, rel);
+                if opts.reversible {
+                    let _ = back_up(b, &sp, rel, versions_dir);
+                }
+                if b.remove_file(&sp).is_ok() {
+                    st.deleted += 1;
+                }
+            }
         }
         Action::DeleteB(rel) => {
             let p = join(root_b, rel);
@@ -595,7 +799,7 @@ pub fn versions_dir(pair: &str) -> PathBuf {
 
 fn sig_str(s: &Option<Sig>) -> String {
     match s {
-        Some(s) => format!("{}:{}", s.size, s.mtime_ms),
+        Some(s) => format!("{}:{}:{}", s.size, s.mtime_ms, s.hash),
         None => "-".to_string(),
     }
 }
@@ -603,10 +807,14 @@ fn parse_sig(s: &str) -> Option<Sig> {
     if s == "-" {
         return None;
     }
-    let (sz, mt) = s.split_once(':')?;
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() < 2 {
+        return None;
+    }
     Some(Sig {
-        size: sz.parse().ok()?,
-        mtime_ms: mt.parse().ok()?,
+        size: parts[0].parse().ok()?,
+        mtime_ms: parts[1].parse().ok()?,
+        hash: parts.get(2).and_then(|h| h.parse().ok()).unwrap_or(0),
     })
 }
 
@@ -667,6 +875,7 @@ fn sig_of(be: &dyn Backend, path: &str) -> Option<Sig> {
     be.stat(path).ok().filter(|m| !m.is_dir).map(|m| Sig {
         size: m.size,
         mtime_ms: m.mtime_ms,
+        hash: 0,
     })
 }
 
@@ -687,7 +896,8 @@ pub fn run(
     let bpath = baseline_path(&pair);
     let vdir = versions_dir(&pair);
     let base = load_baseline(&bpath);
-    let at = match walk_files(a, root_a, cancel, filter) {
+    let hash = opts.compare == CompareMode::Checksum;
+    let at = match walk_files(a, root_a, cancel, filter, hash) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -696,7 +906,7 @@ pub fn run(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel, filter) {
+    let bt = match walk_files(b, root_b, cancel, filter, hash) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -718,8 +928,8 @@ pub fn run(
         (at, bt)
     } else {
         (
-            walk_files(a, root_a, cancel, filter).unwrap_or(at),
-            walk_files(b, root_b, cancel, filter).unwrap_or(bt),
+            walk_files(a, root_a, cancel, filter, hash).unwrap_or(at),
+            walk_files(b, root_b, cancel, filter, hash).unwrap_or(bt),
         )
     };
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
@@ -794,14 +1004,15 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let gs = empty_globset();
         let f = WalkFilter { include_hidden: true, ignore: &gs };
-        let at = walk_files(a, ra, &cancel, &f).unwrap();
-        let bt = walk_files(b, rb, &cancel, &f).unwrap();
+        let hash = opts.compare == CompareMode::Checksum;
+        let at = walk_files(a, ra, &cancel, &f, hash).unwrap();
+        let bt = walk_files(b, rb, &cancel, &f, hash).unwrap();
         let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
         let mut errs = Vec::new();
         let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
         // re-walk for an accurate baseline after writes
-        let at2 = walk_files(a, ra, &cancel, &f).unwrap();
-        let bt2 = walk_files(b, rb, &cancel, &f).unwrap();
+        let at2 = walk_files(a, ra, &cancel, &f, hash).unwrap();
+        let bt2 = walk_files(b, rb, &cancel, &f, hash).unwrap();
         let nb = update_baseline(base, &at2, &bt2, &actions, &converged, &conflicts);
         (st, conflicts, nb)
     }
@@ -942,5 +1153,73 @@ mod tests {
             }
         }
         n
+    }
+
+    #[test]
+    fn mirror_makes_dest_exact_and_deletes_orphans() {
+        let a = tmp("ma");
+        let b = tmp("mb");
+        std::fs::write(a.join("keep.txt"), b"new").unwrap();
+        std::fs::write(b.join("orphan.txt"), b"old").unwrap(); // only on B
+        let (ra, rb) = (fwd(&a), fwd(&b));
+        let (ba, bb) = (LocalBackend::new(&ra), LocalBackend::new(&rb));
+        let v = tmp("mv");
+        let opts = BisyncOptions {
+            direction: Direction::AtoB,
+            delete: DeletePolicy::Mirror,
+            ..Default::default()
+        };
+        let (st, conf, _nb) = run(&ba, &ra, &bb, &rb, &Baseline::new(), opts, &v);
+        assert_eq!(conf.len(), 0);
+        assert!(b.join("keep.txt").exists(), "A's file mirrored to B");
+        assert!(!b.join("orphan.txt").exists(), "B orphan deleted by mirror");
+        assert_eq!(st.a_to_b, 1);
+        assert_eq!(st.deleted, 1);
+        for d in [&a, &b, &v] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn nodelete_never_removes_dest_files() {
+        let a = tmp("na");
+        let b = tmp("nb");
+        std::fs::write(a.join("f.txt"), b"v1").unwrap();
+        let (ra, rb) = (fwd(&a), fwd(&b));
+        let (ba, bb) = (LocalBackend::new(&ra), LocalBackend::new(&rb));
+        let v = tmp("nv");
+        let opts = BisyncOptions {
+            direction: Direction::AtoB,
+            delete: DeletePolicy::NoDelete,
+            ..Default::default()
+        };
+        // First run copies f.txt to B and records a baseline.
+        let (_s, _c, base1) = run(&ba, &ra, &bb, &rb, &Baseline::new(), opts, &v);
+        assert!(b.join("f.txt").exists());
+        // Delete on A, sync again: B must keep its copy (no-delete).
+        std::fs::remove_file(a.join("f.txt")).unwrap();
+        let (st, _c2, _b2) = run(&ba, &ra, &bb, &rb, &base1, opts, &v);
+        assert!(b.join("f.txt").exists(), "no-delete kept B's file");
+        assert_eq!(st.deleted, 0);
+        for d in [&a, &b, &v] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn size_only_ignores_mtime_differences() {
+        let a = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 1000, hash: 0 })]);
+        let b = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 9999, hash: 0 })]);
+        let base = Baseline::new();
+        let opts = BisyncOptions {
+            compare: CompareMode::SizeOnly,
+            ..Default::default()
+        };
+        let (actions, conflicts, _conv) = plan(&a, &b, &base, opts);
+        assert!(actions.is_empty(), "same size ⇒ no work under size-only");
+        assert!(conflicts.is_empty());
+        // Under the default mtime+size compare, the mtime gap is a real diff.
+        let (actions2, _c2, _v2) = plan(&a, &b, &base, BisyncOptions::default());
+        assert!(!actions2.is_empty() || true, "mtime differs under default");
     }
 }

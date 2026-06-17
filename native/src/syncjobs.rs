@@ -10,7 +10,7 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
-use crate::bisync::{ConflictMode, Direction};
+use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction};
 use std::path::PathBuf;
 
 /// What makes a job run. Timer-based kinds (`Interval`, `Calendar`) are evaluated
@@ -105,6 +105,13 @@ pub struct SyncJob {
     pub active_to_min: i32,
     /// Run a missed scheduled occurrence as soon as possible (else wait for next).
     pub catch_up: bool,
+
+    // ── Group B/C: deletion handling, move, comparison ───────────────────────
+    pub delete_policy: DeletePolicy,
+    pub move_files: bool,
+    pub compare: CompareMode,
+    /// mtime tolerance in seconds for MtimeSize compare (FAT/DST: 1–2).
+    pub modify_window_sec: u64,
 }
 
 fn now_secs() -> i64 {
@@ -170,6 +177,10 @@ impl SyncJob {
             active_from_min: 0,
             active_to_min: 0,
             catch_up: true,
+            delete_policy: DeletePolicy::Propagate,
+            move_files: false,
+            compare: CompareMode::MtimeSize,
+            modify_window_sec: 0,
         }
     }
 
@@ -257,6 +268,20 @@ impl SyncJob {
         }
         b.build().unwrap_or_else(|_| crate::bisync::empty_globset())
     }
+
+    /// Engine options derived from this job's settings.
+    pub fn opts(&self, dry_run: bool) -> crate::bisync::BisyncOptions {
+        crate::bisync::BisyncOptions {
+            direction: self.direction,
+            conflict: self.conflict,
+            reversible: true,
+            dry_run,
+            delete: self.delete_policy,
+            move_files: self.move_files,
+            compare: self.compare,
+            modify_window_ms: self.modify_window_sec as i64 * 1000,
+        }
+    }
 }
 
 // ── persistence ──────────────────────────────────────────────────────────────
@@ -332,6 +357,11 @@ fn serialize_kv(j: &SyncJob) -> String {
     s.push_str(&format!("active_from_min={}\n", j.active_from_min));
     s.push_str(&format!("active_to_min={}\n", j.active_to_min));
     s.push_str(&format!("catch_up={}\n", if j.catch_up { 1 } else { 0 }));
+    // Group B/C — direction detail & comparison
+    s.push_str(&format!("delete_policy={}\n", j.delete_policy.as_str()));
+    s.push_str(&format!("move_files={}\n", if j.move_files { 1 } else { 0 }));
+    s.push_str(&format!("compare={}\n", j.compare.as_str()));
+    s.push_str(&format!("modify_window_sec={}\n", j.modify_window_sec));
     s
 }
 
@@ -382,6 +412,12 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
             "active_from_min" => j.active_from_min = v.parse().unwrap_or(0),
             "active_to_min" => j.active_to_min = v.parse().unwrap_or(0),
             "catch_up" => j.catch_up = v != "0",
+            "delete_policy" => {
+                j.delete_policy = DeletePolicy::parse(v).unwrap_or(DeletePolicy::Propagate)
+            }
+            "move_files" => j.move_files = v != "0",
+            "compare" => j.compare = CompareMode::parse(v).unwrap_or(CompareMode::MtimeSize),
+            "modify_window_sec" => j.modify_window_sec = v.parse().unwrap_or(0),
             _ => {} // unknown / future key — ignored
         }
     }
