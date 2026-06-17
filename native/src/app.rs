@@ -409,12 +409,12 @@ pub struct App {
     job_connect_pending: Option<crate::syncjobs::SyncJob>,
     /// In-flight "download a remote file to temp, then open it" jobs (one per
     /// double-clicked remote file). Result is the local temp path to launch.
-    file_open_rx: Vec<Receiver<Result<String, String>>>,
+    file_open_rx: Vec<Receiver<Result<(String, i64), String>>>,
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
     remote_open_mode: RemoteOpenMode,
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     remote_edits: Vec<RemoteEdit>,
-    edit_save_rx: Vec<Receiver<(PathBuf, Result<(), String>)>>,
+    edit_save_rx: Vec<Receiver<(PathBuf, SaveResult)>>,
     last_edit_poll: Instant,
     /// In-flight upload of clipboard/dropped files into a remote folder.
     /// Result is (files uploaded, errors).
@@ -688,7 +688,22 @@ struct RemoteEdit {
     baseline_mtime: i64,
     /// mtime seen last poll (1-cycle debounce so we don't upload mid-write).
     seen_mtime: i64,
+    /// The remote file's mtime when we last synced it (download or upload).
+    /// Before overwriting, we re-check the remote; if it advanced past this,
+    /// it changed underneath us → conflict, don't clobber. 0 = unknown (skip).
+    remote_known_mtime: i64,
     uploading: bool,
+}
+
+/// Outcome of a save-back upload attempt (computed off-thread).
+enum SaveResult {
+    /// Uploaded; carries the remote's new mtime to re-baseline against.
+    Ok(i64),
+    /// The remote changed since we downloaded it — NOT overwritten. Carries the
+    /// remote's current mtime.
+    Conflict(i64),
+    /// Upload failed.
+    Failed(String),
 }
 
 fn rjoin(root: &str, name: &str) -> String {
@@ -3140,6 +3155,7 @@ impl App {
                             name: name.clone(),
                             baseline_mtime: i64::MAX, // sentinel: arm on first sight
                             seen_mtime: 0,
+                            remote_known_mtime: 0, // CfAPI path: no conflict baseline
                             uploading: false,
                         });
                     }
@@ -3195,6 +3211,7 @@ impl App {
                 name: name.clone(),
                 baseline_mtime: i64::MAX, // real value set once downloaded
                 seen_mtime: 0,
+                remote_known_mtime: 0, // captured after download (below)
                 uploading: false,
             });
         }
@@ -3207,7 +3224,13 @@ impl App {
         std::thread::Builder::new()
             .name("remote-open".into())
             .spawn(move || {
-                let _ = tx.send(download_to(&*backend, &path, &dest_t));
+                // Capture the remote's mtime at download time so save-back can
+                // detect a concurrent remote change before overwriting.
+                let res = download_to(&*backend, &path, &dest_t).map(|p| {
+                    let rm = backend.stat(&path).map(|m| m.mtime_ms).unwrap_or(0);
+                    (p, rm)
+                });
+                let _ = tx.send(res);
             })
             .ok();
         self.file_open_rx.push(rx);
@@ -3222,21 +3245,23 @@ impl App {
         let mut to_open = Vec::new();
         for rx in std::mem::take(&mut self.file_open_rx) {
             match rx.try_recv() {
-                Ok(Ok(p)) => to_open.push(p),
+                Ok(Ok((p, remote_mtime))) => to_open.push((p, remote_mtime)),
                 Ok(Err(e)) => self.error_msg = Some(format!("Datei öffnen: {}", e)),
                 Err(crossbeam_channel::TryRecvError::Empty) => pending.push(rx),
                 Err(_) => {}
             }
         }
         self.file_open_rx = pending;
-        for p in to_open {
+        for (p, remote_mtime) in to_open {
             // Baseline the edit-watch to the freshly downloaded content so we
-            // don't immediately re-upload it; only the user's saves count.
+            // don't immediately re-upload it; only the user's saves count. Record
+            // the remote's mtime so save-back can detect a concurrent change.
             let pb = PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR));
             let m = file_mtime_ms(&pb);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
+                e.remote_known_mtime = remote_mtime;
             }
             self.open_path(&p);
         }
@@ -3252,7 +3277,7 @@ impl App {
             return;
         }
         self.last_edit_poll = std::time::Instant::now();
-        let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String)> = Vec::new();
+        let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String, i64)> = Vec::new();
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
             if m == 0 {
@@ -3272,12 +3297,18 @@ impl App {
             if m == e.seen_mtime {
                 e.uploading = true;
                 e.baseline_mtime = m;
-                launch.push((e.temp.clone(), e.backend.clone(), e.remote_path.clone(), e.name.clone()));
+                launch.push((
+                    e.temp.clone(),
+                    e.backend.clone(),
+                    e.remote_path.clone(),
+                    e.name.clone(),
+                    e.remote_known_mtime,
+                ));
             } else {
                 e.seen_mtime = m;
             }
         }
-        for (temp, be, remote, name) in launch {
+        for (temp, be, remote, name, known) in launch {
             let (tx, rx) = unbounded();
             self.edit_save_rx.push(rx);
             self.notice = Some((
@@ -3287,8 +3318,21 @@ impl App {
             std::thread::Builder::new()
                 .name("remote-edit-save".into())
                 .spawn(move || {
-                    let r = upload_file(&*be, &temp, &remote);
-                    let _ = tx.send((temp, r));
+                    // Conflict guard: if the remote advanced past what we last
+                    // knew, it changed underneath us — don't overwrite.
+                    let current = be.stat(&remote).map(|m| m.mtime_ms).unwrap_or(0);
+                    let res = if known != 0 && current > known {
+                        SaveResult::Conflict(current)
+                    } else {
+                        match upload_file(&*be, &temp, &remote) {
+                            Ok(()) => {
+                                let nm = be.stat(&remote).map(|m| m.mtime_ms).unwrap_or(0);
+                                SaveResult::Ok(nm)
+                            }
+                            Err(e) => SaveResult::Failed(e),
+                        }
+                    };
+                    let _ = tx.send((temp, res));
                 })
                 .ok();
         }
@@ -3305,13 +3349,30 @@ impl App {
                     if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
                         e.uploading = false;
                         match res {
-                            Ok(()) => {
+                            SaveResult::Ok(new_remote) => {
+                                e.remote_known_mtime = new_remote;
                                 self.notice = Some((
                                     format!("✓ „{}“ auf dem Remote gespeichert", e.name),
                                     std::time::Instant::now(),
                                 ));
                             }
-                            Err(err) => {
+                            SaveResult::Conflict(remote_mtime) => {
+                                // Remote changed since we opened it. We did NOT
+                                // overwrite. Adopt the remote mtime as the new
+                                // baseline so the next deliberate save wins, and
+                                // keep the local edit as-is.
+                                e.remote_known_mtime = remote_mtime;
+                                e.baseline_mtime = file_mtime_ms(&temp);
+                                e.seen_mtime = e.baseline_mtime;
+                                self.error_msg = Some(format!(
+                                    "Konflikt „{}“: Die Remote-Datei wurde inzwischen geändert — \
+                                     deine lokale Änderung wurde NICHT hochgeladen (kein Überschreiben). \
+                                     Öffne die Datei erneut für die Remote-Version, oder speichere \
+                                     erneut, um deine Version durchzusetzen.",
+                                    e.name
+                                ));
+                            }
+                            SaveResult::Failed(err) => {
                                 e.baseline_mtime = 0; // let a later save retry
                                 self.error_msg =
                                     Some(format!("Remote speichern „{}“: {}", e.name, err));
