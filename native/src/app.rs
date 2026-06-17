@@ -882,11 +882,16 @@ enum OmniMode {
     Filter,
     Path,
     Command,
+    /// Leading `/` → fuzzy global folder-jump search (dropdown owns the keyboard).
+    FolderSearch,
 }
 
 fn omni_mode(input: &str) -> OmniMode {
-    if input.trim_start().starts_with('>') {
+    let t = input.trim_start();
+    if t.starts_with('>') {
         OmniMode::Command
+    } else if t.starts_with('/') {
+        OmniMode::FolderSearch
     } else if omni_is_path(input) {
         OmniMode::Path
     } else {
@@ -895,14 +900,15 @@ fn omni_mode(input: &str) -> OmniMode {
 }
 
 /// True when the input should be read as a filesystem path rather than a filter:
-/// a drive (`C:`), a root (`/`, `\`, `~`), a UNC (`\\srv`), up-navigation (`..`),
-/// or anything containing a path separator.
+/// a drive (`C:`), a root (`\`, `~`), a UNC (`\\srv`), up-navigation (`..`),
+/// or anything containing a path separator. (A leading `/` is handled earlier as
+/// folder-search, so it's intentionally not a path trigger here.)
 fn omni_is_path(input: &str) -> bool {
     let t = input.trim();
     if t.is_empty() {
         return false;
     }
-    if t.starts_with('/') || t.starts_with('\\') || t.starts_with('~') {
+    if t.starts_with('\\') || t.starts_with('~') {
         return true;
     }
     if t.starts_with("..") {
@@ -4542,9 +4548,12 @@ impl App {
         }
         let raw = self.text_draft.clone();
         match omni_mode(&raw) {
-            OmniMode::Command => {
+            OmniMode::Command | OmniMode::FolderSearch => {
+                // No row highlighted → take the best match (top dropdown row).
                 if let Some(it) = self.build_omni_items().into_iter().next() {
                     self.execute_omni(it.action, ctx);
+                } else {
+                    self.clear_omni();
                 }
             }
             OmniMode::Path => {
@@ -4566,8 +4575,9 @@ impl App {
     ///  - Command (`>`): folder-action commands + navigation/root targets;
     ///  - Path: root targets filtered by the typed text (Enter still navigates
     ///    the full typed path / `..`);
-    ///  - Filter: merged global folder-search "jump to" hits, plus the roots
-    ///    when the field is focused and empty.
+    ///  - FolderSearch (`/`): fuzzy global folder-jump hits + matching roots;
+    ///  - Filter: NO dropdown — plain text just narrows the list, so the arrow
+    ///    keys stay with the file list.
     fn build_omni_items(&self) -> Vec<OmniItem> {
         let raw = self.text_draft.as_str();
         let mut items: Vec<OmniItem> = Vec::new();
@@ -4598,7 +4608,8 @@ impl App {
             OmniMode::Path => {
                 self.push_root_items(&mut items, raw.trim());
             }
-            OmniMode::Filter => {
+            OmniMode::FolderSearch => {
+                let q = raw.trim_start().trim_start_matches('/').trim();
                 for (p, _score) in self.folder_search_results.iter().take(12) {
                     let base = p.rsplit('/').next().unwrap_or(p).to_string();
                     let parent = p.rsplit_once('/').map(|(par, _)| par).unwrap_or("").to_string();
@@ -4609,10 +4620,10 @@ impl App {
                         action: OmniAction::Go(p.clone()),
                     });
                 }
-                if raw.trim().is_empty() {
-                    self.push_root_items(&mut items, "");
-                }
+                // Also offer roots / drives / remotes / favourites that match.
+                self.push_root_items(&mut items, q);
             }
+            OmniMode::Filter => {}
         }
         items
     }
@@ -7290,7 +7301,7 @@ impl App {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text(match self.filter.text_mode {
-                        TextMode::Substring => "Filtern · Pfad · ›Befehl · .. hoch",
+                        TextMode::Substring => "Filtern · /Ordnersuche · Pfad · ›Befehl · .. hoch",
                         TextMode::Regex => "Regex z.B. \\.log$",
                         TextMode::Glob => "Glob z.B. **/build/**",
                     })
@@ -7305,12 +7316,15 @@ impl App {
             if resp.changed() {
                 self.filter_pending_at = Some(Instant::now());
                 self.omni_sel = None;
-                // Keep the merged global folder-search in sync so its hits can
-                // surface in the dropdown (filter mode only).
-                if omni_mode(&self.text_draft) == OmniMode::Filter
-                    && !self.text_draft.trim().is_empty()
-                {
-                    self.folder_search_query = self.text_draft.clone();
+                // Folder-search runs ONLY in `/`-mode, so plain filter typing
+                // never pops the dropdown (and the arrows stay with the list).
+                let q = if omni_mode(&self.text_draft) == OmniMode::FolderSearch {
+                    self.text_draft.trim_start().trim_start_matches('/').trim().to_string()
+                } else {
+                    String::new()
+                };
+                if !q.is_empty() {
+                    self.folder_search_query = q;
                     self.folder_search_pending_at = Some(std::time::Instant::now());
                 } else {
                     self.folder_search_query.clear();
@@ -11061,8 +11075,24 @@ impl eframe::App for App {
                 }
                 KbdAct::InvertSelection => self.invert_selection(),
                 KbdAct::FocusSearch => {
-                    // Folder search is merged into the combo-field now.
+                    // Ctrl+F = folder search → drop straight into `/`-mode so the
+                    // dropdown owns the keyboard. Carry a plain filter over as the
+                    // search query; leave an existing `/`-search untouched.
                     self.show_filters = true;
+                    if omni_mode(&self.text_draft) != OmniMode::FolderSearch {
+                        let carry = if omni_mode(&self.text_draft) == OmniMode::Filter {
+                            self.text_draft.trim().to_string()
+                        } else {
+                            String::new()
+                        };
+                        self.text_draft = format!("/{}", carry);
+                        self.filter.text.clear();
+                        self.recompute_view();
+                        if !carry.is_empty() {
+                            self.folder_search_query = carry;
+                            self.folder_search_pending_at = Some(std::time::Instant::now());
+                        }
+                    }
                     self.folder_search_focus = true;
                     self.search_nav_from_filter = false;
                 }
@@ -11548,10 +11578,13 @@ mod omni_tests {
         assert_eq!(omni_mode("../.."), OmniMode::Path);
         assert_eq!(omni_mode("C:\\Users"), OmniMode::Path);
         assert_eq!(omni_mode("C:"), OmniMode::Path);
-        assert_eq!(omni_mode("/etc/hosts"), OmniMode::Path);
         assert_eq!(omni_mode("~"), OmniMode::Path);
         assert_eq!(omni_mode("\\\\server\\share"), OmniMode::Path);
         assert_eq!(omni_mode("a/b"), OmniMode::Path);
+        // A leading slash is the explicit folder-search trigger (not a path).
+        assert_eq!(omni_mode("/proj"), OmniMode::FolderSearch);
+        assert_eq!(omni_mode("/"), OmniMode::FolderSearch);
+        assert_eq!(omni_mode("  /docs"), OmniMode::FolderSearch);
         // Plain names (even with dots) stay filters.
         assert_eq!(omni_mode("file.txt"), OmniMode::Filter);
         assert_eq!(omni_mode("v1.2.3"), OmniMode::Filter);
