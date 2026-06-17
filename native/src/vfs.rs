@@ -137,6 +137,20 @@ pub trait Backend: Send + Sync {
         let _ = (root, keep);
         Ok(0)
     }
+
+    /// Is this a local-filesystem backend? Reading a local file to hash it is
+    /// cheap (no network), so sync may hash the local side to compare against a
+    /// remote's free native hash.
+    fn is_local(&self) -> bool {
+        false
+    }
+
+    /// Does the backend expose a free content hash (MD5) in its listings — Google
+    /// Drive `md5Checksum`, Nextcloud/ownCloud `oc:checksums`? When true, sync can
+    /// compare by content WITHOUT downloading this side.
+    fn provides_content_hash(&self) -> bool {
+        false
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -276,6 +290,9 @@ impl Backend for LocalBackend {
     }
     fn rename_overwrites(&self) -> bool {
         true // std::fs::rename atomically replaces an existing destination
+    }
+    fn is_local(&self) -> bool {
+        true // a local disk read to hash a file is cheap (no network)
     }
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         std::fs::remove_file(to_os(path))

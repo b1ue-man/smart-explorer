@@ -380,6 +380,14 @@ impl Backend for WebdavBackend {
     fn parallelism(&self) -> usize {
         2 // HTTP keep-alive; a couple of concurrent requests are fine
     }
+
+    fn provides_content_hash(&self) -> bool {
+        // Nextcloud/ownCloud expose an MD5 via the `oc:checksums` PROPFIND prop
+        // (parsed into `content_md5`) — a free content hash, no download. Servers
+        // that don't send one leave `content_md5` None, so those files simply
+        // fall back to the size+mtime compare (graceful per-file degradation).
+        true
+    }
 }
 
 struct WebdavWriter {

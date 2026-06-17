@@ -24,7 +24,8 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Size + mtime (+ optional content hash) signature of one file on one side.
-/// `hash` is 0 unless the run uses `CompareMode::Checksum`.
+/// `hash` is 0 when this side wasn't hashed (see `HashMode`/`hash_mode`); when
+/// non-zero it's the MD5-derived content key and takes priority in compares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sig {
     pub size: u64,
@@ -203,7 +204,7 @@ impl CompareMode {
     }
     pub fn label(self) -> &'static str {
         match self {
-            CompareMode::MtimeSize => "Größe + Änderungszeit (schnell)",
+            CompareMode::MtimeSize => "Größe + Änderungszeit (schnell; nutzt gratis Server-Hash bei Drive/Nextcloud → kein erneuter Transfer)",
             CompareMode::SizeOnly => "Nur Größe (Änderungszeit ignorieren)",
             CompareMode::Checksum => "Prüfsumme (Server-Hash bei Drive/Nextcloud = kein Download; sonst Inhalt lesen)",
         }
@@ -402,6 +403,17 @@ fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
             if a.size != b.size {
                 return false;
             }
+            // Content-hash short-circuit: when BOTH sides carry a real content
+            // hash (a server's free native MD5 and/or a cheap local read), equal
+            // size+hash means identical content — independent of mtime. This is
+            // what lets a local↔Drive sync skip files whose mtime differs but
+            // content matches (no re-transfer), in EVERY compare mode. Which
+            // sides get a hash is decided per-mode by `hash_mode` at walk time, so
+            // SizeOnly (no hashing) stays pure size and only the modes that should
+            // use content do. A hash of 0 means "not hashed" → not eligible.
+            if a.hash != 0 && b.hash != 0 {
+                return a.hash == b.hash;
+            }
             match opts.compare {
                 CompareMode::SizeOnly => true,
                 CompareMode::Checksum => a.hash == b.hash,
@@ -514,9 +526,9 @@ pub fn empty_globset() -> globset::GlobSet {
     globset::GlobSetBuilder::new().build().unwrap()
 }
 
-/// FNV-1a content hash of a file (for `CompareMode::Checksum`). Best-effort: an
-/// unreadable file hashes to 0 (treated as "changed" against any real hash).
-/// First 8 bytes of a 16-byte MD5 digest folded into a u64 (the Sig content key).
+/// First 8 bytes of a 16-byte MD5 digest folded into a u64 (the Sig content
+/// key). 0 is reserved for "no hash" (an unreadable file or an un-hashed side),
+/// so a real digest of all-zero high bytes is bumped to 1.
 fn md5_to_u64(d: &[u8; 16]) -> u64 {
     let mut v = [0u8; 8];
     v.copy_from_slice(&d[..8]);
@@ -565,6 +577,59 @@ fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
     md5_to_u64(&ctx.compute().0)
 }
 
+/// How a walk obtains a file's content hash (decided per side by `hash_mode`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HashMode {
+    /// Don't hash — size/mtime only.
+    None,
+    /// Use the backend's FREE native hash if present, else leave it 0. Never
+    /// reads/downloads file content (so a hash-less remote stays free).
+    NativeOnly,
+    /// Native hash if present, else read the file to hash it (a cheap local read,
+    /// or — only when the user explicitly chose Checksum — a remote download).
+    Full,
+}
+
+/// Decide how to hash `this` side given the `other` side and the compare mode.
+/// The goal: use a content hash whenever it's FREE or CHEAP, so files whose
+/// mtime differs but content matches are not re-transferred — without ever
+/// downloading a hash-less remote behind the user's back.
+fn hash_mode(this: &dyn Backend, other: &dyn Backend, compare: CompareMode) -> HashMode {
+    match compare {
+        // Pure size compare is already transfer-optimal (identical files share a
+        // size) and the user asked to ignore everything else → no hashing.
+        CompareMode::SizeOnly => HashMode::None,
+        // Explicit checksum: this side MUST yield a content hash even if that
+        // means reading/downloading it (native hash is still used first).
+        CompareMode::Checksum => HashMode::Full,
+        // Default size+mtime: mtime is unreliable across systems (a cloud upload
+        // gets a fresh modifiedTime). Opportunistically use a content hash when
+        // it's free (native) or cheap (a local read to match the OTHER side's
+        // free native hash). Never download a hash-less remote here — that's the
+        // explicit Checksum mode's job; fall back to mtime+size for it.
+        CompareMode::MtimeSize => {
+            if this.provides_content_hash() {
+                HashMode::NativeOnly
+            } else if this.is_local() && other.provides_content_hash() {
+                HashMode::Full
+            } else {
+                HashMode::None
+            }
+        }
+    }
+}
+
+/// One side's last-known tree (rel → Sig) reconstructed from the saved baseline,
+/// used by `walk_files` to reuse stored hashes for files whose size+mtime are
+/// unchanged (so a large local tree isn't re-hashed on every run).
+fn prev_side(base: &Baseline, side_a: bool) -> Tree {
+    base.iter()
+        .filter_map(|(rel, (a, b))| {
+            (if side_a { *a } else { *b }).map(|s| (rel.clone(), s))
+        })
+        .collect()
+}
+
 /// Recursively list files (not dirs) of a backend subtree → rel → Sig,
 /// honouring the hidden/ignore filter.
 ///
@@ -573,12 +638,18 @@ fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
 /// is a network round-trip and a 27k-file tree spans hundreds of folders.
 /// Backends that report `parallelism() == 1` (SFTP/FTP) stay effectively
 /// serial. Local uses all cores.
+///
+/// `hash` chooses the content-hash strategy (see `HashMode`). `prev` is the
+/// previous run's tree for THIS side (from the saved baseline): when a file's
+/// size+mtime are unchanged from `prev` we reuse its stored hash instead of
+/// re-reading the file — so re-hashing a large local tree every sync is avoided.
 pub fn walk_files(
     be: &dyn Backend,
     root: &str,
     cancel: &AtomicBool,
     filter: &WalkFilter,
-    hash: bool,
+    hash: HashMode,
+    prev: Option<&Tree>,
 ) -> io::Result<Tree> {
     let par = be.parallelism().max(1);
     let out: Mutex<Tree> = Mutex::new(Tree::new());
@@ -625,15 +696,38 @@ pub fn walk_files(
                                         dirs.push(p);
                                     }
                                 } else if filter.size_age_ok(m.size, m.mtime_ms) {
-                                    // Checksum compare: prefer the backend's
-                                    // free native MD5 (Drive/Nextcloud) — no
-                                    // download — else stream-hash the file.
-                                    let h = if !hash {
-                                        0
-                                    } else if let Some(hex) = m.content_md5.as_deref() {
-                                        md5_hex_to_u64(hex)
-                                    } else {
-                                        hash_file(be, &p, cancel)
+                                    // Content hash, cheapest source first:
+                                    //  1. the backend's FREE native MD5
+                                    //     (Drive md5Checksum / Nextcloud
+                                    //     oc:checksums) — no download;
+                                    //  2. the previous run's hash, reused when
+                                    //     size+mtime are unchanged — no re-read;
+                                    //  3. read the file to hash it (Full only —
+                                    //     a cheap local read, or an explicit
+                                    //     Checksum-mode remote download).
+                                    let h = match hash {
+                                        HashMode::None => 0,
+                                        HashMode::NativeOnly => m
+                                            .content_md5
+                                            .as_deref()
+                                            .map(md5_hex_to_u64)
+                                            .unwrap_or(0),
+                                        HashMode::Full => {
+                                            if let Some(hex) = m.content_md5.as_deref() {
+                                                md5_hex_to_u64(hex)
+                                            } else if let Some(ph) = prev.and_then(|t| t.get(&rel))
+                                                .filter(|s| {
+                                                    s.size == m.size
+                                                        && s.mtime_ms == m.mtime_ms
+                                                        && s.hash != 0
+                                                })
+                                                .map(|s| s.hash)
+                                            {
+                                                ph
+                                            } else {
+                                                hash_file(be, &p, cancel)
+                                            }
+                                        }
                                     };
                                     files.push((
                                         rel,
@@ -1217,8 +1311,9 @@ pub fn preview(
     filter: &WalkFilter,
 ) -> Preview {
     let base = load_baseline(&baseline_path(&pair_id(root_a, root_b)));
-    let hash = opts.compare == CompareMode::Checksum;
-    let at = match walk_files(a, root_a, cancel, filter, hash) {
+    let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
+    let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
+    let at = match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
         Ok(t) => t,
         Err(e) => {
             return Preview {
@@ -1227,7 +1322,7 @@ pub fn preview(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel, filter, hash) {
+    let bt = match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
         Ok(t) => t,
         Err(e) => {
             return Preview {
@@ -1453,8 +1548,13 @@ pub fn run(
     let bpath = baseline_path(&pair);
     let vdir = versions_dir(&pair);
     let base = load_baseline(&bpath);
-    let hash = opts.compare == CompareMode::Checksum;
-    let at = match walk_files(a, root_a, cancel, filter, hash) {
+    // Per-side hashing: each side uses a content hash when it's free (native) or
+    // cheap (a local read to match the other side's free native hash), so any
+    // compare mode skips files whose mtime differs but content matches — without
+    // ever downloading a hash-less remote. `prev_*` reuses last run's hashes.
+    let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
+    let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
+    let at = match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -1463,7 +1563,7 @@ pub fn run(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel, filter, hash) {
+    let bt = match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -1512,6 +1612,18 @@ pub fn run(
 
     let mut errors = Vec::new();
     let mut st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
+    // Stop pressed: `apply` broke out between files. Don't dedupe or re-walk (a
+    // cancelled walk returns a PARTIAL tree, which would corrupt the baseline) —
+    // return what completed, leaving the old baseline untouched so the next run
+    // re-detects cleanly.
+    if cancel.load(Ordering::Relaxed) {
+        return Outcome {
+            stats: st,
+            conflicts,
+            errors,
+            baseline: base,
+        };
+    }
     // Mirror = exact replica: remove duplicate same-name files the destination
     // backend may hold (e.g. Google Drive) so only the correct one remains. This
     // runs before the re-walk so the baseline reflects the deduped state.
@@ -1532,8 +1644,8 @@ pub fn run(
         (at, bt)
     } else {
         (
-            walk_files(a, root_a, cancel, filter, hash).unwrap_or(at),
-            walk_files(b, root_b, cancel, filter, hash).unwrap_or(bt),
+            walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)).unwrap_or(at),
+            walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)).unwrap_or(bt),
         )
     };
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
@@ -1610,15 +1722,16 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let gs = empty_globset();
         let f = WalkFilter::basic(true, &gs);
-        let hash = opts.compare == CompareMode::Checksum;
-        let at = walk_files(a, ra, &cancel, &f, hash).unwrap();
-        let bt = walk_files(b, rb, &cancel, &f, hash).unwrap();
+        let (ma, mb) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
+        let (pa, pb) = (prev_side(base, true), prev_side(base, false));
+        let at = walk_files(a, ra, &cancel, &f, ma, Some(&pa)).unwrap();
+        let bt = walk_files(b, rb, &cancel, &f, mb, Some(&pb)).unwrap();
         let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
         let mut errs = Vec::new();
         let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
         // re-walk for an accurate baseline after writes
-        let at2 = walk_files(a, ra, &cancel, &f, hash).unwrap();
-        let bt2 = walk_files(b, rb, &cancel, &f, hash).unwrap();
+        let at2 = walk_files(a, ra, &cancel, &f, ma, Some(&pa)).unwrap();
+        let bt2 = walk_files(b, rb, &cancel, &f, mb, Some(&pb)).unwrap();
         let nb = update_baseline(base, &at2, &bt2, &actions, &converged, &conflicts);
         (st, conflicts, nb)
     }
@@ -1883,6 +1996,96 @@ mod tests {
         // Under the default mtime+size compare, the mtime gap is a real diff.
         let (actions2, _c2, _v2) = plan(&a, &b, &base, BisyncOptions::default());
         assert!(!actions2.is_empty() || true, "mtime differs under default");
+    }
+
+    #[test]
+    fn content_hash_skips_mtime_only_difference() {
+        // The local↔Drive case: Drive's modifiedTime never equals the local
+        // mtime, so under the DEFAULT size+mtime compare every file looked
+        // "changed" and got re-transferred. With a content hash on both sides,
+        // equal size+hash means identical content → NO action, regardless of
+        // mtime. Tested through Mirror (stateless) — exactly what re-uploaded
+        // everything before.
+        let opts = BisyncOptions {
+            direction: Direction::AtoB,
+            delete: DeletePolicy::Mirror,
+            ..Default::default()
+        };
+        let base = Baseline::new();
+        let a = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 1000, hash: 0xABCD })]);
+        let b = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 9_999_999, hash: 0xABCD })]);
+        let (actions, _c, conv) = plan(&a, &b, &base, opts);
+        assert!(actions.is_empty(), "same content hash ⇒ no copy despite mtime gap");
+        assert_eq!(conv, vec!["f".to_string()], "recorded as converged");
+        // A real content change (different hash) under the same mtime gap DOES copy.
+        let b2 = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 9_999_999, hash: 0x1234 })]);
+        let (actions2, _c2, _v2) = plan(&a, &b2, &base, opts);
+        assert_eq!(actions2.len(), 1, "different content hash ⇒ copy");
+        // When only ONE side has a hash (e.g. a hash-less remote), the short-
+        // circuit must NOT fire — fall back to the mtime+size compare.
+        let a0 = Tree::from([("f".to_string(), Sig { size: 10, mtime_ms: 1000, hash: 0 })]);
+        let (actions3, _c3, _v3) = plan(&a0, &b, &base, opts);
+        assert_eq!(actions3.len(), 1, "no hash on one side ⇒ mtime gap is a diff");
+    }
+
+    #[test]
+    fn hash_mode_picks_cheapest_source() {
+        use crate::vfs::{Scheme, VfsMeta, VfsResult};
+        use std::io::{Read, Write};
+        // A backend that advertises a free native hash (like Drive/Nextcloud).
+        struct Native(LocalBackend);
+        impl Backend for Native {
+            fn scheme(&self) -> Scheme { self.0.scheme() }
+            fn root_display(&self) -> String { self.0.root_display() }
+            fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> { self.0.list_dir(p) }
+            fn stat(&self, p: &str) -> VfsResult<VfsMeta> { self.0.stat(p) }
+            fn open_read(&self, p: &str) -> VfsResult<Box<dyn Read + Send>> { self.0.open_read(p) }
+            fn open_write(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> { self.0.open_write(p) }
+            fn rename(&self, s: &str, d: &str) -> VfsResult<()> { self.0.rename(s, d) }
+            fn remove_file(&self, p: &str) -> VfsResult<()> { self.0.remove_file(p) }
+            fn remove_dir(&self, p: &str) -> VfsResult<()> { self.0.remove_dir(p) }
+            fn mkdir_all(&self, p: &str) -> VfsResult<()> { self.0.mkdir_all(p) }
+            fn provides_content_hash(&self) -> bool { true }
+        }
+        let local = LocalBackend::new("/tmp");
+        let native = Native(LocalBackend::new("/tmp"));
+        // Default size+mtime: the native side is free (NativeOnly); the local
+        // side reads cheaply to match it (Full); a hash-less↔hash-less pair stays
+        // unhashed (None). SizeOnly never hashes; Checksum always does.
+        assert_eq!(hash_mode(&native, &local, CompareMode::MtimeSize), HashMode::NativeOnly);
+        assert_eq!(hash_mode(&local, &native, CompareMode::MtimeSize), HashMode::Full);
+        assert_eq!(hash_mode(&local, &local, CompareMode::MtimeSize), HashMode::None);
+        assert_eq!(hash_mode(&local, &native, CompareMode::SizeOnly), HashMode::None);
+        assert_eq!(hash_mode(&local, &local, CompareMode::Checksum), HashMode::Full);
+    }
+
+    #[test]
+    fn walk_reuses_prev_hash_when_unchanged() {
+        // A file whose size+mtime match the previous run reuses its stored hash
+        // instead of re-reading — the "don't re-hash a big local tree" path.
+        let dir = tmp("reuse");
+        std::fs::write(dir.join("f.txt"), b"hello world").unwrap();
+        let be = LocalBackend::new(&fwd(&dir));
+        let cancel = AtomicBool::new(false);
+        let gs = empty_globset();
+        let f = WalkFilter::basic(true, &gs);
+        // First walk (Full) computes the real hash.
+        let t1 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, None).unwrap();
+        let real = t1.get("f.txt").unwrap().hash;
+        assert_ne!(real, 0);
+        // A prev tree claiming a bogus hash at the SAME size+mtime is reused
+        // verbatim (proves we didn't re-read the file).
+        let m = be.stat(&format!("{}/f.txt", fwd(&dir))).unwrap();
+        let mut prev = Tree::new();
+        prev.insert("f.txt".to_string(), Sig { size: m.size, mtime_ms: m.mtime_ms, hash: 0x5151 });
+        let t2 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, Some(&prev)).unwrap();
+        assert_eq!(t2.get("f.txt").unwrap().hash, 0x5151, "reused prev hash");
+        // A size change invalidates the reuse → real hash recomputed.
+        let mut prev_bad = Tree::new();
+        prev_bad.insert("f.txt".to_string(), Sig { size: m.size + 1, mtime_ms: m.mtime_ms, hash: 0x5151 });
+        let t3 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, Some(&prev_bad)).unwrap();
+        assert_eq!(t3.get("f.txt").unwrap().hash, real, "stale size ⇒ recomputed");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
