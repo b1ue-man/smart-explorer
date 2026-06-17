@@ -633,12 +633,64 @@ fn download_to(
     Ok(dest.to_string_lossy().to_string())
 }
 
-/// Local temp path a remote file is downloaded to for opening/editing.
+/// Root for all of this app's open/edit temp copies.
+fn temp_root() -> PathBuf {
+    std::env::temp_dir().join("smart_explorer_open")
+}
+
+/// A stable tag unique to THIS process run (`<pid>_<start-nanos>`), so we can
+/// tell our current session's temp dirs from stale ones left by prior runs.
+fn session_tag() -> &'static str {
+    static T: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("s{}_{}", std::process::id(), nanos)
+    })
+}
+
+fn session_temp_dir() -> PathBuf {
+    temp_root().join(session_tag())
+}
+
+/// A **fresh, unique** local path to download a remote file to for opening or
+/// editing. Each call gets its own `<root>/<session>/<n>/<name>` subdir, so:
+/// (1) two files with the same name never collide, and (2) a previous edit's
+/// copy is never reused — every open is a clean download. Cleanup is by session
+/// sweep (`sweep_stale_temp` at startup + `cleanup_session_temp` on exit), NOT
+/// per-save: deleting a temp mid-edit silently loses changes in editors that
+/// don't hold the file open (VS Code, Notepad, …) — see docs/vfs_research.
 fn open_temp_path(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("smart_explorer_open");
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = session_temp_dir().join(n.to_string());
     let _ = std::fs::create_dir_all(&dir);
     let safe = name.replace(['/', '\\', ':'], "_");
     dir.join(if safe.trim().is_empty() { "datei".to_string() } else { safe })
+}
+
+/// Remove leftover temp copies from PREVIOUS sessions (crash-safe net: TempDir-
+/// style Drop cleanup never runs on a crash/kill, so a startup sweep is the
+/// reliable guarantee). Never touches the current session's dir. Best-effort:
+/// a dir whose file is still held open by an editor survives to a later sweep.
+fn sweep_stale_temp() {
+    let cur = session_tag();
+    if let Ok(rd) = std::fs::read_dir(temp_root()) {
+        for e in rd.flatten() {
+            if e.file_name().to_str() != Some(cur) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+}
+
+/// Delete this session's temp copies on a clean exit. Files an editor still
+/// holds open won't delete (Windows) — those are caught by the next startup
+/// sweep. Safe because we only ever delete on exit, never between saves.
+fn cleanup_session_temp() {
+    let _ = std::fs::remove_dir_all(session_temp_dir());
 }
 
 fn file_mtime_ms(p: &std::path::Path) -> i64 {
@@ -783,6 +835,8 @@ pub(crate) fn is_local_style(path: &str) -> bool {
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
+        // Clean up open/edit temp copies left by previous runs (crash-safe net).
+        sweep_stale_temp();
         let home = dirs_home();
         let drives = list_drives();
         let drive_info = drive_info_list(&drives);
@@ -8026,6 +8080,10 @@ impl App {
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Remove this session's open/edit temp copies (the saved-back ones are
+        // already on the remote). Files an editor still holds open survive to
+        // the next startup sweep.
+        cleanup_session_temp();
         if let Some(h) = self.scan_handle.take() {
             h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
