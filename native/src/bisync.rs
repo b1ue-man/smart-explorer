@@ -205,7 +205,7 @@ impl CompareMode {
         match self {
             CompareMode::MtimeSize => "Größe + Änderungszeit (schnell)",
             CompareMode::SizeOnly => "Nur Größe (Änderungszeit ignorieren)",
-            CompareMode::Checksum => "Prüfsumme (Inhalt lesen — sicher, langsam)",
+            CompareMode::Checksum => "Prüfsumme (Server-Hash bei Drive/Nextcloud = kein Download; sonst Inhalt lesen)",
         }
     }
 }
@@ -516,9 +516,37 @@ pub fn empty_globset() -> globset::GlobSet {
 
 /// FNV-1a content hash of a file (for `CompareMode::Checksum`). Best-effort: an
 /// unreadable file hashes to 0 (treated as "changed" against any real hash).
+/// First 8 bytes of a 16-byte MD5 digest folded into a u64 (the Sig content key).
+fn md5_to_u64(d: &[u8; 16]) -> u64 {
+    let mut v = [0u8; 8];
+    v.copy_from_slice(&d[..8]);
+    let h = u64::from_be_bytes(v);
+    if h == 0 {
+        1
+    } else {
+        h
+    } // reserve 0 for "no hash"
+}
+
+/// Parse a hex MD5 string (e.g. Google Drive `md5Checksum`) into the Sig key.
+fn md5_hex_to_u64(hex: &str) -> u64 {
+    let hex = hex.trim();
+    if hex.len() < 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return 0;
+    }
+    let mut d = [0u8; 16];
+    for i in 0..16 {
+        d[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    md5_to_u64(&d)
+}
+
+/// Stream the file through MD5 → Sig key. Used only when the backend does NOT
+/// already provide a content hash (so for a local file this is a cheap local
+/// read; for a remote without native hashes it's a download — the slow path).
 fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
     use std::io::Read;
-    let mut h: u64 = 0xcbf29ce484222325;
+    let mut ctx = md5::Context::new();
     if let Ok(mut r) = be.open_read(path) {
         let mut buf = [0u8; 65536];
         loop {
@@ -527,19 +555,14 @@ fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
             }
             match r.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => {
-                    for &byte in &buf[..n] {
-                        h ^= byte as u64;
-                        h = h.wrapping_mul(0x100000001b3);
-                    }
-                }
+                Ok(n) => ctx.consume(&buf[..n]),
                 Err(_) => return 0,
             }
         }
     } else {
         return 0;
     }
-    h
+    md5_to_u64(&ctx.compute().0)
 }
 
 /// Recursively list files (not dirs) of a backend subtree → rel → Sig,
@@ -602,7 +625,16 @@ pub fn walk_files(
                                         dirs.push(p);
                                     }
                                 } else if filter.size_age_ok(m.size, m.mtime_ms) {
-                                    let h = if hash { hash_file(be, &p, cancel) } else { 0 };
+                                    // Checksum compare: prefer the backend's
+                                    // free native MD5 (Drive/Nextcloud) — no
+                                    // download — else stream-hash the file.
+                                    let h = if !hash {
+                                        0
+                                    } else if let Some(hex) = m.content_md5.as_deref() {
+                                        md5_hex_to_u64(hex)
+                                    } else {
+                                        hash_file(be, &p, cancel)
+                                    };
                                     files.push((
                                         rel,
                                         Sig {
@@ -1868,6 +1900,20 @@ mod tests {
         assert!(!g.size_age_ok(1, 4_000), "too old");
         assert!(g.size_age_ok(1, 7_000), "in window");
         assert!(!g.size_age_ok(1, 12_000), "too new");
+    }
+
+    #[test]
+    fn native_md5_matches_streamed_md5() {
+        // A remote's native MD5 (e.g. Drive md5Checksum hex) must yield the SAME
+        // Sig key as locally streaming the same bytes — so checksum compare works
+        // without downloading the remote. MD5("abc") = 900150983cd24fb0d6963f7d28e17f72.
+        let mut ctx = md5::Context::new();
+        ctx.consume(b"abc");
+        let streamed = md5_to_u64(&ctx.compute().0);
+        let native = md5_hex_to_u64("900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(streamed, native);
+        assert_ne!(streamed, 0);
+        assert_eq!(md5_hex_to_u64("not-hex"), 0);
     }
 
     #[test]

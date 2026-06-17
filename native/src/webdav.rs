@@ -124,6 +124,11 @@ fn parse_multistatus(xml: &str, request_path: &str) -> Vec<VfsMeta> {
             .and_then(|n| n.text())
             .and_then(parse_http_date_ms)
             .unwrap_or(0);
+        // ownCloud/Nextcloud checksums: "<oc:checksums><oc:checksum>SHA1:… MD5:… ADLER32:…</oc:checksum></oc:checksums>".
+        let content_md5 = resp
+            .descendants()
+            .find(|n| n.tag_name().name() == "checksums")
+            .and_then(|cs| cs.descendants().find_map(|d| d.text().and_then(extract_md5)));
         let name = basename(&path);
         if name.is_empty() {
             continue;
@@ -138,9 +143,28 @@ fn parse_multistatus(xml: &str, request_path: &str) -> Vec<VfsMeta> {
             system: false,
             name,
             id: None,
+            content_md5,
         });
     }
     out
+}
+
+/// Extract the MD5 hex from an ownCloud/Nextcloud checksum string like
+/// "SHA1:… MD5:<hex> ADLER32:…".
+fn extract_md5(s: &str) -> Option<String> {
+    s.split_whitespace().find_map(|tok| {
+        let mut it = tok.splitn(2, ':');
+        let k = it.next()?;
+        let v = it.next()?;
+        if k.eq_ignore_ascii_case("MD5")
+            && v.len() == 32
+            && v.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// RFC 1123 date ("Mon, 01 Jan 2024 12:00:00 GMT") → unix ms.
@@ -209,7 +233,10 @@ impl WebdavBackend {
     }
 
     fn propfind(&self, path: &str, depth: &str) -> io::Result<String> {
-        let body = r#"<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><resourcetype/><getcontentlength/><getlastmodified/></prop></propfind>"#;
+        // Also request ownCloud/Nextcloud's checksums (free content hashes) so a
+        // checksum-mode sync can compare without downloading. Plain WebDAV servers
+        // ignore the oc:* prop.
+        let body = r#"<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:" xmlns:oc="http://owncloud.org/ns"><prop><resourcetype/><getcontentlength/><getlastmodified/><oc:checksums/></prop></propfind>"#;
         let req = self
             .agent
             .request("PROPFIND", &self.url_for(path))
@@ -271,6 +298,7 @@ impl Backend for WebdavBackend {
             system: false,
             name,
             id: None,
+            content_md5: None,
         })
     }
 
