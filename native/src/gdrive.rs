@@ -275,7 +275,16 @@ impl GDriveBackend {
                 .unwrap_or(0),
             hidden: false,
             system: false,
+            id: f["id"].as_str().map(|s| s.to_string()),
         }
+    }
+
+    /// MIME type of a file by its id (for export detection when opening by id).
+    fn mime_of_id(&self, id: &str) -> Option<String> {
+        let url = format!("{}/files/{}?fields=mimeType", API, id);
+        self.get_json(&url).ok()?["mimeType"]
+            .as_str()
+            .map(|s| s.to_string())
     }
 
     /// Ensure a folder path exists, returning the deepest folder's id.
@@ -484,6 +493,7 @@ impl Backend for GDriveBackend {
                 btime_ms: 0,
                 hidden: false,
                 system: false,
+                id: None,
             });
         }
         let id = self.resolve(&key)?;
@@ -493,6 +503,25 @@ impl Backend for GDriveBackend {
         );
         let v = self.get_json(&url)?;
         Ok(Self::meta_from_json(&v))
+    }
+
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        // Target a specific file by id (disambiguates duplicate names); fall back
+        // to the path-based open when no id is supplied.
+        let id = match id {
+            Some(i) if !i.is_empty() => i.to_string(),
+            _ => return self.open_read(path),
+        };
+        let auth = self.bearer()?;
+        let mime = self.mime_of_id(&id).unwrap_or_default();
+        let url = if let Some(fmt) = export_format(&mime) {
+            format!("{}/files/{}/export?mimeType={}", API, id, cloud_urlenc(fmt))
+        } else {
+            format!("{}/files/{}?alt=media", API, id)
+        };
+        let bearer = format!("Bearer {}", auth);
+        let resp = open_stream(|| ureq::get(&url).set("Authorization", &bearer).call())?;
+        Ok(Box::new(resp.into_reader()))
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {

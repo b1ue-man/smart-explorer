@@ -15,6 +15,9 @@ pub struct FileEntry {
     pub hidden: bool,
     pub system: bool,
     pub depth: u32,
+    /// Backend-unique id (Google Drive file-id) when the name isn't unique;
+    /// None for local/SFTP/FTP/WebDAV where the path identifies the item.
+    pub id: Option<Arc<str>>,
 }
 
 impl FileEntry {

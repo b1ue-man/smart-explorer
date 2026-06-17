@@ -45,6 +45,10 @@ pub struct VfsMeta {
     pub btime_ms: i64,
     pub hidden: bool,
     pub system: bool,
+    /// Backend-unique id when names alone aren't unique (e.g. Google Drive
+    /// keys by file-id and allows duplicate names in one folder). None = the
+    /// path/name uniquely identifies the item (local, SFTP, FTP, WebDAV).
+    pub id: Option<String>,
 }
 
 pub type VfsResult<T> = io::Result<T>;
@@ -102,6 +106,14 @@ pub trait Backend: Send + Sync {
     fn rename_overwrites(&self) -> bool {
         false
     }
+
+    /// Open a file for reading by its backend-unique `id` when known (so the
+    /// caller can target one specific item among duplicate names). Default
+    /// ignores the id and opens by path; Google Drive overrides this.
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn std::io::Read + Send>> {
+        let _ = id;
+        self.open_read(path)
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -147,6 +159,7 @@ fn meta_to_vfs(name: String, meta: &std::fs::Metadata) -> VfsMeta {
         btime_ms: meta.created().map(ms_since_unix).unwrap_or(0),
         hidden,
         system,
+        id: None,
     }
 }
 

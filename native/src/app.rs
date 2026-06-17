@@ -383,7 +383,10 @@ pub struct App {
     preview_running: bool,
     preview: Option<crate::bisync::Preview>,
     preview_title: String,
+    preview_job_id: Option<String>,
     show_preview: bool,
+    /// Result channel for a single-file "sync this one" from the compare view.
+    apply_one_rx: Option<Receiver<String>>,
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -760,10 +763,21 @@ fn download_to(
     path: &str,
     dest: &std::path::Path,
 ) -> Result<String, String> {
+    download_to_id(be, path, None, dest)
+}
+
+/// Like `download_to`, but targets a specific backend item by `id` when known
+/// (so duplicate-named files open the exact one the user clicked).
+fn download_to_id(
+    be: &dyn crate::vfs::Backend,
+    path: &str,
+    id: Option<&str>,
+    dest: &std::path::Path,
+) -> Result<String, String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let mut r = be.open_read(path).map_err(|e| e.to_string())?;
+    let mut r = be.open_read_id(path, id).map_err(|e| e.to_string())?;
     let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().to_string())
@@ -1166,7 +1180,9 @@ impl App {
             preview_running: false,
             preview: None,
             preview_title: String::new(),
+            preview_job_id: None,
             show_preview: false,
+            apply_one_rx: None,
             sync_cancel: None,
             bisync_cancel: None,
 
@@ -2838,6 +2854,7 @@ impl App {
         }
         let job = job.clone();
         self.preview_title = format!("{}  ⇄  {}", job.source, job.target);
+        self.preview_job_id = Some(job.id.clone());
         let now = now_secs_i64();
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
@@ -2890,9 +2907,62 @@ impl App {
         }
     }
 
+    /// Apply a single planned action (one file) from the compare view, off-thread.
+    fn apply_one_action(&mut self, job_id: String, action: crate::bisync::Action) {
+        let job = match self.sync_jobs.iter().find(|j| j.id == job_id).cloned() {
+            Some(j) => j,
+            None => return,
+        };
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("sync-one".into())
+            .spawn(move || {
+                let msg = (|| -> Result<String, String> {
+                    let (a, ra) =
+                        crate::connect::resolve_endpoint(&job.source).map_err(|e| e.to_string())?;
+                    let (b, rb) =
+                        crate::connect::resolve_endpoint(&job.target).map_err(|e| e.to_string())?;
+                    let vdir = crate::bisync::versions_dir(&crate::bisync::pair_id(&ra, &rb));
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    let mut errs = Vec::new();
+                    let st = crate::bisync::apply(
+                        &[action],
+                        &*a,
+                        &ra,
+                        &*b,
+                        &rb,
+                        job.opts(false),
+                        &vdir,
+                        &mut errs,
+                        &cancel,
+                    );
+                    if let Some((_, e)) = errs.first() {
+                        return Err(e.clone());
+                    }
+                    Ok(format!(
+                        "✓ 1 Datei synchronisiert ({}→ {}← {} gelöscht)",
+                        st.a_to_b, st.b_to_a, st.deleted
+                    ))
+                })()
+                .unwrap_or_else(|e| format!("Fehler: {}", e));
+                let _ = tx.send(msg);
+            })
+            .ok();
+        self.apply_one_rx = Some(rx);
+    }
+
+    fn drain_apply_one(&mut self) {
+        if let Some(msg) = self.apply_one_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.apply_one_rx = None;
+            self.notice = Some((msg, std::time::Instant::now()));
+        }
+    }
+
     /// The compare-result window: per-file differences, grouped by direction.
     fn ui_preview(&mut self, ctx: &egui::Context) {
         let mut open = self.show_preview;
+        // Set when the user clicks a row's "▶" to sync just that one file.
+        let mut sync_one: Option<crate::bisync::Action> = None;
         egui::Window::new("🔍 Vergleich (Vorschau)")
             .open(&mut open)
             .collapsible(false)
@@ -2958,7 +3028,13 @@ impl App {
                     );
                     return;
                 }
+                ui.label(
+                    RichText::new("▶ neben einer Zeile synchronisiert nur diese eine Datei.")
+                        .small()
+                        .color(Color32::from_gray(130)),
+                );
                 ui.separator();
+                let busy = self.apply_one_rx.is_some();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for c in &p.conflicts {
                         ui.colored_label(
@@ -2975,11 +3051,25 @@ impl App {
                             crate::bisync::Action::KeepBothAtoB(r) => ("⇄→", Color32::from_rgb(230, 200, 90), r),
                             crate::bisync::Action::KeepBothBtoA(r) => ("⇄←", Color32::from_rgb(230, 200, 90), r),
                         };
-                        ui.colored_label(color, format!("{}  {}", sym, rel));
+                        ui.horizontal(|ui| {
+                            if !busy && ui.small_button("▶").on_hover_text("Nur diese Datei jetzt synchronisieren").clicked() {
+                                sync_one = Some(act.clone());
+                            }
+                            ui.colored_label(color, format!("{}  {}", sym, rel));
+                        });
                     }
                 });
             });
         self.show_preview = open;
+        if let Some(act) = sync_one {
+            // Optimistically drop it from the list and apply just that one file.
+            if let Some(p) = self.preview.as_mut() {
+                p.actions.retain(|a| a != &act);
+            }
+            if let Some(job_id) = self.preview_job_id.clone() {
+                self.apply_one_action(job_id, act);
+            }
+        }
     }
 
     fn drain_bisync(&mut self) {
@@ -3417,19 +3507,26 @@ impl App {
     }
 
     fn open_selection(&mut self) {
-        let targets: Vec<(String, String, bool)> = self
+        let targets: Vec<(String, String, bool, Option<String>)> = self
             .entries
             .iter()
             .filter(|e| self.selection.contains(&e.path))
-            .map(|e| (e.path.to_string(), e.name.to_string(), e.is_dir))
+            .map(|e| {
+                (
+                    e.path.to_string(),
+                    e.name.to_string(),
+                    e.is_dir,
+                    e.id.as_ref().map(|s| s.to_string()),
+                )
+            })
             .collect();
         if targets.len() == 1 && targets[0].2 {
             let p = PathBuf::from(targets[0].0.replace('/', std::path::MAIN_SEPARATOR_STR));
             self.start_scan(p);
             return;
         }
-        for (p, name, _) in targets.into_iter().filter(|(_, _, d)| !*d).take(10) {
-            self.open_file(p, name);
+        for (p, name, _, id) in targets.into_iter().filter(|(_, _, d, _)| !*d).take(10) {
+            self.open_file(p, name, id);
         }
     }
 
@@ -3445,13 +3542,14 @@ impl App {
             return;
         }
         let (path, name) = (e.path.to_string(), e.name.to_string());
-        self.open_file(path, name);
+        let id = e.id.as_ref().map(|s| s.to_string());
+        self.open_file(path, name, id);
     }
 
     /// Open a file in its associated app. Local files launch directly; a remote
     /// file is downloaded to a temp copy off the UI thread, then launched when
     /// ready (so double-click "just works" on SFTP/FTP/WebDAV/Drive too).
-    fn open_file(&mut self, path: String, name: String) {
+    fn open_file(&mut self, path: String, name: String, id: Option<String>) {
         let rs = match &self.remote {
             Some(rs) => rs,
             None => {
@@ -3490,7 +3588,7 @@ impl App {
             .spawn(move || {
                 // Capture the remote's mtime at download time so save-back can
                 // detect a concurrent remote change before overwriting.
-                let res = download_to(&*backend, &path, &dest_t).map(|p| {
+                let res = download_to_id(&*backend, &path, id.as_deref(), &dest_t).map(|p| {
                     let rm = backend.stat(&path).map(|m| m.mtime_ms).unwrap_or(0);
                     (p, rm)
                 });
@@ -5369,7 +5467,7 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size([720.0, 460.0])
+            .default_size([760.0, 560.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // ── Left: places ──
@@ -5442,7 +5540,8 @@ impl App {
                         }
                         egui::ScrollArea::vertical()
                             .id_salt("picker_list")
-                            .max_height(300.0)
+                            .max_height(460.0)
+                            .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 for name in &entries {
                                     if ui
@@ -6950,8 +7049,9 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size([560.0, 0.0])
+            .default_size([600.0, 650.0])
             .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
                 egui::Grid::new("job_editor_grid")
                     .num_columns(2)
                     .spacing([10.0, 8.0])
@@ -7232,6 +7332,7 @@ impl App {
                         ui.checkbox(&mut ed.enabled, "Zeitplan aktiv");
                         ui.end_row();
                     });
+                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("✔ Speichern").clicked() {
@@ -8857,6 +8958,7 @@ impl eframe::App for App {
         self.drain_sync();
         self.drain_bisync();
         self.drain_preview();
+        self.drain_apply_one();
         self.drain_job_connect();
         self.drain_picker_connect();
         self.drain_cloud_auth();

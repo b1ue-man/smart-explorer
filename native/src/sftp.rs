@@ -301,6 +301,7 @@ fn to_vfs(name: String, meta: &russh_sftp::protocol::FileAttributes) -> VfsMeta 
         hidden: name.starts_with('.'),
         system: false,
         name,
+        id: None,
     }
 }
 

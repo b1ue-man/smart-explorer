@@ -137,6 +137,7 @@ fn parse_multistatus(xml: &str, request_path: &str) -> Vec<VfsMeta> {
             hidden: name.starts_with('.'),
             system: false,
             name,
+            id: None,
         });
     }
     out
@@ -269,6 +270,7 @@ impl Backend for WebdavBackend {
             hidden: name.starts_with('.'),
             system: false,
             name,
+            id: None,
         })
     }
 

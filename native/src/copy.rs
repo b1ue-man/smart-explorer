@@ -166,6 +166,7 @@ pub fn start_copy_from_paths(
                     hidden: false,
                     system: false,
                     depth: 0,
+                    id: None,
                 };
                 if is_dir {
                     let sub = crate::scanner::collect_recursive(&pb, false, 1);

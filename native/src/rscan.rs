@@ -97,6 +97,7 @@ fn run(
                 hidden: m.hidden,
                 system: m.system,
                 depth: 0,
+                id: None,
             };
             let _ = tx.send(ScanMessage::Entries(vec![entry]));
         }
@@ -156,6 +157,7 @@ fn run(
                 hidden: m.hidden,
                 system: m.system,
                 depth,
+                id: m.id.as_deref().map(Arc::from),
             };
             scanned += 1;
             if !m.is_dir {
