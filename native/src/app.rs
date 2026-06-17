@@ -391,6 +391,7 @@ pub struct App {
     preview: Option<crate::bisync::Preview>,
     preview_title: String,
     preview_job_id: Option<String>,
+    preview_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     show_preview: bool,
     /// Result channel for a single-file "sync this one" from the compare view.
     apply_one_rx: Option<Receiver<String>>,
@@ -800,12 +801,30 @@ fn ep_join(root: &str, rel: &str) -> String {
     format!("{}/{}", root.trim_end_matches('/'), rel)
 }
 
+/// Insert " (Konflikt <timestamp>)" before the extension of a relative path.
+fn conflict_rel_name(rel: &str) -> String {
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let seg_start = rel.rfind('/').map(|i| i + 1).unwrap_or(0);
+    match rel[seg_start..].rfind('.') {
+        Some(d) => {
+            let dot = seg_start + d;
+            format!("{} (Konflikt {}){}", &rel[..dot], ts, &rel[dot..])
+        }
+        None => format!("{} (Konflikt {})", rel, ts),
+    }
+}
+
 /// Read a remote file as UTF-8 text (errors on binary), for the line-merge view.
 fn read_text(be: &dyn crate::vfs::Backend, path: &str) -> Result<String, String> {
     use std::io::Read;
     let mut r = be.open_read(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     r.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    // No line-diffing binary: reject invalid UTF-8 OR any NUL byte (a strong
+    // binary signal even when the bytes happen to be valid UTF-8).
+    if buf.contains(&0) {
+        return Err("Keine Textdatei (binär) — bitte „A/B behalten“ nutzen.".to_string());
+    }
     String::from_utf8(buf).map_err(|_| "Keine Textdatei (binär) — bitte „A/B behalten“ nutzen.".to_string())
 }
 
@@ -1231,6 +1250,7 @@ impl App {
             preview: None,
             preview_title: String::new(),
             preview_job_id: None,
+            preview_cancel: None,
             show_preview: false,
             apply_one_rx: None,
             sync_cancel: None,
@@ -2926,11 +2946,12 @@ impl App {
         self.preview_title = format!("{}  ⇄  {}", job.source, job.target);
         self.preview_job_id = Some(job.id.clone());
         let now = now_secs_i64();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.preview_cancel = Some(cancel.clone());
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
             .name("preview".into())
             .spawn(move || {
-                let cancel = std::sync::atomic::AtomicBool::new(false);
                 let result = (|| -> Result<crate::bisync::Preview, String> {
                     let (a, ra) =
                         crate::connect::resolve_endpoint(&job.source).map_err(|e| e.to_string())?;
@@ -2974,6 +2995,7 @@ impl App {
             self.preview = Some(p);
             self.preview_running = false;
             self.preview_rx = None;
+            self.preview_cancel = None;
         }
     }
 
@@ -3049,6 +3071,11 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Vergleiche beide Seiten…");
+                        if ui.button("⏹ Stop").clicked() {
+                            if let Some(c) = &self.preview_cancel {
+                                c.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
                     });
                     return;
                 }
@@ -3392,6 +3419,35 @@ impl App {
         self.merge_apply_rx = Some(rx);
     }
 
+    /// Resolve a conflict by keeping BOTH versions as separate files: A keeps the
+    /// original name on both sides; B is written as a "(Konflikt …)" sibling on
+    /// both sides. No line concatenation. Reuses the merge-apply result channel.
+    fn start_merge_keep_both(&mut self, rel: String, a_full: String, b_full: String) {
+        let ctx = match &self.bisync_ctx {
+            Some(c) => c,
+            None => return,
+        };
+        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("merge-keepboth".into())
+            .spawn(move || {
+                let res = (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
+                    let crel = conflict_rel_name(&rel);
+                    let pa = ep_join(&ra, &rel);
+                    let pb = ep_join(&rb, &rel);
+                    write_bytes(&*a, &pa, a_full.as_bytes())?;
+                    write_bytes(&*b, &pb, a_full.as_bytes())?;
+                    write_bytes(&*a, &ep_join(&ra, &crel), b_full.as_bytes())?;
+                    write_bytes(&*b, &ep_join(&rb, &crel), b_full.as_bytes())?;
+                    Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
+                })();
+                let _ = tx.send(res);
+            })
+            .ok();
+        self.merge_apply_rx = Some(rx);
+    }
+
     /// The line-merge window: a synced, side-by-side (git-diff-like) view of both
     /// versions; tick the line(s) from each side to keep in the merged result.
     fn ui_merge(&mut self, ctx: &egui::Context) {
@@ -3402,6 +3458,7 @@ impl App {
         let loading = self.merge_load_rx.is_some();
         let mut open = true;
         let mut save = false;
+        let mut keep_both_files = false;
         egui::Window::new(format!("⇄ Zeilenvergleich: {}", m.rel))
             .open(&mut open)
             .collapsible(false)
@@ -3415,22 +3472,17 @@ impl App {
                     });
                     return;
                 }
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Häkchen = diese Zeile ins Ergebnis übernehmen. A = Quelle (links), B = Ziel (rechts).")
-                            .small()
-                            .color(Color32::from_gray(150)),
-                    );
-                });
+                ui.label(
+                    RichText::new("A = Quelle (links), B = Ziel (rechts). Gleiche Zeile auf beiden Seiten = Konflikt → genau EINE Seite wählen (Zeilen werden nicht zusammengefügt). Nur-eine-Seite-Zeilen kannst du einzeln übernehmen/weglassen.")
+                        .small()
+                        .color(Color32::from_gray(150)),
+                );
                 ui.horizontal(|ui| {
                     if ui.small_button("Alle A").clicked() {
                         for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_left = r.left.is_some(); r.take_right = false; }
                     }
                     if ui.small_button("Alle B").clicked() {
                         for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_right = r.right.is_some(); r.take_left = false; }
-                    }
-                    if ui.small_button("Alle beide").clicked() {
-                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_left = r.left.is_some(); r.take_right = r.right.is_some(); }
                     }
                 });
                 ui.separator();
@@ -3441,13 +3493,23 @@ impl App {
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("merge_grid").num_columns(2).striped(true).min_col_width(colw).show(ui, |ui| {
                         for r in m.rows.iter_mut() {
+                            // Same line changed on BOTH sides = a real conflict:
+                            // exactly one side may be taken (never concatenated).
+                            let conflict = !r.equal && r.left.is_some() && r.right.is_some();
                             // Left (A) cell.
                             ui.horizontal(|ui| {
                                 if r.equal {
                                     ui.add_space(20.0);
                                     ui.label(RichText::new(r.left.clone().unwrap_or_default()).monospace().color(gray));
                                 } else if let Some(l) = r.left.clone() {
-                                    ui.checkbox(&mut r.take_left, "");
+                                    if conflict {
+                                        if ui.selectable_label(r.take_left, "A").on_hover_text("Diese Seite übernehmen").clicked() {
+                                            r.take_left = true;
+                                            r.take_right = false;
+                                        }
+                                    } else {
+                                        ui.checkbox(&mut r.take_left, "");
+                                    }
                                     ui.label(RichText::new(l).monospace().color(green));
                                 } else {
                                     ui.add_space(20.0);
@@ -3460,7 +3522,14 @@ impl App {
                                     ui.add_space(20.0);
                                     ui.label(RichText::new(r.right.clone().unwrap_or_default()).monospace().color(gray));
                                 } else if let Some(l) = r.right.clone() {
-                                    ui.checkbox(&mut r.take_right, "");
+                                    if conflict {
+                                        if ui.selectable_label(r.take_right, "B").on_hover_text("Diese Seite übernehmen").clicked() {
+                                            r.take_right = true;
+                                            r.take_left = false;
+                                        }
+                                    } else {
+                                        ui.checkbox(&mut r.take_right, "");
+                                    }
                                     ui.label(RichText::new(l).monospace().color(blue));
                                 } else {
                                     ui.add_space(20.0);
@@ -3472,14 +3541,28 @@ impl App {
                     });
                 });
                 ui.separator();
-                if ui.button("✔ Zusammenführen & speichern").clicked() {
-                    save = true;
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("✔ Zusammenführen & speichern").clicked() {
+                        save = true;
+                    }
+                    if ui
+                        .button("Beide als getrennte Dateien")
+                        .on_hover_text("Kein Zusammenführen: A behält den Namen, B wird als „(Konflikt …)“-Kopie auf beiden Seiten gespeichert")
+                        .clicked()
+                    {
+                        keep_both_files = true;
+                    }
+                });
             });
         if save {
             let merged = crate::linemerge::assemble_rows(&m.rows);
             self.start_merge_apply(m.rel.clone(), merged);
             self.merge = None; // close; result lands via drain
+        } else if keep_both_files {
+            let a_full = crate::linemerge::side_a(&m.rows);
+            let b_full = crate::linemerge::side_b(&m.rows);
+            self.start_merge_keep_both(m.rel.clone(), a_full, b_full);
+            self.merge = None;
         } else if open {
             self.merge = Some(m);
         }

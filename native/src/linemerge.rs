@@ -150,6 +150,16 @@ pub fn rows(a: &str, b: &str) -> Vec<Row> {
     rows
 }
 
+/// The full A (left/source) version reconstructed from the aligned rows.
+pub fn side_a(rows: &[Row]) -> String {
+    rows.iter().filter_map(|r| r.left.clone()).collect::<Vec<_>>().join("\n")
+}
+
+/// The full B (right/target) version reconstructed from the aligned rows.
+pub fn side_b(rows: &[Row]) -> String {
+    rows.iter().filter_map(|r| r.right.clone()).collect::<Vec<_>>().join("\n")
+}
+
 /// Rebuild the merged text from per-row choices (equal rows always contribute).
 pub fn assemble_rows(rows: &[Row]) -> String {
     let mut out: Vec<String> = Vec::new();
