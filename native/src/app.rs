@@ -386,6 +386,8 @@ pub struct App {
     /// Loaded once at start, kept in sync with sync/jobs.tsv after edits/runs.
     sync_jobs: Vec<crate::syncjobs::SyncJob>,
     show_sync_jobs: bool,
+    /// Background-daemon log viewer open?
+    show_daemon_log: bool,
     /// Open add/edit dialog (None = closed).
     job_editor: Option<JobEditor>,
     /// Id of the job whose run is currently in flight (so its `last_run`
@@ -965,6 +967,20 @@ impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
         // Clean up open/edit temp copies left by previous runs (crash-safe net).
         sweep_stale_temp();
+        // Keep the background sync service alive across startup and self-update:
+        // if it's registered to autostart but isn't beating, (re)spawn it. After a
+        // self-update, also cycle a stale daemon so it picks up the new exe.
+        if crate::autostart::is_enabled() {
+            if just_updated {
+                // Hand off to a fresh daemon running the new exe: ask the old one
+                // to stop and spawn a new one (which waits for the old to exit).
+                crate::daemon::request_stop();
+                crate::autostart::spawn_daemon_now();
+            } else if !crate::daemon::is_running() {
+                crate::daemon::clear_stop();
+                crate::autostart::spawn_daemon_now();
+            }
+        }
         let home = dirs_home();
         let drives = list_drives();
         let drive_info = drive_info_list(&drives);
@@ -1145,6 +1161,7 @@ impl App {
 
             sync_jobs: crate::syncjobs::load(),
             show_sync_jobs: false,
+            show_daemon_log: false,
             job_editor: None,
             running_job: None,
 
@@ -2813,6 +2830,27 @@ impl App {
         // "last run" reflect reality, then refresh the cached list.
         if let Some(id) = self.running_job.take() {
             crate::syncjobs::mark_run(&id);
+            let note = if out.errors.iter().any(|(k, _)| k == "abgebrochen") {
+                "abgebrochen"
+            } else if !out.errors.is_empty() {
+                "Fehler"
+            } else if !out.conflicts.is_empty() {
+                "Konflikte"
+            } else {
+                "ok"
+            };
+            crate::syncjobs::record_result(
+                &id,
+                &crate::syncjobs::JobResult {
+                    when: now_secs_i64(),
+                    a_to_b: out.stats.a_to_b,
+                    b_to_a: out.stats.b_to_a,
+                    deleted: out.stats.deleted,
+                    conflicts: out.conflicts.len() as u64,
+                    errors: out.errors.len() as u64,
+                    note: note.into(),
+                },
+            );
             self.sync_jobs = crate::syncjobs::load();
         }
         if let Some(ctx) = self.bisync_ctx.as_mut() {
@@ -6431,6 +6469,11 @@ impl App {
                 ));
             }
         }
+        ui.horizontal(|ui| {
+            if ui.small_button("📜 Protokoll").on_hover_text("Protokoll der Hintergrund-Sync-Läufe anzeigen").clicked() {
+                self.show_daemon_log = true;
+            }
+        });
         if crate::daemon::is_running() {
             let age = crate::daemon::last_heartbeat_age().unwrap_or(0);
             ui.colored_label(
@@ -6519,6 +6562,39 @@ impl App {
     /// Saved-setups manager: list jobs with run / edit / delete / enable, plus
     /// "new". This is the rich overview the user asked for (source → target,
     /// method, schedule). Persists to sync/jobs.tsv on every change.
+    /// Read-only viewer for the background daemon's run log (Group J).
+    fn ui_daemon_log(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_daemon_log;
+        egui::Window::new("📜 Sync-Protokoll")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([640.0, 380.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Letzte Hintergrund-Sync-Läufe (neueste unten).")
+                            .small()
+                            .color(Color32::from_gray(140)),
+                    );
+                });
+                ui.separator();
+                let log = crate::daemon::read_log_tail(300);
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut log.as_str())
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(18),
+                        );
+                    });
+            });
+        self.show_daemon_log = open;
+    }
+
     fn ui_sync_jobs(&mut self, ctx: &egui::Context) {
         let mut open = self.show_sync_jobs;
         let mut run_id: Option<String> = None;
@@ -6527,6 +6603,7 @@ impl App {
         let mut toggle_id: Option<String> = None;
         let mut new_blank = false;
         let jobs = self.sync_jobs.clone();
+        let results = crate::syncjobs::load_results();
         egui::Window::new("⚙ Sync-Setups")
             .open(&mut open)
             .collapsible(false)
@@ -6623,16 +6700,31 @@ impl App {
                             };
                             ui.label(
                                 RichText::new(format!(
-                                    "{} · {} · {} Tage Verlauf · {} · zuletzt: {}",
+                                    "{} · {} · {} · zuletzt: {}",
                                     j.direction.label(),
                                     j.conflict.label(),
-                                    j.retain_days,
                                     sched,
                                     last
                                 ))
                                 .small()
                                 .color(Color32::from_gray(140)),
                             );
+                            // Live status from the last recorded run.
+                            if let Some(r) = results.get(&j.id) {
+                                let color = match r.note.as_str() {
+                                    "ok" => Color32::from_rgb(120, 200, 120),
+                                    "Konflikte" => Color32::from_rgb(230, 200, 90),
+                                    _ => Color32::from_rgb(230, 120, 120),
+                                };
+                                ui.label(
+                                    RichText::new(format!(
+                                        "● {} — {}→ {}← {}gelöscht · {}Konflikte · {}Fehler",
+                                        r.note, r.a_to_b, r.b_to_a, r.deleted, r.conflicts, r.errors
+                                    ))
+                                    .small()
+                                    .color(color),
+                                );
+                            }
                         });
                     }
                 });
@@ -9006,6 +9098,9 @@ impl eframe::App for App {
         self.ui_bisync_conflicts(ctx);
         if self.show_sync_jobs {
             self.ui_sync_jobs(ctx);
+        }
+        if self.show_daemon_log {
+            self.ui_daemon_log(ctx);
         }
         if self.job_editor.is_some() {
             self.ui_job_editor(ctx);
