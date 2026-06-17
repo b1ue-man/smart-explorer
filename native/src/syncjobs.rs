@@ -10,7 +10,7 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction};
+use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
 use std::path::PathBuf;
 
 /// What makes a job run. Timer-based kinds (`Interval`, `Calendar`) are evaluated
@@ -112,6 +112,17 @@ pub struct SyncJob {
     pub compare: CompareMode,
     /// mtime tolerance in seconds for MtimeSize compare (FAT/DST: 1–2).
     pub modify_window_sec: u64,
+
+    // ── Group F: versioning & deletion safety ────────────────────────────────
+    pub versioning_scheme: VersioningScheme,
+    /// Keep-last-N versions (used by Count scheme).
+    pub retain_count: u64,
+    /// Send deletes to the OS Recycle Bin (local paths) instead of removing.
+    pub use_recycle_bin: bool,
+    /// Abort if a run would delete more than this many files (0 = no limit).
+    pub max_delete: u64,
+    /// …or more than this percent of a side's files (0 = no limit).
+    pub max_delete_pct: u8,
 }
 
 fn now_secs() -> i64 {
@@ -181,6 +192,11 @@ impl SyncJob {
             move_files: false,
             compare: CompareMode::MtimeSize,
             modify_window_sec: 0,
+            versioning_scheme: VersioningScheme::Days,
+            retain_count: 0,
+            use_recycle_bin: false,
+            max_delete: 0,
+            max_delete_pct: 0,
         }
     }
 
@@ -280,6 +296,14 @@ impl SyncJob {
             move_files: self.move_files,
             compare: self.compare,
             modify_window_ms: self.modify_window_sec as i64 * 1000,
+            versioning: crate::bisync::Versioning {
+                scheme: self.versioning_scheme,
+                days: self.retain_days,
+                count: self.retain_count,
+            },
+            use_recycle: self.use_recycle_bin,
+            max_delete: self.max_delete,
+            max_delete_pct: self.max_delete_pct,
         }
     }
 }
@@ -362,6 +386,12 @@ fn serialize_kv(j: &SyncJob) -> String {
     s.push_str(&format!("move_files={}\n", if j.move_files { 1 } else { 0 }));
     s.push_str(&format!("compare={}\n", j.compare.as_str()));
     s.push_str(&format!("modify_window_sec={}\n", j.modify_window_sec));
+    // Group F — versioning & deletion safety
+    s.push_str(&format!("versioning_scheme={}\n", j.versioning_scheme.as_str()));
+    s.push_str(&format!("retain_count={}\n", j.retain_count));
+    s.push_str(&format!("use_recycle_bin={}\n", if j.use_recycle_bin { 1 } else { 0 }));
+    s.push_str(&format!("max_delete={}\n", j.max_delete));
+    s.push_str(&format!("max_delete_pct={}\n", j.max_delete_pct));
     s
 }
 
@@ -418,6 +448,13 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
             "move_files" => j.move_files = v != "0",
             "compare" => j.compare = CompareMode::parse(v).unwrap_or(CompareMode::MtimeSize),
             "modify_window_sec" => j.modify_window_sec = v.parse().unwrap_or(0),
+            "versioning_scheme" => {
+                j.versioning_scheme = VersioningScheme::parse(v).unwrap_or(VersioningScheme::Days)
+            }
+            "retain_count" => j.retain_count = v.parse().unwrap_or(0),
+            "use_recycle_bin" => j.use_recycle_bin = v != "0",
+            "max_delete" => j.max_delete = v.parse().unwrap_or(0),
+            "max_delete_pct" => j.max_delete_pct = v.parse().unwrap_or(0),
             _ => {} // unknown / future key — ignored
         }
     }

@@ -485,6 +485,12 @@ struct JobEditor {
     move_files: bool,
     compare: crate::bisync::CompareMode,
     modify_window: String, // seconds
+    // ── Group F: versioning & deletion safety ────────────────────────────────
+    versioning_scheme: crate::bisync::VersioningScheme,
+    retain_count: String,
+    use_recycle_bin: bool,
+    max_delete: String,
+    max_delete_pct: String,
 }
 
 /// Minutes-after-midnight → "HH:MM".
@@ -540,6 +546,11 @@ impl JobEditor {
             move_files: false,
             compare: crate::bisync::CompareMode::MtimeSize,
             modify_window: "0".into(),
+            versioning_scheme: crate::bisync::VersioningScheme::Days,
+            retain_count: "0".into(),
+            use_recycle_bin: false,
+            max_delete: "0".into(),
+            max_delete_pct: "0".into(),
         }
     }
 
@@ -569,6 +580,11 @@ impl JobEditor {
             move_files: j.move_files,
             compare: j.compare,
             modify_window: j.modify_window_sec.to_string(),
+            versioning_scheme: j.versioning_scheme,
+            retain_count: j.retain_count.to_string(),
+            use_recycle_bin: j.use_recycle_bin,
+            max_delete: j.max_delete.to_string(),
+            max_delete_pct: j.max_delete_pct.to_string(),
         }
     }
 }
@@ -2432,7 +2448,6 @@ impl App {
             b,
             dest_local,
             crate::bisync::BisyncOptions::default(),
-            30,
             true,
             Vec::new(),
             None,
@@ -2451,7 +2466,6 @@ impl App {
         b: crate::vfs::BackendHandle,
         root_b: String,
         opts: crate::bisync::BisyncOptions,
-        retain_days: u64,
         include_hidden: bool,
         ignore: Vec<String>,
         job_id: Option<String>,
@@ -2494,7 +2508,7 @@ impl App {
                     ignore: &gs,
                 };
                 let _ = tx.send(crate::bisync::run(
-                    &*a, &root_a, &*b, &root_b, opts, retain_days, &cancel_t, &f,
+                    &*a, &root_a, &*b, &root_b, opts, &cancel_t, &f,
                 ));
             })
             .ok();
@@ -2538,7 +2552,6 @@ impl App {
                 b,
                 job.target.clone(),
                 opts,
-                job.retain_days,
                 job.include_hidden,
                 job.ignore.clone(),
                 Some(job.id.clone()),
@@ -2587,7 +2600,6 @@ impl App {
                     b,
                     root_b,
                     opts,
-                    job.retain_days,
                     job.include_hidden,
                     job.ignore.clone(),
                     Some(job.id.clone()),
@@ -2729,7 +2741,6 @@ impl App {
             b,
             root_b,
             crate::bisync::BisyncOptions::default(),
-            30,
             true,
             Vec::new(),
             None,
@@ -6718,8 +6729,41 @@ impl App {
                             ui.end_row();
                         }
 
-                        ui.label("Verlauf (Tage)").on_hover_text("Wie lange reversible Sicherungen überschriebener Dateien aufbewahrt werden");
-                        ui.add(egui::TextEdit::singleline(&mut ed.retain_days).desired_width(80.0));
+                        ui.label("Versionen").on_hover_text("Wie lange/viele reversible Sicherungen überschriebener & gelöschter Dateien aufbewahrt werden");
+                        egui::ComboBox::from_id_salt("job_ver")
+                            .selected_text(ed.versioning_scheme.label())
+                            .show_ui(ui, |ui| {
+                                for v in crate::bisync::VersioningScheme::ALL {
+                                    ui.selectable_value(&mut ed.versioning_scheme, v, v.label());
+                                }
+                            });
+                        ui.end_row();
+
+                        match ed.versioning_scheme {
+                            crate::bisync::VersioningScheme::Days => {
+                                ui.label("Aufbewahrung (Tage)").on_hover_text("0 = für immer behalten");
+                                ui.add(egui::TextEdit::singleline(&mut ed.retain_days).desired_width(80.0));
+                                ui.end_row();
+                            }
+                            crate::bisync::VersioningScheme::Count => {
+                                ui.label("Versionen behalten").on_hover_text("Anzahl der neuesten Versions-Schnappschüsse (0 = alle)");
+                                ui.add(egui::TextEdit::singleline(&mut ed.retain_count).desired_width(80.0));
+                                ui.end_row();
+                            }
+                            _ => {}
+                        }
+
+                        ui.label("Papierkorb").on_hover_text("Gelöschte Dateien in den Windows-Papierkorb verschieben statt entfernen (nur lokale Pfade)");
+                        ui.checkbox(&mut ed.use_recycle_bin, "Löschungen in den Papierkorb");
+                        ui.end_row();
+
+                        ui.label("Lösch-Schutz").on_hover_text("Abbrechen, wenn ein Lauf mehr als so viele Dateien löschen würde (0 = aus). Schützt vor versehentlichem Massenlöschen, z. B. wenn ein Laufwerk nicht verbunden ist.");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.max_delete).desired_width(70.0));
+                            ui.label("Dateien /");
+                            ui.add(egui::TextEdit::singleline(&mut ed.max_delete_pct).desired_width(50.0));
+                            ui.label("%");
+                        });
                         ui.end_row();
 
                         ui.label("Auslöser").on_hover_text("Wann dieser Sync automatisch läuft");
@@ -6872,6 +6916,11 @@ impl App {
             job.move_files = ed.move_files && ed.direction != crate::bisync::Direction::Both;
             job.compare = ed.compare;
             job.modify_window_sec = ed.modify_window.trim().parse().unwrap_or(0);
+            job.versioning_scheme = ed.versioning_scheme;
+            job.retain_count = ed.retain_count.trim().parse().unwrap_or(0);
+            job.use_recycle_bin = ed.use_recycle_bin;
+            job.max_delete = ed.max_delete.trim().parse().unwrap_or(0);
+            job.max_delete_pct = ed.max_delete_pct.trim().parse().unwrap_or(0);
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();
