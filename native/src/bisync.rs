@@ -297,6 +297,18 @@ pub struct BisyncOptions {
     pub max_delete: u64,
     /// …or more than this percent of the side's files (0 = no limit).
     pub max_delete_pct: u8,
+    // ── Groups H/I: bandwidth & reliability ──────────────────────────────────
+    /// Transfer rate cap in bytes/sec across all workers (0 = unlimited).
+    pub bwlimit_bps: u64,
+    /// Max concurrent transfers (0 = backend default).
+    pub max_transfers: usize,
+    /// Write to a temp file then rename into place (safe copies).
+    pub atomic: bool,
+    /// After copying, re-stat the destination and check its size matches.
+    pub verify: bool,
+    /// Retry a failed file operation this many times (with `retry_delay_secs`).
+    pub retries: u32,
+    pub retry_delay_secs: u64,
 }
 
 impl Default for BisyncOptions {
@@ -316,7 +328,50 @@ impl Default for BisyncOptions {
             use_recycle: false,
             max_delete: 0,
             max_delete_pct: 0,
+            bwlimit_bps: 0,
+            max_transfers: 0,
+            atomic: true,
+            verify: false,
+            retries: 0,
+            retry_delay_secs: 2,
         }
+    }
+}
+
+/// A shared, thread-safe transfer rate limiter (token-bucket over 1-second
+/// windows). `consume` blocks callers once the per-second budget is spent.
+pub struct Throttle {
+    limit_bps: u64,
+    state: Mutex<(std::time::Instant, u64)>,
+}
+
+impl Throttle {
+    pub fn new(limit_bps: u64) -> Self {
+        Throttle {
+            limit_bps,
+            state: Mutex::new((std::time::Instant::now(), 0)),
+        }
+    }
+    fn consume(&self, n: u64) {
+        if self.limit_bps == 0 {
+            return;
+        }
+        let mut g = self.state.lock().unwrap();
+        let (mut start, mut used) = *g;
+        if start.elapsed() >= std::time::Duration::from_secs(1) {
+            start = std::time::Instant::now();
+            used = 0;
+        }
+        used += n;
+        if used > self.limit_bps {
+            let rem = std::time::Duration::from_secs(1).saturating_sub(start.elapsed());
+            if !rem.is_zero() {
+                std::thread::sleep(rem);
+            }
+            start = std::time::Instant::now();
+            used = 0;
+        }
+        *g = (start, used);
     }
 }
 
@@ -752,20 +807,60 @@ fn delete_file(be: &dyn Backend, path: &str, use_recycle: bool) -> io::Result<()
 }
 
 /// Stream-copy one file between backends, creating the destination parent.
+/// When `atomic`, writes to a temp sibling then renames into place (safe copies);
+/// `throttle` rate-limits the transfer across all workers.
 fn copy_between(
     src: &dyn Backend,
     sp: &str,
     dst: &dyn Backend,
     dp: &str,
+    atomic: bool,
+    throttle: &Throttle,
 ) -> io::Result<u64> {
+    use std::io::{Read, Write};
     if let Some(parent) = parent_of(dp) {
         let _ = dst.mkdir_all(&parent);
     }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let write_path = if atomic {
+        format!("{}.se-tmp-{:x}", dp, nanos)
+    } else {
+        dp.to_string()
+    };
     let mut r = src.open_read(sp)?;
-    let mut w = dst.open_write(dp)?;
-    let n = io::copy(&mut r, &mut w)?;
+    let mut w = dst.open_write(&write_path)?;
+    let mut buf = vec![0u8; 1 << 18];
+    let mut total = 0u64;
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                if atomic {
+                    let _ = dst.remove_file(&write_path);
+                }
+                return Err(e);
+            }
+        };
+        if let Err(e) = w.write_all(&buf[..n]) {
+            if atomic {
+                let _ = dst.remove_file(&write_path);
+            }
+            return Err(e);
+        }
+        total += n as u64;
+        throttle.consume(n as u64);
+    }
     w.flush()?;
-    Ok(n)
+    drop(w);
+    if atomic {
+        dst.rename(&write_path, dp)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    }
+    Ok(total)
 }
 
 /// Reversible backup: copy `path` (on `be`) into the local versions store before
@@ -789,6 +884,18 @@ fn back_up(be: &dyn Backend, path: &str, rel: &str, versions_dir: &PathBuf) -> i
 /// Execute one planned action (copy with reversible backup, or delete),
 /// returning its contribution to the run stats. Network-bound and side-effect
 /// free w.r.t. shared state, so many run concurrently in `apply`.
+/// Re-stat the destination and confirm its size matches the bytes written.
+fn verify_copy(dst: &dyn Backend, dp: &str, expected: u64) -> io::Result<()> {
+    let got = dst.stat(dp).map(|m| m.size).unwrap_or(u64::MAX);
+    if got != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Überprüfung fehlgeschlagen: {} ≠ {} Bytes", got, expected),
+        ));
+    }
+    Ok(())
+}
+
 fn run_one(
     act: &Action,
     a: &dyn Backend,
@@ -797,6 +904,7 @@ fn run_one(
     root_b: &str,
     opts: BisyncOptions,
     versions_dir: &PathBuf,
+    throttle: &Throttle,
 ) -> io::Result<BisyncStats> {
     let mut st = BisyncStats::default();
     match act {
@@ -805,7 +913,11 @@ fn run_one(
             if opts.reversible && b.exists(&dp) {
                 let _ = back_up(b, &dp, rel, versions_dir);
             }
-            st.bytes += copy_between(a, &join(root_a, rel), b, &dp)?;
+            let n = copy_between(a, &join(root_a, rel), b, &dp, opts.atomic, throttle)?;
+            if opts.verify {
+                verify_copy(b, &dp, n)?;
+            }
+            st.bytes += n;
             st.a_to_b += 1;
             // Move (one-way): remove the source after a successful copy.
             if opts.move_files && opts.direction != Direction::Both {
@@ -823,7 +935,11 @@ fn run_one(
             if opts.reversible && a.exists(&dp) {
                 let _ = back_up(a, &dp, rel, versions_dir);
             }
-            st.bytes += copy_between(b, &join(root_b, rel), a, &dp)?;
+            let n = copy_between(b, &join(root_b, rel), a, &dp, opts.atomic, throttle)?;
+            if opts.verify {
+                verify_copy(a, &dp, n)?;
+            }
+            st.bytes += n;
             st.b_to_a += 1;
             if opts.move_files && opts.direction != Direction::Both {
                 let sp = join(root_b, rel);
@@ -856,18 +972,18 @@ fn run_one(
             // Preserve B's losing version as a conflict copy that will sync back.
             if b.exists(&bp) {
                 let cp = join(root_b, &conflict_name(rel));
-                let _ = copy_between(b, &bp, b, &cp);
+                let _ = copy_between(b, &bp, b, &cp, opts.atomic, throttle);
             }
-            st.bytes += copy_between(a, &join(root_a, rel), b, &bp)?;
+            st.bytes += copy_between(a, &join(root_a, rel), b, &bp, opts.atomic, throttle)?;
             st.a_to_b += 1;
         }
         Action::KeepBothBtoA(rel) => {
             let ap = join(root_a, rel);
             if a.exists(&ap) {
                 let cp = join(root_a, &conflict_name(rel));
-                let _ = copy_between(a, &ap, a, &cp);
+                let _ = copy_between(a, &ap, a, &cp, opts.atomic, throttle);
             }
-            st.bytes += copy_between(b, &join(root_b, rel), a, &ap)?;
+            st.bytes += copy_between(b, &join(root_b, rel), a, &ap, opts.atomic, throttle)?;
             st.b_to_a += 1;
         }
     }
@@ -906,12 +1022,16 @@ pub fn apply(
         return st;
     }
 
-    let par = a
+    let mut par = a
         .parallelism()
         .min(b.parallelism())
         .max(1)
         .min(actions.len().max(1));
+    if opts.max_transfers > 0 {
+        par = par.min(opts.max_transfers);
+    }
 
+    let throttle = Throttle::new(opts.bwlimit_bps);
     let merged: Mutex<(BisyncStats, Vec<(String, String)>)> =
         Mutex::new((BisyncStats::default(), Vec::new()));
     let idx = AtomicUsize::new(0);
@@ -930,7 +1050,23 @@ pub fn apply(
                         break;
                     }
                     let act = &actions[i];
-                    match run_one(act, a, root_a, b, root_b, opts, versions_dir) {
+                    // Retry transient failures with a delay.
+                    let mut attempt = 0u32;
+                    let res = loop {
+                        match run_one(act, a, root_a, b, root_b, opts, versions_dir, &throttle) {
+                            Ok(s) => break Ok(s),
+                            Err(e) => {
+                                if attempt >= opts.retries || cancel.load(Ordering::Relaxed) {
+                                    break Err(e);
+                                }
+                                attempt += 1;
+                                std::thread::sleep(std::time::Duration::from_secs(
+                                    opts.retry_delay_secs,
+                                ));
+                            }
+                        }
+                    };
+                    match res {
                         Ok(s) => {
                             local.a_to_b += s.a_to_b;
                             local.b_to_a += s.b_to_a;
@@ -1301,16 +1437,17 @@ pub fn resolve(
     let vdir = versions_dir(pair);
     let pa = join(root_a, rel);
     let pb = join(root_b, rel);
+    let throttle = Throttle::new(0);
     if keep_a {
         if b.exists(&pb) {
             let _ = back_up(b, &pb, rel, &vdir);
         }
-        copy_between(a, &pa, b, &pb)?;
+        copy_between(a, &pa, b, &pb, true, &throttle)?;
     } else {
         if a.exists(&pa) {
             let _ = back_up(a, &pa, rel, &vdir);
         }
-        copy_between(b, &pb, a, &pa)?;
+        copy_between(b, &pb, a, &pa, true, &throttle)?;
     }
     Ok((sig_of(a, &pa), sig_of(b, &pb)))
 }

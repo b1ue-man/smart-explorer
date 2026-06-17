@@ -131,6 +131,17 @@ pub struct SyncJob {
     pub filter_max_age_days: u64,
     /// Only sync files older than N days.
     pub filter_min_age_days: u64,
+
+    // ── Groups H/I: bandwidth & reliability ──────────────────────────────────
+    pub bwlimit_kbps: u64,
+    pub max_transfers: u64,
+    pub atomic_copy: bool,
+    pub verify: bool,
+    pub retries: u64,
+    pub retry_delay_secs: u64,
+    /// Commands run before / after the job (background daemon runs).
+    pub run_before: String,
+    pub run_after: String,
 }
 
 fn now_secs() -> i64 {
@@ -209,6 +220,14 @@ impl SyncJob {
             filter_max_size_kb: 0,
             filter_max_age_days: 0,
             filter_min_age_days: 0,
+            bwlimit_kbps: 0,
+            max_transfers: 0,
+            atomic_copy: true,
+            verify: false,
+            retries: 0,
+            retry_delay_secs: 2,
+            run_before: String::new(),
+            run_after: String::new(),
         }
     }
 
@@ -334,6 +353,12 @@ impl SyncJob {
             use_recycle: self.use_recycle_bin,
             max_delete: self.max_delete,
             max_delete_pct: self.max_delete_pct,
+            bwlimit_bps: self.bwlimit_kbps.saturating_mul(1024),
+            max_transfers: self.max_transfers as usize,
+            atomic: self.atomic_copy,
+            verify: self.verify,
+            retries: self.retries as u32,
+            retry_delay_secs: self.retry_delay_secs,
         }
     }
 }
@@ -427,6 +452,15 @@ fn serialize_kv(j: &SyncJob) -> String {
     s.push_str(&format!("filter_max_size_kb={}\n", j.filter_max_size_kb));
     s.push_str(&format!("filter_max_age_days={}\n", j.filter_max_age_days));
     s.push_str(&format!("filter_min_age_days={}\n", j.filter_min_age_days));
+    // Groups H/I — bandwidth & reliability
+    s.push_str(&format!("bwlimit_kbps={}\n", j.bwlimit_kbps));
+    s.push_str(&format!("max_transfers={}\n", j.max_transfers));
+    s.push_str(&format!("atomic_copy={}\n", if j.atomic_copy { 1 } else { 0 }));
+    s.push_str(&format!("verify={}\n", if j.verify { 1 } else { 0 }));
+    s.push_str(&format!("retries={}\n", j.retries));
+    s.push_str(&format!("retry_delay_secs={}\n", j.retry_delay_secs));
+    s.push_str(&format!("run_before={}\n", san(&j.run_before)));
+    s.push_str(&format!("run_after={}\n", san(&j.run_after)));
     s
 }
 
@@ -494,6 +528,14 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
             "filter_max_size_kb" => j.filter_max_size_kb = v.parse().unwrap_or(0),
             "filter_max_age_days" => j.filter_max_age_days = v.parse().unwrap_or(0),
             "filter_min_age_days" => j.filter_min_age_days = v.parse().unwrap_or(0),
+            "bwlimit_kbps" => j.bwlimit_kbps = v.parse().unwrap_or(0),
+            "max_transfers" => j.max_transfers = v.parse().unwrap_or(0),
+            "atomic_copy" => j.atomic_copy = v != "0",
+            "verify" => j.verify = v != "0",
+            "retries" => j.retries = v.parse().unwrap_or(0),
+            "retry_delay_secs" => j.retry_delay_secs = v.parse().unwrap_or(2),
+            "run_before" => j.run_before = v.to_string(),
+            "run_after" => j.run_after = v.to_string(),
             _ => {} // unknown / future key — ignored
         }
     }
