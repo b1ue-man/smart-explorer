@@ -173,6 +173,25 @@ Each phase lands behind grouped options, defaults stay safe (two-way, strict
 conflicts, reversible), and every new control is persisted and shown in a
 readable state line.
 
+### Implementation status — ALL 8 PHASES SHIPPED ✅ (v0.5.38)
+
+1. ✅ Per-job key=value persistence (forward-compatible; legacy import).
+2. ✅ Triggers: manual/interval/calendar/real-time/on-startup/on-USB-connect,
+   active-hours, catch-up, editable cadence, pause + auto-pause (battery).
+3. ✅ Direction modes (mirror/echo/update-contribute/move) + compare
+   (mtime+size/size-only/checksum, modify-window).
+4. ✅ Conflict policies (strict/newer/older/larger/smaller/source/dest/keep-both).
+5. ✅ Versioning schemes (days/count/staggered/GFS) + recycle bin + max-delete guard.
+6. ✅ Filters by size/age + default-ignore set.
+7. ✅ Reliability (safe-copies/verify/retry/run-before-after) + bandwidth (bwlimit/concurrency).
+8. ✅ Observability (per-job status, log viewer) + service (restart-after-update/start-on-launch).
+
+Deferred as documented nice-to-haves (optional, not blocking): rename/move
+detection optimization (B6), block-level delta transfer for remotes (whole-file
+is correct, deltas are an optimization), true Windows service with no user logged
+in (K6), metered-network detection for auto-pause (battery is wired), and the
+per-situation conflict matrix UI (the winner policies cover its cases).
+
 ### Key research URLs
 - SyncBack run-situations: https://help.2brightsparks.com/support/solutions/articles/43000335862 · device-insert: https://www.2brightsparks.com/syncback/help/wheninsert.htm · decisions: https://www.2brightsparks.com/syncback/help/decisionsfiles.htm · versioning: https://www.2brightsparks.com/syncback/help/copydeleteversioning.htm
 - ownCloud architecture/intervals: https://doc.owncloud.com/desktop/5.3/appendices/architecture.html · config: https://doc.owncloud.com/desktop/5.3/advanced_usage/configuration_file.html · versions: https://doc.owncloud.com/server/next/classic_ui/files/version_control.html
