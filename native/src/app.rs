@@ -3618,12 +3618,13 @@ impl App {
         self.selection = self
             .view
             .iter()
-            .map(|&(i, _)| self.entries[i].path.clone())
+            .map(|&(i, _)| self.entries[i].key())
             .collect();
     }
 
     fn copy_paths_to_clipboard(&self, ctx: &egui::Context) {
-        let lines: Vec<String> = self.selection.iter().map(|p| p.replace('/', "\\")).collect();
+        let lines: Vec<String> =
+            self.selection.iter().map(|k| sel_key_path(k).replace('/', "\\")).collect();
         ctx.copy_text(lines.join("\r\n"));
     }
 
@@ -3637,14 +3638,14 @@ impl App {
         // moves to its trash). std::fs/the recycle bin can't touch remote paths.
         if let Some(rs) = &self.remote {
             let backend = rs.backend.clone();
-            let items: Vec<(String, bool)> = self
+            let items: Vec<(String, Option<String>, bool)> = self
                 .entries
                 .iter()
-                .filter(|e| self.selection.contains(&e.path))
-                .map(|e| (e.path.to_string(), e.is_dir))
+                .filter(|e| self.selection.contains(&e.key()))
+                .map(|e| (e.path.to_string(), e.id.as_ref().map(|s| s.to_string()), e.is_dir))
                 .collect();
             let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-            self.entries.retain(|e| !removed.contains(&e.path));
+            self.entries.retain(|e| !removed.contains(&e.key()));
             self.cursor = None;
             self.recompute_view();
             let (tx, rx) = unbounded();
@@ -3653,11 +3654,11 @@ impl App {
                 .name("remote-delete".into())
                 .spawn(move || {
                     let mut first_err: Option<String> = None;
-                    for (p, is_dir) in &items {
+                    for (p, id, is_dir) in &items {
                         let r = if *is_dir {
                             backend.remove_dir(p)
                         } else {
-                            backend.remove_file(p)
+                            backend.remove_file_id(p, id.as_deref())
                         };
                         if let Err(e) = r {
                             if first_err.is_none() {
@@ -3673,11 +3674,11 @@ impl App {
         let paths: Vec<PathBuf> = self
             .selection
             .iter()
-            .map(|p| PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            .map(|k| PathBuf::from(sel_key_path(k).replace('/', std::path::MAIN_SEPARATOR_STR)))
             .collect();
         // Optimistic UI update; on failure drain_trash() rescans.
         let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-        self.entries.retain(|e| !removed.contains(&e.path));
+        self.entries.retain(|e| !removed.contains(&e.key()));
         self.cursor = None;
         self.recompute_view();
 
@@ -3726,7 +3727,7 @@ impl App {
         let targets: Vec<(String, String, bool, Option<String>)> = self
             .entries
             .iter()
-            .filter(|e| self.selection.contains(&e.path))
+            .filter(|e| self.selection.contains(&e.key()))
             .map(|e| {
                 (
                     e.path.to_string(),
@@ -4126,7 +4127,7 @@ impl App {
         }
         self.entries
             .iter()
-            .filter(|e| !e.is_dir && self.selection.contains(&e.path))
+            .filter(|e| !e.is_dir && self.selection.contains(&e.key()))
             .map(|e| e.path.replace('/', std::path::MAIN_SEPARATOR_STR))
             .collect()
     }
@@ -4478,7 +4479,7 @@ impl App {
         self.cursor
             .as_ref()
             .map(|p| p.to_string())
-            .or_else(|| self.selection.iter().next().map(|p| p.to_string()))
+            .or_else(|| self.selection.iter().next().map(|k| sel_key_path(k).to_string()))
     }
 
     /// Open the native file Properties sheet for the focused item.
@@ -4511,9 +4512,9 @@ impl App {
     fn invert_selection(&mut self) {
         let mut new: HashSet<Arc<str>> = HashSet::new();
         for &(i, _) in &self.view {
-            let p = self.entries[i].path.clone();
-            if !self.selection.contains(&p) {
-                new.insert(p);
+            let k = self.entries[i].key();
+            if !self.selection.contains(&k) {
+                new.insert(k);
             }
         }
         self.selection = new;
@@ -4539,10 +4540,10 @@ impl App {
         let paths: Vec<PathBuf> = self
             .selection
             .iter()
-            .map(|p| PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            .map(|k| PathBuf::from(sel_key_path(k).replace('/', std::path::MAIN_SEPARATOR_STR)))
             .collect();
         let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-        self.entries.retain(|e| !removed.contains(&e.path));
+        self.entries.retain(|e| !removed.contains(&e.key()));
         self.cursor = None;
         self.recompute_view();
 
@@ -4585,7 +4586,7 @@ impl App {
             ));
             return;
         }
-        let p = self.selection.iter().next().unwrap().to_string();
+        let p = sel_key_path(self.selection.iter().next().unwrap()).to_string();
         let name = p.rsplit('/').next().unwrap_or("").to_string();
         self.rename_open = Some((p, name));
         self.rename_focus = true;
@@ -4711,33 +4712,33 @@ impl App {
         }
         let pos = pos.min(self.view.len() - 1);
         let path = self.entries[self.view[pos].0].path.clone();
+        let key = self.entries[self.view[pos].0].key();
         if shift {
             if let Some(anchor) = self.last_anchor.clone() {
                 if let Some(a) = self
                     .view
                     .iter()
-                    .position(|&(i, _)| self.entries[i].path == anchor)
+                    .position(|&(i, _)| self.entries[i].key() == anchor)
                 {
                     let (lo, hi) = if a < pos { (a, pos) } else { (pos, a) };
                     self.selection.clear();
                     for r in lo..=hi {
-                        self.selection
-                            .insert(self.entries[self.view[r].0].path.clone());
+                        self.selection.insert(self.entries[self.view[r].0].key());
                     }
                 } else {
                     self.selection.clear();
-                    self.selection.insert(path.clone());
-                    self.last_anchor = Some(path.clone());
+                    self.selection.insert(key.clone());
+                    self.last_anchor = Some(key.clone());
                 }
             } else {
                 self.selection.clear();
-                self.selection.insert(path.clone());
-                self.last_anchor = Some(path.clone());
+                self.selection.insert(key.clone());
+                self.last_anchor = Some(key.clone());
             }
         } else {
             self.selection.clear();
-            self.selection.insert(path.clone());
-            self.last_anchor = Some(path.clone());
+            self.selection.insert(key.clone());
+            self.last_anchor = Some(key.clone());
         }
         self.cursor = Some(path);
         self.pending_scroll_row = Some(pos);
@@ -4855,7 +4856,7 @@ impl App {
         let seeds: Vec<FileEntry> = self
             .entries
             .iter()
-            .filter(|e| self.selection.contains(&e.path))
+            .filter(|e| self.selection.contains(&e.key()))
             .cloned()
             .collect();
         if seeds.is_empty() || self.copy_dest.is_empty() {
@@ -4907,7 +4908,7 @@ impl App {
             let files: Vec<(String, String)> = self
                 .entries
                 .iter()
-                .filter(|e| !e.is_dir && self.selection.contains(&e.path))
+                .filter(|e| !e.is_dir && self.selection.contains(&e.key()))
                 .map(|e| (e.path.to_string(), e.name.to_string()))
                 .collect();
             if files.is_empty() {
@@ -4942,7 +4943,7 @@ impl App {
         let has_dir = self
             .entries
             .iter()
-            .any(|e| e.is_dir && self.selection.contains(&e.path));
+            .any(|e| e.is_dir && self.selection.contains(&e.key()));
 
         // Filter-aware copy: when a filter is active and folders are selected,
         // build a virtual-file data object so pasting (anywhere) recreates
@@ -4951,7 +4952,7 @@ impl App {
             let seeds: Vec<FileEntry> = self
                 .entries
                 .iter()
-                .filter(|e| self.selection.contains(&e.path))
+                .filter(|e| self.selection.contains(&e.key()))
                 .cloned()
                 .collect();
             let filter = self.filter.clone();
@@ -5010,7 +5011,7 @@ impl App {
         }
 
         // Plain CF_HDROP path (no filter, or cut, or files only).
-        let paths: Vec<String> = self.selection.iter().map(|p| p.replace('/', "\\")).collect();
+        let paths: Vec<String> = self.selection.iter().map(|k| sel_key_path(k).replace('/', "\\")).collect();
         let effect = if cut {
             crate::shell_clipboard::DROPEFFECT_MOVE
         } else {
@@ -5868,7 +5869,7 @@ impl App {
         let clicked_arc: Arc<str> = Arc::from(clicked_path);
         let paths: Vec<String> = if self.selection.contains(&clicked_arc) && self.selection.len() > 1
         {
-            self.selection.iter().map(|p| p.replace('/', "\\")).collect()
+            self.selection.iter().map(|k| sel_key_path(k).replace('/', "\\")).collect()
         } else {
             vec![clicked_path.replace('/', "\\")]
         };
@@ -7993,7 +7994,7 @@ impl App {
                     let row_index = row.index();
                     let (entry_idx, display_depth) = self.view[row_index];
                     let e = &self.entries[entry_idx];
-                    let selected = self.selection.contains(&e.path);
+                    let selected = self.selection.contains(&e.key());
                     row.set_selected(selected);
 
                     let mut handle_resp = |resp: egui::Response, ui: &egui::Ui| {
@@ -8135,11 +8136,12 @@ impl App {
         // (remote items would need a download to drop elsewhere).
         if let Some(idx) = drag_start {
             if !self.drag_active {
-                let dragged = self.entries[idx].path.clone();
+                let dragged = self.entries[idx].key();
+                let dragged_path = self.entries[idx].path.clone();
                 let mut files: Vec<String> = if self.selection.contains(&dragged) {
-                    self.selection.iter().map(|p| p.to_string()).collect()
+                    self.selection.iter().map(|k| sel_key_path(k).to_string()).collect()
                 } else {
-                    vec![dragged.to_string()]
+                    vec![dragged_path.to_string()]
                 };
                 // From a local view we only carry local paths; from a remote view
                 // the paths are remote and `drag_src` is the source backend.
@@ -8172,6 +8174,7 @@ impl App {
 
         if let Some((idx, ctrl, shift)) = row_click {
             let path = self.entries[idx].path.clone();
+            let key = self.entries[idx].key();
             if shift && !ctrl {
                 // Explorer semantics: Shift+Click replaces the selection with
                 // the anchor→clicked range.
@@ -8179,21 +8182,20 @@ impl App {
                     let a = self
                         .view
                         .iter()
-                        .position(|&(i, _)| self.entries[i].path == anchor);
-                    let b = self.view.iter().position(|&(i, _)| self.entries[i].path == path);
+                        .position(|&(i, _)| self.entries[i].key() == anchor);
+                    let b = self.view.iter().position(|&(i, _)| self.entries[i].key() == key);
                     if let (Some(a), Some(b)) = (a, b) {
                         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                         self.selection.clear();
                         for i in lo..=hi {
-                            self.selection
-                                .insert(self.entries[self.view[i].0].path.clone());
+                            self.selection.insert(self.entries[self.view[i].0].key());
                         }
                     } else {
-                        self.selection.insert(path.clone());
+                        self.selection.insert(key.clone());
                     }
                 } else {
-                    self.selection.insert(path.clone());
-                    self.last_anchor = Some(path.clone());
+                    self.selection.insert(key.clone());
+                    self.last_anchor = Some(key.clone());
                 }
             } else if shift && ctrl {
                 // Ctrl+Shift+Click: add range to existing selection
@@ -8201,25 +8203,24 @@ impl App {
                     let a = self
                         .view
                         .iter()
-                        .position(|&(i, _)| self.entries[i].path == anchor);
-                    let b = self.view.iter().position(|&(i, _)| self.entries[i].path == path);
+                        .position(|&(i, _)| self.entries[i].key() == anchor);
+                    let b = self.view.iter().position(|&(i, _)| self.entries[i].key() == key);
                     if let (Some(a), Some(b)) = (a, b) {
                         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                         for i in lo..=hi {
-                            self.selection
-                                .insert(self.entries[self.view[i].0].path.clone());
+                            self.selection.insert(self.entries[self.view[i].0].key());
                         }
                     }
                 }
             } else if ctrl {
-                if !self.selection.insert(path.clone()) {
-                    self.selection.remove(&path);
+                if !self.selection.insert(key.clone()) {
+                    self.selection.remove(&key);
                 }
-                self.last_anchor = Some(path.clone());
+                self.last_anchor = Some(key.clone());
             } else {
                 self.selection.clear();
-                self.selection.insert(path.clone());
-                self.last_anchor = Some(path.clone());
+                self.selection.insert(key.clone());
+                self.last_anchor = Some(key.clone());
             }
             self.cursor = Some(path);
         }
@@ -8229,11 +8230,11 @@ impl App {
         }
 
         if let Some(idx) = row_rclick {
-            let path_arc = self.entries[idx].path.clone();
-            if !self.selection.contains(&path_arc) {
+            let key = self.entries[idx].key();
+            if !self.selection.contains(&key) {
                 self.selection.clear();
-                self.selection.insert(path_arc.clone());
-                self.last_anchor = Some(path_arc.clone());
+                self.selection.insert(key.clone());
+                self.last_anchor = Some(key.clone());
             }
             // Remotes have no Windows shell menu (those paths aren't local) — show
             // our own egui context menu instead.
@@ -8244,7 +8245,7 @@ impl App {
                     .unwrap_or_else(|| ui.min_rect().center());
                 self.remote_ctx = Some((pos, idx));
             } else {
-                let path = path_arc.to_string();
+                let path = self.entries[idx].path.to_string();
                 let ctx = ui.ctx().clone();
                 self.show_shell_menu_for(&path, &ctx);
             }
@@ -8522,7 +8523,7 @@ impl App {
         let b: u64 = self
             .entries
             .iter()
-            .filter(|e| !e.is_dir && self.selection.contains(&e.path))
+            .filter(|e| !e.is_dir && self.selection.contains(&e.key()))
             .map(|e| e.size)
             .sum();
         self.sel_size_cache = (self.selection.len(), self.entries.len(), b);
@@ -9101,7 +9102,7 @@ impl App {
             if done {
                 if self.copy_mode_pending == CopyMode::Move {
                     let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-                    self.entries.retain(|e| !removed.contains(&e.path));
+                    self.entries.retain(|e| !removed.contains(&e.key()));
                     self.recompute_view();
                 }
             }

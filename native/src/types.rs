@@ -24,6 +24,22 @@ impl FileEntry {
     pub fn full_path(&self) -> PathBuf {
         PathBuf::from(self.path.as_ref())
     }
+
+    /// A selection key that uniquely identifies this row. Equals `path` for
+    /// normal entries; for backends that allow duplicate names in one folder
+    /// (Google Drive), it appends the backend id so each duplicate selects
+    /// independently. Use `sel_key_path` to recover the path from a key.
+    pub fn key(&self) -> Arc<str> {
+        match &self.id {
+            Some(id) => Arc::from(format!("{}\u{1f}{}", self.path, id)),
+            None => self.path.clone(),
+        }
+    }
+}
+
+/// The filesystem path encoded in a selection key (strips any `\u{1f}<id>`).
+pub fn sel_key_path(key: &str) -> &str {
+    key.split('\u{1f}').next().unwrap_or(key)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

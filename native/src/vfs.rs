@@ -114,6 +114,13 @@ pub trait Backend: Send + Sync {
         let _ = id;
         self.open_read(path)
     }
+
+    /// Delete a file by its backend-unique `id` when known (targets one specific
+    /// item among duplicate names). Default ignores the id and deletes by path.
+    fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
+        let _ = id;
+        self.remove_file(path)
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
