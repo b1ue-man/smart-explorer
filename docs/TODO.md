@@ -62,6 +62,7 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 22 | **Connected Google Drive pinned to the sidebar** — stays under VERBINDUNGEN whenever Drive is connected, even with no tab open (click to browse, × to disconnect). | ✅ | 0.5.22 |
 | 21 | **Peer file sharing** — plan in [`docs/SHARE_PLAN.md`](SHARE_PLAN.md); eval in [`docs/SHARING_EVAL.md`](SHARING_EVAL.md). Server routes discovery only; bytes go **direct P2P, E2E-encrypted** (Noise NNpsk0 keyed by the code). **Shipped 0.5.23:** standalone `se-share-server` (Linux+Windows, in the release); client `share.rs` (signaling, candidate dial, Noise channel, transfer to quarantine); **Geräte/Räume view** with direct pair-by-code + rooms (share to all). | 🚧 | 0.5.23 — needs a real two-machine test (NAT/handshake) |
 | 21b | **Peer-agent Backend** (far Smart Explorer runs scans/filters/search, streams results) + AirDrop ❌ (Windows can't do AWDL) / optional Quick Share interop. | later | builds on the share transport |
+| 23 | **Faster remote browsing** — transfer sync's efficiency ideas to interactive browsing. Connections are already reused; the gaps are: **(1) directory-listing cache** with short TTL (instant back/forward + re-visit; biggest win), **(2) prefetch immediate sub-folders** after listing (rapid drill feels instant), **(3) parallel listing for deep paths** on `parallelism()>1` backends (Drive), **(4)** persist Drive path→ID cache, **(5)** lazy-stat reuse from the last listing. Hashing/atomic-write/baseline are transfer-only → N/A. | ⬜ | cache+prefetch first; ~50–70% snappier re-visits/deep nav |
 
 **One input still needed from you:** a Google OAuth *Client ID* (Desktop type)
 from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
@@ -97,7 +98,7 @@ Analytics needs its **own lightweight recursive scan**:
 | A1 | Interaction + charts: click category/type bar → filter; size + age histograms; CSV export | ⬜ | builds on A0/A0b |
 | A2 | **Find & reclaim**: duplicate finder (size-group → hash via sync MD5, 1-click delete) + large-stale + empty files/folders + cleanup targets (node_modules/.git/caches/logs) | ⬜ | highest user value |
 | A3 | Scale: "scan whole drive" with live-filling treemap; all-drives dashboard; snapshots / growth-over-time (persist aggregation, diff) | ⬜ | needs stable aggregation format from A0 |
-| A4 | Hard/perf (optional, Windows-only): **NTFS MFT direct read** for instant drive scans (behind the scan interface); NTFS compression/sparse awareness; cluster slack | ⬜ | large, risky — last |
+| A4 | **NTFS MFT direct read** (Windows-only), user-selectable opt-in fast scan — *planned, deferred by user (decide later)*. Plan: main app stays unprivileged; the MFT scan relaunches our own exe **elevated via UAC** (`--mft-scan=C:`), reads the raw `\\.\C:` MFT (pure-Rust `ntfs` crate → cross-compiles on windows-gnu, no C deps), serialises the compact `SizeNode` tree to a temp file, parent reads it. **Needs Admin**; **NTFS-local only** → the rayon walker stays the universal fallback (cloud/network/exFAT/unelevated). Also: NTFS compression/sparse awareness, cluster slack. ⚠ untestable in the Linux build env — must be verified on a real NTFS box. | ⬜ | large, risky; user wants it but deferred |
 
 ## Notes
 
@@ -107,6 +108,11 @@ Analytics needs its **own lightweight recursive scan**:
   `proto://user@host:port/path` endpoint. `connect::resolve_endpoint` re-opens
   the matching saved connection (by protocol+user+host+port) using the keyring
   secret — so remote jobs run both interactively (off-thread) and in the daemon.
+  **0.5.58:** generalised to a `PickerPurpose` enum used by *all* folder dialogs
+  (open/scan, analytics target, mirror/bisync dest, copy dest, remote
+  download-to) — the OS folder dialog (rfd `pick_folder`) is gone; `local_only`
+  purposes hide the remote connections. Only the SSH *key-file* pick (a file,
+  not a folder) still uses the native dialog.
 - **#6c drag-out** is Win32 COM (`dragout.rs`) compiled for Windows but not
   runtime-exercised here; wrapped so any COM failure silently aborts the drag.
 

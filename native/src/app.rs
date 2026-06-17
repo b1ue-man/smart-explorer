@@ -710,11 +710,44 @@ impl JobEditor {
     }
 }
 
-/// Which sync-setup field the in-app folder picker fills in.
-#[derive(Clone, Copy, PartialEq)]
-enum PickerField {
-    Source,
-    Target,
+/// What the in-app folder picker is being opened for — decides the title, where
+/// the chosen folder is routed, and whether remote connections are offered.
+enum PickerPurpose {
+    /// Sync-setup editor source/target (remote endpoints allowed).
+    SyncSource,
+    SyncTarget,
+    /// Open a folder in the explorer (local).
+    ScanFolder,
+    /// Pick a folder to run storage-analytics on (local).
+    AnalyticsFolder,
+    /// One-way mirror the current folder into a local destination.
+    MirrorDest,
+    /// Two-way sync the current folder with a local destination.
+    BisyncDest,
+    /// Copy-dialog destination folder (local).
+    CopyDest,
+    /// Download a remote file (at remote path `src`) into the picked dir.
+    DownloadTo { src: String },
+}
+
+impl PickerPurpose {
+    fn title(&self) -> &'static str {
+        match self {
+            PickerPurpose::SyncSource => "📂 Quelle wählen",
+            PickerPurpose::SyncTarget => "📂 Ziel wählen",
+            PickerPurpose::ScanFolder => "📂 Ordner öffnen",
+            PickerPurpose::AnalyticsFolder => "📂 Ordner für Analyse",
+            PickerPurpose::MirrorDest => "📂 Ziel zum Spiegeln",
+            PickerPurpose::BisyncDest => "📂 Ziel für 2-Wege-Sync",
+            PickerPurpose::CopyDest => "📂 Zielordner wählen",
+            PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
+        }
+    }
+    /// Remote connections only make sense for a sync setup's source/target;
+    /// everything else picks a local folder.
+    fn local_only(&self) -> bool {
+        !matches!(self, PickerPurpose::SyncSource | PickerPurpose::SyncTarget)
+    }
 }
 
 /// In-app folder picker (#17): browse local drives AND saved remote
@@ -723,7 +756,7 @@ enum PickerField {
 /// location without typing it. The chosen value is a local path or a
 /// `proto://user@host:port/path` endpoint the sync runner re-opens.
 struct PickerState {
-    field: PickerField,
+    purpose: PickerPurpose,
     /// Live backend for the current location (None = root list / not connected).
     backend: Option<crate::vfs::BackendHandle>,
     is_remote: bool,
@@ -4454,9 +4487,8 @@ impl App {
             AccelAct::Forward => self.navigate_forward(),
             AccelAct::Up => self.navigate_up(),
             AccelAct::PickFolder => {
-                if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                    self.start_scan(p);
-                }
+                let init = self.root_path.clone();
+                self.open_picker(PickerPurpose::ScanFolder, &init);
             }
             AccelAct::Split => self.toggle_split(),
             AccelAct::NewTab => self.new_tab(),
@@ -5413,37 +5445,10 @@ impl App {
                 self.rename_focus = true;
             }
             A::DownloadTo => {
-                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    if let Some(rs) = &self.remote {
-                        if self.remote_op_rx.is_none() {
-                            let backend = rs.backend.clone();
-                            let dest = dir.join(&name);
-                            let (tx, rx) = unbounded();
-                            self.remote_op_rx = Some(rx);
-                            self.notice = Some((
-                                format!("⬇ Lade „{}“ herunter…", name),
-                                std::time::Instant::now(),
-                            ));
-                            std::thread::Builder::new()
-                                .name("remote-download".into())
-                                .spawn(move || {
-                                    let r = (|| -> Result<(), String> {
-                                        let mut rd =
-                                            backend.open_read(&path).map_err(|e| e.to_string())?;
-                                        let mut f = std::fs::File::create(&dest)
-                                            .map_err(|e| e.to_string())?;
-                                        std::io::copy(&mut rd, &mut f).map_err(|e| e.to_string())?;
-                                        Ok(())
-                                    })();
-                                    let _ = tx.send(
-                                        r.map(|_| format!("✓ Heruntergeladen: {}", name))
-                                            .map_err(|e| format!("Herunterladen: {}", e)),
-                                    );
-                                })
-                                .ok();
-                        }
-                    }
-                }
+                // Browse for the local destination in the in-app picker; the
+                // download starts when the user confirms a folder.
+                let _ = name;
+                self.open_picker(PickerPurpose::DownloadTo { src: path }, "");
             }
         }
     }
@@ -6479,9 +6484,9 @@ impl App {
 
     /// Open the picker to fill a sync-setup field, starting from `initial`
     /// (local path → browse there; remote URL or empty → start at the roots).
-    fn open_picker(&mut self, field: PickerField, initial: &str) {
+    fn open_picker(&mut self, purpose: PickerPurpose, initial: &str) {
         let mut st = PickerState {
-            field,
+            purpose,
             backend: None,
             is_remote: false,
             endpoint_prefix: String::new(),
@@ -6658,10 +6663,8 @@ impl App {
         let mut open_conn: Option<crate::creds::SavedConnection> = None;
 
         let st = self.picker.as_ref().unwrap();
-        let title = match st.field {
-            PickerField::Source => "📂 Quelle wählen",
-            PickerField::Target => "📂 Ziel wählen",
-        };
+        let title = st.purpose.title();
+        let local_only = st.purpose.local_only();
         let home = self.home.to_string_lossy().replace('\\', "/");
         let drives = self.drive_info.clone();
         let conns = self.saved_connections.clone();
@@ -6694,27 +6697,30 @@ impl App {
                                 open_local = Some(d.clone());
                             }
                         }
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new("VERBINDUNGEN")
-                                .small()
-                                .color(Color32::from_gray(140)),
-                        );
-                        if conns.is_empty() && !gdrive_connected {
-                            ui.colored_label(Color32::from_gray(120), "(keine)");
-                        }
-                        if gdrive_connected
-                            && ui.selectable_label(false, "☁ Google Drive").clicked()
-                        {
-                            open_gdrive = true;
-                        }
-                        for c in &conns {
-                            if ui
-                                .selectable_label(false, format!("🖧 {}", c.display()))
-                                .on_hover_text(c.to_target())
-                                .clicked()
+                        // Remote connections only for sync source/target.
+                        if !local_only {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("VERBINDUNGEN")
+                                    .small()
+                                    .color(Color32::from_gray(140)),
+                            );
+                            if conns.is_empty() && !gdrive_connected {
+                                ui.colored_label(Color32::from_gray(120), "(keine)");
+                            }
+                            if gdrive_connected
+                                && ui.selectable_label(false, "☁ Google Drive").clicked()
                             {
-                                open_conn = Some(c.clone());
+                                open_gdrive = true;
+                            }
+                            for c in &conns {
+                                if ui
+                                    .selectable_label(false, format!("🖧 {}", c.display()))
+                                    .on_hover_text(c.to_target())
+                                    .clicked()
+                                {
+                                    open_conn = Some(c.clone());
+                                }
                             }
                         }
                     });
@@ -6816,10 +6822,27 @@ impl App {
         if choose {
             if let Some(p) = self.picker.take() {
                 let value = Self::picker_value(&p);
-                if let Some(ed) = self.job_editor.as_mut() {
-                    match p.field {
-                        PickerField::Source => ed.source = value,
-                        PickerField::Target => ed.target = value,
+                let native = value.replace('/', std::path::MAIN_SEPARATOR_STR);
+                match p.purpose {
+                    PickerPurpose::SyncSource => {
+                        if let Some(ed) = self.job_editor.as_mut() {
+                            ed.source = value;
+                        }
+                    }
+                    PickerPurpose::SyncTarget => {
+                        if let Some(ed) = self.job_editor.as_mut() {
+                            ed.target = value;
+                        }
+                    }
+                    PickerPurpose::ScanFolder => self.start_scan(PathBuf::from(native)),
+                    PickerPurpose::AnalyticsFolder => self.start_analytics_scan(value),
+                    PickerPurpose::MirrorDest => self.start_mirror(value),
+                    PickerPurpose::BisyncDest => self.start_bisync(value),
+                    PickerPurpose::CopyDest => self.copy_dest = native,
+                    PickerPurpose::DownloadTo { src } => {
+                        if let Some(backend) = self.remote.as_ref().map(|rs| rs.backend.clone()) {
+                            self.start_remote_download(backend, vec![src], native);
+                        }
                     }
                 }
             }
@@ -7020,9 +7043,8 @@ impl App {
             let r = ui.button("📂").on_hover_text("Ordner auswählen");
             self.accel_push('O', r.rect, AccelAct::PickFolder);
             if r.clicked() {
-                if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                    self.start_scan(p);
-                }
+                let init = self.root_path.clone();
+                self.open_picker(PickerPurpose::ScanFolder, &init);
             }
 
             // ─── Breadcrumbs / editable path ───────────────────────────
@@ -7902,18 +7924,14 @@ impl App {
                     .on_hover_text("Aktuellen Ordner (lokal oder remote) EINSEITIG in einen lokalen Zielordner spiegeln (Backup)")
                     .clicked()
                 {
-                    if let Some(dest) = rfd::FileDialog::new().pick_folder() {
-                        self.start_mirror(dest.to_string_lossy().replace('\\', "/"));
-                    }
+                    self.open_picker(PickerPurpose::MirrorDest, "");
                 }
                 if ui
                     .small_button("⇄ 2-Wege-Sync…")
                     .on_hover_text("Sicher in BEIDE Richtungen abgleichen: nur tatsächlich geänderte Dateien werden übertragen, beidseitige Änderungen werden als Konflikt gemeldet (nichts wird stillschweigend überschrieben), Änderungen sind reversibel.")
                     .clicked()
                 {
-                    if let Some(dest) = rfd::FileDialog::new().pick_folder() {
-                        self.start_bisync(dest.to_string_lossy().replace('\\', "/"));
-                    }
+                    self.open_picker(PickerPurpose::BisyncDest, "");
                 }
             }
         }
@@ -8293,7 +8311,7 @@ impl App {
         // Set when a "Durchsuchen" button is clicked → open the in-app picker
         // after `ed` is restored to self.job_editor (so the picker can write
         // back into it). Carries the field + its current value as a start point.
-        let mut pick: Option<(PickerField, String)> = None;
+        let mut pick: Option<(PickerPurpose, String)> = None;
         let title = if ed.id.is_some() { "✎ Sync-Setup bearbeiten" } else { "＋ Neues Sync-Setup" };
         egui::Window::new(title)
             .open(&mut open)
@@ -8318,7 +8336,7 @@ impl App {
                                 .on_hover_text("Im Explorer wählen — lokale Laufwerke oder gespeicherte Verbindungen")
                                 .clicked()
                             {
-                                pick = Some((PickerField::Source, ed.source.clone()));
+                                pick = Some((PickerPurpose::SyncSource, ed.source.clone()));
                             }
                         });
                         ui.end_row();
@@ -8331,7 +8349,7 @@ impl App {
                                 .on_hover_text("Im Explorer wählen — lokale Laufwerke oder gespeicherte Verbindungen")
                                 .clicked()
                             {
-                                pick = Some((PickerField::Target, ed.target.clone()));
+                                pick = Some((PickerPurpose::SyncTarget, ed.target.clone()));
                             }
                         });
                         ui.end_row();
@@ -8685,8 +8703,8 @@ impl App {
         // Still open, nothing pressed — keep the editor for the next frame.
         self.job_editor = Some(ed);
         // Now that job_editor is restored, the picker can write back into it.
-        if let Some((field, initial)) = pick {
-            self.open_picker(field, &initial);
+        if let Some((purpose, initial)) = pick {
+            self.open_picker(purpose, &initial);
         }
     }
 
@@ -9925,9 +9943,8 @@ impl App {
             self.analytics_scan = None;
         }
         if pick_folder {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                self.start_analytics_scan(p.to_string_lossy().replace('\\', "/"));
-            }
+            let init = self.analytics_root_path.clone();
+            self.open_picker(PickerPurpose::AnalyticsFolder, &init);
         } else if let Some(r) = rescan {
             self.start_analytics_scan(r);
         } else if let Some(p) = drill_path {
@@ -10499,9 +10516,8 @@ impl App {
                             .hint_text("Zielordner…"),
                     );
                     if ui.add_enabled(!running, egui::Button::new("Wählen…")).clicked() {
-                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                            self.copy_dest = p.to_string_lossy().to_string();
-                        }
+                        let init = self.copy_dest.clone();
+                        self.open_picker(PickerPurpose::CopyDest, &init);
                     }
                 });
                 ui.checkbox(
