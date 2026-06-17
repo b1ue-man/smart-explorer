@@ -127,6 +127,30 @@ struct SummaryData {
     top: Vec<(String, String, u64)>,
 }
 
+/// One treemap cell / largest-item row in the analytics view.
+struct AnalyticsItem {
+    name: String,
+    path: String,
+    size: u64,
+    is_dir: bool,
+    cat: Category,
+}
+
+/// Cached storage-analytics aggregation over the current (filtered) view.
+struct AnalyticsData {
+    total_bytes: u64,
+    files: u64,
+    dirs: u64,
+    /// Immediate children of the current root, recursive size, sorted desc.
+    children: Vec<AnalyticsItem>,
+    /// Largest individual files anywhere in the view, sorted desc.
+    largest_files: Vec<AnalyticsItem>,
+    /// (category, bytes, count) sorted by bytes desc, non-empty only.
+    by_cat: Vec<(Category, u64, u64)>,
+    /// (extension, count, bytes) — top types.
+    by_ext: Vec<(String, u64, u64)>,
+}
+
 /// Keyboard actions are collected inside the input closure and executed
 /// afterwards — calling back into egui (clipboard, repaint) from within
 /// `input_mut` can deadlock the context lock.
@@ -183,6 +207,9 @@ pub struct App {
 
     show_filters: bool,
     show_summary: bool,
+    /// Storage-analytics overlay (treemap + breakdowns) is open.
+    show_analytics: bool,
+    analytics_cache: Option<AnalyticsData>,
 
     recursive: bool,
     history: Vec<String>,
@@ -900,6 +927,7 @@ enum OmniCmd {
     CopyPath,
     StarToggle,
     Refresh,
+    Analytics,
 }
 
 /// What activating a dropdown row does.
@@ -960,6 +988,218 @@ fn draw_accel_badge(painter: &egui::Painter, rect: egui::Rect, c: char) {
         egui::FontId::proportional(12.0),
         Color32::from_rgb(40, 30, 10),
     );
+}
+
+// ─── Storage analytics ───────────────────────────────────────────────────────
+
+/// Coarse file category for the analytics breakdown + treemap colouring.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Category {
+    Video,
+    Image,
+    Audio,
+    Document,
+    Archive,
+    Code,
+    Disk,
+    App,
+    Other,
+}
+
+impl Category {
+    const ALL: [Category; 9] = [
+        Category::Video,
+        Category::Image,
+        Category::Audio,
+        Category::Document,
+        Category::Archive,
+        Category::Code,
+        Category::Disk,
+        Category::App,
+        Category::Other,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            Category::Video => "Video",
+            Category::Image => "Bilder",
+            Category::Audio => "Audio",
+            Category::Document => "Dokumente",
+            Category::Archive => "Archive",
+            Category::Code => "Code/Daten",
+            Category::Disk => "Disk-Images",
+            Category::App => "Programme",
+            Category::Other => "Sonstige",
+        }
+    }
+    fn color(self) -> Color32 {
+        match self {
+            Category::Video => Color32::from_rgb(228, 90, 90),
+            Category::Image => Color32::from_rgb(90, 170, 228),
+            Category::Audio => Color32::from_rgb(200, 130, 230),
+            Category::Document => Color32::from_rgb(95, 190, 130),
+            Category::Archive => Color32::from_rgb(230, 175, 70),
+            Category::Code => Color32::from_rgb(120, 200, 200),
+            Category::Disk => Color32::from_rgb(180, 110, 80),
+            Category::App => Color32::from_rgb(150, 160, 180),
+            Category::Other => Color32::from_rgb(130, 130, 140),
+        }
+    }
+}
+
+fn categorize(ext: &str) -> Category {
+    match ext.to_ascii_lowercase().as_str() {
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg" | "ts"
+        | "3gp" | "m2ts" => Category::Video,
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "heic" | "raw"
+        | "cr2" | "nef" | "arw" | "dng" | "svg" | "ico" | "psd" => Category::Image,
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" | "opus" | "aiff" | "mid" => {
+            Category::Audio
+        }
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "odt" | "ods"
+        | "odp" | "csv" | "md" | "epub" | "mobi" | "tex" => Category::Document,
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "cab" | "lz" | "tgz"
+        | "lzma" => Category::Archive,
+        "rs" | "c" | "cpp" | "cc" | "h" | "hpp" | "py" | "js" | "jsx" | "ts" | "tsx" | "java"
+        | "go" | "rb" | "php" | "cs" | "swift" | "kt" | "sh" | "json" | "xml" | "yaml" | "yml"
+        | "toml" | "html" | "css" | "sql" | "lua" | "pl" | "r" => Category::Code,
+        "iso" | "vhd" | "vhdx" | "vmdk" | "img" | "dmg" | "wim" => Category::Disk,
+        "exe" | "msi" | "dll" | "apk" | "appx" | "deb" | "rpm" | "bin" | "sys" | "so" => {
+            Category::App
+        }
+        _ => Category::Other,
+    }
+}
+
+/// The immediate child of `root` that `path` belongs to. Returns
+/// `(name, child_path, is_dir)` where `is_dir` is true when `path` is nested
+/// deeper than that child (so the child is a folder). `None` if `path` is not
+/// under `root`. `root` must be `/`-normalised with no trailing slash.
+fn immediate_child(root: &str, path: &str) -> Option<(String, String, bool)> {
+    let rest = if root.is_empty() {
+        path.strip_prefix('/').unwrap_or(path)
+    } else {
+        path.strip_prefix(root)?.strip_prefix('/')?
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let (seg, tail) = match rest.split_once('/') {
+        Some((s, t)) => (s, t),
+        None => (rest, ""),
+    };
+    if seg.is_empty() {
+        return None;
+    }
+    let child_path = if root.is_empty() {
+        format!("/{}", seg)
+    } else {
+        format!("{}/{}", root, seg)
+    };
+    Some((seg.to_string(), child_path, !tail.is_empty()))
+}
+
+/// A labelled proportional bar (category/type breakdown).
+fn ui_bar(ui: &mut egui::Ui, color: Color32, label: &str, bytes: u64, total: u64, count: u64) {
+    let frac = if total > 0 {
+        (bytes as f32 / total as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let w = ui.available_width().min(280.0).max(120.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 3.0, Color32::from_gray(48));
+    let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * frac, rect.height()));
+    p.rect_filled(fill, 3.0, color);
+    p.text(
+        rect.left_center() + egui::vec2(6.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        format!("{}  ({}×)", label, count),
+        egui::FontId::proportional(11.0),
+        Color32::WHITE,
+    );
+    p.text(
+        rect.right_center() - egui::vec2(6.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        format_bytes(bytes),
+        egui::FontId::proportional(11.0),
+        Color32::WHITE,
+    );
+}
+
+/// Squarified treemap layout (Bruls/Huizing/van Wijk). Returns a rect per input
+/// weight, in the SAME order, with area proportional to the weight; zero/negative
+/// weights get an empty rect.
+fn treemap_layout(weights: &[f64], rect: egui::Rect) -> Vec<egui::Rect> {
+    let mut out = vec![egui::Rect::ZERO; weights.len()];
+    let total: f64 = weights.iter().filter(|w| **w > 0.0).sum();
+    if total <= 0.0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return out;
+    }
+    let area = rect.width() as f64 * rect.height() as f64;
+    let mut idx: Vec<usize> = (0..weights.len()).filter(|&i| weights[i] > 0.0).collect();
+    idx.sort_by(|&a, &b| weights[b].partial_cmp(&weights[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let scaled: Vec<f64> = idx.iter().map(|&i| weights[i] / total * area).collect();
+    let laid = squarify_sorted(&scaled, rect);
+    for (k, &i) in idx.iter().enumerate() {
+        out[i] = laid[k];
+    }
+    out
+}
+
+fn squarify_worst(row: &[f64], sum: f64, side: f32) -> f64 {
+    let w2 = (side as f64) * (side as f64);
+    let s2 = sum * sum;
+    let (mut rmax, mut rmin) = (f64::MIN, f64::MAX);
+    for &a in row {
+        rmax = rmax.max(a);
+        rmin = rmin.min(a);
+    }
+    (w2 * rmax / s2).max(s2 / (w2 * rmin))
+}
+
+/// Lay scaled areas (sum == rect area, sorted desc) into `rect` row by row.
+fn squarify_sorted(scaled: &[f64], mut rect: egui::Rect) -> Vec<egui::Rect> {
+    let n = scaled.len();
+    let mut out = vec![egui::Rect::ZERO; n];
+    let mut i = 0;
+    while i < n {
+        let side = rect.width().min(rect.height());
+        let mut j = i;
+        let mut sum = scaled[i];
+        while j + 1 < n {
+            let new_sum = sum + scaled[j + 1];
+            let cur = squarify_worst(&scaled[i..=j], sum, side);
+            let nxt = squarify_worst(&scaled[i..=j + 1], new_sum, side);
+            if nxt > cur {
+                break;
+            }
+            j += 1;
+            sum = new_sum;
+        }
+        let row = &scaled[i..=j];
+        if rect.width() >= rect.height() {
+            let strip_w = (sum / rect.height() as f64) as f32;
+            let mut yy = rect.min.y;
+            for (k, a) in row.iter().enumerate() {
+                let ch = (*a / sum * rect.height() as f64) as f32;
+                out[i + k] = egui::Rect::from_min_size(egui::pos2(rect.min.x, yy), egui::vec2(strip_w, ch));
+                yy += ch;
+            }
+            rect.min.x += strip_w;
+        } else {
+            let strip_h = (sum / rect.width() as f64) as f32;
+            let mut xx = rect.min.x;
+            for (k, a) in row.iter().enumerate() {
+                let cw = (*a / sum * rect.width() as f64) as f32;
+                out[i + k] = egui::Rect::from_min_size(egui::pos2(xx, rect.min.y), egui::vec2(cw, strip_h));
+                xx += cw;
+            }
+            rect.min.y += strip_h;
+        }
+        i = j + 1;
+    }
+    out
 }
 
 /// Case-insensitive subsequence match (fuzzy), used to filter command palette
@@ -1317,6 +1557,8 @@ impl App {
 
             show_filters: ui_state.show_filters,
             show_summary: ui_state.show_summary,
+            show_analytics: false,
+            analytics_cache: None,
             recursive: false,
             history: Vec::new(),
             forward: Vec::new(),
@@ -1637,6 +1879,7 @@ impl App {
         self.band_press = None;
         self.band_active = false;
         self.summary_cache = None;
+        self.analytics_cache = None;
         self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         if self.view_dirty {
             self.recompute_view();
@@ -2023,6 +2266,7 @@ impl App {
         self.error_msg = None;
         self.failed_paths = Vec::new();
         self.summary_cache = None;
+        self.analytics_cache = None;
         self.view_dirty = false;
         self.band_press = None;
         self.band_active = false;
@@ -3809,6 +4053,7 @@ impl App {
         let key = self.sort_key;
         let dir = self.sort_dir;
         self.summary_cache = None;
+        self.analytics_cache = None;
         self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         self.view_dirty = false;
 
@@ -4296,6 +4541,7 @@ impl App {
                     ("⧉", "Pfad kopieren", OmniCmd::CopyPath),
                     ("★", "Favorit umschalten", OmniCmd::StarToggle),
                     ("⟳", "Aktualisieren", OmniCmd::Refresh),
+                    ("📊", "Speicher-Analyse", OmniCmd::Analytics),
                 ];
                 for (icon, label, cmd) in cmds {
                     if fuzzy_contains(label, q) {
@@ -4415,6 +4661,7 @@ impl App {
                 }
                 OmniCmd::StarToggle => self.star_current_folder(),
                 OmniCmd::Refresh => self.rescan(),
+                OmniCmd::Analytics => self.show_analytics = true,
             },
         }
         self.clear_omni();
@@ -6963,6 +7210,8 @@ impl App {
                 if ui.toggle_value(&mut self.show_summary, "Σ").changed() {
                     self.save_ui_state();
                 }
+                ui.toggle_value(&mut self.show_analytics, "📊")
+                    .on_hover_text("Speicher-Analyse (Treemap, größte Ordner/Dateien)");
                 if ui
                     .toggle_value(&mut self.show_filters, "🔍 Filter")
                     .on_hover_text("Filterleiste ein-/ausklappen")
@@ -9256,6 +9505,110 @@ impl App {
         }
     }
 
+    /// Aggregate the current (filtered) view for the analytics overlay.
+    fn build_analytics(&self) -> AnalyticsData {
+        let root = self.root_path.trim_end_matches('/');
+        let mut total = 0u64;
+        let mut files = 0u64;
+        let mut dirs = 0u64;
+        // child_path -> (size, is_dir, name, dominant-cat accumulators)
+        let mut children: std::collections::HashMap<String, (u64, bool, String, [u64; 9])> =
+            std::collections::HashMap::new();
+        let mut by_cat = [0u64; 9];
+        let mut by_cat_n = [0u64; 9];
+        let mut by_ext: std::collections::HashMap<&str, (u64, u64)> =
+            std::collections::HashMap::new();
+        let mut largest: Vec<&FileEntry> = Vec::new();
+
+        for &(i, _) in &self.view {
+            let e = &self.entries[i];
+            if e.is_dir {
+                dirs += 1;
+                continue;
+            }
+            files += 1;
+            total += e.size;
+            let cat = categorize(&e.ext);
+            by_cat[cat as usize] += e.size;
+            by_cat_n[cat as usize] += 1;
+            let k = if e.ext.is_empty() { "(ohne)" } else { e.ext.as_ref() };
+            let be = by_ext.entry(k).or_insert((0, 0));
+            be.0 += 1;
+            be.1 += e.size;
+            if let Some((name, cpath, child_is_dir)) = immediate_child(root, &e.path) {
+                let c = children
+                    .entry(cpath)
+                    .or_insert((0, false, name, [0u64; 9]));
+                c.0 += e.size;
+                c.1 |= child_is_dir;
+                c.3[cat as usize] += e.size;
+            }
+            // Largest files (top 20).
+            if largest.len() < 20 {
+                largest.push(e);
+                largest.sort_by(|a, b| b.size.cmp(&a.size));
+            } else if e.size > largest.last().unwrap().size {
+                *largest.last_mut().unwrap() = e;
+                largest.sort_by(|a, b| b.size.cmp(&a.size));
+            }
+        }
+
+        let mut children: Vec<AnalyticsItem> = children
+            .into_iter()
+            .map(|(path, (size, is_dir, name, cats))| {
+                // A folder is coloured by its dominant category; a file by its own.
+                let cat = if is_dir {
+                    cats.iter()
+                        .enumerate()
+                        .max_by_key(|(_, b)| **b)
+                        .map(|(i, _)| Category::ALL[i])
+                        .unwrap_or(Category::Other)
+                } else {
+                    Category::ALL
+                        .iter()
+                        .copied()
+                        .find(|c| cats[*c as usize] > 0)
+                        .unwrap_or(Category::Other)
+                };
+                AnalyticsItem { name, path, size, is_dir, cat }
+            })
+            .collect();
+        children.sort_by(|a, b| b.size.cmp(&a.size));
+
+        let mut by_cat_v: Vec<(Category, u64, u64)> = Category::ALL
+            .iter()
+            .map(|c| (*c, by_cat[*c as usize], by_cat_n[*c as usize]))
+            .filter(|(_, b, _)| *b > 0)
+            .collect();
+        by_cat_v.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut by_ext_v: Vec<(String, u64, u64)> = by_ext
+            .into_iter()
+            .map(|(k, (c, b))| (k.to_string(), c, b))
+            .collect();
+        by_ext_v.sort_by(|a, b| b.2.cmp(&a.2));
+        by_ext_v.truncate(12);
+
+        AnalyticsData {
+            total_bytes: total,
+            files,
+            dirs,
+            children,
+            largest_files: largest
+                .into_iter()
+                .map(|e| AnalyticsItem {
+                    name: e.name.to_string(),
+                    path: e.path.to_string(),
+                    size: e.size,
+                    is_dir: false,
+                    cat: categorize(&e.ext),
+                })
+                .collect(),
+            by_cat: by_cat_v,
+            by_ext: by_ext_v,
+        }
+    }
+
     fn ui_summary(&mut self, ui: &mut egui::Ui) {
         if self.summary_cache.is_none() {
             self.summary_cache = Some(self.build_summary());
@@ -9305,6 +9658,251 @@ impl App {
                 ui.colored_label(Color32::from_rgb(80, 140, 255), format_bytes(*size));
                 ui.add(egui::Label::new(name).truncate()).on_hover_text(path);
             });
+        }
+    }
+
+    /// Drive used/total for the drive that `root` lives on.
+    fn drive_usage(&self, root: &str) -> Option<(u64, u64)> {
+        let dl = root.get(0..2)?.to_ascii_uppercase();
+        for (r, free, total) in &self.drive_info {
+            if *total > 0 && r.to_ascii_uppercase().starts_with(&dl) {
+                return Some((total.saturating_sub(*free), *total));
+            }
+        }
+        None
+    }
+
+    /// Storage-analytics overlay: squarified treemap + largest items + category
+    /// and type breakdowns + a drive gauge. WizTree-style "where is my space".
+    fn ui_analytics(&mut self, ctx: &egui::Context) {
+        if self.analytics_cache.is_none() {
+            self.analytics_cache = Some(self.build_analytics());
+        }
+        let recursive = self.recursive;
+        let root = self.root_path.clone();
+        let drive = self.drive_usage(&root);
+
+        let mut open = true;
+        let mut nav: Option<String> = None;
+        let mut reveal: Option<String> = None;
+        let mut enable_recursive = false;
+        let mut go_up = false;
+
+        {
+            let data = self.analytics_cache.as_ref().unwrap();
+            let total = data.total_bytes;
+            egui::Window::new("📊 Speicher-Analyse")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_size([960.0, 640.0])
+                .show(ctx, |ui| {
+                    // Header.
+                    ui.horizontal(|ui| {
+                        if ui.button("↑ Hoch").on_hover_text("Eine Ebene höher").clicked() {
+                            go_up = true;
+                        }
+                        ui.label(RichText::new(if root.is_empty() { "—" } else { &root }).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(format_bytes(total)).strong());
+                            ui.label(format!("{} Dateien · {} Ordner", data.files, data.dirs));
+                        });
+                    });
+                    if let Some((used, tot)) = drive {
+                        let frac = used as f32 / tot as f32;
+                        ui.add(
+                            egui::ProgressBar::new(frac)
+                                .desired_width(ui.available_width())
+                                .text(format!(
+                                    "Laufwerk: {} von {} belegt ({:.0}%)",
+                                    format_bytes(used),
+                                    format_bytes(tot),
+                                    frac * 100.0
+                                )),
+                        );
+                    }
+                    if !recursive {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 190, 90),
+                                "⚠ Ohne rekursiven Scan zählen nur Dateien der obersten Ebene.",
+                            );
+                            if ui.button("🔁 Rekursiv scannen").clicked() {
+                                enable_recursive = true;
+                            }
+                        });
+                    }
+                    ui.separator();
+
+                    ui.horizontal_top(|ui| {
+                        // ── Treemap ──
+                        let tm_w = (ui.available_width() - 300.0).max(220.0);
+                        let tm_h = ui.available_height().max(240.0);
+                        let (tm_rect, tm_resp) =
+                            ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
+                        let weights: Vec<f64> =
+                            data.children.iter().map(|c| c.size as f64).collect();
+                        let rects = treemap_layout(&weights, tm_rect);
+                        let painter = ui.painter_at(tm_rect);
+                        painter.rect_filled(tm_rect, 0.0, Color32::from_gray(28));
+                        for (c, r) in data.children.iter().zip(&rects) {
+                            if r.width() < 1.5 || r.height() < 1.5 {
+                                continue;
+                            }
+                            let base = c.cat.color();
+                            let col = if c.is_dir { base.gamma_multiply(0.8) } else { base };
+                            painter.rect_filled(*r, 2.0, col);
+                            painter.rect_stroke(
+                                *r,
+                                2.0,
+                                egui::Stroke::new(1.0, Color32::from_black_alpha(70)),
+                            );
+                            if r.width() > 52.0 && r.height() > 20.0 {
+                                let lum = 0.299 * col.r() as f32
+                                    + 0.587 * col.g() as f32
+                                    + 0.114 * col.b() as f32;
+                                let tc = if lum < 140.0 {
+                                    Color32::from_gray(245)
+                                } else {
+                                    Color32::from_gray(20)
+                                };
+                                painter.text(
+                                    r.left_top() + egui::vec2(4.0, 3.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("{}\n{}", c.name, format_bytes(c.size)),
+                                    egui::FontId::proportional(11.0),
+                                    tc,
+                                );
+                            }
+                        }
+                        // Hover tooltip + click-to-drill.
+                        let tm_resp = tm_resp.on_hover_ui(|ui| {
+                            if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                                if let Some((c, _)) =
+                                    data.children.iter().zip(&rects).find(|(_, r)| r.contains(pos))
+                                {
+                                    let pct = if total > 0 {
+                                        c.size as f64 / total as f64 * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    ui.label(format!(
+                                        "{}{}\n{} · {:.1}%",
+                                        if c.is_dir { "📁 " } else { "" },
+                                        c.name,
+                                        format_bytes(c.size),
+                                        pct
+                                    ));
+                                }
+                            }
+                        });
+                        if tm_resp.clicked() {
+                            if let Some(pos) = tm_resp.interact_pointer_pos() {
+                                if let Some((c, _)) =
+                                    data.children.iter().zip(&rects).find(|(_, r)| r.contains(pos))
+                                {
+                                    if c.is_dir {
+                                        nav = Some(c.path.clone());
+                                    } else {
+                                        reveal = Some(c.path.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Side stats ──
+                        ui.allocate_ui(egui::vec2(290.0, tm_h), |ui| {
+                            egui::ScrollArea::vertical().id_salt("analytics_side").show(ui, |ui| {
+                                ui.label(
+                                    RichText::new("NACH KATEGORIE")
+                                        .small()
+                                        .color(Color32::from_gray(150)),
+                                );
+                                for (cat, bytes, count) in &data.by_cat {
+                                    ui_bar(ui, cat.color(), cat.label(), *bytes, total, *count);
+                                }
+
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("GRÖSSTE ORDNER")
+                                        .small()
+                                        .color(Color32::from_gray(150)),
+                                );
+                                for c in data.children.iter().filter(|c| c.is_dir).take(10) {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(format!(
+                                                "📁 {}  —  {}",
+                                                c.name,
+                                                format_bytes(c.size)
+                                            ))
+                                            .wrap(),
+                                        )
+                                        .on_hover_text(&c.path)
+                                        .clicked()
+                                    {
+                                        nav = Some(c.path.clone());
+                                    }
+                                }
+
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("GRÖSSTE DATEIEN")
+                                        .small()
+                                        .color(Color32::from_gray(150)),
+                                );
+                                for f in data.largest_files.iter().take(12) {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(format!(
+                                                "{}  —  {}",
+                                                f.name,
+                                                format_bytes(f.size)
+                                            ))
+                                            .wrap(),
+                                        )
+                                        .on_hover_text(&f.path)
+                                        .clicked()
+                                    {
+                                        reveal = Some(f.path.clone());
+                                    }
+                                }
+
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("NACH TYP")
+                                        .small()
+                                        .color(Color32::from_gray(150)),
+                                );
+                                for (ext, count, bytes) in &data.by_ext {
+                                    ui_bar(ui, Color32::from_rgb(90, 140, 200), ext, *bytes, total, *count);
+                                }
+                            });
+                        });
+                    });
+                });
+        }
+
+        if !open {
+            self.show_analytics = false;
+        }
+        if enable_recursive {
+            self.recursive = true;
+            self.rescan();
+        } else if go_up {
+            self.navigate_up();
+        } else if let Some(p) = nav {
+            self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)));
+        } else if let Some(p) = reveal {
+            // Select the file in the list and scroll to it, then close.
+            if let Some(pos) = self
+                .view
+                .iter()
+                .position(|&(i, _)| self.entries[i].path.as_ref() == p)
+            {
+                self.move_cursor_to(pos, false);
+            }
+            self.show_analytics = false;
         }
     }
 
@@ -9750,6 +10348,7 @@ impl App {
                                     "Liste → Enter",
                                     "Öffnen; bei Ordner aus der Suche zurück zur Leiste",
                                 ),
+                                ("📊  ·  ›Analyse", "Speicher-Analyse: Treemap, größte Ordner/Dateien"),
                             ],
                         ),
                         (
@@ -10508,6 +11107,9 @@ impl eframe::App for App {
         if self.show_help {
             self.ui_help_dialog(ctx);
         }
+        if self.show_analytics {
+            self.ui_analytics(ctx);
+        }
         if self.update_ready.is_some() {
             self.ui_update_dialog(ctx);
         }
@@ -10890,6 +11492,48 @@ mod omni_tests {
         assert!(fuzzy_contains("Terminal hier öffnen", "term"));
         assert!(!fuzzy_contains("Neuer Ordner", "xyz"));
         assert!(!fuzzy_contains("abc", "abcd"));
+    }
+
+    #[test]
+    fn categories() {
+        assert_eq!(categorize("MP4"), Category::Video);
+        assert_eq!(categorize("jpg"), Category::Image);
+        assert_eq!(categorize("zip"), Category::Archive);
+        assert_eq!(categorize("rs"), Category::Code);
+        assert_eq!(categorize("iso"), Category::Disk);
+        assert_eq!(categorize("exe"), Category::App);
+        assert_eq!(categorize("qwerty"), Category::Other);
+    }
+
+    #[test]
+    fn immediate_children() {
+        let r = "C:/Users/me";
+        assert_eq!(
+            immediate_child(r, "C:/Users/me/docs/a.txt"),
+            Some(("docs".into(), "C:/Users/me/docs".into(), true))
+        );
+        assert_eq!(
+            immediate_child(r, "C:/Users/me/big.iso"),
+            Some(("big.iso".into(), "C:/Users/me/big.iso".into(), false))
+        );
+        assert_eq!(immediate_child(r, "C:/Users/me"), None);
+        assert_eq!(immediate_child(r, "C:/Other/x"), None);
+    }
+
+    #[test]
+    fn treemap_areas_proportional() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0));
+        let w = [50.0_f64, 30.0, 20.0];
+        let rects = treemap_layout(&w, rect);
+        let total_area: f32 = rects.iter().map(|r| r.area()).sum();
+        assert!((total_area - rect.area()).abs() < rect.area() * 0.01);
+        // Each cell stays within bounds and is proportional.
+        let big = rects[0].area();
+        let small = rects[2].area();
+        assert!(big > small);
+        for r in &rects {
+            assert!(rect.contains_rect(r.shrink(0.5)));
+        }
     }
 
     #[test]
