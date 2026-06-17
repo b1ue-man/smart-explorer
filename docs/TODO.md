@@ -68,6 +68,37 @@ from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OA
 A desktop app can't ship a usable shared secret or pass Drive verification, so
 each publisher uses their own client. With it, slice 1 authorizes end-to-end.
 
+## Storage analytics — roadmap (OPEN)
+
+WizTree-style "where is my space". First overlay shipped in **0.5.54** (toolbar
+📊 / `›Analyse`): squarified treemap of the current folder's children, largest
+folders/files, by-category + by-type bars, drive used/total gauge, ↑-up, click
+folder → drill (navigate), click file → reveal. Built on the existing scan/view.
+
+Also recently shipped (keyboard line): cursorless filter-nav (0.5.51), omnibox
+combo-field (0.5.52), Alt accelerator overlay (0.5.53).
+
+### ⚠ Must-fix before going further — dedicated analytics scanner
+The current overlay reuses the **main scanner**, which loads full per-file
+metadata (mtime/btime/flags/ext/id …) → **kills RAM** on big trees and is slow.
+Analytics needs its **own lightweight recursive scan**:
+- minimal per-node data (path + size + is_dir only), much lower memory, faster;
+- **depth-capped aggregation**: beyond a depth threshold (≈5), DON'T keep every
+  individual file path — roll their bytes up into the depth-N folder node, so a
+  huge tree stays bounded in memory. (WizTree *appears* to keep all paths to the
+  bottom — unconfirmed — but sizes are aggregated from ~depth 5.)
+- deeper drill into a capped folder can scan that subtree on demand.
+
+### Phases (dependency-ordered)
+| # | Item | State | Notes |
+|---|---|---|---|
+| A0 | **Dedicated analytics scanner** (lightweight, low-mem, depth-capped agg) — replaces reuse of the heavy `entries` | ⬜ | the must-fix above; prerequisite for everything below |
+| A0b | **Consolidate drill + recursive** into *one scan, in-memory drill*: `analytics_root` decoupled from the explorer's `root_path`; drill = re-root the compact tree (no re-scan, nested); recursive = the single data-depth control; "reveal in explorer" is the only thing that moves the main view | ⬜ | resolves the drill/recursive duplication; absorbs nested-treemap idea |
+| A1 | Interaction + charts: click category/type bar → filter; size + age histograms; CSV export | ⬜ | builds on A0/A0b |
+| A2 | **Find & reclaim**: duplicate finder (size-group → hash via sync MD5, 1-click delete) + large-stale + empty files/folders + cleanup targets (node_modules/.git/caches/logs) | ⬜ | highest user value |
+| A3 | Scale: "scan whole drive" with live-filling treemap; all-drives dashboard; snapshots / growth-over-time (persist aggregation, diff) | ⬜ | needs stable aggregation format from A0 |
+| A4 | Hard/perf (optional, Windows-only): **NTFS MFT direct read** for instant drive scans (behind the scan interface); NTFS compression/sparse awareness; cluster slack | ⬜ | large, risky — last |
+
 ## Notes
 
 - **In-app picker (#17):** `PickerState` in app.rs drives a modal that lists Home
