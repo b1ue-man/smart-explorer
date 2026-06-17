@@ -13,6 +13,61 @@
 use crate::bisync::{ConflictMode, Direction};
 use std::path::PathBuf;
 
+/// What makes a job run. Timer-based kinds (`Interval`, `Calendar`) are evaluated
+/// by `due()`; the event kinds are driven by the daemon (`OnStartup` once at
+/// launch, `RealTime` by a filesystem watch, `OnConnect` by device arrival).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Trigger {
+    Manual,
+    Interval,
+    Calendar,
+    RealTime,
+    OnStartup,
+    OnConnect,
+}
+
+impl Trigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Trigger::Manual => "manual",
+            Trigger::Interval => "interval",
+            Trigger::Calendar => "calendar",
+            Trigger::RealTime => "realtime",
+            Trigger::OnStartup => "onstartup",
+            Trigger::OnConnect => "onconnect",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Trigger> {
+        Some(match s {
+            "manual" => Trigger::Manual,
+            "interval" => Trigger::Interval,
+            "calendar" => Trigger::Calendar,
+            "realtime" => Trigger::RealTime,
+            "onstartup" => Trigger::OnStartup,
+            "onconnect" => Trigger::OnConnect,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Trigger::Manual => "Manuell (nur „Jetzt“)",
+            Trigger::Interval => "Intervall (alle N Min)",
+            Trigger::Calendar => "Zeitplan (täglich/wöchentlich/monatlich)",
+            Trigger::RealTime => "Echtzeit (bei Änderung)",
+            Trigger::OnStartup => "Beim Start",
+            Trigger::OnConnect => "Bei Geräte-/USB-Anschluss",
+        }
+    }
+    pub const ALL: [Trigger; 6] = [
+        Trigger::Manual,
+        Trigger::Interval,
+        Trigger::Calendar,
+        Trigger::RealTime,
+        Trigger::OnStartup,
+        Trigger::OnConnect,
+    ];
+}
+
 #[derive(Clone, Debug)]
 pub struct SyncJob {
     pub id: String,
@@ -24,7 +79,7 @@ pub struct SyncJob {
     pub direction: Direction,
     pub conflict: ConflictMode,
     pub retain_days: u64,
-    /// Auto-run every N minutes (0 = manual only).
+    /// Auto-run every N minutes (used when `trigger == Interval`; 0 = off).
     pub interval_min: u64,
     pub include_hidden: bool,
     /// Glob patterns matched on the relative path; matches are skipped.
@@ -32,6 +87,24 @@ pub struct SyncJob {
     /// Unix seconds of the last successful run (0 = never).
     pub last_run: i64,
     pub enabled: bool,
+
+    // ── Group D: scheduling / triggers ───────────────────────────────────────
+    pub trigger: Trigger,
+    /// Calendar: minutes after local midnight to run (e.g. 9*60 = 09:00).
+    pub cal_time_min: i32,
+    /// Calendar weekdays bitmask, bit0=Mon … bit6=Sun. 0 = every day.
+    pub cal_weekdays: u8,
+    /// Calendar day-of-month 1..31 for monthly (0 = use weekdays instead).
+    pub cal_monthday: u8,
+    /// RealTime: settle/idle delay in seconds after the last change before running.
+    pub rt_debounce_secs: u64,
+    /// OnConnect: volume label / serial / drive-letter wildcard ("" = any removable).
+    pub connect_match: String,
+    /// Active-hours window (minutes after midnight). from==to ⇒ always allowed.
+    pub active_from_min: i32,
+    pub active_to_min: i32,
+    /// Run a missed scheduled occurrence as soon as possible (else wait for next).
+    pub catch_up: bool,
 }
 
 fn now_secs() -> i64 {
@@ -47,6 +120,28 @@ fn gen_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{:x}", nanos)
+}
+
+/// Minutes after local midnight for a unix timestamp.
+fn local_min_of_day(now: i64) -> i32 {
+    use chrono::{Local, TimeZone, Timelike};
+    match Local.timestamp_opt(now, 0).single() {
+        Some(d) => d.hour() as i32 * 60 + d.minute() as i32,
+        None => 0,
+    }
+}
+
+/// Is `cur` (minutes after midnight) within the active window? `from == to`
+/// means "always". A window with `from > to` wraps past midnight.
+pub fn within_window(cur: i32, from: i32, to: i32) -> bool {
+    if from == to {
+        return true;
+    }
+    if from < to {
+        cur >= from && cur < to
+    } else {
+        cur >= from || cur < to
+    }
 }
 
 impl SyncJob {
@@ -66,14 +161,86 @@ impl SyncJob {
             ignore: Vec::new(),
             last_run: 0,
             enabled: true,
+            trigger: Trigger::Manual,
+            cal_time_min: 9 * 60,
+            cal_weekdays: 0,
+            cal_monthday: 0,
+            rt_debounce_secs: 10,
+            connect_match: String::new(),
+            active_from_min: 0,
+            active_to_min: 0,
+            catch_up: true,
         }
     }
 
-    /// Due to auto-run now?
+    /// Timer-due now? Honours the trigger kind and the active-hours window.
+    /// Event triggers (RealTime/OnStartup/OnConnect) are driven by the daemon,
+    /// not this timer check, so they return false here.
     pub fn due(&self, now: i64) -> bool {
-        self.enabled
-            && self.interval_min > 0
-            && (now - self.last_run) >= (self.interval_min as i64 * 60)
+        if !self.enabled || !self.active_now(now) {
+            return false;
+        }
+        match self.trigger {
+            Trigger::Interval => {
+                self.interval_min > 0 && (now - self.last_run) >= (self.interval_min as i64 * 60)
+            }
+            Trigger::Calendar => match self.last_occurrence(now) {
+                Some(occ) => {
+                    if self.last_run >= occ {
+                        false
+                    } else if self.catch_up {
+                        true
+                    } else {
+                        // No catch-up: only fire close to the scheduled instant
+                        // (within one daemon check window's grace ≈ 2 min).
+                        (now - occ) <= 120
+                    }
+                }
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Is `now` inside this job's active-hours window? (true when no window set).
+    pub fn active_now(&self, now: i64) -> bool {
+        within_window(local_min_of_day(now), self.active_from_min, self.active_to_min)
+    }
+
+    /// Does `day` (Mon=0..Sun=6 weekday, plus day-of-month) match this calendar?
+    fn day_matches(&self, weekday_mon0: u32, day_of_month: u32) -> bool {
+        if self.cal_monthday != 0 {
+            return day_of_month == self.cal_monthday as u32;
+        }
+        if self.cal_weekdays == 0 {
+            return true; // every day
+        }
+        (self.cal_weekdays >> weekday_mon0) & 1 == 1
+    }
+
+    /// Unix-seconds of the most recent scheduled occurrence at or before `now`
+    /// (searching back up to a year), or None if the calendar never matches.
+    fn last_occurrence(&self, now: i64) -> Option<i64> {
+        use chrono::{Datelike, Duration, Local, TimeZone};
+        let now_dt = Local.timestamp_opt(now, 0).single()?;
+        let (h, m) = (
+            (self.cal_time_min / 60).clamp(0, 23) as u32,
+            (self.cal_time_min % 60).clamp(0, 59) as u32,
+        );
+        for back in 0..366 {
+            let d = (now_dt - Duration::days(back)).date_naive();
+            if !self.day_matches(d.weekday().num_days_from_monday(), d.day()) {
+                continue;
+            }
+            let naive = d.and_hms_opt(h, m, 0)?;
+            if let Some(inst) = Local.from_local_datetime(&naive).single() {
+                let ts = inst.timestamp();
+                if ts <= now {
+                    return Some(ts);
+                }
+            }
+        }
+        None
     }
 
     /// Compile the ignore patterns into a GlobSet (bad patterns are skipped).
@@ -155,6 +322,16 @@ fn serialize_kv(j: &SyncJob) -> String {
     }
     s.push_str(&format!("last_run={}\n", j.last_run));
     s.push_str(&format!("enabled={}\n", if j.enabled { 1 } else { 0 }));
+    // Group D — scheduling / triggers
+    s.push_str(&format!("trigger={}\n", j.trigger.as_str()));
+    s.push_str(&format!("cal_time_min={}\n", j.cal_time_min));
+    s.push_str(&format!("cal_weekdays={}\n", j.cal_weekdays));
+    s.push_str(&format!("cal_monthday={}\n", j.cal_monthday));
+    s.push_str(&format!("rt_debounce_secs={}\n", j.rt_debounce_secs));
+    s.push_str(&format!("connect_match={}\n", san(&j.connect_match)));
+    s.push_str(&format!("active_from_min={}\n", j.active_from_min));
+    s.push_str(&format!("active_to_min={}\n", j.active_to_min));
+    s.push_str(&format!("catch_up={}\n", if j.catch_up { 1 } else { 0 }));
     s
 }
 
@@ -165,6 +342,7 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
     j.id.clear(); // require an explicit `id=` line
     j.ignore.clear();
     let mut saw_any = false;
+    let mut saw_trigger = false;
     for line in body.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -192,8 +370,25 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
             }
             "last_run" => j.last_run = v.parse().unwrap_or(0),
             "enabled" => j.enabled = v != "0",
+            "trigger" => {
+                j.trigger = Trigger::parse(v).unwrap_or(Trigger::Manual);
+                saw_trigger = true;
+            }
+            "cal_time_min" => j.cal_time_min = v.parse().unwrap_or(540),
+            "cal_weekdays" => j.cal_weekdays = v.parse().unwrap_or(0),
+            "cal_monthday" => j.cal_monthday = v.parse().unwrap_or(0),
+            "rt_debounce_secs" => j.rt_debounce_secs = v.parse().unwrap_or(10),
+            "connect_match" => j.connect_match = v.to_string(),
+            "active_from_min" => j.active_from_min = v.parse().unwrap_or(0),
+            "active_to_min" => j.active_to_min = v.parse().unwrap_or(0),
+            "catch_up" => j.catch_up = v != "0",
             _ => {} // unknown / future key — ignored
         }
+    }
+    // Back-compat: a job saved before triggers existed but with an interval set
+    // was an interval job.
+    if !saw_trigger && j.interval_min > 0 {
+        j.trigger = Trigger::Interval;
     }
     if saw_any && !j.id.is_empty() {
         Some(j)
@@ -208,24 +403,27 @@ fn parse_legacy(line: &str) -> Option<SyncJob> {
     if f.len() < 12 {
         return None;
     }
-    Some(SyncJob {
-        id: f[0].to_string(),
-        name: f[1].to_string(),
-        source: f[2].to_string(),
-        target: f[3].to_string(),
-        direction: Direction::parse(f[4]).unwrap_or(Direction::Both),
-        conflict: ConflictMode::parse(f[5]).unwrap_or(ConflictMode::FileLevel),
-        retain_days: f[6].parse().unwrap_or(30),
-        interval_min: f[7].parse().unwrap_or(0),
-        include_hidden: f[8] != "0",
-        ignore: if f[9].is_empty() {
-            Vec::new()
-        } else {
-            f[9].split('\u{1f}').map(|s| s.to_string()).collect()
-        },
-        last_run: f[10].parse().unwrap_or(0),
-        enabled: f[11] != "0",
-    })
+    let mut j = SyncJob::new(f[1].to_string(), f[2].to_string(), f[3].to_string());
+    j.id = f[0].to_string();
+    j.direction = Direction::parse(f[4]).unwrap_or(Direction::Both);
+    j.conflict = ConflictMode::parse(f[5]).unwrap_or(ConflictMode::FileLevel);
+    j.retain_days = f[6].parse().unwrap_or(30);
+    j.interval_min = f[7].parse().unwrap_or(0);
+    j.include_hidden = f[8] != "0";
+    j.ignore = if f[9].is_empty() {
+        Vec::new()
+    } else {
+        f[9].split('\u{1f}').map(|s| s.to_string()).collect()
+    };
+    j.last_run = f[10].parse().unwrap_or(0);
+    j.enabled = f[11] != "0";
+    // The old format predates triggers: an interval meant an interval job.
+    j.trigger = if j.interval_min > 0 {
+        Trigger::Interval
+    } else {
+        Trigger::Manual
+    };
+    Some(j)
 }
 
 // ── dir-based store (testable with an explicit directory) ────────────────────
@@ -443,8 +641,10 @@ mod tests {
     }
 
     #[test]
-    fn due_logic() {
+    fn due_logic_interval() {
         let mut j = SyncJob::new("x".into(), "a".into(), "b".into());
+        assert!(!j.due(1000), "manual trigger is never timer-due");
+        j.trigger = Trigger::Interval;
         assert!(!j.due(1000), "interval 0 = never due");
         j.interval_min = 10;
         j.last_run = 0;
@@ -454,6 +654,40 @@ mod tests {
         assert!(j.due(700 + 600));
         j.enabled = false;
         assert!(!j.due(99999), "disabled never due");
+    }
+
+    #[test]
+    fn within_window_logic() {
+        // always (from==to)
+        assert!(within_window(0, 0, 0));
+        assert!(within_window(720, 480, 480));
+        // normal window 09:00–17:00
+        assert!(within_window(600, 540, 1020));
+        assert!(!within_window(1100, 540, 1020));
+        assert!(!within_window(300, 540, 1020));
+        // wraps midnight 22:00–06:00
+        assert!(within_window(1380, 1320, 360)); // 23:00
+        assert!(within_window(120, 1320, 360)); // 02:00
+        assert!(!within_window(720, 1320, 360)); // 12:00
+    }
+
+    #[test]
+    fn calendar_day_matches() {
+        let mut j = SyncJob::new("x".into(), "a".into(), "b".into());
+        // every day
+        j.cal_weekdays = 0;
+        j.cal_monthday = 0;
+        assert!(j.day_matches(0, 15));
+        assert!(j.day_matches(6, 1));
+        // weekly: Mon + Fri (bit0 | bit4)
+        j.cal_weekdays = 0b0001_0001;
+        assert!(j.day_matches(0, 10)); // Mon
+        assert!(j.day_matches(4, 10)); // Fri
+        assert!(!j.day_matches(2, 10)); // Wed
+        // monthly overrides weekdays
+        j.cal_monthday = 15;
+        assert!(j.day_matches(2, 15));
+        assert!(!j.day_matches(0, 16));
     }
 
     #[test]
