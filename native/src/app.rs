@@ -1005,113 +1005,6 @@ fn draw_accel_badge(painter: &egui::Painter, rect: egui::Rect, c: char) {
 
 // ─── Storage analytics ───────────────────────────────────────────────────────
 
-/// Coarse file category for the analytics breakdown + treemap colouring.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Category {
-    Video,
-    Image,
-    Audio,
-    Document,
-    Archive,
-    Code,
-    Disk,
-    App,
-    Other,
-}
-
-impl Category {
-    const ALL: [Category; 9] = [
-        Category::Video,
-        Category::Image,
-        Category::Audio,
-        Category::Document,
-        Category::Archive,
-        Category::Code,
-        Category::Disk,
-        Category::App,
-        Category::Other,
-    ];
-    fn label(self) -> &'static str {
-        match self {
-            Category::Video => "Video",
-            Category::Image => "Bilder",
-            Category::Audio => "Audio",
-            Category::Document => "Dokumente",
-            Category::Archive => "Archive",
-            Category::Code => "Code/Daten",
-            Category::Disk => "Disk-Images",
-            Category::App => "Programme",
-            Category::Other => "Sonstige",
-        }
-    }
-    fn color(self) -> Color32 {
-        match self {
-            Category::Video => Color32::from_rgb(228, 90, 90),
-            Category::Image => Color32::from_rgb(90, 170, 228),
-            Category::Audio => Color32::from_rgb(200, 130, 230),
-            Category::Document => Color32::from_rgb(95, 190, 130),
-            Category::Archive => Color32::from_rgb(230, 175, 70),
-            Category::Code => Color32::from_rgb(120, 200, 200),
-            Category::Disk => Color32::from_rgb(180, 110, 80),
-            Category::App => Color32::from_rgb(150, 160, 180),
-            Category::Other => Color32::from_rgb(130, 130, 140),
-        }
-    }
-}
-
-fn categorize(ext: &str) -> Category {
-    match ext.to_ascii_lowercase().as_str() {
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg" | "ts"
-        | "3gp" | "m2ts" => Category::Video,
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "heic" | "raw"
-        | "cr2" | "nef" | "arw" | "dng" | "svg" | "ico" | "psd" => Category::Image,
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" | "opus" | "aiff" | "mid" => {
-            Category::Audio
-        }
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "odt" | "ods"
-        | "odp" | "csv" | "md" | "epub" | "mobi" | "tex" => Category::Document,
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "cab" | "lz" | "tgz"
-        | "lzma" => Category::Archive,
-        "rs" | "c" | "cpp" | "cc" | "h" | "hpp" | "py" | "js" | "jsx" | "ts" | "tsx" | "java"
-        | "go" | "rb" | "php" | "cs" | "swift" | "kt" | "sh" | "json" | "xml" | "yaml" | "yml"
-        | "toml" | "html" | "css" | "sql" | "lua" | "pl" | "r" => Category::Code,
-        "iso" | "vhd" | "vhdx" | "vmdk" | "img" | "dmg" | "wim" => Category::Disk,
-        "exe" | "msi" | "dll" | "apk" | "appx" | "deb" | "rpm" | "bin" | "sys" | "so" => {
-            Category::App
-        }
-        _ => Category::Other,
-    }
-}
-
-/// A labelled proportional bar (category/type breakdown).
-fn ui_bar(ui: &mut egui::Ui, color: Color32, label: &str, bytes: u64, total: u64, count: u64) {
-    let frac = if total > 0 {
-        (bytes as f32 / total as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let w = ui.available_width().min(280.0).max(120.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::hover());
-    let p = ui.painter_at(rect);
-    p.rect_filled(rect, 3.0, Color32::from_gray(48));
-    let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * frac, rect.height()));
-    p.rect_filled(fill, 3.0, color);
-    p.text(
-        rect.left_center() + egui::vec2(6.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        format!("{}  ({}×)", label, count),
-        egui::FontId::proportional(11.0),
-        Color32::WHITE,
-    );
-    p.text(
-        rect.right_center() - egui::vec2(6.0, 0.0),
-        egui::Align2::RIGHT_CENTER,
-        format_bytes(bytes),
-        egui::FontId::proportional(11.0),
-        Color32::WHITE,
-    );
-}
-
 /// Squarified treemap layout (Bruls/Huizing/van Wijk). Returns a rect per input
 /// weight, in the SAME order, with area proportional to the weight; zero/negative
 /// weights get an empty rect.
@@ -1187,14 +1080,6 @@ fn squarify_sorted(scaled: &[f64], mut rect: egui::Rect) -> Vec<egui::Rect> {
     out
 }
 
-/// Borrowed extension (after last dot) for categorisation; "" if none.
-fn ext_of(name: &str) -> &str {
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => ext,
-        _ => "",
-    }
-}
-
 /// Recursive (files, dirs) count under `node`.
 fn count_subtree(node: &crate::analytics::SizeNode) -> (u64, u64) {
     let mut files = 0u64;
@@ -1219,14 +1104,32 @@ const TM_HEADER: f32 = 15.0; // folder header strip height
 const TM_MAXDEPTH: usize = 14;
 const TM_MAXCELLS: usize = 80_000;
 
+/// Distinct, slightly muted hues for treemap groups. Each immediate child of the
+/// focus picks the next palette colour (so adjacent groups differ); the whole
+/// subtree inherits that colour — you see the grouping, not file types.
+const TM_PALETTE: [Color32; 10] = [
+    Color32::from_rgb(0x5b, 0x8f, 0xc9), // blue
+    Color32::from_rgb(0xe0, 0x8a, 0x3c), // orange
+    Color32::from_rgb(0x6f, 0xb5, 0x6a), // green
+    Color32::from_rgb(0xc9, 0x5f, 0x5f), // red
+    Color32::from_rgb(0x9b, 0x7c, 0xc9), // purple
+    Color32::from_rgb(0x4f, 0xb0, 0xb0), // teal
+    Color32::from_rgb(0xc9, 0xa8, 0x4f), // gold
+    Color32::from_rgb(0xc9, 0x6f, 0xa8), // pink
+    Color32::from_rgb(0x7f, 0x9b, 0x55), // olive
+    Color32::from_rgb(0x6f, 0x8a, 0xa8), // slate
+];
+
 /// Lay out `node`'s children into `rect` as a squarified treemap, recursing into
 /// folders that are big enough (WizTree-style nested view). Collects paintable
-/// `TmCell`s; the parent is responsible for painting them.
+/// `TmCell`s; the parent is responsible for painting them. `group` is the hue
+/// inherited from the focus-level ancestor (None at the focus level itself).
 fn nested_treemap(
     rect: egui::Rect,
     node: &crate::analytics::SizeNode,
     base: &str,
     depth: usize,
+    group: Option<Color32>,
     cells: &mut Vec<TmCell>,
 ) {
     if cells.len() >= TM_MAXCELLS
@@ -1238,10 +1141,22 @@ fn nested_treemap(
     }
     let weights: Vec<f64> = node.children.iter().map(|c| c.size.max(1) as f64).collect();
     let rects = treemap_layout(&weights, rect);
-    for (c, r) in node.children.iter().zip(&rects) {
+    // Palette by size-rank: squarify places cells in size order, so consecutive
+    // ranks land side-by-side → adjacent groups get different hues.
+    let mut rank = vec![0usize; node.children.len()];
+    {
+        let mut order: Vec<usize> = (0..node.children.len()).collect();
+        order.sort_by(|&a, &b| node.children[b].size.cmp(&node.children[a].size));
+        for (r, &idx) in order.iter().enumerate() {
+            rank[idx] = r;
+        }
+    }
+    for (i, (c, r)) in node.children.iter().zip(&rects).enumerate() {
         if r.width() < TM_MIN || r.height() < TM_MIN {
             continue;
         }
+        // Focus-level children seed a hue by rank; deeper cells inherit it.
+        let gcol = group.unwrap_or(TM_PALETTE[rank[i] % TM_PALETTE.len()]);
         let path = format!("{}/{}", base, c.name);
         let recurse = c.is_dir
             && !c.children.is_empty()
@@ -1256,19 +1171,14 @@ fn nested_treemap(
                 size: c.size,
                 is_dir: true,
                 container: true,
-                color: Color32::from_gray(36),
+                color: gcol,
             });
             let inner = egui::Rect::from_min_max(
                 egui::pos2(r.min.x + 1.5, r.min.y + TM_HEADER),
                 egui::pos2(r.max.x - 1.5, r.max.y - 1.5),
             );
-            nested_treemap(inner, c, &path, depth + 1, cells);
+            nested_treemap(inner, c, &path, depth + 1, Some(gcol), cells);
         } else {
-            let color = if c.is_dir {
-                Color32::from_gray(82)
-            } else {
-                categorize(ext_of(&c.name)).color()
-            };
             cells.push(TmCell {
                 rect: *r,
                 name: c.name.to_string(),
@@ -1276,7 +1186,7 @@ fn nested_treemap(
                 size: c.size,
                 is_dir: c.is_dir,
                 container: false,
-                color,
+                color: gcol,
             });
         }
     }
@@ -9911,7 +9821,7 @@ impl App {
 
                     // ── Nested treemap ──
                     let tm_w = ui.available_width();
-                    let tm_h = (ui.available_height() - 26.0).max(200.0);
+                    let tm_h = ui.available_height().max(200.0);
                     let (tm_rect, tm_resp) =
                         ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
@@ -9922,7 +9832,7 @@ impl App {
                     let cells: &[TmCell] = if need {
                         let mut v = Vec::new();
                         if let Some(node) = focus_node {
-                            nested_treemap(tm_rect, node, &focus_path, 0, &mut v);
+                            nested_treemap(tm_rect, node, &focus_path, 0, None, &mut v);
                         }
                         recomputed = Some((v, tm_rect));
                         &recomputed.as_ref().unwrap().0
@@ -9934,34 +9844,41 @@ impl App {
                     painter.rect_filled(tm_rect, 0.0, Color32::from_gray(22));
                     for cell in cells {
                         if cell.container {
-                            painter.rect_filled(cell.rect, 2.0, cell.color);
+                            // Folder = darkened group hue + a lighter header strip.
+                            let fill = cell.color.gamma_multiply(0.40);
+                            painter.rect_filled(cell.rect, 2.0, fill);
                             painter.rect_stroke(cell.rect, 2.0, egui::Stroke::new(1.0, Color32::from_black_alpha(130)));
                             let hr = egui::Rect::from_min_max(
                                 cell.rect.min,
                                 egui::pos2(cell.rect.max.x, cell.rect.min.y + TM_HEADER),
                             );
-                            painter.rect_filled(hr, 0.0, Color32::from_gray(54));
-                            painter.text(
-                                hr.min + egui::vec2(4.0, 1.0),
-                                egui::Align2::LEFT_TOP,
-                                format!("{}  {}", cell.name, format_bytes(cell.size)),
-                                egui::FontId::proportional(11.0),
-                                Color32::from_gray(225),
-                            );
+                            painter.rect_filled(hr, 0.0, cell.color.gamma_multiply(0.7));
+                            painter
+                                .with_clip_rect(hr.shrink(2.0))
+                                .text(
+                                    hr.min + egui::vec2(4.0, 1.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("{}  {}", cell.name, format_bytes(cell.size)),
+                                    egui::FontId::proportional(11.0),
+                                    Color32::from_gray(235),
+                                );
                         } else {
                             painter.rect_filled(cell.rect, 1.0, cell.color);
                             painter.rect_stroke(cell.rect, 1.0, egui::Stroke::new(0.5, Color32::from_black_alpha(70)));
-                            if cell.rect.width() > 46.0 && cell.rect.height() > 16.0 {
+                            if cell.rect.width() > 40.0 && cell.rect.height() > 15.0 {
                                 let col = cell.color;
                                 let lum = 0.299 * col.r() as f32 + 0.587 * col.g() as f32 + 0.114 * col.b() as f32;
                                 let tc = if lum < 140.0 { Color32::from_gray(245) } else { Color32::from_gray(20) };
-                                painter.text(
-                                    cell.rect.left_top() + egui::vec2(3.0, 2.0),
-                                    egui::Align2::LEFT_TOP,
-                                    format!("{}{}\n{}", if cell.is_dir { "📁 " } else { "" }, cell.name, format_bytes(cell.size)),
-                                    egui::FontId::proportional(11.0),
-                                    tc,
-                                );
+                                // Clip to the cell so long names don't bleed across.
+                                painter
+                                    .with_clip_rect(cell.rect.shrink(2.0))
+                                    .text(
+                                        cell.rect.left_top() + egui::vec2(3.0, 2.0),
+                                        egui::Align2::LEFT_TOP,
+                                        format!("{}{}\n{}", if cell.is_dir { "📁 " } else { "" }, cell.name, format_bytes(cell.size)),
+                                        egui::FontId::proportional(11.0),
+                                        tc,
+                                    );
                             }
                         }
                     }
@@ -9971,13 +9888,14 @@ impl App {
                         if let Some(pos) = ui.ctx().pointer_hover_pos() {
                             if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
                                 let pct = if focus_size > 0 { cell.size as f64 / focus_size as f64 * 100.0 } else { 0.0 };
-                                ui.label(format!(
-                                    "{}{}\n{} · {:.1}%",
+                                // Don't wrap the tooltip into a narrow column.
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                                ui.label(RichText::new(format!(
+                                    "{}{}",
                                     if cell.is_dir { "📁 " } else { "" },
-                                    cell.name,
-                                    format_bytes(cell.size),
-                                    pct
-                                ));
+                                    cell.name
+                                )).strong());
+                                ui.label(format!("{} · {:.1}%", format_bytes(cell.size), pct));
                             }
                         }
                     });
@@ -9992,20 +9910,6 @@ impl App {
                             }
                         }
                     }
-
-                    // ── Legend ──
-                    ui.add_space(2.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for cat in Category::ALL {
-                            let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
-                            ui.painter().rect_filled(r, 2.0, cat.color());
-                            ui.label(RichText::new(cat.label()).small());
-                            ui.add_space(4.0);
-                        }
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
-                        ui.painter().rect_filled(r, 2.0, Color32::from_gray(82));
-                        ui.label(RichText::new("Ordner").small());
-                    });
                 });
         }
 
@@ -11639,25 +11543,6 @@ mod omni_tests {
         assert!(fuzzy_contains("Terminal hier öffnen", "term"));
         assert!(!fuzzy_contains("Neuer Ordner", "xyz"));
         assert!(!fuzzy_contains("abc", "abcd"));
-    }
-
-    #[test]
-    fn categories() {
-        assert_eq!(categorize("MP4"), Category::Video);
-        assert_eq!(categorize("jpg"), Category::Image);
-        assert_eq!(categorize("zip"), Category::Archive);
-        assert_eq!(categorize("rs"), Category::Code);
-        assert_eq!(categorize("iso"), Category::Disk);
-        assert_eq!(categorize("exe"), Category::App);
-        assert_eq!(categorize("qwerty"), Category::Other);
-    }
-
-    #[test]
-    fn ext_helpers() {
-        assert_eq!(ext_of("movie.MP4"), "MP4");
-        assert_eq!(ext_of("README"), "");
-        assert_eq!(ext_of(".gitignore"), "");
-        assert_eq!(ext_of("a.tar.gz"), "gz");
     }
 
     #[test]
