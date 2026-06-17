@@ -1470,8 +1470,10 @@ pub fn run(
     // runs before the re-walk so the baseline reflects the deduped state.
     if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
         let dedup = match opts.direction {
-            Direction::AtoB => b.dedupe_recursive(root_b).ok(),
-            Direction::BtoA => a.dedupe_recursive(root_a).ok(),
+            // Keep only names present on the source side (the mirror's truth);
+            // an orphaned duplicate name is removed entirely.
+            Direction::AtoB => b.dedupe_recursive(root_b, &|rel| at.contains_key(rel)).ok(),
+            Direction::BtoA => a.dedupe_recursive(root_a, &|rel| bt.contains_key(rel)).ok(),
             Direction::Both => None,
         };
         st.deleted += dedup.unwrap_or(0) as u64;
