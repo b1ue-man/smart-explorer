@@ -609,7 +609,18 @@ pub fn walk_files(
                             }
                             if !files.is_empty() {
                                 let mut o = out.lock().unwrap();
-                                o.extend(files);
+                                // A backend may report two files with the same
+                                // name in one folder (e.g. Google Drive keys by
+                                // id, not name). Keep the newest deterministically
+                                // so the plan is stable rather than order-dependent.
+                                for (rel, sig) in files {
+                                    match o.get(&rel) {
+                                        Some(prev) if prev.mtime_ms >= sig.mtime_ms => {}
+                                        _ => {
+                                            o.insert(rel, sig);
+                                        }
+                                    }
+                                }
                             }
                             if !dirs.is_empty() {
                                 next.lock().unwrap().extend(dirs);
@@ -818,6 +829,10 @@ fn copy_between(
     throttle: &Throttle,
 ) -> io::Result<u64> {
     use std::io::{Read, Write};
+    // Safe-copies (temp then rename) are only correct where rename atomically
+    // REPLACES the destination. On backends like Google Drive a rename creates a
+    // duplicate same-named file instead of overwriting, so write in place there.
+    let atomic = atomic && dst.rename_overwrites();
     if let Some(parent) = parent_of(dp) {
         let _ = dst.mkdir_all(&parent);
     }
@@ -1131,6 +1146,58 @@ pub fn update_baseline(
     // Drop entries that are now absent on both sides and not in conflict.
     nb.retain(|rel, (x, y)| x.is_some() || y.is_some() || conflict_set.contains(rel.as_str()));
     nb
+}
+
+/// A read-only comparison of two sync endpoints (the "ls-diff" view): the
+/// planned actions + conflicts, with no changes applied. Uses the saved baseline
+/// (so it shows what *would* sync, exactly as a real run would decide).
+#[derive(Default)]
+pub struct Preview {
+    pub actions: Vec<Action>,
+    pub conflicts: Vec<Conflict>,
+    pub a_files: usize,
+    pub b_files: usize,
+    pub error: Option<String>,
+}
+
+pub fn preview(
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+) -> Preview {
+    let base = load_baseline(&baseline_path(&pair_id(root_a, root_b)));
+    let hash = opts.compare == CompareMode::Checksum;
+    let at = match walk_files(a, root_a, cancel, filter, hash) {
+        Ok(t) => t,
+        Err(e) => {
+            return Preview {
+                error: Some(format!("{}: {}", root_a, e)),
+                ..Default::default()
+            }
+        }
+    };
+    let bt = match walk_files(b, root_b, cancel, filter, hash) {
+        Ok(t) => t,
+        Err(e) => {
+            return Preview {
+                error: Some(format!("{}: {}", root_b, e)),
+                ..Default::default()
+            }
+        }
+    };
+    let (a_files, b_files) = (at.len(), bt.len());
+    let (actions, conflicts, _converged) = plan(&at, &bt, &base, opts);
+    Preview {
+        actions,
+        conflicts,
+        a_files,
+        b_files,
+        error: None,
+    }
 }
 
 // ── persistence (baseline TSV in appdata, keyed by the two roots) ────────────

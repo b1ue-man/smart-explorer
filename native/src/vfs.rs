@@ -93,6 +93,15 @@ pub trait Backend: Send + Sync {
     fn parallelism(&self) -> usize {
         rayon::current_num_threads()
     }
+
+    /// Does `rename(src, dst)` atomically REPLACE an existing `dst`? Only then is
+    /// the "write temp then rename" safe-copy pattern correct. Default false —
+    /// e.g. Google Drive allows duplicate names so a rename creates a second file
+    /// instead of overwriting; SFTP/FTP renames may fail if the target exists.
+    /// Local filesystems override this to true.
+    fn rename_overwrites(&self) -> bool {
+        false
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -227,6 +236,9 @@ impl Backend for LocalBackend {
     }
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         std::fs::rename(to_os(src), to_os(dst))
+    }
+    fn rename_overwrites(&self) -> bool {
+        true // std::fs::rename atomically replaces an existing destination
     }
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         std::fs::remove_file(to_os(path))

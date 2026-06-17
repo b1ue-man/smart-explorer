@@ -98,6 +98,7 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
+    "Networking_Connectivity",
 ] }
 
 # Host-only (CI / `cargo test`); never part of the Windows build.

@@ -378,6 +378,12 @@ pub struct App {
     bisync_ctx: Option<BisyncCtx>,
     bisync_conflicts: Vec<crate::bisync::Conflict>,
     show_bisync_conflicts: bool,
+    /// Compare ("ls-diff") view: a running preview + its result window.
+    preview_rx: Option<Receiver<crate::bisync::Preview>>,
+    preview_running: bool,
+    preview: Option<crate::bisync::Preview>,
+    preview_title: String,
+    show_preview: bool,
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -1156,6 +1162,11 @@ impl App {
             bisync_ctx: None,
             bisync_conflicts: Vec::new(),
             show_bisync_conflicts: false,
+            preview_rx: None,
+            preview_running: false,
+            preview: None,
+            preview_title: String::new(),
+            show_preview: false,
             sync_cancel: None,
             bisync_cancel: None,
 
@@ -2816,6 +2827,159 @@ impl App {
             (0, 0, 0, 0),
             None,
         );
+    }
+
+    /// Compare a saved setup's two locations without changing anything (the
+    /// "ls-diff" the user asked for). Resolves endpoints off-thread (local or
+    /// remote) and runs `bisync::preview` with the job's own options/filters.
+    fn launch_preview(&mut self, job: &crate::syncjobs::SyncJob) {
+        if self.preview_running {
+            return;
+        }
+        let job = job.clone();
+        self.preview_title = format!("{}  ⇄  {}", job.source, job.target);
+        let now = now_secs_i64();
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("preview".into())
+            .spawn(move || {
+                let cancel = std::sync::atomic::AtomicBool::new(false);
+                let result = (|| -> Result<crate::bisync::Preview, String> {
+                    let (a, ra) =
+                        crate::connect::resolve_endpoint(&job.source).map_err(|e| e.to_string())?;
+                    let (b, rb) =
+                        crate::connect::resolve_endpoint(&job.target).map_err(|e| e.to_string())?;
+                    let gs = job.glob_set();
+                    let (mn, mx, af, bf) = job.filter_bounds(now);
+                    let f = crate::bisync::WalkFilter {
+                        include_hidden: job.include_hidden,
+                        ignore: &gs,
+                        min_size: mn,
+                        max_size: mx,
+                        after_mtime_ms: af,
+                        before_mtime_ms: bf,
+                    };
+                    Ok(crate::bisync::preview(
+                        &*a,
+                        &ra,
+                        &*b,
+                        &rb,
+                        job.opts(true),
+                        &cancel,
+                        &f,
+                    ))
+                })()
+                .unwrap_or_else(|e| crate::bisync::Preview {
+                    error: Some(e),
+                    ..Default::default()
+                });
+                let _ = tx.send(result);
+            })
+            .ok();
+        self.preview_rx = Some(rx);
+        self.preview_running = true;
+        self.preview = None;
+        self.show_preview = true;
+    }
+
+    fn drain_preview(&mut self) {
+        if let Some(p) = self.preview_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.preview = Some(p);
+            self.preview_running = false;
+            self.preview_rx = None;
+        }
+    }
+
+    /// The compare-result window: per-file differences, grouped by direction.
+    fn ui_preview(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_preview;
+        egui::Window::new("🔍 Vergleich (Vorschau)")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([680.0, 460.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(&self.preview_title)
+                        .small()
+                        .color(Color32::from_gray(170)),
+                );
+                ui.separator();
+                if self.preview_running {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Vergleiche beide Seiten…");
+                    });
+                    return;
+                }
+                let p = match &self.preview {
+                    Some(p) => p,
+                    None => {
+                        ui.label("—");
+                        return;
+                    }
+                };
+                if let Some(e) = &p.error {
+                    ui.colored_label(Color32::from_rgb(230, 120, 120), format!("Fehler: {}", e));
+                    return;
+                }
+                let mut to_b = 0usize;
+                let mut to_a = 0usize;
+                let mut del = 0usize;
+                for act in &p.actions {
+                    match act {
+                        crate::bisync::Action::CopyAtoB(_)
+                        | crate::bisync::Action::KeepBothAtoB(_) => to_b += 1,
+                        crate::bisync::Action::CopyBtoA(_)
+                        | crate::bisync::Action::KeepBothBtoA(_) => to_a += 1,
+                        crate::bisync::Action::DeleteA(_)
+                        | crate::bisync::Action::DeleteB(_) => del += 1,
+                    }
+                }
+                ui.label(format!(
+                    "Quelle: {} Dateien · Ziel: {} Dateien",
+                    p.a_files, p.b_files
+                ));
+                ui.label(
+                    RichText::new(format!(
+                        "{}→ zum Ziel · {}← zur Quelle · {} zu löschen · {} Konflikte",
+                        to_b,
+                        to_a,
+                        del,
+                        p.conflicts.len()
+                    ))
+                    .strong(),
+                );
+                if p.actions.is_empty() && p.conflicts.is_empty() {
+                    ui.add_space(6.0);
+                    ui.colored_label(
+                        Color32::from_rgb(120, 200, 120),
+                        "✓ Beide Seiten sind im Einklang — nichts zu tun.",
+                    );
+                    return;
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for c in &p.conflicts {
+                        ui.colored_label(
+                            Color32::from_rgb(230, 200, 90),
+                            format!("⚠ Konflikt: {}", c.rel),
+                        );
+                    }
+                    for act in &p.actions {
+                        let (sym, color, rel) = match act {
+                            crate::bisync::Action::CopyAtoB(r) => ("→", Color32::from_rgb(120, 200, 120), r),
+                            crate::bisync::Action::CopyBtoA(r) => ("←", Color32::from_rgb(120, 200, 120), r),
+                            crate::bisync::Action::DeleteB(r) => ("🗑→", Color32::from_rgb(230, 150, 120), r),
+                            crate::bisync::Action::DeleteA(r) => ("🗑←", Color32::from_rgb(230, 150, 120), r),
+                            crate::bisync::Action::KeepBothAtoB(r) => ("⇄→", Color32::from_rgb(230, 200, 90), r),
+                            crate::bisync::Action::KeepBothBtoA(r) => ("⇄←", Color32::from_rgb(230, 200, 90), r),
+                        };
+                        ui.colored_label(color, format!("{}  {}", sym, rel));
+                    }
+                });
+            });
+        self.show_preview = open;
     }
 
     fn drain_bisync(&mut self) {
@@ -6543,7 +6707,7 @@ impl App {
                 .changed();
             let c2 = ui
                 .checkbox(&mut met, "Bei getakteter Verbindung")
-                .on_hover_text("Bei getakteten Netzwerken pausieren (Erkennung folgt; aktuell ohne Effekt)")
+                .on_hover_text("Synchronisierung anhalten, solange eine getaktete Netzwerkverbindung erkannt wird (Windows)")
                 .changed();
             if c1 || c2 {
                 crate::daemon::set_autopause_flags(bat, met);
@@ -6598,6 +6762,7 @@ impl App {
     fn ui_sync_jobs(&mut self, ctx: &egui::Context) {
         let mut open = self.show_sync_jobs;
         let mut run_id: Option<String> = None;
+        let mut compare_id: Option<String> = None;
         let mut edit_id: Option<String> = None;
         let mut del_id: Option<String> = None;
         let mut toggle_id: Option<String> = None;
@@ -6652,6 +6817,11 @@ impl App {
                                         && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()
                                     {
                                         run_id = Some(j.id.clone());
+                                    }
+                                    if !self.preview_running
+                                        && ui.small_button("🔍 Vergleichen").on_hover_text("Beide Seiten vergleichen, ohne etwas zu ändern (zeigt, was synchronisiert würde)").clicked()
+                                    {
+                                        compare_id = Some(j.id.clone());
                                     }
                                 });
                             });
@@ -6752,6 +6922,11 @@ impl App {
         }
         if let Some(id) = run_id {
             self.run_job(&id);
+        }
+        if let Some(id) = compare_id {
+            if let Some(j) = self.sync_jobs.iter().find(|j| j.id == id).cloned() {
+                self.launch_preview(&j);
+            }
         }
     }
 
@@ -8681,6 +8856,7 @@ impl eframe::App for App {
         self.drain_connect();
         self.drain_sync();
         self.drain_bisync();
+        self.drain_preview();
         self.drain_job_connect();
         self.drain_picker_connect();
         self.drain_cloud_auth();
@@ -9098,6 +9274,9 @@ impl eframe::App for App {
         self.ui_bisync_conflicts(ctx);
         if self.show_sync_jobs {
             self.ui_sync_jobs(ctx);
+        }
+        if self.show_preview {
+            self.ui_preview(ctx);
         }
         if self.show_daemon_log {
             self.ui_daemon_log(ctx);
