@@ -157,6 +157,7 @@ fn run_scan(
                 hidden,
                 system,
                 depth: 0,
+                id: None,
             };
             let _ = tx.send(ScanMessage::Entries(vec![entry]));
         }
@@ -344,6 +345,7 @@ fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PathBuf>, depth: u32) {
                 hidden,
                 system,
                 depth,
+                id: None,
             };
 
             scanner.scanned.fetch_add(1, Ordering::Relaxed);
@@ -453,6 +455,7 @@ fn walk_into_vec(
                 hidden,
                 system,
                 depth,
+                id: None,
             });
             if is_dir && (!is_symlink || opts.follow_symlinks) {
                 subdirs.push(path);

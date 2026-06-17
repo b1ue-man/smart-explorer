@@ -54,6 +54,7 @@ fn dir_meta(name: String) -> VfsMeta {
         btime_ms: 0,
         hidden: false,
         system: false,
+        id: None,
     }
 }
 
@@ -206,6 +207,7 @@ impl Backend for FtpBackend {
                     hidden: name.starts_with('.'),
                     system: false,
                     name,
+                    id: None,
                 });
             }
         }
