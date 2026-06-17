@@ -97,6 +97,83 @@ pub fn diff(a: &str, b: &str) -> Vec<Hunk> {
     hunks
 }
 
+/// One aligned row of a side-by-side (git-style) diff: the A line and the B line
+/// shown next to each other, with independent "include this side" toggles. A
+/// `None` side is a gap (the line exists only on the other side).
+#[derive(Clone, Debug)]
+pub struct Row {
+    pub left: Option<String>,
+    pub right: Option<String>,
+    /// Both sides identical at this row (always kept; toggles ignored).
+    pub equal: bool,
+    pub take_left: bool,
+    pub take_right: bool,
+}
+
+/// Build an aligned side-by-side view of `a` vs `b`. Equal lines line up; within
+/// a change block, A and B lines are paired by position (extra lines on the
+/// longer side get a gap on the other). Defaults: keep the side(s) that have
+/// content, preferring A when both differ.
+pub fn rows(a: &str, b: &str) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for h in diff(a, b) {
+        if h.equal {
+            for l in h.a {
+                rows.push(Row {
+                    left: Some(l.clone()),
+                    right: Some(l),
+                    equal: true,
+                    take_left: true,
+                    take_right: false,
+                });
+            }
+        } else {
+            let n = h.a.len().max(h.b.len());
+            for i in 0..n {
+                let left = h.a.get(i).cloned();
+                let right = h.b.get(i).cloned();
+                let (tl, tr) = match (&left, &right) {
+                    (Some(_), _) => (true, false),
+                    (None, Some(_)) => (false, true),
+                    _ => (false, false),
+                };
+                rows.push(Row {
+                    left,
+                    right,
+                    equal: false,
+                    take_left: tl,
+                    take_right: tr,
+                });
+            }
+        }
+    }
+    rows
+}
+
+/// Rebuild the merged text from per-row choices (equal rows always contribute).
+pub fn assemble_rows(rows: &[Row]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for r in rows {
+        if r.equal {
+            if let Some(l) = &r.left {
+                out.push(l.clone());
+            }
+            continue;
+        }
+        if r.take_left {
+            if let Some(l) = &r.left {
+                out.push(l.clone());
+            }
+        }
+        if r.take_right {
+            if let Some(l) = &r.right {
+                out.push(l.clone());
+            }
+        }
+    }
+    out.join("\n")
+}
+
 /// Rebuild the merged text from the hunks' choices.
 pub fn assemble(hunks: &[Hunk]) -> String {
     let mut out: Vec<String> = Vec::new();
@@ -151,6 +228,29 @@ mod tests {
         assert_eq!(assemble(&h), "a\nx\ny\nc");
         h[1].choice = Choice::Neither;
         assert_eq!(assemble(&h), "a\nc");
+    }
+
+    #[test]
+    fn rows_align_and_default_to_a() {
+        let r = rows("a\nx\nc", "a\ny\nc");
+        // a (equal), x|y (diff), c (equal)
+        assert_eq!(r.len(), 3);
+        assert!(r[0].equal && r[2].equal);
+        assert!(!r[1].equal);
+        assert_eq!(r[1].left.as_deref(), Some("x"));
+        assert_eq!(r[1].right.as_deref(), Some("y"));
+        assert!(r[1].take_left && !r[1].take_right);
+        assert_eq!(assemble_rows(&r), "a\nx\nc");
+    }
+
+    #[test]
+    fn rows_per_line_accept() {
+        let mut r = rows("a\nx\nc", "a\ny\nc");
+        r[1].take_left = false;
+        r[1].take_right = true;
+        assert_eq!(assemble_rows(&r), "a\ny\nc");
+        r[1].take_left = true; // accept both lines
+        assert_eq!(assemble_rows(&r), "a\nx\ny\nc");
     }
 
     #[test]
