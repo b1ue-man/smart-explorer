@@ -159,6 +159,8 @@ enum KbdAct {
     ToggleHelp,
     ToggleSplit,
     StarCurrent,
+    /// Alt+1..9: jump to tab N (Alt+9 = last tab).
+    SelectTab(usize),
 }
 
 pub struct App {
@@ -299,6 +301,14 @@ pub struct App {
     /// Request focus on the folder-search / name-filter fields next frame.
     folder_search_focus: bool,
     name_filter_focus: bool,
+    /// Set when Enter in the name-filter pressed with >1 result moved keyboard
+    /// focus into the result list. While true, opening a folder with Enter
+    /// bounces focus back to the filter (cursorless drill-down). Cleared by a
+    /// mouse click, a tab switch, or opening a file.
+    search_nav_from_filter: bool,
+    /// Per-frame: the name-filter TextEdit just received Enter (set in
+    /// `ui_filterbar`, consumed in `update`).
+    filter_enter: bool,
 
     summary_cache: Option<SummaryData>,
     /// (selection len, entries len, bytes) — cheap invalidation key.
@@ -1192,6 +1202,8 @@ impl App {
             path_edit_focus: false,
             folder_search_focus: false,
             name_filter_focus: false,
+            search_nav_from_filter: false,
+            filter_enter: false,
 
             summary_cache: None,
             sel_size_cache: (usize::MAX, usize::MAX, 0),
@@ -1413,6 +1425,8 @@ impl App {
         self.swap_with_tab(from);
         self.swap_with_tab(to);
         self.active_tab = to;
+        // Switching tabs ends any in-progress filter-driven navigation.
+        self.search_nav_from_filter = false;
         // In split mode, a tab selection lands in whichever pane has focus, so
         // the user can re-target the right pane (not always the left).
         if self.split {
@@ -1727,7 +1741,16 @@ impl App {
             for i in 0..self.tabs.len() {
                 let selected = i == self.active_tab;
                 let title = self.tab_title(i);
-                let resp = ui.selectable_label(selected, title);
+                // Prefix the first nine tabs with their Alt+N accelerator.
+                let label = if i < 9 {
+                    format!("{}·{}", i + 1, title)
+                } else {
+                    title
+                };
+                let mut resp = ui.selectable_label(selected, label);
+                if i < 9 {
+                    resp = resp.on_hover_text(format!("Alt+{} — zu diesem Tab", i + 1));
+                }
                 header_rects.push((i, resp.rect));
                 // Highlight a tab as a drop target while files are being dragged
                 // from another tab.
@@ -3891,6 +3914,75 @@ impl App {
         }
         for (p, name, _, id) in targets.into_iter().filter(|(_, _, d, _)| !*d).take(10) {
             self.open_file(p, name, id, OpenMode::Default);
+        }
+    }
+
+    /// True when the selection is exactly one folder — the case where Enter /
+    /// `open_selection` navigates into it instead of opening files.
+    fn selection_single_dir(&self) -> bool {
+        let mut it = self
+            .entries
+            .iter()
+            .filter(|e| self.selection.contains(&e.key()));
+        match (it.next(), it.next()) {
+            (Some(e), None) => e.is_dir,
+            _ => false,
+        }
+    }
+
+    /// Commit the debounced name/extension drafts into the active filter and
+    /// rebuild the view. Shared by the keystroke debounce and Enter (which must
+    /// flush immediately so the result count is current).
+    fn flush_text_filter(&mut self) {
+        self.filter.text = self.text_draft.clone();
+        self.filter.extensions = self
+            .ext_draft
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .map(|s| s.trim().trim_start_matches('.').to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        self.filter_pending_at = None;
+        self.recompute_view();
+    }
+
+    /// Enter pressed in the active tab's name filter — the heart of cursorless
+    /// navigation. Flush the filter so the view is current, then branch on the
+    /// number of matches:
+    ///  - 0  → stay in the filter (nothing to do);
+    ///  - 1  → open it. A folder is entered, the filter cleared, and focus kept
+    ///         on the filter so the next segment can be typed straight away; a
+    ///         file is simply opened;
+    ///  - >1 → hand keyboard focus to the result list (cursor on the first row)
+    ///         so arrow keys navigate and Enter there opens — and, for a folder,
+    ///         bounces back here (see the `Open` handler).
+    fn handle_filter_enter(&mut self) {
+        self.flush_text_filter();
+        let n = self.view.len();
+        if n == 0 {
+            return;
+        }
+        if n == 1 {
+            let e = &self.entries[self.view[0].0];
+            let is_dir = e.is_dir;
+            let path = e.path.to_string();
+            let name = e.name.to_string();
+            let id = e.id.as_ref().map(|s| s.to_string());
+            if is_dir {
+                self.start_scan(PathBuf::from(
+                    path.replace('/', std::path::MAIN_SEPARATOR_STR),
+                ));
+                self.text_draft.clear();
+                self.filter.text.clear();
+                self.recompute_view();
+            } else {
+                self.open_file(path, name, id, OpenMode::Default);
+            }
+            self.name_filter_focus = true;
+            self.search_nav_from_filter = false;
+        } else {
+            // Multiple hits: move into the list for arrow-key navigation.
+            self.move_cursor_to(0, false);
+            self.search_nav_from_filter = true;
         }
     }
 
@@ -6442,6 +6534,11 @@ impl App {
             if resp.changed() {
                 self.filter_pending_at = Some(Instant::now());
             }
+            // Enter in the name filter drives cursorless navigation (handled in
+            // `update` after the view is settled).
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.filter_enter = true;
+            }
 
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.ext_draft)
@@ -6627,7 +6724,7 @@ impl App {
         ui.label(RichText::new("ORDNER SUCHEN").small().color(Color32::from_gray(140)));
         let search_resp = ui.add(
             egui::TextEdit::singleline(&mut self.folder_search_query)
-                .hint_text("z.B. dwnlds, projekt-x …  (Ctrl+F)")
+                .hint_text("z.B. dwnlds, projekt-x …  (Ctrl+Shift+F)")
                 .desired_width(f32::INFINITY),
         );
         if self.folder_search_focus {
@@ -9120,8 +9217,16 @@ impl App {
                                 ("F5", "Aktualisieren"),
                                 ("Ctrl+L", "Pfad bearbeiten"),
                                 ("Ctrl+R", "Rekursiv umschalten"),
-                                ("Ctrl+F", "Ordnersuche fokussieren"),
-                                ("F3", "Namensfilter fokussieren"),
+                                ("Ctrl+F  ·  F3", "Namensfilter fokussieren"),
+                                ("Ctrl+Shift+F", "Ordnersuche fokussieren"),
+                                (
+                                    "Filter → Enter",
+                                    "1 Treffer: öffnen/betreten (Filter bleibt aktiv); mehrere: in die Liste springen",
+                                ),
+                                (
+                                    "Liste → Enter",
+                                    "Öffnen; bei Ordner aus Filtersuche zurück zum Filter",
+                                ),
                             ],
                         ),
                         (
@@ -9130,6 +9235,7 @@ impl App {
                                 ("Ctrl+T", "Neuer Tab"),
                                 ("Ctrl+W", "Tab schließen"),
                                 ("Ctrl+Tab / Ctrl+Shift+Tab", "Nächster / vorheriger Tab"),
+                                ("Alt+1 … Alt+9", "Zu Tab 1 … 9 (Alt+9 = letzter)"),
                             ],
                         ),
                         (
@@ -9414,15 +9520,7 @@ impl eframe::App for App {
         // Debounced name/extension filter (150 ms after last keystroke)
         if let Some(ts) = self.filter_pending_at {
             if ts.elapsed().as_millis() >= 150 {
-                self.filter.text = self.text_draft.clone();
-                self.filter.extensions = self
-                    .ext_draft
-                    .split(|c: char| c == ',' || c.is_whitespace())
-                    .map(|s| s.trim().trim_start_matches('.').to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                self.filter_pending_at = None;
-                self.recompute_view();
+                self.flush_text_filter();
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
@@ -9501,11 +9599,29 @@ impl eframe::App for App {
             if i.consume_key(Modifiers::NONE, Key::F6) {
                 acts.push(KbdAct::ToggleSplit);
             }
-            if i.consume_key(Modifiers::COMMAND, Key::F) {
+            // Ctrl+F focuses the active tab's name filter; Ctrl+Shift+F the
+            // sidebar's global folder search.
+            if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
                 acts.push(KbdAct::FocusSearch);
+            }
+            if i.consume_key(Modifiers::COMMAND, Key::F) {
+                acts.push(KbdAct::FocusFilter);
             }
             if i.consume_key(Modifiers::NONE, Key::F3) {
                 acts.push(KbdAct::FocusFilter);
+            }
+            // Alt+1..9 → jump to that tab (Alt+9 = last). Works while typing,
+            // like the other tab shortcuts above.
+            for (n, key) in [
+                Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7,
+                Key::Num8, Key::Num9,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if i.consume_key(Modifiers::ALT, key) {
+                    acts.push(KbdAct::SelectTab(n));
+                }
             }
 
             if !typing && !renaming {
@@ -9609,6 +9725,11 @@ impl eframe::App for App {
                 }
             }
         });
+        // A mouse click means the user took manual control of the list, so a
+        // later Enter-on-folder should not bounce back to the filter.
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            self.search_nav_from_filter = false;
+        }
 
         for act in acts {
             match act {
@@ -9651,7 +9772,23 @@ impl eframe::App for App {
                         self.move_cursor_to(pos, shift);
                     }
                 }
-                KbdAct::Open => self.open_selection(),
+                KbdAct::Open => {
+                    // Enter-to-open. If this drills into a FOLDER during a
+                    // filter-driven nav session, bounce focus back to the filter
+                    // (cleared) so the user can type the next path segment without
+                    // touching the mouse. Files end the session.
+                    let into_folder = self.selection_single_dir();
+                    self.open_selection();
+                    if self.search_nav_from_filter && into_folder {
+                        self.text_draft.clear();
+                        self.filter.text.clear();
+                        self.recompute_view();
+                        self.name_filter_focus = true;
+                        self.show_filters = true;
+                    } else {
+                        self.search_nav_from_filter = false;
+                    }
+                }
                 KbdAct::Properties => self.show_properties(),
                 KbdAct::PermanentDelete => self.delete_permanent(),
                 KbdAct::RevealInExplorer => {
@@ -9664,14 +9801,32 @@ impl eframe::App for App {
                 KbdAct::FocusFilter => {
                     self.show_filters = true;
                     self.name_filter_focus = true;
+                    // Fresh filter session: we're in the filter, not the list.
+                    self.search_nav_from_filter = false;
                 }
                 KbdAct::ToggleHelp => self.show_help = !self.show_help,
                 KbdAct::ToggleSplit => self.toggle_split(),
                 KbdAct::StarCurrent => self.star_current_folder(),
+                KbdAct::SelectTab(n) => {
+                    // Alt+9 = last tab; otherwise the Nth tab if it exists.
+                    let target = if n == 8 {
+                        self.tabs.len().saturating_sub(1)
+                    } else {
+                        n
+                    };
+                    if target < self.tabs.len() {
+                        self.switch_tab(target);
+                    }
+                }
             }
         }
         if !jump_text.is_empty() {
             self.type_to_jump(&jump_text);
+        }
+        // Enter in the name filter (captured in `ui_filterbar`): drive cursorless
+        // navigation now that the frame's view is settled.
+        if std::mem::take(&mut self.filter_enter) {
+            self.handle_filter_enter();
         }
 
         // Drain the background clipboard-key poller (Windows). This is what
