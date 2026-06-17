@@ -2,6 +2,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 mod app;
+mod analytics;
 mod autostart;
 mod bisync;
 mod cloud;
