@@ -470,6 +470,42 @@ struct JobEditor {
     /// One glob per line.
     ignore: String,
     enabled: bool,
+    // ── Group D: scheduling / triggers ───────────────────────────────────────
+    trigger: crate::syncjobs::Trigger,
+    cal_time: String,      // "HH:MM"
+    cal_weekdays: u8,      // bit0=Mon..bit6=Sun, 0 = every day
+    cal_monthday: String,  // "0" = use weekdays
+    rt_debounce: String,   // seconds
+    connect_match: String, // label/serial/letter wildcard
+    active_from: String,   // "HH:MM"
+    active_to: String,     // "HH:MM"
+    catch_up: bool,
+}
+
+/// Minutes-after-midnight → "HH:MM".
+fn min_to_hm(m: i32) -> String {
+    let m = m.rem_euclid(24 * 60);
+    format!("{:02}:{:02}", m / 60, m % 60)
+}
+
+/// "HH:MM" (or "H", "HHMM") → minutes after midnight; None if unparseable.
+fn hm_to_min(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if let Some((h, m)) = s.split_once(':') {
+        let h: i32 = h.trim().parse().ok()?;
+        let m: i32 = m.trim().parse().ok()?;
+        if (0..24).contains(&h) && (0..60).contains(&m) {
+            return Some(h * 60 + m);
+        }
+        return None;
+    }
+    // bare hour
+    let h: i32 = s.parse().ok()?;
+    if (0..24).contains(&h) {
+        Some(h * 60)
+    } else {
+        None
+    }
 }
 
 impl JobEditor {
@@ -486,6 +522,15 @@ impl JobEditor {
             include_hidden: true,
             ignore: String::new(),
             enabled: true,
+            trigger: crate::syncjobs::Trigger::Manual,
+            cal_time: "09:00".into(),
+            cal_weekdays: 0,
+            cal_monthday: "0".into(),
+            rt_debounce: "10".into(),
+            connect_match: String::new(),
+            active_from: "00:00".into(),
+            active_to: "00:00".into(),
+            catch_up: true,
         }
     }
 
@@ -502,6 +547,15 @@ impl JobEditor {
             include_hidden: j.include_hidden,
             ignore: j.ignore.join("\n"),
             enabled: j.enabled,
+            trigger: j.trigger,
+            cal_time: min_to_hm(j.cal_time_min),
+            cal_weekdays: j.cal_weekdays,
+            cal_monthday: j.cal_monthday.to_string(),
+            rt_debounce: j.rt_debounce_secs.to_string(),
+            connect_match: j.connect_match.clone(),
+            active_from: min_to_hm(j.active_from_min),
+            active_to: min_to_hm(j.active_to_min),
+            catch_up: j.catch_up,
         }
     }
 }
@@ -6321,10 +6375,76 @@ impl App {
                 "Dienst startet beim nächsten Anmelden.",
             );
         }
+        // Check cadence (how often the daemon evaluates schedules / reacts).
+        ui.horizontal(|ui| {
+            ui.label("Prüfintervall").on_hover_text(
+                "Wie oft der Dienst nach fälligen Aufträgen, Änderungen (Echtzeit) und \
+                 angeschlossenen Geräten sieht. Kürzer = reaktiver, mehr CPU.",
+            );
+            let mut cad = crate::daemon::cadence_secs();
+            if ui
+                .add(egui::DragValue::new(&mut cad).range(2..=3600).suffix(" s"))
+                .changed()
+            {
+                crate::daemon::set_cadence_secs(cad);
+            }
+        });
+
+        // Pause / resume.
+        ui.horizontal(|ui| {
+            match crate::daemon::pause_remaining() {
+                Some(r) if r == i64::MAX => {
+                    ui.colored_label(Color32::from_rgb(230, 180, 90), "⏸ pausiert (dauerhaft)");
+                }
+                Some(r) => {
+                    ui.colored_label(
+                        Color32::from_rgb(230, 180, 90),
+                        format!("⏸ pausiert (noch {} min)", (r / 60).max(1)),
+                    );
+                }
+                None => {
+                    ui.colored_label(Color32::from_gray(140), "Pause:");
+                }
+            }
+            if ui.small_button("2 h").clicked() {
+                crate::daemon::pause_for_secs(2 * 3600);
+            }
+            if ui.small_button("8 h").clicked() {
+                crate::daemon::pause_for_secs(8 * 3600);
+            }
+            if ui.small_button("24 h").clicked() {
+                crate::daemon::pause_for_secs(24 * 3600);
+            }
+            if ui.small_button("∞").on_hover_text("Dauerhaft pausieren").clicked() {
+                crate::daemon::pause_indefinite();
+            }
+            if ui.small_button("▶ Fortsetzen").clicked() {
+                crate::daemon::resume();
+            }
+        });
+
+        // Auto-pause conditions.
+        let (mut bat, mut met) = crate::daemon::autopause_flags();
+        ui.horizontal(|ui| {
+            let c1 = ui
+                .checkbox(&mut bat, "Im Energiesparmodus pausieren")
+                .on_hover_text("Synchronisierung anhalten, solange der Windows-Energiesparmodus aktiv ist")
+                .changed();
+            let c2 = ui
+                .checkbox(&mut met, "Bei getakteter Verbindung")
+                .on_hover_text("Bei getakteten Netzwerken pausieren (Erkennung folgt; aktuell ohne Effekt)")
+                .changed();
+            if c1 || c2 {
+                crate::daemon::set_autopause_flags(bat, met);
+            }
+        });
+
         ui.label(
-            RichText::new("Hintergrund-Setups: lokale Pfade, Zeitplan > 0 min.")
-                .small()
-                .color(Color32::from_gray(120)),
+            RichText::new(
+                "Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.",
+            )
+            .small()
+            .color(Color32::from_gray(120)),
         );
     }
 
@@ -6395,10 +6515,38 @@ impl App {
                                     .small()
                                     .color(Color32::from_gray(170)),
                             );
-                            let sched = if j.interval_min == 0 {
-                                "manuell".to_string()
-                            } else {
-                                format!("alle {} min", j.interval_min)
+                            let sched = match j.trigger {
+                                crate::syncjobs::Trigger::Manual => "manuell".to_string(),
+                                crate::syncjobs::Trigger::Interval => {
+                                    format!("alle {} min", j.interval_min)
+                                }
+                                crate::syncjobs::Trigger::Calendar => {
+                                    let t = min_to_hm(j.cal_time_min);
+                                    if j.cal_monthday != 0 {
+                                        format!("monatl. am {}. um {}", j.cal_monthday, t)
+                                    } else if j.cal_weekdays == 0 {
+                                        format!("täglich {}", t)
+                                    } else {
+                                        const D: [&str; 7] =
+                                            ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+                                        let days: Vec<&str> = (0..7)
+                                            .filter(|i| (j.cal_weekdays >> i) & 1 == 1)
+                                            .map(|i| D[i])
+                                            .collect();
+                                        format!("{} {}", days.join(","), t)
+                                    }
+                                }
+                                crate::syncjobs::Trigger::RealTime => {
+                                    format!("Echtzeit (+{}s)", j.rt_debounce_secs)
+                                }
+                                crate::syncjobs::Trigger::OnStartup => "beim Start".to_string(),
+                                crate::syncjobs::Trigger::OnConnect => {
+                                    if j.connect_match.is_empty() {
+                                        "bei USB/Gerät".to_string()
+                                    } else {
+                                        format!("bei Gerät „{}“", j.connect_match)
+                                    }
+                                }
                             };
                             let last = if j.last_run == 0 {
                                 "nie".to_string()
@@ -6534,9 +6682,73 @@ impl App {
                         ui.add(egui::TextEdit::singleline(&mut ed.retain_days).desired_width(80.0));
                         ui.end_row();
 
-                        ui.label("Zeitplan (min)").on_hover_text("Automatisch alle N Minuten ausführen (0 = nur manuell)");
-                        ui.add(egui::TextEdit::singleline(&mut ed.interval_min).desired_width(80.0));
+                        ui.label("Auslöser").on_hover_text("Wann dieser Sync automatisch läuft");
+                        egui::ComboBox::from_id_salt("job_trigger")
+                            .selected_text(ed.trigger.label())
+                            .show_ui(ui, |ui| {
+                                for t in crate::syncjobs::Trigger::ALL {
+                                    ui.selectable_value(&mut ed.trigger, t, t.label());
+                                }
+                            });
                         ui.end_row();
+
+                        match ed.trigger {
+                            crate::syncjobs::Trigger::Interval => {
+                                ui.label("Intervall (min)").on_hover_text("Alle N Minuten ausführen");
+                                ui.add(egui::TextEdit::singleline(&mut ed.interval_min).desired_width(80.0));
+                                ui.end_row();
+                            }
+                            crate::syncjobs::Trigger::Calendar => {
+                                ui.label("Uhrzeit").on_hover_text("Startzeit HH:MM");
+                                ui.add(egui::TextEdit::singleline(&mut ed.cal_time).desired_width(80.0));
+                                ui.end_row();
+
+                                ui.label("Wochentage").on_hover_text("Keiner markiert = täglich");
+                                ui.horizontal(|ui| {
+                                    const DAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+                                    for (i, d) in DAYS.iter().enumerate() {
+                                        let on = (ed.cal_weekdays >> i) & 1 == 1;
+                                        if ui.selectable_label(on, *d).clicked() {
+                                            ed.cal_weekdays ^= 1 << i;
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+
+                                ui.label("Tag im Monat").on_hover_text("1–31 = monatlich; 0 = Wochentage verwenden");
+                                ui.add(egui::TextEdit::singleline(&mut ed.cal_monthday).desired_width(80.0));
+                                ui.end_row();
+                            }
+                            crate::syncjobs::Trigger::RealTime => {
+                                ui.label("Verzögerung (s)").on_hover_text("Wartezeit nach der letzten Änderung, bevor synchronisiert wird (entprellt). Echtzeit beobachtet die lokale Seite.");
+                                ui.add(egui::TextEdit::singleline(&mut ed.rt_debounce).desired_width(80.0));
+                                ui.end_row();
+                            }
+                            crate::syncjobs::Trigger::OnConnect => {
+                                ui.label("Gerät/USB").on_hover_text("Laufwerksbezeichnung, Seriennummer oder Buchstabe; Platzhalter * ? erlaubt; leer = jedes Wechselmedium");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut ed.connect_match)
+                                        .hint_text("z. B. BACKUP* oder E:")
+                                        .desired_width(220.0),
+                                );
+                                ui.end_row();
+                            }
+                            _ => {}
+                        }
+
+                        ui.label("Aktive Zeiten").on_hover_text("Nur in diesem Zeitfenster ausführen (von = bis ⇒ immer)");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.active_from).desired_width(64.0));
+                            ui.label("–");
+                            ui.add(egui::TextEdit::singleline(&mut ed.active_to).desired_width(64.0));
+                        });
+                        ui.end_row();
+
+                        if matches!(ed.trigger, crate::syncjobs::Trigger::Calendar) {
+                            ui.label("Nachholen").on_hover_text("Verpasste geplante Läufe nachholen, statt auf den nächsten Termin zu warten");
+                            ui.checkbox(&mut ed.catch_up, "verpasste Läufe nachholen");
+                            ui.end_row();
+                        }
 
                         ui.label("Versteckte Dateien");
                         ui.checkbox(&mut ed.include_hidden, "einbeziehen");
@@ -6605,6 +6817,17 @@ impl App {
             job.include_hidden = ed.include_hidden;
             job.ignore = ignore;
             job.enabled = ed.enabled;
+            job.trigger = ed.trigger;
+            if let Some(m) = hm_to_min(&ed.cal_time) {
+                job.cal_time_min = m;
+            }
+            job.cal_weekdays = ed.cal_weekdays;
+            job.cal_monthday = ed.cal_monthday.trim().parse().unwrap_or(0).min(31);
+            job.rt_debounce_secs = ed.rt_debounce.trim().parse().unwrap_or(10);
+            job.connect_match = ed.connect_match.trim().to_string();
+            job.active_from_min = hm_to_min(&ed.active_from).unwrap_or(0);
+            job.active_to_min = hm_to_min(&ed.active_to).unwrap_or(0);
+            job.catch_up = ed.catch_up;
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();
