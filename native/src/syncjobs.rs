@@ -123,6 +123,14 @@ pub struct SyncJob {
     pub max_delete: u64,
     /// …or more than this percent of a side's files (0 = no limit).
     pub max_delete_pct: u8,
+
+    // ── Group G: filters (0 = off) ───────────────────────────────────────────
+    pub filter_min_size_kb: u64,
+    pub filter_max_size_kb: u64,
+    /// Only sync files modified within the last N days.
+    pub filter_max_age_days: u64,
+    /// Only sync files older than N days.
+    pub filter_min_age_days: u64,
 }
 
 fn now_secs() -> i64 {
@@ -197,7 +205,29 @@ impl SyncJob {
             use_recycle_bin: false,
             max_delete: 0,
             max_delete_pct: 0,
+            filter_min_size_kb: 0,
+            filter_max_size_kb: 0,
+            filter_max_age_days: 0,
+            filter_min_age_days: 0,
         }
+    }
+
+    /// (min_size, max_size, after_mtime_ms, before_mtime_ms) for the walk filter,
+    /// resolving the age windows against `now_secs`.
+    pub fn filter_bounds(&self, now_secs: i64) -> (u64, u64, i64, i64) {
+        let min_size = self.filter_min_size_kb.saturating_mul(1024);
+        let max_size = self.filter_max_size_kb.saturating_mul(1024);
+        let after = if self.filter_max_age_days > 0 {
+            (now_secs - self.filter_max_age_days as i64 * 86_400) * 1000
+        } else {
+            0
+        };
+        let before = if self.filter_min_age_days > 0 {
+            (now_secs - self.filter_min_age_days as i64 * 86_400) * 1000
+        } else {
+            0
+        };
+        (min_size, max_size, after, before)
     }
 
     /// Timer-due now? Honours the trigger kind and the active-hours window.
@@ -392,6 +422,11 @@ fn serialize_kv(j: &SyncJob) -> String {
     s.push_str(&format!("use_recycle_bin={}\n", if j.use_recycle_bin { 1 } else { 0 }));
     s.push_str(&format!("max_delete={}\n", j.max_delete));
     s.push_str(&format!("max_delete_pct={}\n", j.max_delete_pct));
+    // Group G — filters
+    s.push_str(&format!("filter_min_size_kb={}\n", j.filter_min_size_kb));
+    s.push_str(&format!("filter_max_size_kb={}\n", j.filter_max_size_kb));
+    s.push_str(&format!("filter_max_age_days={}\n", j.filter_max_age_days));
+    s.push_str(&format!("filter_min_age_days={}\n", j.filter_min_age_days));
     s
 }
 
@@ -455,6 +490,10 @@ fn parse_kv(body: &str) -> Option<SyncJob> {
             "use_recycle_bin" => j.use_recycle_bin = v != "0",
             "max_delete" => j.max_delete = v.parse().unwrap_or(0),
             "max_delete_pct" => j.max_delete_pct = v.parse().unwrap_or(0),
+            "filter_min_size_kb" => j.filter_min_size_kb = v.parse().unwrap_or(0),
+            "filter_max_size_kb" => j.filter_max_size_kb = v.parse().unwrap_or(0),
+            "filter_max_age_days" => j.filter_max_age_days = v.parse().unwrap_or(0),
+            "filter_min_age_days" => j.filter_min_age_days = v.parse().unwrap_or(0),
             _ => {} // unknown / future key — ignored
         }
     }
