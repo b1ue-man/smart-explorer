@@ -1113,6 +1113,16 @@ fn squarify_sorted(scaled: &[f64], mut rect: egui::Rect) -> Vec<egui::Rect> {
     out
 }
 
+/// Wrap a REMOTE backend with the interactive browsing cache; local backends
+/// pass through (their `std::fs` listing is already instant).
+fn cache_remote(b: crate::vfs::BackendHandle) -> crate::vfs::BackendHandle {
+    if b.is_local() {
+        b
+    } else {
+        Arc::new(crate::vfs::CachingBackend::new(b))
+    }
+}
+
 /// Recursive (files, dirs) count under `node`.
 fn count_subtree(node: &crate::analytics::SizeNode) -> (u64, u64) {
     let mut files = 0u64;
@@ -2363,6 +2373,10 @@ impl App {
         if self.root_path.is_empty() {
             return;
         }
+        // Explicit refresh → drop the browsing cache so we re-list fresh.
+        if let Some(rs) = &self.remote {
+            rs.backend.invalidate_cache();
+        }
         let p = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
         self.start_scan_navigated(p, false);
     }
@@ -3029,8 +3043,12 @@ impl App {
         match msg {
             crate::connect::ConnectResult::Ok(c) => {
                 // SFTP/FTP set a remote backend; a share clears it (browsed
-                // locally) but keeps the auth connection alive.
-                self.remote = c.remote;
+                // locally) but keeps the auth connection alive. Wrap remote
+                // backends with the browsing cache (see `cache_remote`).
+                self.remote = c.remote.map(|mut rs| {
+                    rs.backend = cache_remote(rs.backend);
+                    rs
+                });
                 if let Some(nc) = c.net {
                     self.net_conn = Some(nc);
                 }
@@ -6598,7 +6616,7 @@ impl App {
                     // SFTP/FTP/WebDAV → remote backend; share → browse the UNC
                     // locally once authenticated.
                     if let Some(rs) = c.remote {
-                        p.backend = Some(rs.backend);
+                        p.backend = Some(cache_remote(rs.backend));
                         p.is_remote = true;
                     } else {
                         p.backend = Some(Arc::new(crate::vfs::LocalBackend::new(&c.target)));

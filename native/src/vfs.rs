@@ -151,9 +151,157 @@ pub trait Backend: Send + Sync {
     fn provides_content_hash(&self) -> bool {
         false
     }
+
+    /// Drop any internal directory-listing cache (no-op unless the backend is
+    /// wrapped in `CachingBackend`). Called on an explicit refresh.
+    fn invalidate_cache(&self) {}
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
+
+/// Wraps any backend with a short-TTL **directory-listing cache** so interactive
+/// browsing (back/forward, re-visiting a folder, rapid drilling) doesn't re-list
+/// over the network every time. Mutating ops invalidate the affected directory;
+/// `invalidate_cache()` clears everything (explicit refresh). NOT used by sync —
+/// sync re-opens a fresh backend per run and walks each folder once, so a cache
+/// would only add staleness with no hit benefit.
+pub struct CachingBackend {
+    inner: BackendHandle,
+    ttl: std::time::Duration,
+    cache: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<VfsMeta>)>>,
+}
+
+impl CachingBackend {
+    pub fn new(inner: BackendHandle) -> Self {
+        Self {
+            inner,
+            ttl: std::time::Duration::from_secs(20),
+            cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn norm(path: &str) -> String {
+        let p = path.trim_end_matches('/');
+        if p.is_empty() {
+            "/".to_string()
+        } else {
+            p.to_string()
+        }
+    }
+
+    fn parent_of(key: &str) -> Option<String> {
+        key.rfind('/').map(|i| if i == 0 { "/".to_string() } else { key[..i].to_string() })
+    }
+
+    fn invalidate(&self, path: &str) {
+        if let Ok(mut c) = self.cache.lock() {
+            let key = Self::norm(path);
+            c.remove(&key);
+            if let Some(parent) = Self::parent_of(&key) {
+                c.remove(&parent); // entry added/removed/renamed changes the parent listing
+            }
+        }
+    }
+}
+
+impl Backend for CachingBackend {
+    fn scheme(&self) -> Scheme {
+        self.inner.scheme()
+    }
+    fn root_display(&self) -> String {
+        self.inner.root_display()
+    }
+
+    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        let key = Self::norm(path);
+        if let Ok(c) = self.cache.lock() {
+            if let Some((at, v)) = c.get(&key) {
+                if at.elapsed() < self.ttl {
+                    return Ok(v.clone());
+                }
+            }
+        }
+        let v = self.inner.list_dir(path)?;
+        if let Ok(mut c) = self.cache.lock() {
+            c.insert(key, (std::time::Instant::now(), v.clone()));
+        }
+        Ok(v)
+    }
+
+    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.inner.stat(path)
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.inner.exists(path)
+    }
+    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        self.inner.open_read(path)
+    }
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        self.inner.open_read_id(path, id)
+    }
+    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        // A new file may appear in the parent listing once written.
+        self.invalidate(path);
+        self.inner.open_write(path)
+    }
+    fn download_name(&self, path: &str, name: &str) -> String {
+        self.inner.download_name(path, name)
+    }
+    fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
+        let r = self.inner.copy_file(src, dst);
+        self.invalidate(dst);
+        r
+    }
+    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let r = self.inner.rename(src, dst);
+        self.invalidate(src);
+        self.invalidate(dst);
+        r
+    }
+    fn remove_file(&self, path: &str) -> VfsResult<()> {
+        let r = self.inner.remove_file(path);
+        self.invalidate(path);
+        r
+    }
+    fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
+        let r = self.inner.remove_file_id(path, id);
+        self.invalidate(path);
+        r
+    }
+    fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        let r = self.inner.remove_dir(path);
+        self.invalidate(path);
+        r
+    }
+    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        let r = self.inner.mkdir_all(path);
+        self.invalidate(path);
+        r
+    }
+    fn parallelism(&self) -> usize {
+        self.inner.parallelism()
+    }
+    fn rename_overwrites(&self) -> bool {
+        self.inner.rename_overwrites()
+    }
+    fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
+        let r = self.inner.dedupe_recursive(root, keep);
+        self.invalidate_cache(); // a recursive change can touch many folders
+        r
+    }
+    fn is_local(&self) -> bool {
+        self.inner.is_local()
+    }
+    fn provides_content_hash(&self) -> bool {
+        self.inner.provides_content_hash()
+    }
+    fn invalidate_cache(&self) {
+        if let Ok(mut c) = self.cache.lock() {
+            c.clear();
+        }
+    }
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 // Intentionally duplicated from `scanner.rs` (tiny) to keep this module
@@ -446,6 +594,60 @@ mod tests {
         be.open_read(&dst).unwrap().read_to_end(&mut buf).unwrap();
         assert_eq!(buf, b"abcdef");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn caching_backend_serves_and_invalidates() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // Counts how many times the inner backend is actually hit.
+        struct Counter(AtomicUsize);
+        impl Backend for Counter {
+            fn scheme(&self) -> Scheme {
+                Scheme::Sftp
+            }
+            fn root_display(&self) -> String {
+                "/".into()
+            }
+            fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Vec::new())
+            }
+            fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            }
+            fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            }
+            fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            }
+            fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+        }
+        // Keep a typed handle so we can read the inner hit-counter directly
+        // (the trait object hides it).
+        let typed = Arc::new(Counter(AtomicUsize::new(0)));
+        let cb2 = CachingBackend::new(typed.clone() as BackendHandle);
+        cb2.list_dir("/x").unwrap();
+        cb2.list_dir("/x").unwrap();
+        cb2.list_dir("/x/").unwrap(); // trailing slash → same cache key
+        assert_eq!(typed.0.load(Ordering::SeqCst), 1, "repeat listings served from cache");
+        cb2.invalidate_cache();
+        cb2.list_dir("/x").unwrap();
+        assert_eq!(typed.0.load(Ordering::SeqCst), 2, "refresh re-listed");
+        cb2.remove_dir("/x/sub").unwrap(); // invalidates parent "/x"
+        cb2.list_dir("/x").unwrap();
+        assert_eq!(typed.0.load(Ordering::SeqCst), 3, "mutation invalidated the dir");
     }
 
     #[test]
