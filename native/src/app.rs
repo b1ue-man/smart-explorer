@@ -127,28 +127,19 @@ struct SummaryData {
     top: Vec<(String, String, u64)>,
 }
 
-/// One treemap cell / largest-item row in the analytics view.
-struct AnalyticsItem {
+/// One painted cell of the nested treemap. Cached per focus + treemap size so
+/// painting (every frame) is cheap; the layout walk only re-runs on drill or
+/// resize. Containers (folders we recurse into) are drawn as a dark box with a
+/// header; leaves (files, or folders too small to recurse) are filled solid.
+#[derive(Clone)]
+struct TmCell {
+    rect: egui::Rect,
     name: String,
     path: String,
     size: u64,
     is_dir: bool,
-    cat: Category,
-}
-
-/// Cached storage-analytics aggregation for the current drill focus.
-struct AnalyticsData {
-    total_bytes: u64,
-    files: u64,
-    dirs: u64,
-    /// Immediate children of the focus, recursive size, sorted desc.
-    children: Vec<AnalyticsItem>,
-    /// Largest individual files anywhere under the focus, sorted desc.
-    largest_files: Vec<AnalyticsItem>,
-    /// (category, bytes, count) sorted by bytes desc, non-empty only.
-    by_cat: Vec<(Category, u64, u64)>,
-    /// (extension, count, bytes) — top types.
-    by_ext: Vec<(String, u64, u64)>,
+    container: bool,
+    color: Color32,
 }
 
 /// A running background analytics scan (dedicated low-memory size walk).
@@ -218,8 +209,6 @@ pub struct App {
     show_summary: bool,
     /// Storage-analytics overlay (treemap + breakdowns) is open.
     show_analytics: bool,
-    /// Cached aggregation for the CURRENT focus (rebuilt on drill / new scan).
-    analytics_cache: Option<AnalyticsData>,
     /// Dedicated low-memory size tree for analytics (own scan, not the view).
     analytics_tree: Option<crate::analytics::SizeNode>,
     /// Path the tree was scanned for (`/`-normalised, no trailing slash).
@@ -228,6 +217,12 @@ pub struct App {
     analytics_focus: Vec<String>,
     /// A running background analytics scan, if any.
     analytics_scan: Option<AnalyticsScan>,
+    /// Cached nested-treemap cells for the current focus + the rect they were
+    /// laid out for (recomputed on drill or resize).
+    analytics_cells: Vec<TmCell>,
+    analytics_cells_rect: egui::Rect,
+    /// (files, dirs) under the current focus, cached.
+    analytics_counts: Option<(u64, u64)>,
 
     recursive: bool,
     history: Vec<String>,
@@ -1192,15 +1187,6 @@ fn squarify_sorted(scaled: &[f64], mut rect: egui::Rect) -> Vec<egui::Rect> {
     out
 }
 
-/// Lower-cased extension of a file name (after the last dot), or "" for none /
-/// dotfiles. Returns an owned key (lower-cased) for `by_ext` bucketing.
-fn ext_key(name: &str) -> String {
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => ext.to_ascii_lowercase(),
-        _ => "(ohne)".to_string(),
-    }
-}
-
 /// Borrowed extension (after last dot) for categorisation; "" if none.
 fn ext_of(name: &str) -> &str {
     match name.rsplit_once('.') {
@@ -1209,141 +1195,90 @@ fn ext_of(name: &str) -> &str {
     }
 }
 
-fn dominant_cat(cats: &[u64; 9]) -> Category {
-    cats.iter()
-        .enumerate()
-        .max_by_key(|(_, b)| **b)
-        .map(|(i, _)| Category::ALL[i])
-        .unwrap_or(Category::Other)
-}
-
-/// Keep the top-N (by size) files, formatting the full path only when a file
-/// actually enters the list (rare once it's full).
-fn consider_largest(v: &mut Vec<(u64, String, String)>, size: u64, name: &str, parent: &str) {
-    const N: usize = 20;
-    if v.len() < N {
-        v.push((size, name.to_string(), format!("{}/{}", parent, name)));
-        if v.len() == N {
-            v.sort_by(|a, b| a.0.cmp(&b.0)); // ascending → v[0] is the smallest
-        }
-    } else if size > v[0].0 {
-        v[0] = (size, name.to_string(), format!("{}/{}", parent, name));
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-    }
-}
-
-/// Recurse a subtree once, accumulating global by-ext / largest / counts and
-/// (into `cats`) the per-subtree category byte totals. `stack` holds the full
-/// path of `node` and is restored on return.
-#[allow(clippy::too_many_arguments)]
-fn walk_subtree(
-    node: &crate::analytics::SizeNode,
-    stack: &mut String,
-    by_ext: &mut std::collections::HashMap<String, (u64, u64)>,
-    largest: &mut Vec<(u64, String, String)>,
-    files: &mut u64,
-    dirs: &mut u64,
-    cats: &mut [u64; 9],
-    cats_n: &mut [u64; 9],
-) {
-    for c in &node.children {
-        if c.is_dir {
-            *dirs += 1;
-            let len = stack.len();
-            stack.push('/');
-            stack.push_str(&c.name);
-            walk_subtree(c, stack, by_ext, largest, files, dirs, cats, cats_n);
-            stack.truncate(len);
-        } else {
-            *files += 1;
-            let cat = categorize(ext_of(&c.name)) as usize;
-            cats[cat] += c.size;
-            cats_n[cat] += 1;
-            let e = by_ext.entry(ext_key(&c.name)).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += c.size;
-            consider_largest(largest, c.size, &c.name, stack);
-        }
-    }
-}
-
-/// Build the analytics aggregation for `focus` (whose full path is `base`):
-/// immediate children (with dominant category), category + type breakdowns,
-/// largest files in the subtree, and counts — all in a single traversal.
-fn build_analytics_data(focus: &crate::analytics::SizeNode, base: &str) -> AnalyticsData {
-    let mut by_ext: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
-    let mut largest: Vec<(u64, String, String)> = Vec::new();
+/// Recursive (files, dirs) count under `node`.
+fn count_subtree(node: &crate::analytics::SizeNode) -> (u64, u64) {
     let mut files = 0u64;
     let mut dirs = 0u64;
-    let mut g_cats = [0u64; 9];
-    let mut g_cats_n = [0u64; 9];
-    let mut children: Vec<AnalyticsItem> = Vec::with_capacity(focus.children.len());
-    let mut stack = base.to_string();
-
-    for c in &focus.children {
-        let path = format!("{}/{}", base, c.name);
+    for c in &node.children {
         if c.is_dir {
             dirs += 1;
-            let len = stack.len();
-            stack.push('/');
-            stack.push_str(&c.name);
-            let mut ccats = [0u64; 9];
-            walk_subtree(
-                c, &mut stack, &mut by_ext, &mut largest, &mut files, &mut dirs, &mut ccats,
-                &mut g_cats_n,
+            let (f, d) = count_subtree(c);
+            files += f;
+            dirs += d;
+        } else {
+            files += 1;
+        }
+    }
+    (files, dirs)
+}
+
+// Nested-treemap layout tuning.
+const TM_MIN: f32 = 3.0; // skip cells smaller than this
+const TM_RECURSE: f32 = 38.0; // only recurse into folders at least this big
+const TM_HEADER: f32 = 15.0; // folder header strip height
+const TM_MAXDEPTH: usize = 14;
+const TM_MAXCELLS: usize = 80_000;
+
+/// Lay out `node`'s children into `rect` as a squarified treemap, recursing into
+/// folders that are big enough (WizTree-style nested view). Collects paintable
+/// `TmCell`s; the parent is responsible for painting them.
+fn nested_treemap(
+    rect: egui::Rect,
+    node: &crate::analytics::SizeNode,
+    base: &str,
+    depth: usize,
+    cells: &mut Vec<TmCell>,
+) {
+    if cells.len() >= TM_MAXCELLS
+        || rect.width() < TM_MIN
+        || rect.height() < TM_MIN
+        || node.children.is_empty()
+    {
+        return;
+    }
+    let weights: Vec<f64> = node.children.iter().map(|c| c.size.max(1) as f64).collect();
+    let rects = treemap_layout(&weights, rect);
+    for (c, r) in node.children.iter().zip(&rects) {
+        if r.width() < TM_MIN || r.height() < TM_MIN {
+            continue;
+        }
+        let path = format!("{}/{}", base, c.name);
+        let recurse = c.is_dir
+            && !c.children.is_empty()
+            && depth < TM_MAXDEPTH
+            && r.width() >= TM_RECURSE
+            && r.height() >= TM_RECURSE + TM_HEADER;
+        if recurse {
+            cells.push(TmCell {
+                rect: *r,
+                name: c.name.to_string(),
+                path: path.clone(),
+                size: c.size,
+                is_dir: true,
+                container: true,
+                color: Color32::from_gray(36),
+            });
+            let inner = egui::Rect::from_min_max(
+                egui::pos2(r.min.x + 1.5, r.min.y + TM_HEADER),
+                egui::pos2(r.max.x - 1.5, r.max.y - 1.5),
             );
-            stack.truncate(len);
-            for i in 0..9 {
-                g_cats[i] += ccats[i];
-            }
-            children.push(AnalyticsItem {
+            nested_treemap(inner, c, &path, depth + 1, cells);
+        } else {
+            let color = if c.is_dir {
+                Color32::from_gray(82)
+            } else {
+                categorize(ext_of(&c.name)).color()
+            };
+            cells.push(TmCell {
+                rect: *r,
                 name: c.name.to_string(),
                 path,
                 size: c.size,
-                is_dir: true,
-                cat: dominant_cat(&ccats),
+                is_dir: c.is_dir,
+                container: false,
+                color,
             });
-        } else {
-            files += 1;
-            let cat = categorize(ext_of(&c.name));
-            g_cats[cat as usize] += c.size;
-            g_cats_n[cat as usize] += 1;
-            let e = by_ext.entry(ext_key(&c.name)).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += c.size;
-            consider_largest(&mut largest, c.size, &c.name, base);
-            children.push(AnalyticsItem { name: c.name.to_string(), path, size: c.size, is_dir: false, cat });
         }
-    }
-
-    children.sort_by(|a, b| b.size.cmp(&a.size));
-    let mut by_cat: Vec<(Category, u64, u64)> = Category::ALL
-        .iter()
-        .map(|c| (*c, g_cats[*c as usize], g_cats_n[*c as usize]))
-        .filter(|(_, b, _)| *b > 0)
-        .collect();
-    by_cat.sort_by(|a, b| b.1.cmp(&a.1));
-    let mut by_ext_v: Vec<(String, u64, u64)> =
-        by_ext.into_iter().map(|(k, (c, b))| (k, c, b)).collect();
-    by_ext_v.sort_by(|a, b| b.2.cmp(&a.2));
-    by_ext_v.truncate(12);
-    largest.sort_by(|a, b| b.0.cmp(&a.0));
-    let largest_files = largest
-        .into_iter()
-        .map(|(size, name, path)| {
-            let cat = categorize(ext_of(&name));
-            AnalyticsItem { name, path, size, is_dir: false, cat }
-        })
-        .collect();
-
-    AnalyticsData {
-        total_bytes: focus.size,
-        files,
-        dirs,
-        children,
-        largest_files,
-        by_cat,
-        by_ext: by_ext_v,
     }
 }
 
@@ -1703,11 +1638,13 @@ impl App {
             show_filters: ui_state.show_filters,
             show_summary: ui_state.show_summary,
             show_analytics: false,
-            analytics_cache: None,
             analytics_tree: None,
             analytics_root_path: String::new(),
             analytics_focus: Vec::new(),
             analytics_scan: None,
+            analytics_cells: Vec::new(),
+            analytics_cells_rect: egui::Rect::ZERO,
+            analytics_counts: None,
             recursive: false,
             history: Vec::new(),
             forward: Vec::new(),
@@ -2027,9 +1964,7 @@ impl App {
         }
         self.band_press = None;
         self.band_active = false;
-        self.summary_cache = None;
-        self.analytics_cache = None;
-        self.sel_size_cache = (usize::MAX, usize::MAX, 0);
+        self.summary_cache = None;        self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         if self.view_dirty {
             self.recompute_view();
         }
@@ -2414,9 +2349,7 @@ impl App {
         self.progress = empty_progress();
         self.error_msg = None;
         self.failed_paths = Vec::new();
-        self.summary_cache = None;
-        self.analytics_cache = None;
-        self.view_dirty = false;
+        self.summary_cache = None;        self.view_dirty = false;
         self.band_press = None;
         self.band_active = false;
         // Opening a folder clears the NAME search so the new folder is fully
@@ -4201,9 +4134,7 @@ impl App {
         let cf = CompiledFilter::compile(&self.filter);
         let key = self.sort_key;
         let dir = self.sort_dir;
-        self.summary_cache = None;
-        self.analytics_cache = None;
-        self.sel_size_cache = (usize::MAX, usize::MAX, 0);
+        self.summary_cache = None;        self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         self.view_dirty = false;
 
         // ─── Flat mode: contents of current dir only ──────────────────────
@@ -9654,14 +9585,6 @@ impl App {
         }
     }
 
-    /// Aggregate the current (filtered) view for the analytics overlay.
-    /// Build the analytics aggregation for the current drill focus from the
-    /// dedicated size tree (None until a scan has produced a tree).
-    fn build_analytics(&self) -> Option<AnalyticsData> {
-        let node = self.analytics_focus_node()?;
-        Some(build_analytics_data(node, &self.analytics_focus_path()))
-    }
-
     /// The tree node at the current drill focus.
     fn analytics_focus_node(&self) -> Option<&crate::analytics::SizeNode> {
         let mut node = self.analytics_tree.as_ref()?;
@@ -9684,6 +9607,40 @@ impl App {
         }
     }
 
+    /// Default scan target: the DRIVE ROOT of the current folder (WizTree-style
+    /// whole-drive view) — never the app's own folder. Falls back to the current
+    /// root for UNC / non-drive paths.
+    fn analytics_default_root(&self) -> String {
+        let rp = self.root_path.trim_end_matches('/');
+        let b = rp.as_bytes();
+        if b.len() >= 2 && b[1] == b':' {
+            format!("{}:/", b[0] as char)
+        } else {
+            rp.to_string()
+        }
+    }
+
+    /// Map a full `/`-path back to focus segments relative to the scanned root.
+    fn analytics_path_to_focus(&self, full: &str) -> Vec<String> {
+        let root = self.analytics_root_path.trim_end_matches('/');
+        let rest = full
+            .strip_prefix(root)
+            .unwrap_or("")
+            .trim_start_matches('/');
+        if rest.is_empty() {
+            Vec::new()
+        } else {
+            rest.split('/').map(|s| s.to_string()).collect()
+        }
+    }
+
+    /// Invalidate the cached treemap cells + counts (after a drill / new tree).
+    fn analytics_invalidate(&mut self) {
+        self.analytics_cells.clear();
+        self.analytics_cells_rect = egui::Rect::ZERO;
+        self.analytics_counts = None;
+    }
+
     /// Kick off a dedicated low-memory size scan of `root_path` on a background
     /// thread; the result lands via `poll_analytics_scan`.
     fn start_analytics_scan(&mut self, root_path: String) {
@@ -9699,7 +9656,14 @@ impl App {
         let p = crate::analytics::Progress::default();
         let (tx, rx) = crossbeam_channel::unbounded();
         let p2 = p.clone();
-        let root_pb = PathBuf::from(norm.replace('/', std::path::MAIN_SEPARATOR_STR));
+        // A bare drive letter ("C:") must become a root ("C:\") or read_dir
+        // would target the drive's *current directory* instead of its root.
+        let sep = std::path::MAIN_SEPARATOR;
+        let mut native = norm.replace('/', std::path::MAIN_SEPARATOR_STR);
+        if native.len() == 2 && native.as_bytes()[1] == b':' {
+            native.push(sep);
+        }
+        let root_pb = PathBuf::from(native);
         std::thread::spawn(move || {
             let node = crate::analytics::scan(&root_pb, &p2);
             let _ = tx.send(node);
@@ -9713,7 +9677,7 @@ impl App {
         self.analytics_root_path = norm;
         self.analytics_focus.clear();
         self.analytics_tree = None;
-        self.analytics_cache = None;
+        self.analytics_invalidate();
     }
 
     /// Drain a finished analytics scan into the tree (called each frame).
@@ -9727,7 +9691,7 @@ impl App {
         if let Some(node) = got {
             self.analytics_tree = Some(node);
             self.analytics_scan = None;
-            self.analytics_cache = None;
+            self.analytics_invalidate();
         }
     }
 
@@ -9794,23 +9758,27 @@ impl App {
         None
     }
 
-    /// Storage-analytics overlay: dedicated low-memory size scan → squarified
-    /// treemap + largest items + category/type breakdowns + drive gauge, with
-    /// in-memory drill (no re-scan). WizTree-style "where is my space".
+    /// Storage-analytics overlay: a dedicated low-memory size scan rendered as a
+    /// nested (WizTree-style) squarified treemap. Defaults to the whole drive of
+    /// the current folder; click a box to drill in, use the breadcrumb to go up.
     fn ui_analytics(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         self.poll_analytics_scan();
-        // First open with nothing scanned yet → scan the current folder.
-        if self.analytics_tree.is_none() && self.analytics_scan.is_none() && !self.root_path.is_empty()
-        {
-            let r = self.root_path.clone();
-            self.start_analytics_scan(r);
+        // First open with nothing scanned yet → scan the whole drive.
+        if self.analytics_tree.is_none() && self.analytics_scan.is_none() {
+            let r = self.analytics_default_root();
+            if !r.is_empty() {
+                self.start_analytics_scan(r);
+            }
         }
-        if self.analytics_cache.is_none() {
-            self.analytics_cache = self.build_analytics();
+        if self.analytics_counts.is_none() {
+            if let Some(node) = self.analytics_focus_node() {
+                self.analytics_counts = Some(count_subtree(node));
+            }
         }
 
         let drive = self.drive_usage(&self.analytics_root_path);
+        let drives = self.drive_info.clone();
         let root_label = if self.analytics_root_path.is_empty() {
             "—".to_string()
         } else {
@@ -9818,6 +9786,8 @@ impl App {
         };
         let focus_segs = self.analytics_focus.clone();
         let focus_path = self.analytics_focus_path();
+        let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);
+        let (n_files, n_dirs) = self.analytics_counts.unwrap_or((0, 0));
         let scan_info = self.analytics_scan.as_ref().map(|s| {
             (
                 s.progress.files.load(Relaxed),
@@ -9828,32 +9798,59 @@ impl App {
             )
         });
 
+        let focus_node = self.analytics_focus_node();
+        let cached_cells = &self.analytics_cells;
+        let cached_rect = self.analytics_cells_rect;
+
         let mut open = true;
         let mut nav: Option<String> = None; // open folder in main explorer
         let mut reveal: Option<String> = None; // reveal file in main explorer
-        let mut drill: Option<String> = None; // in-memory drill into folder
-        let mut set_focus: Option<usize> = None; // breadcrumb: truncate focus
+        let mut drill_path: Option<String> = None; // treemap click → drill into folder
+        let mut set_focus: Option<usize> = None; // breadcrumb truncate
         let mut go_up = false;
-        let mut rescan = false;
+        let mut rescan: Option<String> = None; // path to (re)scan
+        let mut pick_folder = false;
         let mut cancel = false;
+        let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
 
         {
-            let data = self.analytics_cache.as_ref();
             egui::Window::new("📊 Speicher-Analyse")
+                .id(egui::Id::new("analyse_treemap_v2"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_size([980.0, 660.0])
+                .default_size([880.0, 600.0])
+                .min_width(440.0)
+                .constrain(true)
                 .show(ctx, |ui| {
-                    // ── Breadcrumb + actions ──
+                    // ── Row 1: scan targets ──
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("⟳ Neu scannen").on_hover_text("Aktuellen Ordner neu scannen").clicked() {
-                            rescan = true;
+                        ui.label(RichText::new("Scannen:").small().color(Color32::from_gray(150)));
+                        for (root, free, total) in &drives {
+                            let dl: String = root.chars().take(2).collect();
+                            let used = total.saturating_sub(*free);
+                            let label = if *total > 0 {
+                                format!("{} ({}/{})", dl, format_bytes(used), format_bytes(*total))
+                            } else {
+                                dl.clone()
+                            };
+                            if ui.button(label).clicked() {
+                                rescan = Some(format!("{}/", dl));
+                            }
                         }
+                        if ui.button("📁 Ordner…").clicked() {
+                            pick_folder = true;
+                        }
+                        if ui.button("⟳").on_hover_text("Neu scannen").clicked() {
+                            rescan = Some(root_label.clone());
+                        }
+                    });
+
+                    // ── Row 2: breadcrumb ──
+                    ui.horizontal_wrapped(|ui| {
                         if !focus_segs.is_empty() && ui.button("↑").on_hover_text("Eine Ebene höher").clicked() {
                             go_up = true;
                         }
-                        ui.separator();
                         if ui.button(RichText::new(&root_label).strong()).clicked() {
                             set_focus = Some(0);
                         }
@@ -9873,14 +9870,12 @@ impl App {
                     if let Some((used, tot)) = drive {
                         let frac = used as f32 / tot as f32;
                         ui.add(
-                            egui::ProgressBar::new(frac)
-                                .desired_width(ui.available_width())
-                                .text(format!(
-                                    "Laufwerk: {} von {} belegt ({:.0}%)",
-                                    format_bytes(used),
-                                    format_bytes(tot),
-                                    frac * 100.0
-                                )),
+                            egui::ProgressBar::new(frac).desired_width(ui.available_width()).text(format!(
+                                "Laufwerk: {} von {} belegt ({:.0}%)",
+                                format_bytes(used),
+                                format_bytes(tot),
+                                frac * 100.0
+                            )),
                         );
                     }
 
@@ -9901,139 +9896,145 @@ impl App {
                             }
                         });
                         ctx.request_repaint_after(std::time::Duration::from_millis(150));
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format_bytes(focus_size)).strong());
+                            ui.label(format!("· {} Dateien · {} Ordner", n_files, n_dirs));
+                            ui.label(
+                                RichText::new("· Klick = reinzoomen")
+                                    .small()
+                                    .color(Color32::from_gray(130)),
+                            );
+                        });
                     }
                     ui.separator();
 
-                    let data = match data {
-                        Some(d) => d,
-                        None => {
-                            if scan_info.is_none() {
-                                ui.label("Kein Scan-Ergebnis — „Neu scannen“ starten.");
-                            }
-                            return;
-                        }
-                    };
-                    let total = data.total_bytes;
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format_bytes(total)).strong());
-                        ui.label(format!("· {} Dateien · {} Ordner", data.files, data.dirs));
-                    });
+                    // ── Nested treemap ──
+                    let tm_w = ui.available_width();
+                    let tm_h = (ui.available_height() - 26.0).max(200.0);
+                    let (tm_rect, tm_resp) =
+                        ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
-                    ui.horizontal_top(|ui| {
-                        // ── Treemap ──
-                        let tm_w = (ui.available_width() - 300.0).max(220.0);
-                        let tm_h = ui.available_height().max(240.0);
-                        let (tm_rect, tm_resp) =
-                            ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
-                        let weights: Vec<f64> = data.children.iter().map(|c| c.size as f64).collect();
-                        let rects = treemap_layout(&weights, tm_rect);
-                        let painter = ui.painter_at(tm_rect);
-                        painter.rect_filled(tm_rect, 0.0, Color32::from_gray(28));
-                        for (c, r) in data.children.iter().zip(&rects) {
-                            if r.width() < 1.5 || r.height() < 1.5 {
-                                continue;
-                            }
-                            let base = c.cat.color();
-                            let col = if c.is_dir { base.gamma_multiply(0.8) } else { base };
-                            painter.rect_filled(*r, 2.0, col);
-                            painter.rect_stroke(*r, 2.0, egui::Stroke::new(1.0, Color32::from_black_alpha(70)));
-                            if r.width() > 52.0 && r.height() > 20.0 {
+                    // (Re)lay out only on resize or drill — painting reuses cells.
+                    let need = focus_node.is_some()
+                        && (cached_cells.is_empty()
+                            || (cached_rect.size() - tm_rect.size()).length() > 2.0);
+                    let cells: &[TmCell] = if need {
+                        let mut v = Vec::new();
+                        if let Some(node) = focus_node {
+                            nested_treemap(tm_rect, node, &focus_path, 0, &mut v);
+                        }
+                        recomputed = Some((v, tm_rect));
+                        &recomputed.as_ref().unwrap().0
+                    } else {
+                        cached_cells
+                    };
+
+                    let painter = ui.painter_at(tm_rect);
+                    painter.rect_filled(tm_rect, 0.0, Color32::from_gray(22));
+                    for cell in cells {
+                        if cell.container {
+                            painter.rect_filled(cell.rect, 2.0, cell.color);
+                            painter.rect_stroke(cell.rect, 2.0, egui::Stroke::new(1.0, Color32::from_black_alpha(130)));
+                            let hr = egui::Rect::from_min_max(
+                                cell.rect.min,
+                                egui::pos2(cell.rect.max.x, cell.rect.min.y + TM_HEADER),
+                            );
+                            painter.rect_filled(hr, 0.0, Color32::from_gray(54));
+                            painter.text(
+                                hr.min + egui::vec2(4.0, 1.0),
+                                egui::Align2::LEFT_TOP,
+                                format!("{}  {}", cell.name, format_bytes(cell.size)),
+                                egui::FontId::proportional(11.0),
+                                Color32::from_gray(225),
+                            );
+                        } else {
+                            painter.rect_filled(cell.rect, 1.0, cell.color);
+                            painter.rect_stroke(cell.rect, 1.0, egui::Stroke::new(0.5, Color32::from_black_alpha(70)));
+                            if cell.rect.width() > 46.0 && cell.rect.height() > 16.0 {
+                                let col = cell.color;
                                 let lum = 0.299 * col.r() as f32 + 0.587 * col.g() as f32 + 0.114 * col.b() as f32;
                                 let tc = if lum < 140.0 { Color32::from_gray(245) } else { Color32::from_gray(20) };
                                 painter.text(
-                                    r.left_top() + egui::vec2(4.0, 3.0),
+                                    cell.rect.left_top() + egui::vec2(3.0, 2.0),
                                     egui::Align2::LEFT_TOP,
-                                    format!("{}\n{}", c.name, format_bytes(c.size)),
+                                    format!("{}{}\n{}", if cell.is_dir { "📁 " } else { "" }, cell.name, format_bytes(cell.size)),
                                     egui::FontId::proportional(11.0),
                                     tc,
                                 );
                             }
                         }
-                        let tm_resp = tm_resp.on_hover_ui(|ui| {
-                            if let Some(pos) = ui.ctx().pointer_hover_pos() {
-                                if let Some((c, _)) = data.children.iter().zip(&rects).find(|(_, r)| r.contains(pos)) {
-                                    let pct = if total > 0 { c.size as f64 / total as f64 * 100.0 } else { 0.0 };
-                                    ui.label(format!(
-                                        "{}{}\n{} · {:.1}%",
-                                        if c.is_dir { "📁 " } else { "" },
-                                        c.name,
-                                        format_bytes(c.size),
-                                        pct
-                                    ));
-                                }
+                    }
+
+                    // Hover tooltip + click-to-drill: deepest cell under pointer.
+                    let tm_resp = tm_resp.on_hover_ui(|ui| {
+                        if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                            if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
+                                let pct = if focus_size > 0 { cell.size as f64 / focus_size as f64 * 100.0 } else { 0.0 };
+                                ui.label(format!(
+                                    "{}{}\n{} · {:.1}%",
+                                    if cell.is_dir { "📁 " } else { "" },
+                                    cell.name,
+                                    format_bytes(cell.size),
+                                    pct
+                                ));
                             }
-                        });
-                        if tm_resp.clicked() {
-                            if let Some(pos) = tm_resp.interact_pointer_pos() {
-                                if let Some((c, _)) = data.children.iter().zip(&rects).find(|(_, r)| r.contains(pos)) {
-                                    if c.is_dir {
-                                        drill = Some(c.name.clone());
-                                    } else {
-                                        reveal = Some(c.path.clone());
-                                    }
+                        }
+                    });
+                    if tm_resp.clicked() {
+                        if let Some(pos) = tm_resp.interact_pointer_pos() {
+                            if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
+                                if cell.is_dir {
+                                    drill_path = Some(cell.path.clone());
+                                } else {
+                                    reveal = Some(cell.path.clone());
                                 }
                             }
                         }
+                    }
 
-                        // ── Side stats ──
-                        ui.allocate_ui(egui::vec2(290.0, tm_h), |ui| {
-                            egui::ScrollArea::vertical().id_salt("analytics_side").show(ui, |ui| {
-                                ui.label(RichText::new("NACH KATEGORIE").small().color(Color32::from_gray(150)));
-                                for (cat, bytes, count) in &data.by_cat {
-                                    ui_bar(ui, cat.color(), cat.label(), *bytes, total, *count);
-                                }
-                                ui.add_space(8.0);
-                                ui.label(RichText::new("GRÖSSTE ORDNER").small().color(Color32::from_gray(150)));
-                                for c in data.children.iter().filter(|c| c.is_dir).take(10) {
-                                    if ui
-                                        .add(egui::Button::new(format!("📁 {}  —  {}", c.name, format_bytes(c.size))).wrap())
-                                        .on_hover_text(&c.path)
-                                        .clicked()
-                                    {
-                                        drill = Some(c.name.clone());
-                                    }
-                                }
-                                ui.add_space(8.0);
-                                ui.label(RichText::new("GRÖSSTE DATEIEN").small().color(Color32::from_gray(150)));
-                                for f in data.largest_files.iter().take(12) {
-                                    if ui
-                                        .add(egui::Button::new(format!("{}  —  {}", f.name, format_bytes(f.size))).wrap())
-                                        .on_hover_text(&f.path)
-                                        .clicked()
-                                    {
-                                        reveal = Some(f.path.clone());
-                                    }
-                                }
-                                ui.add_space(8.0);
-                                ui.label(RichText::new("NACH TYP").small().color(Color32::from_gray(150)));
-                                for (ext, count, bytes) in &data.by_ext {
-                                    ui_bar(ui, Color32::from_rgb(90, 140, 200), ext, *bytes, total, *count);
-                                }
-                            });
-                        });
+                    // ── Legend ──
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for cat in Category::ALL {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
+                            ui.painter().rect_filled(r, 2.0, cat.color());
+                            ui.label(RichText::new(cat.label()).small());
+                            ui.add_space(4.0);
+                        }
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
+                        ui.painter().rect_filled(r, 2.0, Color32::from_gray(82));
+                        ui.label(RichText::new("Ordner").small());
                     });
                 });
         }
 
-        // Apply deferred actions (self is free of the data borrow here).
+        // ── Apply deferred actions (self is free of the borrows here) ──
+        if let Some((cells, rect)) = recomputed {
+            self.analytics_cells = cells;
+            self.analytics_cells_rect = rect;
+        }
         if cancel {
             if let Some(s) = &self.analytics_scan {
                 s.progress.cancel.store(true, Relaxed);
             }
             self.analytics_scan = None;
         }
-        if rescan {
-            let r = self.root_path.clone();
+        if pick_folder {
+            if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                self.start_analytics_scan(p.to_string_lossy().replace('\\', "/"));
+            }
+        } else if let Some(r) = rescan {
             self.start_analytics_scan(r);
+        } else if let Some(p) = drill_path {
+            self.analytics_focus = self.analytics_path_to_focus(&p);
+            self.analytics_invalidate();
         } else if let Some(len) = set_focus {
             self.analytics_focus.truncate(len);
-            self.analytics_cache = None;
+            self.analytics_invalidate();
         } else if go_up {
             self.analytics_focus.pop();
-            self.analytics_cache = None;
-        } else if let Some(name) = drill {
-            self.analytics_focus.push(name);
-            self.analytics_cache = None;
+            self.analytics_invalidate();
         }
         if !open {
             if let Some(s) = &self.analytics_scan {
@@ -11656,8 +11657,7 @@ mod omni_tests {
         assert_eq!(ext_of("movie.MP4"), "MP4");
         assert_eq!(ext_of("README"), "");
         assert_eq!(ext_of(".gitignore"), "");
-        assert_eq!(ext_key("a.TXT"), "txt");
-        assert_eq!(ext_key("noext"), "(ohne)");
+        assert_eq!(ext_of("a.tar.gz"), "gz");
     }
 
     #[test]
