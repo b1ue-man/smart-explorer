@@ -55,6 +55,7 @@ fn dir_meta(name: String) -> VfsMeta {
         hidden: false,
         system: false,
         id: None,
+        content_md5: None,
     }
 }
 
@@ -208,6 +209,7 @@ impl Backend for FtpBackend {
                     system: false,
                     name,
                     id: None,
+                    content_md5: None,
                 });
             }
         }

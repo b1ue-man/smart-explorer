@@ -52,6 +52,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 getrandom = "0.2"
+# MD5 (pure Rust) for content-equality compare using the SAME hash remotes
+# expose natively (Google Drive md5Checksum, Nextcloud/ownCloud oc:checksums) —
+# so checksum-mode sync compares hashes WITHOUT downloading remote files.
+md5 = "0.7"
 # Peer file sharing (share.rs, #21): Noise NNpsk0 E2E channel (snow's default
 # resolver is pure Rust — x25519-dalek + chacha20poly1305 + blake2/sha2, no
 # aws-lc) keyed by a PSK derived from the pairing/room code via HKDF.

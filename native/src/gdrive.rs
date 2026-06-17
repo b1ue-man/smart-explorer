@@ -276,6 +276,7 @@ impl GDriveBackend {
             hidden: false,
             system: false,
             id: f["id"].as_str().map(|s| s.to_string()),
+            content_md5: f["md5Checksum"].as_str().map(|s| s.to_string()),
         }
     }
 
@@ -447,7 +448,7 @@ impl Backend for GDriveBackend {
         loop {
             let q = format!("'{}' in parents and trashed = false", id);
             let mut url = format!(
-                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime)&pageSize=1000",
+                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
                 API,
                 cloud_urlenc(&q)
             );
@@ -500,11 +501,12 @@ impl Backend for GDriveBackend {
                 hidden: false,
                 system: false,
                 id: None,
+                content_md5: None,
             });
         }
         let id = self.resolve(&key)?;
         let url = format!(
-            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime",
+            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
             API, id
         );
         let v = self.get_json(&url)?;

@@ -49,6 +49,11 @@ pub struct VfsMeta {
     /// keys by file-id and allows duplicate names in one folder). None = the
     /// path/name uniquely identifies the item (local, SFTP, FTP, WebDAV).
     pub id: Option<String>,
+    /// Server-provided content MD5 (hex), if the backend exposes one for free in
+    /// its listing — Google Drive `md5Checksum`, Nextcloud/ownCloud
+    /// `oc:checksums`. Lets checksum-mode compare without downloading the file.
+    /// None = not provided (local/SFTP/FTP, Google-Docs/folders).
+    pub content_md5: Option<String>,
 }
 
 pub type VfsResult<T> = io::Result<T>;
@@ -178,6 +183,7 @@ fn meta_to_vfs(name: String, meta: &std::fs::Metadata) -> VfsMeta {
         hidden,
         system,
         id: None,
+        content_md5: None,
     }
 }
 

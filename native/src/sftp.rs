@@ -302,6 +302,7 @@ fn to_vfs(name: String, meta: &russh_sftp::protocol::FileAttributes) -> VfsMeta 
         system: false,
         name,
         id: None,
+        content_md5: None,
     }
 }
 
