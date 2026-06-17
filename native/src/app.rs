@@ -383,7 +383,7 @@ pub struct App {
     show_bisync_conflicts: bool,
     /// Line-merge editor for one conflict (None = closed) + its async channels.
     merge: Option<MergeUi>,
-    merge_load_rx: Option<Receiver<Result<(String, Vec<crate::linemerge::Hunk>), String>>>,
+    merge_load_rx: Option<Receiver<Result<(String, Vec<crate::linemerge::Row>), String>>>,
     merge_apply_rx: Option<Receiver<Result<(String, crate::bisync::Sig, crate::bisync::Sig), String>>>,
     /// Compare ("ls-diff") view: a running preview + its result window.
     preview_rx: Option<Receiver<crate::bisync::Preview>>,
@@ -790,10 +790,10 @@ fn download_to_id(
     Ok(dest.to_string_lossy().to_string())
 }
 
-/// Line-merge editor state for resolving one conflict by line.
+/// Line-merge editor state: a side-by-side aligned diff of the two versions.
 struct MergeUi {
     rel: String,
-    hunks: Vec<crate::linemerge::Hunk>,
+    rows: Vec<crate::linemerge::Row>,
 }
 
 fn ep_join(root: &str, rel: &str) -> String {
@@ -3318,23 +3318,23 @@ impl App {
         std::thread::Builder::new()
             .name("merge-load".into())
             .spawn(move || {
-                let res = (|| -> Result<(String, Vec<crate::linemerge::Hunk>), String> {
+                let res = (|| -> Result<(String, Vec<crate::linemerge::Row>), String> {
                     let ta = read_text(&*a, &ep_join(&ra, &rel_t))?;
                     let tb = read_text(&*b, &ep_join(&rb, &rel_t))?;
-                    Ok((rel_t.clone(), crate::linemerge::diff(&ta, &tb)))
+                    Ok((rel_t.clone(), crate::linemerge::rows(&ta, &tb)))
                 })();
                 let _ = tx.send(res);
             })
             .ok();
         self.merge_load_rx = Some(rx);
-        self.merge = Some(MergeUi { rel, hunks: Vec::new() }); // shows "loading"
+        self.merge = Some(MergeUi { rel, rows: Vec::new() }); // shows "loading"
     }
 
     fn drain_merge(&mut self) {
         if let Some(res) = self.merge_load_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.merge_load_rx = None;
             match res {
-                Ok((rel, hunks)) => self.merge = Some(MergeUi { rel, hunks }),
+                Ok((rel, rows)) => self.merge = Some(MergeUi { rel, rows }),
                 Err(e) => {
                     self.error_msg = Some(format!("Zusammenführen: {}", e));
                     self.merge = None;
@@ -3384,7 +3384,8 @@ impl App {
         self.merge_apply_rx = Some(rx);
     }
 
-    /// The line-merge window: per-hunk A/B/Both/Neither choices + save.
+    /// The line-merge window: a synced, side-by-side (git-diff-like) view of both
+    /// versions; tick the line(s) from each side to keep in the merged result.
     fn ui_merge(&mut self, ctx: &egui::Context) {
         let mut m = match self.merge.take() {
             Some(m) => m,
@@ -3393,11 +3394,11 @@ impl App {
         let loading = self.merge_load_rx.is_some();
         let mut open = true;
         let mut save = false;
-        egui::Window::new(format!("⇄ Zusammenführen: {}", m.rel))
+        egui::Window::new(format!("⇄ Zeilenvergleich: {}", m.rel))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size([760.0, 560.0])
+            .default_size([900.0, 600.0])
             .show(ctx, |ui| {
                 if loading {
                     ui.horizontal(|ui| {
@@ -3406,38 +3407,61 @@ impl App {
                     });
                     return;
                 }
-                ui.label(
-                    RichText::new("A = Quelle (links), B = Ziel (rechts). Pro Änderungsblock wählen, was ins Ergebnis kommt.")
-                        .small()
-                        .color(Color32::from_gray(150)),
-                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Häkchen = diese Zeile ins Ergebnis übernehmen. A = Quelle (links), B = Ziel (rechts).")
+                            .small()
+                            .color(Color32::from_gray(150)),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.small_button("Alle A").clicked() {
+                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_left = r.left.is_some(); r.take_right = false; }
+                    }
+                    if ui.small_button("Alle B").clicked() {
+                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_right = r.right.is_some(); r.take_left = false; }
+                    }
+                    if ui.small_button("Alle beide").clicked() {
+                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_left = r.left.is_some(); r.take_right = r.right.is_some(); }
+                    }
+                });
                 ui.separator();
+                let gray = Color32::from_gray(150);
                 let green = Color32::from_rgb(120, 200, 120);
                 let blue = Color32::from_rgb(120, 180, 230);
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for h in m.hunks.iter_mut() {
-                        if h.equal {
-                            for l in &h.a {
-                                ui.label(RichText::new(format!("  {}", l)).monospace().color(Color32::from_gray(150)));
-                            }
-                            continue;
-                        }
-                        ui.group(|ui| {
+                let colw = ((ui.available_width() - 40.0) / 2.0).max(120.0);
+                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                    egui::Grid::new("merge_grid").num_columns(2).striped(true).min_col_width(colw).show(ui, |ui| {
+                        for r in m.rows.iter_mut() {
+                            // Left (A) cell.
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Block:").small());
-                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::A, "A");
-                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::B, "B");
-                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::Both, "Beide");
-                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::Neither, "Keine");
+                                if r.equal {
+                                    ui.add_space(20.0);
+                                    ui.label(RichText::new(r.left.clone().unwrap_or_default()).monospace().color(gray));
+                                } else if let Some(l) = r.left.clone() {
+                                    ui.checkbox(&mut r.take_left, "");
+                                    ui.label(RichText::new(l).monospace().color(green));
+                                } else {
+                                    ui.add_space(20.0);
+                                    ui.label(RichText::new("∅").monospace().color(Color32::from_gray(90)));
+                                }
                             });
-                            for l in &h.a {
-                                ui.label(RichText::new(format!("A  {}", l)).monospace().color(green));
-                            }
-                            for l in &h.b {
-                                ui.label(RichText::new(format!("B  {}", l)).monospace().color(blue));
-                            }
-                        });
-                    }
+                            // Right (B) cell.
+                            ui.horizontal(|ui| {
+                                if r.equal {
+                                    ui.add_space(20.0);
+                                    ui.label(RichText::new(r.right.clone().unwrap_or_default()).monospace().color(gray));
+                                } else if let Some(l) = r.right.clone() {
+                                    ui.checkbox(&mut r.take_right, "");
+                                    ui.label(RichText::new(l).monospace().color(blue));
+                                } else {
+                                    ui.add_space(20.0);
+                                    ui.label(RichText::new("∅").monospace().color(Color32::from_gray(90)));
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
                 });
                 ui.separator();
                 if ui.button("✔ Zusammenführen & speichern").clicked() {
@@ -3445,7 +3469,7 @@ impl App {
                 }
             });
         if save {
-            let merged = crate::linemerge::assemble(&m.hunks);
+            let merged = crate::linemerge::assemble_rows(&m.rows);
             self.start_merge_apply(m.rel.clone(), merged);
             self.merge = None; // close; result lands via drain
         } else if open {
