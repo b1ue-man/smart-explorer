@@ -145,6 +145,18 @@ pub fn is_running() -> bool {
         .unwrap_or(false)
 }
 
+/// The last `lines` lines of the daemon log (for the GUI log viewer).
+pub fn read_log_tail(lines: usize) -> String {
+    match std::fs::read_to_string(log_path()) {
+        Ok(s) => {
+            let mut tail: Vec<&str> = s.lines().rev().take(lines).collect();
+            tail.reverse();
+            tail.join("\n")
+        }
+        Err(_) => "(noch kein Protokoll)".to_string(),
+    }
+}
+
 pub fn request_stop() {
     let _ = std::fs::write(stop_path(), "stop");
 }
@@ -215,6 +227,27 @@ fn run_one(job: &SyncJob) {
         out.conflicts.len(),
         out.errors.len()
     ));
+    let note = if out.errors.iter().any(|(k, _)| k == "abgebrochen") {
+        "abgebrochen"
+    } else if !out.errors.is_empty() {
+        "Fehler"
+    } else if !out.conflicts.is_empty() {
+        "Konflikte"
+    } else {
+        "ok"
+    };
+    crate::syncjobs::record_result(
+        &job.id,
+        &crate::syncjobs::JobResult {
+            when: now_secs(),
+            a_to_b: out.stats.a_to_b,
+            b_to_a: out.stats.b_to_a,
+            deleted: out.stats.deleted,
+            conflicts: out.conflicts.len() as u64,
+            errors: out.errors.len() as u64,
+            note: note.into(),
+        },
+    );
     if !job.run_after.trim().is_empty() {
         run_cmd(&job.run_after);
     }
@@ -329,7 +362,18 @@ fn wildcard_ci(pat: &str, s: &str) -> bool {
 
 /// The headless loop.
 pub fn run_daemon() {
-    if is_running() {
+    // Handoff: if a stop was requested (e.g. an updated GUI cycling the daemon),
+    // wait for the previous instance to exit before taking over. Otherwise the
+    // single-instance guard applies — a fresh heartbeat means one already runs.
+    if stop_requested() {
+        for _ in 0..15 {
+            if !is_running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        clear_stop();
+    } else if is_running() {
         return;
     }
     clear_stop();
