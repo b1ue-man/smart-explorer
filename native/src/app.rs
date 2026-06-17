@@ -496,6 +496,15 @@ struct JobEditor {
     filter_max_size_kb: String,
     filter_max_age_days: String,
     filter_min_age_days: String,
+    // ── Groups H/I: bandwidth & reliability ──────────────────────────────────
+    bwlimit_kbps: String,
+    max_transfers: String,
+    atomic_copy: bool,
+    verify: bool,
+    retries: String,
+    retry_delay_secs: String,
+    run_before: String,
+    run_after: String,
 }
 
 /// Minutes-after-midnight → "HH:MM".
@@ -560,6 +569,14 @@ impl JobEditor {
             filter_max_size_kb: "0".into(),
             filter_max_age_days: "0".into(),
             filter_min_age_days: "0".into(),
+            bwlimit_kbps: "0".into(),
+            max_transfers: "0".into(),
+            atomic_copy: true,
+            verify: false,
+            retries: "0".into(),
+            retry_delay_secs: "2".into(),
+            run_before: String::new(),
+            run_after: String::new(),
         }
     }
 
@@ -598,6 +615,14 @@ impl JobEditor {
             filter_max_size_kb: j.filter_max_size_kb.to_string(),
             filter_max_age_days: j.filter_max_age_days.to_string(),
             filter_min_age_days: j.filter_min_age_days.to_string(),
+            bwlimit_kbps: j.bwlimit_kbps.to_string(),
+            max_transfers: j.max_transfers.to_string(),
+            atomic_copy: j.atomic_copy,
+            verify: j.verify,
+            retries: j.retries.to_string(),
+            retry_delay_secs: j.retry_delay_secs.to_string(),
+            run_before: j.run_before.clone(),
+            run_after: j.run_after.clone(),
         }
     }
 }
@@ -6904,6 +6929,38 @@ impl App {
                         });
                         ui.end_row();
 
+                        ui.label("Bandbreite").on_hover_text("Übertragungsrate begrenzen (KB/s, 0 = unbegrenzt)");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.bwlimit_kbps).desired_width(80.0));
+                            ui.label("KB/s · max");
+                            ui.add(egui::TextEdit::singleline(&mut ed.max_transfers).desired_width(50.0));
+                            ui.label("parallel");
+                        });
+                        ui.end_row();
+
+                        ui.label("Zuverlässigkeit").on_hover_text("Sichere Kopien (temporär + umbenennen), Größe nach dem Kopieren prüfen");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut ed.atomic_copy, "Sichere Kopien");
+                            ui.checkbox(&mut ed.verify, "Überprüfen");
+                        });
+                        ui.end_row();
+
+                        ui.label("Wiederholungen").on_hover_text("Fehlgeschlagene Übertragungen N-mal wiederholen, mit Pause dazwischen");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut ed.retries).desired_width(50.0));
+                            ui.label("× / Pause");
+                            ui.add(egui::TextEdit::singleline(&mut ed.retry_delay_secs).desired_width(50.0));
+                            ui.label("s");
+                        });
+                        ui.end_row();
+
+                        ui.label("Befehl davor").on_hover_text("Vor dem Lauf ausführen (nur Hintergrund-Dienst)");
+                        ui.add(egui::TextEdit::singleline(&mut ed.run_before).hint_text("optional").desired_width(360.0));
+                        ui.end_row();
+                        ui.label("Befehl danach").on_hover_text("Nach dem Lauf ausführen (nur Hintergrund-Dienst)");
+                        ui.add(egui::TextEdit::singleline(&mut ed.run_after).hint_text("optional").desired_width(360.0));
+                        ui.end_row();
+
                         ui.label("Aktiv");
                         ui.checkbox(&mut ed.enabled, "Zeitplan aktiv");
                         ui.end_row();
@@ -6987,6 +7044,14 @@ impl App {
             job.filter_max_size_kb = ed.filter_max_size_kb.trim().parse().unwrap_or(0);
             job.filter_max_age_days = ed.filter_max_age_days.trim().parse().unwrap_or(0);
             job.filter_min_age_days = ed.filter_min_age_days.trim().parse().unwrap_or(0);
+            job.bwlimit_kbps = ed.bwlimit_kbps.trim().parse().unwrap_or(0);
+            job.max_transfers = ed.max_transfers.trim().parse().unwrap_or(0);
+            job.atomic_copy = ed.atomic_copy;
+            job.verify = ed.verify;
+            job.retries = ed.retries.trim().parse().unwrap_or(0);
+            job.retry_delay_secs = ed.retry_delay_secs.trim().parse().unwrap_or(2);
+            job.run_before = ed.run_before.trim().to_string();
+            job.run_after = ed.run_after.trim().to_string();
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();

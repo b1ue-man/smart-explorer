@@ -188,6 +188,9 @@ fn run_one(job: &SyncJob) {
             return;
         }
     };
+    if !job.run_before.trim().is_empty() {
+        run_cmd(&job.run_before);
+    }
     let opts = job.opts(false);
     let cancel = AtomicBool::new(false);
     let gs = job.glob_set();
@@ -212,6 +215,22 @@ fn run_one(job: &SyncJob) {
         out.conflicts.len(),
         out.errors.len()
     ));
+    if !job.run_after.trim().is_empty() {
+        run_cmd(&job.run_after);
+    }
+}
+
+/// Run a user-specified shell command (run-before/after a job), waiting for it.
+/// Best-effort: failures are logged, not fatal.
+fn run_cmd(cmd: &str) {
+    #[cfg(windows)]
+    let result = std::process::Command::new("cmd").args(["/C", cmd]).status();
+    #[cfg(not(windows))]
+    let result = std::process::Command::new("sh").args(["-c", cmd]).status();
+    match result {
+        Ok(s) => log(&format!("ran command ({}): {}", s, cmd)),
+        Err(e) => log(&format!("command failed ({}): {}", e, cmd)),
+    }
 }
 
 // ── real-time change detection (local-side mtime/count signature) ────────────
