@@ -191,9 +191,14 @@ fn run_one(job: &SyncJob) {
     let opts = job.opts(false);
     let cancel = AtomicBool::new(false);
     let gs = job.glob_set();
+    let (min_size, max_size, after, before) = job.filter_bounds(now_secs());
     let filter = crate::bisync::WalkFilter {
         include_hidden: job.include_hidden,
         ignore: &gs,
+        min_size,
+        max_size,
+        after_mtime_ms: after,
+        before_mtime_ms: before,
     };
     let out = crate::bisync::run(&*a, &root_a, &*b, &root_b, opts, &cancel, &filter);
     crate::syncjobs::mark_run(&job.id);

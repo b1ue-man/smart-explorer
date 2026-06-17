@@ -491,6 +491,11 @@ struct JobEditor {
     use_recycle_bin: bool,
     max_delete: String,
     max_delete_pct: String,
+    // ── Group G: filters ─────────────────────────────────────────────────────
+    filter_min_size_kb: String,
+    filter_max_size_kb: String,
+    filter_max_age_days: String,
+    filter_min_age_days: String,
 }
 
 /// Minutes-after-midnight → "HH:MM".
@@ -551,6 +556,10 @@ impl JobEditor {
             use_recycle_bin: false,
             max_delete: "0".into(),
             max_delete_pct: "0".into(),
+            filter_min_size_kb: "0".into(),
+            filter_max_size_kb: "0".into(),
+            filter_max_age_days: "0".into(),
+            filter_min_age_days: "0".into(),
         }
     }
 
@@ -585,6 +594,10 @@ impl JobEditor {
             use_recycle_bin: j.use_recycle_bin,
             max_delete: j.max_delete.to_string(),
             max_delete_pct: j.max_delete_pct.to_string(),
+            filter_min_size_kb: j.filter_min_size_kb.to_string(),
+            filter_max_size_kb: j.filter_max_size_kb.to_string(),
+            filter_max_age_days: j.filter_max_age_days.to_string(),
+            filter_min_age_days: j.filter_min_age_days.to_string(),
         }
     }
 }
@@ -640,6 +653,13 @@ const DISCLAIMER_TEXT: &str = include_str!("../../DISCLAIMER.txt");
 const SIDEBAR_CONN_CAP: usize = 10;
 
 /// Format a unix-millis timestamp as local "YYYY-MM-DD HH:MM".
+fn now_secs_i64() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn fmt_ms(ms: i64) -> String {
     use chrono::TimeZone;
     chrono::Local
@@ -2450,6 +2470,7 @@ impl App {
             crate::bisync::BisyncOptions::default(),
             true,
             Vec::new(),
+            (0, 0, 0, 0),
             None,
         );
     }
@@ -2468,6 +2489,7 @@ impl App {
         opts: crate::bisync::BisyncOptions,
         include_hidden: bool,
         ignore: Vec<String>,
+        bounds: (u64, u64, i64, i64),
         job_id: Option<String>,
     ) {
         if self.bisync_running {
@@ -2506,6 +2528,10 @@ impl App {
                 let f = crate::bisync::WalkFilter {
                     include_hidden,
                     ignore: &gs,
+                    min_size: bounds.0,
+                    max_size: bounds.1,
+                    after_mtime_ms: bounds.2,
+                    before_mtime_ms: bounds.3,
                 };
                 let _ = tx.send(crate::bisync::run(
                     &*a, &root_a, &*b, &root_b, opts, &cancel_t, &f,
@@ -2554,6 +2580,7 @@ impl App {
                 opts,
                 job.include_hidden,
                 job.ignore.clone(),
+                job.filter_bounds(now_secs_i64()),
                 Some(job.id.clone()),
             );
             return;
@@ -2602,6 +2629,7 @@ impl App {
                     opts,
                     job.include_hidden,
                     job.ignore.clone(),
+                    job.filter_bounds(now_secs_i64()),
                     Some(job.id.clone()),
                 );
             }
@@ -2743,6 +2771,7 @@ impl App {
             crate::bisync::BisyncOptions::default(),
             true,
             Vec::new(),
+            (0, 0, 0, 0),
             None,
         );
     }
@@ -6839,7 +6868,40 @@ impl App {
                         ui.end_row();
 
                         ui.label("Ignorieren").on_hover_text("Glob-Muster, eines pro Zeile (z. B. **/*.tmp, node_modules/**)");
-                        ui.add(egui::TextEdit::multiline(&mut ed.ignore).hint_text("**/*.tmp\nnode_modules/**").desired_rows(3).desired_width(360.0));
+                        ui.vertical(|ui| {
+                            ui.add(egui::TextEdit::multiline(&mut ed.ignore).hint_text("**/*.tmp\nnode_modules/**").desired_rows(3).desired_width(360.0));
+                            if ui.small_button("＋ Standard-Ausschlüsse").on_hover_text("Übliche temporäre/System-Dateien ergänzen").clicked() {
+                                const DEFAULTS: &[&str] = &[
+                                    "**/*.tmp", "**/~$*", "**/desktop.ini", "**/Thumbs.db",
+                                    "**/.DS_Store", "**/System Volume Information/**",
+                                ];
+                                let mut lines: Vec<String> = ed.ignore.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+                                for d in DEFAULTS {
+                                    if !lines.iter().any(|l| l == d) {
+                                        lines.push((*d).to_string());
+                                    }
+                                }
+                                ed.ignore = lines.join("\n");
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Größe (KB)").on_hover_text("Nur Dateien in diesem Größenbereich (0 = keine Grenze)");
+                        ui.horizontal(|ui| {
+                            ui.label("min");
+                            ui.add(egui::TextEdit::singleline(&mut ed.filter_min_size_kb).desired_width(70.0));
+                            ui.label("max");
+                            ui.add(egui::TextEdit::singleline(&mut ed.filter_max_size_kb).desired_width(70.0));
+                        });
+                        ui.end_row();
+
+                        ui.label("Alter (Tage)").on_hover_text("Nur Dateien, die jünger als / älter als N Tage sind (0 = aus)");
+                        ui.horizontal(|ui| {
+                            ui.label("jünger als");
+                            ui.add(egui::TextEdit::singleline(&mut ed.filter_max_age_days).desired_width(60.0));
+                            ui.label("älter als");
+                            ui.add(egui::TextEdit::singleline(&mut ed.filter_min_age_days).desired_width(60.0));
+                        });
                         ui.end_row();
 
                         ui.label("Aktiv");
@@ -6921,6 +6983,10 @@ impl App {
             job.use_recycle_bin = ed.use_recycle_bin;
             job.max_delete = ed.max_delete.trim().parse().unwrap_or(0);
             job.max_delete_pct = ed.max_delete_pct.trim().parse().unwrap_or(0);
+            job.filter_min_size_kb = ed.filter_min_size_kb.trim().parse().unwrap_or(0);
+            job.filter_max_size_kb = ed.filter_max_size_kb.trim().parse().unwrap_or(0);
+            job.filter_max_age_days = ed.filter_max_age_days.trim().parse().unwrap_or(0);
+            job.filter_min_age_days = ed.filter_min_age_days.trim().parse().unwrap_or(0);
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();

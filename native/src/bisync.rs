@@ -409,11 +409,49 @@ fn parent_of(path: &str) -> Option<String> {
     t.rfind('/').map(|i| if i == 0 { "/".into() } else { t[..i].into() })
 }
 
-/// What to skip while walking (hidden files, ignore globs matched on the
-/// relative path). `default_filter()` includes everything.
+/// What to skip while walking: hidden files, ignore globs (matched on the
+/// relative path), and size/age bounds (Group G). A bound of 0 means "no limit".
 pub struct WalkFilter<'a> {
     pub include_hidden: bool,
     pub ignore: &'a globset::GlobSet,
+    /// Only include files with `min_size <= size <= max_size` (bytes; 0 = off).
+    pub min_size: u64,
+    pub max_size: u64,
+    /// Only include files modified within `[after_mtime_ms, before_mtime_ms]`
+    /// (unix ms; 0 = off on that side).
+    pub after_mtime_ms: i64,
+    pub before_mtime_ms: i64,
+}
+
+impl<'a> WalkFilter<'a> {
+    /// A filter with no size/age bounds (the common case).
+    pub fn basic(include_hidden: bool, ignore: &'a globset::GlobSet) -> Self {
+        WalkFilter {
+            include_hidden,
+            ignore,
+            min_size: 0,
+            max_size: 0,
+            after_mtime_ms: 0,
+            before_mtime_ms: 0,
+        }
+    }
+
+    /// Does a file of this size/mtime pass the size & age bounds?
+    fn size_age_ok(&self, size: u64, mtime_ms: i64) -> bool {
+        if self.min_size > 0 && size < self.min_size {
+            return false;
+        }
+        if self.max_size > 0 && size > self.max_size {
+            return false;
+        }
+        if self.after_mtime_ms > 0 && mtime_ms < self.after_mtime_ms {
+            return false;
+        }
+        if self.before_mtime_ms > 0 && mtime_ms > self.before_mtime_ms {
+            return false;
+        }
+        true
+    }
 }
 
 /// An empty filter (include everything) — handy for tests / "no settings".
@@ -502,7 +540,7 @@ pub fn walk_files(
                                     if !m.is_symlink {
                                         dirs.push(p);
                                     }
-                                } else {
+                                } else if filter.size_age_ok(m.size, m.mtime_ms) {
                                     let h = if hash { hash_file(be, &p) } else { 0 };
                                     files.push((
                                         rel,
@@ -1306,7 +1344,7 @@ mod tests {
     ) -> (BisyncStats, Vec<Conflict>, Baseline) {
         let cancel = AtomicBool::new(false);
         let gs = empty_globset();
-        let f = WalkFilter { include_hidden: true, ignore: &gs };
+        let f = WalkFilter::basic(true, &gs);
         let hash = opts.compare == CompareMode::Checksum;
         let at = walk_files(a, ra, &cancel, &f, hash).unwrap();
         let bt = walk_files(b, rb, &cancel, &f, hash).unwrap();
@@ -1583,6 +1621,23 @@ mod tests {
     }
 
     #[test]
+    fn walk_filter_size_age_bounds() {
+        let gs = empty_globset();
+        let mut f = WalkFilter::basic(true, &gs);
+        f.min_size = 100;
+        f.max_size = 1000;
+        assert!(!f.size_age_ok(50, 0), "below min");
+        assert!(f.size_age_ok(500, 0), "in range");
+        assert!(!f.size_age_ok(2000, 0), "above max");
+        let mut g = WalkFilter::basic(true, &gs);
+        g.after_mtime_ms = 5_000;
+        g.before_mtime_ms = 10_000;
+        assert!(!g.size_age_ok(1, 4_000), "too old");
+        assert!(g.size_age_ok(1, 7_000), "in window");
+        assert!(!g.size_age_ok(1, 12_000), "too new");
+    }
+
+    #[test]
     fn prune_count_keeps_newest_n() {
         let v = tmp("pv");
         for ts in [100u64, 200, 300, 400] {
@@ -1614,10 +1669,7 @@ mod tests {
         let (ba, bb) = (LocalBackend::new(&ra), LocalBackend::new(&rb));
         let cancel = AtomicBool::new(false);
         let gs = empty_globset();
-        let f = WalkFilter {
-            include_hidden: true,
-            ignore: &gs,
-        };
+        let f = WalkFilter::basic(true, &gs);
         // First run copies the 3 files A→B and records the baseline.
         let o1 = super::run(&ba, &ra, &bb, &rb, BisyncOptions::default(), &cancel, &f);
         assert_eq!(o1.errors.len(), 0);
