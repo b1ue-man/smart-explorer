@@ -4,9 +4,6 @@
 mod app;
 mod autostart;
 mod bisync;
-mod cfsync;
-#[cfg(windows)]
-mod cfprovider;
 mod cloud;
 mod connect;
 mod daemon;

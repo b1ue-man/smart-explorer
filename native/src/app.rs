@@ -411,7 +411,6 @@ pub struct App {
     /// double-clicked remote file). Result is the local temp path to launch.
     file_open_rx: Vec<Receiver<Result<(String, i64), String>>>,
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
-    remote_open_mode: RemoteOpenMode,
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     remote_edits: Vec<RemoteEdit>,
     edit_save_rx: Vec<Receiver<(PathBuf, SaveResult)>>,
@@ -582,14 +581,6 @@ struct BisyncCtx {
 /// `//server/…`). Remote SFTP/FTP roots are rooted POSIX paths (`/…`) with no
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
-/// How a remote file is opened/edited: a temp copy watched for save-back, or a
-/// native Windows Cloud-Files placeholder (CfAPI). User-toggleable.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RemoteOpenMode {
-    Temp,
-    CfApi,
-}
-
 fn app_data_file(name: &str) -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -597,24 +588,6 @@ fn app_data_file(name: &str) -> PathBuf {
     let d = base.join("smart_explorer");
     let _ = std::fs::create_dir_all(&d);
     d.join(name)
-}
-
-fn load_remote_open_mode() -> RemoteOpenMode {
-    match std::fs::read_to_string(app_data_file("remote_open_mode.txt"))
-        .map(|s| s.trim().to_string())
-        .as_deref()
-    {
-        Ok("cfapi") => RemoteOpenMode::CfApi,
-        _ => RemoteOpenMode::Temp,
-    }
-}
-
-fn save_remote_open_mode(m: RemoteOpenMode) {
-    let v = match m {
-        RemoteOpenMode::Temp => "temp",
-        RemoteOpenMode::CfApi => "cfapi",
-    };
-    let _ = std::fs::write(app_data_file("remote_open_mode.txt"), v);
 }
 
 fn share_server_path() -> PathBuf {
@@ -997,7 +970,6 @@ impl App {
             job_connect_rx: None,
             job_connect_pending: None,
             file_open_rx: Vec::new(),
-            remote_open_mode: load_remote_open_mode(),
             remote_edits: Vec::new(),
             edit_save_rx: Vec::new(),
             last_edit_poll: Instant::now(),
@@ -3110,98 +3082,12 @@ impl App {
             }
         };
         let backend = rs.backend.clone();
-        let label = rs.label.clone();
 
-        // Files whose bytes are *transformed* on read (Google-Docs exported to
-        // .docx/.xlsx/…) have an unknown, non-zero size that the backend reports
-        // as 0. A CfAPI placeholder created with size 0 hydrates to an EMPTY
-        // file, so those MUST go through Temp mode (full download of the exported
-        // bytes). `download_name != name` is exactly the transform signal.
-        #[cfg(windows)]
-        let is_transformed = backend.download_name(&path, &name) != name;
-
-        // CfAPI mode on Windows: mount the connection as a native Cloud-Files
-        // sync root (cloud-filter provider). The placeholder path resolves to the
-        // remote item; the OS populates parents and hydrates on open via the
-        // provider's fetch_data → backend.open_read. We only register an
-        // edit-watch for save-back and launch the path (no manual download).
-        #[cfg(windows)]
-        if self.remote_open_mode == RemoteOpenMode::CfApi && !is_transformed {
-            match crate::cfprovider::ensure_mounted(
-                &label,
-                backend.clone(),
-                self.root_path.trim_end_matches('/'),
-            ) {
-                Ok(local_root) => {
-                    // The placeholder's on-disk name must match what the provider
-                    // creates in fetch_placeholders (download_name → Google-Docs
-                    // get a .docx/.xlsx extension), else the open finds nothing.
-                    let local_name = backend.download_name(&path, &name);
-                    let dest = crate::cfsync::local_path_named(
-                        &label,
-                        &self.root_path,
-                        &path,
-                        &local_name,
-                    );
-                    // Placeholders populate on directory enumeration, not on a
-                    // direct leaf open — walk the parents so `dest` exists first.
-                    crate::cfprovider::populate_to(&local_root, &dest);
-                    self.remote_edits.retain(|e| e.temp != dest);
-                    if self.remote_edits.len() < 50 {
-                        self.remote_edits.push(RemoteEdit {
-                            temp: dest.clone(),
-                            backend: backend.clone(),
-                            remote_path: path.clone(),
-                            name: name.clone(),
-                            baseline_mtime: i64::MAX, // sentinel: arm on first sight
-                            seen_mtime: 0,
-                            remote_known_mtime: 0, // CfAPI path: no conflict baseline
-                            uploading: false,
-                        });
-                    }
-                    if dest.exists() {
-                        self.notice = Some((
-                            format!("☁ Öffne „{}“ (CfAPI-Platzhalter)…", name),
-                            std::time::Instant::now(),
-                        ));
-                        self.open_path(&dest.to_string_lossy().replace('\\', "/"));
-                    } else {
-                        // Population didn't yield the placeholder — tell the user
-                        // instead of failing silently.
-                        self.error_msg = Some(format!(
-                            "CfAPI: Platzhalter für „{}“ wurde nicht erzeugt (Ordner: {}). \
-                             Tipp: in den Einstellungen auf „Temp-Kopie“ wechseln.",
-                            name,
-                            local_root.to_string_lossy()
-                        ));
-                    }
-                    return;
-                }
-                Err(e) => {
-                    // Clean failure — surface the real CfAPI error; never write
-                    // into the (possibly half-registered) sync folder. The user
-                    // can switch to Temp mode in Settings if needed.
-                    self.error_msg = Some(format!("CfAPI: {}", e));
-                    return;
-                }
-            }
-        }
-
-        // Temp mode: download to a temp copy, watch it for saves, launch.
-        // `download_name` gives Google-Docs files the right extension (.docx/…).
-        // (On Windows, CfApi is fully handled above and returns; off-Windows
-        // CfApi uses the persistent mirror folder.)
+        // Download to a local temp copy, watch it for saves, and launch the OS
+        // default editor. `download_name` gives Google-Docs files the right
+        // extension (.docx/…) so the editor opens them correctly.
         let local_name = backend.download_name(&path, &name);
-        let dest = match self.remote_open_mode {
-            RemoteOpenMode::Temp => open_temp_path(&local_name),
-            // On Windows the CfApi branch above handles non-transformed files and
-            // returns; we only reach here in CfApi mode for transformed files
-            // (Google-Docs exports), which fall back to a temp copy.
-            #[cfg(windows)]
-            RemoteOpenMode::CfApi => open_temp_path(&local_name),
-            #[cfg(not(windows))]
-            RemoteOpenMode::CfApi => crate::cfsync::local_path(&label, &self.root_path, &local_name),
-        };
+        let dest = open_temp_path(&local_name);
         self.remote_edits.retain(|e| e.temp != dest);
         if self.remote_edits.len() < 50 {
             self.remote_edits.push(RemoteEdit {
@@ -6789,33 +6675,6 @@ impl App {
 
     fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         self.ui_menu_cloud(ui);
-
-        // ─── Remote-Dateien öffnen (temp vs CfAPI) ────────────────────
-        ui.add_space(12.0);
-        ui.label(RichText::new("REMOTE-DATEIEN ÖFFNEN").small().color(Color32::from_gray(140)));
-        let mut mode = self.remote_open_mode;
-        let changed = ui
-            .radio_value(&mut mode, RemoteOpenMode::Temp, "Temp-Kopie (überall)")
-            .on_hover_text(
-                "Lädt die Datei in eine temporäre Kopie, öffnet sie in der zugehörigen \
-                 App und lädt Änderungen beim Speichern automatisch auf das Remote zurück. \
-                 Funktioniert mit jeder App und jedem Backend.",
-            )
-            .changed()
-            | ui
-                .radio_value(&mut mode, RemoteOpenMode::CfApi, "Cloud-Platzhalter (CfAPI, Windows)")
-                .on_hover_text(
-                    "Windows: bindet die Verbindung als nativen Cloud-Files-Sync-Root ein \
-                     (wie OneDrive) — Ordner erscheinen unter %USERPROFILE%\\Smart Explorer\\\
-                     <Verbindung>\\…, werden auf Abruf befüllt und beim Öffnen hydriert; \
-                     Speichern lädt zurück. Außerhalb von Windows: persistenter Spiegel-Ordner.",
-                )
-                .changed();
-        if changed {
-            self.remote_open_mode = mode;
-            save_remote_open_mode(mode);
-            self.notice = Some(("✓ Remote-Öffnen-Modus gespeichert".to_string(), std::time::Instant::now()));
-        }
 
         // ─── Teilen (peer file sharing) ───────────────────────────────
         ui.add_space(12.0);
