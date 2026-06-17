@@ -6672,10 +6672,7 @@ impl App {
                         egui::ComboBox::from_id_salt("job_conf")
                             .selected_text(ed.conflict.label())
                             .show_ui(ui, |ui| {
-                                for c in [
-                                    crate::bisync::ConflictMode::FileLevel,
-                                    crate::bisync::ConflictMode::NewerWins,
-                                ] {
+                                for c in crate::bisync::ConflictMode::ALL {
                                     ui.selectable_value(&mut ed.conflict, c, c.label());
                                 }
                             });
