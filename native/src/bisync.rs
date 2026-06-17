@@ -72,10 +72,20 @@ impl Direction {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConflictMode {
-    /// Strict (default): a file changed on BOTH sides is a conflict.
+    /// Strict (default): a file changed on BOTH sides is a conflict, surfaced
+    /// for the user; nothing is silently overwritten.
     FileLevel,
-    /// No conflicts — the newer mtime wins.
     NewerWins,
+    OlderWins,
+    LargerWins,
+    SmallerWins,
+    /// Side A (source/left) always wins.
+    SourceWins,
+    /// Side B (target/right) always wins.
+    DestWins,
+    /// Keep both: the winner (newer) keeps the name, the loser is preserved as a
+    /// "(Konflikt …)" copy that then syncs to both sides.
+    KeepBoth,
 }
 
 impl ConflictMode {
@@ -83,21 +93,49 @@ impl ConflictMode {
         match self {
             ConflictMode::FileLevel => "strict",
             ConflictMode::NewerWins => "newer",
+            ConflictMode::OlderWins => "older",
+            ConflictMode::LargerWins => "larger",
+            ConflictMode::SmallerWins => "smaller",
+            ConflictMode::SourceWins => "source",
+            ConflictMode::DestWins => "dest",
+            ConflictMode::KeepBoth => "keepboth",
         }
     }
     pub fn parse(s: &str) -> Option<ConflictMode> {
-        match s {
-            "strict" => Some(ConflictMode::FileLevel),
-            "newer" => Some(ConflictMode::NewerWins),
-            _ => None,
-        }
+        Some(match s {
+            "strict" => ConflictMode::FileLevel,
+            "newer" => ConflictMode::NewerWins,
+            "older" => ConflictMode::OlderWins,
+            "larger" => ConflictMode::LargerWins,
+            "smaller" => ConflictMode::SmallerWins,
+            "source" => ConflictMode::SourceWins,
+            "dest" => ConflictMode::DestWins,
+            "keepboth" => ConflictMode::KeepBoth,
+            _ => return None,
+        })
     }
     pub fn label(self) -> &'static str {
         match self {
             ConflictMode::FileLevel => "Streng: beidseitige Änderung = Konflikt (sicher)",
-            ConflictMode::NewerWins => "Neuere gewinnt (kein Konflikt)",
+            ConflictMode::NewerWins => "Neuere gewinnt",
+            ConflictMode::OlderWins => "Ältere gewinnt",
+            ConflictMode::LargerWins => "Größere gewinnt",
+            ConflictMode::SmallerWins => "Kleinere gewinnt",
+            ConflictMode::SourceWins => "Quelle (links) gewinnt",
+            ConflictMode::DestWins => "Ziel (rechts) gewinnt",
+            ConflictMode::KeepBoth => "Beide behalten (Konflikt-Kopie)",
         }
     }
+    pub const ALL: [ConflictMode; 8] = [
+        ConflictMode::FileLevel,
+        ConflictMode::NewerWins,
+        ConflictMode::OlderWins,
+        ConflictMode::LargerWins,
+        ConflictMode::SmallerWins,
+        ConflictMode::SourceWins,
+        ConflictMode::DestWins,
+        ConflictMode::KeepBoth,
+    ];
 }
 
 /// How deletions are handled on a sync (Group B). `Propagate` = a delete on the
@@ -204,6 +242,25 @@ impl Default for BisyncOptions {
     }
 }
 
+fn sig_mtime(s: Option<Sig>) -> i64 {
+    s.map(|s| s.mtime_ms).unwrap_or(i64::MIN)
+}
+fn sig_size(s: Option<Sig>) -> u64 {
+    s.map(|s| s.size).unwrap_or(0)
+}
+
+/// Insert a "(Konflikt <timestamp>)" tag before the extension of a relative path.
+fn conflict_name(rel: &str) -> String {
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    match rel.rfind('.') {
+        // only treat as an extension if the dot is in the final path segment
+        Some(i) if i > rel.rfind('/').map(|s| s + 1).unwrap_or(0) => {
+            format!("{} (Konflikt {}){}", &rel[..i], ts, &rel[i..])
+        }
+        _ => format!("{} (Konflikt {})", rel, ts),
+    }
+}
+
 /// Comparison-mode-aware equality of two optional signatures.
 fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
     match (x, y) {
@@ -230,6 +287,11 @@ pub enum Action {
     CopyBtoA(String),
     DeleteA(String),
     DeleteB(String),
+    /// Keep-both, A wins: preserve B's current file as a "(Konflikt …)" copy,
+    /// then copy A's version over the original name.
+    KeepBothAtoB(String),
+    /// Keep-both, B wins.
+    KeepBothBtoA(String),
 }
 
 #[derive(Clone, Debug)]
@@ -500,16 +562,40 @@ pub fn plan(
                     }
                 }
             }
-            (true, true) => match opts.conflict {
-                ConflictMode::FileLevel => conflicts.push(Conflict {
-                    rel: rel.clone(),
-                    a: an,
-                    b: bn,
-                }),
-                ConflictMode::NewerWins => {
-                    let am = an.map(|s| s.mtime_ms).unwrap_or(i64::MIN);
-                    let bm = bn.map(|s| s.mtime_ms).unwrap_or(i64::MIN);
-                    if am >= bm {
+            (true, true) => {
+                if opts.conflict == ConflictMode::FileLevel {
+                    conflicts.push(Conflict {
+                        rel: rel.clone(),
+                        a: an,
+                        b: bn,
+                    });
+                } else if opts.conflict == ConflictMode::KeepBoth {
+                    // Winner (newer) keeps the name; loser preserved as a copy.
+                    let a_wins = match (an, bn) {
+                        (Some(_), None) => true,
+                        (None, Some(_)) => false,
+                        (Some(sa), Some(sb)) => sa.mtime_ms >= sb.mtime_ms,
+                        (None, None) => continue,
+                    };
+                    if a_wins && allow_a_to_b {
+                        actions.push(Action::KeepBothAtoB(rel.clone()));
+                    } else if !a_wins && allow_b_to_a {
+                        actions.push(Action::KeepBothBtoA(rel.clone()));
+                    }
+                } else {
+                    // A deterministic winner side from the policy.
+                    let a_wins = match opts.conflict {
+                        ConflictMode::SourceWins => true,
+                        ConflictMode::DestWins => false,
+                        ConflictMode::NewerWins => {
+                            sig_mtime(an) >= sig_mtime(bn)
+                        }
+                        ConflictMode::OlderWins => sig_mtime(an) <= sig_mtime(bn),
+                        ConflictMode::LargerWins => sig_size(an) >= sig_size(bn),
+                        ConflictMode::SmallerWins => sig_size(an) <= sig_size(bn),
+                        _ => true,
+                    };
+                    if a_wins {
                         if allow_a_to_b {
                             match an {
                                 Some(_) => actions.push(Action::CopyAtoB(rel.clone())),
@@ -531,7 +617,7 @@ pub fn plan(
                         }
                     }
                 }
-            },
+            }
             (false, false) => unreachable!(),
         }
     }
@@ -638,6 +724,25 @@ fn run_one(
             a.remove_file(&p)?;
             st.deleted += 1;
         }
+        Action::KeepBothAtoB(rel) => {
+            let bp = join(root_b, rel);
+            // Preserve B's losing version as a conflict copy that will sync back.
+            if b.exists(&bp) {
+                let cp = join(root_b, &conflict_name(rel));
+                let _ = copy_between(b, &bp, b, &cp);
+            }
+            st.bytes += copy_between(a, &join(root_a, rel), b, &bp)?;
+            st.a_to_b += 1;
+        }
+        Action::KeepBothBtoA(rel) => {
+            let ap = join(root_a, rel);
+            if a.exists(&ap) {
+                let cp = join(root_a, &conflict_name(rel));
+                let _ = copy_between(a, &ap, a, &cp);
+            }
+            st.bytes += copy_between(b, &join(root_b, rel), a, &ap)?;
+            st.b_to_a += 1;
+        }
     }
     Ok(st)
 }
@@ -666,8 +771,8 @@ pub fn apply(
         let mut st = BisyncStats::default();
         for act in actions {
             match act {
-                Action::CopyAtoB(_) => st.a_to_b += 1,
-                Action::CopyBtoA(_) => st.b_to_a += 1,
+                Action::CopyAtoB(_) | Action::KeepBothAtoB(_) => st.a_to_b += 1,
+                Action::CopyBtoA(_) | Action::KeepBothBtoA(_) => st.b_to_a += 1,
                 Action::DeleteA(_) | Action::DeleteB(_) => st.deleted += 1,
             }
         }
@@ -745,7 +850,12 @@ pub fn update_baseline(
     };
     for act in applied {
         let rel = match act {
-            Action::CopyAtoB(r) | Action::CopyBtoA(r) | Action::DeleteA(r) | Action::DeleteB(r) => r,
+            Action::CopyAtoB(r)
+            | Action::CopyBtoA(r)
+            | Action::DeleteA(r)
+            | Action::DeleteB(r)
+            | Action::KeepBothAtoB(r)
+            | Action::KeepBothBtoA(r) => r,
         };
         // After a copy both sides match; after a delete both are absent. For
         // NewerWins the loser side may not match yet — record current state so
@@ -1201,6 +1311,62 @@ mod tests {
         let (st, _c2, _b2) = run(&ba, &ra, &bb, &rb, &base1, opts, &v);
         assert!(b.join("f.txt").exists(), "no-delete kept B's file");
         assert_eq!(st.deleted, 0);
+        for d in [&a, &b, &v] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    fn has_file_containing(p: &Path, needle: &str) -> bool {
+        let mut stack = vec![p.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                for e in rd.flatten() {
+                    let path = e.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.contains(needle))
+                        .unwrap_or(false)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn keep_both_preserves_loser_as_conflict_copy() {
+        let a = tmp("ka");
+        let b = tmp("kb");
+        std::fs::write(a.join("f.txt"), b"orig").unwrap();
+        let (ra, rb) = (fwd(&a), fwd(&b));
+        let (ba, bb) = (LocalBackend::new(&ra), LocalBackend::new(&rb));
+        let v = tmp("kv");
+        let opts = BisyncOptions {
+            conflict: ConflictMode::KeepBoth,
+            ..Default::default()
+        };
+        // First run establishes the baseline (copies f.txt to B).
+        let (_s, _c, base1) = run(&ba, &ra, &bb, &rb, &Baseline::new(), opts, &v);
+        // Change both sides differently; make A clearly newer.
+        std::fs::write(b.join("f.txt"), b"B-edit").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(a.join("f.txt"), b"A-edit-newer").unwrap();
+        let (_st, conf, _b2) = run(&ba, &ra, &bb, &rb, &base1, opts, &v);
+        assert_eq!(conf.len(), 0, "keep-both surfaces no conflict");
+        assert_eq!(
+            std::fs::read(b.join("f.txt")).unwrap(),
+            b"A-edit-newer",
+            "winner (newer) keeps the original name on B"
+        );
+        assert!(
+            has_file_containing(&b, "Konflikt"),
+            "loser preserved as a (Konflikt …) copy on B"
+        );
         for d in [&a, &b, &v] {
             std::fs::remove_dir_all(d).ok();
         }
