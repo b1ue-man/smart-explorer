@@ -427,8 +427,9 @@ pub struct App {
     >,
     job_connect_pending: Option<crate::syncjobs::SyncJob>,
     /// In-flight "download a remote file to temp, then open it" jobs (one per
-    /// double-clicked remote file). Result is the local temp path to launch.
-    file_open_rx: Vec<Receiver<Result<(String, i64), String>>>,
+    /// double-clicked remote file). Result is the local temp path to launch;
+    /// `OpenMode` selects the default app vs. the native "Open with…" dialog.
+    file_open_rx: Vec<(Receiver<Result<(String, i64), String>>, OpenMode)>,
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     remote_edits: Vec<RemoteEdit>,
@@ -766,6 +767,14 @@ fn download_to_temp(
 
 /// Stream a remote file to an explicit local `dest` (creating parents). Returns
 /// the local path string for launching.
+/// How an opened file is launched once it's local: the OS default app, or the
+/// native Windows "Open with…" chooser (the `openas` shell verb).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OpenMode {
+    Default,
+    With,
+}
+
 fn download_to(
     be: &dyn crate::vfs::Backend,
     path: &str,
@@ -3815,16 +3824,19 @@ impl App {
             .spawn();
     }
 
-    /// Open a file with its associated application. Uses ShellExecuteW —
-    /// the previous `cmd /C start` spawned a visible console window.
+    /// Launch a local path via the shell. `verb` None = the default action
+    /// (open with the associated app); `Some("openas")` = the native Windows
+    /// "Open with…" chooser. Uses ShellExecuteW — `cmd /C start` flashed a
+    /// console window.
     #[cfg(windows)]
-    fn open_path(&self, path: &str) {
+    fn shell_verb(&self, path: &str, verb: Option<&str>) {
         let p = path.replace('/', "\\");
         let wide: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
+        let verb_w: Option<Vec<u16>> = verb.map(|v| v.encode_utf16().chain(Some(0)).collect());
         unsafe {
             windows_sys::Win32::UI::Shell::ShellExecuteW(
                 std::ptr::null_mut(),
-                std::ptr::null(),
+                verb_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
                 wide.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -3833,9 +3845,29 @@ impl App {
         }
     }
 
+    /// Open a file with its associated application.
+    #[cfg(windows)]
+    fn open_path(&self, path: &str) {
+        self.shell_verb(path, None);
+    }
+
+    /// Show the native Windows "Open with…" chooser for a file (the `openas`
+    /// shell verb). Remote files are downloaded to a temp copy first (see
+    /// `open_file`), so this always runs on a real local path.
+    #[cfg(windows)]
+    fn open_with_path(&self, path: &str) {
+        self.shell_verb(path, Some("openas"));
+    }
+
     #[cfg(not(windows))]
     fn open_path(&self, path: &str) {
         let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
+
+    #[cfg(not(windows))]
+    fn open_with_path(&self, path: &str) {
+        // No portable "open with" chooser; fall back to the default opener.
+        self.open_path(path);
     }
 
     fn open_selection(&mut self) {
@@ -3858,7 +3890,7 @@ impl App {
             return;
         }
         for (p, name, _, id) in targets.into_iter().filter(|(_, _, d, _)| !*d).take(10) {
-            self.open_file(p, name, id);
+            self.open_file(p, name, id, OpenMode::Default);
         }
     }
 
@@ -3875,17 +3907,22 @@ impl App {
         }
         let (path, name) = (e.path.to_string(), e.name.to_string());
         let id = e.id.as_ref().map(|s| s.to_string());
-        self.open_file(path, name, id);
+        self.open_file(path, name, id, OpenMode::Default);
     }
 
-    /// Open a file in its associated app. Local files launch directly; a remote
-    /// file is downloaded to a temp copy off the UI thread, then launched when
-    /// ready (so double-click "just works" on SFTP/FTP/WebDAV/Drive too).
-    fn open_file(&mut self, path: String, name: String, id: Option<String>) {
+    /// Open a file in its associated app (`OpenMode::Default`) or via the native
+    /// Windows "Open with…" chooser (`OpenMode::With`). Local files launch
+    /// directly; a remote file is downloaded to a temp copy off the UI thread,
+    /// then launched when ready (so it "just works" on SFTP/FTP/WebDAV/Drive too,
+    /// and the temp copy is edit-watched so saves upload back).
+    fn open_file(&mut self, path: String, name: String, id: Option<String>, mode: OpenMode) {
         let rs = match &self.remote {
             Some(rs) => rs,
             None => {
-                self.open_path(&path);
+                match mode {
+                    OpenMode::Default => self.open_path(&path),
+                    OpenMode::With => self.open_with_path(&path),
+                }
                 return;
             }
         };
@@ -3927,7 +3964,22 @@ impl App {
                 let _ = tx.send(res);
             })
             .ok();
-        self.file_open_rx.push(rx);
+        self.file_open_rx.push((rx, mode));
+    }
+
+    /// Open the file at `idx` via the native "Open with…" chooser (downloading a
+    /// remote file to a temp copy first). Folders are ignored.
+    fn open_with_entry(&mut self, idx: usize) {
+        if idx >= self.entries.len() {
+            return;
+        }
+        let e = &self.entries[idx];
+        if e.is_dir {
+            return;
+        }
+        let (path, name) = (e.path.to_string(), e.name.to_string());
+        let id = e.id.as_ref().map(|s| s.to_string());
+        self.open_file(path, name, id, OpenMode::With);
     }
 
     /// Launch any remote files that finished downloading to temp.
@@ -3937,16 +3989,16 @@ impl App {
         }
         let mut pending = Vec::new();
         let mut to_open = Vec::new();
-        for rx in std::mem::take(&mut self.file_open_rx) {
+        for (rx, mode) in std::mem::take(&mut self.file_open_rx) {
             match rx.try_recv() {
-                Ok(Ok((p, remote_mtime))) => to_open.push((p, remote_mtime)),
+                Ok(Ok((p, remote_mtime))) => to_open.push((p, remote_mtime, mode)),
                 Ok(Err(e)) => self.error_msg = Some(format!("Datei öffnen: {}", e)),
-                Err(crossbeam_channel::TryRecvError::Empty) => pending.push(rx),
+                Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, mode)),
                 Err(_) => {}
             }
         }
         self.file_open_rx = pending;
-        for (p, remote_mtime) in to_open {
+        for (p, remote_mtime, mode) in to_open {
             // Baseline the edit-watch to the freshly downloaded content so we
             // don't immediately re-upload it; only the user's saves count. Record
             // the remote's mtime so save-back can detect a concurrent change.
@@ -3957,7 +4009,10 @@ impl App {
                 e.seen_mtime = m;
                 e.remote_known_mtime = remote_mtime;
             }
-            self.open_path(&p);
+            match mode {
+                OpenMode::Default => self.open_path(&p),
+                OpenMode::With => self.open_with_path(&p),
+            }
         }
     }
 
@@ -4465,7 +4520,7 @@ impl App {
         let is_dir = e.is_dir;
 
         #[derive(Clone, Copy)]
-        enum A { Open, DownloadTo, CopyClip, Rename, Delete, NewFolder, CopyPath, Refresh }
+        enum A { Open, OpenWith, DownloadTo, CopyClip, Rename, Delete, NewFolder, CopyPath, Refresh }
         let mut act: Option<A> = None;
         let area = egui::Area::new(egui::Id::new("remote_ctx_menu"))
             .order(egui::Order::Foreground)
@@ -4477,6 +4532,13 @@ impl App {
                         act = Some(A::Open);
                     }
                     if !is_dir {
+                        if ui
+                            .button("📂 Öffnen mit…")
+                            .on_hover_text("Lädt die Datei lokal und öffnet Windows' „Öffnen mit“-Auswahl")
+                            .clicked()
+                        {
+                            act = Some(A::OpenWith);
+                        }
                         if ui.button("⬇ Herunterladen nach…").clicked() {
                             act = Some(A::DownloadTo);
                         }
@@ -4523,6 +4585,7 @@ impl App {
         };
         match act {
             A::Open => self.activate_entry(idx),
+            A::OpenWith => self.open_with_entry(idx),
             A::Refresh => self.rescan(),
             A::NewFolder => self.create_new_folder(),
             A::Delete => self.trash_selected(),
