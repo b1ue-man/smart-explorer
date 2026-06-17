@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.36"
+version = "0.5.37"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
