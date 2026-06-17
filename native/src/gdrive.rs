@@ -674,6 +674,15 @@ impl Backend for GDriveBackend {
         // backs off on the rare rate-limit response.
         16
     }
+
+    fn provides_content_hash(&self) -> bool {
+        // Drive returns `md5Checksum` in the file listing (binary files) — a free
+        // content hash, no download. Lets sync compare by content even in the
+        // size+mtime mode, so files whose mtime differs but content matches are
+        // not re-transferred. (Google-native Docs have no md5 → content_md5 None
+        // → those gracefully fall back to size+mtime.)
+        true
+    }
 }
 
 /// Buffers written bytes and uploads to Drive on `flush` (so bisync's
