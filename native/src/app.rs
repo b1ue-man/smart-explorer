@@ -314,6 +314,14 @@ pub struct App {
     /// Set when Enter in the omnibox should activate the highlighted dropdown
     /// row (carried alongside `filter_enter` so `update` can dispatch it).
     omni_activate: Option<OmniAction>,
+    /// Alt key-overlay (classic accelerator badges) is showing.
+    accel_mode: bool,
+    /// Alt modifier state last frame, and whether this Alt-hold was "used" as a
+    /// modifier (another key/click) — a clean tap toggles the overlay.
+    alt_prev: bool,
+    alt_dirty: bool,
+    /// Controls registered for the overlay this frame: (badge char, rect, act).
+    accel_targets: Vec<(char, egui::Rect, AccelAct)>,
 
     summary_cache: Option<SummaryData>,
     /// (selection len, entries len, bytes) — cheap invalidation key.
@@ -913,6 +921,47 @@ struct OmniItem {
     action: OmniAction,
 }
 
+/// A control reachable from the Alt key-overlay (classic accelerator badges).
+#[derive(Clone, Copy, Debug)]
+enum AccelAct {
+    Back,
+    Forward,
+    Up,
+    PickFolder,
+    Split,
+    NewTab,
+    Tab(usize),
+}
+
+/// Map an accelerator character to its egui logical key (letters + digits).
+fn accel_key(c: char) -> Option<egui::Key> {
+    use egui::Key::*;
+    Some(match c.to_ascii_uppercase() {
+        'A' => A, 'B' => B, 'C' => C, 'D' => D, 'E' => E, 'F' => F, 'G' => G, 'H' => H,
+        'I' => I, 'J' => J, 'K' => K, 'L' => L, 'M' => M, 'N' => N, 'O' => O, 'P' => P,
+        'Q' => Q, 'R' => R, 'S' => S, 'T' => T, 'U' => U, 'V' => V, 'W' => W, 'X' => X,
+        'Y' => Y, 'Z' => Z,
+        '1' => Num1, '2' => Num2, '3' => Num3, '4' => Num4, '5' => Num5,
+        '6' => Num6, '7' => Num7, '8' => Num8, '9' => Num9,
+        _ => return None,
+    })
+}
+
+/// Draw one accelerator badge (boxed letter) at the top-left of `rect`.
+fn draw_accel_badge(painter: &egui::Painter, rect: egui::Rect, c: char) {
+    let sz = egui::vec2(16.0, 16.0);
+    let at = egui::Rect::from_min_size(rect.left_top() + egui::vec2(1.0, 1.0), sz);
+    painter.rect_filled(at, 3.0, Color32::from_rgb(250, 240, 200));
+    painter.rect_stroke(at, 3.0, egui::Stroke::new(1.0, Color32::from_rgb(120, 90, 30)));
+    painter.text(
+        at.center(),
+        egui::Align2::CENTER_CENTER,
+        c,
+        egui::FontId::proportional(12.0),
+        Color32::from_rgb(40, 30, 10),
+    );
+}
+
 /// Case-insensitive subsequence match (fuzzy), used to filter command palette
 /// entries by the text typed after `>`.
 fn fuzzy_contains(haystack: &str, needle: &str) -> bool {
@@ -1353,6 +1402,10 @@ impl App {
             filter_enter: false,
             omni_sel: None,
             omni_activate: None,
+            accel_mode: false,
+            alt_prev: false,
+            alt_dirty: false,
+            accel_targets: Vec::new(),
 
             summary_cache: None,
             sel_size_cache: (usize::MAX, usize::MAX, 0),
@@ -1926,11 +1979,9 @@ impl App {
                     }
                 }
             }
-            if ui
-                .button("＋")
-                .on_hover_text("Neuer Tab (Ctrl+T)")
-                .clicked()
-            {
+            let r = ui.button("＋").on_hover_text("Neuer Tab (Ctrl+T)");
+            self.accel_push('T', r.rect, AccelAct::NewTab);
+            if r.clicked() {
                 action = Some(TabAction::New);
             }
         });
@@ -4138,6 +4189,55 @@ impl App {
             // Multiple hits: move into the list for arrow-key navigation.
             self.move_cursor_to(0, false);
             self.search_nav_from_filter = true;
+        }
+    }
+
+    // ─── Alt key-overlay (accelerators) ─────────────────────────────────────
+
+    /// Register a control for the Alt overlay (only while it's showing).
+    fn accel_push(&mut self, c: char, rect: egui::Rect, act: AccelAct) {
+        if self.accel_mode {
+            self.accel_targets.push((c, rect, act));
+        }
+    }
+
+    /// All overlay targets this frame: the registered toolbar controls plus a
+    /// digit per visible tab (1..9).
+    fn accel_all(&self) -> Vec<(char, egui::Rect, AccelAct)> {
+        let mut v = self.accel_targets.clone();
+        for (i, rect) in &self.tab_header_rects {
+            if *i < 9 {
+                v.push(((b'1' + *i as u8) as char, *rect, AccelAct::Tab(*i)));
+            }
+        }
+        v
+    }
+
+    fn exec_accel(&mut self, act: AccelAct) {
+        match act {
+            AccelAct::Back => self.navigate_back(),
+            AccelAct::Forward => self.navigate_forward(),
+            AccelAct::Up => self.navigate_up(),
+            AccelAct::PickFolder => {
+                if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                    self.start_scan(p);
+                }
+            }
+            AccelAct::Split => self.toggle_split(),
+            AccelAct::NewTab => self.new_tab(),
+            AccelAct::Tab(i) => self.switch_tab(i),
+        }
+    }
+
+    /// Dim the window and draw the accelerator badges over registered controls.
+    fn draw_accel_overlay(&self, ctx: &egui::Context) {
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("accel_overlay"),
+        ));
+        painter.rect_filled(ctx.screen_rect(), 0.0, Color32::from_black_alpha(110));
+        for (c, rect, _) in self.accel_all() {
+            draw_accel_badge(&painter, rect, c);
         }
     }
 
@@ -6658,29 +6758,31 @@ impl App {
 
     fn ui_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui
+            let r = ui
                 .add_enabled(!self.history.is_empty(), egui::Button::new("◀"))
-                .on_hover_text("Zurück (Alt+←)")
-                .clicked()
-            {
+                .on_hover_text("Zurück (Alt+←)");
+            self.accel_push('B', r.rect, AccelAct::Back);
+            if r.clicked() {
                 self.navigate_back();
             }
-            if ui
+            let r = ui
                 .add_enabled(!self.forward.is_empty(), egui::Button::new("▶"))
-                .on_hover_text("Vor (Alt+→)")
-                .clicked()
-            {
+                .on_hover_text("Vor (Alt+→)");
+            self.accel_push('N', r.rect, AccelAct::Forward);
+            if r.clicked() {
                 self.navigate_forward();
             }
-            if ui
+            let r = ui
                 .add_enabled(!self.root_path.is_empty(), egui::Button::new("↑"))
-                .on_hover_text("Eine Ebene hoch (Alt+↑ / Backspace)")
-                .clicked()
-            {
+                .on_hover_text("Eine Ebene hoch (Alt+↑ / Backspace)");
+            self.accel_push('U', r.rect, AccelAct::Up);
+            if r.clicked() {
                 self.navigate_up();
             }
 
-            if ui.button("📂").on_hover_text("Ordner auswählen").clicked() {
+            let r = ui.button("📂").on_hover_text("Ordner auswählen");
+            self.accel_push('O', r.rect, AccelAct::PickFolder);
+            if r.clicked() {
                 if let Some(p) = rfd::FileDialog::new().pick_folder() {
                     self.start_scan(p);
                 }
@@ -6871,11 +6973,11 @@ impl App {
                 if ui.button("？").on_hover_text("Tastenkürzel (F1)").clicked() {
                     self.show_help = !self.show_help;
                 }
-                if ui
+                let r = ui
                     .selectable_label(self.split, "⊟ Split")
-                    .on_hover_text("Zwei Tabs nebeneinander (F6)")
-                    .clicked()
-                {
+                    .on_hover_text("Zwei Tabs nebeneinander (F6)");
+                self.accel_push('S', r.rect, AccelAct::Split);
+                if r.clicked() {
                     self.toggle_split();
                 }
             });
@@ -9657,6 +9759,10 @@ impl App {
                                 ("Ctrl+W", "Tab schließen"),
                                 ("Ctrl+Tab / Ctrl+Shift+Tab", "Nächster / vorheriger Tab"),
                                 ("Alt+1 … Alt+9", "Zu Tab 1 … 9 (Alt+9 = letzter)"),
+                                (
+                                    "Alt (tippen)",
+                                    "Tastenkürzel einblenden: Buchstabe/Ziffer wählt das Bedienelement (Esc schließt)",
+                                ),
                             ],
                         ),
                         (
@@ -9969,6 +10075,35 @@ impl eframe::App for App {
             }
         }
 
+        // ─── Alt key-overlay (accelerators) ────────────────────────────
+        // While the overlay is up, a bare letter/digit fires its control (using
+        // last frame's rects — controls don't move) and closes the overlay; Esc
+        // closes it. Runs before the other shortcuts so the key is consumed
+        // before type-to-jump or a text field sees it.
+        if self.accel_mode {
+            let targets = self.accel_all();
+            let hit = ctx.input_mut(|i| {
+                use egui::{Key, Modifiers};
+                if i.consume_key(Modifiers::NONE, Key::Escape) {
+                    return Some(None);
+                }
+                for (c, _rect, act) in &targets {
+                    if let Some(k) = accel_key(*c) {
+                        if i.consume_key(Modifiers::NONE, k) {
+                            return Some(Some(*act));
+                        }
+                    }
+                }
+                None
+            });
+            if let Some(act) = hit {
+                self.accel_mode = false;
+                if let Some(a) = act {
+                    self.exec_accel(a);
+                }
+            }
+        }
+
         // ─── Global keyboard shortcuts ─────────────────────────────────
         // `wants_keyboard_input` = a text field has focus; table shortcuts
         // and type-to-jump must not fire then.
@@ -10147,10 +10282,33 @@ impl eframe::App for App {
             }
         });
         // A mouse click means the user took manual control of the list, so a
-        // later Enter-on-folder should not bounce back to the filter.
+        // later Enter-on-folder should not bounce back to the filter, and the
+        // Alt overlay (if any) closes.
         if ctx.input(|i| i.pointer.any_pressed()) {
             self.search_nav_from_filter = false;
+            self.accel_mode = false;
         }
+        // Alt key-overlay toggle: a clean Alt tap (pressed and released with no
+        // other key or click) toggles the overlay; using Alt as a modifier
+        // (Alt+←, Alt+1, …) does not. egui exposes Alt only as a modifier flag,
+        // so detect it via the state transition.
+        let (alt_now, key_or_click) = ctx.input(|i| {
+            (
+                i.modifiers.alt,
+                i.pointer.any_pressed()
+                    || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })),
+            )
+        });
+        if alt_now && !self.alt_prev {
+            self.alt_dirty = false; // Alt just went down
+        }
+        if alt_now && key_or_click {
+            self.alt_dirty = true; // used together with another input
+        }
+        if !alt_now && self.alt_prev && !self.alt_dirty {
+            self.accel_mode = !self.accel_mode; // clean tap released
+        }
+        self.alt_prev = alt_now;
 
         for act in acts {
             match act {
@@ -10286,6 +10444,9 @@ impl eframe::App for App {
         }
 
         // ─── Layout ────────────────────────────────────────────────────
+        // Rebuild the Alt-overlay target list fresh each frame: clear before any
+        // panel registers (tabbar renders first), repopulate during rendering.
+        self.accel_targets.clear();
         egui::TopBottomPanel::top("tabbar")
             .min_height(26.0)
             .show(ctx, |ui| self.ui_tabbar(ui));
@@ -10380,6 +10541,11 @@ impl eframe::App for App {
         }
         // Liability notice on top of everything, on first run.
         self.ui_disclaimer(ctx);
+
+        // Alt key-overlay badges, drawn last so they sit above the toolbar/tabs.
+        if self.accel_mode {
+            self.draw_accel_overlay(ctx);
+        }
 
         // Drag-over hint while the OS is dragging files onto the window.
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
