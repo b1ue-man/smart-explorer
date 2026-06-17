@@ -1530,13 +1530,13 @@ impl App {
                             self.ui_table(ui);
                             self.band_suppressed = false;
                             self.swap_with_tab(tab_idx);
-                            // Click anywhere in this pane focuses it.
-                            let pressed = ui.input(|i| i.pointer.any_pressed());
-                            if pressed {
-                                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                                    if rect.contains(pos) {
-                                        focus_to = Some(slot);
-                                    }
+                        }
+                        // Click anywhere in this pane focuses it (both panes).
+                        let pressed = ui.input(|i| i.pointer.any_pressed());
+                        if pressed {
+                            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                                if rect.contains(pos) {
+                                    focus_to = Some(slot);
                                 }
                             }
                         }
@@ -1547,6 +1547,14 @@ impl App {
                 self.focused_pane = slot;
                 self.switch_tab(panes[slot]);
             }
+            // Outline the focused pane so it's obvious which one a top-bar tab
+            // selection (and keyboard actions) will apply to.
+            let fr = rects[self.focused_pane.min(1)];
+            ui.painter().rect_stroke(
+                fr.shrink(1.0),
+                4.0,
+                egui::Stroke::new(2.0, Color32::from_rgb(90, 150, 220)),
+            );
             if sync_panes_req {
                 self.sync_split_panes();
             }
@@ -3264,7 +3272,7 @@ impl App {
                     if ui.button("Alle: B behalten →").clicked() { all_b = true; }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for (i, c) in conflicts.iter().enumerate() {
                         ui.horizontal(|ui| {
                             let a = c.a.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms))).unwrap_or_else(|| "—".into());
@@ -7134,7 +7142,7 @@ impl App {
                     );
                     return;
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for j in &jobs {
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
@@ -8955,7 +8963,7 @@ impl App {
             .default_size([520.0, 560.0])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     let groups: &[(&str, &[(&str, &str)])] = &[
                         (
                             "Navigation",

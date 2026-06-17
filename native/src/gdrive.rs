@@ -609,32 +609,45 @@ impl Backend for GDriveBackend {
         }
     }
 
-    fn dedupe_recursive(&self, root: &str) -> VfsResult<usize> {
+    fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
         use std::collections::HashMap;
+        let root_n = norm(root);
         let mut removed = 0usize;
-        let mut stack = vec![norm(root)];
+        let mut stack = vec![root_n.clone()];
         while let Some(dir) = stack.pop() {
+            let dir_rel = if root_n.is_empty() {
+                dir.clone()
+            } else {
+                dir.strip_prefix(&root_n).unwrap_or("").trim_start_matches('/').to_string()
+            };
             let entries = self.list_dir(&dir)?;
             let mut by_name: HashMap<String, Vec<VfsMeta>> = HashMap::new();
             for m in entries {
-                let child = if dir.is_empty() {
-                    m.name.clone()
-                } else {
-                    format!("{}/{}", dir.trim_end_matches('/'), m.name)
-                };
                 if m.is_dir {
+                    let child = if dir.is_empty() {
+                        m.name.clone()
+                    } else {
+                        format!("{}/{}", dir.trim_end_matches('/'), m.name)
+                    };
                     stack.push(child);
                 } else {
                     by_name.entry(m.name.clone()).or_default().push(m);
                 }
             }
-            for (_name, mut group) in by_name {
+            for (name, mut group) in by_name {
                 if group.len() < 2 {
-                    continue;
+                    continue; // only ever remove EXTRA copies, never singletons
                 }
-                // Keep the newest; trash the rest by their exact id.
+                let rel = if dir_rel.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", dir_rel, name)
+                };
+                // Newest first; if the name belongs in the mirror, keep it and
+                // trash the older copies; if it's an orphaned dup, trash them all.
                 group.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-                for extra in &group[1..] {
+                let start = if keep(&rel) { 1 } else { 0 };
+                for extra in &group[start..] {
                     if let Some(id) = &extra.id {
                         if self.trash_id(id).is_ok() {
                             removed += 1;
