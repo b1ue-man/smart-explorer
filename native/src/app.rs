@@ -480,6 +480,11 @@ struct JobEditor {
     active_from: String,   // "HH:MM"
     active_to: String,     // "HH:MM"
     catch_up: bool,
+    // ── Group B/C: deletion / move / comparison ──────────────────────────────
+    delete_policy: crate::bisync::DeletePolicy,
+    move_files: bool,
+    compare: crate::bisync::CompareMode,
+    modify_window: String, // seconds
 }
 
 /// Minutes-after-midnight → "HH:MM".
@@ -531,6 +536,10 @@ impl JobEditor {
             active_from: "00:00".into(),
             active_to: "00:00".into(),
             catch_up: true,
+            delete_policy: crate::bisync::DeletePolicy::Propagate,
+            move_files: false,
+            compare: crate::bisync::CompareMode::MtimeSize,
+            modify_window: "0".into(),
         }
     }
 
@@ -556,6 +565,10 @@ impl JobEditor {
             active_from: min_to_hm(j.active_from_min),
             active_to: min_to_hm(j.active_to_min),
             catch_up: j.catch_up,
+            delete_policy: j.delete_policy,
+            move_files: j.move_files,
+            compare: j.compare,
+            modify_window: j.modify_window_sec.to_string(),
         }
     }
 }
@@ -2510,12 +2523,7 @@ impl App {
             Some(j) => j.clone(),
             None => return,
         };
-        let opts = crate::bisync::BisyncOptions {
-            direction: job.direction,
-            conflict: job.conflict,
-            reversible: true,
-            dry_run: false,
-        };
+        let opts = job.opts(false);
         // Pure local: resolve inline (no network) and launch immediately.
         if !crate::connect::is_remote_url(&job.source)
             && !crate::connect::is_remote_url(&job.target)
@@ -2572,12 +2580,7 @@ impl App {
         };
         match res {
             Ok(((a, root_a), (b, root_b))) => {
-                let opts = crate::bisync::BisyncOptions {
-                    direction: job.direction,
-                    conflict: job.conflict,
-                    reversible: true,
-                    dry_run: false,
-                };
+                let opts = job.opts(false);
                 self.launch_bisync(
                     a,
                     root_a,
@@ -6678,6 +6681,46 @@ impl App {
                             });
                         ui.end_row();
 
+                        ui.label("Löschungen").on_hover_text("Wie mit Dateien umgegangen wird, die auf einer Seite fehlen");
+                        egui::ComboBox::from_id_salt("job_del")
+                            .selected_text(ed.delete_policy.label())
+                            .show_ui(ui, |ui| {
+                                for d in [
+                                    crate::bisync::DeletePolicy::Propagate,
+                                    crate::bisync::DeletePolicy::Mirror,
+                                    crate::bisync::DeletePolicy::NoDelete,
+                                ] {
+                                    ui.selectable_value(&mut ed.delete_policy, d, d.label());
+                                }
+                            });
+                        ui.end_row();
+
+                        if ed.direction != crate::bisync::Direction::Both {
+                            ui.label("Verschieben").on_hover_text("Einseitig: Quelle nach erfolgreicher Kopie löschen (Move)");
+                            ui.checkbox(&mut ed.move_files, "Dateien verschieben statt kopieren");
+                            ui.end_row();
+                        }
+
+                        ui.label("Vergleich").on_hover_text("Wie entschieden wird, ob zwei Dateien gleich sind");
+                        egui::ComboBox::from_id_salt("job_cmp")
+                            .selected_text(ed.compare.label())
+                            .show_ui(ui, |ui| {
+                                for c in [
+                                    crate::bisync::CompareMode::MtimeSize,
+                                    crate::bisync::CompareMode::SizeOnly,
+                                    crate::bisync::CompareMode::Checksum,
+                                ] {
+                                    ui.selectable_value(&mut ed.compare, c, c.label());
+                                }
+                            });
+                        ui.end_row();
+
+                        if ed.compare == crate::bisync::CompareMode::MtimeSize {
+                            ui.label("Zeit-Toleranz (s)").on_hover_text("Zeitstempel-Unterschiede bis zu N Sekunden als gleich werten (FAT/exFAT, Sommerzeit: 1–2)");
+                            ui.add(egui::TextEdit::singleline(&mut ed.modify_window).desired_width(80.0));
+                            ui.end_row();
+                        }
+
                         ui.label("Verlauf (Tage)").on_hover_text("Wie lange reversible Sicherungen überschriebener Dateien aufbewahrt werden");
                         ui.add(egui::TextEdit::singleline(&mut ed.retain_days).desired_width(80.0));
                         ui.end_row();
@@ -6828,6 +6871,10 @@ impl App {
             job.active_from_min = hm_to_min(&ed.active_from).unwrap_or(0);
             job.active_to_min = hm_to_min(&ed.active_to).unwrap_or(0);
             job.catch_up = ed.catch_up;
+            job.delete_policy = ed.delete_policy;
+            job.move_files = ed.move_files && ed.direction != crate::bisync::Direction::Both;
+            job.compare = ed.compare;
+            job.modify_window_sec = ed.modify_window.trim().parse().unwrap_or(0);
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();
