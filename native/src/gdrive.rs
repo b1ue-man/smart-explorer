@@ -407,6 +407,13 @@ impl GDriveBackend {
 
     fn trash(&self, path: &str) -> VfsResult<()> {
         let id = self.resolve(path)?;
+        self.trash_id(&id)?;
+        self.ids.lock().unwrap().remove(&norm(path));
+        Ok(())
+    }
+
+    /// Trash one file by its exact id (targets a specific duplicate-named file).
+    fn trash_id(&self, id: &str) -> VfsResult<()> {
         let auth = self.bearer()?;
         let bearer = format!("Bearer {}", auth);
         let url = format!("{}/files/{}", API, id);
@@ -417,7 +424,6 @@ impl GDriveBackend {
                 .set("Content-Type", "application/json")
                 .send_string(&payload)
         })?;
-        self.ids.lock().unwrap().remove(&norm(path));
         Ok(())
     }
 }
@@ -595,6 +601,12 @@ impl Backend for GDriveBackend {
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         self.trash(path)
+    }
+    fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
+        match id {
+            Some(i) if !i.is_empty() => self.trash_id(i),
+            _ => self.trash(path),
+        }
     }
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
         self.trash(path)
