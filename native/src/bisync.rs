@@ -1639,14 +1639,30 @@ pub fn run(
     }
     // Re-walk to capture real post-write signatures (e.g. the destination's new
     // mtime), so the baseline doesn't re-detect just-synced files. Skipped on a
-    // dry run, where nothing changed.
-    let (at2, bt2) = if opts.dry_run {
+    // dry run, and — the common steady-state case — when nothing was actually
+    // transferred or deleted: then the on-disk state is unchanged, so the trees
+    // we already walked are still current. This avoids a second full metadata
+    // walk of a remote (hundreds of Drive round-trips) on every no-op sync.
+    let changed = st.a_to_b > 0 || st.b_to_a > 0 || st.deleted > 0;
+    let (at2, bt2) = if opts.dry_run || !changed {
         (at, bt)
     } else {
-        (
-            walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)).unwrap_or(at),
-            walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)).unwrap_or(bt),
-        )
+        // Only re-walk a side the run could have modified. A one-way sync without
+        // move leaves its SOURCE side untouched, so re-walking it is pure wasted
+        // round-trips (decisive when the source is a remote like Drive).
+        let a_touched = opts.direction != Direction::AtoB || opts.move_files;
+        let b_touched = opts.direction != Direction::BtoA || opts.move_files;
+        let at2 = if a_touched {
+            walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)).unwrap_or(at)
+        } else {
+            at
+        };
+        let bt2 = if b_touched {
+            walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)).unwrap_or(bt)
+        } else {
+            bt
+        };
+        (at2, bt2)
     };
     let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
     if !opts.dry_run {
@@ -2086,6 +2102,69 @@ mod tests {
         let t3 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, Some(&prev_bad)).unwrap();
         assert_eq!(t3.get("f.txt").unwrap().hash, real, "stale size ⇒ recomputed");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_op_run_skips_rewalk() {
+        // Once converged, a no-op sync must NOT re-walk — a second full metadata
+        // pass is wasted round-trips (decisive for a remote). Counting list_dir
+        // calls: a no-op run lists each flat side exactly once (initial walk only).
+        use crate::vfs::{Scheme, VfsMeta, VfsResult};
+        use std::io::{Read, Write};
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        struct Counting {
+            inner: LocalBackend,
+            lists: Arc<AtomicUsize>,
+        }
+        impl Backend for Counting {
+            fn scheme(&self) -> Scheme { self.inner.scheme() }
+            fn root_display(&self) -> String { self.inner.root_display() }
+            fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> {
+                self.lists.fetch_add(1, Ordering::Relaxed);
+                self.inner.list_dir(p)
+            }
+            fn stat(&self, p: &str) -> VfsResult<VfsMeta> { self.inner.stat(p) }
+            fn open_read(&self, p: &str) -> VfsResult<Box<dyn Read + Send>> { self.inner.open_read(p) }
+            fn open_write(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> { self.inner.open_write(p) }
+            fn rename(&self, s: &str, d: &str) -> VfsResult<()> { self.inner.rename(s, d) }
+            fn rename_overwrites(&self) -> bool { true }
+            fn is_local(&self) -> bool { true }
+            fn remove_file(&self, p: &str) -> VfsResult<()> { self.inner.remove_file(p) }
+            fn remove_dir(&self, p: &str) -> VfsResult<()> { self.inner.remove_dir(p) }
+            fn mkdir_all(&self, p: &str) -> VfsResult<()> { self.inner.mkdir_all(p) }
+        }
+        let a = tmp("nora");
+        let b = tmp("norb");
+        std::fs::write(a.join("f.txt"), b"hello").unwrap();
+        let (ra, rb) = (fwd(&a), fwd(&b));
+        let la = Arc::new(AtomicUsize::new(0));
+        let lb = Arc::new(AtomicUsize::new(0));
+        let ca = Counting { inner: LocalBackend::new(&ra), lists: la.clone() };
+        let cb = Counting { inner: LocalBackend::new(&rb), lists: lb.clone() };
+        let cancel = AtomicBool::new(false);
+        let gs = empty_globset();
+        let f = WalkFilter::basic(true, &gs);
+        let opts = BisyncOptions::default();
+        // Run 1 copies f.txt A→B; both sides changed → both re-walked (2 lists each).
+        let o1 = super::run(&ca, &ra, &cb, &rb, opts, &cancel, &f);
+        assert_eq!(o1.errors.len(), 0);
+        assert!(b.join("f.txt").exists());
+        assert_eq!(la.load(Ordering::Relaxed), 2, "run 1: initial walk + re-walk");
+        assert_eq!(lb.load(Ordering::Relaxed), 2);
+        // Run 2 is a no-op (already in sync) → NO re-walk → exactly one list each.
+        la.store(0, Ordering::Relaxed);
+        lb.store(0, Ordering::Relaxed);
+        let o2 = super::run(&ca, &ra, &cb, &rb, opts, &cancel, &f);
+        assert_eq!(o2.stats.a_to_b + o2.stats.b_to_a + o2.stats.deleted, 0, "no-op");
+        assert_eq!(la.load(Ordering::Relaxed), 1, "no-op skips A re-walk");
+        assert_eq!(lb.load(Ordering::Relaxed), 1, "no-op skips B re-walk");
+        let pair = pair_id(&ra, &rb);
+        let _ = std::fs::remove_file(baseline_path(&pair));
+        let _ = std::fs::remove_dir_all(versions_dir(&pair));
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]
