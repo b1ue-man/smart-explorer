@@ -121,6 +121,16 @@ pub trait Backend: Send + Sync {
         let _ = id;
         self.remove_file(path)
     }
+
+    /// Remove duplicate same-name files within `root` (recursively), keeping the
+    /// newest of each name. Only meaningful for backends that allow duplicate
+    /// names (Google Drive); the default is a no-op (names are already unique).
+    /// Used to make a mirror's destination an exact replica. Returns the count
+    /// removed.
+    fn dedupe_recursive(&self, root: &str) -> VfsResult<usize> {
+        let _ = root;
+        Ok(0)
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;

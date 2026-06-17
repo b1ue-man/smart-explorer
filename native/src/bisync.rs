@@ -1464,7 +1464,18 @@ pub fn run(
     }
 
     let mut errors = Vec::new();
-    let st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
+    let mut st = apply(&actions, a, root_a, b, root_b, opts, &vdir, &mut errors, cancel);
+    // Mirror = exact replica: remove duplicate same-name files the destination
+    // backend may hold (e.g. Google Drive) so only the correct one remains. This
+    // runs before the re-walk so the baseline reflects the deduped state.
+    if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
+        let dedup = match opts.direction {
+            Direction::AtoB => b.dedupe_recursive(root_b).ok(),
+            Direction::BtoA => a.dedupe_recursive(root_a).ok(),
+            Direction::Both => None,
+        };
+        st.deleted += dedup.unwrap_or(0) as u64;
+    }
     // Re-walk to capture real post-write signatures (e.g. the destination's new
     // mtime), so the baseline doesn't re-detect just-synced files. Skipped on a
     // dry run, where nothing changed.
