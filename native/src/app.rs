@@ -193,6 +193,9 @@ pub struct App {
     /// in the left/right slots; the focused one equals `active_tab`.
     split: bool,
     panes: [usize; 2],
+    /// Which split slot (0 = left, 1 = right) currently has focus. Selecting a
+    /// tab in the top bar applies it to THIS pane (not always the left one).
+    focused_pane: usize,
 
     // dialog state
     copy_open: bool,
@@ -378,6 +381,10 @@ pub struct App {
     bisync_ctx: Option<BisyncCtx>,
     bisync_conflicts: Vec<crate::bisync::Conflict>,
     show_bisync_conflicts: bool,
+    /// Line-merge editor for one conflict (None = closed) + its async channels.
+    merge: Option<MergeUi>,
+    merge_load_rx: Option<Receiver<Result<(String, Vec<crate::linemerge::Hunk>), String>>>,
+    merge_apply_rx: Option<Receiver<Result<(String, crate::bisync::Sig, crate::bisync::Sig), String>>>,
     /// Compare ("ls-diff") view: a running preview + its result window.
     preview_rx: Option<Receiver<crate::bisync::Preview>>,
     preview_running: bool,
@@ -783,6 +790,45 @@ fn download_to_id(
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Line-merge editor state for resolving one conflict by line.
+struct MergeUi {
+    rel: String,
+    hunks: Vec<crate::linemerge::Hunk>,
+}
+
+fn ep_join(root: &str, rel: &str) -> String {
+    format!("{}/{}", root.trim_end_matches('/'), rel)
+}
+
+/// Read a remote file as UTF-8 text (errors on binary), for the line-merge view.
+fn read_text(be: &dyn crate::vfs::Backend, path: &str) -> Result<String, String> {
+    use std::io::Read;
+    let mut r = be.open_read(path).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    r.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    String::from_utf8(buf).map_err(|_| "Keine Textdatei (binär) — bitte „A/B behalten“ nutzen.".to_string())
+}
+
+fn write_bytes(be: &dyn crate::vfs::Backend, path: &str, data: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    if let Some((parent, _)) = path.rsplit_once('/') {
+        let _ = be.mkdir_all(parent);
+    }
+    let mut w = be.open_write(path).map_err(|e| e.to_string())?;
+    w.write_all(data).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn sig_from(be: &dyn crate::vfs::Backend, path: &str) -> crate::bisync::Sig {
+    let m = be.stat(path).ok();
+    crate::bisync::Sig {
+        size: m.as_ref().map(|m| m.size).unwrap_or(0),
+        mtime_ms: m.as_ref().map(|m| m.mtime_ms).unwrap_or(0),
+        hash: 0,
+    }
+}
+
 /// Root for all of this app's open/edit temp copies.
 fn temp_root() -> PathBuf {
     std::env::temp_dir().join("smart_explorer_open")
@@ -1045,6 +1091,7 @@ impl App {
             active_tab: 0,
             split: false,
             panes: [0, 1],
+            focused_pane: 0,
 
             copy_open: false,
             copy_mode_pending: CopyMode::Copy,
@@ -1176,6 +1223,9 @@ impl App {
             bisync_ctx: None,
             bisync_conflicts: Vec::new(),
             show_bisync_conflicts: false,
+            merge: None,
+            merge_load_rx: None,
+            merge_apply_rx: None,
             preview_rx: None,
             preview_running: false,
             preview: None,
@@ -1334,6 +1384,11 @@ impl App {
         self.swap_with_tab(from);
         self.swap_with_tab(to);
         self.active_tab = to;
+        // In split mode, a tab selection lands in whichever pane has focus, so
+        // the user can re-target the right pane (not always the left).
+        if self.split {
+            self.panes[self.focused_pane.min(1)] = to;
+        }
         self.band_press = None;
         self.band_active = false;
         self.summary_cache = None;
@@ -1368,6 +1423,7 @@ impl App {
             .find(|&i| i != self.active_tab)
             .unwrap_or(self.active_tab);
         self.panes = [self.active_tab, other];
+        self.focused_pane = 0;
         self.split = true;
     }
 
@@ -1384,17 +1440,22 @@ impl App {
                 return;
             }
             let n = self.tabs.len();
-            // Keep pane indices valid and ensure the focused tab is shown.
+            self.focused_pane = self.focused_pane.min(1);
+            // Keep pane indices valid and ensure the focused pane shows the
+            // active tab.
             for p in self.panes.iter_mut() {
                 if *p >= n {
                     *p = 0;
                 }
             }
             if self.panes[0] != self.active_tab && self.panes[1] != self.active_tab {
-                self.panes[0] = self.active_tab;
+                self.panes[self.focused_pane] = self.active_tab;
             }
             if self.panes[0] == self.panes[1] {
-                self.panes[1] = (0..n).find(|&i| i != self.panes[0]).unwrap_or(self.panes[0]);
+                // Keep the focused pane's tab; move the other to a free one.
+                let other = 1 - self.focused_pane;
+                self.panes[other] =
+                    (0..n).find(|&i| i != self.panes[self.focused_pane]).unwrap_or(self.panes[self.focused_pane]);
             }
             let panes = self.panes;
             let mut focus_to: Option<usize> = None;
@@ -1474,7 +1535,7 @@ impl App {
                             if pressed {
                                 if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
                                     if rect.contains(pos) {
-                                        focus_to = Some(tab_idx);
+                                        focus_to = Some(slot);
                                     }
                                 }
                             }
@@ -1482,8 +1543,9 @@ impl App {
                     });
                 });
             }
-            if let Some(t) = focus_to {
-                self.switch_tab(t);
+            if let Some(slot) = focus_to {
+                self.focused_pane = slot;
+                self.switch_tab(panes[slot]);
             }
             if sync_panes_req {
                 self.sync_split_panes();
@@ -3185,6 +3247,7 @@ impl App {
         let mut keep_a: Option<usize> = None;
         let mut keep_b: Option<usize> = None;
         let mut skip: Option<usize> = None;
+        let mut merge_req: Option<usize> = None;
         let mut close = false;
         let mut all_a = false;
         let mut all_b = false;
@@ -3208,6 +3271,7 @@ impl App {
                             let b = c.b.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms))).unwrap_or_else(|| "—".into());
                             if ui.small_button("← A").on_hover_text(format!("A: {a}")).clicked() { keep_a = Some(i); }
                             if ui.small_button("B →").on_hover_text(format!("B: {b}")).clicked() { keep_b = Some(i); }
+                            if ui.small_button("⇄ Zeilen").on_hover_text("Zeilenweise zusammenführen").clicked() { merge_req = Some(i); }
                             if ui.small_button("⏭").on_hover_text("Vorerst überspringen").clicked() { skip = Some(i); }
                             ui.label(&c.rel);
                         });
@@ -3232,10 +3296,162 @@ impl App {
             if self.bisync_conflicts.is_empty() {
                 self.finish_bisync_conflicts();
             }
+        } else if let Some(i) = merge_req {
+            if let Some(c) = conflicts.get(i) {
+                self.start_merge(c.rel.clone());
+            }
         }
         if close {
             self.finish_bisync_conflicts();
         }
+    }
+
+    /// Begin a line-merge for one conflict: read both versions off-thread, diff.
+    fn start_merge(&mut self, rel: String) {
+        let ctx = match &self.bisync_ctx {
+            Some(c) => c,
+            None => return,
+        };
+        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let rel_t = rel.clone();
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("merge-load".into())
+            .spawn(move || {
+                let res = (|| -> Result<(String, Vec<crate::linemerge::Hunk>), String> {
+                    let ta = read_text(&*a, &ep_join(&ra, &rel_t))?;
+                    let tb = read_text(&*b, &ep_join(&rb, &rel_t))?;
+                    Ok((rel_t.clone(), crate::linemerge::diff(&ta, &tb)))
+                })();
+                let _ = tx.send(res);
+            })
+            .ok();
+        self.merge_load_rx = Some(rx);
+        self.merge = Some(MergeUi { rel, hunks: Vec::new() }); // shows "loading"
+    }
+
+    fn drain_merge(&mut self) {
+        if let Some(res) = self.merge_load_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.merge_load_rx = None;
+            match res {
+                Ok((rel, hunks)) => self.merge = Some(MergeUi { rel, hunks }),
+                Err(e) => {
+                    self.error_msg = Some(format!("Zusammenführen: {}", e));
+                    self.merge = None;
+                }
+            }
+        }
+        if let Some(res) = self.merge_apply_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.merge_apply_rx = None;
+            match res {
+                Ok((rel, sa, sb)) => {
+                    if let Some(ctx) = self.bisync_ctx.as_mut() {
+                        ctx.baseline.insert(rel.clone(), (Some(sa), Some(sb)));
+                    }
+                    self.bisync_conflicts.retain(|c| c.rel != rel);
+                    self.notice =
+                        Some((format!("✓ „{}“ zusammengeführt", rel), std::time::Instant::now()));
+                    if self.bisync_conflicts.is_empty() {
+                        self.finish_bisync_conflicts();
+                    }
+                }
+                Err(e) => self.error_msg = Some(format!("Zusammenführen: {}", e)),
+            }
+        }
+    }
+
+    /// Write the merged text to both sides off-thread, then resolve the conflict.
+    fn start_merge_apply(&mut self, rel: String, merged: String) {
+        let ctx = match &self.bisync_ctx {
+            Some(c) => c,
+            None => return,
+        };
+        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let (tx, rx) = unbounded();
+        std::thread::Builder::new()
+            .name("merge-apply".into())
+            .spawn(move || {
+                let res = (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
+                    let pa = ep_join(&ra, &rel);
+                    let pb = ep_join(&rb, &rel);
+                    write_bytes(&*a, &pa, merged.as_bytes())?;
+                    write_bytes(&*b, &pb, merged.as_bytes())?;
+                    Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
+                })();
+                let _ = tx.send(res);
+            })
+            .ok();
+        self.merge_apply_rx = Some(rx);
+    }
+
+    /// The line-merge window: per-hunk A/B/Both/Neither choices + save.
+    fn ui_merge(&mut self, ctx: &egui::Context) {
+        let mut m = match self.merge.take() {
+            Some(m) => m,
+            None => return,
+        };
+        let loading = self.merge_load_rx.is_some();
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(format!("⇄ Zusammenführen: {}", m.rel))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([760.0, 560.0])
+            .show(ctx, |ui| {
+                if loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Lade beide Versionen…");
+                    });
+                    return;
+                }
+                ui.label(
+                    RichText::new("A = Quelle (links), B = Ziel (rechts). Pro Änderungsblock wählen, was ins Ergebnis kommt.")
+                        .small()
+                        .color(Color32::from_gray(150)),
+                );
+                ui.separator();
+                let green = Color32::from_rgb(120, 200, 120);
+                let blue = Color32::from_rgb(120, 180, 230);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for h in m.hunks.iter_mut() {
+                        if h.equal {
+                            for l in &h.a {
+                                ui.label(RichText::new(format!("  {}", l)).monospace().color(Color32::from_gray(150)));
+                            }
+                            continue;
+                        }
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Block:").small());
+                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::A, "A");
+                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::B, "B");
+                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::Both, "Beide");
+                                ui.selectable_value(&mut h.choice, crate::linemerge::Choice::Neither, "Keine");
+                            });
+                            for l in &h.a {
+                                ui.label(RichText::new(format!("A  {}", l)).monospace().color(green));
+                            }
+                            for l in &h.b {
+                                ui.label(RichText::new(format!("B  {}", l)).monospace().color(blue));
+                            }
+                        });
+                    }
+                });
+                ui.separator();
+                if ui.button("✔ Zusammenführen & speichern").clicked() {
+                    save = true;
+                }
+            });
+        if save {
+            let merged = crate::linemerge::assemble(&m.hunks);
+            self.start_merge_apply(m.rel.clone(), merged);
+            self.merge = None; // close; result lands via drain
+        } else if open {
+            self.merge = Some(m);
+        }
+        // !open → leave closed (m dropped)
     }
 
     // ─── View ───────────────────────────────────────────────────────────
@@ -8959,6 +9175,7 @@ impl eframe::App for App {
         self.drain_bisync();
         self.drain_preview();
         self.drain_apply_one();
+        self.drain_merge();
         self.drain_job_connect();
         self.drain_picker_connect();
         self.drain_cloud_auth();
@@ -9374,6 +9591,9 @@ impl eframe::App for App {
             self.ui_connect_dialog(ctx);
         }
         self.ui_bisync_conflicts(ctx);
+        if self.merge.is_some() {
+            self.ui_merge(ctx);
+        }
         if self.show_sync_jobs {
             self.ui_sync_jobs(ctx);
         }

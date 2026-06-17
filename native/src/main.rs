@@ -8,6 +8,7 @@ mod cloud;
 mod connect;
 mod daemon;
 mod gdrive;
+mod linemerge;
 #[cfg(windows)]
 mod dragout;
 mod copy;
