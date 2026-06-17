@@ -516,12 +516,15 @@ pub fn empty_globset() -> globset::GlobSet {
 
 /// FNV-1a content hash of a file (for `CompareMode::Checksum`). Best-effort: an
 /// unreadable file hashes to 0 (treated as "changed" against any real hash).
-fn hash_file(be: &dyn Backend, path: &str) -> u64 {
+fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
     use std::io::Read;
     let mut h: u64 = 0xcbf29ce484222325;
     if let Ok(mut r) = be.open_read(path) {
         let mut buf = [0u8; 65536];
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return 0; // abort promptly when the user stops
+            }
             match r.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -583,6 +586,9 @@ pub fn walk_files(
                             let mut files: Vec<(String, Sig)> = Vec::new();
                             let mut dirs: Vec<String> = Vec::new();
                             for m in entries {
+                                if cancel.load(Ordering::Relaxed) {
+                                    break; // stop promptly mid-directory (esp. when hashing)
+                                }
                                 if !filter.include_hidden && m.hidden {
                                     continue;
                                 }
@@ -596,7 +602,7 @@ pub fn walk_files(
                                         dirs.push(p);
                                     }
                                 } else if filter.size_age_ok(m.size, m.mtime_ms) {
-                                    let h = if hash { hash_file(be, &p) } else { 0 };
+                                    let h = if hash { hash_file(be, &p, cancel) } else { 0 };
                                     files.push((
                                         rel,
                                         Sig {
@@ -827,6 +833,7 @@ fn copy_between(
     dp: &str,
     atomic: bool,
     throttle: &Throttle,
+    cancel: &AtomicBool,
 ) -> io::Result<u64> {
     use std::io::{Read, Write};
     // Safe-copies (temp then rename) are only correct where rename atomically
@@ -850,6 +857,13 @@ fn copy_between(
     let mut buf = vec![0u8; 1 << 18];
     let mut total = 0u64;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(w);
+            if atomic {
+                let _ = dst.remove_file(&write_path);
+            }
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "abgebrochen"));
+        }
         let n = match r.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
@@ -920,6 +934,7 @@ fn run_one(
     opts: BisyncOptions,
     versions_dir: &PathBuf,
     throttle: &Throttle,
+    cancel: &AtomicBool,
 ) -> io::Result<BisyncStats> {
     let mut st = BisyncStats::default();
     match act {
@@ -928,7 +943,7 @@ fn run_one(
             if opts.reversible && b.exists(&dp) {
                 let _ = back_up(b, &dp, rel, versions_dir);
             }
-            let n = copy_between(a, &join(root_a, rel), b, &dp, opts.atomic, throttle)?;
+            let n = copy_between(a, &join(root_a, rel), b, &dp, opts.atomic, throttle, cancel)?;
             if opts.verify {
                 verify_copy(b, &dp, n)?;
             }
@@ -950,7 +965,7 @@ fn run_one(
             if opts.reversible && a.exists(&dp) {
                 let _ = back_up(a, &dp, rel, versions_dir);
             }
-            let n = copy_between(b, &join(root_b, rel), a, &dp, opts.atomic, throttle)?;
+            let n = copy_between(b, &join(root_b, rel), a, &dp, opts.atomic, throttle, cancel)?;
             if opts.verify {
                 verify_copy(a, &dp, n)?;
             }
@@ -987,18 +1002,18 @@ fn run_one(
             // Preserve B's losing version as a conflict copy that will sync back.
             if b.exists(&bp) {
                 let cp = join(root_b, &conflict_name(rel));
-                let _ = copy_between(b, &bp, b, &cp, opts.atomic, throttle);
+                let _ = copy_between(b, &bp, b, &cp, opts.atomic, throttle, cancel);
             }
-            st.bytes += copy_between(a, &join(root_a, rel), b, &bp, opts.atomic, throttle)?;
+            st.bytes += copy_between(a, &join(root_a, rel), b, &bp, opts.atomic, throttle, cancel)?;
             st.a_to_b += 1;
         }
         Action::KeepBothBtoA(rel) => {
             let ap = join(root_a, rel);
             if a.exists(&ap) {
                 let cp = join(root_a, &conflict_name(rel));
-                let _ = copy_between(a, &ap, a, &cp, opts.atomic, throttle);
+                let _ = copy_between(a, &ap, a, &cp, opts.atomic, throttle, cancel);
             }
-            st.bytes += copy_between(b, &join(root_b, rel), a, &ap, opts.atomic, throttle)?;
+            st.bytes += copy_between(b, &join(root_b, rel), a, &ap, opts.atomic, throttle, cancel)?;
             st.b_to_a += 1;
         }
     }
@@ -1068,7 +1083,7 @@ pub fn apply(
                     // Retry transient failures with a delay.
                     let mut attempt = 0u32;
                     let res = loop {
-                        match run_one(act, a, root_a, b, root_b, opts, versions_dir, &throttle) {
+                        match run_one(act, a, root_a, b, root_b, opts, versions_dir, &throttle, cancel) {
                             Ok(s) => break Ok(s),
                             Err(e) => {
                                 if attempt >= opts.retries || cancel.load(Ordering::Relaxed) {
@@ -1518,16 +1533,17 @@ pub fn resolve(
     let pa = join(root_a, rel);
     let pb = join(root_b, rel);
     let throttle = Throttle::new(0);
+    let no_cancel = AtomicBool::new(false);
     if keep_a {
         if b.exists(&pb) {
             let _ = back_up(b, &pb, rel, &vdir);
         }
-        copy_between(a, &pa, b, &pb, true, &throttle)?;
+        copy_between(a, &pa, b, &pb, true, &throttle, &no_cancel)?;
     } else {
         if a.exists(&pa) {
             let _ = back_up(a, &pa, rel, &vdir);
         }
-        copy_between(b, &pb, a, &pa, true, &throttle)?;
+        copy_between(b, &pb, a, &pa, true, &throttle, &no_cancel)?;
     }
     Ok((sig_of(a, &pa), sig_of(b, &pb)))
 }
