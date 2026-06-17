@@ -309,6 +309,11 @@ pub struct App {
     /// Per-frame: the name-filter TextEdit just received Enter (set in
     /// `ui_filterbar`, consumed in `update`).
     filter_enter: bool,
+    /// Highlighted row in the omnibox dropdown (None = typing, no row picked).
+    omni_sel: Option<usize>,
+    /// Set when Enter in the omnibox should activate the highlighted dropdown
+    /// row (carried alongside `filter_enter` so `update` can dispatch it).
+    omni_activate: Option<OmniAction>,
 
     summary_cache: Option<SummaryData>,
     /// (selection len, entries len, bytes) — cheap invalidation key.
@@ -785,6 +790,148 @@ enum OpenMode {
     With,
 }
 
+// ─── Omnibox (the combo-field) ───────────────────────────────────────────────
+// The name-filter doubles as an address bar + command palette. What the input
+// means is decided by its content (no mode switch): a leading `>` is a command,
+// path-like text navigates, everything else filters the current list as before.
+
+/// What the omnibox input currently means.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OmniMode {
+    Filter,
+    Path,
+    Command,
+}
+
+fn omni_mode(input: &str) -> OmniMode {
+    if input.trim_start().starts_with('>') {
+        OmniMode::Command
+    } else if omni_is_path(input) {
+        OmniMode::Path
+    } else {
+        OmniMode::Filter
+    }
+}
+
+/// True when the input should be read as a filesystem path rather than a filter:
+/// a drive (`C:`), a root (`/`, `\`, `~`), a UNC (`\\srv`), up-navigation (`..`),
+/// or anything containing a path separator.
+fn omni_is_path(input: &str) -> bool {
+    let t = input.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.starts_with('/') || t.starts_with('\\') || t.starts_with('~') {
+        return true;
+    }
+    if t.starts_with("..") {
+        return true;
+    }
+    // Pure dots (".." = up 1, "..." = up 2, …).
+    if t.len() >= 2 && t.bytes().all(|b| b == b'.') {
+        return true;
+    }
+    let b = t.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return true; // drive-qualified
+    }
+    t.contains('/') || t.contains('\\')
+}
+
+/// If `input` is an up-navigation (`..`, `../..`, `..\..`, or `...`/`....`),
+/// return how many levels to go up. Dot-runs use n-dots → n-1 levels.
+fn omni_up_levels(input: &str) -> Option<usize> {
+    let t = input.trim();
+    if t.len() >= 2 && t.bytes().all(|b| b == b'.') {
+        return Some(t.len() - 1);
+    }
+    let segs: Vec<&str> = t.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    if !segs.is_empty() && segs.iter().all(|s| *s == "..") {
+        return Some(segs.len());
+    }
+    None
+}
+
+/// Resolve omnibox path-mode input to a concrete path to scan: expand `~`,
+/// complete a bare drive (`C:` → `C:\`), and resolve a relative `..`-path
+/// against the current root (the OS normalises `..` segments when scanning).
+fn expand_omni_path(raw: &str, home: &std::path::Path, root: &str) -> String {
+    let t = raw.trim();
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    if t == "~" {
+        return home.to_string_lossy().to_string();
+    }
+    if let Some(rest) = t.strip_prefix("~/").or_else(|| t.strip_prefix("~\\")) {
+        return home
+            .join(rest.replace(['/', '\\'], sep))
+            .to_string_lossy()
+            .to_string();
+    }
+    let b = t.as_bytes();
+    if b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return format!("{}{}", t, sep); // C: → C:\
+    }
+    // Relative path that starts with `..` (mixed, e.g. ../sibling): resolve
+    // against the current root.
+    if t.starts_with("..") && !root.is_empty() {
+        return PathBuf::from(root.replace('/', sep))
+            .join(t.replace(['/', '\\'], sep))
+            .to_string_lossy()
+            .to_string();
+    }
+    t.replace('/', sep)
+}
+
+/// A one-shot command available via `>` in the omnibox (folder actions only —
+/// navigation/roots are expressed as `Go`/`Up`/`Connect` actions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OmniCmd {
+    NewFolder,
+    Reveal,
+    Terminal,
+    CopyPath,
+    StarToggle,
+    Refresh,
+}
+
+/// What activating a dropdown row does.
+#[derive(Clone, Debug)]
+enum OmniAction {
+    /// Navigate to (scan) this local path.
+    Go(String),
+    /// Open a saved remote connection by index into `saved_connections`.
+    Connect(usize),
+    /// Run a one-shot folder command.
+    Cmd(OmniCmd),
+}
+
+/// One row in the omnibox dropdown.
+struct OmniItem {
+    icon: &'static str,
+    label: String,
+    sub: String,
+    action: OmniAction,
+}
+
+/// Case-insensitive subsequence match (fuzzy), used to filter command palette
+/// entries by the text typed after `>`.
+fn fuzzy_contains(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut chars = haystack.chars().flat_map(|c| c.to_lowercase());
+    for n in needle.chars().flat_map(|c| c.to_lowercase()) {
+        loop {
+            match chars.next() {
+                Some(h) if h == n => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 fn download_to(
     be: &dyn crate::vfs::Backend,
     path: &str,
@@ -1204,6 +1351,8 @@ impl App {
             name_filter_focus: false,
             search_nav_from_filter: false,
             filter_enter: false,
+            omni_sel: None,
+            omni_activate: None,
 
             summary_cache: None,
             sel_size_cache: (usize::MAX, usize::MAX, 0),
@@ -3932,9 +4081,15 @@ impl App {
 
     /// Commit the debounced name/extension drafts into the active filter and
     /// rebuild the view. Shared by the keystroke debounce and Enter (which must
-    /// flush immediately so the result count is current).
+    /// flush immediately so the result count is current). Only plain filter-mode
+    /// text narrows the listing — a typed path or `>command` must leave the
+    /// current folder's entries visible.
     fn flush_text_filter(&mut self) {
-        self.filter.text = self.text_draft.clone();
+        self.filter.text = if omni_mode(&self.text_draft) == OmniMode::Filter {
+            self.text_draft.clone()
+        } else {
+            String::new()
+        };
         self.filter.extensions = self
             .ext_draft
             .split(|c: char| c == ',' || c.is_whitespace())
@@ -3983,6 +4138,239 @@ impl App {
             // Multiple hits: move into the list for arrow-key navigation.
             self.move_cursor_to(0, false);
             self.search_nav_from_filter = true;
+        }
+    }
+
+    // ─── Omnibox (combo-field) ──────────────────────────────────────────────
+
+    /// Enter in the omnibox. A highlighted dropdown row wins; otherwise act by
+    /// mode: run the first command (`>`), navigate the typed path / `..`, or
+    /// fall through to the in-list cursorless navigation (plain filter text).
+    fn handle_omni_enter(&mut self, ctx: &egui::Context) {
+        if let Some(sel) = self.omni_sel {
+            let items = self.build_omni_items();
+            if let Some(it) = items.get(sel) {
+                let action = it.action.clone();
+                self.execute_omni(action, ctx);
+                return;
+            }
+        }
+        let raw = self.text_draft.clone();
+        match omni_mode(&raw) {
+            OmniMode::Command => {
+                if let Some(it) = self.build_omni_items().into_iter().next() {
+                    self.execute_omni(it.action, ctx);
+                }
+            }
+            OmniMode::Path => {
+                if let Some(n) = omni_up_levels(&raw) {
+                    self.navigate_up_n(n);
+                } else {
+                    let p = expand_omni_path(&raw, &self.home, &self.root_path);
+                    if !p.is_empty() {
+                        self.start_scan(PathBuf::from(p));
+                    }
+                }
+                self.clear_omni();
+            }
+            OmniMode::Filter => self.handle_filter_enter(),
+        }
+    }
+
+    /// Build the dropdown rows for the current omnibox text, by mode:
+    ///  - Command (`>`): folder-action commands + navigation/root targets;
+    ///  - Path: root targets filtered by the typed text (Enter still navigates
+    ///    the full typed path / `..`);
+    ///  - Filter: merged global folder-search "jump to" hits, plus the roots
+    ///    when the field is focused and empty.
+    fn build_omni_items(&self) -> Vec<OmniItem> {
+        let raw = self.text_draft.as_str();
+        let mut items: Vec<OmniItem> = Vec::new();
+        match omni_mode(raw) {
+            OmniMode::Command => {
+                let q = raw.trim_start().trim_start_matches('>').trim();
+                let cmds: &[(&str, &str, OmniCmd)] = &[
+                    ("＋", "Neuer Ordner", OmniCmd::NewFolder),
+                    ("🗗", "Im Explorer anzeigen", OmniCmd::Reveal),
+                    ("▶", "Terminal hier öffnen", OmniCmd::Terminal),
+                    ("⧉", "Pfad kopieren", OmniCmd::CopyPath),
+                    ("★", "Favorit umschalten", OmniCmd::StarToggle),
+                    ("⟳", "Aktualisieren", OmniCmd::Refresh),
+                ];
+                for (icon, label, cmd) in cmds {
+                    if fuzzy_contains(label, q) {
+                        items.push(OmniItem {
+                            icon,
+                            label: (*label).to_string(),
+                            sub: "Befehl".into(),
+                            action: OmniAction::Cmd(*cmd),
+                        });
+                    }
+                }
+                self.push_root_items(&mut items, q);
+            }
+            OmniMode::Path => {
+                self.push_root_items(&mut items, raw.trim());
+            }
+            OmniMode::Filter => {
+                for (p, _score) in self.folder_search_results.iter().take(12) {
+                    let base = p.rsplit('/').next().unwrap_or(p).to_string();
+                    let parent = p.rsplit_once('/').map(|(par, _)| par).unwrap_or("").to_string();
+                    items.push(OmniItem {
+                        icon: "📁",
+                        label: base,
+                        sub: parent,
+                        action: OmniAction::Go(p.clone()),
+                    });
+                }
+                if raw.trim().is_empty() {
+                    self.push_root_items(&mut items, "");
+                }
+            }
+        }
+        items
+    }
+
+    /// Append root targets — Home, drives, saved remotes, favorites — keeping
+    /// those that fuzzy-match `q`.
+    fn push_root_items(&self, items: &mut Vec<OmniItem>, q: &str) {
+        let home = self.home.to_string_lossy().to_string();
+        if fuzzy_contains("Persönlicher Ordner", q) || fuzzy_contains(&home, q) {
+            items.push(OmniItem {
+                icon: "🏠",
+                label: "Persönlicher Ordner".into(),
+                sub: home.clone(),
+                action: OmniAction::Go(home),
+            });
+        }
+        for d in &self.drives {
+            let trimmed = d.trim_end_matches(['\\', '/']).to_string();
+            if fuzzy_contains(&trimmed, q) {
+                items.push(OmniItem {
+                    icon: "💽",
+                    label: format!("Laufwerk {}", trimmed),
+                    sub: d.clone(),
+                    action: OmniAction::Go(d.clone()),
+                });
+            }
+        }
+        for (i, c) in self.saved_connections.iter().enumerate() {
+            let label = if c.label.trim().is_empty() {
+                c.host.clone()
+            } else {
+                c.label.clone()
+            };
+            let sub = if c.user.trim().is_empty() {
+                c.host.clone()
+            } else {
+                format!("{}@{}", c.user, c.host)
+            };
+            if fuzzy_contains(&label, q) || fuzzy_contains(&sub, q) {
+                items.push(OmniItem {
+                    icon: "🌐",
+                    label,
+                    sub,
+                    action: OmniAction::Connect(i),
+                });
+            }
+        }
+        for f in self.favorites.iter().take(20) {
+            let base = f.rsplit('/').next().unwrap_or(f).to_string();
+            if fuzzy_contains(&base, q) || fuzzy_contains(f, q) {
+                items.push(OmniItem {
+                    icon: "★",
+                    label: base,
+                    sub: f.clone(),
+                    action: OmniAction::Go(f.clone()),
+                });
+            }
+        }
+    }
+
+    /// Run a dropdown row's action, then clear the omnibox.
+    fn execute_omni(&mut self, action: OmniAction, ctx: &egui::Context) {
+        match action {
+            OmniAction::Go(p) => {
+                self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            }
+            OmniAction::Connect(i) => {
+                if let Some(c) = self.saved_connections.get(i).cloned() {
+                    self.connect_saved(&c);
+                }
+            }
+            OmniAction::Cmd(cmd) => match cmd {
+                OmniCmd::NewFolder => self.create_new_folder(),
+                OmniCmd::Reveal => {
+                    if let Some(p) = self.focus_path() {
+                        self.open_in_explorer(&p);
+                    } else if !self.root_path.is_empty() {
+                        self.open_in_explorer(&self.root_path.clone());
+                    }
+                }
+                OmniCmd::Terminal => self.open_terminal_here(),
+                OmniCmd::CopyPath => {
+                    if !self.root_path.is_empty() {
+                        ctx.copy_text(self.root_path.clone());
+                    }
+                }
+                OmniCmd::StarToggle => self.star_current_folder(),
+                OmniCmd::Refresh => self.rescan(),
+            },
+        }
+        self.clear_omni();
+    }
+
+    /// Reset the omnibox after an action: clear text, filter, and dropdown.
+    fn clear_omni(&mut self) {
+        self.text_draft.clear();
+        self.filter.text.clear();
+        self.folder_search_query.clear();
+        self.folder_search_results.clear();
+        self.omni_sel = None;
+        self.recompute_view();
+    }
+
+    /// Navigate up `n` folder levels from the current root.
+    fn navigate_up_n(&mut self, n: usize) {
+        let mut p = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        for _ in 0..n.max(1) {
+            match p.parent() {
+                Some(par) if !par.as_os_str().is_empty() => p = par.to_path_buf(),
+                _ => break,
+            }
+        }
+        if !p.as_os_str().is_empty() && p.to_string_lossy() != self.root_path {
+            self.start_scan(p);
+        }
+    }
+
+    /// Open a system terminal in the current folder.
+    #[cfg(windows)]
+    fn open_terminal_here(&self) {
+        let dir = self.root_path.replace('/', "\\");
+        if dir.is_empty() {
+            return;
+        }
+        let dir_w: Vec<u16> = dir.encode_utf16().chain(Some(0)).collect();
+        let file_w: Vec<u16> = "cmd.exe".encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                file_w.as_ptr(),
+                std::ptr::null(),
+                dir_w.as_ptr(), // working directory
+                1,              // SW_SHOWNORMAL
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn open_terminal_here(&self) {
+        if !self.root_path.is_empty() {
+            let _ = std::process::Command::new("x-terminal-emulator")
+                .current_dir(&self.root_path)
+                .spawn();
         }
     }
 
@@ -6521,23 +6909,91 @@ impl App {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text(match self.filter.text_mode {
-                        TextMode::Substring => "Suche im Namen…",
+                        TextMode::Substring => "Filtern · Pfad · ›Befehl · .. hoch",
                         TextMode::Regex => "Regex z.B. \\.log$",
                         TextMode::Glob => "Glob z.B. **/build/**",
                     })
-                    .desired_width(240.0),
+                    .desired_width(300.0),
             );
-            if self.name_filter_focus {
+            let field_rect = resp.rect;
+            if self.name_filter_focus || self.folder_search_focus {
                 resp.request_focus();
                 self.name_filter_focus = false;
+                self.folder_search_focus = false;
             }
             if resp.changed() {
                 self.filter_pending_at = Some(Instant::now());
+                self.omni_sel = None;
+                // Keep the merged global folder-search in sync so its hits can
+                // surface in the dropdown (filter mode only).
+                if omni_mode(&self.text_draft) == OmniMode::Filter
+                    && !self.text_draft.trim().is_empty()
+                {
+                    self.folder_search_query = self.text_draft.clone();
+                    self.folder_search_pending_at = Some(std::time::Instant::now());
+                } else {
+                    self.folder_search_query.clear();
+                    self.folder_search_results.clear();
+                    self.folder_search_pending_at = None;
+                }
             }
-            // Enter in the name filter drives cursorless navigation (handled in
-            // `update` after the view is settled).
+            // Enter drives navigation/commands (handled in `update` after the
+            // frame's view + folder-search hits have settled).
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.filter_enter = true;
+            }
+            // Dropdown: roots, commands, and folder-search jumps.
+            if resp.has_focus() {
+                let items = self.build_omni_items();
+                if !items.is_empty() {
+                    let (down, up) = ui.input_mut(|i| {
+                        (
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                        )
+                    });
+                    if down {
+                        self.omni_sel = Some(match self.omni_sel {
+                            Some(s) => (s + 1).min(items.len() - 1),
+                            None => 0,
+                        });
+                    }
+                    if up {
+                        self.omni_sel = match self.omni_sel {
+                            Some(0) | None => None,
+                            Some(s) => Some(s - 1),
+                        };
+                    }
+                    let sel = self.omni_sel;
+                    let mut clicked: Option<OmniAction> = None;
+                    egui::Area::new(egui::Id::new("omni_popup"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(field_rect.left_bottom() + egui::vec2(0.0, 3.0))
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                ui.set_min_width(field_rect.width().max(320.0));
+                                egui::ScrollArea::vertical()
+                                    .id_salt("omni_results")
+                                    .max_height(300.0)
+                                    .show(ui, |ui| {
+                                        for (i, it) in items.iter().enumerate() {
+                                            let r = ui
+                                                .selectable_label(
+                                                    Some(i) == sel,
+                                                    format!("{}  {}", it.icon, it.label),
+                                                )
+                                                .on_hover_text(&it.sub);
+                                            if r.clicked() {
+                                                clicked = Some(it.action.clone());
+                                            }
+                                        }
+                                    });
+                            });
+                        });
+                    if let Some(a) = clicked {
+                        self.omni_activate = Some(a);
+                    }
+                }
             }
 
             let resp = ui.add(
@@ -6720,52 +7176,13 @@ impl App {
         ui.heading("Smart Explorer");
         ui.add_space(4.0);
 
-        // ─── Folder fuzzy search ──────────────────────────────────────────
-        ui.label(RichText::new("ORDNER SUCHEN").small().color(Color32::from_gray(140)));
-        let search_resp = ui.add(
-            egui::TextEdit::singleline(&mut self.folder_search_query)
-                .hint_text("z.B. dwnlds, projekt-x …  (Ctrl+Shift+F)")
-                .desired_width(f32::INFINITY),
+        // Folder search now lives in the combo-field at the top (Ctrl+F): type
+        // to filter the list, with global folder jumps offered in its dropdown.
+        ui.label(
+            RichText::new("Ordnersuche → Suchleiste oben (Ctrl+F)")
+                .small()
+                .color(Color32::from_gray(140)),
         );
-        if self.folder_search_focus {
-            search_resp.request_focus();
-            self.folder_search_focus = false;
-        }
-        if search_resp.changed() {
-            if self.folder_search_query.is_empty() {
-                self.folder_search_results.clear();
-                self.folder_search_pending_at = None;
-            } else {
-                self.folder_search_pending_at = Some(std::time::Instant::now());
-            }
-        }
-        let mut clicked_path: Option<String> = None;
-        if !self.folder_index.is_empty() && !self.folder_search_query.is_empty() {
-            egui::ScrollArea::vertical()
-                .id_salt("folder_search_results")
-                .max_height(220.0)
-                .show(ui, |ui| {
-                    if self.folder_search_results.is_empty() {
-                        ui.colored_label(Color32::from_gray(140), "keine Treffer");
-                    }
-                    for (p, _score) in &self.folder_search_results {
-                        let base = p.rsplit('/').next().unwrap_or(p);
-                        let parent = p.rsplit_once('/').map(|(par, _)| par).unwrap_or("");
-                        let label = format!("{}\n{}", base, parent);
-                        let resp = ui
-                            .add(egui::Button::new(label).wrap().min_size(egui::vec2(0.0, 28.0)))
-                            .on_hover_text(p.clone());
-                        if resp.clicked() {
-                            clicked_path = Some(p.clone());
-                        }
-                    }
-                });
-        }
-        if let Some(p) = clicked_path {
-            self.folder_search_query.clear();
-            self.folder_search_results.clear();
-            self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)));
-        }
 
         ui.horizontal(|ui| {
             if self.index_building {
@@ -9217,15 +9634,19 @@ impl App {
                                 ("F5", "Aktualisieren"),
                                 ("Ctrl+L", "Pfad bearbeiten"),
                                 ("Ctrl+R", "Rekursiv umschalten"),
-                                ("Ctrl+F  ·  F3", "Namensfilter fokussieren"),
-                                ("Ctrl+Shift+F", "Ordnersuche fokussieren"),
+                                ("Ctrl+F  ·  F3", "Suchleiste (Filter / Pfad / Befehl)"),
                                 (
-                                    "Filter → Enter",
-                                    "1 Treffer: öffnen/betreten (Filter bleibt aktiv); mehrere: in die Liste springen",
+                                    "Suchleiste",
+                                    "Tippen filtert · Pfad oder C:\\… öffnen · .. (…) hoch · ›  für Befehle",
+                                ),
+                                ("↑/↓ in der Leiste", "Vorschläge (Wurzeln, Ordnersprünge, Befehle)"),
+                                (
+                                    "Leiste → Enter",
+                                    "1 Treffer: öffnen/betreten (Leiste bleibt aktiv); mehrere: in die Liste springen",
                                 ),
                                 (
                                     "Liste → Enter",
-                                    "Öffnen; bei Ordner aus Filtersuche zurück zum Filter",
+                                    "Öffnen; bei Ordner aus der Suche zurück zur Leiste",
                                 ),
                             ],
                         ),
@@ -9797,7 +10218,12 @@ impl eframe::App for App {
                     }
                 }
                 KbdAct::InvertSelection => self.invert_selection(),
-                KbdAct::FocusSearch => self.folder_search_focus = true,
+                KbdAct::FocusSearch => {
+                    // Folder search is merged into the combo-field now.
+                    self.show_filters = true;
+                    self.folder_search_focus = true;
+                    self.search_nav_from_filter = false;
+                }
                 KbdAct::FocusFilter => {
                     self.show_filters = true;
                     self.name_filter_focus = true;
@@ -9823,10 +10249,13 @@ impl eframe::App for App {
         if !jump_text.is_empty() {
             self.type_to_jump(&jump_text);
         }
-        // Enter in the name filter (captured in `ui_filterbar`): drive cursorless
-        // navigation now that the frame's view is settled.
+        // Omnibox Enter / dropdown-row activation (captured in `ui_filterbar`),
+        // processed now that the frame's view + folder-search hits have settled.
         if std::mem::take(&mut self.filter_enter) {
-            self.handle_filter_enter();
+            self.handle_omni_enter(ctx);
+        }
+        if let Some(a) = self.omni_activate.take() {
+            self.execute_omni(a, ctx);
         }
 
         // Drain the background clipboard-key poller (Windows). This is what
@@ -10249,5 +10678,63 @@ impl UiState {
             self.show_filters as u8, self.show_summary as u8
         );
         let _ = std::fs::write(appdata_file("ui_state.txt"), txt);
+    }
+}
+
+#[cfg(test)]
+mod omni_tests {
+    use super::*;
+
+    #[test]
+    fn classify_modes() {
+        assert_eq!(omni_mode("report"), OmniMode::Filter);
+        assert_eq!(omni_mode(""), OmniMode::Filter);
+        assert_eq!(omni_mode(">new"), OmniMode::Command);
+        assert_eq!(omni_mode("  > refresh"), OmniMode::Command);
+        assert_eq!(omni_mode(".."), OmniMode::Path);
+        assert_eq!(omni_mode("../.."), OmniMode::Path);
+        assert_eq!(omni_mode("C:\\Users"), OmniMode::Path);
+        assert_eq!(omni_mode("C:"), OmniMode::Path);
+        assert_eq!(omni_mode("/etc/hosts"), OmniMode::Path);
+        assert_eq!(omni_mode("~"), OmniMode::Path);
+        assert_eq!(omni_mode("\\\\server\\share"), OmniMode::Path);
+        assert_eq!(omni_mode("a/b"), OmniMode::Path);
+        // Plain names (even with dots) stay filters.
+        assert_eq!(omni_mode("file.txt"), OmniMode::Filter);
+        assert_eq!(omni_mode("v1.2.3"), OmniMode::Filter);
+    }
+
+    #[test]
+    fn up_levels() {
+        assert_eq!(omni_up_levels(".."), Some(1));
+        assert_eq!(omni_up_levels("..."), Some(2));
+        assert_eq!(omni_up_levels("...."), Some(3));
+        assert_eq!(omni_up_levels("../.."), Some(2));
+        assert_eq!(omni_up_levels("..\\..\\.."), Some(3));
+        assert_eq!(omni_up_levels("../foo"), None);
+        assert_eq!(omni_up_levels("foo"), None);
+        assert_eq!(omni_up_levels("."), None);
+    }
+
+    #[test]
+    fn fuzzy() {
+        assert!(fuzzy_contains("Neuer Ordner", "no"));
+        assert!(fuzzy_contains("Neuer Ordner", "ordner"));
+        assert!(fuzzy_contains("Aktualisieren", ""));
+        assert!(fuzzy_contains("Terminal hier öffnen", "term"));
+        assert!(!fuzzy_contains("Neuer Ordner", "xyz"));
+        assert!(!fuzzy_contains("abc", "abcd"));
+    }
+
+    #[test]
+    fn path_expansion() {
+        let home = std::path::Path::new("/home/u");
+        assert_eq!(expand_omni_path("~", home, ""), "/home/u");
+        // bare drive completes to a root
+        assert_eq!(expand_omni_path("C:", home, ""), format!("C:{}", std::path::MAIN_SEPARATOR));
+        // ~/sub expands under home
+        let got = expand_omni_path("~/docs", home, "");
+        assert!(got.ends_with("docs"));
+        assert!(got.starts_with("/home/u"));
     }
 }
