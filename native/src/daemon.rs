@@ -577,9 +577,16 @@ mod power {
         }
     }
     pub fn on_metered_network() -> bool {
-        // Best-effort: metered detection needs WinRT NetworkInformation, which we
-        // don't pull in here. Treated as "not metered" until that lands.
-        false
+        use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+        // Best-effort via WinRT: treat Fixed/Variable cost as metered. Any error
+        // (no connection, API unavailable) is treated as not-metered.
+        (|| -> windows::core::Result<bool> {
+            let profile = NetworkInformation::GetInternetConnectionProfile()?;
+            let cost = profile.GetConnectionCost()?;
+            let t = cost.NetworkCostType()?;
+            Ok(t == NetworkCostType::Fixed || t == NetworkCostType::Variable)
+        })()
+        .unwrap_or(false)
     }
 }
 
