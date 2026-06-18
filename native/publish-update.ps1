@@ -23,6 +23,25 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
 cargo build --release --bin smart_explorer --bin smart_explorer_updater
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$shareSrc = Join-Path $repoRoot "share-server"
+$shareOut = Join-Path $repoRoot "release-native\share-server"
+if (Test-Path $shareSrc) {
+    Push-Location $shareSrc
+    try {
+        cargo build --release --bin se-share-server
+        if ($LASTEXITCODE -ne 0) { throw "Share-Server-Build fehlgeschlagen" }
+    } finally {
+        Pop-Location
+    }
+    New-Item -ItemType Directory -Force $shareOut | Out-Null
+    Copy-Item (Join-Path $shareSrc "target\release\se-share-server.exe") (Join-Path $shareOut "se-share-server.exe") -Force
+    $linuxShare = Join-Path $shareSrc "target\release\se-share-server"
+    if (Test-Path $linuxShare) {
+        Copy-Item $linuxShare (Join-Path $shareOut "se-share-server-linux") -Force
+    }
+}
+
 # Feed aktualisieren (EXE zuerst, version.txt zuletzt — Clients sehen die neue
 # Version erst, wenn die EXE schon vollstaendig da ist). Dateiname
 # smart_explorer.exe (ohne Leerzeichen) ist identisch zum Git/HTTPS-Feed unter

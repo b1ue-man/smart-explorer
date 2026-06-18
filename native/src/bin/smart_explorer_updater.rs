@@ -11,6 +11,7 @@ struct ApplyArgs {
     version: String,
     last_applied: PathBuf,
     error_file: PathBuf,
+    elevated: bool,
 }
 
 fn main() {
@@ -42,6 +43,7 @@ impl ApplyArgs {
             version: required_arg(raw, "--version")?,
             last_applied: PathBuf::from(required_arg(raw, "--last-applied")?),
             error_file: PathBuf::from(required_arg(raw, "--error-file")?),
+            elevated: raw.iter().any(|a| a == "--elevated"),
         })
     }
 }
@@ -67,6 +69,7 @@ fn apply_update(args: ApplyArgs) -> Result<(), String> {
         })?
         .len();
     let mut last_err = None;
+    let mut last_needs_elevation = false;
     let mut replaced = false;
     for _ in 0..180 {
         match std::fs::copy(&args.staged, &args.target) {
@@ -80,15 +83,25 @@ fn apply_update(args: ApplyArgs) -> Result<(), String> {
                     n, staged_len
                 ));
             }
-            Err(e) => last_err = Some(e.to_string()),
+            Err(e) => {
+                last_needs_elevation = should_elevate_for_io(&e);
+                last_err = Some(e.to_string());
+            }
         }
         std::thread::sleep(Duration::from_millis(500));
     }
     if !replaced {
-        return Err(format!(
+        let msg = format!(
             "Smart Explorer.exe konnte nicht ersetzt werden: {}",
             last_err.unwrap_or_else(|| "unbekannter Fehler".to_string())
-        ));
+        );
+        if !args.elevated && last_needs_elevation {
+            append_log("copy needs elevation; relaunching updater with UAC");
+            relaunch_elevated(&args)
+                .map_err(|e| format!("Administratorfreigabe starten: {}", e))?;
+            return Ok(());
+        }
+        return Err(msg);
     }
 
     if let Some(parent) = args.last_applied.parent() {
@@ -202,4 +215,116 @@ fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
     {
         cmd.spawn().map(|_| ())
     }
+}
+
+fn should_elevate_for_io(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5) | Some(740) | Some(1314))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+#[cfg(windows)]
+fn relaunch_elevated(args: &ApplyArgs) -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let argv = vec![
+        "--apply".to_string(),
+        "--target".to_string(),
+        args.target.to_string_lossy().into_owned(),
+        "--staged".to_string(),
+        args.staged.to_string_lossy().into_owned(),
+        "--parent-pid".to_string(),
+        args.parent_pid.to_string(),
+        "--version".to_string(),
+        args.version.clone(),
+        "--last-applied".to_string(),
+        args.last_applied.to_string_lossy().into_owned(),
+        "--error-file".to_string(),
+        args.error_file.to_string_lossy().into_owned(),
+        "--elevated".to_string(),
+    ];
+    spawn_elevated_detached(&exe, &argv)
+}
+
+#[cfg(not(windows))]
+fn relaunch_elevated(_args: &ApplyArgs) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "elevation is only supported on Windows",
+    ))
+}
+
+#[cfg(windows)]
+fn spawn_elevated_detached(exe: &Path, args: &[String]) -> std::io::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide_os(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+    fn wide_str(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let verb = wide_str("runas");
+    let file = wide_os(exe.as_os_str());
+    let params = wide_str(&join_windows_args(args));
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            params.as_ptr(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if rc > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Administratorfreigabe abgebrochen oder verweigert (ShellExecuteW={rc})"),
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn join_windows_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(windows)]
+fn quote_windows_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'))
+    {
+        return arg.to_string();
+    }
+
+    let mut out = String::from("\"");
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                out.push(ch);
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
 }
