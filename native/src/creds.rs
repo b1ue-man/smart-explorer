@@ -85,6 +85,9 @@ pub struct SavedConnection {
     /// Remote start path (sftp/ftp) or the `\\server\share…` UNC (share).
     pub root: String,
     pub label: String,
+    /// Opt-in: deploy + use the SSH remote agent for this connection (#24).
+    /// SFTP only; ignored elsewhere. Defaults false (old entries → false).
+    pub use_agent: bool,
 }
 
 impl SavedConnection {
@@ -167,6 +170,7 @@ fn serialize(c: &SavedConnection) -> String {
         sanitize(&keypath),
         sanitize(&c.root),
         sanitize(&c.label),
+        if c.use_agent { "1" } else { "0" }.to_string(),
     ]
     .join("\t")
 }
@@ -192,6 +196,8 @@ fn parse(line: &str) -> Option<SavedConnection> {
         auth,
         root: f[6].to_string(),
         label: f[7].to_string(),
+        // Field 9 added in #24; old 8-field lines default to false.
+        use_agent: f.get(8).map(|v| *v == "1").unwrap_or(false),
     })
 }
 
@@ -257,6 +263,7 @@ mod tests {
             auth: AuthKind::Password,
             root: "/home/alice".into(),
             label: "Work box".into(),
+            use_agent: false,
         }
     }
 
@@ -305,6 +312,7 @@ mod tests {
             auth: AuthKind::Password,
             root: r"\\fileserver\public".into(),
             label: String::new(),
+            use_agent: false,
         };
         assert_eq!(share.to_target(), r"\\fileserver\public");
         assert!(!share.protocol.is_url());

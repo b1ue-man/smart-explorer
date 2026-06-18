@@ -35,6 +35,8 @@ pub struct ConnectForm {
     pub unc: String, // network share path
     pub save: bool,
     pub label: String,
+    /// Opt-in SSH remote agent (#24); SFTP only.
+    pub use_agent: bool,
 }
 
 impl Default for ConnectForm {
@@ -52,6 +54,7 @@ impl Default for ConnectForm {
             unc: String::new(),
             save: false,
             label: String::new(),
+            use_agent: false,
         }
     }
 }
@@ -77,6 +80,7 @@ impl ConnectForm {
             unc: if c.protocol.is_url() { String::new() } else { c.root.clone() },
             save: true,
             label: c.label.clone(),
+            use_agent: c.use_agent,
         }
     }
 }
@@ -180,6 +184,7 @@ pub fn build_saved(form: &ConnectForm, port: u16) -> SavedConnection {
         auth,
         root,
         label: form.label.trim().to_string(),
+        use_agent: form.use_agent && form.protocol == Protocol::Sftp,
     }
 }
 
@@ -229,11 +234,27 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                     let s = if form.use_key { passphrase } else { password };
                     persist(&form, port, Some(&s));
                     let label = label_for(&form, port);
+                    // Opt-in: try to deploy + use the SSH remote agent (#24). Any
+                    // failure (no bundled binary, no exec right, …) falls back to
+                    // plain SFTP, so connecting never breaks.
+                    let be_arc: Arc<crate::sftp::SftpBackend> = Arc::new(be);
+                    let backend: BackendHandle = if form.use_agent {
+                        let inner: BackendHandle = be_arc.clone();
+                        match crate::agent::deploy_over_sftp(&be_arc, inner) {
+                            Ok(agent) => {
+                                let a: BackendHandle = Arc::new(agent);
+                                a
+                            }
+                            Err(_) => {
+                                let a: BackendHandle = be_arc;
+                                a
+                            }
+                        }
+                    } else {
+                        be_arc
+                    };
                     ConnectResult::Ok(Connected {
-                        remote: Some(RemoteState {
-                            backend: Arc::new(be),
-                            label: label.clone(),
-                        }),
+                        remote: Some(RemoteState { backend, label: label.clone() }),
                         net: None,
                         target: root,
                         label,
@@ -480,6 +501,7 @@ mod tests {
             auth: AuthKind::Password,
             root: "/".into(),
             label: String::new(),
+            use_agent: false,
         };
         assert_eq!(remote_endpoint(&c, "/data"), "sftp://u@h:22/data");
     }
@@ -525,6 +547,7 @@ mod tests {
             auth: AuthKind::Password,
             root: r"\\srv\pub".into(),
             label: "Files".into(),
+            use_agent: false,
         };
         let f = ConnectForm::from_saved(&c);
         assert_eq!(f.protocol, Protocol::Share);
