@@ -18,6 +18,9 @@ use std::sync::Arc;
 pub struct RemoteState {
     pub backend: BackendHandle,
     pub label: String,
+    /// `Some(version)` when an SSH remote agent is active for this session (#24);
+    /// drives the "⚡ Agent" status indicator. `None` = plain backend.
+    pub agent_version: Option<String>,
 }
 
 /// Editable Connect-dialog state.
@@ -238,23 +241,21 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                     // failure (no bundled binary, no exec right, …) falls back to
                     // plain SFTP, so connecting never breaks.
                     let be_arc: Arc<crate::sftp::SftpBackend> = Arc::new(be);
-                    let backend: BackendHandle = if form.use_agent {
+                    let (backend, agent_version): (BackendHandle, Option<String>) = if form.use_agent
+                    {
                         let inner: BackendHandle = be_arc.clone();
                         match crate::agent::deploy_over_sftp(&be_arc, inner) {
                             Ok(agent) => {
-                                let a: BackendHandle = Arc::new(agent);
-                                a
+                                let ver = agent.version().to_string();
+                                (Arc::new(agent), Some(ver))
                             }
-                            Err(_) => {
-                                let a: BackendHandle = be_arc;
-                                a
-                            }
+                            Err(_) => (be_arc, None), // fall back to plain SFTP
                         }
                     } else {
-                        be_arc
+                        (be_arc, None)
                     };
                     ConnectResult::Ok(Connected {
-                        remote: Some(RemoteState { backend, label: label.clone() }),
+                        remote: Some(RemoteState { backend, label: label.clone(), agent_version }),
                         net: None,
                         target: root,
                         label,
@@ -292,6 +293,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                         remote: Some(RemoteState {
                             backend: Arc::new(be),
                             label: label.clone(),
+                            agent_version: None,
                         }),
                         net: None,
                         target: root,
@@ -320,6 +322,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                         remote: Some(RemoteState {
                             backend: Arc::new(be),
                             label: label.clone(),
+                            agent_version: None,
                         }),
                         net: None,
                         target: root,

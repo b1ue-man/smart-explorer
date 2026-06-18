@@ -21,3 +21,7 @@ Thumbs.db
 # repo (and referenced by the README). The Release attaches them too.
 !release-native/Smart Explorer Setup *.exe
 !release-native/Smart Explorer.exe
+
+# Standalone se-agent crate build artifacts (the built binaries are committed
+# under native/agent-bin/, not these).
+/se-agent/target/

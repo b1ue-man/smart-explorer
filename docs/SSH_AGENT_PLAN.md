@@ -6,10 +6,10 @@ storage-analysis walk, search/filter) runs **locally on the server** and only
 the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
-Status: **phases 1–4 implemented & compile-verified (host + windows-gnu); only
-phase 5 (cross-compiled agent binaries) + a real-server run remain.** Researched
-against how VS Code Remote-SSH, JetBrains Gateway, `rclone`, and `ansible` deploy
-and drive a remote side. Date: 2026-06-18.
+Status: **phases 1–5 implemented & build-verified (host + windows-gnu); the agent
+is functional for Linux x86_64/aarch64 servers — only a real-server smoke test
+remains.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
+`rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
 
@@ -33,16 +33,24 @@ and drive a remote side. Date: 2026-06-18.
   checkbox in the connect dialog (SFTP only); the SFTP connect path calls
   `deploy_over_sftp` and falls back to plain SFTP on any error. (Status chip +
   in-app "remove agent" action: minor follow-up.)
-- ⬜ **Phase 5 — cross-compile + bundle.** Build `se-agent` for
-  `x86_64/aarch64-unknown-linux-musl`, commit hashes, wire `artifact_for`
-  (currently returns `None` for every target by design → deploy no-ops to the
-  SFTP fallback). **Blocked in this env: no musl toolchain installed.** This is
-  the ONLY thing between here and a working remote agent.
-- ⬜ **Phase 6 — polish:** server-side search/filter, chunked tree streaming with
-  live progress, prefetch; agent status chip + cleanup action.
+- ✅ **Phase 5 — cross-compile + bundle.** A standalone minimal crate
+  (`/se-agent`, rayon-only — no ring/TLS) cross-compiles to **static musl**
+  without a musl C toolchain (rust-lld for aarch64). Built binaries are committed
+  under `native/agent-bin/se-agent-{x86_64,aarch64}-linux-musl` (~0.5/0.4 MB,
+  static, stripped) and embedded via `include_bytes!` in `artifact_for`. The
+  deploy verifies the upload's SHA-256 against the bundled bytes (computed with
+  `sha2`, no hardcoded hash). Install path/probe keyed on `PROTO_VERSION`.
+- ✅ **Phase 5b — status indicator.** `RemoteState.agent_version` (set from the
+  handshake on deploy success) drives a "⚡ Agent" badge next to the connection
+  indicator (hover shows the version).
+- ⬜ **Remaining: a real-server smoke test** (no SSH server in the build env) and
+  Phase 6 polish: server-side search/filter, chunked tree streaming with live
+  progress, prefetch, the in-app "remove agent" action.
 
-The seam is clean and fully wired end-to-end: the moment phase-5 binaries are
-bundled and `artifact_for` returns them, the opt-in checkbox makes it live.
+Regenerating the binaries (e.g. on a `PROTO_VERSION` bump):
+`cd se-agent && cargo build --release --target x86_64-unknown-linux-musl` and
+`… --target aarch64-unknown-linux-musl` (set `RUSTFLAGS="-C linker=rust-lld"`
+for aarch64), then copy the outputs into `native/agent-bin/`.
 
 ---
 
