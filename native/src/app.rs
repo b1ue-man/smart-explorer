@@ -398,6 +398,12 @@ pub struct App {
     /// on disk, so "Später" just keeps running the old code until next launch.
     update_ready: Option<(String, PathBuf)>,
     update_feed_draft: String,
+    /// Previously-released versions from the GitHub feed (#rollback). None = not
+    /// fetched yet; `Some(vec)` = fetched (possibly empty).
+    remote_versions: Option<Vec<String>>,
+    remote_versions_rx: Option<Receiver<Vec<String>>>,
+    /// Rollback-to-a-released-version download in flight: Ok((version, exe)).
+    rollback_rx: Option<Receiver<Result<(String, PathBuf), String>>>,
 
     /// A folder path passed on the command line, scanned on the first frame.
     pending_initial_path: Option<PathBuf>,
@@ -1733,6 +1739,9 @@ impl App {
 
             update_rx: Some(urx),
             update_ready: None,
+            remote_versions: None,
+            remote_versions_rx: None,
+            rollback_rx: None,
             update_feed_draft: crate::updater::update_source_str().unwrap_or_default(),
             pending_initial_path: initial_path,
             #[cfg(windows)]
@@ -5524,6 +5533,61 @@ impl App {
         }
     }
 
+    /// One-time (cached) fetch of previously-released versions from the GitHub
+    /// feed for the rollback list. No-op if already fetched / fetching.
+    fn fetch_remote_versions(&mut self) {
+        if self.remote_versions.is_some() || self.remote_versions_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = unbounded();
+        self.remote_versions_rx = Some(rx);
+        std::thread::Builder::new()
+            .name("versions-list".into())
+            .spawn(move || {
+                let _ = tx.send(crate::updater::list_remote_versions());
+            })
+            .ok();
+    }
+
+    /// Download a released version's binary (off-thread); installed by
+    /// `drain_version_channels` via the normal rollback swap.
+    fn start_rollback_download(&mut self, version: String) {
+        if self.rollback_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = unbounded();
+        self.rollback_rx = Some(rx);
+        self.notice = Some((format!("⬇ Lade v{version} …"), std::time::Instant::now()));
+        std::thread::Builder::new()
+            .name("rollback-dl".into())
+            .spawn(move || {
+                let r = crate::updater::download_version(&version).map(|p| (version, p));
+                let _ = tx.send(r);
+            })
+            .ok();
+    }
+
+    fn drain_version_channels(&mut self) {
+        if let Some(rx) = self.remote_versions_rx.as_ref() {
+            if let Ok(list) = rx.try_recv() {
+                self.remote_versions = Some(list);
+                self.remote_versions_rx = None;
+            }
+        }
+        if let Some(rx) = self.rollback_rx.as_ref() {
+            if let Ok(res) = rx.try_recv() {
+                self.rollback_rx = None;
+                match res {
+                    Ok((ver, exe)) => match crate::updater::revert_to(&exe, &ver) {
+                        Ok(cur) => self.update_ready = Some((ver, cur)),
+                        Err(e) => self.error_msg = Some(format!("Zurückrollen: {e}")),
+                    },
+                    Err(e) => self.error_msg = Some(format!("Version laden: {e}")),
+                }
+            }
+        }
+    }
+
     fn drain_remote_op(&mut self) {
         let res = match self.remote_op_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
@@ -9135,46 +9199,92 @@ impl App {
                     Some(("Suche neueste Version…".to_string(), std::time::Instant::now()));
             }
         }
-        // Rollback section — always shown so the feature is discoverable. The
-        // currently-running version is filtered out (you can't roll back to it).
+        // Rollback section. Primary source = the actual RELEASES on the GitHub
+        // feed (so you see every previous version, not just what you happened to
+        // archive locally); locally-archived binaries are the offline fallback.
         ui.add_space(2.0);
-        ui.label(
-            RichText::new("Frühere Versionen")
-                .small()
-                .color(Color32::from_gray(140)),
-        );
+        self.fetch_remote_versions(); // one-time, cached
         let current = env!("CARGO_PKG_VERSION");
+        let downloading = self.rollback_rx.is_some();
+        let mut dl_version: Option<String> = None; // released version → download+revert
+        let mut revert_local: Option<(String, PathBuf)> = None;
+
+        ui.label(RichText::new("Frühere Versionen (Releases)").small().color(Color32::from_gray(140)));
+        if self.remote_versions_rx.is_some() {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(13.0));
+                ui.label(RichText::new("lade Release-Liste…").small().color(Color32::from_gray(120)));
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        } else if let Some(list) = self.remote_versions.clone() {
+            let list: Vec<String> = list.into_iter().filter(|v| v != current).collect();
+            if list.is_empty() {
+                ui.colored_label(Color32::from_gray(110), "(keine — Feed ist kein GitHub-Repo, oder offline)");
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("rollback_remote")
+                    .max_height(160.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for ver in &list {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("v{}", ver));
+                                if ui
+                                    .add_enabled(!downloading, egui::Button::new("↩ Zurück").small())
+                                    .on_hover_text("Diese veröffentlichte Version laden und zurückrollen (Neustart)")
+                                    .clicked()
+                                {
+                                    dl_version = Some(ver.clone());
+                                }
+                            });
+                        }
+                    });
+            }
+        }
+        if downloading {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(13.0));
+                ui.label(RichText::new("lade Version…").small().color(Color32::from_gray(120)));
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+
+        // Locally-archived binaries (instant; also lets you go forward again
+        // after a rollback, and works offline).
         let archived: Vec<(String, PathBuf)> = crate::updater::list_archived_versions()
             .into_iter()
             .filter(|(v, _)| v != current)
             .collect();
-        if archived.is_empty() {
-            ui.colored_label(
-                Color32::from_gray(110),
-                "(keine — werden nach jedem Update gesichert)",
-            );
-        } else {
-            let mut revert: Option<(String, PathBuf)> = None;
-            for (ver, path) in &archived {
-                ui.horizontal(|ui| {
-                    ui.label(format!("v{}", ver));
-                    if ui
-                        .small_button("↩ Zurück")
-                        .on_hover_text("Auf diese Version zurückrollen (Neustart)")
-                        .clicked()
-                    {
-                        revert = Some((ver.clone(), path.clone()));
+        if !archived.is_empty() {
+            ui.add_space(4.0);
+            ui.label(RichText::new("Lokal gesichert").small().color(Color32::from_gray(140)));
+            egui::ScrollArea::vertical()
+                .id_salt("rollback_local")
+                .max_height(140.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (ver, path) in &archived {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("v{}", ver));
+                            if ui
+                                .small_button("↩ Zurück")
+                                .on_hover_text("Auf diese (lokal gesicherte) Version zurückrollen (Neustart)")
+                                .clicked()
+                            {
+                                revert_local = Some((ver.clone(), path.clone()));
+                            }
+                        });
                     }
                 });
-            }
-            if let Some((ver, path)) = revert {
-                match crate::updater::revert_to(&path, &ver) {
-                    Ok(exe) => {
-                        // Reuse the restart-prompt flow.
-                        self.update_ready = Some((ver, exe));
-                    }
-                    Err(e) => self.error_msg = Some(format!("Zurückrollen: {}", e)),
-                }
+        }
+
+        if let Some(ver) = dl_version {
+            self.start_rollback_download(ver);
+        }
+        if let Some((ver, path)) = revert_local {
+            match crate::updater::revert_to(&path, &ver) {
+                Ok(exe) => self.update_ready = Some((ver, exe)),
+                Err(e) => self.error_msg = Some(format!("Zurückrollen: {}", e)),
             }
         }
 
@@ -11002,6 +11112,7 @@ impl eframe::App for App {
         self.drain_upload();
         self.drain_remote_op();
         self.drain_agent_activate();
+        self.drain_version_channels();
         self.drain_clip_download();
         self.drain_share();
         self.drain_quickshare();
