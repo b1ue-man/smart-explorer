@@ -223,6 +223,12 @@ impl Backend for CachingBackend {
         }
         let v = self.inner.list_dir(path)?;
         if let Ok(mut c) = self.cache.lock() {
+            // Bound memory: a full-tree analytics scan can list thousands of
+            // dirs; drop everything once the map gets large rather than grow it
+            // unbounded (browsing only needs a small working set).
+            if c.len() >= 4096 {
+                c.clear();
+            }
             c.insert(key, (std::time::Instant::now(), v.clone()));
         }
         Ok(v)

@@ -10,6 +10,7 @@
 //! reconstructed by descending from the root (the drill position carries the
 //! prefix), so the tree stays compact: roughly `name + ~48 bytes` per node.
 
+use crate::vfs::Backend; // brings `list_dir` into scope for `&dyn Backend`
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -104,6 +105,76 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
     SizeNode { name, size, is_dir: true, children }
 }
 
+/// Scan a REMOTE tree through the VFS backend (SFTP/FTP/WebDAV/Drive). Same
+/// compact `SizeNode` output as the local `scan`, but each directory is one
+/// `list_dir` network round-trip — so this is serial (network-bound) and far
+/// slower than the local MFT-less walk. Cancellation is checked per directory.
+pub fn scan_backend(be: &dyn crate::vfs::Backend, root: &str, p: &Progress) -> SizeNode {
+    let name = root
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or(root)
+        .to_string();
+    scan_backend_dir(be, root, name.into_boxed_str(), p)
+}
+
+fn scan_backend_dir(
+    be: &dyn crate::vfs::Backend,
+    dir: &str,
+    name: Box<str>,
+    p: &Progress,
+) -> SizeNode {
+    if p.cancel.load(Ordering::Relaxed) {
+        return SizeNode { name, size: 0, is_dir: true, children: Vec::new() };
+    }
+    let mut subdirs: Vec<(String, Box<str>)> = Vec::new();
+    let mut files: Vec<SizeNode> = Vec::new();
+    let mut own_files = 0u64;
+    let mut own_bytes = 0u64;
+
+    if let Ok(entries) = be.list_dir(dir) {
+        let base = dir.trim_end_matches('/');
+        for m in entries {
+            if m.is_symlink {
+                continue; // don't follow — avoids cycles + double counting
+            }
+            if m.is_dir {
+                let child = format!("{}/{}", base, m.name);
+                subdirs.push((child, m.name.into_boxed_str()));
+            } else {
+                own_files += 1;
+                own_bytes += m.size;
+                files.push(SizeNode {
+                    name: m.name.into_boxed_str(),
+                    size: m.size,
+                    is_dir: false,
+                    children: Vec::new(),
+                });
+            }
+        }
+    }
+
+    p.files.fetch_add(own_files, Ordering::Relaxed);
+    p.bytes.fetch_add(own_bytes, Ordering::Relaxed);
+    p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
+
+    let mut size = own_bytes;
+    let mut dir_nodes: Vec<SizeNode> = Vec::with_capacity(subdirs.len());
+    for (path, nm) in subdirs {
+        if p.cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let node = scan_backend_dir(be, &path, nm, p);
+        size += node.size;
+        dir_nodes.push(node);
+    }
+
+    let mut children = Vec::with_capacity(dir_nodes.len() + files.len());
+    children.append(&mut dir_nodes);
+    children.append(&mut files);
+    SizeNode { name, size, is_dir: true, children }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +200,30 @@ mod tests {
         let a = root.children.iter().find(|c| &*c.name == "a.txt").unwrap();
         assert_eq!(a.size, 100);
         assert!(!a.is_dir && a.children.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_backend_via_local_backend() {
+        // Exercise the VFS-backend walk against the real LocalBackend so the
+        // remote code path is covered without a network.
+        let base = std::env::temp_dir().join(format!("se_anbe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        std::fs::write(base.join("a.txt"), vec![0u8; 100]).unwrap();
+        std::fs::write(base.join("sub/b.bin"), vec![0u8; 250]).unwrap();
+
+        let root = base.to_string_lossy().replace('\\', "/");
+        let be = crate::vfs::LocalBackend::new("/");
+        let p = Progress::default();
+        let node = scan_backend(&be, &root, &p);
+        assert!(node.is_dir);
+        assert_eq!(node.size, 350);
+        assert_eq!(p.files.load(Ordering::Relaxed), 2);
+        let sub = node.children.iter().find(|c| &*c.name == "sub").unwrap();
+        assert_eq!(sub.size, 250);
+        assert_eq!(sub.children.len(), 1);
 
         let _ = std::fs::remove_dir_all(&base);
     }
