@@ -321,6 +321,14 @@ impl Backend for CachingBackend {
             c.clear();
         }
     }
+    // Forward the agent capability so analytics' one-shot server-side walk works
+    // through the cache wrapper (otherwise it fell back to per-dir listing).
+    fn supports_walk_tree(&self) -> bool {
+        self.inner.supports_walk_tree()
+    }
+    fn walk_tree(&self, root: &str) -> Option<crate::agent_proto::WireNode> {
+        self.inner.walk_tree(root)
+    }
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

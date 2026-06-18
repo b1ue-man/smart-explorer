@@ -385,6 +385,95 @@ pub fn list_archived_versions() -> Vec<(String, PathBuf)> {
     out
 }
 
+/// Owner/repo from the configured feed, if it's a GitHub feed (so we can list
+/// and fetch *released* versions from the repo's `release/v*` branches instead
+/// of only what's archived locally).
+fn github_repo(feed_raw: &str) -> Option<(String, String)> {
+    let base = normalize_http_feed(feed_raw);
+    let rest = base.strip_prefix("https://raw.githubusercontent.com/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        Some((parts[0].to_string(), parts[1].trim_end_matches(".git").to_string()))
+    } else {
+        None
+    }
+}
+
+/// `release/v*` branch name → version (e.g. "release/v0.5.63" → "0.5.63").
+fn branch_to_version(name: &str) -> Option<String> {
+    let v = name.strip_prefix("release/v")?;
+    if v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        Some(v.to_string())
+    } else {
+        None
+    }
+}
+
+/// List previously-RELEASED versions from the GitHub feed's `release/v*`
+/// branches (newest first, current excluded). Empty for non-GitHub feeds or on
+/// any network error — callers fall back to the locally-archived list. Network;
+/// run off the UI thread.
+pub fn list_remote_versions() -> Vec<String> {
+    let raw = match update_source_str() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let (owner, repo) = match github_repo(&raw) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let cur = env!("CARGO_PKG_VERSION");
+    let mut versions: Vec<String> = Vec::new();
+    // GitHub paginates branches at 100; a few pages cover the project's history.
+    for page in 1..=5u32 {
+        let url = format!(
+            "https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+        );
+        let body = match ureq::get(&url)
+            .set("User-Agent", "smart-explorer-updater")
+            .set("Accept", "application/vnd.github+json")
+            .timeout(HTTP_TIMEOUT)
+            .call()
+            .and_then(|r| Ok(r.into_string()?))
+        {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        let arr: Vec<serde_json::Value> = match serde_json::from_str(&body) {
+            Ok(a) => a,
+            Err(_) => break,
+        };
+        let n = arr.len();
+        for b in &arr {
+            if let Some(v) = b.get("name").and_then(|v| v.as_str()).and_then(branch_to_version) {
+                versions.push(v);
+            }
+        }
+        if n < 100 {
+            break;
+        }
+    }
+    versions.retain(|v| v != cur);
+    versions.sort_by(|a, b| parse_ver(b).cmp(&parse_ver(a)));
+    versions.dedup();
+    versions
+}
+
+/// Download a specific released version's binary (from its `release/v<ver>`
+/// branch on the GitHub feed) to a temp file ready for `revert_to`/`swap_in`.
+pub fn download_version(version: &str) -> Result<PathBuf, String> {
+    let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
+    let (owner, repo) =
+        github_repo(&raw).ok_or("Frühere Versionen sind nur über einen GitHub-Feed abrufbar")?;
+    let url = format!(
+        "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/smart_explorer.exe"
+    );
+    let dest = appdata_dir().join("rollback_download.exe");
+    let _ = std::fs::remove_file(&dest);
+    http_download(&url, &dest)?;
+    Ok(dest)
+}
+
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
 fn swap_in(new_exe: &std::path::Path) -> Result<PathBuf, String> {
@@ -662,6 +751,28 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_repo_and_branch_parsing() {
+        // Bare repo URL → owner/repo.
+        assert_eq!(
+            github_repo("https://github.com/b1ue-man/smart-explorer"),
+            Some(("b1ue-man".into(), "smart-explorer".into()))
+        );
+        // Already-raw feed URL → owner/repo.
+        assert_eq!(
+            github_repo("https://raw.githubusercontent.com/o/r/main/release-native/update-feed"),
+            Some(("o".into(), "r".into()))
+        );
+        // Non-GitHub feed → None (callers fall back to local archives).
+        assert_eq!(github_repo("https://example.com/feed"), None);
+        assert_eq!(github_repo("/local/dir"), None);
+        // Branch → version.
+        assert_eq!(branch_to_version("release/v0.5.63"), Some("0.5.63".into()));
+        assert_eq!(branch_to_version("release/vX"), None);
+        assert_eq!(branch_to_version("main"), None);
+        assert_eq!(branch_to_version("claude/foo"), None);
+    }
 
     #[test]
     fn archived_versions_parse_and_sort_numerically() {
