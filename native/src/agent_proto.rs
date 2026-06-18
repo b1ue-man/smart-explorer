@@ -283,6 +283,18 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
 
 // ── local filesystem operations (run server-side by the agent) ───────────────
 
+/// Linux pseudo-filesystems whose "files" report bogus huge sizes (e.g.
+/// `/proc/kcore` ≈ the 128 TiB virtual address space). A size walk must skip
+/// them or totals explode. No-op for Windows-style paths (they never match).
+pub fn is_pseudo_dir(path: &str) -> bool {
+    let p = path.trim_end_matches('/');
+    matches!(p, "/proc" | "/sys" | "/dev" | "/run")
+        || p.starts_with("/proc/")
+        || p.starts_with("/sys/")
+        || p.starts_with("/dev/")
+        || p.starts_with("/run/")
+}
+
 fn systemtime_ms(t: std::time::SystemTime) -> i64 {
     match t.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_millis() as i64,
@@ -358,7 +370,11 @@ fn walk_dir(dir: &Path, name: String) -> WireNode {
             }
             let nm = ent.file_name().to_string_lossy().into_owned();
             if ft.is_dir() {
-                subdirs.push((ent.path(), nm));
+                let cp = ent.path();
+                if is_pseudo_dir(&cp.to_string_lossy()) {
+                    continue; // /proc, /sys, … — bogus sizes
+                }
+                subdirs.push((cp, nm));
             } else if ft.is_file() {
                 let sz = ent.metadata().map(|m| m.len()).unwrap_or(0);
                 own += sz;

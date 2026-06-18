@@ -66,7 +66,11 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
             }
             let nm: Box<str> = ent.file_name().to_string_lossy().into_owned().into_boxed_str();
             if ft.is_dir() {
-                subdirs.push((ent.path(), nm));
+                let cp = ent.path();
+                if crate::agent_proto::is_pseudo_dir(&cp.to_string_lossy()) {
+                    continue; // /proc, /sys, … report bogus huge sizes
+                }
+                subdirs.push((cp, nm));
             } else if ft.is_file() {
                 let sz = ent.metadata().map(|m| m.len()).unwrap_or(0);
                 own_files += 1;
@@ -200,8 +204,12 @@ fn scan_backend_parallel(be: &dyn crate::vfs::Backend, root: &str, name: String,
         for (dir, kids) in level {
             for c in &kids {
                 if c.is_dir {
+                    let cp = child_path(&dir, &c.name);
+                    if crate::agent_proto::is_pseudo_dir(&cp) {
+                        continue; // /proc, /sys, … bogus sizes
+                    }
                     lvl_dirs += 1;
-                    next.push(child_path(&dir, &c.name));
+                    next.push(cp);
                 } else {
                     lvl_files += 1;
                     lvl_bytes += c.size;
@@ -271,6 +279,9 @@ fn scan_backend_dir(
             }
             if m.is_dir {
                 let child = format!("{}/{}", base, m.name);
+                if crate::agent_proto::is_pseudo_dir(&child) {
+                    continue; // /proc, /sys, … bogus sizes
+                }
                 subdirs.push((child, m.name.into_boxed_str()));
             } else {
                 own_files += 1;

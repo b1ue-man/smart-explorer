@@ -766,10 +766,13 @@ impl PickerPurpose {
             PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
         }
     }
-    /// Remote connections only make sense for a sync setup's source/target;
-    /// everything else picks a local folder.
+    /// Whether to offer remote connections too. Sync source/target and the
+    /// storage-analysis target can point at a remote; the rest are local-only.
     fn local_only(&self) -> bool {
-        !matches!(self, PickerPurpose::SyncSource | PickerPurpose::SyncTarget)
+        !matches!(
+            self,
+            PickerPurpose::SyncSource | PickerPurpose::SyncTarget | PickerPurpose::AnalyticsFolder
+        )
     }
 }
 
@@ -1890,6 +1893,47 @@ impl App {
         self.root_path.replace('\\', "/").trim_end_matches('/').to_string()
     }
 
+    /// A re-openable, connection-namespaced key for a location: a bare path
+    /// locally, or `proto://user@host:port/path` on a remote — so favourites and
+    /// per-folder prefs bind to the connection (the "link id"), not just a path.
+    fn location_key(&self, path: &str) -> String {
+        let p = path.replace('\\', "/").trim_end_matches('/').to_string();
+        match self.remote.as_ref().and_then(|rs| rs.endpoint_prefix.as_ref()) {
+            Some(prefix) => format!("{}{}", prefix, p),
+            None => p,
+        }
+    }
+
+    /// Open a saved connection and navigate straight to `path` on it (used to
+    /// re-open a remote favourite at its exact folder).
+    fn connect_saved_at(&mut self, c: &crate::creds::SavedConnection, path: &str) {
+        let mut form = crate::connect::ConnectForm::from_saved(c);
+        if !path.is_empty() {
+            form.root = path.to_string();
+        }
+        let secret = crate::creds::get_secret(&c.account());
+        crate::creds::touch_connection(&c.account());
+        self.saved_connections = crate::creds::load_connections();
+        self.begin_connect(form, secret);
+    }
+
+    /// Navigate to a favourite/location: a remote endpoint URL re-opens its
+    /// connection at that path; a local path scans directly.
+    fn navigate_to_location(&mut self, loc: &str) {
+        if crate::connect::is_remote_url(loc) {
+            if let Some((c, path)) = crate::connect::saved_and_path(loc) {
+                self.connect_saved_at(&c, &path);
+            } else if loc.starts_with("gdrive://") {
+                self.open_gdrive_browse(); // best-effort: Drive root
+            } else {
+                self.error_msg =
+                    Some("Verbindung für diesen Favoriten nicht gefunden — zuerst verbinden".into());
+            }
+        } else {
+            self.start_scan(PathBuf::from(loc.replace('/', std::path::MAIN_SEPARATOR_STR)));
+        }
+    }
+
     fn filter_is_active(&self) -> bool {
         let f = &self.filter;
         !f.text.is_empty()
@@ -1944,7 +1988,7 @@ impl App {
         // whatever path is now active so the toggle + next sort match.
         self.dirs_first = self
             .dir_sort
-            .get(&self.root_path)
+            .get(&self.location_key(&self.root_path))
             .copied()
             .unwrap_or(DEFAULT_DIRS_FIRST);
     }
@@ -2359,12 +2403,6 @@ impl App {
         self.filter.text.clear();
         self.text_draft.clear();
         self.root_path = root.to_string_lossy().replace('\\', "/");
-        // Per-location sort preference (folders-first vs mixed); default if unset.
-        self.dirs_first = self
-            .dir_sort
-            .get(&self.root_path)
-            .copied()
-            .unwrap_or(DEFAULT_DIRS_FIRST);
 
         let (tx, rx) = unbounded();
         let max_depth = if self.recursive { None } else { Some(1) };
@@ -2381,6 +2419,13 @@ impl App {
             // local scan).
             self.add_recent(&self.root_path.clone());
         }
+        // Per-location sort preference (after `remote` is finalized, so the key
+        // is namespaced by connection). Default if unset; no inheritance.
+        self.dirs_first = self
+            .dir_sort
+            .get(&self.location_key(&self.root_path))
+            .copied()
+            .unwrap_or(DEFAULT_DIRS_FIRST);
         let handle = match self.remote.as_ref() {
             Some(rs) => crate::rscan::start_scan_backend(
                 rs.backend.clone(),
@@ -3415,6 +3460,7 @@ impl App {
                             zip_return: None,
                             sftp: None,
                             account: None,
+                            endpoint_prefix: Some("gdrive://".to_string()),
                         }),
                         net: None,
                         target: root,
@@ -3444,6 +3490,7 @@ impl App {
                             zip_return: None,
                             sftp: None,
                             account: None,
+                            endpoint_prefix: Some("gdrive://".to_string()),
                         }),
                         net: None,
                         target: root,
@@ -4745,9 +4792,7 @@ impl App {
     /// Run a dropdown row's action, then clear the omnibox.
     fn execute_omni(&mut self, action: OmniAction, ctx: &egui::Context) {
         match action {
-            OmniAction::Go(p) => {
-                self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
-            }
+            OmniAction::Go(p) => self.navigate_to_location(&p),
             OmniAction::Connect(i) => {
                 if let Some(c) = self.saved_connections.get(i).cloned() {
                     self.connect_saved(&c);
@@ -4921,6 +4966,7 @@ impl App {
                     zip_return: parent,
                     sftp: None,
                     account: None,
+                    endpoint_prefix: None,
                 });
                 self.start_scan(PathBuf::from("/")); // root inside the archive
             }
@@ -5636,9 +5682,10 @@ impl App {
         let path = e.path.to_string();
         let name = e.name.to_string();
         let is_dir = e.is_dir;
+        let starred = is_dir && self.is_favorite(&self.location_key(&path));
 
         #[derive(Clone, Copy)]
-        enum A { Open, OpenWith, DownloadTo, CopyClip, Rename, Delete, NewFolder, CopyPath, Refresh }
+        enum A { Open, OpenWith, DownloadTo, CopyClip, Rename, Delete, NewFolder, CopyPath, Refresh, Star }
         let mut act: Option<A> = None;
         let area = egui::Area::new(egui::Id::new("remote_ctx_menu"))
             .order(egui::Order::Foreground)
@@ -5648,6 +5695,13 @@ impl App {
                     ui.set_min_width(200.0);
                     if ui.button(if is_dir { "📂 Öffnen" } else { "📄 Öffnen" }).clicked() {
                         act = Some(A::Open);
+                    }
+                    if is_dir
+                        && ui
+                            .button(if starred { "☆ Aus Favoriten entfernen" } else { "★ Zu Favoriten" })
+                            .clicked()
+                    {
+                        act = Some(A::Star);
                     }
                     if !is_dir {
                         if ui
@@ -5709,6 +5763,10 @@ impl App {
             A::Delete => self.trash_selected(),
             A::CopyClip => self.clipboard_copy_files(false),
             A::CopyPath => ctx.copy_text(path),
+            A::Star => {
+                let key = self.location_key(&path);
+                self.toggle_favorite(&key);
+            }
             A::Rename => {
                 self.rename_open = Some((path, name));
                 self.rename_focus = true;
@@ -5843,8 +5901,8 @@ impl App {
         if self.root_path.is_empty() {
             return;
         }
-        let p = self.root_prefix();
-        self.toggle_favorite(&p);
+        let key = self.location_key(&self.root_path);
+        self.toggle_favorite(&key);
     }
 
     fn open_rename(&mut self) {
@@ -7104,7 +7162,17 @@ impl App {
                         }
                     }
                     PickerPurpose::ScanFolder => self.start_scan(PathBuf::from(native)),
-                    PickerPurpose::AnalyticsFolder => self.start_analytics_scan(value),
+                    PickerPurpose::AnalyticsFolder => {
+                        // Reuse the picker's live backend for a remote target;
+                        // otherwise analyse the local folder.
+                        if p.is_remote {
+                            if let Some(be) = p.backend.clone() {
+                                self.start_analytics_scan_remote(be, p.cwd.clone(), p.conn_label.clone());
+                            }
+                        } else {
+                            self.start_analytics_scan(value);
+                        }
+                    }
                     PickerPurpose::MirrorDest => self.start_mirror(value),
                     PickerPurpose::BisyncDest => self.start_bisync(value),
                     PickerPurpose::CopyDest => self.copy_dest = native,
@@ -7483,7 +7551,8 @@ impl App {
                 None => {}
             }
             // Star the current folder
-            let starred = !self.root_path.is_empty() && self.is_favorite(&self.root_prefix());
+            let starred =
+                !self.root_path.is_empty() && self.is_favorite(&self.location_key(&self.root_path));
             let star_glyph = if starred { "★" } else { "☆" };
             if ui
                 .add_enabled(!self.root_path.is_empty(), egui::Button::new(star_glyph).small())
@@ -7506,9 +7575,10 @@ impl App {
                     )
                     .changed()
                 {
-                    // Bind the choice to the current location (not global).
+                    // Bind the choice to the current location (connection+path).
                     if !self.root_path.is_empty() {
-                        self.dir_sort.insert(self.root_path.clone(), self.dirs_first);
+                        let key = self.location_key(&self.root_path);
+                        self.dir_sort.insert(key, self.dirs_first);
                         save_dir_sort(&self.dir_sort);
                     }
                     self.recompute_view();
@@ -7898,7 +7968,7 @@ impl App {
                         if base.is_empty() { f.as_str() } else { base }
                     };
                     if ui
-                        .selectable_label(self.root_prefix() == *f, label)
+                        .selectable_label(self.location_key(&self.root_path) == *f, label)
                         .on_hover_text(f)
                         .clicked()
                     {
@@ -7912,7 +7982,7 @@ impl App {
                 });
             }
             if let Some(p) = nav {
-                self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                self.navigate_to_location(&p);
             }
             if let Some(p) = unstar {
                 self.toggle_favorite(&p);

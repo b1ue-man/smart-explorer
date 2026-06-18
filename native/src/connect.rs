@@ -31,6 +31,10 @@ pub struct RemoteState {
     /// Saved-connection account key (if this came from a saved connection), so a
     /// later agent activation can persist the choice. `None` for ad-hoc/non-SFTP.
     pub account: Option<String>,
+    /// `proto://user@host:port` for this session (`None` for local/share/zip), so
+    /// favourites and per-folder settings can be keyed by connection + path
+    /// (a re-openable endpoint URL) rather than a bare path.
+    pub endpoint_prefix: Option<String>,
 }
 
 /// Editable Connect-dialog state.
@@ -160,6 +164,32 @@ fn enc(s: &str) -> String {
     out
 }
 
+/// `proto://user@host:port` for URL protocols (sftp/ftp/ftps/webdav); `None` for
+/// a local share. The stable per-connection prefix used to key favourites/prefs.
+fn ep_prefix(form: &ConnectForm, port: u16) -> Option<String> {
+    if form.protocol.is_url() {
+        Some(format!(
+            "{}://{}@{}:{}",
+            form.protocol.as_str(),
+            form.user.trim(),
+            form.host.trim(),
+            port
+        ))
+    } else {
+        None
+    }
+}
+
+/// Split a remote endpoint URL into its matching saved connection + the path
+/// part, so a favourite/endpoint can be re-opened.
+pub fn saved_and_path(url: &str) -> Option<(SavedConnection, String)> {
+    let (proto, user, host, port, path) = parse_remote_url(url)?;
+    let c = crate::creds::load_connections()
+        .into_iter()
+        .find(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port)?;
+    Some((c, path))
+}
+
 fn label_for(form: &ConnectForm, port: u16) -> String {
     if !form.label.trim().is_empty() {
         return form.label.trim().to_string();
@@ -274,6 +304,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             zip_return: None,
                             sftp: Some(sftp_handle),
                             account,
+                            endpoint_prefix: ep_prefix(&form, port),
                         }),
                         net: None,
                         target: root,
@@ -316,6 +347,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             zip_return: None,
                             sftp: None,
                             account: None,
+                            endpoint_prefix: ep_prefix(&form, port),
                         }),
                         net: None,
                         target: root,
@@ -348,6 +380,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             zip_return: None,
                             sftp: None,
                             account: None,
+                            endpoint_prefix: ep_prefix(&form, port),
                         }),
                         net: None,
                         target: root,
