@@ -21,6 +21,7 @@ mod menu_ids {
     pub const MOVE_TO: u32 = 0x8004;
     pub const RENAME: u32 = 0x8005;
     pub const TOGGLE_FAV: u32 = 0x8006;
+    pub const EXTRACT_ZIP: u32 = 0x8007;
     // Background (empty space) menu
     pub const PASTE: u32 = 0x8010;
     pub const NEW_FOLDER: u32 = 0x8011;
@@ -207,6 +208,9 @@ pub struct App {
 
     show_filters: bool,
     show_summary: bool,
+    /// Sort directories before files (classic). When false, files and folders
+    /// are sorted together by the active key (e.g. by date). Persisted.
+    dirs_first: bool,
     /// Storage-analytics overlay (treemap + breakdowns) is open.
     show_analytics: bool,
     /// Dedicated low-memory size tree for analytics (own scan, not the view).
@@ -1545,6 +1549,11 @@ pub(crate) fn is_local_style(path: &str) -> bool {
     has_drive || p.starts_with("//") || p.starts_with("\\\\")
 }
 
+/// A ZIP archive we can browse in-app / extract.
+fn is_zip_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".zip")
+}
+
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
         // Clean up open/edit temp copies left by previous runs (crash-safe net).
@@ -1599,6 +1608,7 @@ impl App {
 
             show_filters: ui_state.show_filters,
             show_summary: ui_state.show_summary,
+            dirs_first: ui_state.dirs_first,
             show_analytics: false,
             analytics_tree: None,
             analytics_root_path: String::new(),
@@ -1850,6 +1860,7 @@ impl App {
         UiState {
             show_filters: self.show_filters,
             show_summary: self.show_summary,
+            dirs_first: self.dirs_first,
         }
         .save();
     }
@@ -3367,6 +3378,7 @@ impl App {
                             backend: be,
                             label: "Google Drive".to_string(),
                             agent_version: None,
+                            zip_return: None,
                         }),
                         net: None,
                         target: root,
@@ -3393,6 +3405,7 @@ impl App {
                             backend: be,
                             label: "Google Drive".to_string(),
                             agent_version: None,
+                            zip_return: None,
                         }),
                         net: None,
                         target: root,
@@ -4107,6 +4120,7 @@ impl App {
         let cf = CompiledFilter::compile(&self.filter);
         let key = self.sort_key;
         let dir = self.sort_dir;
+        let dirs_first = self.dirs_first;
         self.summary_cache = None;        self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         self.view_dirty = false;
 
@@ -4121,7 +4135,7 @@ impl App {
                 .collect();
             let entries = &self.entries;
             rows.sort_unstable_by(|&(a, _), &(b, _)| {
-                compare_entries(&entries[a], &entries[b], key, dir)
+                compare_entries(&entries[a], &entries[b], key, dir, dirs_first)
             });
             self.view = rows;
             self.last_view_recompute = Instant::now();
@@ -4229,7 +4243,7 @@ impl App {
                         file_matches[c]
                     }
                 });
-                out.sort_unstable_by(|&a, &b| compare_entries(&entries[a], &entries[b], key, dir));
+                out.sort_unstable_by(|&a, &b| compare_entries(&entries[a], &entries[b], key, dir, dirs_first));
                 out
             };
 
@@ -4803,7 +4817,10 @@ impl App {
         let rs = match &self.remote {
             Some(rs) => rs,
             None => {
+                // A local .zip opens INSIDE the explorer (browse as a folder);
+                // everything else hands off to the OS.
                 match mode {
+                    OpenMode::Default if is_zip_name(&name) => self.open_zip(&path),
                     OpenMode::Default => self.open_path(&path),
                     OpenMode::With => self.open_with_path(&path),
                 }
@@ -4849,6 +4866,58 @@ impl App {
             })
             .ok();
         self.file_open_rx.push((rx, mode));
+    }
+
+    /// Open a local `.zip` as a browsable, read-only "remote" so it navigates
+    /// like a folder (rscan walks the `ZipBackend`; ⏏ returns to the folder it
+    /// lives in). Files inside open via the normal download-to-temp path.
+    fn open_zip(&mut self, zip_path: &str) {
+        let parent = zip_path.rsplit_once('/').map(|(p, _)| p.to_string());
+        match crate::zipfs::ZipBackend::open(zip_path) {
+            Ok(be) => {
+                let name = zip_path.rsplit('/').next().unwrap_or("Archiv").to_string();
+                self.remote = Some(crate::connect::RemoteState {
+                    backend: Arc::new(be),
+                    label: format!("📦 {}", name),
+                    agent_version: None,
+                    zip_return: parent,
+                });
+                self.start_scan(PathBuf::from("/")); // root inside the archive
+            }
+            Err(e) => self.error_msg = Some(format!("ZIP konnte nicht geöffnet werden: {e}")),
+        }
+    }
+
+    /// Extract a local `.zip` into a sibling folder named after the archive,
+    /// off-thread; the result + a refresh land via `drain_remote_op`.
+    fn start_zip_extract(&mut self, zip_path: String) {
+        if self.remote_op_rx.is_some() {
+            self.notice = Some(("Es läuft bereits eine Aktion…".to_string(), std::time::Instant::now()));
+            return;
+        }
+        let name = zip_path.rsplit('/').next().unwrap_or("archiv").to_string();
+        let stem = if name.to_ascii_lowercase().ends_with(".zip") {
+            &name[..name.len() - 4]
+        } else {
+            &name
+        };
+        let dest = match zip_path.rsplit_once('/') {
+            Some((p, _)) => format!("{}/{}", p, stem),
+            None => stem.to_string(),
+        };
+        let dest_pb = PathBuf::from(dest.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let (tx, rx) = unbounded();
+        self.remote_op_rx = Some(rx);
+        self.notice = Some((format!("📦 Entpacke „{name}“…"), std::time::Instant::now()));
+        std::thread::Builder::new()
+            .name("zip-extract".into())
+            .spawn(move || {
+                let r = crate::zipfs::extract_all(&zip_path, &dest_pb)
+                    .map(|n| format!("✓ Entpackt: {} Datei(en)", n))
+                    .map_err(|e| format!("Entpacken: {e}"));
+                let _ = tx.send(r);
+            })
+            .ok();
     }
 
     /// Open the file at `idx` via the native "Open with…" chooser (downloading a
@@ -6975,6 +7044,11 @@ impl App {
                     "★ Zu Favoriten".to_string()
                 },
             });
+        } else if is_zip_name(&clicked_fwd) {
+            own.push(OwnMenuItem {
+                id: menu_ids::EXTRACT_ZIP,
+                label: "📦 Hier entpacken".to_string(),
+            });
         }
 
         match crate::shell_menu::show_for_paths(&paths, None, None, &own) {
@@ -6992,6 +7066,7 @@ impl App {
                 }
                 menu_ids::RENAME => self.open_rename(),
                 menu_ids::TOGGLE_FAV => self.toggle_favorite(&clicked_fwd),
+                menu_ids::EXTRACT_ZIP => self.start_zip_extract(clicked_fwd.clone()),
                 _ => {}
             },
             Ok(MenuResult::Shell) => {
@@ -7255,6 +7330,17 @@ impl App {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.toggle_value(&mut self.show_summary, "Σ").changed() {
+                    self.save_ui_state();
+                }
+                if ui
+                    .toggle_value(&mut self.dirs_first, "📁↑")
+                    .on_hover_text(
+                        "Ordner zuerst sortieren. Aus: Dateien und Ordner werden gemischt nach \
+                         der aktiven Spalte sortiert (z.B. nach Datum).",
+                    )
+                    .changed()
+                {
+                    self.recompute_view();
                     self.save_ui_state();
                 }
                 ui.toggle_value(&mut self.show_analytics, "📊")
@@ -7846,9 +7932,17 @@ impl App {
         }
 
         if disconnect {
+            // Closing a ZIP returns to the folder it lives in; a real connection
+            // just drops (entries clear on the next navigation).
+            let zip_return = self.remote.as_ref().and_then(|rs| rs.zip_return.clone());
             self.remote = None;
             self.net_conn = None;
-            self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
+            if let Some(parent) = zip_return {
+                self.notice = Some(("Archiv geschlossen".to_string(), std::time::Instant::now()));
+                self.start_scan(PathBuf::from(parent.replace('/', std::path::MAIN_SEPARATOR_STR)));
+            } else {
+                self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
+            }
         }
         if let Some(acc) = to_remove {
             let _ = crate::creds::remove_connection(&acc);
@@ -11637,6 +11731,7 @@ fn favorites_path() -> PathBuf {
 struct UiState {
     show_filters: bool,
     show_summary: bool,
+    dirs_first: bool,
 }
 
 impl UiState {
@@ -11644,6 +11739,7 @@ impl UiState {
         let mut s = UiState {
             show_filters: true,
             show_summary: false,
+            dirs_first: true,
         };
         if let Ok(txt) = std::fs::read_to_string(appdata_file("ui_state.txt")) {
             for line in txt.lines() {
@@ -11652,6 +11748,7 @@ impl UiState {
                     match k.trim() {
                         "show_filters" => s.show_filters = on,
                         "show_summary" => s.show_summary = on,
+                        "dirs_first" => s.dirs_first = on,
                         _ => {}
                     }
                 }
@@ -11662,8 +11759,8 @@ impl UiState {
 
     fn save(&self) {
         let txt = format!(
-            "show_filters={}\nshow_summary={}\n",
-            self.show_filters as u8, self.show_summary as u8
+            "show_filters={}\nshow_summary={}\ndirs_first={}\n",
+            self.show_filters as u8, self.show_summary as u8, self.dirs_first as u8
         );
         let _ = std::fs::write(appdata_file("ui_state.txt"), txt);
     }

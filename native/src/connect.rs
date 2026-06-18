@@ -21,6 +21,9 @@ pub struct RemoteState {
     /// `Some(version)` when an SSH remote agent is active for this session (#24);
     /// drives the "⚡ Agent" status indicator. `None` = plain backend.
     pub agent_version: Option<String>,
+    /// For an opened ZIP archive: the local folder to return to when the archive
+    /// is closed (⏏). `None` for real network connections.
+    pub zip_return: Option<String>,
 }
 
 /// Editable Connect-dialog state.
@@ -255,7 +258,12 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                         (be_arc, None)
                     };
                     ConnectResult::Ok(Connected {
-                        remote: Some(RemoteState { backend, label: label.clone(), agent_version }),
+                        remote: Some(RemoteState {
+                            backend,
+                            label: label.clone(),
+                            agent_version,
+                            zip_return: None,
+                        }),
                         net: None,
                         target: root,
                         label,
@@ -294,6 +302,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             backend: Arc::new(be),
                             label: label.clone(),
                             agent_version: None,
+                            zip_return: None,
                         }),
                         net: None,
                         target: root,
@@ -323,6 +332,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             backend: Arc::new(be),
                             label: label.clone(),
                             agent_version: None,
+                            zip_return: None,
                         }),
                         net: None,
                         target: root,

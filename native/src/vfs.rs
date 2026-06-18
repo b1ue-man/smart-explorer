@@ -35,7 +35,7 @@ pub enum Scheme {
 
 /// Backend-neutral directory entry / file metadata. Fields a remote backend
 /// can't supply (`btime`, `hidden`, `system`) default to `0` / `false`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct VfsMeta {
     pub name: String,
     pub is_dir: bool,
