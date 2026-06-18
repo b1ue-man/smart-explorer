@@ -1,7 +1,31 @@
 # Smart Explorer — TODO / status board
 
-Live status of every request. Legend: ✅ done · 🚧 working · ⬜ open.
-New items get appended here as they come in. Roadmap history is in ROADMAP.md.
+Live status of every request. Legend: ✅ done · 🚧 working (shipped but needs a
+real-world test) · ⬜ open. New items get appended here. History in ROADMAP.md.
+
+## Still open (what's actually left)
+
+Everything in the sections below the dividers is **shipped**. This is the
+remaining work, roughly by value:
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| A2 | **Find & reclaim** — duplicate finder (size-group → MD5 via Drive/Nextcloud free hashes or local read), large-stale, empty files/folders, cleanup targets (node_modules/.git/caches/logs) | ⬜ | highest user value |
+| A1 | Analytics **charts + export** — click a category/type bar → filter, size + age histograms, CSV export | ⬜ | builds on A0/A0b |
+| A3 | Analytics **scale** — all-drives dashboard, snapshots / growth-over-time (persist aggregation + diff) | ⬜ | |
+| 23 | **Faster remote browsing** — remaining of: (2) prefetch sub-folders, (3) parallel deep-path listing in *interactive* nav, (4) persist Drive path→id cache, (5) lazy-stat. (1) listing cache ✅ 0.5.59 | 🚧 | prefetch next |
+| 24 | **SSH agent** — remaining: a real-server smoke test + phase 6 (server-side search/filter, chunked tree streaming w/ progress, "remove agent" button). Phases 1–5 ✅ & functional (Linux x86_64/aarch64) | 🚧 | needs a real SSH box |
+| 21 | **Peer file sharing** — a real two-machine NAT/handshake test (code shipped 0.5.23) | 🚧 | |
+| A4 | **NTFS MFT** instant local drive scan | ⬜ | deferred by you; plan in SSH_AGENT-style doc note |
+| 20.4 | Drag remote files **OUT** via OLE deferred-contents | later | Ctrl+C already copies out |
+| 19.3 | **Dropbox / OneDrive** backends | later | after Drive proves out on a real account |
+| 21b | Peer-agent over the **P2P share** transport | later | #24 is the practical SSH variant |
+| Q2 | **Quick Share** transfer (UKEY2 + OfflineFrames) | later | needs real-device iteration |
+
+**Input still needed from you:** a Google OAuth *Client ID* (Desktop type) for
+end-to-end Drive auth — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
+
+---
 
 ## Shipped this cycle (0.5.x)
 
@@ -30,7 +54,11 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via keyring creds). | ✅ | 0.5.14 |
 | 18 | Trackpad **inertia scroll stuttered**; now repaints while egui animates the smooth-scroll so it glides to a smooth stop. | ✅ | 0.5.14 |
 
-## In progress
+## Shipped — remote files, cloud (Drive), CfAPI, sharing, Quick Share
+
+(All ✅ below; only **Q2** Quick-Share transfer is still `later`. Note: item
+numbers 24/25/26 here are the *older* remote-file series — the newer 24/25/26 in
+the lists above are the SSH agent / sort / ZIP items. Legacy numbering kept.)
 
 | # | Item | State | Notes |
 |---|---|---|---|
@@ -52,7 +80,7 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 | 19.2 | **Google Drive `Backend`** (`gdrive.rs`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, multipart upload. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16 |
 | 19.4 | **Self-setup instructions** — the app is not a hosted service: each user creates their own Google OAuth client. In-app collapsible guide + console link in Settings, full walkthrough in [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md), README note. Covers the Desktop-app loopback (no redirect URI) and the Testing-mode 7-day-token caveat. | ✅ | 0.5.17 |
 
-## Open / upcoming
+## Remote / cloud / sharing follow-ups (mostly shipped; open ones tracked at the top)
 
 | # | Item | Prio | Notes |
 |---|---|---|---|
@@ -72,26 +100,24 @@ from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OA
 A desktop app can't ship a usable shared secret or pass Drive verification, so
 each publisher uses their own client. With it, slice 1 authorizes end-to-end.
 
-## Storage analytics — roadmap (OPEN)
+## Storage analytics — roadmap
 
-WizTree-style "where is my space". First overlay shipped in **0.5.54** (toolbar
-📊 / `›Analyse`): squarified treemap of the current folder's children, largest
-folders/files, by-category + by-type bars, drive used/total gauge, ↑-up, click
-folder → drill (navigate), click file → reveal. Built on the existing scan/view.
+WizTree-style "where is my space" (toolbar 📊 / `›Analyse`). **Current state**
+(0.5.56–62): a dedicated low-memory parallel scanner (`analytics.rs`), a *nested*
+squarified treemap with instant in-memory drill + breadcrumb, group-coloured
+cells, whole-drive default + drive/folder picker, and **remote** analysis over
+any VFS backend (parallel for Drive/WebDAV). Open work below: A1/A2/A3/A4.
 
-Also recently shipped (keyboard line): cursorless filter-nav (0.5.51), omnibox
+Also shipped (keyboard line): cursorless filter-nav (0.5.51), omnibox
 combo-field (0.5.52), Alt accelerator overlay (0.5.53).
 
-### ⚠ Must-fix before going further — dedicated analytics scanner
-The current overlay reuses the **main scanner**, which loads full per-file
-metadata (mtime/btime/flags/ext/id …) → **kills RAM** on big trees and is slow.
-Analytics needs its **own lightweight recursive scan**:
-- minimal per-node data (path + size + is_dir only), much lower memory, faster;
-- **depth-capped aggregation**: beyond a depth threshold (≈5), DON'T keep every
-  individual file path — roll their bytes up into the depth-N folder node, so a
-  huge tree stays bounded in memory. (WizTree *appears* to keep all paths to the
-  bottom — unconfirmed — but sizes are aggregated from ~depth 5.)
-- deeper drill into a capped folder can scan that subtree on demand.
+### ✅ Resolved — dedicated analytics scanner (was the must-fix)
+The overlay no longer reuses the heavy main scanner. `analytics.rs` does its own
+compact, parallel, size-only walk (A0, 0.5.55); the nested treemap with in-memory
+drill replaced the first version (A0b, 0.5.56); remote + parallel-remote walks
+followed (A5, 0.5.61–62). Full paths ARE kept (no depth cap) — confirmed
+acceptable on memory because each node stores only its own name. Open analytics
+work is A1/A2/A3/A4 (see "Still open" at the top).
 
 ### Phases (dependency-ordered)
 | # | Item | State | Notes |
@@ -119,9 +145,6 @@ Analytics needs its **own lightweight recursive scan**:
   not a folder) still uses the native dialog.
 - **#6c drag-out** is Win32 COM (`dragout.rs`) compiled for Windows but not
   runtime-exercised here; wrapped so any COM failure silently aborts the drag.
-
-## Notes
-
 - **Background daemon (#4):** `daemon.rs` is a headless loop started by a per-user
   `HKCU\…\Run` entry (`autostart.rs`) → `--sync-daemon`. Loads jobs, runs every
   `due()` one via the same `bisync::run` (local↔local; remote needs re-auth so
