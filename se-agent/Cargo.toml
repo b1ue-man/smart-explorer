@@ -1,0 +1,25 @@
+# Standalone minimal build of the SSH remote agent (`se-agent`), kept OUT of the
+# app crate so it pulls ONLY rayon+std — no ring/TLS/GUI — and therefore
+# cross-compiles to static musl for arbitrary Linux servers without a musl C
+# toolchain. It shares the protocol/walk source with the app via #[path] include
+# of native/src/agent_proto.rs, so there is one definition. See
+# docs/SSH_AGENT_PLAN.md §7. Build:
+#   cd se-agent && cargo build --release --target x86_64-unknown-linux-musl
+[package]
+name = "se-agent"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "se-agent"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

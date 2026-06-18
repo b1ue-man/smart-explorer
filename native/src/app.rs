@@ -3366,6 +3366,7 @@ impl App {
                         remote: Some(crate::connect::RemoteState {
                             backend: be,
                             label: "Google Drive".to_string(),
+                            agent_version: None,
                         }),
                         net: None,
                         target: root,
@@ -3391,6 +3392,7 @@ impl App {
                         remote: Some(crate::connect::RemoteState {
                             backend: be,
                             label: "Google Drive".to_string(),
+                            agent_version: None,
                         }),
                         net: None,
                         target: root,
@@ -7754,6 +7756,13 @@ impl App {
         if let Some(rs) = &self.remote {
             ui.horizontal(|ui| {
                 ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
+                // Show whether the SSH remote agent is active for this session.
+                if let Some(ver) = &rs.agent_version {
+                    ui.colored_label(Color32::from_rgb(120, 230, 140), "⚡ Agent")
+                        .on_hover_text(format!(
+                            "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse laufen serverseitig"
+                        ));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
                         disconnect = true;

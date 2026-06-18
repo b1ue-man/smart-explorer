@@ -14,21 +14,11 @@ use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 
-/// The live framed connection to one agent + the child process, if we spawned
-/// it (kept alive; killed on drop).
+/// The live framed connection to one agent. Dropping it drops the underlying
+/// streams (SSH channel halves) → the remote agent gets EOF on stdin and exits.
 struct AgentConn {
     r: Box<dyn Read + Send>,
     w: Box<dyn Write + Send>,
-    child: Option<std::process::Child>,
-}
-
-impl Drop for AgentConn {
-    fn drop(&mut self) {
-        if let Some(c) = self.child.as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
 }
 
 pub struct AgentBackend {
@@ -47,29 +37,7 @@ impl AgentBackend {
         w: Box<dyn Write + Send>,
         inner: BackendHandle,
     ) -> io::Result<Self> {
-        Self::connect(AgentConn { r, w, child: None }, inner)
-    }
-
-    /// Spawn the agent as a LOCAL child process and hand-shake over its stdio.
-    /// Used for tests and for the deploy self-check; production runs it over SSH
-    /// via `from_streams`.
-    pub fn spawn_local(exe: &std::path::Path, inner: BackendHandle) -> io::Result<Self> {
-        let mut child = std::process::Command::new(exe)
-            .arg("--serve")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
-        let w = child.stdin.take().expect("piped stdin");
-        let r = child.stdout.take().expect("piped stdout");
-        Self::connect(
-            AgentConn {
-                r: Box::new(std::io::BufReader::new(r)),
-                w: Box::new(w),
-                child: Some(child),
-            },
-            inner,
-        )
+        Self::connect(AgentConn { r, w }, inner)
     }
 
     fn connect(conn: AgentConn, inner: BackendHandle) -> io::Result<Self> {
@@ -215,27 +183,33 @@ impl Backend for AgentBackend {
 
 // ── deploy over an existing SFTP/SSH connection (phase 3) ────────────────────
 
-/// A bundled agent binary for one server target + its integrity hash.
+/// A bundled agent binary for one server target. The integrity hash is computed
+/// from `bytes` at deploy time (sha2) — no separate hash to keep in sync.
 pub struct AgentArtifact {
     pub bytes: &'static [u8],
-    pub sha256_hex: &'static str,
-    pub version: &'static str,
 }
 
 /// Select the bundled agent for a server's `uname -sm` (e.g. "Linux x86_64",
-/// "Linux aarch64", "Darwin arm64"), or `None` if we ship none for it → the
-/// caller keeps plain SFTP. Binaries are wired in once the static-musl
-/// cross-compile (plan §7 / phase 5) produces them; until then this is empty by
-/// design, so deploy cleanly no-ops to the SFTP fallback.
+/// "Linux aarch64"), or `None` if we ship none for it → the caller keeps plain
+/// SFTP. Binaries are static-musl, built by the standalone `se-agent` crate
+/// (see `docs/SSH_AGENT_PLAN.md` §7) and embedded here.
 pub fn artifact_for(uname_sm: &str) -> Option<AgentArtifact> {
     let mut it = uname_sm.split_whitespace();
     let os = it.next().unwrap_or("");
     let arch = it.next().unwrap_or("");
-    match (os, arch) {
-        // ("Linux", "x86_64")  => Some(AgentArtifact { bytes: include_bytes!(concat!(env!("OUT_DIR"), "/se-agent-x86_64-linux-musl")), sha256_hex: "…", version: env!("CARGO_PKG_VERSION") }),
-        // ("Linux", "aarch64") => Some(AgentArtifact { … }),
-        _ => None,
-    }
+    let bytes: &'static [u8] = match (os, arch) {
+        ("Linux", "x86_64") => include_bytes!("../agent-bin/se-agent-x86_64-linux-musl"),
+        ("Linux", "aarch64") | ("Linux", "arm64") => {
+            include_bytes!("../agent-bin/se-agent-aarch64-linux-musl")
+        }
+        _ => return None,
+    };
+    Some(AgentArtifact { bytes })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Single-quote a string for safe interpolation into a remote `sh -c` command.
@@ -257,20 +231,21 @@ pub fn deploy_over_sftp(
     let art = artifact_for(&uname)
         .ok_or_else(|| io::Error::other(format!("kein Agent-Binary gebündelt für '{uname}'")))?;
 
-    // 2. Resolve a per-user install path.
+    // 2. Resolve a per-user install path, keyed by PROTO version (so a stale but
+    //    protocol-compatible agent is reused, and app-version bumps don't churn).
     let home = sftp.exec_capture("printf %s \"$HOME\"")?;
     let home = if home.is_empty() { ".".to_string() } else { home };
     let dir = format!("{}/.cache/smart-explorer", home.trim_end_matches('/'));
-    let remote = format!("{}/se-agent-{}", dir, art.version);
+    let remote = format!("{}/se-agent-p{}", dir, agent_proto::PROTO_VERSION);
 
-    // 3. Skip upload if a matching agent is already installed.
-    let want = format!("proto={} ver={}", agent_proto::PROTO_VERSION, art.version);
+    // 3. Skip upload if a protocol-compatible agent is already installed.
+    let want = format!("proto={}", agent_proto::PROTO_VERSION);
     let probe = sftp
         .exec_capture(&format!("{} --version 2>/dev/null", sh_quote(&remote)))
         .unwrap_or_default();
     if !probe.contains(&want) {
-        // 4. Upload to a temp path (SFTP), verify SHA-256 server-side, then
-        //    atomically move into place and lock down permissions.
+        // 4. Upload to a temp path (SFTP), verify SHA-256 server-side against the
+        //    bundled bytes, then atomically move into place and lock perms.
         inner.mkdir_all(&dir)?;
         let tmp = format!("{}.tmp", remote);
         {
@@ -278,10 +253,11 @@ pub fn deploy_over_sftp(
             w.write_all(art.bytes)?;
             w.flush()?;
         }
+        let expected = sha256_hex(art.bytes);
         let sum = sftp
             .exec_capture(&format!("sha256sum {} 2>/dev/null | cut -d' ' -f1", sh_quote(&tmp)))
             .unwrap_or_default();
-        if !sum.is_empty() && !sum.eq_ignore_ascii_case(art.sha256_hex) {
+        if !sum.is_empty() && !sum.eq_ignore_ascii_case(&expected) {
             let _ = inner.remove_file(&tmp);
             return Err(io::Error::other("Agent-Binary: SHA-256 stimmt nicht"));
         }
@@ -297,7 +273,9 @@ pub fn deploy_over_sftp(
     AgentBackend::from_streams(r, w, inner)
 }
 
-/// Remove a deployed agent from a server (the "Remote-Agent entfernen" action).
+/// Remove a deployed agent from a server (the "Remote-Agent entfernen" action;
+/// UI wiring is a phase-6 follow-up).
+#[allow(dead_code)]
 pub fn remove_from_sftp(sftp: &crate::sftp::SftpBackend) -> io::Result<()> {
     sftp.exec_capture("rm -rf \"$HOME/.cache/smart-explorer\"")?;
     Ok(())
@@ -310,9 +288,14 @@ mod tests {
 
     #[test]
     fn artifact_selection_and_quoting() {
-        // No binaries bundled yet → every target falls back.
-        assert!(artifact_for("Linux x86_64").is_none());
+        // Linux x86_64/aarch64 are bundled; other targets fall back to SFTP.
+        let a = artifact_for("Linux x86_64").expect("x86_64 bundled");
+        assert!(a.bytes.len() > 1000 && a.bytes.starts_with(b"\x7fELF"));
+        assert!(artifact_for("Linux aarch64").is_some());
+        assert!(artifact_for("Darwin arm64").is_none());
         assert!(artifact_for("garbage").is_none());
+        // Hash is computed from the bundled bytes (stable, 64 hex chars).
+        assert_eq!(sha256_hex(a.bytes).len(), 64);
         // Shell quoting is injection-safe.
         assert_eq!(sh_quote("/home/u/dir"), "'/home/u/dir'");
         assert_eq!(sh_quote("a'b; rm -rf /"), r#"'a'\''b; rm -rf /'"#);

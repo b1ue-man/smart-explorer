@@ -9,6 +9,11 @@
 //! Framing: each message is `u32 LE length` followed by that many body bytes.
 //! The body is a compact hand-rolled binary encoding (no serde_json — a
 //! million-node `WalkTree` response must not pay JSON's size/parse cost).
+//!
+//! Shared module: the app uses the client half (encode `Req` / decode `Resp` +
+//! framing), the `se-agent` binary uses the server half (decode `Req`, run the
+//! fs ops, encode `Resp`, `serve`). Each build leaves the other half unused.
+#![allow(dead_code)]
 
 use rayon::prelude::*;
 use std::io::{self, Read, Write};
