@@ -105,6 +105,18 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
     SizeNode { name, size, is_dir: true, children }
 }
 
+/// Convert a tree computed server-side by the SSH agent (`agent_proto::WireNode`)
+/// into the analytics `SizeNode`. Same shape — names only, paths rebuilt on
+/// descent — so this is a straight ownership-transferring recursion.
+pub fn from_wire(w: crate::agent_proto::WireNode) -> SizeNode {
+    SizeNode {
+        name: w.name.into_boxed_str(),
+        size: w.size,
+        is_dir: w.is_dir,
+        children: w.children.into_iter().map(from_wire).collect(),
+    }
+}
+
 /// Scan a REMOTE tree through the VFS backend (SFTP/FTP/WebDAV/Drive) into the
 /// same compact `SizeNode` output as the local `scan`. Backends that report
 /// `parallelism() > 1` (WebDAV, Google Drive) list each tree level concurrently

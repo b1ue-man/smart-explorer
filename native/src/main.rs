@@ -3,6 +3,8 @@
 
 mod app;
 mod analytics;
+mod agent;
+mod agent_proto;
 mod autostart;
 mod bisync;
 mod cloud;
