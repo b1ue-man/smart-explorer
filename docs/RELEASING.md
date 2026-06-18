@@ -75,7 +75,25 @@ URL — only the transport differs (`updater.rs`'s `Feed` enum):
 release-native/update-feed/
   version.txt          first line = "0.5.3"
   smart_explorer.exe   the new binary (the app downloads + swaps this)
+  smart_explorer.exe.sha256
+  smart_explorer_updater.exe
+  smart_explorer_updater.exe.sha256
 ```
+
+Since v0.5.77, the normal update path uses a separate
+`Smart Explorer Updater.exe` helper installed next to `Smart Explorer.exe`.
+The app stages `smart_explorer.exe`, refreshes the helper from the same feed,
+then exits while the helper performs the replacement and relaunches the app.
+The one unavoidable migration exception is v0.5.76 -> v0.5.77: v0.5.76 does
+not know how to fetch the helper yet, so it can only update the main exe. On
+the first v0.5.77 launch, the app silently ensures the helper is present for
+all later updates.
+
+The `.sha256` files are integrity checks for broken or partial downloads. They
+are not a substitute for code signing. The industry-standard trust path for
+Windows distribution is still: sign every release, keep one stable publisher
+identity, publish every version as a GitHub Release, and let Windows/AV
+reputation build on that identity.
 
 The update **source** the app points at (Sidebar → UPDATE, or
 `%APPDATA%\smart_explorer\update_source.txt`) may be:
@@ -115,3 +133,17 @@ cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
 git show origin/main:release-native/update-feed/version.txt   # must match, on main
 ```
+
+## Bitdefender / antivirus trust
+
+The installer cannot reliably or appropriately tell Bitdefender "trust this app"
+without the user's action. For Bitdefender Advanced Threat Defense, the user can
+add explicit `.exe` exceptions. Add both installed executables if needed:
+
+- `%LOCALAPPDATA%\Programs\Smart Explorer\Smart Explorer.exe`
+- `%LOCALAPPDATA%\Programs\Smart Explorer\Smart Explorer Updater.exe`
+
+The updater helper itself does not need outbound network access; it only applies
+an already-downloaded staged update. Long-term, the accepted Windows pattern is
+code signing every release with a stable publisher identity so SmartScreen and
+security products can build reputation across versions.

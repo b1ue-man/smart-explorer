@@ -18,13 +18,19 @@ target="x86_64-pc-windows-gnu"
 version="$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
 echo "Building Smart Explorer $version for $target ..."
 
-cargo build --release --target "$target" --bin smart_explorer
+cargo build --release --target "$target" --bin smart_explorer --bin smart_explorer_updater
 exe="target/$target/release/smart_explorer.exe"
+updater="target/$target/release/smart_explorer_updater.exe"
 
 mkdir -p "$feed"
 # EXE first, version.txt last — clients only see the new version once the new
 # binary is fully published (mirrors publish-update.ps1).
 cp "$exe" "$feed/smart_explorer.exe"
+cp "$updater" "$feed/smart_explorer_updater.exe"
+( cd "$feed"
+  sha256sum smart_explorer.exe > smart_explorer.exe.sha256
+  sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
+)
 printf '%s\n' "$version" > "$feed/version.txt"
 
 # Standalone share rendezvous server (Linux + Windows) — routes peer-sharing
@@ -43,8 +49,9 @@ fi
 
 # Portable exe + NSIS installer (per-user, sets up update source + context menu).
 cp "$exe" "$rel/Smart Explorer.exe"
+cp "$updater" "$rel/Smart Explorer Updater.exe"
 if command -v makensis >/dev/null 2>&1; then
-  makensis -DVERSION="$version" installer.nsi >/dev/null
+  makensis -DVERSION="$version" -DEXE_SRC="$exe" -DUPDATER_SRC="$updater" installer.nsi >/dev/null
   echo "Installer: $rel/Smart Explorer Setup $version.exe"
 else
   echo "makensis not found — installer skipped (apt-get install nsis)" >&2

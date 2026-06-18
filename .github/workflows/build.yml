@@ -49,7 +49,7 @@ jobs:
         run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
 
       - name: Release build
-        run: cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer
+        run: cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater
 
       - name: Build context-menu COM DLL
         working-directory: native/explorer-command
@@ -60,14 +60,19 @@ jobs:
         run: |
           mkdir -p out
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
+          cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
           cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
           ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
+          ( cd out
+            sha256sum smart_explorer.exe > smart_explorer.exe.sha256
+            sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
+          )
           printf '%s\n' "$ver" > out/version.txt
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           # NSIS installer (per-user; sets the Git update source + context menu).
-          makensis -DVERSION="$ver" installer.nsi
+          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" installer.nsi
           cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
-          echo "Built version $ver (exe + dll + installer)"
+          echo "Built version $ver (exe + updater + dll + installer)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -89,6 +94,10 @@ jobs:
             echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh and commit release-native/ before releasing."
             exit 1
           fi
+          test -s ../release-native/update-feed/smart_explorer.exe
+          test -s ../release-native/update-feed/smart_explorer_updater.exe
+          test -s ../release-native/update-feed/smart_explorer.exe.sha256
+          test -s ../release-native/update-feed/smart_explorer_updater.exe.sha256
           echo "Feed matches Cargo.toml ($ver)."
 
       - name: Publish GitHub Release
@@ -123,5 +132,8 @@ jobs:
           files: |
             native/out/Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe
             native/out/smart_explorer.exe
+            native/out/smart_explorer_updater.exe
+            native/out/smart_explorer.exe.sha256
+            native/out/smart_explorer_updater.exe.sha256
             native/out/smart_explorer_command.dll
             native/out/version.txt
