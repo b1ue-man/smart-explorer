@@ -169,6 +169,29 @@ pub trait Backend: Send + Sync {
     fn walk_tree(&self, _root: &str) -> Option<crate::agent_proto::WireNode> {
         None
     }
+
+    /// Can this backend transfer an entire subtree in ONE session (the SSH
+    /// agent's `GetTree`/`PutTree`)? When true, folder download/upload skips the
+    /// per-file round-trips.
+    fn supports_bulk_tree(&self) -> bool {
+        false
+    }
+
+    /// Download the remote subtree rooted at `root` into local `dst` (the
+    /// contents of `root` land directly under `dst`), in one streamed session.
+    /// Returns the number of files written. Only the agent overrides this.
+    fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
+        let _ = (root, dst);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "bulk tree transfer not supported"))
+    }
+
+    /// Upload the local subtree `src` into remote `root` (the contents of `src`
+    /// land directly under `root`), in one streamed session. Returns the number
+    /// of files sent. Only the agent overrides this.
+    fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
+        let _ = (src, root);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "bulk tree transfer not supported"))
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -328,6 +351,17 @@ impl Backend for CachingBackend {
     }
     fn walk_tree(&self, root: &str) -> Option<crate::agent_proto::WireNode> {
         self.inner.walk_tree(root)
+    }
+    fn supports_bulk_tree(&self) -> bool {
+        self.inner.supports_bulk_tree()
+    }
+    fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
+        self.inner.get_tree(root, dst)
+    }
+    fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
+        let r = self.inner.put_tree(src, root);
+        self.invalidate(root); // new tree appears under root + its parent listing
+        r
     }
 }
 

@@ -9,10 +9,11 @@ round-trip per directory.
 Status: **phases 1–5 implemented & build-verified (host + windows-gnu); the agent
 is functional for Linux x86_64/aarch64 servers. Deep-integration roadmap: P0
 (protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local copy/move/
-delete/mkdir) in 0.5.70 — the agent now multiplexes every op over one channel,
-streams reads and writes natively, and runs same-server copy/move in place (no
-down+up round-trip). Only a real-server smoke test remains.** Researched against
-how VS Code Remote-SSH, JetBrains Gateway,
+delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71 — the
+agent now multiplexes every op over one channel, streams reads/writes natively,
+runs same-server copy/move in place, and transfers whole folders in one session
+(no per-file round-trip). Only a real-server smoke test remains.** Researched
+against how VS Code Remote-SSH, JetBrains Gateway,
 `rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
@@ -362,13 +363,19 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   `copy_remote_tree` (recursive `copy_file`/`mkdir_all` via the backend) instead
   of streaming each file down to a temp and back up.
 
-## Phase 4 — Recursive bulk transfer (folders, one session)
-- **Capability:** `GetTree{root}` / `PutTree{root}` — stream an entire subtree
-  (entries + bytes) in one framed session. *(Server side implemented in the
-  0.5.69 agent; client mapping pending.)*
-- **Mapping:** the copy engine for remote **folders**; drag/paste of folders;
-  "Herunterladen nach…" on a folder. The "größere Transfers" win — no per-file
-  round-trip.
+## Phase 4 — Recursive bulk transfer (folders, one session) — ✅ done (0.5.71)
+- **Capability:** `GetTree{root}` / `PutTree{root}` stream an entire subtree
+  (dirs as `TreeEntry`, files as `TreeEntry`+`Data`*) in one framed session,
+  terminated by `End`/`Ok`. The client's outgoing channel is **bounded** so a
+  large upload back-pressures on a slow link instead of buffering the whole tree
+  in memory (~8 MiB of 256 KiB chunks in flight).
+- **Mapping:** new `Backend::{supports_bulk_tree, get_tree, put_tree}` (CachingBackend
+  forwards; only the agent implements them). **Folder upload** (`upload_paths`)
+  uses `put_tree`; **folder download** (`download_node`, used by
+  `start_remote_download` / drag remote→local / "Herunterladen nach…") uses
+  `get_tree`. Both fall back to the recursive per-file walk on plain SFTP or any
+  agent error — and this also makes plain-SFTP **folder** download work, which
+  the old per-file path didn't. The "größere Transfers" win.
 
 ## Phase 5 — Server-side search / filter
 - **Capability:** `Search{root, spec}` (name / glob + size) → streamed `Match`.

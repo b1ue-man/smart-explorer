@@ -1311,6 +1311,35 @@ fn download_to_id(
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Download a remote node (file OR folder) to local `dest`. For a folder, uses
+/// the agent's one-session bulk `get_tree` when available, else recurses through
+/// `list_dir`/`open_read`. For a file, the plain single-stream download. `dest`
+/// is the local path the node should become (folder → that folder, file → that
+/// file).
+fn download_node(
+    be: &dyn crate::vfs::Backend,
+    src: &str,
+    dest: &std::path::Path,
+) -> Result<String, String> {
+    let m = be.stat(src).map_err(|e| e.to_string())?;
+    if m.is_dir {
+        if be.supports_bulk_tree() {
+            if be.get_tree(src, dest).is_ok() {
+                return Ok(dest.to_string_lossy().to_string());
+            }
+            // fall through to the recursive download on any agent error
+        }
+        std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+        for e in be.list_dir(src).map_err(|e| e.to_string())? {
+            let cs = format!("{}/{}", src.trim_end_matches('/'), e.name);
+            download_node(be, &cs, &dest.join(&e.name))?;
+        }
+        Ok(dest.to_string_lossy().to_string())
+    } else {
+        download_to(be, src, dest)
+    }
+}
+
 /// Line-merge editor state: a side-by-side aligned diff of the two versions.
 struct MergeUi {
     rel: String,
@@ -1559,6 +1588,18 @@ fn upload_paths(
         }
         let dest = rjoin(dest_root, &base);
         if src.is_dir() {
+            // Bulk fast path: stream the whole folder in one agent session
+            // (no per-file round-trip). Falls back to the recursive per-file
+            // upload on plain SFTP / on any agent error.
+            if be.supports_bulk_tree() {
+                match be.put_tree(&src, &dest) {
+                    Ok(n) => {
+                        copied += n;
+                        continue;
+                    }
+                    Err(_) => {} // fall through to the per-file walk
+                }
+            }
             upload_dir(be, &src, &dest, &mut copied, &mut errors);
         } else {
             match upload_file(be, &src, &dest) {
@@ -6744,7 +6785,9 @@ impl App {
                 for p in &files {
                     let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
                     let dest = std::path::Path::new(&dest_local).join(name);
-                    match download_to(&*backend, p, &dest) {
+                    // download_node handles folders (bulk get_tree / recursive)
+                    // as well as files.
+                    match download_node(&*backend, p, &dest) {
                         Ok(_) => copied += 1,
                         Err(e) => errors.push(format!("{}: {}", name, e)),
                     }
