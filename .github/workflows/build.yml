@@ -55,6 +55,12 @@ jobs:
         working-directory: native/explorer-command
         run: cargo build --release --target x86_64-pc-windows-gnu
 
+      - name: Build share rendezvous server
+        working-directory: share-server
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --bin se-share-server
+          cargo build --release --bin se-share-server
+
       - name: Stage feed + build installer
         id: stage
         run: |
@@ -62,6 +68,8 @@ jobs:
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
           cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
+          cp "../share-server/target/x86_64-pc-windows-gnu/release/se-share-server.exe" "out/se-share-server.exe"
+          cp "../share-server/target/release/se-share-server" "out/se-share-server-linux"
           ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
           ( cd out
             sha256sum smart_explorer.exe > smart_explorer.exe.sha256
@@ -126,6 +134,8 @@ jobs:
             - **smart_explorer_command.dll** — Win11 modern context-menu
               IExplorerCommand handler (needs signing to register; see
               `docs/WIN11_CONTEXT_MENU.md`).
+            - **se-share-server.exe** / **se-share-server-linux** —
+              standalone rendezvous server for direct peer sharing.
 
             Built by CI (ubuntu + mingw-w64 + `x86_64-pc-windows-gnu`). Update +
             release flow: `docs/RELEASING.md`.
@@ -136,4 +146,6 @@ jobs:
             native/out/smart_explorer.exe.sha256
             native/out/smart_explorer_updater.exe.sha256
             native/out/smart_explorer_command.dll
+            native/out/se-share-server.exe
+            native/out/se-share-server-linux
             native/out/version.txt

@@ -599,8 +599,8 @@ fn github_repo(feed_raw: &str) -> Option<(String, String)> {
 }
 
 /// `release/v*` branch name → version (e.g. "release/v0.5.63" → "0.5.63").
-fn branch_to_version(name: &str) -> Option<String> {
-    let v = name.strip_prefix("release/v")?;
+fn tag_to_version(name: &str) -> Option<String> {
+    let v = name.strip_prefix('v')?;
     if v.chars()
         .next()
         .map(|c| c.is_ascii_digit())
@@ -627,18 +627,12 @@ pub fn list_remote_versions() -> Vec<String> {
     };
     let cur = env!("CARGO_PKG_VERSION");
     let mut versions: Vec<String> = Vec::new();
-    // GitHub paginates branches at 100; a few pages cover the project's history.
+    // GitHub paginates releases at 100; a few pages cover the project's history.
     for page in 1..=5u32 {
         let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+            "https://api.github.com/repos/{owner}/{repo}/releases?per_page=100&page={page}"
         );
-        let body = match ureq::get(&url)
-            .set("User-Agent", UPDATE_USER_AGENT)
-            .set("Accept", "application/vnd.github+json")
-            .timeout(HTTP_TIMEOUT)
-            .call()
-            .and_then(|r| Ok(r.into_string()?))
-        {
+        let body = match http_get_github_json(&url) {
             Ok(s) => s,
             Err(_) => break,
         };
@@ -647,11 +641,26 @@ pub fn list_remote_versions() -> Vec<String> {
             Err(_) => break,
         };
         let n = arr.len();
-        for b in &arr {
-            if let Some(v) = b
-                .get("name")
+        for release in &arr {
+            if release.get("draft").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
+            let has_app_asset = release
+                .get("assets")
+                .and_then(|v| v.as_array())
+                .map(|assets| {
+                    assets.iter().any(|asset| {
+                        asset.get("name").and_then(|v| v.as_str()) == Some("smart_explorer.exe")
+                    })
+                })
+                .unwrap_or(true);
+            if !has_app_asset {
+                continue;
+            }
+            if let Some(v) = release
+                .get("tag_name")
                 .and_then(|v| v.as_str())
-                .and_then(branch_to_version)
+                .and_then(tag_to_version)
             {
                 versions.push(v);
             }
@@ -666,18 +675,38 @@ pub fn list_remote_versions() -> Vec<String> {
     versions
 }
 
+fn http_get_github_json(url: &str) -> Result<String, String> {
+    let resp = ureq::get(url)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .set("Accept", "application/vnd.github+json")
+        .timeout(HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format_http_error(url, e))?;
+    resp.into_string()
+        .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
+}
+
 /// Download a specific released version's binary (from its `release/v<ver>`
 /// branch on the GitHub feed) to a temp file ready for `revert_to`/`swap_in`.
 pub fn download_version(version: &str) -> Result<PathBuf, String> {
     let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
     let (owner, repo) =
         github_repo(&raw).ok_or("Frühere Versionen sind nur über einen GitHub-Feed abrufbar")?;
-    let url = format!(
-        "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/smart_explorer.exe"
-    );
+    let url =
+        format!("https://github.com/{owner}/{repo}/releases/download/v{version}/smart_explorer.exe");
     let dest = appdata_dir().join("rollback_download.exe");
     let _ = std::fs::remove_file(&dest);
-    http_download(&url, &dest)?;
+    if let Err(release_err) = http_download(&url, &dest) {
+        let branch_url = format!(
+            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/smart_explorer.exe"
+        );
+        http_download(&branch_url, &dest).map_err(|branch_err| {
+            format!(
+                "Release-Download fehlgeschlagen: {}; Branch-Fallback fehlgeschlagen: {}",
+                release_err, branch_err
+            )
+        })?;
+    }
     Ok(dest)
 }
 
@@ -720,19 +749,110 @@ fn spawn_detached(exe: &std::path::Path, args: &[&str]) -> std::io::Result<()> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
-        if cmd.spawn().is_ok() {
-            return Ok(());
+        match cmd.spawn() {
+            Ok(_) => return Ok(()),
+            Err(e) if should_elevate_for_spawn(&e) => {
+                return spawn_elevated_detached(exe, args);
+            }
+            Err(_) => {}
         }
         // Some job objects forbid breakaway → retry without that flag.
         let mut c2 = std::process::Command::new(exe);
         c2.args(args)
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-        return c2.spawn().map(|_| ());
+        return match c2.spawn() {
+            Ok(_) => Ok(()),
+            Err(e) if should_elevate_for_spawn(&e) => spawn_elevated_detached(exe, args),
+            Err(e) => Err(e),
+        };
     }
     #[cfg(not(windows))]
     {
         cmd.spawn().map(|_| ())
     }
+}
+
+#[cfg(windows)]
+fn should_elevate_for_spawn(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5) | Some(740) | Some(1314))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+#[cfg(windows)]
+fn spawn_elevated_detached(exe: &std::path::Path, args: &[&str]) -> std::io::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide_os(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+    fn wide_str(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let verb = wide_str("runas");
+    let file = wide_os(exe.as_os_str());
+    let params = wide_str(&join_windows_args(args));
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            params.as_ptr(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if rc > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Administratorfreigabe abgebrochen oder verweigert (ShellExecuteW={rc})"),
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn join_windows_args(args: &[&str]) -> String {
+    args.iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(windows)]
+fn quote_windows_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'))
+    {
+        return arg.to_string();
+    }
+
+    let mut out = String::from("\"");
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                out.push(ch);
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
 }
 
 fn installed_updater_path() -> Result<PathBuf, String> {
@@ -1062,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn github_repo_and_branch_parsing() {
+    fn github_repo_and_release_tag_parsing() {
         // Bare repo URL → owner/repo.
         assert_eq!(
             github_repo("https://github.com/b1ue-man/smart-explorer"),
@@ -1077,10 +1197,10 @@ mod tests {
         assert_eq!(github_repo("https://example.com/feed"), None);
         assert_eq!(github_repo("/local/dir"), None);
         // Branch → version.
-        assert_eq!(branch_to_version("release/v0.5.63"), Some("0.5.63".into()));
-        assert_eq!(branch_to_version("release/vX"), None);
-        assert_eq!(branch_to_version("main"), None);
-        assert_eq!(branch_to_version("claude/foo"), None);
+        assert_eq!(tag_to_version("v0.5.63"), Some("0.5.63".into()));
+        assert_eq!(tag_to_version("vX"), None);
+        assert_eq!(tag_to_version("main"), None);
+        assert_eq!(tag_to_version("release/v0.5.63"), None);
     }
 
     #[test]
