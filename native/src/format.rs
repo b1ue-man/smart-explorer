@@ -33,8 +33,16 @@ pub fn format_date(ms: i64) -> String {
     }
 }
 
-pub fn compare_entries(a: &FileEntry, b: &FileEntry, key: SortKey, dir: SortDir) -> Ordering {
-    if a.is_dir != b.is_dir {
+pub fn compare_entries(
+    a: &FileEntry,
+    b: &FileEntry,
+    key: SortKey,
+    dir: SortDir,
+    dirs_first: bool,
+) -> Ordering {
+    // Optionally pin directories above files; otherwise both are ranked purely
+    // by the active key (so e.g. sorting by date interleaves files and folders).
+    if dirs_first && a.is_dir != b.is_dir {
         return if a.is_dir { Ordering::Less } else { Ordering::Greater };
     }
     let cmp = match key {

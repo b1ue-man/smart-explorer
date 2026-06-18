@@ -7,6 +7,8 @@ New items get appended here as they come in. Roadmap history is in ROADMAP.md.
 
 | # | Item | State | Version |
 |---|---|---|---|
+| 25 | **Sort folders+files together**: `📁↑` toggle (persisted) — off = files and folders ranked purely by the active column (e.g. by date), instead of folders pinned first | ✅ | 0.5.64 |
+| 26 | **ZIP support**: open a `.zip` in-app and browse it like a folder (read-only `zipfs::ZipBackend` via the remote path; ⏏ closes it), and "📦 Hier entpacken" (shell menu) to extract to a sibling folder. Pure-Rust deflate, no new C deps | ✅ | 0.5.64 |
 | 1 | Legal disclaimer → standard **MIT License** (installer accept-page + first-run notice + README) | ✅ | 0.5.4 / 0.5.6 |
 | 2 | Remote connection **per-tab**; remote/share tabs show a name | ✅ | 0.5.5 |
 | 5 | **Per-tab + per-split-pane** filter/search | ✅ | 0.5.6 |

@@ -39,6 +39,7 @@ mod types;
 mod updater;
 mod vfs;
 mod webdav;
+mod zipfs;
 #[cfg(windows)]
 mod virtual_clipboard;
 
