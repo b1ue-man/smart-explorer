@@ -22,11 +22,17 @@
 
 use crate::agent_proto::{self, Frame, WireMeta};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Bound on un-sent outgoing frames. Provides backpressure for uploads (a slow
+/// link makes `send` block instead of buffering the whole local tree in memory)
+/// while still pipelining ~8 MiB of 256 KiB chunks ahead of the wire.
+const OUT_BACKLOG: usize = 32;
 
 /// Shared multiplexer over one agent channel.
 struct Mux {
@@ -85,7 +91,7 @@ impl AgentBackend {
         w: Box<dyn Write + Send>,
         inner: BackendHandle,
     ) -> io::Result<Self> {
-        let (out_tx, out_rx) = unbounded::<(u64, Frame)>();
+        let (out_tx, out_rx) = bounded::<(u64, Frame)>(OUT_BACKLOG);
         let pending: Arc<Mutex<HashMap<u64, Sender<Frame>>>> = Arc::new(Mutex::new(HashMap::new()));
 
         // Writer thread: drain outgoing frames; closing the write half on exit
@@ -335,6 +341,105 @@ impl AgentBackend {
             _ => Ok(false), // transport/handshake oddity → caller falls back
         }
     }
+
+    /// Stream an entire remote subtree (`root`) down into local `dst` in one
+    /// session — the contents of `root` land directly under `dst`.
+    fn agent_get_tree(&self, root: &str, dst: &Path) -> io::Result<u64> {
+        std::fs::create_dir_all(dst)?;
+        let (id, rx) = self.mux.register();
+        let r = (|| {
+            self.mux.send(id, Frame::GetTree(root.to_string()))?;
+            let mut cur: Option<std::fs::File> = None;
+            let mut files = 0u64;
+            loop {
+                match rx.recv() {
+                    Ok(Frame::TreeEntry { rel, is_dir, .. }) => {
+                        cur = None;
+                        let p = dst.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+                        if is_dir {
+                            std::fs::create_dir_all(&p)?;
+                        } else {
+                            if let Some(parent) = p.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            cur = Some(std::fs::File::create(&p)?);
+                            files += 1;
+                        }
+                    }
+                    Ok(Frame::Data(d)) => {
+                        if let Some(f) = cur.as_mut() {
+                            f.write_all(&d)?;
+                        }
+                    }
+                    Ok(Frame::End) => break,
+                    Ok(Frame::Err(e)) => return Err(io::Error::other(e)),
+                    Ok(_) => {}
+                    Err(_) => {
+                        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent get-tree closed"))
+                    }
+                }
+            }
+            Ok(files)
+        })();
+        self.mux.unregister(id);
+        r
+    }
+
+    /// Stream an entire local subtree (`src`) up into remote `root` in one
+    /// session — the contents of `src` land directly under `root`.
+    fn agent_put_tree(&self, src: &Path, root: &str) -> io::Result<u64> {
+        let (id, rx) = self.mux.register();
+        let r = (|| {
+            self.mux.send(id, Frame::PutTree(root.to_string()))?;
+            let mut files = 0u64;
+            send_subtree(&self.mux, id, src, src, &mut files)?;
+            self.mux.send(id, Frame::End)?;
+            match rx.recv() {
+                Ok(Frame::Ok) => Ok(files),
+                Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+                _ => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent put-tree closed")),
+            }
+        })();
+        self.mux.unregister(id);
+        r
+    }
+}
+
+/// Depth-first walk of a local subtree, emitting `TreeEntry` (rel path with `/`
+/// separators, relative to `base`) and, for files, a run of `Data` chunks.
+/// `mux.send` blocks on the bounded outgoing channel → natural upload pacing.
+fn send_subtree(mux: &Mux, id: u64, base: &Path, dir: &Path, files: &mut u64) -> io::Result<()> {
+    for ent in std::fs::read_dir(dir)? {
+        let ent = ent?;
+        let ft = match ent.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() {
+            continue;
+        }
+        let p = ent.path();
+        let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+        if ft.is_dir() {
+            mux.send(id, Frame::TreeEntry { rel, is_dir: true, size: 0, mtime_ms: 0 })?;
+            send_subtree(mux, id, base, &p, files)?;
+        } else if ft.is_file() {
+            let md = ent.metadata().ok();
+            let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
+            mux.send(id, Frame::TreeEntry { rel, is_dir: false, size, mtime_ms: 0 })?;
+            let mut f = std::fs::File::open(&p)?;
+            let mut buf = vec![0u8; agent_proto::CHUNK];
+            loop {
+                let n = f.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                mux.send(id, Frame::Data(buf[..n].to_vec()))?;
+            }
+            *files += 1;
+        }
+    }
+    Ok(())
 }
 
 impl Backend for AgentBackend {
@@ -372,6 +477,17 @@ impl Backend for AgentBackend {
             Ok(Frame::Tree(n)) => Some(n),
             _ => None, // fall back to the client-side walk
         }
+    }
+
+    // ── Phase 4: recursive bulk folder transfer in one session ──
+    fn supports_bulk_tree(&self) -> bool {
+        true
+    }
+    fn get_tree(&self, root: &str, dst: &Path) -> VfsResult<u64> {
+        self.agent_get_tree(root, dst)
+    }
+    fn put_tree(&self, src: &Path, root: &str) -> VfsResult<u64> {
+        self.agent_put_tree(src, root)
     }
 
     // ── Phase 1: streamed read via the agent, SFTP fallback ──
@@ -645,6 +761,21 @@ mod tests {
         // a real error (removing a non-empty dir non-recursively) surfaces, not swallowed
         assert!(be.remove_dir(&format!("{}/newdir", root)).is_err());
 
+        // recursive bulk transfer (Phase 4): put a local tree up, get it back
+        assert!(be.supports_bulk_tree());
+        let upsrc = base.join("upsrc");
+        std::fs::create_dir_all(upsrc.join("sub")).unwrap();
+        std::fs::write(upsrc.join("f1.txt"), b"one").unwrap();
+        std::fs::write(upsrc.join("sub/f2.txt"), b"two longer").unwrap();
+        let remote_dst = format!("{}/uploaded", root);
+        assert_eq!(be.put_tree(&upsrc, &remote_dst).unwrap(), 2);
+        assert_eq!(std::fs::read(base.join("uploaded/f1.txt")).unwrap(), b"one");
+        assert_eq!(std::fs::read(base.join("uploaded/sub/f2.txt")).unwrap(), b"two longer");
+        let getdst = base.join("downloaded");
+        assert_eq!(be.get_tree(&remote_dst, &getdst).unwrap(), 2);
+        assert_eq!(std::fs::read(getdst.join("f1.txt")).unwrap(), b"one");
+        assert_eq!(std::fs::read(getdst.join("sub/f2.txt")).unwrap(), b"two longer");
+
         drop(be);
         let _ = shut.shutdown(std::net::Shutdown::Both);
         let _ = server.join();
@@ -693,8 +824,23 @@ mod tests {
         be.open_read(&format!("{}/hello.txt", root)).unwrap().read_to_string(&mut buf).unwrap();
         assert_eq!(buf, "agent works");
 
+        // write + bulk tree against the REAL bundled binary
+        {
+            let mut w = be.open_write(&format!("{}/up.txt", root)).unwrap();
+            w.write_all(b"streamed up").unwrap();
+            w.flush().unwrap();
+        }
+        assert_eq!(std::fs::read(base.join("up.txt")).unwrap(), b"streamed up");
+        // Download target OUTSIDE the walked root (in production the agent walks
+        // the remote fs and the client writes locally; here both are one fs).
+        let getdst = std::env::temp_dir().join(format!("se_got_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&getdst);
+        assert_eq!(be.get_tree(&root, &getdst).unwrap(), 3); // hello.txt, d/x.bin, up.txt
+        assert!(getdst.join("d/x.bin").exists());
+
         drop(be);
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&getdst);
     }
 }
