@@ -217,6 +217,9 @@ pub struct App {
     analytics_focus: Vec<String>,
     /// A running background analytics scan, if any.
     analytics_scan: Option<AnalyticsScan>,
+    /// Backend the current analytics tree was scanned with (None = local fs).
+    /// Set when analysing a remote, so rescans re-walk the same source.
+    analytics_backend: Option<crate::vfs::BackendHandle>,
     /// Cached nested-treemap cells for the current focus + the rect they were
     /// laid out for (recomputed on drill or resize).
     analytics_cells: Vec<TmCell>,
@@ -1601,6 +1604,7 @@ impl App {
             analytics_root_path: String::new(),
             analytics_focus: Vec::new(),
             analytics_scan: None,
+            analytics_backend: None,
             analytics_cells: Vec::new(),
             analytics_cells_rect: egui::Rect::ZERO,
             analytics_counts: None,
@@ -9635,6 +9639,44 @@ impl App {
             started: Instant::now(),
         });
         self.analytics_root_path = norm;
+        self.analytics_backend = None;
+        self.analytics_focus.clear();
+        self.analytics_tree = None;
+        self.analytics_invalidate();
+    }
+
+    /// Kick off an analytics scan of a REMOTE folder via its VFS backend
+    /// (SFTP/FTP/WebDAV/Drive). Serial + network-bound, so slower than local.
+    fn start_analytics_scan_remote(
+        &mut self,
+        backend: crate::vfs::BackendHandle,
+        root: String,
+        label: String,
+    ) {
+        let t = root.trim_end_matches('/');
+        let norm = if t.is_empty() { "/".to_string() } else { t.to_string() };
+        if let Some(s) = &self.analytics_scan {
+            s.progress
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let p = crate::analytics::Progress::default();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let p2 = p.clone();
+        let be = backend.clone();
+        let scan_root = norm.clone();
+        std::thread::spawn(move || {
+            let node = crate::analytics::scan_backend(&*be, &scan_root, &p2);
+            let _ = tx.send(node);
+        });
+        self.analytics_scan = Some(AnalyticsScan {
+            rx,
+            progress: p,
+            root: if label.is_empty() { norm.clone() } else { format!("{} · {}", label, norm) },
+            started: Instant::now(),
+        });
+        self.analytics_root_path = norm;
+        self.analytics_backend = Some(backend);
         self.analytics_focus.clear();
         self.analytics_tree = None;
         self.analytics_invalidate();
@@ -9724,11 +9766,19 @@ impl App {
     fn ui_analytics(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         self.poll_analytics_scan();
-        // First open with nothing scanned yet → scan the whole drive.
+        // First open with nothing scanned yet → scan the current remote folder if
+        // browsing a remote, otherwise the whole local drive.
         if self.analytics_tree.is_none() && self.analytics_scan.is_none() {
-            let r = self.analytics_default_root();
-            if !r.is_empty() {
-                self.start_analytics_scan(r);
+            if let Some(rs) = self.remote.as_ref() {
+                let be = rs.backend.clone();
+                let label = rs.label.clone();
+                let root = self.root_path.clone();
+                self.start_analytics_scan_remote(be, root, label);
+            } else {
+                let r = self.analytics_default_root();
+                if !r.is_empty() {
+                    self.start_analytics_scan(r);
+                }
             }
         }
         if self.analytics_counts.is_none() {
@@ -9744,6 +9794,14 @@ impl App {
         } else {
             self.analytics_root_path.clone()
         };
+        // Current remote (for the "scan this remote folder" button) + the source
+        // the current tree came from (for ⟳ to re-walk the same place).
+        let remote_scan: Option<(crate::vfs::BackendHandle, String, String)> = self
+            .remote
+            .as_ref()
+            .map(|rs| (rs.backend.clone(), self.root_path.clone(), rs.label.clone()));
+        let cur_backend = self.analytics_backend.clone();
+        let cur_root = self.analytics_root_path.clone();
         let focus_segs = self.analytics_focus.clone();
         let focus_path = self.analytics_focus_path();
         let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);
@@ -9768,7 +9826,8 @@ impl App {
         let mut drill_path: Option<String> = None; // treemap click → drill into folder
         let mut set_focus: Option<usize> = None; // breadcrumb truncate
         let mut go_up = false;
-        let mut rescan: Option<String> = None; // path to (re)scan
+        let mut rescan: Option<String> = None; // local path to (re)scan
+        let mut rescan_remote: Option<(crate::vfs::BackendHandle, String, String)> = None;
         let mut pick_folder = false;
         let mut cancel = false;
         let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
@@ -9801,8 +9860,27 @@ impl App {
                         if ui.button("📁 Ordner…").clicked() {
                             pick_folder = true;
                         }
+                        if let Some((be, root, label)) = &remote_scan {
+                            let txt = if label.is_empty() {
+                                "📡 Remote-Ordner".to_string()
+                            } else {
+                                format!("📡 {}", label)
+                            };
+                            if ui
+                                .button(txt)
+                                .on_hover_text(format!("Aktuellen Remote-Ordner scannen: {}", root))
+                                .clicked()
+                            {
+                                rescan_remote = Some((be.clone(), root.clone(), label.clone()));
+                            }
+                        }
                         if ui.button("⟳").on_hover_text("Neu scannen").clicked() {
-                            rescan = Some(root_label.clone());
+                            // Re-walk whatever the current tree came from.
+                            if let Some(be) = &cur_backend {
+                                rescan_remote = Some((be.clone(), cur_root.clone(), String::new()));
+                            } else {
+                                rescan = Some(root_label.clone());
+                            }
                         }
                     });
 
@@ -9974,7 +10052,9 @@ impl App {
             }
             self.analytics_scan = None;
         }
-        if pick_folder {
+        if let Some((be, root, label)) = rescan_remote {
+            self.start_analytics_scan_remote(be, root, label);
+        } else if pick_folder {
             let init = self.analytics_root_path.clone();
             self.open_picker(PickerPurpose::AnalyticsFolder, &init);
         } else if let Some(r) = rescan {
