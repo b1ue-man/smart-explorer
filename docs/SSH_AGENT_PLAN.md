@@ -281,3 +281,96 @@ SSH-specific glue that needs a real server.
 - Agent lifetime on flaky links: auto-relaunch on channel drop; idempotent
   re-handshake.
 - Windows servers: defer to phase 2 (different exec/quoting + no musl).
+
+---
+
+# Deep-integration roadmap — make the agent the FAST PATH
+
+**Decision (your call):** SFTP stays the baseline for any connection; once the
+agent is deployed, route **everything** through it — read/write transfers,
+folder-bulk transfers, server-local copy/move, search, and sync — with SFTP as
+the automatic per-op fallback. Today the `AgentBackend` only overrides
+`list_dir`/`stat`/`walk_tree` and *delegates* byte/mutation ops to SFTP; this
+roadmap flips that so the agent implements them natively.
+
+**Honest expectation on "faster/bigger transfers":** the real wins are
+**round-trip elimination** (server-local `cp`/`mv`, one-shot recursive transfer),
+**server-side parallelism**, optional **compression**, and better **read
+pipelining** than russh-sftp's chunked windowing. For a single big file on a
+fast link, throughput is still bounded by SSH's encrypted stream — the agent
+won't magically beat that. The big wins are many-files, same-server ops, and
+enumeration.
+
+Each phase = **(a) a new agent capability (protocol op)** then **(b) the
+tool-mapping** that routes the app's operations to it. Shipped together, phase by
+phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
+
+## Phase 0 — protocol v2 foundation (prerequisite for transfers)
+- **Capability:** framed, multiplexed, streaming protocol. Every frame carries a
+  `req_id: u64`; responses and stream chunks are tagged with it. New frames:
+  `DataChunk{req_id, bytes}`, `End{req_id}`, `Err{req_id, msg}`, `Cancel{req_id}`,
+  `Progress{req_id, done, total}`. A bridge worker thread in `AgentBackend` pumps
+  the channel and routes frames to the waiting op by id (blocking ops `recv` on
+  their id); enables concurrent ops + progress + cancel on one channel.
+- **Tool-mapping:** none yet (foundation). Bump `PROTO_VERSION` → agents
+  re-deploy on mismatch (already handled).
+- **Testable:** fully (in-process / socket).
+
+## Phase 1 — Read transfer (open / download via agent)
+- **Capability:** `Read{path}` → streamed `DataChunk`s (large buffer, pipelined);
+  optional gzip for compressible types; `Progress`.
+- **Mapping:** `AgentBackend::open_read` / `open_read_id` → agent stream (was
+  SFTP delegation). Speeds up: **opening a remote file** (download-to-temp),
+  **Ctrl+C remote→local**, **drag remote→local**, **"Herunterladen nach…"**.
+
+## Phase 2 — Write transfer (upload / save via agent)
+- **Capability:** `Write{path}` ← streamed chunks; server writes to a temp,
+  `fsync`, atomic rename; `Progress`.
+- **Mapping:** `AgentBackend::open_write` → agent stream. Affects: **save-back of
+  an edited remote file**, **paste/drop upload into a remote folder**, **drag
+  local→remote**, **"Neu" file creation** on a remote.
+
+## Phase 3 — Server-local mutations (instant)
+- **Capability:** `Copy{src,dst}`, `Rename{src,dst}`, `Remove{path,recursive}`,
+  `Mkdir{path}` — executed natively on the server.
+- **Mapping:** `AgentBackend::{copy_file, rename, remove_file, remove_dir,
+  mkdir_all}` → agent. Biggest single-op win: **remote→remote copy/move on the
+  SAME server** becomes instant (today it streams down then back up through a
+  temp). Also delete / rename / new-folder in one op.
+
+## Phase 4 — Recursive bulk transfer (folders, one session)
+- **Capability:** `GetTree{root}` / `PutTree{root}` — stream an entire subtree
+  (entries + bytes) in one framed session; the server reads files in parallel
+  (rayon) and pipelines; `Progress` over the whole job.
+- **Mapping:** the copy engine (`copy.rs`) for remote **folders**; drag/paste of
+  folders; "Herunterladen nach…" on a folder. This is the "größere Transfers"
+  win — no per-file round-trip.
+
+## Phase 5 — Server-side search / filter
+- **Capability:** `Search{root, spec}` (name / glob / regex + size/date) →
+  streamed matches.
+- **Mapping:** the omnibox folder-search and the active filter, when on a remote,
+  run **server-side**; matches stream into the list. Find on huge remote trees
+  without client-side enumeration.
+
+## Phase 6 — Hashing & sync via the agent
+- **Capability:** `WalkHashed{root, mode}` — the sync signature (size+mtime, and
+  md5/native hash on demand) in one server walk; reuse Phase 1–4 ops to apply.
+- **Mapping:** `bisync::{walk_files, apply}` use the agent when the endpoint's
+  connection has it — teach `connect::resolve_endpoint` / the sync runner to
+  deploy + use the agent (sync currently builds a *fresh, plain* SFTP backend).
+  Also unlocks the **duplicate finder (A2)** for remotes (hash without download).
+
+## Cross-cutting (all phases)
+- **Fallback:** any agent op error → fall back to the inner SFTP op (per-op), as
+  today. The feature can only speed things up, never break them.
+- **Progress + cancel:** stream byte/file counts into the existing copy/transfer
+  progress UI; `Cancel{req_id}` wired to the cancel buttons.
+- **Security/versioning:** unchanged — opt-in deploy, SHA-256 integrity,
+  `PROTO_VERSION` re-deploy, `release/v*` bundled musl binaries.
+- **Testability:** phases 0–5 are locally testable (in-process child / socket);
+  phase 6's real sync needs a live server.
+
+**Sequencing:** 0 → 1 → 2 → 3 give "everything interactive goes through the
+agent" (open/save/copy/move/delete). 4 adds bulk folders, 5 search, 6 sync. Each
+is independently shippable and falls back to SFTP until done.

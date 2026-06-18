@@ -15,6 +15,7 @@ remaining work, roughly by value:
 | A3 | Analytics **scale** — all-drives dashboard, snapshots / growth-over-time (persist aggregation + diff) | ⬜ | |
 | 23 | **Faster remote browsing** — remaining of: (2) prefetch sub-folders, (3) parallel deep-path listing in *interactive* nav, (4) persist Drive path→id cache, (5) lazy-stat. (1) listing cache ✅ 0.5.59 | 🚧 | prefetch next |
 | 24 | **SSH agent** — remaining: a real-server smoke test + phase 6 (server-side search/filter, chunked tree streaming w/ progress, "remove agent" button). Phases 1–5 ✅ & functional (Linux x86_64/aarch64); **0.5.65:** activate on an already-connected session via the live "⚡ Agent aktivieren" button (no reconnect), persisted per connection | 🚧 | needs a real SSH box |
+| 24d | **Agent as the FAST PATH** — make the agent handle *everything* (read/write transfers, server-local copy/move, bulk folder transfer, search, sync), SFTP only as fallback. Phased capability+mapping plan in [`docs/SSH_AGENT_PLAN.md`](SSH_AGENT_PLAN.md) → "Deep-integration roadmap" (P0 protocol v2 streaming/ids/progress → P1 read → P2 write → P3 server-local cp/mv → P4 bulk folders → P5 search → P6 sync+hashing). | ⬜ | P0–P5 locally testable; P6 needs a server |
 | 21 | **Peer file sharing** — a real two-machine NAT/handshake test (code shipped 0.5.23) | 🚧 | |
 | A4 | **NTFS MFT** instant local drive scan | ⬜ | deferred by you; plan in SSH_AGENT-style doc note |
 | 20.4 | Drag remote files **OUT** via OLE deferred-contents | later | Ctrl+C already copies out |
