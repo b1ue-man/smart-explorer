@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+const APP_ERROR_LOG_LIMIT: usize = 200;
+
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────
 #[cfg(windows)]
 mod menu_ids {
@@ -126,6 +128,13 @@ struct SummaryData {
     newest: i64,
     by_ext: Vec<(String, u64, u64)>,
     top: Vec<(String, String, u64)>,
+}
+
+#[derive(Clone)]
+struct AppErrorEntry {
+    ts: String,
+    context: String,
+    detail: String,
 }
 
 /// One painted cell of the nested treemap. Cached per focus + treemap size so
@@ -267,6 +276,8 @@ pub struct App {
     error_msg: Option<String>,
     notice: Option<(String, std::time::Instant)>,
     failed_paths: Vec<(String, String)>,
+    app_errors: Vec<AppErrorEntry>,
+    last_logged_error: Option<String>,
     show_errors_dialog: bool,
 
     // Filter input drafts
@@ -1743,6 +1754,8 @@ impl App {
                 None
             },
             failed_paths: Vec::new(),
+            app_errors: Vec::new(),
+            last_logged_error: None,
             show_errors_dialog: false,
 
             text_draft: String::new(),
@@ -10818,6 +10831,66 @@ impl App {
         b
     }
 
+    fn push_app_error(&mut self, context: impl Into<String>, detail: impl Into<String>) {
+        let detail = detail.into();
+        if detail.trim().is_empty() {
+            return;
+        }
+        if self.last_logged_error.as_deref() == Some(detail.as_str()) {
+            return;
+        }
+        self.last_logged_error = Some(detail.clone());
+        self.app_errors.push(AppErrorEntry {
+            ts: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            context: context.into(),
+            detail,
+        });
+        if self.app_errors.len() > APP_ERROR_LOG_LIMIT {
+            let remove = self.app_errors.len() - APP_ERROR_LOG_LIMIT;
+            self.app_errors.drain(0..remove);
+        }
+    }
+
+    fn capture_current_error(&mut self) {
+        if let Some(detail) = self.error_msg.clone() {
+            self.push_app_error("Fehler", detail);
+        } else {
+            self.last_logged_error = None;
+        }
+    }
+
+    fn error_log_text(&self) -> String {
+        let mut lines = Vec::new();
+        if !self.app_errors.is_empty() {
+            lines.push("App-Fehler:".to_string());
+            for e in &self.app_errors {
+                lines.push(format!("[{}] {}: {}", e.ts, e.context, e.detail));
+            }
+        }
+        if let Some(current) = &self.error_msg {
+            if !self.app_errors.iter().any(|e| e.detail == *current) {
+                if lines.is_empty() {
+                    lines.push("App-Fehler:".to_string());
+                }
+                lines.push(format!("[aktuell] Fehler: {}", current));
+            }
+        }
+        if !self.failed_paths.is_empty() || self.progress.errors > 0 {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(format!(
+                "Scan-Fehler: {} gesamt, {} Pfade im Protokoll",
+                self.progress.errors,
+                self.failed_paths.len()
+            ));
+            for (path, msg) in &self.failed_paths {
+                lines.push(format!("{}\t{}", path, msg));
+            }
+        }
+        lines.join("\r\n")
+    }
+
     fn ui_status(&mut self, ui: &mut egui::Ui) {
         let sel_bytes = self.selection_bytes();
         ui.horizontal(|ui| {
@@ -10868,11 +10941,15 @@ impl App {
                 if let Some(ref e) = self.error_msg {
                     ui.colored_label(Color32::from_rgb(220, 100, 80), format!("⚠ {}", e));
                 }
-                if !self.failed_paths.is_empty() || p.errors > 0 {
-                    let label = format!(
-                        "⚠ {} Fehler",
-                        p.errors.max(self.failed_paths.len() as u64)
-                    );
+                let scan_errors = p.errors.max(self.failed_paths.len() as u64) as usize;
+                let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
+                    1
+                } else {
+                    self.app_errors.len()
+                };
+                let total_errors = scan_errors + app_errors;
+                if total_errors > 0 {
+                    let label = format!("⚠ {} Fehler", total_errors);
                     if ui
                         .add(
                             egui::Button::new(
@@ -10880,7 +10957,7 @@ impl App {
                             )
                             .small(),
                         )
-                        .on_hover_text("Pfade anzeigen, die nicht gelesen werden konnten")
+                        .on_hover_text("Fehler-Protokoll anzeigen und kopieren")
                         .clicked()
                     {
                         self.show_errors_dialog = true;
@@ -10904,32 +10981,39 @@ impl App {
 
     fn ui_errors_dialog(&mut self, ctx: &egui::Context) {
         let mut close = false;
-        egui::Window::new(format!("Nicht lesbare Pfade ({})", self.failed_paths.len()))
+        let mut clear_app_log = false;
+        let mut log_text = self.error_log_text();
+        let scan_errors = self.progress.errors.max(self.failed_paths.len() as u64) as usize;
+        let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
+            1
+        } else {
+            self.app_errors.len()
+        };
+        egui::Window::new(format!("Fehler-Protokoll ({})", scan_errors + app_errors))
             .resizable(true)
             .default_size([700.0, 480.0])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Diese Pfade konnten nicht gelistet werden (Berechtigung, Reparse-Point, etc.):");
+                ui.label("Fehler aus der App und nicht lesbare Scan-Pfade. Der Text ist markierbar und kopierbar.");
                 ui.add_space(6.0);
-                egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
-                    egui::Grid::new("errs").num_columns(2).striped(true).show(ui, |ui| {
-                        for (p, msg) in &self.failed_paths {
-                            ui.add(egui::Label::new(p).truncate()).on_hover_text(p);
-                            ui.colored_label(Color32::from_gray(140), msg);
-                            ui.end_row();
-                        }
-                    });
-                });
+                if log_text.is_empty() {
+                    ui.colored_label(Color32::from_gray(140), "Keine Fehler protokolliert.");
+                } else {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut log_text)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(18),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Liste in Zwischenablage").clicked() {
-                        let txt: String = self
-                            .failed_paths
-                            .iter()
-                            .map(|(p, m)| format!("{}\t{}", p, m))
-                            .collect::<Vec<_>>()
-                            .join("\r\n");
-                        ctx.copy_text(txt);
+                    if ui.button("Alles kopieren").clicked() {
+                        ctx.copy_text(log_text.clone());
+                    }
+                    if !self.app_errors.is_empty() && ui.button("App-Protokoll leeren").clicked()
+                    {
+                        clear_app_log = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Schließen").clicked() {
@@ -10938,6 +11022,10 @@ impl App {
                     });
                 });
             });
+        if clear_app_log {
+            self.app_errors.clear();
+            self.last_logged_error = None;
+        }
         if close {
             self.show_errors_dialog = false;
         }
@@ -11505,6 +11593,7 @@ impl eframe::App for App {
         self.drain_clip_download();
         self.drain_share();
         self.drain_quickshare();
+        self.capture_current_error();
         if self.icon_cache.drain(ctx) {
             ctx.request_repaint();
         }

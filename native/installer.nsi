@@ -37,7 +37,7 @@ ShowUninstDetails nevershow
 
 ; Liability notice the user must accept before installing.
 LicenseText "Bitte lesen und akzeptieren Sie die folgenden Hinweise."
-LicenseData "../DISCLAIMER.txt"
+LicenseData "${__FILEDIR__}\..\DISCLAIMER.txt"
 LicenseForceSelection checkbox "Ich habe die Hinweise gelesen und akzeptiere sie"
 
 Page license
@@ -83,13 +83,13 @@ Section "Install"
   write_done:
   SetOverwrite on
 
-  File "../LICENSE"
+  File "${__FILEDIR__}\..\LICENSE"
 
   ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
   ; update_source.txt ships the raw.githubusercontent feed URL, so a fresh
   ; install auto-updates from Git with no configuration.
   IfFileExists "$INSTDIR\update_source.txt" +2 0
-    File "update_source.txt"
+    File "${__FILEDIR__}\update_source.txt"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 

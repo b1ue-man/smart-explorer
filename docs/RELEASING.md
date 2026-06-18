@@ -99,6 +99,14 @@ So a release is "done" when, for the new version: `Cargo.toml` = feed
 `version.txt` = Release tag = installer version, and the feed + Release live on
 `main`.
 
+### Troubleshooting: socket access denied
+
+If the update check fails with `os error 10013` / "Zugriff auf einen Socket war
+aufgrund der Zugriffsrechte des Sockets unzulässig", the GitHub feed can still
+be fine. Bitdefender Firewall has blocked Smart Explorer this way before. Check
+the Bitdefender/Windows Firewall app rule for `Smart Explorer.exe` and allow
+outbound HTTPS to `raw.githubusercontent.com`.
+
 ## Quick consistency check
 
 ```bash

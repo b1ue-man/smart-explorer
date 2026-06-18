@@ -91,6 +91,7 @@ pub fn update_source_str() -> Option<String> {
 // update flow in `check_and_apply`.
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
+const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 
 enum Feed {
     Local(PathBuf),
@@ -186,23 +187,38 @@ fn normalize_http_feed(url: &str) -> String {
 
 fn http_get_string(url: &str) -> Result<String, String> {
     let resp = ureq::get(url)
+        .set("User-Agent", UPDATE_USER_AGENT)
         .timeout(HTTP_TIMEOUT)
         .call()
-        .map_err(|e| format!("HTTP {}: {}", url, e))?;
+        .map_err(|e| format_http_error(url, e))?;
     resp.into_string()
         .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
 }
 
 fn http_download(url: &str, dest: &Path) -> Result<(), String> {
     let resp = ureq::get(url)
+        .set("User-Agent", UPDATE_USER_AGENT)
         .timeout(HTTP_TIMEOUT)
         .call()
-        .map_err(|e| format!("HTTP {}: {}", url, e))?;
+        .map_err(|e| format_http_error(url, e))?;
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(dest)
         .map_err(|e| format!("Temp-Datei {}: {}", dest.display(), e))?;
     std::io::copy(&mut reader, &mut file).map_err(|e| format!("Download {}: {}", url, e))?;
     Ok(())
+}
+
+fn format_http_error(url: &str, err: ureq::Error) -> String {
+    let msg = err.to_string();
+    let hint = if msg.contains("os error 10013")
+        || msg.contains("Zugriff auf einen Socket")
+        || msg.contains("access permissions")
+    {
+        " Hinweis: Windows hat den ausgehenden Socket blockiert. Pruefe Firewall/Antivirus oder eine App-Regel fuer Smart Explorer."
+    } else {
+        ""
+    };
+    format!("HTTP {}: {}{}", url, msg, hint)
 }
 
 /// Persist a user-chosen feed folder (empty string removes the override).
@@ -430,7 +446,7 @@ pub fn list_remote_versions() -> Vec<String> {
             "https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
         );
         let body = match ureq::get(&url)
-            .set("User-Agent", "smart-explorer-updater")
+            .set("User-Agent", UPDATE_USER_AGENT)
             .set("Accept", "application/vnd.github+json")
             .timeout(HTTP_TIMEOUT)
             .call()

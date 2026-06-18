@@ -35,8 +35,19 @@ Write-Host "Feed aktualisiert: $Feed (v$version)"
 
 # Installer neu bauen (fuer Neuinstallationen). EXE_SRC zeigt auf den nativen
 # Windows-Build (installer.nsi defaultet auf den gnu-Cross-Pfad).
-$makensis = "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe"
-if (Test-Path $makensis) {
+$makensis = $null
+$makensisCmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+if ($makensisCmd) {
+    $makensis = $makensisCmd.Source
+} else {
+    $candidates = @(
+        "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe",
+        "$env:ProgramFiles\NSIS\makensis.exe",
+        "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+    )
+    $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+}
+if ($makensis) {
     & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "installer.nsi" | Out-Null
     Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
 } else {
