@@ -58,6 +58,107 @@ pub fn start_scan_backend(
     ScanHandle { cancel }
 }
 
+/// Run a SERVER-SIDE recursive search (the SSH agent's `Search`) under `root`,
+/// streaming each match into the scan channel as a flat `FileEntry` whose name
+/// is the path RELATIVE to `root` (so the user sees where each hit lives). The
+/// app's drain loop / view are unchanged. Falls back to nothing if the backend
+/// reports it didn't run the search (the caller decides what to do then).
+pub fn start_search_backend(
+    backend: BackendHandle,
+    root: String,
+    spec: crate::agent_proto::SearchSpec,
+    tx: Sender<ScanMessage>,
+) -> ScanHandle {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let ct = cancel.clone();
+    std::thread::Builder::new()
+        .name("rscan-search".into())
+        .spawn(move || run_search(backend, root, spec, tx, ct))
+        .expect("spawn rscan-search thread");
+    ScanHandle { cancel }
+}
+
+fn run_search(
+    backend: BackendHandle,
+    root: String,
+    spec: crate::agent_proto::SearchSpec,
+    tx: Sender<ScanMessage>,
+    cancel: Arc<AtomicBool>,
+) {
+    use crossbeam_channel::unbounded;
+    let start = Instant::now();
+    let (htx, hrx) = unbounded::<crate::vfs::SearchHit>();
+    // Drive the (blocking) backend search on a worker; batch hits as they arrive.
+    let be = backend.clone();
+    let root_w = root.clone();
+    let cancel_w = cancel.clone();
+    let worker = std::thread::Builder::new()
+        .name("agent-search".into())
+        .spawn(move || {
+            be.search(&root_w, &spec, htx, &cancel_w);
+        })
+        .expect("spawn agent-search thread");
+
+    let root_arc: Arc<str> = Arc::from(root.as_str());
+    let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH);
+    let mut scanned: u64 = 0;
+    let mut bytes: u64 = 0;
+    let mut last_progress = Instant::now();
+    while let Ok(hit) = hrx.recv() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let path = join(&root, &hit.rel);
+        let base = hit.rel.rsplit('/').next().unwrap_or(&hit.rel);
+        let fe = FileEntry {
+            path: Arc::from(path.as_str()),
+            parent: root_arc.clone(),
+            name: Arc::from(hit.rel.as_str()), // show the relative path
+            ext: Arc::from(ext_of(base, hit.is_dir).as_str()),
+            size: hit.size,
+            mtime_ms: hit.mtime_ms,
+            btime_ms: 0,
+            is_dir: hit.is_dir,
+            is_symlink: false,
+            hidden: false,
+            system: false,
+            depth: 1,
+            id: None,
+        };
+        scanned += 1;
+        if !hit.is_dir {
+            bytes += hit.size;
+        }
+        batch.push(fe);
+        if batch.len() >= BATCH {
+            let _ = tx.send(ScanMessage::Entries(std::mem::take(&mut batch)));
+        }
+        if last_progress.elapsed().as_millis() > PROGRESS_MS {
+            let _ = tx.send(ScanMessage::Progress(ScanProgress {
+                scanned,
+                bytes,
+                errors: 0,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                current_path: root.clone(),
+                done: false,
+            }));
+            last_progress = Instant::now();
+        }
+    }
+    let _ = worker.join();
+    if !batch.is_empty() {
+        let _ = tx.send(ScanMessage::Entries(std::mem::take(&mut batch)));
+    }
+    let _ = tx.send(ScanMessage::Done(ScanProgress {
+        scanned,
+        bytes,
+        errors: 0,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+        current_path: String::new(),
+        done: true,
+    }));
+}
+
 fn run(
     backend: BackendHandle,
     root: String,

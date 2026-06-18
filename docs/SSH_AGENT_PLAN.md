@@ -9,11 +9,13 @@ round-trip per directory.
 Status: **phases 1–5 implemented & build-verified (host + windows-gnu); the agent
 is functional for Linux x86_64/aarch64 servers. Deep-integration roadmap: P0
 (protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local copy/move/
-delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71 — the
-agent now multiplexes every op over one channel, streams reads/writes natively,
-runs same-server copy/move in place, and transfers whole folders in one session
-(no per-file round-trip). Only a real-server smoke test remains.** Researched
-against how VS Code Remote-SSH, JetBrains Gateway,
+delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71; P5
+(server-side recursive search) in 0.5.72 — the agent now multiplexes every op
+over one channel, streams reads/writes natively, runs same-server copy/move in
+place, transfers whole folders in one session, and searches huge remote trees
+server-side (only matches stream back). Only P6 (sync via the agent) + a
+real-server smoke test remain.** Researched against how VS Code Remote-SSH,
+JetBrains Gateway,
 `rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
@@ -377,12 +379,19 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   agent error — and this also makes plain-SFTP **folder** download work, which
   the old per-file path didn't. The "größere Transfers" win.
 
-## Phase 5 — Server-side search / filter
-- **Capability:** `Search{root, spec}` (name / glob + size) → streamed `Match`.
-  *(Server side implemented in the 0.5.69 agent; client mapping pending.)*
-- **Mapping:** the omnibox folder-search and the active filter, when on a remote,
-  run **server-side**; matches stream into the list. Find on huge remote trees
-  without client-side enumeration.
+## Phase 5 — Server-side search / filter — ✅ done (0.5.72)
+- **Capability:** `Search{root, spec}` (case-insensitive substring or `*?`-glob,
+  + size bounds, dirs-optional, result cap) → streamed `Match` (rel path), then
+  `End`; `Cancel` aborts. The agent walks the tree server-side and sends only the
+  hits.
+- **Mapping:** new `Backend::{supports_search, search}` (agent streams `Match`
+  into a channel; CachingBackend forwards). `rscan::start_search_backend` turns
+  hits into flat `FileEntry`s (name = path relative to the search root) over the
+  normal scan channel — so the drain loop / view are unchanged. A **"🔎 Server"**
+  button in the filter bar (shown only on a remote whose backend supports search,
+  with a non-regex query) runs `run_remote_search`: the listing becomes the
+  streamed matches across the whole subtree, no client-side enumeration. RegExp
+  stays client-side (the agent does substring/glob).
 
 ## Phase 6 — Hashing & sync via the agent
 - **Capability:** `WalkHashed{root, want_hash}` — the sync signature (size+mtime,
