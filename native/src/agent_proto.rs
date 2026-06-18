@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch (handshake in `Hello`/`HelloOk`, and the
 /// install path is keyed on this).
-pub const PROTO_VERSION: u32 = 3;
+pub const PROTO_VERSION: u32 = 4;
 
 /// Reject absurd frame lengths from a corrupt/hostile stream before allocating.
 const MAX_FRAME: usize = 1 << 31; // 2 GiB
@@ -600,6 +600,95 @@ fn walk_dir(dir: &Path, name: String) -> WireNode {
     WireNode { name, size, is_dir: true, children }
 }
 
+/// Live counters for a `WalkTree` (so the client can show progress while the
+/// server walks): running file count + byte total.
+pub struct WalkCounter {
+    pub files: std::sync::atomic::AtomicU64,
+    pub bytes: std::sync::atomic::AtomicU64,
+}
+
+/// Recursive size walk that updates `cnt` live and bails on `cancel` (returning
+/// the partial subtree — the client discards a cancelled walk anyway).
+fn walk_dir_counted(dir: &Path, name: String, cnt: &WalkCounter, cancel: &AtomicBool) -> WireNode {
+    if cancel.load(Ordering::Relaxed) {
+        return WireNode { name, size: 0, is_dir: true, children: Vec::new() };
+    }
+    let mut subdirs: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut files: Vec<WireNode> = Vec::new();
+    let mut own = 0u64;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for ent in rd.flatten() {
+            let ft = match ent.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            let nm = ent.file_name().to_string_lossy().into_owned();
+            if ft.is_dir() {
+                let cp = ent.path();
+                if is_pseudo_dir(&cp.to_string_lossy()) {
+                    continue;
+                }
+                subdirs.push((cp, nm));
+            } else if ft.is_file() {
+                let sz = ent.metadata().map(|m| m.len()).unwrap_or(0);
+                own += sz;
+                cnt.files.fetch_add(1, Ordering::Relaxed);
+                cnt.bytes.fetch_add(sz, Ordering::Relaxed);
+                files.push(WireNode { name: nm, size: sz, is_dir: false, children: Vec::new() });
+            }
+        }
+    }
+    let mut dir_nodes: Vec<WireNode> = if subdirs.len() > 1 {
+        subdirs.into_par_iter().map(|(p, n)| walk_dir_counted(&p, n, cnt, cancel)).collect()
+    } else {
+        subdirs.into_iter().map(|(p, n)| walk_dir_counted(&p, n, cnt, cancel)).collect()
+    };
+    let mut size = own;
+    for d in &dir_nodes {
+        size += d.size;
+    }
+    let mut children = Vec::with_capacity(dir_nodes.len() + files.len());
+    children.append(&mut dir_nodes);
+    children.append(&mut files);
+    WireNode { name, size, is_dir: true, children }
+}
+
+/// Walk `root` server-side, emitting periodic `Progress{files, bytes}` frames
+/// while it runs, then the final `Tree`. Respects `cancel`.
+fn handle_walk_tree(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io::Result<()> {
+    let p = Path::new(root);
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.to_string());
+    let cnt = Arc::new(WalkCounter {
+        files: std::sync::atomic::AtomicU64::new(0),
+        bytes: std::sync::atomic::AtomicU64::new(0),
+    });
+    let done = Arc::new(AtomicBool::new(false));
+    // Progress emitter: ~5/s while the walk runs.
+    let sink2 = sink.clone();
+    let cnt2 = cnt.clone();
+    let done2 = done.clone();
+    let emitter = std::thread::spawn(move || {
+        while !done2.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let f = cnt2.files.load(Ordering::Relaxed);
+            let b = cnt2.bytes.load(Ordering::Relaxed);
+            if emit(&sink2, id, &Frame::Progress { done: f, total: b }).is_err() {
+                break;
+            }
+        }
+    });
+    let tree = walk_dir_counted(p, name, &cnt, cancel);
+    done.store(true, Ordering::Relaxed);
+    let _ = emitter.join();
+    emit(sink, id, &Frame::Tree(tree))
+}
+
 // ── server-side streaming handlers ───────────────────────────────────────────
 
 /// A shared, mutex-guarded frame sink. Per-frame locking lets a quick op's reply
@@ -1009,7 +1098,7 @@ fn dispatch(
             Ok(m) => emit(sink, id, &Frame::Meta(m)),
             Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
         },
-        Frame::WalkTree(p) => emit(sink, id, &Frame::Tree(walk_local(Path::new(&p)))),
+        Frame::WalkTree(p) => handle_walk_tree(sink, id, &p, cancel),
         Frame::Read { path, offset, len } => handle_read(sink, id, &path, offset, len, cancel),
         Frame::Write(p) => match inbound {
             Some(rx) => handle_write(sink, id, &p, rx, cancel),

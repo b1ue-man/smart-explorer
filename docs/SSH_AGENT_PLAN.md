@@ -6,16 +6,20 @@ storage-analysis walk, search/filter) runs **locally on the server** and only
 the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
-Status: **phases 1–5 implemented & build-verified (host + windows-gnu); the agent
-is functional for Linux x86_64/aarch64 servers. Deep-integration roadmap: P0
-(protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local copy/move/
-delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71; P5
-(server-side recursive search) in 0.5.72 — the agent now multiplexes every op
-over one channel, streams reads/writes natively, runs same-server copy/move in
-place, transfers whole folders in one session, and searches huge remote trees
-server-side (only matches stream back). Only P6 (sync via the agent) + a
-real-server smoke test remain.** Researched against how VS Code Remote-SSH,
-JetBrains Gateway,
+Status: **fully implemented & build-verified (host + windows-gnu); the agent is
+functional for Linux x86_64/aarch64 servers. The ENTIRE deep-integration roadmap
+ships — P0 (protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local
+copy/move/delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71;
+P5 (server-side recursive search) in 0.5.72; P6 (sync signature + content hashing
+via the agent), live analytics-walk progress, and the in-app "remove agent"
+action in 0.5.73. The agent multiplexes every op over one channel, streams
+reads/writes natively, runs same-server copy/move in place, transfers whole
+folders in one session, searches huge remote trees server-side, and produces the
+sync signature (size+mtime, MD5 on demand) in one server pass — sync, the
+storage analysis and now hashing all run server-side with SFTP as the per-op
+fallback. The ONLY thing not exercised here is a real-server SSH smoke test (no
+SSH server in the build env) — covered by socket + real-musl-binary child-process
+tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
 `rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
@@ -56,9 +60,19 @@ JetBrains Gateway,
 - ✅ **Phase 5b — status indicator.** `RemoteState.agent_version` (set from the
   handshake on deploy success) drives a "⚡ Agent" badge next to the connection
   indicator (hover shows the version).
-- ⬜ **Remaining: a real-server smoke test** (no SSH server in the build env) and
-  Phase 6 polish: server-side search/filter, chunked tree streaming with live
-  progress, prefetch, the in-app "remove agent" action.
+- ✅ **Phase 6 polish (0.5.72–0.5.73).** Server-side search/filter (P5); live
+  progress streamed during the server-side analytics walk (the agent emits
+  `Progress{files,bytes}` ~5/s while walking and respects `Cancel`); the in-app
+  **"✖ remove agent"** action next to the live "⚡ Agent" badge (switches the
+  connection back to plain SFTP and deletes `~/.cache/smart-explorer` on the
+  server). *Prefetch* was intentionally dropped: it was a workaround for per-dir
+  latency, which the agent eliminates — `list_dir` is one fast server-side
+  round-trip and the `CachingBackend` already makes re-visits instant, so a
+  speculative pre-list would add complexity for no measurable win.
+- ⬜ **Remaining: a real-server SSH smoke test only** (no SSH server in the build
+  env). The whole protocol/agent is otherwise covered by unit tests, an in-process
+  socket bridge, and a child-process test that drives the ACTUAL bundled musl
+  binary end to end.
 
 Regenerating the binaries (e.g. on a `PROTO_VERSION` bump):
 `cd se-agent && cargo build --release --target x86_64-unknown-linux-musl` and
@@ -393,14 +407,22 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   streamed matches across the whole subtree, no client-side enumeration. RegExp
   stays client-side (the agent does substring/glob).
 
-## Phase 6 — Hashing & sync via the agent
+## Phase 6 — Hashing & sync via the agent — ✅ done (0.5.73)
 - **Capability:** `WalkHashed{root, want_hash}` — the sync signature (size+mtime,
-  and MD5 on demand) in one server walk. *(Server side implemented in the 0.5.69
-  agent; client mapping pending.)*
-- **Mapping:** `bisync::{walk_files, apply}` use the agent when the endpoint's
-  connection has it — teach the sync runner to deploy + use the agent (sync
-  currently builds a *fresh, plain* SFTP backend). Also unlocks the **duplicate
-  finder (A2)** for remotes (hash without download).
+  and MD5 on demand) computed in one SERVER-SIDE walk; streamed as `HashEntry`
+  per file (the agent links a small pure-Rust MD5, verified against the `md5`
+  crate over real content). `Cancel` aborts.
+- **Mapping:** new `Backend::{supports_walk_hashed, walk_hashed}` (CachingBackend
+  forwards; only the agent implements it). `bisync::walk_files` takes a fast path
+  — `walk_hashed_via_agent` builds the signature `Tree` from one server pass
+  (applying the same client-side ignore/hidden/size filters), so a remote sync no
+  longer downloads every file to hash it. MD5 is requested only for
+  `HashMode::Full`; the agent's hex MD5 maps through `md5_hex_to_u64`, the same
+  content key the local side derives from `hash_file`, so cross-side compares stay
+  correct. The sync runner already obtains the `AgentBackend` automatically:
+  `resolve_endpoint → open_saved_at → do_connect` deploys the agent whenever the
+  saved connection has `use_agent`, so `walk_files`/`apply` ride it with no extra
+  wiring. This also unlocks content-hash dedup on remotes (hash without download).
 
 ## Cross-cutting (all phases)
 - **Fallback:** any agent op error → fall back to the inner SFTP op (per-op), as

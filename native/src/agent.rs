@@ -472,11 +472,41 @@ impl Backend for AgentBackend {
         true
     }
 
-    fn walk_tree(&self, root: &str) -> Option<crate::agent_proto::WireNode> {
-        match self.mux.call(Frame::WalkTree(root.to_string())) {
-            Ok(Frame::Tree(n)) => Some(n),
-            _ => None, // fall back to the client-side walk
+    fn walk_tree(
+        &self,
+        root: &str,
+        on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+    ) -> Option<crate::agent_proto::WireNode> {
+        let (id, rx) = self.mux.register();
+        if self.mux.send(id, Frame::WalkTree(root.to_string())).is_err() {
+            self.mux.unregister(id);
+            return None;
         }
+        let mut last = (0u64, 0u64);
+        let result = loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                Ok(Frame::Progress { done, total }) => {
+                    last = (done, total);
+                    if !on_progress(done, total) {
+                        let _ = self.mux.send(id, Frame::Cancel);
+                        break None;
+                    }
+                }
+                Ok(Frame::Tree(n)) => break Some(n),
+                Ok(Frame::Err(_)) => break None,
+                Ok(_) => {}
+                // No frame yet — still let the caller cancel a long walk.
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if !on_progress(last.0, last.1) {
+                        let _ = self.mux.send(id, Frame::Cancel);
+                        break None;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break None,
+            }
+        };
+        self.mux.unregister(id);
+        result
     }
 
     // ── Phase 4: recursive bulk folder transfer in one session ──
@@ -520,6 +550,52 @@ impl Backend for AgentBackend {
                         .is_err()
                     {
                         let _ = self.mux.send(id, Frame::Cancel); // consumer gone
+                        break;
+                    }
+                }
+                Ok(Frame::End) => break,
+                Ok(Frame::Err(_)) => break,
+                Ok(_) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        self.mux.unregister(id);
+        true
+    }
+
+    // ── Phase 6: the sync signature (size+mtime [+md5]) in one server walk ──
+    fn supports_walk_hashed(&self) -> bool {
+        true
+    }
+    fn walk_hashed(
+        &self,
+        root: &str,
+        want_hash: bool,
+        tx: Sender<crate::vfs::HashHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        let (id, rx) = self.mux.register();
+        if self
+            .mux
+            .send(id, Frame::WalkHashed { root: root.to_string(), want_hash })
+            .is_err()
+        {
+            self.mux.unregister(id);
+            return false;
+        }
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = self.mux.send(id, Frame::Cancel);
+                break;
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(Frame::HashEntry { rel, is_dir, size, mtime_ms, md5 }) => {
+                    if tx
+                        .send(crate::vfs::HashHit { rel, is_dir, size, mtime_ms, md5 })
+                        .is_err()
+                    {
+                        let _ = self.mux.send(id, Frame::Cancel);
                         break;
                     }
                 }
@@ -771,7 +847,7 @@ mod tests {
 
         // whole-tree walk
         assert!(be.supports_walk_tree());
-        let tree = crate::analytics::from_wire(be.walk_tree(&root).unwrap());
+        let tree = crate::analytics::from_wire(be.walk_tree(&root, &|_, _| true).unwrap());
         assert_eq!(tree.size, 500);
         assert_eq!(tree.children.iter().find(|c| &*c.name == "sub").unwrap().size, 400);
 
@@ -801,6 +877,22 @@ mod tests {
             assert!(be.search(&root, &spec, stx, &cancel));
             let hits: Vec<String> = srx.iter().map(|h| h.rel).collect();
             assert_eq!(hits, vec!["sub/b.bin".to_string()]);
+        }
+
+        // signature walk (Phase 6): size+mtime + server-computed MD5, one pass
+        {
+            let (htx, hrx) = unbounded();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            assert!(be.walk_hashed(&root, true, htx, &cancel));
+            let hits: Vec<crate::vfs::HashHit> = hrx.iter().collect();
+            let files: Vec<&crate::vfs::HashHit> = hits.iter().filter(|h| !h.is_dir).collect();
+            assert_eq!(files.len(), 2);
+            assert!(files.iter().all(|h| h.md5.as_ref().map_or(false, |m| m.len() == 32)));
+            let bbin = files.iter().find(|h| h.rel == "sub/b.bin").unwrap();
+            assert_eq!(bbin.size, 400);
+            // the agent's pure-Rust MD5 matches the `md5` crate over real content
+            let expect = format!("{:x}", md5::compute(vec![0u8; 400]));
+            assert_eq!(bbin.md5.as_deref(), Some(expect.as_str()));
         }
 
         // streamed write (Phase 2): temp + atomic rename, server-side
@@ -879,7 +971,7 @@ mod tests {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(entries.len(), 2);
 
-        let tree = crate::analytics::from_wire(be.walk_tree(&root).unwrap());
+        let tree = crate::analytics::from_wire(be.walk_tree(&root, &|_, _| true).unwrap());
         assert_eq!(tree.size, 311);
 
         let mut buf = String::new();
@@ -899,6 +991,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&getdst);
         assert_eq!(be.get_tree(&root, &getdst).unwrap(), 3); // hello.txt, d/x.bin, up.txt
         assert!(getdst.join("d/x.bin").exists());
+
+        // signature walk against the REAL binary: its pure-Rust MD5 (in the musl
+        // build) must equal the `md5` crate over the same content.
+        {
+            let (htx, hrx) = unbounded();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            assert!(be.walk_hashed(&root, true, htx, &cancel));
+            let hits: Vec<crate::vfs::HashHit> = hrx.iter().collect();
+            let hello = hits.iter().find(|h| h.rel == "hello.txt").unwrap();
+            assert_eq!(hello.md5.as_deref(), Some(format!("{:x}", md5::compute(b"agent works")).as_str()));
+        }
 
         drop(be);
         let _ = child.wait();
