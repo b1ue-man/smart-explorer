@@ -47,11 +47,42 @@ Page instfiles
 Section "Install"
   SetOutPath "$INSTDIR"
 
-  ; Close a running instance so the exe can be replaced
-  nsExec::Exec 'taskkill /IM "${EXE_NAME}" /F'
-  Sleep 400
+  ; Close ALL running instances before touching the exe. The auto-updater renames
+  ; the live binary ("Smart Explorer_old.exe") and can run a worker, so killing
+  ; only "Smart Explorer.exe" misses them — and a process still holding a handle
+  ; on the (already-deleted) exe makes Windows refuse to recreate it at the same
+  ; path, which is the "Error opening file for writing" you can hit even when the
+  ; folder looks empty. The IMAGENAME wildcard catches every variant.
+  nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
+  nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
+  Sleep 1200
 
-  File "/oname=${EXE_NAME}" "${EXE_SRC}"
+  ; Clear leftovers from a previous/interrupted auto-update so the fresh exe lands.
+  Delete "$INSTDIR\Smart Explorer_old.exe"
+  Delete "$INSTDIR\Smart Explorer_update_pending.exe"
+
+  ; Write the exe with retries: if a handle is still releasing, wait + re-kill
+  ; rather than dropping the user into Abort/Retry/Ignore. SetOverwrite try makes
+  ; a failed File set the error flag instead of prompting.
+  SetOverwrite try
+  StrCpy $0 0
+  write_exe:
+    Delete "$INSTDIR\${EXE_NAME}"
+    ClearErrors
+    File "/oname=${EXE_NAME}" "${EXE_SRC}"
+    IfErrors 0 write_done
+    IntOp $0 $0 + 1
+    IntCmp $0 6 write_failed
+    Sleep 1000
+    nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
+    nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
+    Goto write_exe
+  write_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Konnte $INSTDIR\${EXE_NAME} nicht schreiben.$\r$\nBitte alle Smart-Explorer-Fenster schließen (ggf. im Task-Manager 'Smart Explorer' beenden) und die Installation erneut starten."
+    Abort
+  write_done:
+  SetOverwrite on
+
   File "../LICENSE"
 
   ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
@@ -100,8 +131,10 @@ Function .onInstSuccess
 FunctionEnd
 
 Section "Uninstall"
-  nsExec::Exec 'taskkill /IM "${EXE_NAME}" /F'
-  Sleep 400
+  ; Kill every variant (see the install section) so the exe isn't left locked.
+  nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
+  nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
+  Sleep 1000
 
   ; Undo shell integration via the app's own (reversible) restore BEFORE the
   ; exe is deleted, so folder-opening can't be left pointing at a missing file.
