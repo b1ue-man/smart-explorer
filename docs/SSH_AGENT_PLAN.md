@@ -6,9 +6,10 @@ storage-analysis walk, search/filter) runs **locally on the server** and only
 the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
-Status: **phases 1–3 implemented & compile-verified (host + windows-gnu); phases
-4–5 pending.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
-`rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
+Status: **phases 1–4 implemented & compile-verified (host + windows-gnu); only
+phase 5 (cross-compiled agent binaries) + a real-server run remain.** Researched
+against how VS Code Remote-SSH, JetBrains Gateway, `rclone`, and `ansible` deploy
+and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
 
@@ -27,19 +28,21 @@ Status: **phases 1–3 implemented & compile-verified (host + windows-gnu); phas
   `chmod` → launch → handshake). Compiles against the real russh 0.61 API on
   host + windows-gnu; `sh_quote`/`artifact_for` unit-tested. **Not runtime-tested
   (no SSH server in the build env).**
-- ⬜ **Phase 4 — connect UX.** A `use_agent` flag on `SavedConnection`, calling
-  `deploy_over_sftp` after SFTP connect (fallback on error), a status chip, and
-  the cleanup action. Deferred: inert until phase 5 binaries exist, and it
-  touches the saved-connection schema — do it together with phase 5.
+- ✅ **Phase 4 — connect UX.** `use_agent` flag on `SavedConnection` (TSV field 9,
+  backward-compatible: old 8-field lines → false) + `ConnectForm`; an opt-in
+  checkbox in the connect dialog (SFTP only); the SFTP connect path calls
+  `deploy_over_sftp` and falls back to plain SFTP on any error. (Status chip +
+  in-app "remove agent" action: minor follow-up.)
 - ⬜ **Phase 5 — cross-compile + bundle.** Build `se-agent` for
   `x86_64/aarch64-unknown-linux-musl`, commit hashes, wire `artifact_for`
   (currently returns `None` for every target by design → deploy no-ops to the
-  SFTP fallback). **Blocked in this env: no musl toolchain installed.**
+  SFTP fallback). **Blocked in this env: no musl toolchain installed.** This is
+  the ONLY thing between here and a working remote agent.
 - ⬜ **Phase 6 — polish:** server-side search/filter, chunked tree streaming with
-  live progress, prefetch.
+  live progress, prefetch; agent status chip + cleanup action.
 
-The seam is clean: once phase 5 binaries are bundled and `artifact_for` is
-filled in, phase 4 is the only wiring left to make it user-reachable.
+The seam is clean and fully wired end-to-end: the moment phase-5 binaries are
+bundled and `artifact_for` returns them, the opt-in checkbox makes it live.
 
 ---
 

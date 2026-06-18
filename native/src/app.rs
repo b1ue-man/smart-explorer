@@ -10406,6 +10406,13 @@ impl App {
 
                 if f.protocol == Protocol::Sftp {
                     ui.checkbox(&mut f.use_key, "Mit Schlüsseldatei anmelden");
+                    ui.checkbox(&mut f.use_agent, "⚡ Remote-Agent (experimentell)")
+                        .on_hover_text(
+                            "Lädt beim Verbinden einen kleinen Helfer auf den Server und führt \
+                             Erkundung/Analyse dort lokal aus (statt vieler Netzwerk-Roundtrips). \
+                             Opt-in; fällt bei Problemen automatisch auf normales SFTP zurück. \
+                             Noch keine Agent-Binaries gebündelt — siehe docs/SSH_AGENT_PLAN.md.",
+                        );
                 }
                 if f.protocol == Protocol::Sftp && f.use_key {
                     ui.horizontal(|ui| {
