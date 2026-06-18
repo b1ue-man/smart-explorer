@@ -228,6 +228,69 @@ impl SftpBackend {
     pub fn url(&self) -> String {
         self.url.clone()
     }
+
+    /// Run a one-shot remote command and capture its stdout — used by the SSH
+    /// remote-agent deploy (`uname -sm`, `$HOME`, the agent `--version` probe,
+    /// `mv`/`chmod`, `sha256sum`, cleanup). Opens a fresh exec channel on the
+    /// already-authenticated session. See `docs/SSH_AGENT_PLAN.md`.
+    pub fn exec_capture(&self, cmd: &str) -> io::Result<String> {
+        self.rt.block_on(async {
+            let mut ch = self._session.channel_open_session().await.map_err(io_err)?;
+            ch.exec(true, cmd).await.map_err(io_err)?;
+            let mut out = Vec::new();
+            loop {
+                match ch.wait().await {
+                    Some(russh::ChannelMsg::Data { data }) => out.extend_from_slice(&data),
+                    Some(russh::ChannelMsg::Close) | None => break,
+                    _ => {} // ExtendedData (stderr), Eof, ExitStatus, … → ignore
+                }
+            }
+            Ok::<_, io::Error>(String::from_utf8_lossy(&out).trim().to_string())
+        })
+    }
+
+    /// Exec `cmd` and return blocking read/write halves over its stdio, for the
+    /// agent's framed request/response protocol (the agent runs `--serve`).
+    pub fn open_exec_streams(
+        &self,
+        cmd: &str,
+    ) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
+        let stream = self.rt.block_on(async {
+            let ch = self._session.channel_open_session().await.map_err(io_err)?;
+            ch.exec(false, cmd).await.map_err(io_err)?;
+            Ok::<_, io::Error>(ch.into_stream())
+        })?;
+        let (rd, wr) = tokio::io::split(stream);
+        let r: Box<dyn Read + Send> = Box::new(BlockingRead { rt: self.rt.clone(), inner: rd });
+        let w: Box<dyn Write + Send> = Box::new(BlockingWrite { rt: self.rt.clone(), inner: wr });
+        Ok((r, w))
+    }
+}
+
+/// `std::io::Read` over a tokio async read half, driven by the backend's runtime
+/// (the protocol is request/response, so each call blocks one op — never nested
+/// inside another `block_on`, since Backend calls run on app/scan threads).
+struct BlockingRead<R> {
+    rt: Arc<Runtime>,
+    inner: R,
+}
+impl<R: tokio::io::AsyncRead + Unpin + Send> Read for BlockingRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.rt.block_on(self.inner.read(buf))
+    }
+}
+
+struct BlockingWrite<W> {
+    rt: Arc<Runtime>,
+    inner: W,
+}
+impl<W: tokio::io::AsyncWrite + Unpin + Send> Write for BlockingWrite<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.rt.block_on(self.inner.write(buf))
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.rt.block_on(self.inner.flush())
+    }
 }
 
 async fn connect_async(cfg: SftpConfig) -> io::Result<(client::Handle<Client>, SftpSession)> {

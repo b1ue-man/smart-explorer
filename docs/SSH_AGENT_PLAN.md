@@ -6,10 +6,40 @@ storage-analysis walk, search/filter) runs **locally on the server** and only
 the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
-Status: **planned, not implemented.** Researched against how VS Code Remote-SSH,
-JetBrains Gateway, `rclone`, and `ansible` deploy and drive a remote side. Build
-in the phase order in §9; de-risk the transport (§3) and the cross-compiled
-agent binary (§7) first. Date: 2026-06-18.
+Status: **phases 1–3 implemented & compile-verified (host + windows-gnu); phases
+4–5 pending.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
+`rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
+
+### Implementation status
+
+- ✅ **Phase 1 — protocol + agent core** (`agent_proto.rs`, `src/bin/se-agent.rs`).
+  Framed wire protocol + server-side local fs ops + `serve()`. Unit-tested
+  (req/resp roundtrip, framed `serve()` over an in-memory pipe).
+- ✅ **Phase 2 — `AgentBackend`** (`agent.rs`) implementing `vfs::Backend`;
+  `vfs::Backend::{supports_walk_tree,walk_tree}` hooks; the analytics remote
+  scan uses `walk_tree` (one server-side walk) with client-side fallback;
+  `analytics::from_wire`. Tested end-to-end against an in-process agent over a
+  **TCP socket pair** (`list_dir` + `walk_tree` + `stat`) — no SSH needed.
+- ✅ **Phase 3 — SSH transport + deploy logic.** `SftpBackend::{exec_capture,
+  open_exec_streams}` (second exec channel on the live russh session + blocking
+  read/write adapters over the channel stream); `agent::{deploy_over_sftp,
+  remove_from_sftp, artifact_for, sh_quote}` (detect → probe → verified upload →
+  `chmod` → launch → handshake). Compiles against the real russh 0.61 API on
+  host + windows-gnu; `sh_quote`/`artifact_for` unit-tested. **Not runtime-tested
+  (no SSH server in the build env).**
+- ⬜ **Phase 4 — connect UX.** A `use_agent` flag on `SavedConnection`, calling
+  `deploy_over_sftp` after SFTP connect (fallback on error), a status chip, and
+  the cleanup action. Deferred: inert until phase 5 binaries exist, and it
+  touches the saved-connection schema — do it together with phase 5.
+- ⬜ **Phase 5 — cross-compile + bundle.** Build `se-agent` for
+  `x86_64/aarch64-unknown-linux-musl`, commit hashes, wire `artifact_for`
+  (currently returns `None` for every target by design → deploy no-ops to the
+  SFTP fallback). **Blocked in this env: no musl toolchain installed.**
+- ⬜ **Phase 6 — polish:** server-side search/filter, chunked tree streaming with
+  live progress, prefetch.
+
+The seam is clean: once phase 5 binaries are bundled and `artifact_for` is
+filled in, phase 4 is the only wiring left to make it user-reachable.
 
 ---
 

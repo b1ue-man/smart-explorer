@@ -213,10 +213,110 @@ impl Backend for AgentBackend {
     }
 }
 
+// ── deploy over an existing SFTP/SSH connection (phase 3) ────────────────────
+
+/// A bundled agent binary for one server target + its integrity hash.
+pub struct AgentArtifact {
+    pub bytes: &'static [u8],
+    pub sha256_hex: &'static str,
+    pub version: &'static str,
+}
+
+/// Select the bundled agent for a server's `uname -sm` (e.g. "Linux x86_64",
+/// "Linux aarch64", "Darwin arm64"), or `None` if we ship none for it → the
+/// caller keeps plain SFTP. Binaries are wired in once the static-musl
+/// cross-compile (plan §7 / phase 5) produces them; until then this is empty by
+/// design, so deploy cleanly no-ops to the SFTP fallback.
+pub fn artifact_for(uname_sm: &str) -> Option<AgentArtifact> {
+    let mut it = uname_sm.split_whitespace();
+    let os = it.next().unwrap_or("");
+    let arch = it.next().unwrap_or("");
+    match (os, arch) {
+        // ("Linux", "x86_64")  => Some(AgentArtifact { bytes: include_bytes!(concat!(env!("OUT_DIR"), "/se-agent-x86_64-linux-musl")), sha256_hex: "…", version: env!("CARGO_PKG_VERSION") }),
+        // ("Linux", "aarch64") => Some(AgentArtifact { … }),
+        _ => None,
+    }
+}
+
+/// Single-quote a string for safe interpolation into a remote `sh -c` command.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r#"'\''"#))
+}
+
+/// Deploy + launch the agent over an existing SFTP backend's SSH connection:
+/// detect the target, upload (verified) if missing/stale, then exec `--serve`
+/// and hand-shake. Returns an `AgentBackend` wrapping `inner` (the SFTP backend)
+/// for byte-stream ops. Any failure is returned so the caller falls back to
+/// plain SFTP. See `docs/SSH_AGENT_PLAN.md` §5/§6.
+pub fn deploy_over_sftp(
+    sftp: &crate::sftp::SftpBackend,
+    inner: BackendHandle,
+) -> io::Result<AgentBackend> {
+    // 1. Detect the server target and pick a matching bundled binary.
+    let uname = sftp.exec_capture("uname -sm")?;
+    let art = artifact_for(&uname)
+        .ok_or_else(|| io::Error::other(format!("kein Agent-Binary gebündelt für '{uname}'")))?;
+
+    // 2. Resolve a per-user install path.
+    let home = sftp.exec_capture("printf %s \"$HOME\"")?;
+    let home = if home.is_empty() { ".".to_string() } else { home };
+    let dir = format!("{}/.cache/smart-explorer", home.trim_end_matches('/'));
+    let remote = format!("{}/se-agent-{}", dir, art.version);
+
+    // 3. Skip upload if a matching agent is already installed.
+    let want = format!("proto={} ver={}", agent_proto::PROTO_VERSION, art.version);
+    let probe = sftp
+        .exec_capture(&format!("{} --version 2>/dev/null", sh_quote(&remote)))
+        .unwrap_or_default();
+    if !probe.contains(&want) {
+        // 4. Upload to a temp path (SFTP), verify SHA-256 server-side, then
+        //    atomically move into place and lock down permissions.
+        inner.mkdir_all(&dir)?;
+        let tmp = format!("{}.tmp", remote);
+        {
+            let mut w = inner.open_write(&tmp)?;
+            w.write_all(art.bytes)?;
+            w.flush()?;
+        }
+        let sum = sftp
+            .exec_capture(&format!("sha256sum {} 2>/dev/null | cut -d' ' -f1", sh_quote(&tmp)))
+            .unwrap_or_default();
+        if !sum.is_empty() && !sum.eq_ignore_ascii_case(art.sha256_hex) {
+            let _ = inner.remove_file(&tmp);
+            return Err(io::Error::other("Agent-Binary: SHA-256 stimmt nicht"));
+        }
+        sftp.exec_capture(&format!(
+            "mv -f {tmp} {remote} && chmod 700 {remote}",
+            tmp = sh_quote(&tmp),
+            remote = sh_quote(&remote),
+        ))?;
+    }
+
+    // 5. Launch the agent and hand-shake.
+    let (r, w) = sftp.open_exec_streams(&format!("{} --serve", sh_quote(&remote)))?;
+    AgentBackend::from_streams(r, w, inner)
+}
+
+/// Remove a deployed agent from a server (the "Remote-Agent entfernen" action).
+pub fn remove_from_sftp(sftp: &crate::sftp::SftpBackend) -> io::Result<()> {
+    sftp.exec_capture("rm -rf \"$HOME/.cache/smart-explorer\"")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn artifact_selection_and_quoting() {
+        // No binaries bundled yet → every target falls back.
+        assert!(artifact_for("Linux x86_64").is_none());
+        assert!(artifact_for("garbage").is_none());
+        // Shell quoting is injection-safe.
+        assert_eq!(sh_quote("/home/u/dir"), "'/home/u/dir'");
+        assert_eq!(sh_quote("a'b; rm -rf /"), r#"'a'\''b; rm -rf /'"#);
+    }
 
     /// Drive a real `AgentBackend` against an in-process agent over a TCP socket
     /// pair (no child process / SSH needed): a thread runs `agent_proto::serve`
