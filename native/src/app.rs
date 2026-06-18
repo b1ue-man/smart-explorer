@@ -5714,6 +5714,42 @@ impl App {
         }
     }
 
+    /// Remove the remote agent from THIS connection: switch back to plain SFTP
+    /// immediately (dropping the `AgentBackend` tears its bridge down → the
+    /// remote `se-agent` process exits), un-persist the preference, and delete
+    /// `~/.cache/smart-explorer` on the server (best-effort, off the UI thread).
+    fn remove_agent_now(&mut self) {
+        let (sftp, account) = match self.remote.as_ref() {
+            Some(rs) if rs.agent_version.is_some() => match &rs.sftp {
+                Some(s) => (s.clone(), rs.account.clone()),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Some(rs) = self.remote.as_mut() {
+            rs.backend = cache_remote(sftp.clone());
+            rs.agent_version = None;
+        }
+        if let Some(acc) = account {
+            let mut conns = crate::creds::load_connections();
+            if let Some(c) = conns.iter_mut().find(|c| c.account() == acc) {
+                c.use_agent = false;
+                let _ = crate::creds::save_connection(c);
+                self.saved_connections = crate::creds::load_connections();
+            }
+        }
+        std::thread::Builder::new()
+            .name("agent-remove".into())
+            .spawn(move || {
+                let _ = crate::agent::remove_from_sftp(&sftp);
+            })
+            .ok();
+        self.notice = Some((
+            "Remote-Agent entfernt — Verbindung läuft wieder über SFTP".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
     /// One-time (cached) fetch of previously-released versions from the GitHub
     /// feed for the rollback list. No-op if already fetched / fetching.
     fn fetch_remote_versions(&mut self) {
@@ -8224,6 +8260,7 @@ impl App {
 
         let mut disconnect = false;
         let mut activate_agent = false;
+        let mut remove_agent = false;
         let agent_activating = self.agent_activate_rx.is_some();
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
         let mut to_remove: Option<String> = None;
@@ -8239,8 +8276,19 @@ impl App {
                 if let Some(ver) = &rs.agent_version {
                     ui.colored_label(Color32::from_rgb(120, 230, 140), "⚡ Agent")
                         .on_hover_text(format!(
-                            "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse laufen serverseitig"
+                            "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse/Transfers laufen serverseitig"
                         ));
+                    if rs.sftp.is_some()
+                        && ui
+                            .small_button("✖")
+                            .on_hover_text(
+                                "Remote-Agent entfernen — löscht ~/.cache/smart-explorer auf dem \
+                                 Server und schaltet diese Verbindung zurück auf reines SFTP.",
+                            )
+                            .clicked()
+                    {
+                        remove_agent = true;
+                    }
                 } else if rs.sftp.is_some() {
                     if agent_activating {
                         ui.add(egui::Spinner::new().size(14.0));
@@ -8354,6 +8402,9 @@ impl App {
         }
         if activate_agent {
             self.start_agent_activation();
+        }
+        if remove_agent {
+            self.remove_agent_now();
         }
         if self.agent_activate_rx.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
@@ -10230,9 +10281,16 @@ impl App {
         let scan_root = norm.clone();
         std::thread::spawn(move || {
             // If the backend has a server-side agent, let IT walk the whole tree
-            // (one request, no per-dir round-trip); else walk client-side.
+            // (one request, no per-dir round-trip) while streaming live progress
+            // into `p2`; else walk client-side.
             let node = if be.supports_walk_tree() {
-                match be.walk_tree(&scan_root) {
+                let prog = p2.clone();
+                let on_progress = move |files: u64, bytes: u64| -> bool {
+                    prog.files.store(files, std::sync::atomic::Ordering::Relaxed);
+                    prog.bytes.store(bytes, std::sync::atomic::Ordering::Relaxed);
+                    !prog.cancel.load(std::sync::atomic::Ordering::Relaxed)
+                };
+                match be.walk_tree(&scan_root, &on_progress) {
                     Some(w) => crate::analytics::from_wire(w),
                     None => crate::analytics::scan_backend(&*be, &scan_root, &p2),
                 }

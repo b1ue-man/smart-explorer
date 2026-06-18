@@ -164,9 +164,14 @@ pub trait Backend: Send + Sync {
     }
 
     /// Walk `root` server-side and return the size tree, or `None` to fall back
-    /// to the client-side walk. Only the agent backend overrides this; blocking
-    /// (run it off the UI thread).
-    fn walk_tree(&self, _root: &str) -> Option<crate::agent_proto::WireNode> {
+    /// to the client-side walk. `on_progress(files, bytes)` is called as the walk
+    /// streams progress and returns `false` to request cancellation. Only the
+    /// agent backend overrides this; blocking (run it off the UI thread).
+    fn walk_tree(
+        &self,
+        _root: &str,
+        _on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+    ) -> Option<crate::agent_proto::WireNode> {
         None
     }
 
@@ -214,6 +219,29 @@ pub trait Backend: Send + Sync {
         let _ = (root, spec, tx, cancel);
         false
     }
+
+    /// Can this backend produce the SYNC SIGNATURE (size+mtime, and MD5 on
+    /// demand) in one SERVER-SIDE walk (the agent's `WalkHashed`)? When true,
+    /// `bisync::walk_files` gets the whole tree — including content hashes —
+    /// without downloading a single file.
+    fn supports_walk_hashed(&self) -> bool {
+        false
+    }
+
+    /// Walk `root` server-side, streaming a `HashHit` per entry (rel path) into
+    /// `tx`; computes MD5 per file when `want_hash`. Returns true if the backend
+    /// ran it (false = unsupported → caller does the client-side walk). `cancel`
+    /// aborts. Only the agent overrides this.
+    fn walk_hashed(
+        &self,
+        root: &str,
+        want_hash: bool,
+        tx: crossbeam_channel::Sender<HashHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        let _ = (root, want_hash, tx, cancel);
+        false
+    }
 }
 
 /// One server-side search match (path relative to the search root).
@@ -223,6 +251,17 @@ pub struct SearchHit {
     pub is_dir: bool,
     pub size: u64,
     pub mtime_ms: i64,
+}
+
+/// One entry of a server-side signature walk (path relative to the walk root).
+/// `md5` is the hex content hash, present only for files when hashing was asked.
+#[derive(Clone, Debug)]
+pub struct HashHit {
+    pub rel: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub md5: Option<String>,
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -380,8 +419,12 @@ impl Backend for CachingBackend {
     fn supports_walk_tree(&self) -> bool {
         self.inner.supports_walk_tree()
     }
-    fn walk_tree(&self, root: &str) -> Option<crate::agent_proto::WireNode> {
-        self.inner.walk_tree(root)
+    fn walk_tree(
+        &self,
+        root: &str,
+        on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+    ) -> Option<crate::agent_proto::WireNode> {
+        self.inner.walk_tree(root, on_progress)
     }
     fn supports_bulk_tree(&self) -> bool {
         self.inner.supports_bulk_tree()
@@ -405,6 +448,18 @@ impl Backend for CachingBackend {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> bool {
         self.inner.search(root, spec, tx, cancel)
+    }
+    fn supports_walk_hashed(&self) -> bool {
+        self.inner.supports_walk_hashed()
+    }
+    fn walk_hashed(
+        &self,
+        root: &str,
+        want_hash: bool,
+        tx: crossbeam_channel::Sender<HashHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        self.inner.walk_hashed(root, want_hash, tx, cancel)
     }
 }
 

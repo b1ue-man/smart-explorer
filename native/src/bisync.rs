@@ -636,6 +636,55 @@ fn prev_side(base: &Baseline, side_a: bool) -> Tree {
 /// The walk is breadth-first and **fans out each level across the backend's
 /// `parallelism()`** — decisive for remotes like Drive where every `list_dir`
 /// is a network round-trip and a 27k-file tree spans hundreds of folders.
+/// Build the signature `Tree` from the agent's one-pass server-side walk
+/// (`Backend::walk_hashed`), applying the same client-side `filter` the per-dir
+/// walk would. `Some` = ran server-side; `None` = backend declined → caller
+/// falls back. MD5 is requested only for `HashMode::Full` (so `NativeOnly`/`None`
+/// keep their "don't hash" semantics — SFTP has no free hash). The agent's MD5
+/// hex maps through `md5_hex_to_u64`, the same key the local side derives from
+/// `hash_file`, so cross-side compares stay correct.
+fn walk_hashed_via_agent(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+) -> Option<Tree> {
+    let want_hash = matches!(hash, HashMode::Full);
+    let (tx, rx) = crossbeam_channel::unbounded::<crate::vfs::HashHit>();
+    let mut tree = Tree::new();
+    let ran = std::thread::scope(|scope| {
+        let h = scope.spawn(|| be.walk_hashed(root, want_hash, tx, cancel));
+        for hit in rx.iter() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            if hit.is_dir {
+                continue; // the Tree tracks files
+            }
+            if filter.ignore.is_match(&hit.rel) {
+                continue;
+            }
+            // Unix dotfile = hidden (the agent doesn't carry an attribute).
+            let hidden = hit.rel.rsplit('/').next().map_or(false, |n| n.starts_with('.'));
+            if !filter.include_hidden && hidden {
+                continue;
+            }
+            if !filter.size_age_ok(hit.size, hit.mtime_ms) {
+                continue;
+            }
+            let h = hit.md5.as_deref().map(md5_hex_to_u64).unwrap_or(0);
+            tree.insert(hit.rel, Sig { size: hit.size, mtime_ms: hit.mtime_ms, hash: h });
+        }
+        h.join().unwrap_or(false)
+    });
+    if ran {
+        Some(tree)
+    } else {
+        None
+    }
+}
+
 /// Backends that report `parallelism() == 1` (SFTP/FTP) stay effectively
 /// serial. Local uses all cores.
 ///
@@ -651,6 +700,16 @@ pub fn walk_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
+    // Fast path: when the backend can produce the signature SERVER-SIDE (the SSH
+    // agent's WalkHashed), get the whole tree — including content MD5 for Full —
+    // in one pass without downloading a single file. Falls through to the per-dir
+    // walk if it didn't run.
+    if be.supports_walk_hashed() {
+        if let Some(tree) = walk_hashed_via_agent(be, root, cancel, filter, hash) {
+            return Ok(tree);
+        }
+    }
+
     let par = be.parallelism().max(1);
     let out: Mutex<Tree> = Mutex::new(Tree::new());
     let mut level = vec![root.to_string()];
