@@ -155,6 +155,20 @@ pub trait Backend: Send + Sync {
     /// Drop any internal directory-listing cache (no-op unless the backend is
     /// wrapped in `CachingBackend`). Called on an explicit refresh.
     fn invalidate_cache(&self) {}
+
+    /// Does this backend compute a whole-tree size walk server-side (the SSH
+    /// remote agent)? When true, the analytics scan calls `walk_tree` instead of
+    /// the client-side per-dir recursion.
+    fn supports_walk_tree(&self) -> bool {
+        false
+    }
+
+    /// Walk `root` server-side and return the size tree, or `None` to fall back
+    /// to the client-side walk. Only the agent backend overrides this; blocking
+    /// (run it off the UI thread).
+    fn walk_tree(&self, _root: &str) -> Option<crate::agent_proto::WireNode> {
+        None
+    }
 }
 
 pub type BackendHandle = Arc<dyn Backend>;

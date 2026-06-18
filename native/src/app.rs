@@ -9666,7 +9666,16 @@ impl App {
         let be = backend.clone();
         let scan_root = norm.clone();
         std::thread::spawn(move || {
-            let node = crate::analytics::scan_backend(&*be, &scan_root, &p2);
+            // If the backend has a server-side agent, let IT walk the whole tree
+            // (one request, no per-dir round-trip); else walk client-side.
+            let node = if be.supports_walk_tree() {
+                match be.walk_tree(&scan_root) {
+                    Some(w) => crate::analytics::from_wire(w),
+                    None => crate::analytics::scan_backend(&*be, &scan_root, &p2),
+                }
+            } else {
+                crate::analytics::scan_backend(&*be, &scan_root, &p2)
+            };
             let _ = tx.send(node);
         });
         self.analytics_scan = Some(AnalyticsScan {
