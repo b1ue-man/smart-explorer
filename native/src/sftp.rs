@@ -280,7 +280,7 @@ impl<R: tokio::io::AsyncRead + Unpin + Send> Read for BlockingRead<R> {
     }
 }
 
-struct BlockingWrite<W> {
+struct BlockingWrite<W: tokio::io::AsyncWrite + Unpin + Send> {
     rt: Arc<Runtime>,
     inner: W,
 }
@@ -290,6 +290,14 @@ impl<W: tokio::io::AsyncWrite + Unpin + Send> Write for BlockingWrite<W> {
     }
     fn flush(&mut self) -> io::Result<()> {
         self.rt.block_on(self.inner.flush())
+    }
+}
+impl<W: tokio::io::AsyncWrite + Unpin + Send> Drop for BlockingWrite<W> {
+    fn drop(&mut self) {
+        // Closing the agent's stdin (channel EOF) is what makes the remote
+        // `se-agent` exit, which then closes its stdout so the agent reader
+        // thread unblocks and the whole bridge tears down cleanly. Best-effort.
+        let _ = self.rt.block_on(self.inner.shutdown());
     }
 }
 

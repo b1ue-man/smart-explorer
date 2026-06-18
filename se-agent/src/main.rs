@@ -14,9 +14,12 @@ fn main() {
             println!("proto={} ver={}", agent_proto::PROTO_VERSION, env!("CARGO_PKG_VERSION"));
         }
         "--serve" | "" => {
+            // The serve loop dispatches requests on worker threads that all
+            // write through the (mutex-guarded) sink, so the writer must be
+            // `Send + 'static` → hand it the owned `Stdout` (locks per write
+            // internally) rather than a non-Send `StdoutLock`.
             let stdin = std::io::stdin();
-            let stdout = std::io::stdout();
-            if let Err(e) = agent_proto::serve(stdin.lock(), stdout.lock()) {
+            if let Err(e) = agent_proto::serve(stdin.lock(), std::io::stdout()) {
                 let _ = writeln!(std::io::stderr(), "se-agent: {e}");
                 std::process::exit(1);
             }

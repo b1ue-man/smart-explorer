@@ -1,31 +1,79 @@
-//! `AgentBackend` — a `vfs::Backend` that drives a remote `se-agent` over a
-//! framed stdio stream (an SSH `exec` channel in production, or a spawned local
-//! child process for testing). Directory listing, `stat`, and the whole-tree
-//! storage-analysis walk run SERVER-SIDE in the agent; byte-stream ops
-//! (`open_read`/`open_write`/…) and any unsupported call delegate to the `inner`
-//! backend (the SFTP backend in production). See `docs/SSH_AGENT_PLAN.md`.
+//! `AgentBackend` — a `vfs::Backend` that drives a remote `se-agent` over the
+//! multiplexed, streaming protocol-v2 framed stdio stream (an SSH `exec` channel
+//! in production, or a spawned local child / socket pair for testing). Directory
+//! listing, `stat`, the whole-tree storage-analysis walk, byte transfers
+//! (`open_read`/`open_write`), server-local mutations (copy/rename/remove/mkdir),
+//! recursive bulk tree transfer, server-side search and the sync signature walk
+//! all run SERVER-SIDE in the agent; anything unsupported (or any transport
+//! error) falls back per-op to the `inner` backend (the SFTP backend in
+//! production). See `docs/SSH_AGENT_PLAN.md`.
 //!
-//! The protocol is strictly request/response (one outstanding call), so a single
-//! `Mutex` around the stream serialises calls — simple and correct; multiplexing
-//! is a later optimisation.
+//! ## Bridge worker (protocol v2)
+//!
+//! One channel carries every operation, tagged by `req_id`:
+//!  * a **writer thread** owns the write half and serialises outgoing frames
+//!    (fed by a crossbeam channel — clones of the sender live in the backend and
+//!    in each active read/write stream),
+//!  * a **reader thread** owns the read half, decodes frames and routes each to
+//!    the waiting op's channel by `req_id`.
+//! Dropping the backend (and all its streams) drops every sender → the writer
+//! exits and closes the write half → the agent sees EOF on stdin and exits →
+//! the reader sees EOF and exits. No explicit shutdown handshake needed.
 
-use crate::agent_proto::{self, Req, Resp, WireMeta};
+use crate::agent_proto::{self, Frame, WireMeta};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-/// The live framed connection to one agent. Dropping it drops the underlying
-/// streams (SSH channel halves) → the remote agent gets EOF on stdin and exits.
-struct AgentConn {
-    r: Box<dyn Read + Send>,
-    w: Box<dyn Write + Send>,
+/// Shared multiplexer over one agent channel.
+struct Mux {
+    /// Outgoing frames → the writer thread (FIFO preserves per-op ordering).
+    out: Sender<(u64, Frame)>,
+    /// req_id → the op waiting for its reply/stream frames.
+    pending: Arc<Mutex<HashMap<u64, Sender<Frame>>>>,
+    next_id: AtomicU64,
+}
+
+impl Mux {
+    /// Allocate a fresh req_id and a channel to receive its frames.
+    fn register(&self) -> (u64, Receiver<Frame>) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = unbounded();
+        if let Ok(mut p) = self.pending.lock() {
+            p.insert(id, tx);
+        }
+        (id, rx)
+    }
+    fn unregister(&self, id: u64) {
+        if let Ok(mut p) = self.pending.lock() {
+            p.remove(&id);
+        }
+    }
+    fn send(&self, id: u64, frame: Frame) -> io::Result<()> {
+        self.out
+            .send((id, frame))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "agent writer gone"))
+    }
+    /// One request → one response frame (single-shot ops). Registers, sends,
+    /// waits for the first frame, then unregisters.
+    fn call(&self, req: Frame) -> io::Result<Frame> {
+        let (id, rx) = self.register();
+        let r = (|| {
+            self.send(id, req)?;
+            rx.recv()
+                .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "agent stream closed"))
+        })();
+        self.unregister(id);
+        r
+    }
 }
 
 pub struct AgentBackend {
-    /// File-stream ops + fallback for anything the agent can't do.
     inner: BackendHandle,
-    conn: Mutex<AgentConn>,
-    /// Agent's reported semver (diagnostics / status chip).
+    mux: Arc<Mux>,
     version: String,
 }
 
@@ -37,20 +85,54 @@ impl AgentBackend {
         w: Box<dyn Write + Send>,
         inner: BackendHandle,
     ) -> io::Result<Self> {
-        Self::connect(AgentConn { r, w }, inner)
-    }
+        let (out_tx, out_rx) = unbounded::<(u64, Frame)>();
+        let pending: Arc<Mutex<HashMap<u64, Sender<Frame>>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    fn connect(conn: AgentConn, inner: BackendHandle) -> io::Result<Self> {
-        let mut conn = conn;
+        // Writer thread: drain outgoing frames; closing the write half on exit
+        // signals EOF to the agent.
+        std::thread::Builder::new()
+            .name("agent-writer".into())
+            .spawn(move || {
+                let mut w = w;
+                while let Ok((id, frame)) = out_rx.recv() {
+                    if agent_proto::write_frame(&mut w, id, &frame).is_err() {
+                        break;
+                    }
+                }
+                // w dropped here → underlying channel write side closes.
+            })
+            .ok();
+
+        // Reader thread: route inbound frames to the waiting op by req_id.
+        let pending_r = pending.clone();
+        std::thread::Builder::new()
+            .name("agent-reader".into())
+            .spawn(move || {
+                let mut r = r;
+                loop {
+                    match agent_proto::read_frame(&mut r) {
+                        Ok(Some((id, frame))) => {
+                            let tx = pending_r.lock().ok().and_then(|p| p.get(&id).cloned());
+                            if let Some(tx) = tx {
+                                let _ = tx.send(frame);
+                            }
+                        }
+                        _ => break, // EOF or decode error
+                    }
+                }
+                // Drop all waiters so any blocked recv() errors out → ops fall back.
+                if let Ok(mut p) = pending_r.lock() {
+                    p.clear();
+                }
+            })
+            .ok();
+
+        let mux = Arc::new(Mux { out: out_tx, pending, next_id: AtomicU64::new(1) });
+
         // Handshake before publishing the backend.
-        agent_proto::write_frame(&mut conn.w, &Req::Hello { proto: agent_proto::PROTO_VERSION }.encode())?;
-        let resp = match agent_proto::read_frame(&mut conn.r)? {
-            Some(f) => Resp::decode(&f)?,
-            None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent closed during handshake")),
-        };
-        let version = match resp {
-            Resp::Hello { proto, version } if proto == agent_proto::PROTO_VERSION => version,
-            Resp::Hello { proto, .. } => {
+        let version = match mux.call(Frame::Hello { proto: agent_proto::PROTO_VERSION })? {
+            Frame::HelloOk { proto, version } if proto == agent_proto::PROTO_VERSION => version,
+            Frame::HelloOk { proto, .. } => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("agent protocol {proto} != {}", agent_proto::PROTO_VERSION),
@@ -63,24 +145,11 @@ impl AgentBackend {
                 ))
             }
         };
-        Ok(AgentBackend { inner, conn: Mutex::new(conn), version })
+        Ok(AgentBackend { inner, mux, version })
     }
 
     pub fn version(&self) -> &str {
         &self.version
-    }
-
-    /// One request → one response (serialised by the conn mutex).
-    fn call(&self, req: Req) -> io::Result<Resp> {
-        let mut c = self
-            .conn
-            .lock()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "agent connection poisoned"))?;
-        agent_proto::write_frame(&mut c.w, &req.encode())?;
-        match agent_proto::read_frame(&mut c.r)? {
-            Some(f) => Resp::decode(&f),
-            None => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent stream closed")),
-        }
     }
 }
 
@@ -99,6 +168,97 @@ fn wire_to_vfs(m: WireMeta) -> VfsMeta {
     }
 }
 
+/// `std::io::Read` over a streamed `Read` op: pulls `Data` frames from the mux,
+/// ends on `End`, fails on `Err`/transport drop. Cancels the op if dropped early.
+struct AgentReadStream {
+    mux: Arc<Mux>,
+    id: u64,
+    rx: Receiver<Frame>,
+    buf: Vec<u8>,
+    pos: usize,
+    done: bool,
+}
+
+impl Read for AgentReadStream {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.pos < self.buf.len() {
+                let n = (self.buf.len() - self.pos).min(out.len());
+                out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+                self.pos += n;
+                return Ok(n);
+            }
+            if self.done {
+                return Ok(0);
+            }
+            match self.rx.recv() {
+                Ok(Frame::Data(d)) => {
+                    self.buf = d;
+                    self.pos = 0;
+                }
+                Ok(Frame::End) => {
+                    self.done = true;
+                    return Ok(0);
+                }
+                Ok(Frame::Err(e)) => return Err(io::Error::other(e)),
+                Ok(_) => continue, // ignore unexpected frame kinds
+                Err(_) => {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent read stream closed"))
+                }
+            }
+        }
+    }
+}
+
+impl Drop for AgentReadStream {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self.mux.send(self.id, Frame::Cancel);
+        }
+        self.mux.unregister(self.id);
+    }
+}
+
+impl AgentBackend {
+    /// Begin a streamed read of `path`. Blocks for the first frame so an open
+    /// error falls back to `inner` synchronously (the feature only ever speeds
+    /// up — it never breaks a read).
+    fn agent_open_read(&self, path: &str) -> Option<Box<dyn Read + Send>> {
+        let (id, rx) = self.mux.register();
+        if self
+            .mux
+            .send(id, Frame::Read { path: path.to_string(), offset: 0, len: 0 })
+            .is_err()
+        {
+            self.mux.unregister(id);
+            return None;
+        }
+        match rx.recv() {
+            Ok(Frame::Data(d)) => Some(Box::new(AgentReadStream {
+                mux: self.mux.clone(),
+                id,
+                rx,
+                buf: d,
+                pos: 0,
+                done: false,
+            })),
+            Ok(Frame::End) => Some(Box::new(AgentReadStream {
+                mux: self.mux.clone(),
+                id,
+                rx,
+                buf: Vec::new(),
+                pos: 0,
+                done: true,
+            })),
+            // Err or unexpected → fall back to the inner backend.
+            _ => {
+                self.mux.unregister(id);
+                None
+            }
+        }
+    }
+}
+
 impl Backend for AgentBackend {
     fn scheme(&self) -> Scheme {
         self.inner.scheme()
@@ -108,19 +268,19 @@ impl Backend for AgentBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self.call(Req::ListDir(path.to_string())) {
-            Ok(Resp::Dir(v)) => Ok(v.into_iter().map(wire_to_vfs).collect()),
-            Ok(Resp::Err(e)) => Err(io::Error::other(e)),
-            // Unexpected reply or transport failure → fall back to the inner
-            // backend so browsing degrades to plain SFTP rather than breaking.
+        match self.mux.call(Frame::ListDir(path.to_string())) {
+            Ok(Frame::Dir(v)) => Ok(v.into_iter().map(wire_to_vfs).collect()),
+            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+            // Unexpected reply or transport failure → fall back so browsing
+            // degrades to plain SFTP rather than breaking.
             _ => self.inner.list_dir(path),
         }
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        match self.call(Req::Stat(path.to_string())) {
-            Ok(Resp::Meta(m)) => Ok(wire_to_vfs(m)),
-            Ok(Resp::Err(e)) => Err(io::Error::other(e)),
+        match self.mux.call(Frame::Stat(path.to_string())) {
+            Ok(Frame::Meta(m)) => Ok(wire_to_vfs(m)),
+            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
             _ => self.inner.stat(path),
         }
     }
@@ -130,19 +290,28 @@ impl Backend for AgentBackend {
     }
 
     fn walk_tree(&self, root: &str) -> Option<crate::agent_proto::WireNode> {
-        match self.call(Req::WalkTree(root.to_string())) {
-            Ok(Resp::Tree(n)) => Some(n),
+        match self.mux.call(Frame::WalkTree(root.to_string())) {
+            Ok(Frame::Tree(n)) => Some(n),
             _ => None, // fall back to the client-side walk
         }
     }
 
-    // ── byte-stream ops + mutations: delegate to the inner (SFTP) backend ──
+    // ── Phase 1: streamed read via the agent, SFTP fallback ──
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.inner.open_read(path)
+        match self.agent_open_read(path) {
+            Some(r) => Ok(r),
+            None => self.inner.open_read(path),
+        }
     }
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
-        self.inner.open_read_id(path, id)
+        // Agent indexes by path; the id is only meaningful to id-keyed backends
+        // (Google Drive), which never sit behind the agent.
+        let _ = id;
+        self.open_read(path)
     }
+
+    // ── byte writes + mutations: delegate to inner for now (wired in later
+    //    milestones to the agent's native Write/Copy/Rename/Remove/Mkdir) ──
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.inner.open_write(path)
     }
@@ -273,9 +442,7 @@ pub fn deploy_over_sftp(
     AgentBackend::from_streams(r, w, inner)
 }
 
-/// Remove a deployed agent from a server (the "Remote-Agent entfernen" action;
-/// UI wiring is a phase-6 follow-up).
-#[allow(dead_code)]
+/// Remove a deployed agent from a server (the "Remote-Agent entfernen" action).
 pub fn remove_from_sftp(sftp: &crate::sftp::SftpBackend) -> io::Result<()> {
     sftp.exec_capture("rm -rf \"$HOME/.cache/smart-explorer\"")?;
     Ok(())
@@ -288,28 +455,26 @@ mod tests {
 
     #[test]
     fn artifact_selection_and_quoting() {
-        // Linux x86_64/aarch64 are bundled; other targets fall back to SFTP.
         let a = artifact_for("Linux x86_64").expect("x86_64 bundled");
         assert!(a.bytes.len() > 1000 && a.bytes.starts_with(b"\x7fELF"));
         assert!(artifact_for("Linux aarch64").is_some());
         assert!(artifact_for("Darwin arm64").is_none());
         assert!(artifact_for("garbage").is_none());
-        // Hash is computed from the bundled bytes (stable, 64 hex chars).
         assert_eq!(sha256_hex(a.bytes).len(), 64);
-        // Shell quoting is injection-safe.
         assert_eq!(sh_quote("/home/u/dir"), "'/home/u/dir'");
         assert_eq!(sh_quote("a'b; rm -rf /"), r#"'a'\''b; rm -rf /'"#);
     }
 
-    /// Drive a real `AgentBackend` against an in-process agent over a TCP socket
-    /// pair (no child process / SSH needed): a thread runs `agent_proto::serve`
-    /// on one end, the backend talks framed protocol on the other.
+    /// Spawn an in-process agent (`agent_proto::serve`) on one end of a TCP
+    /// socket pair and drive a real `AgentBackend` from the other — exercises
+    /// the full v2 mux (handshake, list, walk, stat, streamed read) with no
+    /// child process / SSH.
     #[test]
     fn agent_backend_over_socket() {
         let base = std::env::temp_dir().join(format!("se_agbe_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("sub")).unwrap();
-        std::fs::write(base.join("a.txt"), vec![0u8; 100]).unwrap();
+        std::fs::write(base.join("a.txt"), vec![7u8; 100]).unwrap();
         std::fs::write(base.join("sub/b.bin"), vec![0u8; 400]).unwrap();
         let root = base.to_string_lossy().to_string();
 
@@ -322,32 +487,89 @@ mod tests {
         });
 
         let client = TcpStream::connect(addr).unwrap();
+        // A spare handle to force a FIN at the end: a TCP socket only sends FIN
+        // once ALL clones close, and the bridge's reader thread keeps one clone
+        // blocked on read — so we shut it down explicitly (the SSH/child-process
+        // transports EOF naturally when the single write end drops).
+        let shut = client.try_clone().unwrap();
         let r: Box<dyn Read + Send> = Box::new(client.try_clone().unwrap());
         let w: Box<dyn Write + Send> = Box::new(client);
         let inner: BackendHandle = std::sync::Arc::new(crate::vfs::LocalBackend::new("/"));
         let be = AgentBackend::from_streams(r, w, inner).unwrap();
 
-        // list_dir over the agent
+        // list_dir
         let mut entries = be.list_dir(&root).unwrap();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(entries.len(), 2);
         assert_eq!(entries.iter().find(|e| e.name == "a.txt").unwrap().size, 100);
         assert!(entries.iter().find(|e| e.name == "sub").unwrap().is_dir);
 
-        // whole-tree walk over the agent
+        // whole-tree walk
         assert!(be.supports_walk_tree());
         let tree = crate::analytics::from_wire(be.walk_tree(&root).unwrap());
         assert_eq!(tree.size, 500);
-        let sub = tree.children.iter().find(|c| &*c.name == "sub").unwrap();
-        assert_eq!(sub.size, 400);
+        assert_eq!(tree.children.iter().find(|c| &*c.name == "sub").unwrap().size, 400);
 
-        // stat over the agent
+        // stat
         let m = be.stat(&format!("{}/a.txt", root)).unwrap();
         assert_eq!(m.size, 100);
         assert!(!m.is_dir);
 
-        drop(be); // closes the socket → server thread's serve() returns
+        // streamed read (Phase 1)
+        let mut buf = Vec::new();
+        be.open_read(&format!("{}/a.txt", root)).unwrap().read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, vec![7u8; 100]);
+
+        drop(be);
+        let _ = shut.shutdown(std::net::Shutdown::Both);
         let _ = server.join();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Drive the ACTUAL bundled musl binary as a child process over its stdio —
+    /// the real deployable artifact, end to end (handshake + list + streamed
+    /// read). Only meaningful where the host can run the x86_64 binary.
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn real_agent_binary_child_process() {
+        use std::process::{Command, Stdio};
+        let bin = concat!(env!("CARGO_MANIFEST_DIR"), "/agent-bin/se-agent-x86_64-linux-musl");
+        let base = std::env::temp_dir().join(format!("se_agbin_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("d")).unwrap();
+        std::fs::write(base.join("hello.txt"), b"agent works").unwrap();
+        std::fs::write(base.join("d/x.bin"), vec![9u8; 300]).unwrap();
+        let root = base.to_string_lossy().to_string();
+
+        let mut child = match Command::new(bin)
+            .arg("--serve")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return, // can't exec the bundled binary here → skip
+        };
+        let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
+        let r: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
+        let inner: BackendHandle = std::sync::Arc::new(crate::vfs::LocalBackend::new("/"));
+        let be = AgentBackend::from_streams(r, w, inner).unwrap();
+        assert!(be.version().contains('.'));
+
+        let mut entries = be.list_dir(&root).unwrap();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(entries.len(), 2);
+
+        let tree = crate::analytics::from_wire(be.walk_tree(&root).unwrap());
+        assert_eq!(tree.size, 311);
+
+        let mut buf = String::new();
+        be.open_read(&format!("{}/hello.txt", root)).unwrap().read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "agent works");
+
+        drop(be);
+        let _ = child.wait();
         let _ = std::fs::remove_dir_all(&base);
     }
 }
