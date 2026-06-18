@@ -31,8 +31,14 @@ remains.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
 - ✅ **Phase 4 — connect UX.** `use_agent` flag on `SavedConnection` (TSV field 9,
   backward-compatible: old 8-field lines → false) + `ConnectForm`; an opt-in
   checkbox in the connect dialog (SFTP only); the SFTP connect path calls
-  `deploy_over_sftp` and falls back to plain SFTP on any error. (Status chip +
-  in-app "remove agent" action: minor follow-up.)
+  `deploy_over_sftp` and falls back to plain SFTP on any error.
+- ✅ **Phase 4b — runtime activation (0.5.65).** You don't have to decide at
+  config time: an **"⚡ Agent aktivieren"** button on the *live* connection
+  indicator deploys the agent on the already-established SFTP session (no
+  reconnect — `RemoteState.sftp` keeps the concrete backend; deploy runs
+  off-thread, then the backend is swapped to `AgentBackend` in place) and
+  persists `use_agent=true` on the matching saved connection so it sticks.
+  Falls back silently on any error; the "⚡ Agent" badge then shows it's active.
 - ✅ **Phase 5 — cross-compile + bundle.** A standalone minimal crate
   (`/se-agent`, rayon-only — no ring/TLS) cross-compiles to **static musl**
   without a musl C toolchain (rust-lld for aarch64). Built binaries are committed

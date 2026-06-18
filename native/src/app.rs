@@ -511,6 +511,12 @@ pub struct App {
     /// In-flight one-shot remote op (new folder, rename, download-to).
     /// Ok(notice)/Err(msg); the worker includes the op context in both.
     remote_op_rx: Option<Receiver<Result<String, String>>>,
+    /// In-flight runtime activation of the SSH agent on the live connection
+    /// (#24): the deployed `AgentBackend` + its version, or an error message.
+    agent_activate_rx: Option<Receiver<Result<(crate::agent::AgentBackend, String), String>>>,
+    /// The SFTP session the activation is running against (guards installing the
+    /// result into the right connection if the user switched tabs meanwhile).
+    agent_activate_for: Option<Arc<crate::sftp::SftpBackend>>,
     /// Open egui context menu for a remote entry: (screen pos, entry index).
     remote_ctx: Option<(egui::Pos2, usize)>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
@@ -1795,6 +1801,8 @@ impl App {
             last_edit_poll: Instant::now(),
             upload_rx: None,
             remote_op_rx: None,
+            agent_activate_rx: None,
+            agent_activate_for: None,
             remote_ctx: None,
             clip_download_rx: None,
 
@@ -3379,6 +3387,8 @@ impl App {
                             label: "Google Drive".to_string(),
                             agent_version: None,
                             zip_return: None,
+                            sftp: None,
+                            account: None,
                         }),
                         net: None,
                         target: root,
@@ -3406,6 +3416,8 @@ impl App {
                             label: "Google Drive".to_string(),
                             agent_version: None,
                             zip_return: None,
+                            sftp: None,
+                            account: None,
                         }),
                         net: None,
                         target: root,
@@ -4881,6 +4893,8 @@ impl App {
                     label: format!("📦 {}", name),
                     agent_version: None,
                     zip_return: parent,
+                    sftp: None,
+                    account: None,
                 });
                 self.start_scan(PathBuf::from("/")); // root inside the archive
             }
@@ -5437,6 +5451,76 @@ impl App {
         if let Some((id, accept)) = answer {
             self.share_incoming.retain(|(i, _, _)| *i != id);
             self.share_cmd(crate::share::ShareCmd::Answer { id, accept });
+        }
+    }
+
+    /// Deploy + activate the SSH remote agent on the ALREADY-connected SFTP
+    /// session (runtime opt-in, #24) — no reconnect. Blocking deploy runs
+    /// off-thread; the result is installed by `drain_agent_activate`.
+    fn start_agent_activation(&mut self) {
+        if self.agent_activate_rx.is_some() {
+            return;
+        }
+        let sftp = match self.remote.as_ref() {
+            Some(rs) if rs.agent_version.is_none() => match &rs.sftp {
+                Some(s) => s.clone(),
+                None => return,
+            },
+            _ => return,
+        };
+        let (tx, rx) = unbounded();
+        self.agent_activate_rx = Some(rx);
+        self.agent_activate_for = Some(sftp.clone());
+        self.notice = Some(("⚡ Aktiviere Remote-Agent…".to_string(), std::time::Instant::now()));
+        std::thread::Builder::new()
+            .name("agent-activate".into())
+            .spawn(move || {
+                let inner: crate::vfs::BackendHandle = sftp.clone();
+                let r = crate::agent::deploy_over_sftp(&sftp, inner)
+                    .map(|a| {
+                        let v = a.version().to_string();
+                        (a, v)
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(r);
+            })
+            .ok();
+    }
+
+    fn drain_agent_activate(&mut self) {
+        let res = match self.agent_activate_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+        self.agent_activate_rx = None;
+        let target = self.agent_activate_for.take();
+        match res {
+            Ok((agent, ver)) => {
+                // Install only if we're still on the same SFTP session.
+                let same = matches!(
+                    (self.remote.as_ref().and_then(|rs| rs.sftp.as_ref()), target.as_ref()),
+                    (Some(a), Some(b)) if Arc::ptr_eq(a, b)
+                );
+                if same {
+                    let account = self.remote.as_ref().and_then(|rs| rs.account.clone());
+                    if let Some(rs) = self.remote.as_mut() {
+                        rs.backend = cache_remote(Arc::new(agent));
+                        rs.agent_version = Some(ver);
+                    }
+                    // Persist so this connection auto-uses the agent next time.
+                    if let Some(acc) = account {
+                        let mut conns = crate::creds::load_connections();
+                        if let Some(c) = conns.iter_mut().find(|c| c.account() == acc) {
+                            c.use_agent = true;
+                            let _ = crate::creds::save_connection(c);
+                            self.saved_connections = crate::creds::load_connections();
+                        }
+                    }
+                    self.notice = Some(("⚡ Remote-Agent aktiv".to_string(), std::time::Instant::now()));
+                    self.rescan();
+                }
+            }
+            Err(e) => self.error_msg = Some(format!("Agent-Aktivierung: {e}")),
         }
     }
 
@@ -7833,6 +7917,8 @@ impl App {
         });
 
         let mut disconnect = false;
+        let mut activate_agent = false;
+        let agent_activating = self.agent_activate_rx.is_some();
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
         let mut to_remove: Option<String> = None;
         let mut open_gdrive = false;
@@ -7842,12 +7928,28 @@ impl App {
         if let Some(rs) = &self.remote {
             ui.horizontal(|ui| {
                 ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
-                // Show whether the SSH remote agent is active for this session.
+                // SSH remote agent: show it's active, or offer to activate it on
+                // THIS already-connected session (no reconnect, #24).
                 if let Some(ver) = &rs.agent_version {
                     ui.colored_label(Color32::from_rgb(120, 230, 140), "⚡ Agent")
                         .on_hover_text(format!(
                             "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse laufen serverseitig"
                         ));
+                } else if rs.sftp.is_some() {
+                    if agent_activating {
+                        ui.add(egui::Spinner::new().size(14.0));
+                        ui.label(RichText::new("Agent…").small().color(Color32::from_gray(150)));
+                    } else if ui
+                        .small_button("⚡ Agent aktivieren")
+                        .on_hover_text(
+                            "Den Remote-Agent jetzt auf dieser Verbindung ausrollen — \
+                             Listing/Analyse laufen dann serverseitig. Wird für diese \
+                             Verbindung gemerkt. Fällt bei Problemen auf normales SFTP zurück.",
+                        )
+                        .clicked()
+                    {
+                        activate_agent = true;
+                    }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
@@ -7943,6 +8045,12 @@ impl App {
             } else {
                 self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
             }
+        }
+        if activate_agent {
+            self.start_agent_activation();
+        }
+        if self.agent_activate_rx.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         if let Some(acc) = to_remove {
             let _ = crate::creds::remove_connection(&acc);
@@ -10893,6 +11001,7 @@ impl eframe::App for App {
         self.drain_edit_saves();
         self.drain_upload();
         self.drain_remote_op();
+        self.drain_agent_activate();
         self.drain_clip_download();
         self.drain_share();
         self.drain_quickshare();

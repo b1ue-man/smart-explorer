@@ -24,6 +24,13 @@ pub struct RemoteState {
     /// For an opened ZIP archive: the local folder to return to when the archive
     /// is closed (⏏). `None` for real network connections.
     pub zip_return: Option<String>,
+    /// The concrete SFTP backend behind this session, kept so the SSH remote
+    /// agent can be activated LATER on an already-established connection
+    /// (#24, runtime opt-in). `None` for non-SFTP.
+    pub sftp: Option<Arc<crate::sftp::SftpBackend>>,
+    /// Saved-connection account key (if this came from a saved connection), so a
+    /// later agent activation can persist the choice. `None` for ad-hoc/non-SFTP.
+    pub account: Option<String>,
 }
 
 /// Editable Connect-dialog state.
@@ -244,6 +251,8 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                     // failure (no bundled binary, no exec right, …) falls back to
                     // plain SFTP, so connecting never breaks.
                     let be_arc: Arc<crate::sftp::SftpBackend> = Arc::new(be);
+                    let sftp_handle = be_arc.clone(); // kept for later agent activation
+                    let account = Some(build_saved(&form, port).account());
                     let (backend, agent_version): (BackendHandle, Option<String>) = if form.use_agent
                     {
                         let inner: BackendHandle = be_arc.clone();
@@ -263,6 +272,8 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             label: label.clone(),
                             agent_version,
                             zip_return: None,
+                            sftp: Some(sftp_handle),
+                            account,
                         }),
                         net: None,
                         target: root,
@@ -303,6 +314,8 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             label: label.clone(),
                             agent_version: None,
                             zip_return: None,
+                            sftp: None,
+                            account: None,
                         }),
                         net: None,
                         target: root,
@@ -333,6 +346,8 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
                             label: label.clone(),
                             agent_version: None,
                             zip_return: None,
+                            sftp: None,
+                            account: None,
                         }),
                         net: None,
                         target: root,

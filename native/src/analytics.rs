@@ -10,7 +10,6 @@
 //! reconstructed by descending from the root (the drill position carries the
 //! prefix), so the tree stays compact: roughly `name + ~48 bytes` per node.
 
-use crate::vfs::Backend; // brings `list_dir` into scope for `&dyn Backend`
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
