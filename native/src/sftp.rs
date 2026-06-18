@@ -261,8 +261,14 @@ impl SftpBackend {
             Ok::<_, io::Error>(ch.into_stream())
         })?;
         let (rd, wr) = tokio::io::split(stream);
-        let r: Box<dyn Read + Send> = Box::new(BlockingRead { rt: self.rt.clone(), inner: rd });
-        let w: Box<dyn Write + Send> = Box::new(BlockingWrite { rt: self.rt.clone(), inner: wr });
+        let r: Box<dyn Read + Send> = Box::new(BlockingRead {
+            rt: self.rt.clone(),
+            inner: Some(rd),
+        });
+        let w: Box<dyn Write + Send> = Box::new(BlockingWrite {
+            rt: self.rt.clone(),
+            inner: Some(wr),
+        });
         Ok((r, w))
     }
 }
@@ -272,24 +278,48 @@ impl SftpBackend {
 /// inside another `block_on`, since Backend calls run on app/scan threads).
 struct BlockingRead<R> {
     rt: Arc<Runtime>,
-    inner: R,
+    inner: Option<R>,
 }
 impl<R: tokio::io::AsyncRead + Unpin + Send> Read for BlockingRead<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.rt.block_on(self.inner.read(buf))
+        match self.inner.as_mut() {
+            Some(inner) => self.rt.block_on(inner.read(buf)),
+            None => Ok(0),
+        }
+    }
+}
+impl<R> Drop for BlockingRead<R> {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            // russh's ChannelCloseOnDrop uses tokio::spawn internally. Dropping
+            // the split half inside this runtime avoids a delayed panic on the
+            // plain std agent-reader thread after an earlier transport error.
+            self.rt.block_on(async move {
+                drop(inner);
+            });
+        }
     }
 }
 
 struct BlockingWrite<W: tokio::io::AsyncWrite + Unpin + Send> {
     rt: Arc<Runtime>,
-    inner: W,
+    inner: Option<W>,
 }
 impl<W: tokio::io::AsyncWrite + Unpin + Send> Write for BlockingWrite<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.rt.block_on(self.inner.write(buf))
+        match self.inner.as_mut() {
+            Some(inner) => self.rt.block_on(inner.write(buf)),
+            None => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SFTP exec stream already closed",
+            )),
+        }
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.rt.block_on(self.inner.flush())
+        match self.inner.as_mut() {
+            Some(inner) => self.rt.block_on(inner.flush()),
+            None => Ok(()),
+        }
     }
 }
 impl<W: tokio::io::AsyncWrite + Unpin + Send> Drop for BlockingWrite<W> {
@@ -297,7 +327,12 @@ impl<W: tokio::io::AsyncWrite + Unpin + Send> Drop for BlockingWrite<W> {
         // Closing the agent's stdin (channel EOF) is what makes the remote
         // `se-agent` exit, which then closes its stdout so the agent reader
         // thread unblocks and the whole bridge tears down cleanly. Best-effort.
-        let _ = self.rt.block_on(self.inner.shutdown());
+        if let Some(mut inner) = self.inner.take() {
+            self.rt.block_on(async move {
+                let _ = inner.shutdown().await;
+                drop(inner);
+            });
+        }
     }
 }
 
