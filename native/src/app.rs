@@ -2551,6 +2551,61 @@ impl App {
         self.scan_running = false;
     }
 
+    /// Run a recursive name search SERVER-SIDE (the SSH agent) under the current
+    /// remote folder, replacing the listing with the streamed matches (shown as
+    /// a flat list of paths relative to the search root). The server does the
+    /// enumeration + name match, so huge remote trees are searchable without
+    /// pulling the whole listing. RegExp isn't supported server-side.
+    fn run_remote_search(&mut self, query: String) {
+        let backend = match self.remote.as_ref() {
+            Some(rs) if rs.backend.supports_search() => rs.backend.clone(),
+            _ => return,
+        };
+        if query.trim().is_empty() || self.root_path.is_empty() {
+            return;
+        }
+        if self.filter.text_mode == TextMode::Regex {
+            self.notice = Some((
+                "Server-Suche unterstützt kein RegExp — bitte „enthält“ oder „Glob“.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        if let Some(h) = self.scan_handle.take() {
+            h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let spec = crate::agent_proto::SearchSpec {
+            query: query.trim().to_string(),
+            glob: self.filter.text_mode == TextMode::Glob,
+            min_size: 0,
+            max_size: 0,
+            max_results: 100_000,
+            want_dirs: self.filter.include_dirs,
+        };
+        // Reset the listing (mirrors start_scan_navigated).
+        self.entries = Vec::new();
+        self.view = Vec::new();
+        self.selection = HashSet::new();
+        self.last_anchor = None;
+        self.cursor = None;
+        self.progress = empty_progress();
+        self.error_msg = None;
+        self.failed_paths = Vec::new();
+        self.summary_cache = None;
+        self.view_dirty = false;
+        // Flat, cross-folder results; the server already applied the name match,
+        // so clear the name filter (size/date/ext filters still refine the view).
+        self.recursive = false;
+        self.filter.text.clear();
+        self.text_draft.clear();
+        let (tx, rx) = unbounded();
+        let handle = crate::rscan::start_search_backend(backend, self.root_path.clone(), spec, tx);
+        self.scan_rx = Some(rx);
+        self.scan_handle = Some(handle);
+        self.scan_running = true;
+        self.notice = Some(("🔎 Server-Suche läuft…".to_string(), std::time::Instant::now()));
+    }
+
     // ─── Folder index lifecycle ─────────────────────────────────────────
     fn start_index_build(&mut self) {
         if self.index_building {
@@ -7705,6 +7760,25 @@ impl App {
                         self.recompute_view();
                     }
                 });
+
+            // Server-side recursive search (SSH agent): only on a remote whose
+            // backend supports it, with a non-regex query typed.
+            let show_server_search =
+                self.remote.as_ref().map_or(false, |rs| rs.backend.supports_search());
+            if show_server_search {
+                let q = self.text_draft.trim().to_string();
+                let enabled = !q.is_empty() && self.filter.text_mode != TextMode::Regex;
+                if ui
+                    .add_enabled(enabled, egui::Button::new("🔎 Server"))
+                    .on_hover_text(
+                        "Rekursive Suche serverseitig über den Agent — durchsucht den ganzen \
+                         Unterbaum und liefert nur die Treffer (enthält/Glob).",
+                    )
+                    .clicked()
+                {
+                    self.run_remote_search(q);
+                }
+            }
 
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)

@@ -192,6 +192,37 @@ pub trait Backend: Send + Sync {
         let _ = (src, root);
         Err(io::Error::new(io::ErrorKind::Unsupported, "bulk tree transfer not supported"))
     }
+
+    /// Can this backend run a recursive search SERVER-SIDE (the agent's
+    /// `Search`)? When true, a recursive name search on a remote streams only
+    /// the matches back instead of enumerating the whole tree client-side.
+    fn supports_search(&self) -> bool {
+        false
+    }
+
+    /// Recursively search under `root` server-side, streaming each match into
+    /// `tx` (paths RELATIVE to `root`). Returns true if the backend ran the
+    /// search (false = unsupported → caller does a client-side walk). `cancel`
+    /// aborts the stream. Only the agent overrides this.
+    fn search(
+        &self,
+        root: &str,
+        spec: &crate::agent_proto::SearchSpec,
+        tx: crossbeam_channel::Sender<SearchHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        let _ = (root, spec, tx, cancel);
+        false
+    }
+}
+
+/// One server-side search match (path relative to the search root).
+#[derive(Clone, Debug)]
+pub struct SearchHit {
+    pub rel: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime_ms: i64,
 }
 
 pub type BackendHandle = Arc<dyn Backend>;
@@ -362,6 +393,18 @@ impl Backend for CachingBackend {
         let r = self.inner.put_tree(src, root);
         self.invalidate(root); // new tree appears under root + its parent listing
         r
+    }
+    fn supports_search(&self) -> bool {
+        self.inner.supports_search()
+    }
+    fn search(
+        &self,
+        root: &str,
+        spec: &crate::agent_proto::SearchSpec,
+        tx: crossbeam_channel::Sender<SearchHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        self.inner.search(root, spec, tx, cancel)
     }
 }
 

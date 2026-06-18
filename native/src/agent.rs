@@ -490,6 +490,50 @@ impl Backend for AgentBackend {
         self.agent_put_tree(src, root)
     }
 
+    // ── Phase 5: server-side recursive search ──
+    fn supports_search(&self) -> bool {
+        true
+    }
+    fn search(
+        &self,
+        root: &str,
+        spec: &crate::agent_proto::SearchSpec,
+        tx: Sender<crate::vfs::SearchHit>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        let (id, rx) = self.mux.register();
+        if self.mux.send(id, Frame::Search { root: root.to_string(), spec: spec.clone() }).is_err() {
+            self.mux.unregister(id);
+            return false;
+        }
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = self.mux.send(id, Frame::Cancel);
+                break;
+            }
+            // recv_timeout so cancellation is observed even when no match is
+            // currently arriving.
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(Frame::Match { rel, is_dir, size, mtime_ms }) => {
+                    if tx
+                        .send(crate::vfs::SearchHit { rel, is_dir, size, mtime_ms })
+                        .is_err()
+                    {
+                        let _ = self.mux.send(id, Frame::Cancel); // consumer gone
+                        break;
+                    }
+                }
+                Ok(Frame::End) => break,
+                Ok(Frame::Err(_)) => break,
+                Ok(_) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        self.mux.unregister(id);
+        true
+    }
+
     // ── Phase 1: streamed read via the agent, SFTP fallback ──
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         match self.agent_open_read(path) {
@@ -740,6 +784,24 @@ mod tests {
         let mut buf = Vec::new();
         be.open_read(&format!("{}/a.txt", root)).unwrap().read_to_end(&mut buf).unwrap();
         assert_eq!(buf, vec![7u8; 100]);
+
+        // server-side recursive search (Phase 5): only "sub/b.bin" contains "b"
+        // among files (the "sub" dir is excluded with want_dirs=false).
+        {
+            let (stx, srx) = unbounded();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let spec = crate::agent_proto::SearchSpec {
+                query: "b".into(),
+                glob: false,
+                min_size: 0,
+                max_size: 0,
+                max_results: 0,
+                want_dirs: false,
+            };
+            assert!(be.search(&root, &spec, stx, &cancel));
+            let hits: Vec<String> = srx.iter().map(|h| h.rel).collect();
+            assert_eq!(hits, vec!["sub/b.bin".to_string()]);
+        }
 
         // streamed write (Phase 2): temp + atomic rename, server-side
         {
