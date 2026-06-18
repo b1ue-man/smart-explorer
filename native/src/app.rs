@@ -4862,13 +4862,11 @@ impl App {
             }
             OmniMode::FolderSearch => {
                 let q = raw.trim_start().trim_start_matches('/').trim();
-                for (p, _score) in self.folder_search_results.iter().take(12) {
-                    let base = p.rsplit('/').next().unwrap_or(p).to_string();
-                    let parent = p.rsplit_once('/').map(|(par, _)| par).unwrap_or("").to_string();
+                for (p, _score) in self.folder_search_results.iter().take(30) {
                     items.push(OmniItem {
                         icon: "📁",
-                        label: base,
-                        sub: parent,
+                        label: p.clone(),
+                        sub: p.clone(),
                         action: OmniAction::Go(p.clone()),
                     });
                 }
@@ -7958,10 +7956,10 @@ impl App {
                         .fixed_pos(field_rect.left_bottom() + egui::vec2(0.0, 3.0))
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                ui.set_min_width(field_rect.width().max(320.0));
+                                ui.set_min_width(field_rect.width().max(680.0));
                                 egui::ScrollArea::vertical()
                                     .id_salt("omni_results")
-                                    .max_height(300.0)
+                                    .max_height(520.0)
                                     .show(ui, |ui| {
                                         for (i, it) in items.iter().enumerate() {
                                             let r = ui
