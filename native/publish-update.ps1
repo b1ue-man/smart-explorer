@@ -20,7 +20,7 @@ Write-Host "Baue Version $version ..."
 
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
-cargo build --release
+cargo build --release --bin smart_explorer --bin smart_explorer_updater
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 # Feed aktualisieren (EXE zuerst, version.txt zuletzt — Clients sehen die neue
@@ -30,6 +30,14 @@ if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 # raw.githubusercontent.com ausgeliefert wird ("Git als Update-Quelle").
 New-Item -ItemType Directory -Force $Feed | Out-Null
 Copy-Item "target\release\smart_explorer.exe" "$Feed\smart_explorer.exe" -Force
+Copy-Item "target\release\smart_explorer_updater.exe" "$Feed\smart_explorer_updater.exe" -Force
+function Write-Sha256File([string]$Path) {
+    $hash = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+    $name = [System.IO.Path]::GetFileName($Path)
+    Set-Content "$Path.sha256" "$hash  $name" -Encoding ascii
+}
+Write-Sha256File "$Feed\smart_explorer.exe"
+Write-Sha256File "$Feed\smart_explorer_updater.exe"
 Set-Content "$Feed\version.txt" $version -Encoding ascii
 Write-Host "Feed aktualisiert: $Feed (v$version)"
 
@@ -48,7 +56,7 @@ if ($makensisCmd) {
     $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if ($makensis) {
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "installer.nsi" | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "installer.nsi" | Out-Null
     Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
 } else {
     Write-Warning "makensis nicht gefunden - Installer uebersprungen"
@@ -56,4 +64,5 @@ if ($makensis) {
 
 # Portable Kopie
 Copy-Item "target\release\smart_explorer.exe" "..\release-native\Smart Explorer.exe" -Force
+Copy-Item "target\release\smart_explorer_updater.exe" "..\release-native\Smart Explorer Updater.exe" -Force
 Write-Host "Fertig."

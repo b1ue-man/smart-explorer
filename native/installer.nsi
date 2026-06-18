@@ -4,6 +4,7 @@
 ;   makensis -DVERSION=x.y.z installer.nsi
 ; Override the exe source when building natively on Windows:
 ;   makensis -DVERSION=x.y.z "-DEXE_SRC=target\release\smart_explorer.exe" installer.nsi
+;   makensis -DVERSION=x.y.z "-DUPDATER_SRC=target\release\smart_explorer_updater.exe" installer.nsi
 ; Silent install:  "Smart Explorer Setup x.y.z.exe" /S
 ;
 ; What it sets up so the app "just works":
@@ -19,9 +20,14 @@
   ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
   !define EXE_SRC "target/x86_64-pc-windows-gnu/release/smart_explorer.exe"
 !endif
+!ifndef UPDATER_SRC
+  ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
+  !define UPDATER_SRC "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe"
+!endif
 
 !define APP_NAME "Smart Explorer"
 !define EXE_NAME "Smart Explorer.exe"
+!define UPDATER_EXE_NAME "Smart Explorer Updater.exe"
 !define VERB "OpenInSmartExplorer"
 !define VERB_LABEL "In Smart Explorer öffnen"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartExplorer"
@@ -82,6 +88,9 @@ Section "Install"
     Abort
   write_done:
   SetOverwrite on
+
+  Delete "$INSTDIR\${UPDATER_EXE_NAME}"
+  File "/oname=${UPDATER_EXE_NAME}" "${UPDATER_SRC}"
 
   File "${__FILEDIR__}\..\LICENSE"
 
@@ -147,6 +156,7 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\${VERB}"
 
   Delete "$INSTDIR\${EXE_NAME}"
+  Delete "$INSTDIR\${UPDATER_EXE_NAME}"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"

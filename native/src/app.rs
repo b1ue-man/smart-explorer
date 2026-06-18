@@ -1688,6 +1688,8 @@ impl App {
             .map(|s| s.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
             .unwrap_or_default();
         let ui_state = UiState::load();
+        let startup_update_error =
+            crate::updater::take_updater_error().map(|e| format!("Update-Helfer: {}", e));
 
         // Kick off the automatic update check (silent unless an update is
         // found and applied).
@@ -1744,7 +1746,7 @@ impl App {
             copy_errors: Vec::new(),
             copy_refresh_after: false,
 
-            error_msg: None,
+            error_msg: startup_update_error,
             notice: if just_updated {
                 Some((
                     format!("✓ Update installiert — Version {}", env!("CARGO_PKG_VERSION")),

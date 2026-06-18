@@ -21,8 +21,13 @@
 //   4. record applied version (loop protection for broken feeds)
 //   5. caller relaunches the new exe with --updated and exits
 // On the next start `cleanup_old_binaries` deletes the *_old.exe leftover.
+//
+// NOTE: Since v0.5.77 the normal auto-update path stages the payload and hands
+// replacement to the persistent `Smart Explorer Updater.exe` helper. The
+// rename-dance path above remains only for legacy/manual flows.
 
 use crossbeam_channel::Sender;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -56,6 +61,22 @@ fn override_path() -> PathBuf {
 
 fn last_applied_path() -> PathBuf {
     appdata_dir().join("last_applied_update.txt")
+}
+
+fn updater_error_path() -> PathBuf {
+    appdata_dir().join("last_updater_error.txt")
+}
+
+pub fn take_updater_error() -> Option<String> {
+    let p = updater_error_path();
+    let raw = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    let msg = raw.trim().to_string();
+    if msg.is_empty() {
+        None
+    } else {
+        Some(msg)
+    }
 }
 
 /// The raw configured update source string (folder path OR http(s) URL),
@@ -92,6 +113,7 @@ pub fn update_source_str() -> Option<String> {
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
+const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 
 enum Feed {
     Local(PathBuf),
@@ -116,32 +138,97 @@ impl Feed {
         Ok(raw.lines().next().unwrap_or("").trim().to_string())
     }
 
-    /// Obtain the new binary as a local file ready for `swap_in`. HTTP feeds
-    /// download to a temp file in appdata.
-    fn fetch_exe(&self) -> Result<PathBuf, String> {
+    /// Stage the new app binary as a local file. Local feeds are copied too, so
+    /// a detached helper can delete the staging file without touching the feed.
+    fn fetch_exe(&self, version: &str) -> Result<PathBuf, String> {
+        self.fetch_payload(
+            &["smart_explorer.exe", "Smart Explorer.exe"],
+            &["smart_explorer.exe", "Smart%20Explorer.exe"],
+            "smart_explorer.exe.sha256",
+            "update_download",
+            version,
+        )
+    }
+
+    fn fetch_updater_exe(&self, version: &str) -> Result<PathBuf, String> {
+        self.fetch_payload(
+            &["smart_explorer_updater.exe", "Smart Explorer Updater.exe"],
+            &[
+                "smart_explorer_updater.exe",
+                "Smart%20Explorer%20Updater.exe",
+            ],
+            "smart_explorer_updater.exe.sha256",
+            "updater_download",
+            version,
+        )
+    }
+
+    fn fetch_payload(
+        &self,
+        local_names: &[&str],
+        http_names: &[&str],
+        hash_name: &str,
+        temp_prefix: &str,
+        version: &str,
+    ) -> Result<PathBuf, String> {
+        let dest = staged_payload_path(temp_prefix, version);
+        let _ = std::fs::remove_file(&dest);
         match self {
-            Feed::Local(dir) => ["Smart Explorer.exe", "smart_explorer.exe"]
-                .iter()
-                .map(|n| dir.join(n))
-                .find(|p| p.exists())
-                .ok_or_else(|| format!("Keine EXE im Update-Feed {} gefunden", dir.display())),
+            Feed::Local(dir) => {
+                let source = local_names
+                    .iter()
+                    .map(|n| dir.join(n))
+                    .find(|p| p.exists())
+                    .ok_or_else(|| {
+                        format!("Keine Datei im Update-Feed {} gefunden", dir.display())
+                    })?;
+                std::fs::copy(&source, &dest).map_err(|e| {
+                    format!(
+                        "Update-Datei stagen ({} -> {}): {}",
+                        source.display(),
+                        dest.display(),
+                        e
+                    )
+                })?;
+                if let Some(hash) = self.read_sha256(hash_name)? {
+                    verify_sha256(&dest, &hash)?;
+                }
+                Ok(dest)
+            }
             Feed::Http(base) => {
-                let dest = appdata_dir().join("update_download.exe");
-                let _ = std::fs::remove_file(&dest);
                 let mut last_err = String::new();
-                for name in ["smart_explorer.exe", "Smart%20Explorer.exe"] {
+                for name in http_names {
                     match http_download(&format!("{base}/{name}"), &dest) {
-                        Ok(()) => return Ok(dest),
+                        Ok(()) => {
+                            if let Some(hash) = self.read_sha256(hash_name)? {
+                                verify_sha256(&dest, &hash)?;
+                            }
+                            return Ok(dest);
+                        }
                         Err(e) => last_err = e,
                     }
                 }
-                Err(format!("Download der EXE fehlgeschlagen: {}", last_err))
+                Err(format!(
+                    "Download der Update-Datei fehlgeschlagen: {}",
+                    last_err
+                ))
             }
         }
     }
 
-    fn is_http(&self) -> bool {
-        matches!(self, Feed::Http(_))
+    fn read_sha256(&self, hash_name: &str) -> Result<Option<String>, String> {
+        let raw = match self {
+            Feed::Local(dir) => {
+                let p = dir.join(hash_name);
+                match std::fs::read_to_string(&p) {
+                    Ok(s) => Some(s),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(format!("Hash-Datei {}: {}", p.display(), e)),
+                }
+            }
+            Feed::Http(base) => http_get_string_optional_404(&format!("{base}/{hash_name}"))?,
+        };
+        raw.map(|s| parse_sha256_file(&s, hash_name)).transpose()
     }
 }
 
@@ -195,6 +282,21 @@ fn http_get_string(url: &str) -> Result<String, String> {
         .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
 }
 
+fn http_get_string_optional_404(url: &str) -> Result<Option<String>, String> {
+    let resp = match ureq::get(url)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .timeout(HTTP_TIMEOUT)
+        .call()
+    {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(e) => return Err(format_http_error(url, e)),
+    };
+    resp.into_string()
+        .map(Some)
+        .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
+}
+
 fn http_download(url: &str, dest: &Path) -> Result<(), String> {
     let resp = ureq::get(url)
         .set("User-Agent", UPDATE_USER_AGENT)
@@ -202,8 +304,8 @@ fn http_download(url: &str, dest: &Path) -> Result<(), String> {
         .call()
         .map_err(|e| format_http_error(url, e))?;
     let mut reader = resp.into_reader();
-    let mut file = std::fs::File::create(dest)
-        .map_err(|e| format!("Temp-Datei {}: {}", dest.display(), e))?;
+    let mut file =
+        std::fs::File::create(dest).map_err(|e| format!("Temp-Datei {}: {}", dest.display(), e))?;
     std::io::copy(&mut reader, &mut file).map_err(|e| format!("Download {}: {}", url, e))?;
     Ok(())
 }
@@ -219,6 +321,78 @@ fn format_http_error(url: &str, err: ureq::Error) -> String {
         ""
     };
     format!("HTTP {}: {}{}", url, msg, hint)
+}
+
+fn staged_payload_path(prefix: &str, version: &str) -> PathBuf {
+    let safe_version: String = version
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    appdata_dir().join(format!(
+        "{}_{}_{}_{}.exe",
+        prefix,
+        safe_version,
+        std::process::id(),
+        nanos
+    ))
+}
+
+fn parse_sha256_file(raw: &str, name: &str) -> Result<String, String> {
+    let token = raw
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| format!("Hash-Datei {} ist leer", name))?
+        .to_ascii_lowercase();
+    if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(token)
+    } else {
+        Err(format!(
+            "Hash-Datei {} enthaelt keinen gueltigen SHA-256",
+            name
+        ))
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("Hash lesen {}: {}", path.display(), e))?;
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Hash lesen {}: {}", path.display(), e))?;
+        if n == 0 {
+            break;
+        }
+        sha2::Digest::update(&mut hasher, &buf[..n]);
+    }
+    Ok(format!("{:x}", sha2::Digest::finalize(hasher)))
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let actual = sha256_file(path)?;
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        let _ = std::fs::remove_file(path);
+        Err(format!(
+            "Download-Pruefsumme passt nicht fuer {}: erwartet {}, erhalten {}",
+            path.display(),
+            expected,
+            actual
+        ))
+    }
 }
 
 /// Persist a user-chosen feed folder (empty string removes the override).
@@ -285,7 +459,8 @@ pub fn cleanup_old_binaries() {
                 if let Ok(rd) = std::fs::read_dir(&dir) {
                     for e in rd.flatten() {
                         let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with(&prefix) && name.ends_with(".exe")
+                        if name.starts_with(&prefix)
+                            && name.ends_with(".exe")
                             && std::fs::remove_file(e.path()).is_err()
                         {
                             any_left = true; // still locked — try again shortly
@@ -388,7 +563,12 @@ pub fn list_archived_versions() -> Vec<(String, PathBuf)> {
                 if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                     // "Smart Explorer <ver>" -> last whitespace token is the version
                     if let Some(ver) = stem.rsplit(' ').next() {
-                        if ver.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        if ver
+                            .chars()
+                            .next()
+                            .map(|c| c.is_ascii_digit())
+                            .unwrap_or(false)
+                        {
                             out.push((ver.to_string(), p.clone()));
                         }
                     }
@@ -409,7 +589,10 @@ fn github_repo(feed_raw: &str) -> Option<(String, String)> {
     let rest = base.strip_prefix("https://raw.githubusercontent.com/")?;
     let parts: Vec<&str> = rest.split('/').collect();
     if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Some((parts[0].to_string(), parts[1].trim_end_matches(".git").to_string()))
+        Some((
+            parts[0].to_string(),
+            parts[1].trim_end_matches(".git").to_string(),
+        ))
     } else {
         None
     }
@@ -418,7 +601,11 @@ fn github_repo(feed_raw: &str) -> Option<(String, String)> {
 /// `release/v*` branch name → version (e.g. "release/v0.5.63" → "0.5.63").
 fn branch_to_version(name: &str) -> Option<String> {
     let v = name.strip_prefix("release/v")?;
-    if v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if v.chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         Some(v.to_string())
     } else {
         None
@@ -461,7 +648,11 @@ pub fn list_remote_versions() -> Vec<String> {
         };
         let n = arr.len();
         for b in &arr {
-            if let Some(v) = b.get("name").and_then(|v| v.as_str()).and_then(branch_to_version) {
+            if let Some(v) = b
+                .get("name")
+                .and_then(|v| v.as_str())
+                .and_then(branch_to_version)
+            {
                 versions.push(v);
             }
         }
@@ -502,7 +693,11 @@ fn swap_in(new_exe: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::copy(new_exe, &pending).map_err(|e| format!("Kopieren fehlgeschlagen: {}", e))?;
     std::fs::rename(&cur_exe, &old).map_err(|e| {
         let _ = std::fs::remove_file(&pending);
-        format!("Programmdatei kann nicht ersetzt werden ({}): {}", cur_exe.display(), e)
+        format!(
+            "Programmdatei kann nicht ersetzt werden ({}): {}",
+            cur_exe.display(),
+            e
+        )
     })?;
     if let Err(e) = std::fs::rename(&pending, &cur_exe) {
         let _ = std::fs::rename(&old, &cur_exe);
@@ -530,13 +725,97 @@ fn spawn_detached(exe: &std::path::Path, args: &[&str]) -> std::io::Result<()> {
         }
         // Some job objects forbid breakaway → retry without that flag.
         let mut c2 = std::process::Command::new(exe);
-        c2.args(args).creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        c2.args(args)
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
         return c2.spawn().map(|_| ());
     }
     #[cfg(not(windows))]
     {
         cmd.spawn().map(|_| ())
     }
+}
+
+fn installed_updater_path() -> Result<PathBuf, String> {
+    let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    let dir = cur
+        .parent()
+        .ok_or_else(|| format!("Installationsordner unbekannt: {}", cur.display()))?;
+    Ok(dir.join(INSTALLED_UPDATER_EXE))
+}
+
+fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), String> {
+    let mut last = None;
+    for _ in 0..10 {
+        match std::fs::copy(src, dest) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                std::thread::sleep(Duration::from_millis(350));
+            }
+        }
+    }
+    Err(format!(
+        "{} kopieren ({} -> {}): {}",
+        label,
+        src.display(),
+        dest.display(),
+        last.map(|e| e.to_string())
+            .unwrap_or_else(|| "unbekannter Fehler".to_string())
+    ))
+}
+
+fn ensure_installed_updater(feed: &Feed, version: &str, refresh: bool) -> Result<PathBuf, String> {
+    let dest = installed_updater_path()?;
+    if !refresh && dest.exists() {
+        return Ok(dest);
+    }
+
+    match feed.fetch_updater_exe(version) {
+        Ok(staged) => {
+            let result = copy_with_retries(&staged, &dest, "Updater-Helfer");
+            let _ = std::fs::remove_file(&staged);
+            result?;
+            Ok(dest)
+        }
+        Err(_e) if dest.exists() => Ok(dest),
+        Err(e) => Err(format!(
+            "Updater-Helfer fehlt und konnte nicht aus dem Feed geladen werden: {}",
+            e
+        )),
+    }
+}
+
+fn apply_via_installed_updater(
+    helper: &Path,
+    staged_exe: &Path,
+    version: &str,
+) -> Result<(), String> {
+    let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    let target = cur_exe.to_string_lossy().into_owned();
+    let staged = staged_exe.to_string_lossy().into_owned();
+    let parent_pid = std::process::id().to_string();
+    let last_applied = last_applied_path().to_string_lossy().into_owned();
+    let error_file = updater_error_path().to_string_lossy().into_owned();
+    spawn_detached(
+        helper,
+        &[
+            "--apply",
+            "--target",
+            &target,
+            "--staged",
+            &staged,
+            "--parent-pid",
+            &parent_pid,
+            "--version",
+            version,
+            "--last-applied",
+            &last_applied,
+            "--error-file",
+            &error_file,
+        ],
+    )
+    .map_err(|e| format!("Updater-Helfer starten: {}", e))?;
+    Ok(())
 }
 
 /// Fallback when the in-place swap can't replace the running exe: stage the new
@@ -650,11 +929,17 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 /// rollback pin so auto-update keeps working. Mirrors `revert_to` but for going
 /// forward to a newer release (no pin). Returns the exe to relaunch.
 pub fn install_version(downloaded: &std::path::Path, version: &str) -> Result<PathBuf, String> {
-    let _ = version;
     if !downloaded.exists() {
         return Err("Heruntergeladene Version nicht gefunden".into());
     }
     archive_binary(env!("CARGO_PKG_VERSION"));
+    if let Ok(helper) = installed_updater_path() {
+        if helper.exists() {
+            resume_auto_update();
+            apply_via_installed_updater(&helper, downloaded, version)?;
+            return Ok(PathBuf::new());
+        }
+    }
     let cur_exe = swap_in(downloaded)?;
     resume_auto_update(); // forward update → don't leave a rollback pin behind
     Ok(cur_exe)
@@ -712,7 +997,11 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
     let raw = match update_source_str() {
         Some(s) => s,
         None => {
-            return Ok(if manual { Some(UpdateMsg::NoFeed) } else { None });
+            return Ok(if manual {
+                Some(UpdateMsg::NoFeed)
+            } else {
+                None
+            });
         }
     };
     let feed = classify_feed(&raw);
@@ -724,6 +1013,9 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
 
     let current = env!("CARGO_PKG_VERSION");
     if parse_ver(&feed_version) <= parse_ver(current) {
+        if parse_ver(&feed_version) == parse_ver(current) {
+            let _ = ensure_installed_updater(&feed, &feed_version, false);
+        }
         return Ok(if manual {
             Some(UpdateMsg::UpToDate { feed_version })
         } else {
@@ -743,47 +1035,16 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
         }
     }
 
-    // Obtain the new binary (downloaded for http feeds), archive the version
-    // we're replacing so it can be rolled back to, then swap it in.
-    let new_exe = feed.fetch_exe()?;
+    // Stage the new binary, archive the outgoing version, refresh the helper,
+    // and let the helper replace the app after this process exits.
+    let new_exe = feed.fetch_exe(&feed_version)?;
     archive_binary(current);
-    // Primary: in-place rename-dance swap (works on a running exe via a unique
-    // _old name). Fallback: if the target can't be replaced (locked by AV / a
-    // lingering process), hand off to a detached worker that waits for THIS
-    // process to exit, then replaces the exe and relaunches it.
-    let (msg, applied_in_place) = match swap_in(&new_exe) {
-        Ok(cur_exe) => (
-            UpdateMsg::Applied {
-                version: feed_version.clone(),
-                exe: cur_exe,
-            },
-            true,
-        ),
-        Err(swap_err) => {
-            apply_via_worker(&new_exe)
-                .map_err(|e| format!("Swap fehlgeschlagen ({}); Worker: {}", swap_err, e))?;
-            (
-                UpdateMsg::AppliedViaWorker {
-                    version: feed_version.clone(),
-                },
-                false,
-            )
-        }
-    };
-    // A downloaded temp binary is consumed (swap_in copies to pending; the
-    // worker copies to its own staging) — remove it regardless of outcome.
-    if feed.is_http() {
-        let _ = std::fs::remove_file(&new_exe);
-    }
-
-    // We're now on the latest — clear any rollback pin. Only record the version
-    // as applied for the in-place path; if the worker hasn't run yet and later
-    // fails, we must still re-detect the update rather than think it's done.
+    let helper = ensure_installed_updater(&feed, &feed_version, true)?;
+    apply_via_installed_updater(&helper, &new_exe, &feed_version)?;
     resume_auto_update();
-    if applied_in_place {
-        let _ = std::fs::write(last_applied_path(), &feed_version);
-    }
-    Ok(Some(msg))
+    Ok(Some(UpdateMsg::AppliedViaWorker {
+        version: feed_version.clone(),
+    }))
 }
 
 #[cfg(test)]
@@ -830,7 +1091,10 @@ mod tests {
         for v in mk {
             std::fs::write(vd.join(format!("Smart Explorer {}.exe", v)), b"x").unwrap();
         }
-        let vers: Vec<String> = list_archived_versions().into_iter().map(|(v, _)| v).collect();
+        let vers: Vec<String> = list_archived_versions()
+            .into_iter()
+            .map(|(v, _)| v)
+            .collect();
         let idx = |s: &str| vers.iter().position(|x| x == s);
         assert!(idx("0.4.0").is_some() && idx("0.3.10").is_some() && idx("0.3.6").is_some());
         // Numeric (not lexical) ordering, newest first: 0.4.0 > 0.3.10 > 0.3.6.
@@ -866,7 +1130,10 @@ mod tests {
 
     #[test]
     fn classify_distinguishes_transports() {
-        assert!(matches!(classify_feed("https://example.com/f"), Feed::Http(_)));
+        assert!(matches!(
+            classify_feed("https://example.com/f"),
+            Feed::Http(_)
+        ));
         assert!(matches!(classify_feed("http://host/f"), Feed::Http(_)));
         assert!(matches!(classify_feed(r"C:\Users\x\feed"), Feed::Local(_)));
         assert!(matches!(classify_feed(r"\\server\share"), Feed::Local(_)));
