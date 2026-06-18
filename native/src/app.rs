@@ -208,9 +208,13 @@ pub struct App {
 
     show_filters: bool,
     show_summary: bool,
-    /// Sort directories before files (classic). When false, files and folders
-    /// are sorted together by the active key (e.g. by date). Persisted.
+    /// Effective "directories first" sort for the CURRENT location (classic when
+    /// true; false = files+folders mixed by the active key). Set on navigation
+    /// from `dir_sort`; the toggle writes back the per-location override.
     dirs_first: bool,
+    /// Per-location overrides for `dirs_first` (path → bool), persisted. Folders
+    /// not in here use the default (`DEFAULT_DIRS_FIRST`).
+    dir_sort: std::collections::HashMap<String, bool>,
     /// Storage-analytics overlay (treemap + breakdowns) is open.
     show_analytics: bool,
     /// Dedicated low-memory size tree for analytics (own scan, not the view).
@@ -1620,7 +1624,8 @@ impl App {
 
             show_filters: ui_state.show_filters,
             show_summary: ui_state.show_summary,
-            dirs_first: ui_state.dirs_first,
+            dirs_first: DEFAULT_DIRS_FIRST,
+            dir_sort: load_dir_sort(),
             show_analytics: false,
             analytics_tree: None,
             analytics_root_path: String::new(),
@@ -1877,7 +1882,6 @@ impl App {
         UiState {
             show_filters: self.show_filters,
             show_summary: self.show_summary,
-            dirs_first: self.dirs_first,
         }
         .save();
     }
@@ -1936,6 +1940,13 @@ impl App {
         std::mem::swap(&mut t.btime_min_date, &mut self.btime_min_date);
         std::mem::swap(&mut t.btime_max_date, &mut self.btime_max_date);
         self.tabs[i] = t;
+        // dirs_first is per-location (not parked in the tab) — re-derive it for
+        // whatever path is now active so the toggle + next sort match.
+        self.dirs_first = self
+            .dir_sort
+            .get(&self.root_path)
+            .copied()
+            .unwrap_or(DEFAULT_DIRS_FIRST);
     }
 
     fn switch_tab(&mut self, to: usize) {
@@ -2348,6 +2359,12 @@ impl App {
         self.filter.text.clear();
         self.text_draft.clear();
         self.root_path = root.to_string_lossy().replace('\\', "/");
+        // Per-location sort preference (folders-first vs mixed); default if unset.
+        self.dirs_first = self
+            .dir_sort
+            .get(&self.root_path)
+            .copied()
+            .unwrap_or(DEFAULT_DIRS_FIRST);
 
         let (tx, rx) = unbounded();
         let max_depth = if self.recursive { None } else { Some(1) };
@@ -7483,13 +7500,18 @@ impl App {
                 if ui
                     .toggle_value(&mut self.dirs_first, "📁↑")
                     .on_hover_text(
-                        "Ordner zuerst sortieren. Aus: Dateien und Ordner werden gemischt nach \
-                         der aktiven Spalte sortiert (z.B. nach Datum).",
+                        "Ordner zuerst sortieren — gilt nur für DIESEN Ordner und wird dafür \
+                         gemerkt. Aus: Dateien und Ordner gemischt nach der aktiven Spalte \
+                         (z.B. nach Datum).",
                     )
                     .changed()
                 {
+                    // Bind the choice to the current location (not global).
+                    if !self.root_path.is_empty() {
+                        self.dir_sort.insert(self.root_path.clone(), self.dirs_first);
+                        save_dir_sort(&self.dir_sort);
+                    }
                     self.recompute_view();
-                    self.save_ui_state();
                 }
                 ui.toggle_value(&mut self.show_analytics, "📊")
                     .on_hover_text("Speicher-Analyse (Treemap, größte Ordner/Dateien)");
@@ -11951,7 +11973,6 @@ fn favorites_path() -> PathBuf {
 struct UiState {
     show_filters: bool,
     show_summary: bool,
-    dirs_first: bool,
 }
 
 impl UiState {
@@ -11959,7 +11980,6 @@ impl UiState {
         let mut s = UiState {
             show_filters: true,
             show_summary: false,
-            dirs_first: true,
         };
         if let Ok(txt) = std::fs::read_to_string(appdata_file("ui_state.txt")) {
             for line in txt.lines() {
@@ -11968,7 +11988,6 @@ impl UiState {
                     match k.trim() {
                         "show_filters" => s.show_filters = on,
                         "show_summary" => s.show_summary = on,
-                        "dirs_first" => s.dirs_first = on,
                         _ => {}
                     }
                 }
@@ -11979,11 +11998,38 @@ impl UiState {
 
     fn save(&self) {
         let txt = format!(
-            "show_filters={}\nshow_summary={}\ndirs_first={}\n",
-            self.show_filters as u8, self.show_summary as u8, self.dirs_first as u8
+            "show_filters={}\nshow_summary={}\n",
+            self.show_filters as u8, self.show_summary as u8
         );
         let _ = std::fs::write(appdata_file("ui_state.txt"), txt);
     }
+}
+
+/// Default "directories first" when a location has no saved preference.
+const DEFAULT_DIRS_FIRST: bool = true;
+
+/// Load the per-location `dirs_first` overrides (`path\t0|1` per line).
+fn load_dir_sort() -> std::collections::HashMap<String, bool> {
+    let mut m = std::collections::HashMap::new();
+    if let Ok(txt) = std::fs::read_to_string(appdata_file("dir_sort.tsv")) {
+        for line in txt.lines() {
+            if let Some((path, v)) = line.rsplit_once('\t') {
+                if !path.is_empty() {
+                    m.insert(path.to_string(), v.trim() == "1");
+                }
+            }
+        }
+    }
+    m
+}
+
+fn save_dir_sort(map: &std::collections::HashMap<String, bool>) {
+    let mut lines: Vec<String> = map
+        .iter()
+        .map(|(p, v)| format!("{}\t{}", p, *v as u8))
+        .collect();
+    lines.sort();
+    let _ = std::fs::write(appdata_file("dir_sort.tsv"), lines.join("\n"));
 }
 
 #[cfg(test)]
