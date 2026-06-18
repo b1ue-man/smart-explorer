@@ -219,6 +219,51 @@ impl Drop for AgentReadStream {
     }
 }
 
+/// `std::io::Write` over a streamed `Write` op: each `write` ships a `Data`
+/// frame; closing sends `End` and waits for the agent's `Ok`/`Err` (the server
+/// writes to a temp, fsyncs and atomically renames). Mirrors `SftpWriter`'s
+/// close-on-drop semantics.
+struct AgentWriteStream {
+    mux: Arc<Mux>,
+    id: u64,
+    rx: Receiver<Frame>,
+    finished: bool,
+}
+
+impl AgentWriteStream {
+    fn finish(&mut self) -> io::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        self.finished = true;
+        self.mux.send(self.id, Frame::End)?;
+        let r = match self.rx.recv() {
+            Ok(Frame::Ok) => Ok(()),
+            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+            Ok(_) => Err(io::Error::other("unexpected agent reply to write")),
+            Err(_) => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent write stream closed")),
+        };
+        self.mux.unregister(self.id);
+        r
+    }
+}
+
+impl Write for AgentWriteStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.mux.send(self.id, Frame::Data(buf.to_vec()))?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(()) // the agent fsyncs at End; chunks are flushed on the wire as sent
+    }
+}
+
+impl Drop for AgentWriteStream {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
 impl AgentBackend {
     /// Begin a streamed read of `path`. Blocks for the first frame so an open
     /// error falls back to `inner` synchronously (the feature only ever speeds
@@ -255,6 +300,39 @@ impl AgentBackend {
                 self.mux.unregister(id);
                 None
             }
+        }
+    }
+
+    /// Begin a streamed write of `path`. Blocks for the agent's ready-ack so a
+    /// path/permission error falls back to `inner` synchronously (parity with
+    /// SFTP's fail-fast `open_write`).
+    fn agent_open_write(&self, path: &str) -> Option<Box<dyn Write + Send>> {
+        let (id, rx) = self.mux.register();
+        if self.mux.send(id, Frame::Write(path.to_string())).is_err() {
+            self.mux.unregister(id);
+            return None;
+        }
+        match rx.recv() {
+            // Progress{0,0} = "temp created, ready to receive".
+            Ok(Frame::Progress { .. }) => {
+                Some(Box::new(AgentWriteStream { mux: self.mux.clone(), id, rx, finished: false }))
+            }
+            _ => {
+                self.mux.unregister(id);
+                None
+            }
+        }
+    }
+
+    /// Run a single-shot mutation op that replies `Ok`/`Err`. `Ok(true)` ran on
+    /// the agent, `Ok(false)` means "fall back to inner", `Err` is a real error
+    /// the agent reported (don't paper over it with a fallback that would also
+    /// fail — e.g. "directory not empty").
+    fn agent_unit_op(&self, req: Frame) -> io::Result<bool> {
+        match self.mux.call(req) {
+            Ok(Frame::Ok) => Ok(true),
+            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+            _ => Ok(false), // transport/handshake oddity → caller falls back
         }
     }
 }
@@ -310,31 +388,58 @@ impl Backend for AgentBackend {
         self.open_read(path)
     }
 
-    // ── byte writes + mutations: delegate to inner for now (wired in later
-    //    milestones to the agent's native Write/Copy/Rename/Remove/Mkdir) ──
+    // ── Phase 2: streamed write via the agent, SFTP fallback ──
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.inner.open_write(path)
+        match self.agent_open_write(path) {
+            Some(w) => Ok(w),
+            None => self.inner.open_write(path),
+        }
     }
     fn download_name(&self, path: &str, name: &str) -> String {
         self.inner.download_name(path, name)
     }
+
+    // ── Phase 3: server-local mutations via the agent, SFTP fallback ──
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
-        self.inner.copy_file(src, dst)
+        // Server-local copy is the big win (no down+up through a temp). The agent
+        // reports success only, so report the destination size for progress.
+        match self.agent_unit_op(Frame::Copy { src: src.to_string(), dst: dst.to_string() }) {
+            Ok(true) => Ok(self.stat(dst).map(|m| m.size).unwrap_or(0)),
+            Ok(false) => self.inner.copy_file(src, dst),
+            Err(e) => Err(e),
+        }
     }
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.inner.rename(src, dst)
+        match self.agent_unit_op(Frame::Rename { src: src.to_string(), dst: dst.to_string() }) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.inner.rename(src, dst),
+            Err(e) => Err(e),
+        }
     }
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_file(path)
+        match self.agent_unit_op(Frame::Remove { path: path.to_string(), recursive: false }) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.inner.remove_file(path),
+            Err(e) => Err(e),
+        }
     }
-    fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
-        self.inner.remove_file_id(path, id)
+    fn remove_file_id(&self, path: &str, _id: Option<&str>) -> VfsResult<()> {
+        // Agent indexes by path; id-keyed backends (Drive) never sit behind it.
+        self.remove_file(path)
     }
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_dir(path)
+        match self.agent_unit_op(Frame::Remove { path: path.to_string(), recursive: false }) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.inner.remove_dir(path),
+            Err(e) => Err(e),
+        }
     }
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        self.inner.mkdir_all(path)
+        match self.agent_unit_op(Frame::Mkdir(path.to_string())) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.inner.mkdir_all(path),
+            Err(e) => Err(e),
+        }
     }
     fn parallelism(&self) -> usize {
         self.inner.parallelism()
@@ -519,6 +624,26 @@ mod tests {
         let mut buf = Vec::new();
         be.open_read(&format!("{}/a.txt", root)).unwrap().read_to_end(&mut buf).unwrap();
         assert_eq!(buf, vec![7u8; 100]);
+
+        // streamed write (Phase 2): temp + atomic rename, server-side
+        {
+            let mut w = be.open_write(&format!("{}/written.dat", root)).unwrap();
+            w.write_all(b"hello agent write").unwrap();
+            w.flush().unwrap();
+        } // drop → End + Ok ack
+        assert_eq!(std::fs::read(base.join("written.dat")).unwrap(), b"hello agent write");
+
+        // server-local mutations (Phase 3): mkdir, copy, rename, remove
+        be.mkdir_all(&format!("{}/newdir/inner", root)).unwrap();
+        assert!(base.join("newdir/inner").is_dir());
+        be.copy_file(&format!("{}/a.txt", root), &format!("{}/newdir/copy.txt", root)).unwrap();
+        assert_eq!(std::fs::read(base.join("newdir/copy.txt")).unwrap().len(), 100);
+        be.rename(&format!("{}/newdir/copy.txt", root), &format!("{}/newdir/moved.txt", root)).unwrap();
+        assert!(!base.join("newdir/copy.txt").exists() && base.join("newdir/moved.txt").exists());
+        be.remove_file(&format!("{}/newdir/moved.txt", root)).unwrap();
+        assert!(!base.join("newdir/moved.txt").exists());
+        // a real error (removing a non-empty dir non-recursively) surfaces, not swallowed
+        assert!(be.remove_dir(&format!("{}/newdir", root)).is_err());
 
         drop(be);
         let _ = shut.shutdown(std::net::Shutdown::Both);

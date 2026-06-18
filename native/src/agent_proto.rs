@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch (handshake in `Hello`/`HelloOk`, and the
 /// install path is keyed on this).
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 3;
 
 /// Reject absurd frame lengths from a corrupt/hostile stream before allocating.
 const MAX_FRAME: usize = 1 << 31; // 2 GiB
@@ -656,6 +656,11 @@ fn handle_write(
         let _ = std::fs::create_dir_all(parent);
     }
     let mut f = std::fs::File::create(&tmp)?;
+    // Positive "ready" ack: the temp file was created, so the client may start
+    // streaming. Lets `open_write` fail fast (and fall back to SFTP) on a path/
+    // permission error instead of discovering it only at close. A `Data`-less
+    // `Progress{0,0}` is unambiguous here (writes never report mid-progress).
+    emit(sink, id, &Frame::Progress { done: 0, total: 0 })?;
     loop {
         if cancel.load(Ordering::Relaxed) {
             drop(f);

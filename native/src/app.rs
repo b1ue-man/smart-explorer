@@ -1484,6 +1484,28 @@ fn upload_file(be: &dyn crate::vfs::Backend, src: &std::path::Path, dest: &str) 
     Ok(())
 }
 
+/// Recursively copy `src` → `dst` WITHIN one backend. Files go through
+/// `copy_file` (server-local + instant on the agent; SFTP streams through the
+/// client as a fallback), directories are recreated and walked. Used for
+/// same-connection remote→remote copy/move so nothing round-trips via a temp.
+fn copy_remote_tree(be: &dyn crate::vfs::Backend, src: &str, dst: &str) -> std::io::Result<()> {
+    let m = be.stat(src)?;
+    if m.is_dir {
+        be.mkdir_all(dst)?;
+        for e in be.list_dir(src)? {
+            let cs = format!("{}/{}", src.trim_end_matches('/'), e.name);
+            let cd = format!("{}/{}", dst.trim_end_matches('/'), e.name);
+            copy_remote_tree(be, &cs, &cd)?;
+        }
+        Ok(())
+    } else {
+        if let Some((parent, _)) = dst.rsplit_once('/') {
+            let _ = be.mkdir_all(parent);
+        }
+        be.copy_file(src, dst).map(|_| ())
+    }
+}
+
 fn upload_dir(
     be: &dyn crate::vfs::Backend,
     dir: &std::path::Path,
@@ -6649,9 +6671,11 @@ impl App {
         }
     }
 
-    /// Copy remote `files` into another remote folder by streaming each through a
-    /// temp file (download from `src`, upload to `tgt`/dest). Off the UI thread;
-    /// reuses the transfer result channel.
+    /// Copy remote `files` into another remote folder. When source and target
+    /// are the SAME connection (`Arc::ptr_eq`), copy SERVER-LOCALLY through the
+    /// backend (instant with the agent — no down+up through a temp; falls back to
+    /// SFTP streaming on a plain connection). Cross-connection still streams each
+    /// through a temp file. Off the UI thread; reuses the transfer channel.
     fn start_remote_to_remote(
         &mut self,
         src: crate::vfs::BackendHandle,
@@ -6664,6 +6688,7 @@ impl App {
             return;
         }
         let n = files.len();
+        let same_server = std::sync::Arc::ptr_eq(&src, &tgt);
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
             .name("remote-to-remote".into())
@@ -6672,21 +6697,29 @@ impl App {
                 let mut errors = Vec::new();
                 for p in &files {
                     let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
-                    let tmp = open_temp_path(name);
                     let dest = format!("{}/{}", dest_root.trim_end_matches('/'), name);
-                    let r = download_to(&*src, p, &tmp)
-                        .and_then(|_| upload_file(&*tgt, &tmp, &dest));
+                    let r = if same_server {
+                        // No temp round-trip: copy in place on the server.
+                        copy_remote_tree(&*tgt, p, &dest)
+                    } else {
+                        let tmp = open_temp_path(name);
+                        let r = download_to(&*src, p, &tmp)
+                            .and_then(|_| upload_file(&*tgt, &tmp, &dest))
+                            .map(|_| ());
+                        let _ = std::fs::remove_file(&tmp);
+                        r.map_err(std::io::Error::other)
+                    };
                     match r {
                         Ok(_) => copied += 1,
                         Err(e) => errors.push(format!("{}: {}", name, e)),
                     }
-                    let _ = std::fs::remove_file(&tmp);
                 }
                 let _ = tx.send((copied, errors));
             })
             .ok();
         self.upload_rx = Some(rx);
-        self.notice = Some((format!("⇄ Übertrage {} Element(e) (Remote→Remote)…", n), std::time::Instant::now()));
+        let how = if same_server { "Remote→Remote, serverseitig" } else { "Remote→Remote" };
+        self.notice = Some((format!("⇄ Übertrage {} Element(e) ({})…", n, how), std::time::Instant::now()));
     }
 
     /// Download remote `files` into a local folder, off the UI thread (reuses

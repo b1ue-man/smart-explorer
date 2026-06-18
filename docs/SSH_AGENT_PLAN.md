@@ -8,9 +8,11 @@ round-trip per directory.
 
 Status: **phases 1–5 implemented & build-verified (host + windows-gnu); the agent
 is functional for Linux x86_64/aarch64 servers. Deep-integration roadmap: P0
-(protocol v2) + P1 (read transfer) shipped in 0.5.69 — the agent now multiplexes
-every op over one channel and streams reads natively. Only a real-server smoke
-test remains.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
+(protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local copy/move/
+delete/mkdir) in 0.5.70 — the agent now multiplexes every op over one channel,
+streams reads and writes natively, and runs same-server copy/move in place (no
+down+up round-trip). Only a real-server smoke test remains.** Researched against
+how VS Code Remote-SSH, JetBrains Gateway,
 `rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
 
 ### Implementation status
@@ -339,22 +341,26 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   remote→local** (`start_remote_download` → `download_to`), **drag remote→local**,
   **"Herunterladen nach…"**, since all of those go through `Backend::open_read`.
 
-## Phase 2 — Write transfer (upload / save via agent)
+## Phase 2 — Write transfer (upload / save via agent) — ✅ done (0.5.70)
 - **Capability:** `Write{path}` ← streamed `Data` then `End`; the server writes
-  to a temp, `fsync`s, atomically renames → `Ok`. *(Server side implemented in
-  the 0.5.69 agent; client mapping pending.)*
-- **Mapping:** `AgentBackend::open_write` → agent stream. Affects: **save-back of
-  an edited remote file**, **paste/drop upload into a remote folder**, **drag
-  local→remote**, **"Neu" file creation** on a remote.
+  to a temp, `fsync`s, atomically renames → `Ok`. A `Progress{0,0}` ready-ack
+  after temp-create lets the client fail fast (and fall back to SFTP) on a path/
+  permission error — parity with SFTP's synchronous `open_write`.
+- **Mapping:** `AgentBackend::open_write` streams via the agent (`AgentWriteStream`,
+  close-on-drop = `End`+`Ok`). No call-site change — **paste/drop upload into a
+  remote folder**, **drag local→remote**, **single-file upload** (`upload_file`),
+  **"Neu" file creation** all go through `Backend::open_write`.
 
-## Phase 3 — Server-local mutations (instant)
+## Phase 3 — Server-local mutations (instant) — ✅ done (0.5.70)
 - **Capability:** `Copy{src,dst}`, `Rename{src,dst}`, `Remove{path,recursive}`,
-  `Mkdir{path}` — executed natively on the server. *(Server side implemented in
-  the 0.5.69 agent; client mapping pending.)*
+  `Mkdir{path}` — executed natively on the server.
 - **Mapping:** `AgentBackend::{copy_file, rename, remove_file, remove_dir,
-  mkdir_all}` → agent. Biggest single-op win: **remote→remote copy/move on the
-  SAME server** becomes instant (today it streams down then back up through a
-  temp). Also delete / rename / new-folder in one op.
+  mkdir_all}` → agent (real agent errors surface; only transport oddities fall
+  back). Rename / delete / new-folder on a remote are now one server-side op.
+  Biggest single-op win: **remote→remote copy/move on the SAME connection** runs
+  in place — `start_remote_to_remote` detects `Arc::ptr_eq(src, tgt)` and uses
+  `copy_remote_tree` (recursive `copy_file`/`mkdir_all` via the backend) instead
+  of streaming each file down to a temp and back up.
 
 ## Phase 4 — Recursive bulk transfer (folders, one session)
 - **Capability:** `GetTree{root}` / `PutTree{root}` — stream an entire subtree
