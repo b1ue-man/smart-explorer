@@ -408,6 +408,17 @@ pub struct App {
     remote_versions_rx: Option<Receiver<Vec<String>>>,
     /// Rollback-to-a-released-version download in flight: Ok((version, exe)).
     rollback_rx: Option<Receiver<Result<(String, PathBuf), String>>>,
+    /// True when the in-flight `rollback_rx` download is a FORWARD update
+    /// (install a newer release) rather than a rollback — picks `install_version`
+    /// vs `revert_to` when it lands.
+    rollback_forward: bool,
+    /// Newest released version that is strictly newer than the running one, once
+    /// the release list has been fetched. Drives the "⬆ Update verfügbar" banner
+    /// + a one-shot notice, so a newer release is offered automatically (no need
+    /// to press "Jetzt prüfen", and independent of the main-branch feed).
+    update_release_available: Option<String>,
+    /// Set once we've shown the discovery notice, so it fires only once.
+    update_release_notified: bool,
 
     /// A folder path passed on the command line, scanned on the first frame.
     pending_initial_path: Option<PathBuf>,
@@ -1812,6 +1823,9 @@ impl App {
             update_ready: None,
             remote_versions: None,
             remote_versions_rx: None,
+            rollback_forward: false,
+            update_release_available: None,
+            update_release_notified: false,
             rollback_rx: None,
             update_feed_draft: crate::updater::update_source_str().unwrap_or_default(),
             pending_initial_path: initial_path,
@@ -5767,16 +5781,19 @@ impl App {
     }
 
     /// Download a released version's binary (off-thread); installed by
-    /// `drain_version_channels` via the normal rollback swap.
-    fn start_rollback_download(&mut self, version: String) {
+    /// `drain_version_channels`. `forward` = a newer release to install as an
+    /// update (no rollback pin); else a rollback to an older version.
+    fn start_version_download(&mut self, version: String, forward: bool) {
         if self.rollback_rx.is_some() {
             return;
         }
         let (tx, rx) = unbounded();
         self.rollback_rx = Some(rx);
-        self.notice = Some((format!("⬇ Lade v{version} …"), std::time::Instant::now()));
+        self.rollback_forward = forward;
+        let verb = if forward { "Update" } else { "Lade" };
+        self.notice = Some((format!("⬇ {verb} v{version} …"), std::time::Instant::now()));
         std::thread::Builder::new()
-            .name("rollback-dl".into())
+            .name("version-dl".into())
             .spawn(move || {
                 let r = crate::updater::download_version(&version).map(|p| (version, p));
                 let _ = tx.send(r);
@@ -5784,9 +5801,35 @@ impl App {
             .ok();
     }
 
+    /// Download + roll back to an older released version.
+    fn start_rollback_download(&mut self, version: String) {
+        self.start_version_download(version, false);
+    }
+
+    /// Download + install a newer released version as a forward update.
+    fn start_install_download(&mut self, version: String) {
+        self.start_version_download(version, true);
+    }
+
     fn drain_version_channels(&mut self) {
         if let Some(rx) = self.remote_versions_rx.as_ref() {
             if let Ok(list) = rx.try_recv() {
+                // The list is newest-first with the current version excluded, so
+                // the first entry strictly newer than us is the update on offer.
+                let current = env!("CARGO_PKG_VERSION");
+                self.update_release_available =
+                    list.iter().find(|v| crate::updater::is_newer(v, current)).cloned();
+                // Tell the user once, so a newer release is surfaced without
+                // opening the update menu or pressing "Jetzt prüfen".
+                if let Some(v) = self.update_release_available.clone() {
+                    if !self.update_release_notified {
+                        self.update_release_notified = true;
+                        self.notice = Some((
+                            format!("⬆ Update verfügbar: v{v} — im Update-Menü installierbar"),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
                 self.remote_versions = Some(list);
                 self.remote_versions_rx = None;
             }
@@ -5794,11 +5837,27 @@ impl App {
         if let Some(rx) = self.rollback_rx.as_ref() {
             if let Ok(res) = rx.try_recv() {
                 self.rollback_rx = None;
+                let forward = self.rollback_forward;
                 match res {
-                    Ok((ver, exe)) => match crate::updater::revert_to(&exe, &ver) {
-                        Ok(cur) => self.update_ready = Some((ver, cur)),
-                        Err(e) => self.error_msg = Some(format!("Zurückrollen: {e}")),
-                    },
+                    Ok((ver, exe)) => {
+                        let applied = if forward {
+                            crate::updater::install_version(&exe, &ver)
+                        } else {
+                            crate::updater::revert_to(&exe, &ver)
+                        };
+                        match applied {
+                            Ok(cur) => {
+                                if forward {
+                                    self.update_release_available = None;
+                                }
+                                self.update_ready = Some((ver, cur));
+                            }
+                            Err(e) => {
+                                let what = if forward { "Update" } else { "Zurückrollen" };
+                                self.error_msg = Some(format!("{what}: {e}"));
+                            }
+                        }
+                    }
                     Err(e) => self.error_msg = Some(format!("Version laden: {e}")),
                 }
             }
@@ -9499,8 +9558,27 @@ impl App {
         self.fetch_remote_versions(); // one-time, cached
         let current = env!("CARGO_PKG_VERSION");
         let downloading = self.rollback_rx.is_some();
-        let mut dl_version: Option<String> = None; // released version → download+revert
+        let mut dl_version: Option<String> = None; // older release → download+rollback
+        let mut install_version: Option<String> = None; // newer release → download+install
         let mut revert_local: Option<(String, PathBuf)> = None;
+
+        // A newer release than the running version → offer it as an update right
+        // here (auto-discovered, so no "Jetzt prüfen" needed, and independent of
+        // the main-branch feed version).
+        if let Some(newest) = self.update_release_available.clone() {
+            ui.colored_label(
+                Color32::from_rgb(120, 220, 130),
+                format!("⬆ Update verfügbar: v{newest}"),
+            );
+            if ui
+                .add_enabled(!downloading, egui::Button::new("⬆ Installieren"))
+                .on_hover_text("Diese neuere Version laden und installieren (Neustart)")
+                .clicked()
+            {
+                install_version = Some(newest);
+            }
+            ui.add_space(4.0);
+        }
 
         ui.label(RichText::new("Frühere Versionen (Releases)").small().color(Color32::from_gray(140)));
         if self.remote_versions_rx.is_some() {
@@ -9510,7 +9588,12 @@ impl App {
             });
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         } else if let Some(list) = self.remote_versions.clone() {
-            let list: Vec<String> = list.into_iter().filter(|v| v != current).collect();
+            // Only OLDER versions are rollback targets; a newer one is offered as
+            // an update by the banner above.
+            let list: Vec<String> = list
+                .into_iter()
+                .filter(|v| v != current && !crate::updater::is_newer(v, current))
+                .collect();
             if list.is_empty() {
                 ui.colored_label(Color32::from_gray(110), "(keine — Feed ist kein GitHub-Repo, oder offline)");
             } else {
@@ -9571,6 +9654,9 @@ impl App {
                 });
         }
 
+        if let Some(ver) = install_version {
+            self.start_install_download(ver);
+        }
         if let Some(ver) = dl_version {
             self.start_rollback_download(ver);
         }
@@ -11412,6 +11498,9 @@ impl eframe::App for App {
         self.drain_upload();
         self.drain_remote_op();
         self.drain_agent_activate();
+        // Fetch the released-versions list once, early, so a newer release is
+        // discovered and offered automatically (independent of the feed check).
+        self.fetch_remote_versions();
         self.drain_version_channels();
         self.drain_clip_download();
         self.drain_share();

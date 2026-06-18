@@ -622,6 +622,28 @@ pub fn revert_to(archived: &std::path::Path, version: &str) -> Result<PathBuf, S
     Ok(cur_exe)
 }
 
+/// True if released `candidate` is strictly newer than `current` (semver-ish).
+/// Lets the UI tell apart "newer release → offer as an update" from "older
+/// release → offer as a rollback".
+pub fn is_newer(candidate: &str, current: &str) -> bool {
+    parse_ver(candidate) > parse_ver(current)
+}
+
+/// Install a downloaded released binary as a FORWARD update: archive the current
+/// exe (so the user can still roll back), swap the new one in, and clear any
+/// rollback pin so auto-update keeps working. Mirrors `revert_to` but for going
+/// forward to a newer release (no pin). Returns the exe to relaunch.
+pub fn install_version(downloaded: &std::path::Path, version: &str) -> Result<PathBuf, String> {
+    let _ = version;
+    if !downloaded.exists() {
+        return Err("Heruntergeladene Version nicht gefunden".into());
+    }
+    archive_binary(env!("CARGO_PKG_VERSION"));
+    let cur_exe = swap_in(downloaded)?;
+    resume_auto_update(); // forward update → don't leave a rollback pin behind
+    Ok(cur_exe)
+}
+
 /// Force a forward update to the feed's latest, clearing any rollback pin.
 /// Runs on its own thread; result via `tx`.
 pub fn update_to_latest_async(tx: Sender<UpdateMsg>) {
@@ -751,6 +773,16 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_newer_compares_semver() {
+        assert!(is_newer("0.5.74", "0.5.73"));
+        assert!(is_newer("0.6.0", "0.5.99"));
+        assert!(is_newer("1.0.0", "0.9.9"));
+        assert!(!is_newer("0.5.73", "0.5.73"));
+        assert!(!is_newer("0.5.72", "0.5.73"));
+        assert!(!is_newer("0.5.9", "0.5.10")); // numeric, not lexical
+    }
 
     #[test]
     fn github_repo_and_branch_parsing() {
