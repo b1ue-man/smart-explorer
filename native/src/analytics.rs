@@ -105,17 +105,137 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
     SizeNode { name, size, is_dir: true, children }
 }
 
-/// Scan a REMOTE tree through the VFS backend (SFTP/FTP/WebDAV/Drive). Same
-/// compact `SizeNode` output as the local `scan`, but each directory is one
-/// `list_dir` network round-trip — so this is serial (network-bound) and far
-/// slower than the local MFT-less walk. Cancellation is checked per directory.
+/// Scan a REMOTE tree through the VFS backend (SFTP/FTP/WebDAV/Drive) into the
+/// same compact `SizeNode` output as the local `scan`. Backends that report
+/// `parallelism() > 1` (WebDAV, Google Drive) list each tree level concurrently
+/// — the dominant latency lever for HTTP backends; serial otherwise. Each
+/// directory is one `list_dir` round-trip. Cancellation is checked per level/dir.
 pub fn scan_backend(be: &dyn crate::vfs::Backend, root: &str, p: &Progress) -> SizeNode {
     let name = root
         .rsplit('/')
         .find(|s| !s.is_empty())
         .unwrap_or(root)
         .to_string();
-    scan_backend_dir(be, root, name.into_boxed_str(), p)
+    if be.parallelism() <= 1 {
+        scan_backend_dir(be, root, name.into_boxed_str(), p)
+    } else {
+        scan_backend_parallel(be, root, name, p)
+    }
+}
+
+/// Backend-neutral child entry collected during the parallel walk.
+struct ChildMeta {
+    name: String,
+    is_dir: bool,
+    size: u64,
+}
+
+/// Normalise a backend dir path so the listing key matches the path rebuilt
+/// during tree assembly (trailing slash stripped; root stays "/").
+fn norm_dir(s: &str) -> String {
+    let t = s.trim_end_matches('/');
+    if t.is_empty() {
+        "/".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn child_path(parent: &str, name: &str) -> String {
+    format!("{}/{}", parent.trim_end_matches('/'), name)
+}
+
+fn scan_backend_parallel(be: &dyn crate::vfs::Backend, root: &str, name: String, p: &Progress) -> SizeNode {
+    let par = be.parallelism().clamp(2, 16);
+    let pool = match rayon::ThreadPoolBuilder::new().num_threads(par).build() {
+        Ok(pool) => pool,
+        Err(_) => return scan_backend_dir(be, root, name.into_boxed_str(), p),
+    };
+
+    let root_norm = norm_dir(root);
+    let mut listings: std::collections::HashMap<String, Vec<ChildMeta>> =
+        std::collections::HashMap::new();
+    let mut frontier: Vec<String> = vec![root_norm.clone()];
+
+    // Breadth-first: list every directory at the current depth in parallel, then
+    // descend to the next depth. Bounds concurrency to the pool size.
+    while !frontier.is_empty() {
+        if p.cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let level: Vec<(String, Vec<ChildMeta>)> = pool.install(|| {
+            frontier
+                .par_iter()
+                .map(|dir| {
+                    if p.cancel.load(Ordering::Relaxed) {
+                        return (dir.clone(), Vec::new());
+                    }
+                    let mut kids = Vec::new();
+                    if let Ok(entries) = be.list_dir(dir) {
+                        for m in entries {
+                            if m.is_symlink {
+                                continue;
+                            }
+                            kids.push(ChildMeta { name: m.name, is_dir: m.is_dir, size: m.size });
+                        }
+                    }
+                    (dir.clone(), kids)
+                })
+                .collect()
+        });
+
+        let mut next = Vec::new();
+        let (mut lvl_files, mut lvl_dirs, mut lvl_bytes) = (0u64, 0u64, 0u64);
+        for (dir, kids) in level {
+            for c in &kids {
+                if c.is_dir {
+                    lvl_dirs += 1;
+                    next.push(child_path(&dir, &c.name));
+                } else {
+                    lvl_files += 1;
+                    lvl_bytes += c.size;
+                }
+            }
+            listings.insert(dir, kids);
+        }
+        p.files.fetch_add(lvl_files, Ordering::Relaxed);
+        p.dirs.fetch_add(lvl_dirs, Ordering::Relaxed);
+        p.bytes.fetch_add(lvl_bytes, Ordering::Relaxed);
+        frontier = next;
+    }
+
+    build_from_listings(&root_norm, name.into_boxed_str(), &listings)
+}
+
+/// Assemble the `SizeNode` tree from the collected per-directory listings.
+fn build_from_listings(
+    path: &str,
+    name: Box<str>,
+    listings: &std::collections::HashMap<String, Vec<ChildMeta>>,
+) -> SizeNode {
+    let mut children = Vec::new();
+    let mut size = 0u64;
+    if let Some(kids) = listings.get(path) {
+        for c in kids.iter().filter(|c| c.is_dir) {
+            let node = build_from_listings(
+                &child_path(path, &c.name),
+                c.name.clone().into_boxed_str(),
+                listings,
+            );
+            size += node.size;
+            children.push(node);
+        }
+        for c in kids.iter().filter(|c| !c.is_dir) {
+            size += c.size;
+            children.push(SizeNode {
+                name: c.name.clone().into_boxed_str(),
+                size: c.size,
+                is_dir: false,
+                children: Vec::new(),
+            });
+        }
+    }
+    SizeNode { name, size, is_dir: true, children }
 }
 
 fn scan_backend_dir(
@@ -226,5 +346,34 @@ mod tests {
         assert_eq!(sub.children.len(), 1);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parallel_tree_assembly() {
+        // build_from_listings reconstructs the tree from per-dir listings (the
+        // parallel walk's output) — verify sizes + nesting deterministically.
+        let mut l: std::collections::HashMap<String, Vec<ChildMeta>> =
+            std::collections::HashMap::new();
+        l.insert(
+            "/r".into(),
+            vec![
+                ChildMeta { name: "sub".into(), is_dir: true, size: 0 },
+                ChildMeta { name: "a.txt".into(), is_dir: false, size: 100 },
+            ],
+        );
+        l.insert(
+            "/r/sub".into(),
+            vec![
+                ChildMeta { name: "b.bin".into(), is_dir: false, size: 250 },
+                ChildMeta { name: "c.bin".into(), is_dir: false, size: 150 },
+            ],
+        );
+        let node = build_from_listings("/r", "r".into(), &l);
+        assert_eq!(node.size, 500);
+        // Directories sort before files in the assembled children.
+        assert!(node.children[0].is_dir);
+        let sub = node.children.iter().find(|c| &*c.name == "sub").unwrap();
+        assert_eq!(sub.size, 400);
+        assert_eq!(sub.children.len(), 2);
     }
 }
