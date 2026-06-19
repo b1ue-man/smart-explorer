@@ -5,9 +5,9 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
-#[path = "../scanner.rs"]
+#[path = "../scanner/core_oslocked/scanner.rs"]
 mod scanner;
-#[path = "../types.rs"]
+#[path = "../types/core/types.rs"]
 mod types;
 
 use scanner::ScanMessage;

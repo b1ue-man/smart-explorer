@@ -9,9 +9,13 @@
 //!    is then browsed by the LOCAL scanner (std::fs handles UNC), so no
 //!    `RemoteState` - only the live `NetConnection` is kept alive.
 
+#[path = "core_oslocked/connector.rs"]
 mod connector;
+#[path = "core/endpoint.rs"]
 mod endpoint;
+#[path = "core_oslocked/persistence.rs"]
 mod persistence;
+#[path = "core/types.rs"]
 mod types;
 
 pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};

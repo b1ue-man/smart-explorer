@@ -3,7 +3,7 @@ use super::*;
 
 /// First-run liability notice (single source: the repo's DISCLAIMER.txt, also
 /// used by the installer's accept page).
-pub(in crate::app) const DISCLAIMER_TEXT: &str = include_str!("../../../DISCLAIMER.txt");
+pub(in crate::app) const DISCLAIMER_TEXT: &str = include_str!("../../../../DISCLAIMER.txt");
 
 /// How many saved (set-up-once) remote connections stay pinned on the sidebar.
 /// The freshest are shown there; any older ones overflow into the "Verbindung"

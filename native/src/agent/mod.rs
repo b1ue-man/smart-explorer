@@ -5,11 +5,17 @@
 //! serializes outgoing frames and a reader thread routes incoming frames to the
 //! waiting operation.
 
+#[path = "core_oslocked/backend.rs"]
 mod backend;
+#[path = "core_oslocked/deploy.rs"]
 mod deploy;
+#[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core_oslocked/mux.rs"]
 mod mux;
+#[path = "core_oslocked/stream.rs"]
 mod stream;
+#[path = "core_oslocked/transfer.rs"]
 mod transfer;
 
 pub use backend::AgentBackend;
@@ -17,4 +23,5 @@ pub use backend::AgentBackend;
 pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact};
 
 #[cfg(test)]
+#[path = "core_oslocked/tests.rs"]
 mod tests;

@@ -15,9 +15,9 @@ pub fn artifact_for(uname_sm: &str) -> Option<AgentArtifact> {
     let os = it.next().unwrap_or("");
     let arch = it.next().unwrap_or("");
     let bytes: &'static [u8] = match (os, arch) {
-        ("Linux", "x86_64") => include_bytes!("../../agent-bin/se-agent-x86_64-linux-musl"),
+        ("Linux", "x86_64") => include_bytes!("../../../agent-bin/se-agent-x86_64-linux-musl"),
         ("Linux", "aarch64") | ("Linux", "arm64") => {
-            include_bytes!("../../agent-bin/se-agent-aarch64-linux-musl")
+            include_bytes!("../../../agent-bin/se-agent-aarch64-linux-musl")
         }
         _ => return None,
     };

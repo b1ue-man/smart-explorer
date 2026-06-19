@@ -1,9 +1,20 @@
+#[path = "core_oslocked/archive.rs"]
 mod archive;
+#[path = "core_oslocked/config.rs"]
 mod config;
+#[path = "core/core.rs"]
 mod core;
+#[path = "core_oslocked/feed.rs"]
 mod feed;
+#[path = "core_oslocked/flow.rs"]
 mod flow;
+#[cfg(windows)]
+#[path = "os/windows.rs"]
 mod os;
+#[cfg(not(windows))]
+#[path = "os/non_windows.rs"]
+mod os;
+#[path = "core/types.rs"]
 mod types;
 
 #[allow(unused_imports)]
@@ -19,4 +30,5 @@ pub use os::{install_version, revert_to, run_apply_worker};
 pub use types::UpdateMsg;
 
 #[cfg(test)]
+#[path = "core/tests.rs"]
 mod tests;

@@ -10,9 +10,17 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
+#[path = "core_oslocked/job.rs"]
 mod job;
+#[cfg(windows)]
+#[path = "os/windows/platform.rs"]
 mod platform;
+#[cfg(not(windows))]
+#[path = "os/non_windows/platform.rs"]
+mod platform;
+#[path = "core_oslocked/schedule.rs"]
 mod schedule;
+#[path = "core_oslocked/state.rs"]
 mod state;
 
 #[allow(unused_imports)]
@@ -26,4 +34,5 @@ pub use state::{
 };
 
 #[cfg(test)]
+#[path = "core/tests.rs"]
 mod tests;

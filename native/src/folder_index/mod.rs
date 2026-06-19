@@ -8,10 +8,15 @@
 // Storage: plain UTF-8 paths, one per line, in %APPDATA%\smart_explorer\
 // folder_index.txt. Loading is just split-on-newline.
 
+#[path = "core_oslocked/index_build.rs"]
 mod core_oslocked;
+#[path = "core/filters.rs"]
 mod filters;
+#[path = "core/model.rs"]
 mod model;
+#[path = "core_oslocked/persistence.rs"]
 mod persistence;
+#[path = "core/search.rs"]
 mod search;
 
 #[allow(unused_imports)]
@@ -22,4 +27,5 @@ pub use core_oslocked::stat_and_rank;
 pub use model::{FolderIndex, IndexMsg};
 
 #[cfg(test)]
+#[path = "core/tests.rs"]
 mod tests;
