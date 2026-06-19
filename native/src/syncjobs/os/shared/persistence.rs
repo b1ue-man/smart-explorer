@@ -288,10 +288,6 @@ pub fn load() -> Vec<SyncJob> {
     jobs
 }
 
-pub fn save(jobs: &[SyncJob]) -> std::io::Result<()> {
-    save_dir(&jobs_dir(), jobs)
-}
-
 /// Add or replace a job (by id) - rewrites just that job's file.
 pub fn upsert(job: &SyncJob) -> std::io::Result<()> {
     write_job(&jobs_dir(), job)

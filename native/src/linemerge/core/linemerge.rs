@@ -1,9 +1,9 @@
 //! Minimal line-level two-way merge used to resolve sync conflicts: an LCS line
-//! diff groups the two versions into equal runs and change blocks ("hunks"), and
-//! the user picks per change block whether to take the A side, the B side, both,
-//! or neither. `assemble` then rebuilds the merged text.
+//! diff groups the two versions into equal runs and change blocks ("hunks").
+//! The UI uses `rows`/`assemble_rows` for side-by-side conflict resolution.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg(test)]
 pub enum Choice {
     A,
     B,
@@ -18,6 +18,7 @@ pub struct Hunk {
     pub a: Vec<String>,
     pub b: Vec<String>,
     /// For change hunks: which side(s) to keep. Ignored when `equal`.
+    #[cfg(test)]
     pub choice: Choice,
 }
 
@@ -51,6 +52,7 @@ pub fn diff(a: &str, b: &str) -> Vec<Hunk> {
                 equal: false,
                 a: std::mem::take(ca),
                 b: std::mem::take(cb),
+                #[cfg(test)]
                 choice: Choice::A,
             });
         }
@@ -62,6 +64,7 @@ pub fn diff(a: &str, b: &str) -> Vec<Hunk> {
                 equal: true,
                 a: v.clone(),
                 b: v,
+                #[cfg(test)]
                 choice: Choice::Both,
             });
         }
@@ -191,6 +194,7 @@ pub fn assemble_rows(rows: &[Row]) -> String {
 }
 
 /// Rebuild the merged text from the hunks' choices.
+#[cfg(test)]
 pub fn assemble(hunks: &[Hunk]) -> String {
     let mut out: Vec<String> = Vec::new();
     for h in hunks {

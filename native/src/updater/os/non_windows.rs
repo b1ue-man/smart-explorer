@@ -125,23 +125,6 @@ pub(super) fn apply_via_installed_updater(
     Ok(())
 }
 
-fn apply_via_worker(new_exe: &Path) -> Result<(), String> {
-    let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let worker = std::env::temp_dir().join(format!("se_update_worker_{}.exe", nanos));
-    std::fs::copy(new_exe, &worker).map_err(|e| format!("Worker stagen: {}", e))?;
-    let pid = std::process::id().to_string();
-    spawn_detached(
-        &worker,
-        &["--apply-update", &cur_exe.to_string_lossy(), &pid],
-    )
-    .map_err(|e| format!("Worker starten: {}", e))?;
-    Ok(())
-}
-
 /// Worker entry point (`--apply-update <target> <parent_pid>`).
 pub fn run_apply_worker(args: &[String]) {
     let i = match args.iter().position(|a| a == "--apply-update") {

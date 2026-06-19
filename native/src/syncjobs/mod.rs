@@ -20,7 +20,7 @@ mod schedule;
 mod types;
 
 #[allow(unused_imports)]
-pub use persistence::{jobs_dir, jobs_path, load, remove, save, upsert};
+pub use persistence::{jobs_dir, jobs_path, load, remove, upsert};
 pub use results::{load_results, mark_run, record_result, JobResult};
 #[allow(unused_imports)]
 pub use schedule::within_window;

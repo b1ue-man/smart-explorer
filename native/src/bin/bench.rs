@@ -6,8 +6,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[path = "../scanner/mod.rs"]
+#[allow(dead_code)]
 mod scanner;
 #[path = "../types/mod.rs"]
+#[allow(dead_code)]
 mod types;
 
 use scanner::ScanMessage;

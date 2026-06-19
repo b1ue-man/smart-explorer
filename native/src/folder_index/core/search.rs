@@ -1,20 +1,8 @@
 use rayon::prelude::*;
 
 use super::model::FolderIndex;
-use super::os::stat_and_rank;
 
 impl FolderIndex {
-    /// Score every path against `query`. Returns the top `max` matches sorted
-    /// by (fuzzy_score DESC, mtime DESC) - fuzzy score is the primary key, with
-    /// last-modified time as tiebreaker (also reorders within a score band so
-    /// recently-touched folders surface first).
-    ///
-    /// To keep stat() calls cheap, we only stat the top `max * 3` fuzzy
-    /// candidates and discard the rest.
-    pub fn search(&self, query: &str, max: usize) -> Vec<(String, i32)> {
-        stat_and_rank(self.search_scored(query, max * 3), max)
-    }
-
     /// CPU-only part of the search: parallel fuzzy scoring, sorted by score
     /// descending, truncated to `n`. No filesystem access - safe to run on
     /// the UI thread even with a cold disk.

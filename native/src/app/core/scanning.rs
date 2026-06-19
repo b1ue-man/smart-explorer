@@ -237,12 +237,6 @@ impl App {
                     ));
                     break;
                 }
-                Ok(IndexMsg::Error(e)) => {
-                    self.error_msg = Some(e);
-                    self.index_building = false;
-                    self.index_rx = None;
-                    break;
-                }
                 Err(_) => break,
             }
         }

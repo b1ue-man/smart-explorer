@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use super::filters::{path_has_skipped_segment, should_skip_meta};
 use super::model::{FolderIndex, IndexMsg};
@@ -34,10 +33,7 @@ impl FolderIndex {
                     set.insert(p);
                 }
 
-                let _ = tx.send(IndexMsg::Done(FolderIndex {
-                    paths: set,
-                    built_at: Some(SystemTime::now()),
-                }));
+                let _ = tx.send(IndexMsg::Done(FolderIndex { paths: set }));
             })
             .ok();
     }
@@ -170,7 +166,6 @@ impl FolderIndex {
             .filter(|l| !path_has_skipped_segment(l))
             .map(|l| l.to_string())
             .collect();
-        let built_at = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        Ok(Self { paths, built_at })
+        Ok(Self { paths })
     }
 }

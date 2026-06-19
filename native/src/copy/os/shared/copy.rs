@@ -53,24 +53,10 @@ fn rel_from_root(path_fwd: &str, root_fwd: &str) -> String {
     }
 }
 
-pub fn start_copy(entries: Vec<FileEntry>, opts: CopyOptions, tx: Sender<CopyMsg>) -> CopyHandle {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_clone = cancel.clone();
-
-    std::thread::Builder::new()
-        .name("copy-driver".into())
-        .spawn(move || {
-            run_copy(entries, opts, tx, cancel_clone);
-        })
-        .expect("spawn copy thread");
-
-    CopyHandle { cancel }
-}
-
-/// Like `start_copy`, but the directory expansion (recursive walk of selected
+/// Copy selected entries. Directory expansion (recursive walk of selected
 /// folders) happens on the worker thread, so the UI never blocks on a large
-/// subtree. `filter` (with its root prefix) is applied to the expanded
-/// entries; selected plain files always pass.
+/// subtree. `filter` (with its root prefix) is applied to the expanded entries;
+/// selected plain files always pass.
 pub fn start_copy_expanded(
     seeds: Vec<FileEntry>,
     filter: Option<(crate::types::FilterDef, String)>,
@@ -244,7 +230,6 @@ pub fn start_copy_pairs(
                         bytes_done,
                         bytes_total,
                         elapsed_ms: start.elapsed().as_millis() as u64,
-                        current_path: abs.clone(),
                         errors: errors_count,
                         done: false,
                     }));
@@ -259,7 +244,6 @@ pub fn start_copy_pairs(
                     bytes_done,
                     bytes_total,
                     elapsed_ms: start.elapsed().as_millis() as u64,
-                    current_path: String::new(),
                     errors: errors_count,
                     done: true,
                 },
@@ -292,19 +276,17 @@ fn run_copy(
     let mut errors: Vec<(String, String)> = Vec::new();
     let mut last_progress = Instant::now();
 
-    let send_progress =
-        |files_done: u64, bytes_done: u64, current: &str, errs: u64, done: bool| -> CopyProgress {
-            CopyProgress {
-                files_done,
-                files_total,
-                bytes_done,
-                bytes_total,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                current_path: current.to_string(),
-                errors: errs,
-                done,
-            }
-        };
+    let send_progress = |files_done: u64, bytes_done: u64, errs: u64, done: bool| -> CopyProgress {
+        CopyProgress {
+            files_done,
+            files_total,
+            bytes_done,
+            bytes_total,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            errors: errs,
+            done,
+        }
+    };
 
     for f in &files {
         if cancel.load(Ordering::Relaxed) {
@@ -380,7 +362,6 @@ fn run_copy(
             let _ = tx.send(CopyMsg::Progress(send_progress(
                 files_done,
                 bytes_done,
-                src_str,
                 errors_count,
                 false,
             )));
@@ -393,7 +374,7 @@ fn run_copy(
         prune_empty_dirs(&opts.root, &files, &root_fwd);
     }
 
-    let done = send_progress(files_done, bytes_done, "", errors_count, true);
+    let done = send_progress(files_done, bytes_done, errors_count, true);
     let _ = tx.send(CopyMsg::Done {
         progress: done,
         errors,

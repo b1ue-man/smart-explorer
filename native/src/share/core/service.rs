@@ -13,7 +13,6 @@ pub struct ShareService {
     pub events: EventRx,
     cmds: CmdTx,
     pub fingerprint: String,
-    pub listen_port: u16,
 }
 
 impl ShareService {
@@ -69,7 +68,6 @@ impl ShareService {
             events: ev_rx,
             cmds: cmd_tx,
             fingerprint,
-            listen_port,
         })
     }
 }

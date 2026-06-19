@@ -11,6 +11,7 @@ pub struct FileEntry {
     pub mtime_ms: i64,
     pub btime_ms: i64,
     pub is_dir: bool,
+    #[allow(dead_code)]
     pub is_symlink: bool,
     pub hidden: bool,
     pub system: bool,
@@ -21,10 +22,6 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn full_path(&self) -> PathBuf {
-        PathBuf::from(self.path.as_ref())
-    }
-
     /// A selection key that uniquely identifies this row. Equals `path` for
     /// normal entries; for backends that allow duplicate names in one folder
     /// (Google Drive), it appends the backend id so each duplicate selects
@@ -146,7 +143,6 @@ pub struct ScanProgress {
     pub errors: u64,
     pub elapsed_ms: u64,
     pub current_path: String,
-    pub done: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -156,7 +152,6 @@ pub struct CopyProgress {
     pub bytes_done: u64,
     pub bytes_total: u64,
     pub elapsed_ms: u64,
-    pub current_path: String,
     pub errors: u64,
     pub done: bool,
 }

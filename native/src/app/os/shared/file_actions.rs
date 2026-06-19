@@ -433,7 +433,6 @@ impl App {
             bytes_done: 0,
             bytes_total: 0,
             elapsed_ms: 0,
-            current_path: String::new(),
             errors: 0,
             done: false,
         });
