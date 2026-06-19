@@ -3,6 +3,27 @@ use std::path::{Path, PathBuf};
 use super::config::appdata_dir;
 use super::core::parse_ver;
 
+#[cfg(windows)]
+fn binary_suffix() -> &'static str {
+    ".exe"
+}
+
+#[cfg(target_os = "linux")]
+fn binary_suffix() -> &'static str {
+    ""
+}
+
+fn is_archived_binary(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        path.extension().and_then(|x| x.to_str()) == Some("exe")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        path.is_file()
+    }
+}
+
 /// Filename prefix for the renamed-out running binary (`<stem>_old`).
 pub(super) fn old_binary_prefix(cur_exe: &Path) -> String {
     let stem = cur_exe
@@ -18,7 +39,12 @@ pub(super) fn new_old_binary_path(cur_exe: &Path) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    cur_exe.with_file_name(format!("{}_{}.exe", old_binary_prefix(cur_exe), nanos))
+    cur_exe.with_file_name(format!(
+        "{}_{}{}",
+        old_binary_prefix(cur_exe),
+        nanos,
+        binary_suffix()
+    ))
 }
 
 /// Delete leftovers from previous updates (best effort, with retries since an
@@ -42,7 +68,7 @@ pub fn cleanup_old_binaries() {
                     for e in rd.flatten() {
                         let name = e.file_name().to_string_lossy().to_string();
                         if name.starts_with(&prefix)
-                            && name.ends_with(".exe")
+                            && name.ends_with(binary_suffix())
                             && std::fs::remove_file(e.path()).is_err()
                         {
                             any_left = true;
@@ -107,7 +133,7 @@ pub(super) fn archive_binary(version: &str) {
     };
     let _ = std::fs::create_dir_all(&vd);
     if let Ok(cur) = std::env::current_exe() {
-        let dest = vd.join(format!("{} {}.exe", exe_stem(&cur), version));
+        let dest = vd.join(format!("{} {}{}", exe_stem(&cur), version, binary_suffix()));
         if !dest.exists() {
             let _ = std::fs::copy(&cur, &dest);
         }
@@ -130,7 +156,7 @@ pub fn list_archived_versions() -> Vec<(String, PathBuf)> {
         if let Ok(rd) = std::fs::read_dir(&vd) {
             for e in rd.flatten() {
                 let p = e.path();
-                if p.extension().and_then(|x| x.to_str()) != Some("exe") {
+                if !is_archived_binary(&p) {
                     continue;
                 }
                 if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {

@@ -33,8 +33,15 @@ fn archived_versions_parse_and_sort_numerically() {
     let vd = archive::versions_dir().expect("versions dir");
     std::fs::create_dir_all(&vd).unwrap();
     let mk = ["0.3.6", "0.3.10", "0.4.0"];
+    let archive_name = |v: &str| {
+        if cfg!(windows) {
+            format!("Smart Explorer {}.exe", v)
+        } else {
+            format!("Smart Explorer {}", v)
+        }
+    };
     for v in mk {
-        std::fs::write(vd.join(format!("Smart Explorer {}.exe", v)), b"x").unwrap();
+        std::fs::write(vd.join(archive_name(v)), b"x").unwrap();
     }
     let vers: Vec<String> = list_archived_versions()
         .into_iter()
@@ -45,7 +52,7 @@ fn archived_versions_parse_and_sort_numerically() {
     assert!(idx("0.4.0") < idx("0.3.10"));
     assert!(idx("0.3.10") < idx("0.3.6"));
     for v in mk {
-        let _ = std::fs::remove_file(vd.join(format!("Smart Explorer {}.exe", v)));
+        let _ = std::fs::remove_file(vd.join(archive_name(v)));
     }
 }
 

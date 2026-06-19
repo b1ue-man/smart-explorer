@@ -1,9 +1,9 @@
-//! Headless background sync (#4). Started as `smart_explorer.exe --sync-daemon`
+//! Headless background sync (#4). Started as `smart_explorer --sync-daemon`
 //! from a per-user logon autostart entry - see `autostart.rs`. It opens no
 //! window: it loops on a short tick, runs every *due* saved sync job, reacts to
 //! the event triggers (on-startup, real-time change, device/USB connect), writes
 //! a heartbeat the GUI can read, then sleeps. Because the daemon is the *same
-//! exe*, a self-update swaps it too.
+//! executable*, a self-update swaps it too.
 //!
 //! Safety mirrors the interactive sync exactly (same `bisync::run`): only files
 //! that actually changed move, both-sides-changed stays a conflict (nothing is
@@ -15,8 +15,8 @@ mod job;
 #[cfg(windows)]
 #[path = "os/windows/platform.rs"]
 mod platform;
-#[cfg(not(windows))]
-#[path = "os/non_windows/platform.rs"]
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/platform.rs"]
 mod platform;
 #[path = "os/shared/schedule.rs"]
 mod schedule;
