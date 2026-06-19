@@ -740,7 +740,7 @@ fn handle_write(
     inbound: &Receiver<Frame>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let tmp = format!("{path}.se-agent.part");
+    let tmp = format!("{path}.se-agent-{id:x}.part");
     if let Some(parent) = Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }

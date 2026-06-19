@@ -256,11 +256,14 @@ impl AgentWriteStream {
 
 impl Write for AgentWriteStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.finished {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "agent write stream already closed"));
+        }
         self.mux.send(self.id, Frame::Data(buf.to_vec()))?;
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
-        Ok(()) // the agent fsyncs at End; chunks are flushed on the wire as sent
+        self.finish()
     }
 }
 
@@ -681,7 +684,7 @@ impl Backend for AgentBackend {
         self.inner.parallelism()
     }
     fn rename_overwrites(&self) -> bool {
-        self.inner.rename_overwrites()
+        true
     }
     fn is_local(&self) -> bool {
         self.inner.is_local()
