@@ -17,7 +17,6 @@ pub(crate) fn on_metered_network() -> bool {
     power::on_metered_network()
 }
 
-#[cfg(windows)]
 mod drives {
     use super::DriveInfo;
     use std::os::windows::ffi::OsStrExt;
@@ -72,15 +71,6 @@ mod drives {
     }
 }
 
-#[cfg(not(windows))]
-mod drives {
-    use super::DriveInfo;
-    pub fn removable() -> Vec<DriveInfo> {
-        Vec::new()
-    }
-}
-
-#[cfg(windows)]
 mod power {
     pub fn battery_saver_on() -> bool {
         use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
@@ -94,6 +84,7 @@ mod power {
             }
         }
     }
+
     pub fn on_metered_network() -> bool {
         use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
         // Best-effort via WinRT: treat Fixed/Variable cost as metered. Any error
@@ -105,15 +96,5 @@ mod power {
             Ok(t == NetworkCostType::Fixed || t == NetworkCostType::Variable)
         })()
         .unwrap_or(false)
-    }
-}
-
-#[cfg(not(windows))]
-mod power {
-    pub fn battery_saver_on() -> bool {
-        false
-    }
-    pub fn on_metered_network() -> bool {
-        false
     }
 }

@@ -16,9 +16,13 @@
 //!    the hot local walk. The local fast path stays exactly as it is.
 #![allow(dead_code)] // staged interface: wired in by the SFTP/FTP/connect steps.
 
+#[path = "core_oslocked/cache.rs"]
 mod cache;
+#[path = "core/core.rs"]
 mod core;
+#[path = "core_oslocked/dispatch.rs"]
 mod dispatch;
+#[path = "os/shared/local.rs"]
 mod local;
 
 pub use self::cache::CachingBackend;
@@ -28,4 +32,5 @@ pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
 
 #[cfg(test)]
+#[path = "core_oslocked/tests.rs"]
 mod tests;

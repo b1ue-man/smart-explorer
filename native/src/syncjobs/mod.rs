@@ -10,9 +10,13 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
+#[path = "core_oslocked/persistence.rs"]
 mod persistence;
+#[path = "core_oslocked/results.rs"]
 mod results;
+#[path = "core/schedule.rs"]
 mod schedule;
+#[path = "core/types.rs"]
 mod types;
 
 #[allow(unused_imports)]

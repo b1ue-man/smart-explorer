@@ -11,18 +11,25 @@
 //! in chunks (no `SyncIoBridge` — it conflicts with this model). This keeps
 //! scanner / copy / UI fully synchronous; see docs/REMOTE_LAYER_PLAN.md §1,§3.
 
+#[path = "core_oslocked/backend.rs"]
 mod backend;
+#[path = "core/config.rs"]
 mod config;
+#[path = "core/errors.rs"]
+mod errors;
+#[path = "core_oslocked/io_adapters.rs"]
 mod io_adapters;
+#[path = "core_oslocked/known_hosts.rs"]
 mod known_hosts;
+#[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core_oslocked/session.rs"]
 mod session;
+#[path = "core/url.rs"]
 mod url;
 
 pub use backend::SftpBackend;
 pub use config::{SftpAuth, SftpConfig};
 pub use url::backend_from_url;
 
-fn io_err<E: std::fmt::Display>(e: E) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-}
+pub(crate) use errors::io_err;

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "tests/extra.rs"]
 mod extra;
 
 fn tmp(tag: &str) -> PathBuf {

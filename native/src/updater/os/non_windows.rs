@@ -32,121 +32,10 @@ fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
     Ok(cur_exe)
 }
 
-/// Spawn a process fully detached: no console window, and (on Windows) broken
-/// away from any job object so it outlives this process.
 fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
-        match cmd.spawn() {
-            Ok(_) => return Ok(()),
-            Err(e) if should_elevate_for_spawn(&e) => {
-                return spawn_elevated_detached(exe, args);
-            }
-            Err(_) => {}
-        }
-        let mut c2 = std::process::Command::new(exe);
-        c2.args(args)
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-        return match c2.spawn() {
-            Ok(_) => Ok(()),
-            Err(e) if should_elevate_for_spawn(&e) => spawn_elevated_detached(exe, args),
-            Err(e) => Err(e),
-        };
-    }
-    #[cfg(not(windows))]
-    {
-        cmd.spawn().map(|_| ())
-    }
-}
-
-#[cfg(windows)]
-fn should_elevate_for_spawn(e: &std::io::Error) -> bool {
-    matches!(e.raw_os_error(), Some(5) | Some(740) | Some(1314))
-        || e.kind() == std::io::ErrorKind::PermissionDenied
-}
-
-#[cfg(windows)]
-fn spawn_elevated_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    fn wide_os(s: &OsStr) -> Vec<u16> {
-        s.encode_wide().chain(std::iter::once(0)).collect()
-    }
-    fn wide_str(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    let verb = wide_str("runas");
-    let file = wide_os(exe.as_os_str());
-    let params = wide_str(&join_windows_args(args));
-    let rc = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            verb.as_ptr(),
-            file.as_ptr(),
-            params.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    } as isize;
-    if rc > 32 {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("Administratorfreigabe abgebrochen oder verweigert (ShellExecuteW={rc})"),
-        ))
-    }
-}
-
-#[cfg(windows)]
-fn join_windows_args(args: &[&str]) -> String {
-    args.iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-#[cfg(windows)]
-fn quote_windows_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && !arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'))
-    {
-        return arg.to_string();
-    }
-
-    let mut out = String::from("\"");
-    let mut backslashes = 0usize;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                out.push_str(&"\\".repeat(backslashes * 2 + 1));
-                out.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                out.push_str(&"\\".repeat(backslashes));
-                backslashes = 0;
-                out.push(ch);
-            }
-        }
-    }
-    out.push_str(&"\\".repeat(backslashes * 2));
-    out.push('"');
-    out
+    cmd.spawn().map(|_| ())
 }
 
 fn installed_updater_path() -> Result<PathBuf, String> {
@@ -288,27 +177,8 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) {
     if pid == 0 {
         return;
     }
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-        };
-        unsafe {
-            let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-            if !h.is_null() {
-                WaitForSingleObject(h, timeout.as_millis() as u32);
-                CloseHandle(h);
-                return;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(300));
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = timeout;
-        std::thread::sleep(Duration::from_millis(300));
-    }
+    let _ = timeout;
+    std::thread::sleep(Duration::from_millis(300));
 }
 
 /// Revert to an archived binary.
