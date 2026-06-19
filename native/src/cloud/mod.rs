@@ -2,8 +2,8 @@
 mod cloud;
 
 mod os {
-    #[cfg(not(windows))]
-    #[path = "non_windows.rs"]
+    #[cfg(target_os = "linux")]
+    #[path = "linux_os.rs"]
     mod platform;
     #[cfg(windows)]
     #[path = "windows.rs"]
