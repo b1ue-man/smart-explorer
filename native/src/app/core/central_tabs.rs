@@ -67,7 +67,7 @@ impl App {
             for (slot, &rect) in rects.iter().enumerate() {
                 let tab_idx = panes[slot];
                 let focused = tab_idx == self.active_tab;
-                ui.allocate_ui_at_rect(rect, |ui| {
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.set_clip_rect(rect); // <- prevents the table from overflowing the pane
                     ui.push_id(("pane", tab_idx), |ui| {
                         let title = self.tab_title(tab_idx);

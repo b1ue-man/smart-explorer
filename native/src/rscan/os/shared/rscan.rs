@@ -140,7 +140,6 @@ fn run_search(
                 errors: 0,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 current_path: root.clone(),
-                done: false,
             }));
             last_progress = Instant::now();
         }
@@ -155,7 +154,6 @@ fn run_search(
         errors: 0,
         elapsed_ms: start.elapsed().as_millis() as u64,
         current_path: String::new(),
-        done: true,
     }));
 }
 
@@ -213,7 +211,6 @@ fn run(
                 errors: 1,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 current_path: String::new(),
-                done: true,
             }));
             return;
         }
@@ -283,7 +280,6 @@ fn run(
                 errors,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 current_path: dir.clone(),
-                done: false,
             }));
             last_progress = Instant::now();
         }
@@ -298,7 +294,6 @@ fn run(
         errors,
         elapsed_ms: start.elapsed().as_millis() as u64,
         current_path: String::new(),
-        done: true,
     }));
 }
 

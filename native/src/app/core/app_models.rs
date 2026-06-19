@@ -69,7 +69,6 @@ pub(in crate::app) fn empty_progress() -> ScanProgress {
         errors: 0,
         elapsed_ms: 0,
         current_path: String::new(),
-        done: false,
     }
 }
 

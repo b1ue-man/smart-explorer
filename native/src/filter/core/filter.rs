@@ -164,18 +164,3 @@ pub fn parse_size_input(s: &str) -> Option<u64> {
     };
     Some((num * mul).round() as u64)
 }
-
-pub fn parse_date_input(s: &str) -> Option<i64> {
-    use chrono::{NaiveDate, TimeZone};
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let date = NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
-    let dt = date.and_hms_opt(0, 0, 0)?;
-    let local = chrono::Local
-        .from_local_datetime(&dt)
-        .single()
-        .or_else(|| chrono::Local.from_local_datetime(&dt).earliest())?;
-    Some(local.timestamp_millis())
-}

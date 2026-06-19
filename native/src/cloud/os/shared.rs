@@ -39,10 +39,6 @@ pub fn save_config(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
     std::fs::write(cfg_path(p), body)
 }
 
-pub fn is_configured(p: Provider) -> bool {
-    !load_config(p).client_id.trim().is_empty()
-}
-
 fn keyring_account(p: Provider) -> String {
     format!("cloud:{}", p.as_str())
 }

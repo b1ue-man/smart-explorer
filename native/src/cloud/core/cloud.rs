@@ -24,11 +24,6 @@ impl Provider {
             Provider::GDrive => "gdrive",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::GDrive => "Google Drive",
-        }
-    }
     fn auth_url(self) -> &'static str {
         match self {
             Provider::GDrive => "https://accounts.google.com/o/oauth2/v2/auth",
@@ -59,8 +54,7 @@ pub struct ClientConfig {
 }
 
 pub use super::os::shared::{
-    disconnect, is_configured, is_connected, load_config, refresh_token, save_config,
-    store_refresh_token,
+    disconnect, is_connected, load_config, refresh_token, save_config, store_refresh_token,
 };
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────

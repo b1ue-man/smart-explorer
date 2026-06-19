@@ -132,7 +132,6 @@ fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<
                 errors: 1,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 current_path: String::new(),
-                done: true,
             }));
             return;
         }
@@ -164,7 +163,6 @@ fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<
                     errors: s.errors.load(Ordering::Relaxed),
                     elapsed_ms: s.start.elapsed().as_millis() as u64,
                     current_path: cur,
-                    done: false,
                 }));
             }
         })
@@ -190,7 +188,6 @@ fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<
         errors: scanner.errors.load(Ordering::Relaxed),
         elapsed_ms: scanner.start.elapsed().as_millis() as u64,
         current_path: String::new(),
-        done: true,
     };
     let _ = tx.send(ScanMessage::Done(final_progress));
 }

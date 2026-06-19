@@ -204,13 +204,6 @@ impl App {
         };
         self.update_rx = None;
         match msg {
-            UpdateMsg::Applied { version, exe } => {
-                self.notice = Some((
-                    format!("⬆ Update auf v{} bereit", version),
-                    std::time::Instant::now(),
-                ));
-                self.update_ready = Some((version, exe));
-            }
             UpdateMsg::AppliedViaWorker { version } => {
                 // The exe couldn't be replaced in place; a worker will do it
                 // after we exit. Sentinel empty path = "just close, don't
