@@ -34,6 +34,8 @@ mod init;
 mod job_editor;
 #[path = "core/job_editor_ui.rs"]
 mod job_editor_ui;
+#[path = "core/landing.rs"]
+mod landing;
 #[path = "core/menus_settings.rs"]
 mod menus_settings;
 #[path = "core/menus_sync.rs"]

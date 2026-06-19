@@ -90,6 +90,10 @@ impl App {
     pub(in crate::app) fn navigate_back(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.forward.push(self.root_path.clone());
+            if prev.is_empty() {
+                self.show_landing_page();
+                return;
+            }
             let p = PathBuf::from(prev.replace('/', std::path::MAIN_SEPARATOR_STR));
             self.start_scan_navigated(p, false);
         }
@@ -98,6 +102,10 @@ impl App {
     pub(in crate::app) fn navigate_forward(&mut self) {
         if let Some(next) = self.forward.pop() {
             self.history.push(self.root_path.clone());
+            if next.is_empty() {
+                self.show_landing_page();
+                return;
+            }
             let p = PathBuf::from(next.replace('/', std::path::MAIN_SEPARATOR_STR));
             self.start_scan_navigated(p, false);
         }

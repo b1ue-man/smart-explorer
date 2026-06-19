@@ -5,6 +5,16 @@ impl App {
     pub(in crate::app) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.heading("Smart Explorer");
         ui.add_space(4.0);
+        if ui
+            .selectable_label(
+                self.root_path.is_empty() && self.remote.is_none() && self.net_conn.is_none(),
+                "Startseite",
+            )
+            .clicked()
+        {
+            self.navigate_to_landing_page();
+        }
+        ui.add_space(6.0);
 
         // Folder search now lives in the combo-field at the top (Ctrl+F): type
         // to filter the list, with global folder jumps offered in its dropdown.

@@ -11,7 +11,7 @@ impl App {
                 self.split = self.split && self.tabs.len() >= 2;
                 self.pane_rects.clear();
                 self.current_render_tab = self.active_tab;
-                self.ui_table(ui);
+                self.ui_current_content(ui);
                 return;
             }
             let n = self.tabs.len();
@@ -96,15 +96,23 @@ impl App {
                         ui.separator();
                         if focused {
                             self.current_render_tab = tab_idx;
-                            self.ui_pane_search(ui);
-                            self.ui_table(ui);
+                            if self.root_path.is_empty() && !self.scan_running {
+                                self.ui_landing(ui);
+                            } else {
+                                self.ui_pane_search(ui);
+                                self.ui_table(ui);
+                            }
                         } else {
                             self.swap_with_tab(tab_idx);
                             self.current_render_tab = tab_idx;
-                            self.ui_pane_search(ui);
-                            self.band_suppressed = true; // band belongs to the focused pane
-                            self.ui_table(ui);
-                            self.band_suppressed = false;
+                            if self.root_path.is_empty() && !self.scan_running {
+                                self.ui_landing(ui);
+                            } else {
+                                self.ui_pane_search(ui);
+                                self.band_suppressed = true; // band belongs to the focused pane
+                                self.ui_table(ui);
+                                self.band_suppressed = false;
+                            }
                             self.swap_with_tab(tab_idx);
                         }
                         // Click anywhere in this pane focuses it (both panes).
@@ -247,7 +255,7 @@ impl App {
             )
         };
         if p.is_empty() && remote_label.is_none() {
-            return "Neuer Tab".to_string();
+            return "Startseite".to_string();
         }
         let t = p.trim_end_matches('/');
         let base = t.rsplit('/').next().unwrap_or(t);
