@@ -1,12 +1,12 @@
-#[path = "core_oslocked/archive.rs"]
+#[path = "os/shared/archive.rs"]
 mod archive;
-#[path = "core_oslocked/config.rs"]
+#[path = "os/shared/config.rs"]
 mod config;
 #[path = "core/core.rs"]
 mod core;
-#[path = "core_oslocked/feed.rs"]
+#[path = "os/shared/feed.rs"]
 mod feed;
-#[path = "core_oslocked/flow.rs"]
+#[path = "os/shared/flow.rs"]
 mod flow;
 #[cfg(windows)]
 #[path = "os/windows.rs"]

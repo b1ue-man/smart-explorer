@@ -17,7 +17,11 @@ impl App {
         // after `ed` is restored to self.job_editor (so the picker can write
         // back into it). Carries the field + its current value as a start point.
         let mut pick: Option<(PickerPurpose, String)> = None;
-        let title = if ed.id.is_some() { "✎ Sync-Setup bearbeiten" } else { "＋ Neues Sync-Setup" };
+        let title = if ed.id.is_some() {
+            "✎ Sync-Setup bearbeiten"
+        } else {
+            "＋ Neues Sync-Setup"
+        };
         egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
@@ -327,7 +331,12 @@ impl App {
                 return;
             }
             let name = if ed.name.trim().is_empty() {
-                let base = ed.source.trim_end_matches('/').rsplit('/').next().unwrap_or("Sync");
+                let base = ed
+                    .source
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("Sync");
                 base.to_string()
             } else {
                 ed.name.trim().to_string()
@@ -346,13 +355,23 @@ impl App {
                         .iter()
                         .find(|j| &j.id == id)
                         .cloned()
-                        .unwrap_or_else(|| crate::syncjobs::SyncJob::new(name.clone(), ed.source.clone(), ed.target.clone()));
+                        .unwrap_or_else(|| {
+                            crate::syncjobs::SyncJob::new(
+                                name.clone(),
+                                ed.source.clone(),
+                                ed.target.clone(),
+                            )
+                        });
                     j.name = name.clone();
                     j.source = ed.source.trim().to_string();
                     j.target = ed.target.trim().to_string();
                     j
                 }
-                None => crate::syncjobs::SyncJob::new(name.clone(), ed.source.trim().to_string(), ed.target.trim().to_string()),
+                None => crate::syncjobs::SyncJob::new(
+                    name.clone(),
+                    ed.source.trim().to_string(),
+                    ed.target.trim().to_string(),
+                ),
             };
             job.direction = ed.direction;
             job.conflict = ed.conflict;
@@ -396,7 +415,10 @@ impl App {
             match crate::syncjobs::upsert(&job) {
                 Ok(_) => {
                     self.sync_jobs = crate::syncjobs::load();
-                    self.notice = Some((format!("✓ Setup „{}“ gespeichert", job.name), std::time::Instant::now()));
+                    self.notice = Some((
+                        format!("✓ Setup „{}“ gespeichert", job.name),
+                        std::time::Instant::now(),
+                    ));
                 }
                 Err(e) => {
                     self.error_msg = Some(format!("Setup speichern: {}", e));
@@ -412,5 +434,4 @@ impl App {
             self.open_picker(purpose, &initial);
         }
     }
-
 }

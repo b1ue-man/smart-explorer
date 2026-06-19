@@ -24,16 +24,14 @@ use windows::Win32::System::Com::{
     DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, STGM_READ, STGM_SHARE_DENY_NONE,
     TYMED_HGLOBAL, TYMED_ISTREAM,
 };
-use windows::Win32::System::DataExchange::{
-    GetClipboardSequenceNumber, RegisterClipboardFormatW,
-};
+use windows::Win32::System::DataExchange::{GetClipboardSequenceNumber, RegisterClipboardFormatW};
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
 };
 use windows::Win32::System::Ole::OleSetClipboard;
 use windows::Win32::UI::Shell::{
-    SHCreateStdEnumFmtEtc, SHCreateStreamOnFileEx, FILEDESCRIPTORW, FILEGROUPDESCRIPTORW,
-    FD_FILESIZE, FD_PROGRESSUI, FD_WRITESTIME,
+    SHCreateStdEnumFmtEtc, SHCreateStreamOnFileEx, FD_FILESIZE, FD_PROGRESSUI, FD_WRITESTIME,
+    FILEDESCRIPTORW, FILEGROUPDESCRIPTORW,
 };
 
 /// One virtual file: absolute source on disk + relative path in the paste.

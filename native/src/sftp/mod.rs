@@ -11,19 +11,19 @@
 //! in chunks (no `SyncIoBridge` — it conflicts with this model). This keeps
 //! scanner / copy / UI fully synchronous; see docs/REMOTE_LAYER_PLAN.md §1,§3.
 
-#[path = "core_oslocked/backend.rs"]
+#[path = "core/backend.rs"]
 mod backend;
 #[path = "core/config.rs"]
 mod config;
 #[path = "core/errors.rs"]
 mod errors;
-#[path = "core_oslocked/io_adapters.rs"]
+#[path = "core/io_adapters.rs"]
 mod io_adapters;
-#[path = "core_oslocked/known_hosts.rs"]
+#[path = "os/shared/known_hosts.rs"]
 mod known_hosts;
 #[path = "core/metadata.rs"]
 mod metadata;
-#[path = "core_oslocked/session.rs"]
+#[path = "core/session.rs"]
 mod session;
 #[path = "core/url.rs"]
 mod url;

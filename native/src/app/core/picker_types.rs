@@ -17,7 +17,9 @@ pub(in crate::app) enum PickerPurpose {
     /// Copy-dialog destination folder (local).
     CopyDest,
     /// Download a remote file (at remote path `src`) into the picked dir.
-    DownloadTo { src: String },
+    DownloadTo {
+        src: String,
+    },
 }
 
 impl PickerPurpose {

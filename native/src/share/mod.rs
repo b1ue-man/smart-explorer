@@ -11,19 +11,19 @@
 //! cannot be exercised in the headless build env; it compiles for host +
 //! windows-gnu and the pure logic is unit-tested. Needs a real two-machine test.
 
-#[path = "core_oslocked/advertise.rs"]
+#[path = "core/advertise.rs"]
 mod advertise;
 #[path = "core/crypto.rs"]
 mod core;
-#[path = "core_oslocked/system.rs"]
-mod core_oslocked;
-#[path = "core_oslocked/protocol.rs"]
+#[path = "core/protocol.rs"]
 mod protocol;
-#[path = "core_oslocked/service.rs"]
+#[path = "core/service.rs"]
 mod service;
-#[path = "core_oslocked/session.rs"]
+#[path = "core/session.rs"]
 mod session;
-#[path = "core_oslocked/transfer.rs"]
+#[path = "os/shared/system.rs"]
+mod system;
+#[path = "os/shared/transfer.rs"]
 mod transfer;
 #[path = "core/types.rs"]
 mod types;

@@ -38,8 +38,7 @@ impl App {
         let dest = match self.drop_target() {
             Some(p) => PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)),
             None => {
-                self.error_msg =
-                    Some("Ablegen nur in einem lokalen Ordner möglich.".to_string());
+                self.error_msg = Some("Ablegen nur in einem lokalen Ordner möglich.".to_string());
                 return;
             }
         };
@@ -73,10 +72,16 @@ impl App {
     pub(in crate::app) fn drop_files_into_tab(&mut self, t: usize, move_files: bool) {
         // Target backend: Some(handle) if the target tab is a remote view.
         let (dest_str, tgt_backend) = if t == self.active_tab {
-            (self.root_path.clone(), self.remote.as_ref().map(|rs| rs.backend.clone()))
+            (
+                self.root_path.clone(),
+                self.remote.as_ref().map(|rs| rs.backend.clone()),
+            )
         } else {
             match self.tabs.get(t) {
-                Some(x) => (x.root_path.clone(), x.remote.as_ref().map(|rs| rs.backend.clone())),
+                Some(x) => (
+                    x.root_path.clone(),
+                    x.remote.as_ref().map(|rs| rs.backend.clone()),
+                ),
                 None => return,
             }
         };
@@ -106,7 +111,10 @@ impl App {
                 }
                 let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
                 self.copy_paths_into(files, dest, move_files);
-                self.notice = Some((format!("{} Element(e) werden kopiert…", n), std::time::Instant::now()));
+                self.notice = Some((
+                    format!("{} Element(e) werden kopiert…", n),
+                    std::time::Instant::now(),
+                ));
             }
             // local → remote (upload)
             (None, Some(be)) => {
@@ -141,7 +149,10 @@ impl App {
         dest_root: String,
     ) {
         if self.upload_rx.is_some() {
-            self.notice = Some(("Es läuft bereits eine Übertragung…".to_string(), std::time::Instant::now()));
+            self.notice = Some((
+                "Es läuft bereits eine Übertragung…".to_string(),
+                std::time::Instant::now(),
+            ));
             return;
         }
         let n = files.len();
@@ -153,7 +164,11 @@ impl App {
                 let mut copied = 0u64;
                 let mut errors = Vec::new();
                 for p in &files {
-                    let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                    let name = p
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("datei");
                     let dest = format!("{}/{}", dest_root.trim_end_matches('/'), name);
                     let r = if same_server {
                         // No temp round-trip: copy in place on the server.
@@ -175,8 +190,15 @@ impl App {
             })
             .ok();
         self.upload_rx = Some(rx);
-        let how = if same_server { "Remote→Remote, serverseitig" } else { "Remote→Remote" };
-        self.notice = Some((format!("⇄ Übertrage {} Element(e) ({})…", n, how), std::time::Instant::now()));
+        let how = if same_server {
+            "Remote→Remote, serverseitig"
+        } else {
+            "Remote→Remote"
+        };
+        self.notice = Some((
+            format!("⇄ Übertrage {} Element(e) ({})…", n, how),
+            std::time::Instant::now(),
+        ));
     }
 
     /// Download remote `files` into a local folder, off the UI thread (reuses
@@ -188,7 +210,10 @@ impl App {
         dest_local: String,
     ) {
         if self.upload_rx.is_some() {
-            self.notice = Some(("Es läuft bereits eine Übertragung…".to_string(), std::time::Instant::now()));
+            self.notice = Some((
+                "Es läuft bereits eine Übertragung…".to_string(),
+                std::time::Instant::now(),
+            ));
             return;
         }
         let n = files.len();
@@ -199,7 +224,11 @@ impl App {
                 let mut copied = 0u64;
                 let mut errors = Vec::new();
                 for p in &files {
-                    let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                    let name = p
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("datei");
                     let dest = std::path::Path::new(&dest_local).join(name);
                     // download_node handles folders (bulk get_tree / recursive)
                     // as well as files.
@@ -212,7 +241,10 @@ impl App {
             })
             .ok();
         self.upload_rx = Some(rx);
-        self.notice = Some((format!("⬇ Lade {} Element(e) herunter…", n), std::time::Instant::now()));
+        self.notice = Some((
+            format!("⬇ Lade {} Element(e) herunter…", n),
+            std::time::Instant::now(),
+        ));
     }
 
     /// Drive an active internal file drag each frame: paint a cursor chip,
@@ -249,7 +281,11 @@ impl App {
                         files
                             .iter()
                             .filter_map(|p| {
-                                let name = p.trim_end_matches('/').rsplit('/').next().unwrap_or("datei");
+                                let name = p
+                                    .trim_end_matches('/')
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or("datei");
                                 download_to(&*be, p, &open_temp_path(name)).ok()
                             })
                             .collect()
@@ -307,5 +343,4 @@ impl App {
     }
 
     // ─── In-app folder picker (#17) ─────────────────────────────────────
-
 }

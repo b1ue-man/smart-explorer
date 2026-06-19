@@ -82,9 +82,7 @@ impl App {
                             let parent_norm = e.parent.trim_end_matches('/');
                             let base = format!("{}/", parent_norm);
                             let sub = crate::scanner::collect_recursive(
-                                &PathBuf::from(
-                                    e.path.replace('/', std::path::MAIN_SEPARATOR_STR),
-                                ),
+                                &PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
                                 false,
                                 e.depth + 1,
                             );
@@ -120,7 +118,11 @@ impl App {
         }
 
         // Plain CF_HDROP path (no filter, or cut, or files only).
-        let paths: Vec<String> = self.selection.iter().map(|k| sel_key_path(k).replace('/', "\\")).collect();
+        let paths: Vec<String> = self
+            .selection
+            .iter()
+            .map(|k| sel_key_path(k).replace('/', "\\"))
+            .collect();
         let effect = if cut {
             crate::shell_clipboard::DROPEFFECT_MOVE
         } else {
@@ -228,7 +230,11 @@ impl App {
             format!(
                 "📥 Füge {} {} ein…",
                 paths.len(),
-                if is_cut { "Datei(en) (verschieben)" } else { "Datei(en)" }
+                if is_cut {
+                    "Datei(en) (verschieben)"
+                } else {
+                    "Datei(en)"
+                }
             ),
             std::time::Instant::now(),
         ));
@@ -241,7 +247,11 @@ impl App {
             dest,
             preserve_structure: true,
             conflict: Conflict::Rename,
-            mode: if is_cut { CopyMode::Move } else { CopyMode::Copy },
+            mode: if is_cut {
+                CopyMode::Move
+            } else {
+                CopyMode::Copy
+            },
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         let h = start_copy_from_paths(paths, opts, tx);
@@ -269,11 +279,21 @@ impl App {
 
     /// Copy (or move) OS paths into `dest`, on the copy worker. Conflicts
     /// auto-rename so a drop never overwrites. Shared by the OS drop handler.
-    pub(in crate::app) fn copy_paths_into(&mut self, paths: Vec<String>, dest: PathBuf, move_files: bool) {
+    pub(in crate::app) fn copy_paths_into(
+        &mut self,
+        paths: Vec<String>,
+        dest: PathBuf,
+        move_files: bool,
+    ) {
         if paths.is_empty() {
             return;
         }
-        if self.copy_progress.as_ref().map(|p| !p.done).unwrap_or(false) {
+        if self
+            .copy_progress
+            .as_ref()
+            .map(|p| !p.done)
+            .unwrap_or(false)
+        {
             self.error_msg = Some("Es läuft bereits ein Kopiervorgang.".to_string());
             return;
         }
@@ -286,7 +306,11 @@ impl App {
             dest,
             preserve_structure: true,
             conflict: Conflict::Rename,
-            mode: if move_files { CopyMode::Move } else { CopyMode::Copy },
+            mode: if move_files {
+                CopyMode::Move
+            } else {
+                CopyMode::Copy
+            },
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         let h = start_copy_from_paths(paths, opts, tx);
@@ -304,5 +328,4 @@ impl App {
         });
         self.copy_refresh_after = true;
     }
-
 }

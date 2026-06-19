@@ -5,9 +5,9 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
-#[path = "../scanner/core_oslocked/scanner.rs"]
+#[path = "../scanner/mod.rs"]
 mod scanner;
-#[path = "../types/core/types.rs"]
+#[path = "../types/mod.rs"]
 mod types;
 
 use scanner::ScanMessage;
@@ -69,7 +69,10 @@ fn main() {
     };
     println!("---");
     println!("Entries:           {}", entry_count);
-    println!("Bytes:             {:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0);
+    println!(
+        "Bytes:             {:.2} GB",
+        bytes as f64 / 1024.0 / 1024.0 / 1024.0
+    );
     println!("Errors:            {}", errors);
     println!("Time (worker):     {} ms", elapsed);
     println!("Time (incl. drain):{} ms", total_elapsed_ms);

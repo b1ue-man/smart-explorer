@@ -1,4 +1,7 @@
-#[path = "core_oslocked/creds.rs"]
-mod imp;
+#[path = "core/types.rs"]
+mod core;
+#[path = "os/shared.rs"]
+mod os;
 
-pub use imp::*;
+pub use core::*;
+pub use os::*;

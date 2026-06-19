@@ -13,7 +13,11 @@ impl App {
                 .show_ui(ui, |ui| {
                     let mut changed = false;
                     changed |= ui
-                        .selectable_value(&mut self.filter.text_mode, TextMode::Substring, "enthält")
+                        .selectable_value(
+                            &mut self.filter.text_mode,
+                            TextMode::Substring,
+                            "enthält",
+                        )
                         .clicked();
                     changed |= ui
                         .selectable_value(&mut self.filter.text_mode, TextMode::Regex, "RegExp")
@@ -28,8 +32,10 @@ impl App {
 
             // Server-side recursive search (SSH agent): only on a remote whose
             // backend supports it, with a non-regex query typed.
-            let show_server_search =
-                self.remote.as_ref().map_or(false, |rs| rs.backend.supports_search());
+            let show_server_search = self
+                .remote
+                .as_ref()
+                .map_or(false, |rs| rs.backend.supports_search());
             if show_server_search {
                 let q = self.text_draft.trim().to_string();
                 let enabled = !q.is_empty() && self.filter.text_mode != TextMode::Regex;
@@ -66,7 +72,11 @@ impl App {
                 // Folder-search runs ONLY in `/`-mode, so plain filter typing
                 // never pops the dropdown (and the arrows stay with the list).
                 let q = if omni_mode(&self.text_draft) == OmniMode::FolderSearch {
-                    self.text_draft.trim_start().trim_start_matches('/').trim().to_string()
+                    self.text_draft
+                        .trim_start()
+                        .trim_start_matches('/')
+                        .trim()
+                        .to_string()
                 } else {
                     String::new()
                 };
@@ -175,11 +185,7 @@ impl App {
                     }
                     if ui.button("Dieses Jahr").clicked() {
                         preset = Some((
-                            chrono::NaiveDate::from_ymd_opt(
-                                chrono::Datelike::year(&today),
-                                1,
-                                1,
-                            ),
+                            chrono::NaiveDate::from_ymd_opt(chrono::Datelike::year(&today), 1, 1),
                             None,
                         ));
                     }
@@ -201,10 +207,18 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut changed = false;
-            changed |= ui.checkbox(&mut self.filter.include_files, "Dateien").changed();
-            changed |= ui.checkbox(&mut self.filter.include_dirs, "Ordner").changed();
-            changed |= ui.checkbox(&mut self.filter.include_hidden, "versteckt").changed();
-            changed |= ui.checkbox(&mut self.filter.include_system, "System").changed();
+            changed |= ui
+                .checkbox(&mut self.filter.include_files, "Dateien")
+                .changed();
+            changed |= ui
+                .checkbox(&mut self.filter.include_dirs, "Ordner")
+                .changed();
+            changed |= ui
+                .checkbox(&mut self.filter.include_hidden, "versteckt")
+                .changed();
+            changed |= ui
+                .checkbox(&mut self.filter.include_system, "System")
+                .changed();
             if changed {
                 self.recompute_view();
             }
@@ -238,7 +252,13 @@ impl App {
         });
     }
 
-    pub(in crate::app) fn size_input(&mut self, ui: &mut egui::Ui, id: &str, hint: &str, is_min: bool) {
+    pub(in crate::app) fn size_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        hint: &str,
+        is_min: bool,
+    ) {
         let draft = if is_min {
             &mut self.size_min_draft
         } else {
@@ -313,5 +333,4 @@ impl App {
         self.filter.btime.min = self.btime_min_date.map(date_to_ms_start);
         self.filter.btime.max = self.btime_max_date.map(date_to_ms_end);
     }
-
 }

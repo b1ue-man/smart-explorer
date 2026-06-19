@@ -75,7 +75,10 @@ fn classify_distinguishes_transports() {
         feed::classify_feed("https://example.com/f"),
         feed::Feed::Http(_)
     ));
-    assert!(matches!(feed::classify_feed("http://host/f"), feed::Feed::Http(_)));
+    assert!(matches!(
+        feed::classify_feed("http://host/f"),
+        feed::Feed::Http(_)
+    ));
     assert!(matches!(
         feed::classify_feed(r"C:\Users\x\feed"),
         feed::Feed::Local(_)

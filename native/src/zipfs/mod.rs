@@ -1,4 +1,4 @@
-#[path = "core_oslocked/zipfs.rs"]
+#[path = "os/shared/zipfs.rs"]
 mod imp;
 
 pub use imp::*;

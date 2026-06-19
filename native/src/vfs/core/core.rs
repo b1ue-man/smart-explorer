@@ -96,7 +96,11 @@ pub trait Backend: Send + Sync {
     /// Open a file for reading by its backend-unique `id` when known (so the
     /// caller can target one specific item among duplicate names). Default
     /// ignores the id and opens by path; Google Drive overrides this.
-    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn std::io::Read + Send>> {
+    fn open_read_id(
+        &self,
+        path: &str,
+        id: Option<&str>,
+    ) -> VfsResult<Box<dyn std::io::Read + Send>> {
         let _ = id;
         self.open_read(path)
     }
@@ -168,7 +172,10 @@ pub trait Backend: Send + Sync {
     /// Returns the number of files written. Only the agent overrides this.
     fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
         let _ = (root, dst);
-        Err(io::Error::new(io::ErrorKind::Unsupported, "bulk tree transfer not supported"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "bulk tree transfer not supported",
+        ))
     }
 
     /// Upload the local subtree `src` into remote `root` (the contents of `src`
@@ -176,7 +183,10 @@ pub trait Backend: Send + Sync {
     /// of files sent. Only the agent overrides this.
     fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
         let _ = (src, root);
-        Err(io::Error::new(io::ErrorKind::Unsupported, "bulk tree transfer not supported"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "bulk tree transfer not supported",
+        ))
     }
 
     /// Can this backend run a recursive search SERVER-SIDE (the agent's

@@ -9,21 +9,21 @@
 //!    is then browsed by the LOCAL scanner (std::fs handles UNC), so no
 //!    `RemoteState` - only the live `NetConnection` is kept alive.
 
-#[path = "core_oslocked/connector.rs"]
+#[path = "os/shared/connector.rs"]
 mod connector;
 #[path = "core/endpoint.rs"]
 mod endpoint;
-#[path = "core_oslocked/persistence.rs"]
+#[path = "os/shared/persistence.rs"]
 mod persistence;
 #[path = "core/types.rs"]
 mod types;
 
-pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};
 #[allow(unused_imports)]
 pub use connector::open_saved_at;
-pub use endpoint::{is_remote_url, saved_and_path};
+pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};
 #[allow(unused_imports)]
 pub use endpoint::{gdrive_endpoint, remote_endpoint};
+pub use endpoint::{is_remote_url, saved_and_path};
 #[allow(unused_imports)]
 pub use persistence::build_saved;
-pub use types::{Connected, ConnectForm, ConnectResult, RemoteState};
+pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};

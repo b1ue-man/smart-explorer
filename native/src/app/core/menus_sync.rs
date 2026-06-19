@@ -5,12 +5,21 @@ impl App {
     pub(in crate::app) fn ui_menu_connect(&mut self, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("VERBINDEN").small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new("VERBINDEN")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
             if self.remote.is_some() || self.net_conn.is_some() {
-                if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
+                if ui
+                    .small_button("⏏")
+                    .on_hover_text("Verbindung trennen")
+                    .clicked()
+                {
                     self.remote = None;
                     self.net_conn = None;
-                    self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
+                    self.notice =
+                        Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
                 }
             }
         });
@@ -146,7 +155,11 @@ impl App {
 
         // ─── Background sync (runs setups on their schedule, app closed) ──
         ui.separator();
-        ui.label(RichText::new("HINTERGRUND").small().color(Color32::from_gray(140)));
+        ui.label(
+            RichText::new("HINTERGRUND")
+                .small()
+                .color(Color32::from_gray(140)),
+        );
         let mut bg = crate::autostart::is_enabled();
         if ui
             .checkbox(&mut bg, "Beim Anmelden im Hintergrund synchronisieren")
@@ -179,7 +192,11 @@ impl App {
             }
         }
         ui.horizontal(|ui| {
-            if ui.small_button("📜 Protokoll").on_hover_text("Protokoll der Hintergrund-Sync-Läufe anzeigen").clicked() {
+            if ui
+                .small_button("📜 Protokoll")
+                .on_hover_text("Protokoll der Hintergrund-Sync-Läufe anzeigen")
+                .clicked()
+            {
                 self.show_daemon_log = true;
             }
         });
@@ -235,7 +252,11 @@ impl App {
             if ui.small_button("24 h").clicked() {
                 crate::daemon::pause_for_secs(24 * 3600);
             }
-            if ui.small_button("∞").on_hover_text("Dauerhaft pausieren").clicked() {
+            if ui
+                .small_button("∞")
+                .on_hover_text("Dauerhaft pausieren")
+                .clicked()
+            {
                 crate::daemon::pause_indefinite();
             }
             if ui.small_button("▶ Fortsetzen").clicked() {
@@ -260,11 +281,9 @@ impl App {
         });
 
         ui.label(
-            RichText::new(
-                "Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.",
-            )
-            .small()
-            .color(Color32::from_gray(120)),
+            RichText::new("Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.")
+                .small()
+                .color(Color32::from_gray(120)),
         );
     }
 
@@ -474,5 +493,4 @@ impl App {
             }
         }
     }
-
 }

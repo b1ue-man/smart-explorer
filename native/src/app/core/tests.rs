@@ -70,7 +70,10 @@ pub(in crate::app) mod omni_tests {
         let home = std::path::Path::new("/home/u");
         assert_eq!(expand_omni_path("~", home, ""), "/home/u");
         // bare drive completes to a root
-        assert_eq!(expand_omni_path("C:", home, ""), format!("C:{}", std::path::MAIN_SEPARATOR));
+        assert_eq!(
+            expand_omni_path("C:", home, ""),
+            format!("C:{}", std::path::MAIN_SEPARATOR)
+        );
         // ~/sub expands under home
         let got = expand_omni_path("~/docs", home, "");
         assert!(got.ends_with("docs"));

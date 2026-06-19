@@ -20,8 +20,7 @@ use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     IContextMenu, IShellFolder, SHBindToParent, SHGetDesktopFolder, SHParseDisplayName,
-    CMF_CANRENAME, CMF_EXPLORE, CMF_NORMAL,
-    CMIC_MASK_PTINVOKE, CMINVOKECOMMANDINFOEX,
+    CMF_CANRENAME, CMF_EXPLORE, CMF_NORMAL, CMIC_MASK_PTINVOKE, CMINVOKECOMMANDINFOEX,
 };
 
 // windows 0.58 omits CMIC_MASK_UNICODE from its generated bindings, so we
@@ -32,9 +31,8 @@ const GCS_VERBA: u32 = 0x0000_0000;
 
 use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, DestroyMenu, GetCursorPos, GetForegroundWindow, GetMenuItemCount,
-    GetMenuItemID, InsertMenuW, RemoveMenu, SetForegroundWindow, TrackPopupMenu,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_SEPARATOR, MF_STRING, SW_SHOWNORMAL, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON,
+    GetMenuItemID, InsertMenuW, RemoveMenu, SetForegroundWindow, TrackPopupMenu, MF_BYCOMMAND,
+    MF_BYPOSITION, MF_SEPARATOR, MF_STRING, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON,
 };
 
 const ID_CMD_FIRST: u32 = 1;
@@ -96,7 +94,11 @@ impl Drop for PidlGuard {
 
 /// Remove shell menu entries whose canonical verb matches one of `verbs`
 /// (e.g. "copy", "cut"). Items without a queryable verb are left alone.
-unsafe fn remove_shell_verbs(cmenu: &IContextMenu, hmenu: windows::Win32::UI::WindowsAndMessaging::HMENU, verbs: &[&str]) {
+unsafe fn remove_shell_verbs(
+    cmenu: &IContextMenu,
+    hmenu: windows::Win32::UI::WindowsAndMessaging::HMENU,
+    verbs: &[&str],
+) {
     let count = GetMenuItemCount(hmenu);
     let mut remove_ids: Vec<u32> = Vec::new();
     for pos in 0..count {

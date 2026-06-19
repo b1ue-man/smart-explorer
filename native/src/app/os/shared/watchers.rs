@@ -13,9 +13,8 @@ impl App {
             .name("clip-keys".into())
             .spawn(move || {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-                let down = |vk: i32| -> bool {
-                    (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0
-                };
+                let down =
+                    |vk: i32| -> bool { (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0 };
                 let mut prev = [false; 3]; // C, X, V
                 while !cancel_t.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(30));
@@ -215,7 +214,9 @@ impl App {
 
             for p in self.folder_index.iter() {
                 if remove_exact.contains(p.as_str())
-                    || remove_prefixes.iter().any(|pref| p.starts_with(pref.as_str()))
+                    || remove_prefixes
+                        .iter()
+                        .any(|pref| p.starts_with(pref.as_str()))
                 {
                     removes_to_apply.push(p.clone());
                     continue;
@@ -266,5 +267,4 @@ impl App {
     pub(in crate::app) fn start_watcher(&mut self) {}
     #[cfg(not(windows))]
     pub(in crate::app) fn drain_watcher(&mut self) {}
-
 }

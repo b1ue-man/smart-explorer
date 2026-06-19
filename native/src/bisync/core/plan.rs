@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::types::{
-    Action, Baseline, BisyncOptions, Conflict, ConflictMode, CompareMode, DeletePolicy, Direction,
+    Action, Baseline, BisyncOptions, CompareMode, Conflict, ConflictMode, DeletePolicy, Direction,
     Sig, Tree,
 };
 
@@ -34,9 +34,7 @@ fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
             match opts.compare {
                 CompareMode::SizeOnly => true,
                 CompareMode::Checksum => a.hash == b.hash,
-                CompareMode::MtimeSize => {
-                    (a.mtime_ms - b.mtime_ms).abs() <= opts.modify_window_ms
-                }
+                CompareMode::MtimeSize => (a.mtime_ms - b.mtime_ms).abs() <= opts.modify_window_ms,
             }
         }
         _ => false,

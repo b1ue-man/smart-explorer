@@ -36,12 +36,15 @@ impl App {
         use crate::shell_menu::{MenuResult, OwnMenuItem};
 
         let clicked_arc: Arc<str> = Arc::from(clicked_path);
-        let paths: Vec<String> = if self.selection.contains(&clicked_arc) && self.selection.len() > 1
-        {
-            self.selection.iter().map(|k| sel_key_path(k).replace('/', "\\")).collect()
-        } else {
-            vec![clicked_path.replace('/', "\\")]
-        };
+        let paths: Vec<String> =
+            if self.selection.contains(&clicked_arc) && self.selection.len() > 1 {
+                self.selection
+                    .iter()
+                    .map(|k| sel_key_path(k).replace('/', "\\"))
+                    .collect()
+            } else {
+                vec![clicked_path.replace('/', "\\")]
+            };
 
         let filter_active = self.filter_is_active();
         let own = vec![
@@ -219,9 +222,8 @@ impl App {
                 let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if enter && !self.root_path.is_empty() {
                     self.path_edit_mode = false;
-                    let p = PathBuf::from(
-                        self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR),
-                    );
+                    let p =
+                        PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
                     self.start_scan(p);
                 } else if resp.lost_focus() {
                     self.path_edit_mode = false;
@@ -253,7 +255,9 @@ impl App {
                                         prefix.split('/').filter(|s| !s.is_empty()).collect();
                                     for (i, seg) in segs.iter().enumerate() {
                                         if i > 0 {
-                                            ui.label(RichText::new("›").color(Color32::from_gray(110)));
+                                            ui.label(
+                                                RichText::new("›").color(Color32::from_gray(110)),
+                                            );
                                         }
                                         acc.push_str(seg);
                                         acc.push('/');
@@ -316,7 +320,9 @@ impl App {
             });
             if ui
                 .selectable_label(self.show_share, "📡 Teilen")
-                .on_hover_text("Dateien direkt an gekoppelte Geräte / in Räume senden (P2P, verschlüsselt)")
+                .on_hover_text(
+                    "Dateien direkt an gekoppelte Geräte / in Räume senden (P2P, verschlüsselt)",
+                )
                 .clicked()
             {
                 self.show_share = !self.show_share;
@@ -369,7 +375,10 @@ impl App {
                 !self.root_path.is_empty() && self.is_favorite(&self.location_key(&self.root_path));
             let star_glyph = if starred { "★" } else { "☆" };
             if ui
-                .add_enabled(!self.root_path.is_empty(), egui::Button::new(star_glyph).small())
+                .add_enabled(
+                    !self.root_path.is_empty(),
+                    egui::Button::new(star_glyph).small(),
+                )
                 .on_hover_text("Aktuellen Ordner zu Favoriten (Ctrl+B)")
                 .clicked()
             {
@@ -419,5 +428,4 @@ impl App {
             });
         });
     }
-
 }

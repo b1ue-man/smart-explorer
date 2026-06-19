@@ -1,4 +1,4 @@
-#[path = "core_oslocked/sync.rs"]
+#[path = "os/shared/sync.rs"]
 mod imp;
 
 pub use imp::*;

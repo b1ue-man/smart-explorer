@@ -37,8 +37,18 @@ impl App {
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(240.0).at_least(120.0).resizable(true).clip(true)) // name
-            .column(Column::initial(360.0).at_least(120.0).resizable(true).clip(true)) // path
+            .column(
+                Column::initial(240.0)
+                    .at_least(120.0)
+                    .resizable(true)
+                    .clip(true),
+            ) // name
+            .column(
+                Column::initial(360.0)
+                    .at_least(120.0)
+                    .resizable(true)
+                    .clip(true),
+            ) // path
             .column(Column::initial(90.0).at_least(60.0).resizable(true)) // size
             .column(Column::initial(130.0).at_least(80.0).resizable(true)) // mtime
             .column(Column::initial(130.0).at_least(80.0).resizable(true)) // btime
@@ -130,16 +140,12 @@ impl App {
                         // 16px icon slot at the left of the cell (after indent);
                         // the name always sits at indent+20 so it never shifts
                         // when the real icon replaces the emoji placeholder.
-                        let icon_center = egui::pos2(
-                            rect.left() + 4.0 + indent + 8.0,
-                            rect.center().y,
-                        );
+                        let icon_center =
+                            egui::pos2(rect.left() + 4.0 + indent + 8.0, rect.center().y);
                         let key = crate::icons::icon_key(e.is_dir, e.ext.as_ref());
                         if let Some(tex) = self.icon_cache.get(&key) {
-                            let icon_rect = egui::Rect::from_center_size(
-                                icon_center,
-                                egui::vec2(16.0, 16.0),
-                            );
+                            let icon_rect =
+                                egui::Rect::from_center_size(icon_center, egui::vec2(16.0, 16.0));
                             egui::Image::from_texture(egui::load::SizedTexture::new(
                                 tex.id(),
                                 egui::vec2(16.0, 16.0),
@@ -182,7 +188,11 @@ impl App {
 
                     // ─── Size ──────────────────────────────────────────
                     row.col(|ui| {
-                        let txt = if e.is_dir { String::new() } else { format_bytes(e.size) };
+                        let txt = if e.is_dir {
+                            String::new()
+                        } else {
+                            format_bytes(e.size)
+                        };
                         let resp = handle_cell(ui, &txt, true);
                         handle_resp(resp, ui);
                     });
@@ -219,7 +229,10 @@ impl App {
                 let dragged = self.entries[idx].key();
                 let dragged_path = self.entries[idx].path.clone();
                 let mut files: Vec<String> = if self.selection.contains(&dragged) {
-                    self.selection.iter().map(|k| sel_key_path(k).to_string()).collect()
+                    self.selection
+                        .iter()
+                        .map(|k| sel_key_path(k).to_string())
+                        .collect()
                 } else {
                     vec![dragged_path.to_string()]
                 };
@@ -263,7 +276,10 @@ impl App {
                         .view
                         .iter()
                         .position(|&(i, _)| self.entries[i].key() == anchor);
-                    let b = self.view.iter().position(|&(i, _)| self.entries[i].key() == key);
+                    let b = self
+                        .view
+                        .iter()
+                        .position(|&(i, _)| self.entries[i].key() == key);
                     if let (Some(a), Some(b)) = (a, b) {
                         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                         self.selection.clear();
@@ -284,7 +300,10 @@ impl App {
                         .view
                         .iter()
                         .position(|&(i, _)| self.entries[i].key() == anchor);
-                    let b = self.view.iter().position(|&(i, _)| self.entries[i].key() == key);
+                    let b = self
+                        .view
+                        .iter()
+                        .position(|&(i, _)| self.entries[i].key() == key);
                     if let (Some(a), Some(b)) = (a, b) {
                         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                         for i in lo..=hi {
@@ -391,7 +410,11 @@ impl App {
                         || (p.x - press_x).abs() > 4.0
                     {
                         self.band_active = true;
-                        let (lo_y, hi_y) = if press_y < p.y { (press_y, p.y) } else { (p.y, press_y) };
+                        let (lo_y, hi_y) = if press_y < p.y {
+                            (press_y, p.y)
+                        } else {
+                            (p.y, press_y)
+                        };
                         // Map both screen endpoints to rows via the current base-Y.
                         let lo_off = lo_y - by;
                         let hi_off = hi_y - by;
@@ -414,10 +437,8 @@ impl App {
                         let x0 = press_x.min(p.x).max(body_viewport.left());
                         let x1 = press_x.max(p.x).min(body_viewport.right());
                         if y1 > y0 && x1 > x0 {
-                            let rect = egui::Rect::from_min_max(
-                                egui::pos2(x0, y0),
-                                egui::pos2(x1, y1),
-                            );
+                            let rect =
+                                egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
                             let painter = ui.painter();
                             painter.rect_filled(
                                 rect,
@@ -433,14 +454,12 @@ impl App {
 
                         // Auto-scroll when the pointer leaves the viewport
                         if p.y > body_viewport.bottom() - 4.0 {
-                            let bottom_row =
-                                (((body_viewport.bottom() - by) / row_h) as usize + 2)
-                                    .min(total_rows.saturating_sub(1));
+                            let bottom_row = (((body_viewport.bottom() - by) / row_h) as usize + 2)
+                                .min(total_rows.saturating_sub(1));
                             self.pending_scroll_row = Some(bottom_row);
                         } else if p.y < body_viewport.top() + 4.0 {
-                            let top_row =
-                                (((body_viewport.top() - by) / row_h).max(0.0) as usize)
-                                    .saturating_sub(2);
+                            let top_row = (((body_viewport.top() - by) / row_h).max(0.0) as usize)
+                                .saturating_sub(2);
                             self.pending_scroll_row = Some(top_row);
                         }
                         ui.ctx().request_repaint();
@@ -483,5 +502,4 @@ impl App {
             self.icon_cache.request(key);
         }
     }
-
 }

@@ -50,7 +50,11 @@ impl App {
                         )
                     ),
                 );
-                if ui.small_button("⟳").on_hover_text("Index aktualisieren").clicked() {
+                if ui
+                    .small_button("⟳")
+                    .on_hover_text("Index aktualisieren")
+                    .clicked()
+                {
                     self.start_index_build();
                 }
             }
@@ -60,7 +64,11 @@ impl App {
 
         // ─── Favorites (starred folders) ───────────────────────────────
         if !self.favorites.is_empty() {
-            ui.label(RichText::new("★ FAVORITEN").small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new("★ FAVORITEN")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
             let favs = self.favorites.clone();
             let mut nav: Option<String> = None;
             let mut unstar: Option<String> = None;
@@ -68,7 +76,11 @@ impl App {
                 ui.horizontal(|ui| {
                     let label = {
                         let base = f.trim_end_matches('/').rsplit('/').next().unwrap_or(f);
-                        if base.is_empty() { f.as_str() } else { base }
+                        if base.is_empty() {
+                            f.as_str()
+                        } else {
+                            base
+                        }
                     };
                     if ui
                         .selectable_label(self.location_key(&self.root_path) == *f, label)
@@ -78,7 +90,11 @@ impl App {
                         nav = Some(f.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Aus Favoriten entfernen").clicked() {
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Aus Favoriten entfernen")
+                            .clicked()
+                        {
                             unstar = Some(f.clone());
                         }
                     });
@@ -93,7 +109,11 @@ impl App {
             ui.add_space(8.0);
         }
 
-        ui.label(RichText::new("SCHNELLZUGRIFF").small().color(Color32::from_gray(140)));
+        ui.label(
+            RichText::new("SCHNELLZUGRIFF")
+                .small()
+                .color(Color32::from_gray(140)),
+        );
         let home = self.home.clone();
         for (label, sub) in [
             ("Home", ""),
@@ -104,9 +124,16 @@ impl App {
             ("Music", "Music"),
             ("Videos", "Videos"),
         ] {
-            let p = if sub.is_empty() { home.clone() } else { home.join(sub) };
+            let p = if sub.is_empty() {
+                home.clone()
+            } else {
+                home.join(sub)
+            };
             if ui
-                .selectable_label(self.root_path == p.to_string_lossy().replace('\\', "/"), label)
+                .selectable_label(
+                    self.root_path == p.to_string_lossy().replace('\\', "/"),
+                    label,
+                )
                 .on_hover_text(p.to_string_lossy())
                 .clicked()
             {
@@ -116,7 +143,11 @@ impl App {
 
         if !self.drive_info.is_empty() {
             ui.add_space(8.0);
-            ui.label(RichText::new("LAUFWERKE").small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new("LAUFWERKE")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
             let infos = self.drive_info.clone();
             for (d, free, total) in infos {
                 if ui
@@ -144,7 +175,11 @@ impl App {
 
         if !self.recent.is_empty() {
             ui.add_space(8.0);
-            ui.label(RichText::new("ZULETZT").small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new("ZULETZT")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
             let recent = self.recent.clone();
             for r in recent {
                 let label = r.rsplit('/').next().unwrap_or(&r).to_string();
@@ -162,7 +197,11 @@ impl App {
         // ─── Remote connections (set-up-once; freshest pinned here) ─────
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("VERBINDUNGEN").small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new("VERBINDUNGEN")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("＋")
@@ -232,7 +271,11 @@ impl App {
             ui.horizontal(|ui| {
                 ui.colored_label(Color32::from_rgb(120, 200, 255), "● Netzlaufwerk");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
+                    if ui
+                        .small_button("⏏")
+                        .on_hover_text("Verbindung trennen")
+                        .clicked()
+                    {
                         disconnect = true;
                     }
                 });
@@ -262,7 +305,11 @@ impl App {
                     open_gdrive = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text("Google Drive trennen").clicked() {
+                    if ui
+                        .small_button("×")
+                        .on_hover_text("Google Drive trennen")
+                        .clicked()
+                    {
                         disc_gdrive = true;
                     }
                 });
@@ -312,7 +359,9 @@ impl App {
             self.net_conn = None;
             if let Some(parent) = zip_return {
                 self.notice = Some(("Archiv geschlossen".to_string(), std::time::Instant::now()));
-                self.start_scan(PathBuf::from(parent.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                self.start_scan(PathBuf::from(
+                    parent.replace('/', std::path::MAIN_SEPARATOR_STR),
+                ));
             } else {
                 self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
             }
@@ -324,7 +373,8 @@ impl App {
             self.remove_agent_now();
         }
         if self.agent_activate_rx.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         if let Some(acc) = to_remove {
             let _ = crate::creds::remove_connection(&acc);
@@ -341,8 +391,10 @@ impl App {
             if gdrive_active {
                 self.remote = None;
             }
-            self.notice = Some(("Google Drive getrennt".to_string(), std::time::Instant::now()));
+            self.notice = Some((
+                "Google Drive getrennt".to_string(),
+                std::time::Instant::now(),
+            ));
         }
     }
-
 }

@@ -15,5 +15,6 @@ pub(super) fn rel_of(path: &str, root: &str) -> String {
 
 pub(super) fn parent_of(path: &str) -> Option<String> {
     let t = path.trim_end_matches('/');
-    t.rfind('/').map(|i| if i == 0 { "/".into() } else { t[..i].into() })
+    t.rfind('/')
+        .map(|i| if i == 0 { "/".into() } else { t[..i].into() })
 }

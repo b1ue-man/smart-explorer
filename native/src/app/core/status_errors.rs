@@ -18,7 +18,11 @@ impl App {
         b
     }
 
-    pub(in crate::app) fn push_app_error(&mut self, context: impl Into<String>, detail: impl Into<String>) {
+    pub(in crate::app) fn push_app_error(
+        &mut self,
+        context: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
         let detail = detail.into();
         if detail.trim().is_empty() {
             return;
@@ -119,7 +123,10 @@ impl App {
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.colored_label(Color32::from_gray(140), format!("v{}", env!("CARGO_PKG_VERSION")));
+                ui.colored_label(
+                    Color32::from_gray(140),
+                    format!("v{}", env!("CARGO_PKG_VERSION")),
+                );
                 if let Some((ref msg, ts)) = self.notice {
                     if ts.elapsed().as_secs() < 6 {
                         ui.colored_label(Color32::from_rgb(120, 200, 130), msg.clone());
@@ -217,5 +224,4 @@ impl App {
             self.show_errors_dialog = false;
         }
     }
-
 }

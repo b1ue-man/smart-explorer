@@ -1,4 +1,4 @@
-#[path = "core_oslocked/quickshare.rs"]
+#[path = "os/shared/quickshare.rs"]
 mod imp;
 
 pub use imp::*;

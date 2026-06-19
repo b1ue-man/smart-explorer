@@ -73,12 +73,7 @@ pub fn is_generic_id(name: &str) -> bool {
     }
 
     // Rule 2: UUID 8-4-4-4-12 with hex digits
-    if n == 36
-        && bytes[8] == b'-'
-        && bytes[13] == b'-'
-        && bytes[18] == b'-'
-        && bytes[23] == b'-'
-    {
+    if n == 36 && bytes[8] == b'-' && bytes[13] == b'-' && bytes[18] == b'-' && bytes[23] == b'-' {
         let only_hex_dash = bytes
             .iter()
             .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'-'));
@@ -98,15 +93,7 @@ pub fn is_generic_id(name: &str) -> bool {
                 .filter(|&&b| {
                     matches!(
                         b,
-                        b'a' | b'e'
-                            | b'i'
-                            | b'o'
-                            | b'u'
-                            | b'A'
-                            | b'E'
-                            | b'I'
-                            | b'O'
-                            | b'U'
+                        b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U'
                     )
                 })
                 .count();
@@ -149,5 +136,6 @@ pub fn should_skip_meta(name: &str, _attrs: u32) -> bool {
 /// True if any segment of `path` (separated by `/`) would be filtered out.
 /// Used to clean legacy indices on load.
 pub fn path_has_skipped_segment(path: &str) -> bool {
-    path.split('/').any(|seg| !seg.is_empty() && should_skip(seg))
+    path.split('/')
+        .any(|seg| !seg.is_empty() && should_skip(seg))
 }

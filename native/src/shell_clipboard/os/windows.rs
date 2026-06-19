@@ -14,8 +14,8 @@
 use windows::core::{Result, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND, POINT};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, RegisterClipboardFormatW,
+    SetClipboardData,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_HDROP;
@@ -179,4 +179,3 @@ pub fn read_files() -> Option<(Vec<String>, bool)> {
         Some((paths, is_cut))
     }
 }
-

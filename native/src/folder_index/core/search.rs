@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 
-use super::core_oslocked::stat_and_rank;
 use super::model::FolderIndex;
+use super::os::stat_and_rank;
 
 impl FolderIndex {
     /// Score every path against `query`. Returns the top `max` matches sorted
@@ -89,12 +89,7 @@ pub(super) fn fuzzy_score(query: &[u8], target: &[u8]) -> Option<i32> {
                 score += 12;
             }
             // Word-start bonus
-            if ti > 0
-                && matches!(
-                    target[ti - 1],
-                    b'/' | b'\\' | b'_' | b'-' | b'.' | b' '
-                )
-            {
+            if ti > 0 && matches!(target[ti - 1], b'/' | b'\\' | b'_' | b'-' | b'.' | b' ') {
                 score += 8;
             }
             if ti >= basename_start && !matched_in_basename {
