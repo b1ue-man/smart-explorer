@@ -29,8 +29,9 @@ impl App {
             if self.panes[0] == self.panes[1] {
                 // Keep the focused pane's tab; move the other to a free one.
                 let other = 1 - self.focused_pane;
-                self.panes[other] =
-                    (0..n).find(|&i| i != self.panes[self.focused_pane]).unwrap_or(self.panes[self.focused_pane]);
+                self.panes[other] = (0..n)
+                    .find(|&i| i != self.panes[self.focused_pane])
+                    .unwrap_or(self.panes[self.focused_pane]);
             }
             let panes = self.panes;
             let mut focus_to: Option<usize> = None;
@@ -165,7 +166,11 @@ impl App {
             return;
         }
         if i == self.active_tab {
-            let to = if i + 1 < self.tabs.len() { i + 1 } else { i - 1 };
+            let to = if i + 1 < self.tabs.len() {
+                i + 1
+            } else {
+                i - 1
+            };
             self.switch_tab(to);
         }
         let t = self.tabs.remove(i);
@@ -200,7 +205,11 @@ impl App {
                 crate::types::TextMode::Regex => ".*",
                 crate::types::TextMode::Glob => "*?",
             };
-            if ui.small_button(mode_label).on_hover_text("Modus: Text / Regex / Glob").clicked() {
+            if ui
+                .small_button(mode_label)
+                .on_hover_text("Modus: Text / Regex / Glob")
+                .clicked()
+            {
                 self.filter.text_mode = match self.filter.text_mode {
                     crate::types::TextMode::Substring => crate::types::TextMode::Regex,
                     crate::types::TextMode::Regex => crate::types::TextMode::Glob,
@@ -208,7 +217,12 @@ impl App {
                 };
                 self.recompute_view();
             }
-            if !self.text_draft.is_empty() && ui.small_button("×").on_hover_text("Filter löschen").clicked() {
+            if !self.text_draft.is_empty()
+                && ui
+                    .small_button("×")
+                    .on_hover_text("Filter löschen")
+                    .clicked()
+            {
                 self.text_draft.clear();
                 self.filter.text.clear();
                 self.recompute_view();
@@ -325,5 +339,4 @@ impl App {
     }
 
     // ─── Scanning / navigation ──────────────────────────────────────────
-
 }

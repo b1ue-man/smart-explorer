@@ -61,7 +61,11 @@ impl SyncJob {
 
     /// Is `now` inside this job's active-hours window? (true when no window set).
     pub fn active_now(&self, now: i64) -> bool {
-        within_window(local_min_of_day(now), self.active_from_min, self.active_to_min)
+        within_window(
+            local_min_of_day(now),
+            self.active_from_min,
+            self.active_to_min,
+        )
     }
 
     /// Does `day` (Mon=0..Sun=6 weekday, plus day-of-month) match this calendar?

@@ -1,4 +1,4 @@
-#[path = "core_oslocked/analytics.rs"]
+#[path = "os/shared/analytics.rs"]
 mod imp;
 
 pub use imp::*;

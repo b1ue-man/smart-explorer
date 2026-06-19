@@ -10,22 +10,22 @@ mod codec;
 #[cfg(test)]
 #[path = "core/codec_tests.rs"]
 mod codec_tests;
-#[path = "core_oslocked/fs.rs"]
-mod core_oslocked;
-#[path = "core_oslocked/hash.rs"]
+#[path = "os/shared/fs.rs"]
+mod fs;
+#[path = "os/shared/hash.rs"]
 mod hash;
-#[path = "core_oslocked/search.rs"]
+#[path = "os/shared/search.rs"]
 mod search;
-#[path = "core_oslocked/server.rs"]
+#[path = "core/server.rs"]
 mod server;
-#[path = "core_oslocked/session.rs"]
+#[path = "core/session.rs"]
 mod session;
-#[path = "core_oslocked/transfer.rs"]
+#[path = "os/shared/transfer.rs"]
 mod transfer;
 #[path = "core/types.rs"]
 mod types;
 
 pub use codec::{read_frame, write_frame};
-pub use core_oslocked::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
+pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub use server::serve;
 pub use types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK, PROTO_VERSION};

@@ -61,11 +61,14 @@ fn is_not_found(e: &io::Error) -> bool {
 
 fn register_verb(class_path: &str, arg: &str) -> io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (verb, _) = hkcu.create_subkey(format!(r"Software\Classes\{}\shell\{}", class_path, VERB))?;
+    let (verb, _) =
+        hkcu.create_subkey(format!(r"Software\Classes\{}\shell\{}", class_path, VERB))?;
     verb.set_value("MUIVerb", &LABEL)?;
     verb.set_value("Icon", &icon_value())?;
-    let (cmd, _) =
-        hkcu.create_subkey(format!(r"Software\Classes\{}\shell\{}\command", class_path, VERB))?;
+    let (cmd, _) = hkcu.create_subkey(format!(
+        r"Software\Classes\{}\shell\{}\command",
+        class_path, VERB
+    ))?;
     cmd.set_value("", &command_for(arg))?;
     Ok(())
 }
@@ -97,7 +100,10 @@ pub fn set_context_menu(on: bool) -> io::Result<()> {
 
 pub fn context_menu_enabled() -> bool {
     RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey(format!(r"Software\Classes\Directory\shell\{}\command", VERB))
+        .open_subkey(format!(
+            r"Software\Classes\Directory\shell\{}\command",
+            VERB
+        ))
         .is_ok()
 }
 
@@ -153,9 +159,10 @@ fn enable_default_manager() -> io::Result<()> {
         // A freshly created key has neither, but if a prior tool left a
         // DelegateExecute value or ddeexec subkey on the open verb it would
         // re-route to Explorer — strip them so our command actually runs.
-        if let Ok(open) =
-            hkcu.open_subkey_with_flags(format!(r"Software\Classes\{}\shell\open", cls), KEY_ALL_ACCESS)
-        {
+        if let Ok(open) = hkcu.open_subkey_with_flags(
+            format!(r"Software\Classes\{}\shell\open", cls),
+            KEY_ALL_ACCESS,
+        ) {
             let _ = open.delete_value("DelegateExecute");
             let _ = open.delete_subkey_all("ddeexec");
         }
@@ -169,8 +176,14 @@ fn disable_default_manager() -> io::Result<()> {
     let bk = read_backup();
     for cls in CLASSES {
         let key = cls.to_lowercase();
-        let existed = bk.get(&format!("{}_existed", key)).map(|s| s == "1").unwrap_or(false);
-        let prior_cmd = bk.get(&format!("{}_command", key)).cloned().unwrap_or_default();
+        let existed = bk
+            .get(&format!("{}_existed", key))
+            .map(|s| s == "1")
+            .unwrap_or(false);
+        let prior_cmd = bk
+            .get(&format!("{}_command", key))
+            .cloned()
+            .unwrap_or_default();
         if existed && !prior_cmd.is_empty() {
             // CASE 2 (rare): another handler owned this verb — restore it verbatim.
             if let Ok((cmd, _)) =
@@ -196,8 +209,8 @@ fn disable_default_manager() -> io::Result<()> {
 /// True if OUR exe is the current Directory open handler.
 fn default_manager_enabled() -> bool {
     let exe = exe_path().to_lowercase();
-    if let Ok(k) =
-        RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\Classes\Directory\shell\open\command")
+    if let Ok(k) = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Classes\Directory\shell\open\command")
     {
         if let Ok(v) = k.get_value::<String, _>("") {
             let v = v.to_lowercase();
@@ -290,7 +303,10 @@ mod tests {
     fn context_menu_is_reversible() {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         set_context_menu(true).expect("enable ctx menu");
-        assert!(context_menu_enabled(), "verb should be present after enable");
+        assert!(
+            context_menu_enabled(),
+            "verb should be present after enable"
+        );
         assert!(hkcu
             .open_subkey(r"Software\Classes\Directory\Background\shell\OpenInSmartExplorer\command")
             .is_ok());

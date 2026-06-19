@@ -51,8 +51,9 @@ impl App {
                         | crate::bisync::Action::KeepBothAtoB(_) => to_b += 1,
                         crate::bisync::Action::CopyBtoA(_)
                         | crate::bisync::Action::KeepBothBtoA(_) => to_a += 1,
-                        crate::bisync::Action::DeleteA(_)
-                        | crate::bisync::Action::DeleteB(_) => del += 1,
+                        crate::bisync::Action::DeleteA(_) | crate::bisync::Action::DeleteB(_) => {
+                            del += 1
+                        }
                     }
                 }
                 ui.label(format!(
@@ -84,30 +85,49 @@ impl App {
                 );
                 ui.separator();
                 let busy = self.apply_one_rx.is_some();
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for c in &p.conflicts {
-                        ui.colored_label(
-                            Color32::from_rgb(230, 200, 90),
-                            format!("⚠ Konflikt: {}", c.rel),
-                        );
-                    }
-                    for act in &p.actions {
-                        let (sym, color, rel) = match act {
-                            crate::bisync::Action::CopyAtoB(r) => ("→", Color32::from_rgb(120, 200, 120), r),
-                            crate::bisync::Action::CopyBtoA(r) => ("←", Color32::from_rgb(120, 200, 120), r),
-                            crate::bisync::Action::DeleteB(r) => ("🗑→", Color32::from_rgb(230, 150, 120), r),
-                            crate::bisync::Action::DeleteA(r) => ("🗑←", Color32::from_rgb(230, 150, 120), r),
-                            crate::bisync::Action::KeepBothAtoB(r) => ("⇄→", Color32::from_rgb(230, 200, 90), r),
-                            crate::bisync::Action::KeepBothBtoA(r) => ("⇄←", Color32::from_rgb(230, 200, 90), r),
-                        };
-                        ui.horizontal(|ui| {
-                            if !busy && ui.small_button("▶").on_hover_text("Nur diese Datei jetzt synchronisieren").clicked() {
-                                sync_one = Some(act.clone());
-                            }
-                            ui.colored_label(color, format!("{}  {}", sym, rel));
-                        });
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for c in &p.conflicts {
+                            ui.colored_label(
+                                Color32::from_rgb(230, 200, 90),
+                                format!("⚠ Konflikt: {}", c.rel),
+                            );
+                        }
+                        for act in &p.actions {
+                            let (sym, color, rel) = match act {
+                                crate::bisync::Action::CopyAtoB(r) => {
+                                    ("→", Color32::from_rgb(120, 200, 120), r)
+                                }
+                                crate::bisync::Action::CopyBtoA(r) => {
+                                    ("←", Color32::from_rgb(120, 200, 120), r)
+                                }
+                                crate::bisync::Action::DeleteB(r) => {
+                                    ("🗑→", Color32::from_rgb(230, 150, 120), r)
+                                }
+                                crate::bisync::Action::DeleteA(r) => {
+                                    ("🗑←", Color32::from_rgb(230, 150, 120), r)
+                                }
+                                crate::bisync::Action::KeepBothAtoB(r) => {
+                                    ("⇄→", Color32::from_rgb(230, 200, 90), r)
+                                }
+                                crate::bisync::Action::KeepBothBtoA(r) => {
+                                    ("⇄←", Color32::from_rgb(230, 200, 90), r)
+                                }
+                            };
+                            ui.horizontal(|ui| {
+                                if !busy
+                                    && ui
+                                        .small_button("▶")
+                                        .on_hover_text("Nur diese Datei jetzt synchronisieren")
+                                        .clicked()
+                                {
+                                    sync_one = Some(act.clone());
+                                }
+                                ui.colored_label(color, format!("{}  {}", sym, rel));
+                            });
+                        }
+                    });
             });
         self.show_preview = open;
         if let Some(act) = sync_one {
@@ -195,7 +215,13 @@ impl App {
             None => return,
         };
         match crate::bisync::resolve(
-            &*ctx.a, &ctx.root_a, &*ctx.b, &ctx.root_b, &rel, keep_a, &ctx.pair,
+            &*ctx.a,
+            &ctx.root_a,
+            &*ctx.b,
+            &ctx.root_b,
+            &rel,
+            keep_a,
+            &ctx.pair,
         ) {
             Ok((sa, sb)) => {
                 ctx.baseline.insert(rel, (sa, sb));
@@ -299,7 +325,12 @@ impl App {
             Some(c) => c,
             None => return,
         };
-        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let (a, ra, b, rb) = (
+            ctx.a.clone(),
+            ctx.root_a.clone(),
+            ctx.b.clone(),
+            ctx.root_b.clone(),
+        );
         let rel_t = rel.clone();
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
@@ -314,11 +345,18 @@ impl App {
             })
             .ok();
         self.merge_load_rx = Some(rx);
-        self.merge = Some(MergeUi { rel, rows: Vec::new() }); // shows "loading"
+        self.merge = Some(MergeUi {
+            rel,
+            rows: Vec::new(),
+        }); // shows "loading"
     }
 
     pub(in crate::app) fn drain_merge(&mut self) {
-        if let Some(res) = self.merge_load_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some(res) = self
+            .merge_load_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
             self.merge_load_rx = None;
             match res {
                 Ok((rel, rows)) => self.merge = Some(MergeUi { rel, rows }),
@@ -328,7 +366,11 @@ impl App {
                 }
             }
         }
-        if let Some(res) = self.merge_apply_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some(res) = self
+            .merge_apply_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
             self.merge_apply_rx = None;
             match res {
                 Ok((rel, sa, sb)) => {
@@ -336,8 +378,10 @@ impl App {
                         ctx.baseline.insert(rel.clone(), (Some(sa), Some(sb)));
                     }
                     self.bisync_conflicts.retain(|c| c.rel != rel);
-                    self.notice =
-                        Some((format!("✓ „{}“ zusammengeführt", rel), std::time::Instant::now()));
+                    self.notice = Some((
+                        format!("✓ „{}“ zusammengeführt", rel),
+                        std::time::Instant::now(),
+                    ));
                     if self.bisync_conflicts.is_empty() {
                         self.finish_bisync_conflicts();
                     }
@@ -353,18 +397,24 @@ impl App {
             Some(c) => c,
             None => return,
         };
-        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let (a, ra, b, rb) = (
+            ctx.a.clone(),
+            ctx.root_a.clone(),
+            ctx.b.clone(),
+            ctx.root_b.clone(),
+        );
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
             .name("merge-apply".into())
             .spawn(move || {
-                let res = (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
-                    let pa = ep_join(&ra, &rel);
-                    let pb = ep_join(&rb, &rel);
-                    write_bytes(&*a, &pa, merged.as_bytes())?;
-                    write_bytes(&*b, &pb, merged.as_bytes())?;
-                    Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
-                })();
+                let res =
+                    (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
+                        let pa = ep_join(&ra, &rel);
+                        let pb = ep_join(&rb, &rel);
+                        write_bytes(&*a, &pa, merged.as_bytes())?;
+                        write_bytes(&*b, &pb, merged.as_bytes())?;
+                        Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
+                    })();
                 let _ = tx.send(res);
             })
             .ok();
@@ -374,30 +424,40 @@ impl App {
     /// Resolve a conflict by keeping BOTH versions as separate files: A keeps the
     /// original name on both sides; B is written as a "(Konflikt …)" sibling on
     /// both sides. No line concatenation. Reuses the merge-apply result channel.
-    pub(in crate::app) fn start_merge_keep_both(&mut self, rel: String, a_full: String, b_full: String) {
+    pub(in crate::app) fn start_merge_keep_both(
+        &mut self,
+        rel: String,
+        a_full: String,
+        b_full: String,
+    ) {
         let ctx = match &self.bisync_ctx {
             Some(c) => c,
             None => return,
         };
-        let (a, ra, b, rb) = (ctx.a.clone(), ctx.root_a.clone(), ctx.b.clone(), ctx.root_b.clone());
+        let (a, ra, b, rb) = (
+            ctx.a.clone(),
+            ctx.root_a.clone(),
+            ctx.b.clone(),
+            ctx.root_b.clone(),
+        );
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
             .name("merge-keepboth".into())
             .spawn(move || {
-                let res = (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
-                    let crel = conflict_rel_name(&rel);
-                    let pa = ep_join(&ra, &rel);
-                    let pb = ep_join(&rb, &rel);
-                    write_bytes(&*a, &pa, a_full.as_bytes())?;
-                    write_bytes(&*b, &pb, a_full.as_bytes())?;
-                    write_bytes(&*a, &ep_join(&ra, &crel), b_full.as_bytes())?;
-                    write_bytes(&*b, &ep_join(&rb, &crel), b_full.as_bytes())?;
-                    Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
-                })();
+                let res =
+                    (|| -> Result<(String, crate::bisync::Sig, crate::bisync::Sig), String> {
+                        let crel = conflict_rel_name(&rel);
+                        let pa = ep_join(&ra, &rel);
+                        let pb = ep_join(&rb, &rel);
+                        write_bytes(&*a, &pa, a_full.as_bytes())?;
+                        write_bytes(&*b, &pb, a_full.as_bytes())?;
+                        write_bytes(&*a, &ep_join(&ra, &crel), b_full.as_bytes())?;
+                        write_bytes(&*b, &ep_join(&rb, &crel), b_full.as_bytes())?;
+                        Ok((rel.clone(), sig_from(&*a, &pa), sig_from(&*b, &pb)))
+                    })();
                 let _ = tx.send(res);
             })
             .ok();
         self.merge_apply_rx = Some(rx);
     }
-
 }

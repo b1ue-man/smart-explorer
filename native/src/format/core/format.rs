@@ -43,7 +43,11 @@ pub fn compare_entries(
     // Optionally pin directories above files; otherwise both are ranked purely
     // by the active key (so e.g. sorting by date interleaves files and folders).
     if dirs_first && a.is_dir != b.is_dir {
-        return if a.is_dir { Ordering::Less } else { Ordering::Greater };
+        return if a.is_dir {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
     }
     let cmp = match key {
         SortKey::Name => natural_compare(a.name.as_ref(), b.name.as_ref()),
@@ -51,7 +55,10 @@ pub fn compare_entries(
         SortKey::Size => a.size.cmp(&b.size),
         SortKey::Mtime => a.mtime_ms.cmp(&b.mtime_ms),
         SortKey::Btime => a.btime_ms.cmp(&b.btime_ms),
-        SortKey::Ext => a.ext.cmp(&b.ext).then_with(|| natural_compare(a.name.as_ref(), b.name.as_ref())),
+        SortKey::Ext => a
+            .ext
+            .cmp(&b.ext)
+            .then_with(|| natural_compare(a.name.as_ref(), b.name.as_ref())),
         SortKey::Depth => a.depth.cmp(&b.depth),
     };
     match dir {

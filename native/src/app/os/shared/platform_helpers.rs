@@ -90,9 +90,7 @@ pub(in crate::app) fn date_to_ms_end(d: chrono::NaiveDate) -> i64 {
 #[cfg(windows)]
 pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
     use windows::core::PCWSTR;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO};
     let t: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     let m: Vec<u16> = msg.encode_utf16().chain(Some(0)).collect();
     let r = unsafe {

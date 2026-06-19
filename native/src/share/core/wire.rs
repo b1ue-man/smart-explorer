@@ -22,18 +22,36 @@ pub(crate) struct SrvMember {
 
 impl From<SrvMember> for RemoteDevice {
     fn from(m: SrvMember) -> Self {
-        RemoteDevice { device: m.device, fingerprint: m.pubkey, candidates: m.candidates }
+        RemoteDevice {
+            device: m.device,
+            fingerprint: m.pubkey,
+            candidates: m.candidates,
+        }
     }
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub(crate) enum SrvMsg {
-    Peer { device: String, candidates: Vec<String>, pubkey: String },
-    Roster { members: Vec<SrvMember> },
-    Joined { member: SrvMember },
-    Left { #[allow(dead_code)] device: String, pubkey: String },
-    Error { msg: String },
+    Peer {
+        device: String,
+        candidates: Vec<String>,
+        pubkey: String,
+    },
+    Roster {
+        members: Vec<SrvMember>,
+    },
+    Joined {
+        member: SrvMember,
+    },
+    Left {
+        #[allow(dead_code)]
+        device: String,
+        pubkey: String,
+    },
+    Error {
+        msg: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]

@@ -10,7 +10,7 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
-#[path = "core_oslocked/job.rs"]
+#[path = "os/shared/job.rs"]
 mod job;
 #[cfg(windows)]
 #[path = "os/windows/platform.rs"]
@@ -18,9 +18,9 @@ mod platform;
 #[cfg(not(windows))]
 #[path = "os/non_windows/platform.rs"]
 mod platform;
-#[path = "core_oslocked/schedule.rs"]
+#[path = "os/shared/schedule.rs"]
 mod schedule;
-#[path = "core_oslocked/state.rs"]
+#[path = "os/shared/state.rs"]
 mod state;
 
 #[allow(unused_imports)]

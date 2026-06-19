@@ -86,7 +86,11 @@ impl App {
                 .show(ctx, |ui| {
                     // ── Row 1: scan targets ──
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Scannen:").small().color(Color32::from_gray(150)));
+                        ui.label(
+                            RichText::new("Scannen:")
+                                .small()
+                                .color(Color32::from_gray(150)),
+                        );
                         for (root, free, total) in &drives {
                             let dl: String = root.chars().take(2).collect();
                             let used = total.saturating_sub(*free);
@@ -128,7 +132,9 @@ impl App {
 
                     // ── Row 2: breadcrumb ──
                     ui.horizontal_wrapped(|ui| {
-                        if !focus_segs.is_empty() && ui.button("↑").on_hover_text("Eine Ebene höher").clicked() {
+                        if !focus_segs.is_empty()
+                            && ui.button("↑").on_hover_text("Eine Ebene höher").clicked()
+                        {
                             go_up = true;
                         }
                         if ui.button(RichText::new(&root_label).strong()).clicked() {
@@ -150,12 +156,14 @@ impl App {
                     if let Some((used, tot)) = drive {
                         let frac = used as f32 / tot as f32;
                         ui.add(
-                            egui::ProgressBar::new(frac).desired_width(ui.available_width()).text(format!(
-                                "Laufwerk: {} von {} belegt ({:.0}%)",
-                                format_bytes(used),
-                                format_bytes(tot),
-                                frac * 100.0
-                            )),
+                            egui::ProgressBar::new(frac)
+                                .desired_width(ui.available_width())
+                                .text(format!(
+                                    "Laufwerk: {} von {} belegt ({:.0}%)",
+                                    format_bytes(used),
+                                    format_bytes(tot),
+                                    frac * 100.0
+                                )),
                         );
                     }
 
@@ -217,38 +225,53 @@ impl App {
                             // Folder = darkened group hue + a lighter header strip.
                             let fill = cell.color.gamma_multiply(0.40);
                             painter.rect_filled(cell.rect, 2.0, fill);
-                            painter.rect_stroke(cell.rect, 2.0, egui::Stroke::new(1.0, Color32::from_black_alpha(130)));
+                            painter.rect_stroke(
+                                cell.rect,
+                                2.0,
+                                egui::Stroke::new(1.0, Color32::from_black_alpha(130)),
+                            );
                             let hr = egui::Rect::from_min_max(
                                 cell.rect.min,
                                 egui::pos2(cell.rect.max.x, cell.rect.min.y + TM_HEADER),
                             );
                             painter.rect_filled(hr, 0.0, cell.color.gamma_multiply(0.7));
-                            painter
-                                .with_clip_rect(hr.shrink(2.0))
-                                .text(
-                                    hr.min + egui::vec2(4.0, 1.0),
-                                    egui::Align2::LEFT_TOP,
-                                    format!("{}  {}", cell.name, format_bytes(cell.size)),
-                                    egui::FontId::proportional(11.0),
-                                    Color32::from_gray(235),
-                                );
+                            painter.with_clip_rect(hr.shrink(2.0)).text(
+                                hr.min + egui::vec2(4.0, 1.0),
+                                egui::Align2::LEFT_TOP,
+                                format!("{}  {}", cell.name, format_bytes(cell.size)),
+                                egui::FontId::proportional(11.0),
+                                Color32::from_gray(235),
+                            );
                         } else {
                             painter.rect_filled(cell.rect, 1.0, cell.color);
-                            painter.rect_stroke(cell.rect, 1.0, egui::Stroke::new(0.5, Color32::from_black_alpha(70)));
+                            painter.rect_stroke(
+                                cell.rect,
+                                1.0,
+                                egui::Stroke::new(0.5, Color32::from_black_alpha(70)),
+                            );
                             if cell.rect.width() > 40.0 && cell.rect.height() > 15.0 {
                                 let col = cell.color;
-                                let lum = 0.299 * col.r() as f32 + 0.587 * col.g() as f32 + 0.114 * col.b() as f32;
-                                let tc = if lum < 140.0 { Color32::from_gray(245) } else { Color32::from_gray(20) };
+                                let lum = 0.299 * col.r() as f32
+                                    + 0.587 * col.g() as f32
+                                    + 0.114 * col.b() as f32;
+                                let tc = if lum < 140.0 {
+                                    Color32::from_gray(245)
+                                } else {
+                                    Color32::from_gray(20)
+                                };
                                 // Clip to the cell so long names don't bleed across.
-                                painter
-                                    .with_clip_rect(cell.rect.shrink(2.0))
-                                    .text(
-                                        cell.rect.left_top() + egui::vec2(3.0, 2.0),
-                                        egui::Align2::LEFT_TOP,
-                                        format!("{}{}\n{}", if cell.is_dir { "📁 " } else { "" }, cell.name, format_bytes(cell.size)),
-                                        egui::FontId::proportional(11.0),
-                                        tc,
-                                    );
+                                painter.with_clip_rect(cell.rect.shrink(2.0)).text(
+                                    cell.rect.left_top() + egui::vec2(3.0, 2.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!(
+                                        "{}{}\n{}",
+                                        if cell.is_dir { "📁 " } else { "" },
+                                        cell.name,
+                                        format_bytes(cell.size)
+                                    ),
+                                    egui::FontId::proportional(11.0),
+                                    tc,
+                                );
                             }
                         }
                     }
@@ -257,14 +280,21 @@ impl App {
                     let tm_resp = tm_resp.on_hover_ui(|ui| {
                         if let Some(pos) = ui.ctx().pointer_hover_pos() {
                             if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
-                                let pct = if focus_size > 0 { cell.size as f64 / focus_size as f64 * 100.0 } else { 0.0 };
+                                let pct = if focus_size > 0 {
+                                    cell.size as f64 / focus_size as f64 * 100.0
+                                } else {
+                                    0.0
+                                };
                                 // Don't wrap the tooltip into a narrow column.
                                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                                ui.label(RichText::new(format!(
-                                    "{}{}",
-                                    if cell.is_dir { "📁 " } else { "" },
-                                    cell.name
-                                )).strong());
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}{}",
+                                        if cell.is_dir { "📁 " } else { "" },
+                                        cell.name
+                                    ))
+                                    .strong(),
+                                );
                                 ui.label(format!("{} · {:.1}%", format_bytes(cell.size), pct));
                             }
                         }
@@ -322,10 +352,11 @@ impl App {
         } else if let Some(p) = reveal {
             // Navigate the main explorer to the file's parent, then close.
             if let Some((parent, _)) = p.rsplit_once('/') {
-                self.start_scan(PathBuf::from(parent.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                self.start_scan(PathBuf::from(
+                    parent.replace('/', std::path::MAIN_SEPARATOR_STR),
+                ));
             }
             self.show_analytics = false;
         }
     }
-
 }

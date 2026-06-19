@@ -36,8 +36,14 @@ pub(super) fn connect_impl(
     nr.dwType = RESOURCETYPE_DISK;
     nr.lpRemoteName = remote.as_mut_ptr();
 
-    let user_ptr = user_w.as_ref().map(|v| v.as_ptr()).unwrap_or(std::ptr::null());
-    let pass_ptr = pass_w.as_ref().map(|v| v.as_ptr()).unwrap_or(std::ptr::null());
+    let user_ptr = user_w
+        .as_ref()
+        .map(|v| v.as_ptr())
+        .unwrap_or(std::ptr::null());
+    let pass_ptr = pass_w
+        .as_ref()
+        .map(|v| v.as_ptr())
+        .unwrap_or(std::ptr::null());
 
     // dwflags = 0 (no drive mapping, not persistent).
     let rc = unsafe { WNetAddConnection2W(&nr, pass_ptr, user_ptr, 0) };

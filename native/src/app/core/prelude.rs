@@ -1,4 +1,6 @@
-pub(in crate::app) use crate::copy::{start_copy_expanded, start_copy_from_paths, CopyHandle, CopyMsg};
+pub(in crate::app) use crate::copy::{
+    start_copy_expanded, start_copy_from_paths, CopyHandle, CopyMsg,
+};
 pub(in crate::app) use crate::filter::{parse_size_input, CompiledFilter};
 pub(in crate::app) use crate::folder_index::{FolderIndex, IndexMsg};
 pub(in crate::app) use crate::format::{compare_entries, format_bytes, format_date};

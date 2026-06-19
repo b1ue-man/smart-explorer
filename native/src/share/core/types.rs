@@ -28,10 +28,22 @@ pub enum ShareEvent {
     /// Current peers in the session (pair has 0 or 1; room has N).
     Roster(Vec<RemoteDevice>),
     /// An inbound transfer is awaiting accept/reject.
-    Incoming { id: u64, from: String, files: Vec<(String, u64)> },
-    Progress { done: u64, total: u64 },
-    Received { count: usize, dir: String },
-    Sent { count: usize },
+    Incoming {
+        id: u64,
+        from: String,
+        files: Vec<(String, u64)>,
+    },
+    Progress {
+        done: u64,
+        total: u64,
+    },
+    Received {
+        count: usize,
+        dir: String,
+    },
+    Sent {
+        count: usize,
+    },
 }
 
 pub(crate) type EventRx = Receiver<ShareEvent>;

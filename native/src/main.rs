@@ -1,47 +1,47 @@
 // Hide console window on Windows release builds
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
-mod app;
-mod analytics;
 mod agent;
 mod agent_proto;
+mod analytics;
+mod app;
 mod autostart;
 mod bisync;
 mod cloud;
 mod connect;
-mod daemon;
-mod gdrive;
-mod linemerge;
-#[cfg(windows)]
-mod dragout;
 mod copy;
 mod creds;
+mod daemon;
+#[cfg(windows)]
+mod dragout;
 mod filter;
-mod ftp;
 mod folder_index;
 mod format;
+mod ftp;
+mod gdrive;
 mod icons;
+mod linemerge;
 mod net;
 mod quickshare;
 mod rscan;
 mod scanner;
-mod share;
 mod sftp;
-mod sync;
-mod syncjobs;
+mod share;
 #[cfg(windows)]
 mod shell_clipboard;
 #[cfg(windows)]
-mod shell_register;
-#[cfg(windows)]
 mod shell_menu;
+#[cfg(windows)]
+mod shell_register;
+mod sync;
+mod syncjobs;
 mod types;
 mod updater;
 mod vfs;
-mod webdav;
-mod zipfs;
 #[cfg(windows)]
 mod virtual_clipboard;
+mod webdav;
+mod zipfs;
 
 fn main() -> eframe::Result<()> {
     install_panic_logger();

@@ -1,4 +1,4 @@
-#[path = "core_oslocked/webdav.rs"]
-mod imp;
+#[path = "core/webdav.rs"]
+mod webdav;
 
-pub use imp::*;
+pub use webdav::{WebdavBackend, WebdavConfig};

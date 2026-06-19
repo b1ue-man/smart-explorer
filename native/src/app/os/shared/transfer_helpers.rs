@@ -124,7 +124,12 @@ pub(in crate::app) fn download_to_id(
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let expected = be.stat(path).ok().filter(|m| !m.is_dir).map(|m| m.size).unwrap_or(0);
+    let expected = be
+        .stat(path)
+        .ok()
+        .filter(|m| !m.is_dir)
+        .map(|m| m.size)
+        .unwrap_or(0);
     ensure_local_space(dest, expected)?;
     let part = download_part_path(dest);
     cleanup_partial(&part);

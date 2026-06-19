@@ -80,7 +80,11 @@ impl LocalBackend {
         let r = root.trim().replace('\\', "/");
         let r = r.trim_end_matches('/');
         LocalBackend {
-            root: if r.is_empty() { "/".to_string() } else { r.to_string() },
+            root: if r.is_empty() {
+                "/".to_string()
+            } else {
+                r.to_string()
+            },
         }
     }
 }

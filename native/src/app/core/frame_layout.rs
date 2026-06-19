@@ -20,7 +20,9 @@ impl App {
         egui::TopBottomPanel::top("filterbar").show(ctx, |ui| {
             let active = self.filter_is_active();
             let title = if active {
-                RichText::new("🔍 Filter & Suche  ●").strong().color(Color32::from_rgb(255, 190, 90))
+                RichText::new("🔍 Filter & Suche  ●")
+                    .strong()
+                    .color(Color32::from_rgb(255, 190, 90))
             } else {
                 RichText::new("🔍 Filter & Suche").strong()
             };
@@ -124,7 +126,9 @@ impl App {
         // reactive app only repaints on the discrete OS events → the glide
         // stalls and stutters. Keep painting at full rate during scrolling and
         // for a short tail afterwards, so the smoothing runs to a clean stop.
-        if ctx.input(|i| i.raw_scroll_delta != egui::Vec2::ZERO || i.smooth_scroll_delta != egui::Vec2::ZERO) {
+        if ctx.input(|i| {
+            i.raw_scroll_delta != egui::Vec2::ZERO || i.smooth_scroll_delta != egui::Vec2::ZERO
+        }) {
             self.last_scroll_at = Some(std::time::Instant::now());
         }
         if let Some(t) = self.last_scroll_at {
@@ -134,6 +138,5 @@ impl App {
                 self.last_scroll_at = None;
             }
         }
-
     }
 }

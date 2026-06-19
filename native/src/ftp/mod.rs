@@ -1,4 +1,4 @@
-#[path = "core_oslocked/ftp.rs"]
-mod imp;
+#[path = "core/ftp.rs"]
+mod ftp;
 
-pub use imp::*;
+pub use ftp::{backend_from_url, FtpBackend};

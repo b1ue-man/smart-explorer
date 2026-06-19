@@ -1,4 +1,12 @@
-#[path = "core_oslocked/scanner.rs"]
-mod imp;
+#[path = "core/entry.rs"]
+mod core;
+#[path = "os/shared.rs"]
+mod os;
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod platform;
+#[cfg(not(windows))]
+#[path = "os/non_windows.rs"]
+mod platform;
 
-pub use imp::*;
+pub use os::*;

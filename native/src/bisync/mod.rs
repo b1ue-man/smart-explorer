@@ -16,23 +16,23 @@
 #![allow(dead_code)] // engine; the sync UI wiring lands next.
 #![allow(unused_imports)] // re-exports below preserve the crate::bisync API surface.
 
+#[path = "os/shared/apply.rs"]
+mod apply;
 #[path = "core/plan.rs"]
 mod core;
-#[path = "core_oslocked/apply.rs"]
-mod core_oslocked;
-#[path = "core_oslocked/orchestration.rs"]
+#[path = "os/shared/orchestration.rs"]
 mod orchestration;
 #[path = "core/paths.rs"]
 mod paths;
-#[path = "core_oslocked/persistence.rs"]
+#[path = "os/shared/persistence.rs"]
 mod persistence;
-#[path = "core_oslocked/snapshot.rs"]
+#[path = "os/shared/snapshot.rs"]
 mod snapshot;
 #[path = "core/types.rs"]
 mod types;
 
+pub use apply::{apply, resolve};
 pub use core::{plan, update_baseline};
-pub use core_oslocked::{apply, resolve};
 pub use orchestration::{preview, run, Outcome, Preview};
 pub use persistence::{
     baseline_path, load_baseline, pair_id, prune_versions, save_baseline, versions_dir,
@@ -44,5 +44,5 @@ pub use types::{
 };
 
 #[cfg(test)]
-#[path = "core_oslocked/tests.rs"]
+#[path = "os/shared/tests.rs"]
 mod tests;

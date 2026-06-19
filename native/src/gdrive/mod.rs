@@ -11,19 +11,19 @@
 //! in the headless build env (no OAuth client). It compiles for host +
 //! windows-gnu and is gated behind an explicit, user-configured connection.
 
-#[path = "core_oslocked/api.rs"]
+#[path = "core/api.rs"]
 mod api;
-#[path = "core_oslocked/auth.rs"]
+#[path = "core/auth.rs"]
 mod auth;
-#[path = "core_oslocked/backend.rs"]
+#[path = "core/backend.rs"]
 mod backend;
 #[path = "core/core.rs"]
 mod core;
-#[path = "core_oslocked/metadata.rs"]
+#[path = "core/metadata.rs"]
 mod metadata;
-#[path = "core_oslocked/state.rs"]
+#[path = "core/state.rs"]
 mod state;
-#[path = "core_oslocked/transfer.rs"]
+#[path = "core/transfer.rs"]
 mod transfer;
 
 pub use state::GDriveBackend;

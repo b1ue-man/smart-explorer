@@ -74,7 +74,10 @@ pub struct Range<T> {
 
 impl<T> Default for Range<T> {
     fn default() -> Self {
-        Self { min: None, max: None }
+        Self {
+            min: None,
+            max: None,
+        }
     }
 }
 

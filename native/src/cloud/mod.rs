@@ -1,4 +1,16 @@
-#[path = "core_oslocked/cloud.rs"]
-mod imp;
+#[path = "core/cloud.rs"]
+mod cloud;
 
-pub use imp::*;
+mod os {
+    #[cfg(not(windows))]
+    #[path = "non_windows.rs"]
+    mod platform;
+    #[cfg(windows)]
+    #[path = "windows.rs"]
+    mod platform;
+    pub mod shared;
+
+    pub use platform::open_url;
+}
+
+pub use cloud::*;
