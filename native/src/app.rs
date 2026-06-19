@@ -7,11 +7,13 @@ use crate::types::*;
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 const APP_ERROR_LOG_LIMIT: usize = 200;
+const DOWNLOAD_SPACE_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
+const TEMP_SESSION_PID_FILE: &str = "session.pid";
 
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────
 #[cfg(windows)]
@@ -531,7 +533,7 @@ pub struct App {
     /// In-flight "download a remote file to temp, then open it" jobs (one per
     /// double-clicked remote file). Result is the local temp path to launch;
     /// `OpenMode` selects the default app vs. the native "Open with…" dialog.
-    file_open_rx: Vec<(Receiver<Result<(String, i64), String>>, OpenMode)>,
+    file_open_rx: Vec<(Receiver<Result<(String, i64), String>>, OpenMode, PathBuf)>,
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     remote_edits: Vec<RemoteEdit>,
@@ -1316,6 +1318,89 @@ fn download_to(
     download_to_id(be, path, None, dest)
 }
 
+fn download_part_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "download".to_string());
+    dest.with_file_name(format!(".{name}.smart-explorer.part"))
+}
+
+fn cleanup_partial(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+#[cfg(windows)]
+fn path_to_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
+fn available_space_for_path(path: &Path) -> Option<u64> {
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or_else(|| Path::new("."))
+    };
+    let wide = path_to_wide(dir);
+    let mut free = 0u64;
+    let mut total = 0u64;
+    let mut total_free = 0u64;
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut total_free) };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(windows))]
+fn available_space_for_path(_path: &Path) -> Option<u64> {
+    None
+}
+
+fn ensure_local_space(dest: &Path, expected_bytes: u64) -> Result<(), String> {
+    if expected_bytes == 0 {
+        return Ok(());
+    }
+    let needed = expected_bytes.saturating_add(DOWNLOAD_SPACE_MARGIN_BYTES);
+    if let Some(free) = available_space_for_path(dest) {
+        if free < needed {
+            return Err(format!(
+                "Nicht genug lokaler Speicher fuer den Temp-Download: benoetigt ca. {}, frei {}",
+                format_bytes(needed),
+                format_bytes(free)
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let src_w = path_to_wide(src);
+    let dest_w = path_to_wide(dest);
+    let ok = unsafe {
+        MoveFileExW(
+            src_w.as_ptr(),
+            dest_w.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::rename(src, dest)
+}
+
 /// Like `download_to`, but targets a specific backend item by `id` when known
 /// (so duplicate-named files open the exact one the user clicked).
 fn download_to_id(
@@ -1324,12 +1409,46 @@ fn download_to_id(
     id: Option<&str>,
     dest: &std::path::Path,
 ) -> Result<String, String> {
+    use std::io::Write;
+
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let expected = be.stat(path).ok().filter(|m| !m.is_dir).map(|m| m.size).unwrap_or(0);
+    ensure_local_space(dest, expected)?;
+    let part = download_part_path(dest);
+    cleanup_partial(&part);
     let mut r = be.open_read_id(path, id).map_err(|e| e.to_string())?;
-    let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-    std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
+    let mut f = match std::fs::File::create(&part) {
+        Ok(f) => f,
+        Err(e) => {
+            cleanup_partial(&part);
+            return Err(e.to_string());
+        }
+    };
+    let copied = match std::io::copy(&mut r, &mut f) {
+        Ok(n) => n,
+        Err(e) => {
+            cleanup_partial(&part);
+            return Err(e.to_string());
+        }
+    };
+    if let Err(e) = f.flush().and_then(|_| f.sync_all()) {
+        cleanup_partial(&part);
+        return Err(e.to_string());
+    }
+    drop(f);
+    if expected != 0 && copied != expected {
+        cleanup_partial(&part);
+        return Err(format!(
+            "Download unvollstaendig: {} von {} Bytes",
+            copied, expected
+        ));
+    }
+    if let Err(e) = replace_file_atomic(&part, dest) {
+        cleanup_partial(&part);
+        return Err(e.to_string());
+    }
     Ok(dest.to_string_lossy().to_string())
 }
 
@@ -1441,6 +1560,87 @@ fn session_temp_dir() -> PathBuf {
     temp_root().join(session_tag())
 }
 
+fn session_marker_path(dir: &Path) -> PathBuf {
+    dir.join(TEMP_SESSION_PID_FILE)
+}
+
+fn init_temp_session() {
+    sweep_stale_temp();
+    let _ = write_session_marker();
+}
+
+fn write_session_marker() -> std::io::Result<()> {
+    let dir = session_temp_dir();
+    std::fs::create_dir_all(&dir)?;
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::fs::write(
+        session_marker_path(&dir),
+        format!(
+            "pid={}\ntag={}\nstarted_ms={}\n",
+            std::process::id(),
+            session_tag(),
+            started
+        ),
+    )
+}
+
+fn read_session_pid(dir: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(session_marker_path(dir)).ok()?;
+    for line in text.lines() {
+        if let Some(pid) = line.strip_prefix("pid=").and_then(|s| s.trim().parse().ok()) {
+            return Some(pid);
+        }
+        if let Ok(pid) = line.trim().parse() {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn process_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(windows))]
+fn process_running(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+fn session_dir_is_live(dir: &Path) -> bool {
+    read_session_pid(dir)
+        .map(process_running)
+        .unwrap_or(false)
+}
+
+fn safe_temp_name(name: &str) -> String {
+    let safe = name.replace(['/', '\\', ':'], "_");
+    if safe.trim().is_empty() {
+        "datei".to_string()
+    } else {
+        safe
+    }
+}
+
 /// A **fresh, unique** local path to download a remote file to for opening or
 /// editing. Each call gets its own `<root>/<session>/<n>/<name>` subdir, so:
 /// (1) two files with the same name never collide, and (2) a previous edit's
@@ -1450,11 +1650,25 @@ fn session_temp_dir() -> PathBuf {
 /// don't hold the file open (VS Code, Notepad, …) — see docs/vfs_research.
 fn open_temp_path(name: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let root = session_temp_dir();
+    let _ = std::fs::create_dir_all(&root);
+    let _ = write_session_marker();
+    let safe = safe_temp_name(name);
+    for _ in 0..16 {
+        let mut bytes = [0u8; 8];
+        if getrandom::getrandom(&mut bytes).is_ok() {
+            let dir = root.join(format!("e{:016x}", u64::from_le_bytes(bytes)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return dir.join(&safe),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
+            }
+        }
+    }
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = session_temp_dir().join(n.to_string());
+    let dir = root.join(format!("e{}_{}", std::process::id(), n));
     let _ = std::fs::create_dir_all(&dir);
-    let safe = name.replace(['/', '\\', ':'], "_");
-    dir.join(if safe.trim().is_empty() { "datei".to_string() } else { safe })
+    dir.join(safe)
 }
 
 /// Remove leftover temp copies from PREVIOUS sessions (crash-safe net: TempDir-
@@ -1465,7 +1679,7 @@ fn sweep_stale_temp() {
     let cur = session_tag();
     if let Ok(rd) = std::fs::read_dir(temp_root()) {
         for e in rd.flatten() {
-            if e.file_name().to_str() != Some(cur) {
+            if e.file_name().to_str() != Some(cur) && !session_dir_is_live(&e.path()) {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
@@ -1479,6 +1693,16 @@ fn cleanup_session_temp() {
     let _ = std::fs::remove_dir_all(session_temp_dir());
 }
 
+fn cleanup_temp_copy(temp: &Path) {
+    if let Some(parent) = temp.parent() {
+        if parent.starts_with(session_temp_dir()) {
+            let _ = std::fs::remove_dir_all(parent);
+            return;
+        }
+    }
+    let _ = std::fs::remove_file(temp);
+}
+
 fn file_mtime_ms(p: &std::path::Path) -> i64 {
     std::fs::metadata(p)
         .and_then(|m| m.modified())
@@ -1486,6 +1710,37 @@ fn file_mtime_ms(p: &std::path::Path) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(windows)]
+struct EditProcess {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl EditProcess {
+    fn new(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<Self> {
+        if handle.is_null() {
+            None
+        } else {
+            Some(Self { handle })
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        unsafe { WaitForSingleObject(self.handle, 0) == WAIT_OBJECT_0 }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for EditProcess {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.handle);
+        }
+    }
 }
 
 /// A remote file opened for editing in **temp mode**: the temp copy is watched
@@ -1503,7 +1758,10 @@ struct RemoteEdit {
     /// Before overwriting, we re-check the remote; if it advanced past this,
     /// it changed underneath us → conflict, don't clobber. 0 = unknown (skip).
     remote_known_mtime: i64,
+    dirty: bool,
     uploading: bool,
+    #[cfg(windows)]
+    process: Option<EditProcess>,
 }
 
 /// Outcome of a save-back upload attempt (computed off-thread).
@@ -1523,7 +1781,19 @@ fn rjoin(root: &str, name: &str) -> String {
 
 /// Stream one local file to `dest` on the backend (creating parent dirs). The
 /// `flush()` is essential — the Drive backend uploads on flush.
-fn upload_file(be: &dyn crate::vfs::Backend, src: &std::path::Path, dest: &str) -> Result<(), String> {
+fn remote_temp_path(dest: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{dest}.se-upload-{}-{nanos:x}.part", std::process::id())
+}
+
+fn upload_file_direct(
+    be: &dyn crate::vfs::Backend,
+    src: &std::path::Path,
+    dest: &str,
+) -> Result<(), String> {
     use std::io::Write;
     if let Some((parent, _)) = dest.rsplit_once('/') {
         let _ = be.mkdir_all(parent);
@@ -1532,6 +1802,22 @@ fn upload_file(be: &dyn crate::vfs::Backend, src: &std::path::Path, dest: &str) 
     let mut w = be.open_write(dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut w).map_err(|e| e.to_string())?;
     w.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn upload_file(be: &dyn crate::vfs::Backend, src: &std::path::Path, dest: &str) -> Result<(), String> {
+    if !be.rename_overwrites() {
+        return upload_file_direct(be, src, dest);
+    }
+    let tmp = remote_temp_path(dest);
+    if let Err(e) = upload_file_direct(be, src, &tmp) {
+        let _ = be.remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = be.rename(&tmp, dest) {
+        let _ = be.remove_file(&tmp);
+        return Err(e.to_string());
+    }
     Ok(())
 }
 
@@ -1660,8 +1946,8 @@ fn is_zip_name(name: &str) -> bool {
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
-        // Clean up open/edit temp copies left by previous runs (crash-safe net).
-        sweep_stale_temp();
+        // Clean up dead-session temp copies and mark this live session.
+        init_temp_session();
         // Keep the background sync service alive across startup and self-update:
         // if it's registered to autostart but isn't beating, (re)spawn it. After a
         // self-update, also cycle a stale daemon so it picks up the new exe.
@@ -4637,6 +4923,39 @@ impl App {
         self.open_path(path);
     }
 
+    #[cfg(windows)]
+    fn launch_for_edit(&self, path: &str, mode: OpenMode) -> Option<EditProcess> {
+        use windows_sys::Win32::UI::Shell::{
+            ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        };
+        let p = path.replace('/', "\\");
+        let file: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
+        let verb: Option<Vec<u16>> = match mode {
+            OpenMode::Default => None,
+            OpenMode::With => Some("openas".encode_utf16().chain(Some(0)).collect()),
+        };
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.lpVerb = verb.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+        info.lpFile = file.as_ptr();
+        info.nShow = 1; // SW_SHOWNORMAL
+        let ok = unsafe { ShellExecuteExW(&mut info) };
+        if ok == 0 {
+            None
+        } else {
+            EditProcess::new(info.hProcess)
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn launch_for_edit(&self, path: &str, mode: OpenMode) {
+        match mode {
+            OpenMode::Default => self.open_path(path),
+            OpenMode::With => self.open_with_path(path),
+        }
+    }
+
     fn open_selection(&mut self) {
         let targets: Vec<(String, String, bool, Option<String>)> = self
             .entries
@@ -5061,20 +5380,27 @@ impl App {
         // default editor. `download_name` gives Google-Docs files the right
         // extension (.docx/…) so the editor opens them correctly.
         let local_name = backend.download_name(&path, &name);
+        if self.remote_edits.len() >= 50 {
+            self.error_msg = Some(
+                "Zu viele offene Remote-Dateien: bitte einige Editor-Fenster schliessen.".to_string(),
+            );
+            return;
+        }
         let dest = open_temp_path(&local_name);
         self.remote_edits.retain(|e| e.temp != dest);
-        if self.remote_edits.len() < 50 {
-            self.remote_edits.push(RemoteEdit {
-                temp: dest.clone(),
-                backend: backend.clone(),
-                remote_path: path.clone(),
-                name: name.clone(),
-                baseline_mtime: i64::MAX, // real value set once downloaded
-                seen_mtime: 0,
-                remote_known_mtime: 0, // captured after download (below)
-                uploading: false,
-            });
-        }
+        self.remote_edits.push(RemoteEdit {
+            temp: dest.clone(),
+            backend: backend.clone(),
+            remote_path: path.clone(),
+            name: name.clone(),
+            baseline_mtime: i64::MAX, // real value set once downloaded
+            seen_mtime: 0,
+            remote_known_mtime: 0, // captured after download (below)
+            dirty: false,
+            uploading: false,
+            #[cfg(windows)]
+            process: None,
+        });
         let (tx, rx) = unbounded();
         self.notice = Some((
             format!("⬇ Öffne „{}“ (Speichern landet auf dem Remote)…", name),
@@ -5093,7 +5419,7 @@ impl App {
                 let _ = tx.send(res);
             })
             .ok();
-        self.file_open_rx.push((rx, mode));
+        self.file_open_rx.push((rx, mode, dest));
     }
 
     /// Open a local `.zip` as a browsable, read-only "remote" so it navigates
@@ -5173,29 +5499,38 @@ impl App {
         }
         let mut pending = Vec::new();
         let mut to_open = Vec::new();
-        for (rx, mode) in std::mem::take(&mut self.file_open_rx) {
+        for (rx, mode, temp) in std::mem::take(&mut self.file_open_rx) {
             match rx.try_recv() {
-                Ok(Ok((p, remote_mtime))) => to_open.push((p, remote_mtime, mode)),
-                Ok(Err(e)) => self.error_msg = Some(format!("Datei öffnen: {}", e)),
-                Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, mode)),
+                Ok(Ok((p, remote_mtime))) => to_open.push((p, remote_mtime, mode, temp)),
+                Ok(Err(e)) => {
+                    self.remote_edits.retain(|edit| edit.temp != temp);
+                    cleanup_temp_copy(&temp);
+                    self.error_msg = Some(format!("Datei oeffnen: {}", e));
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, mode, temp)),
                 Err(_) => {}
             }
         }
         self.file_open_rx = pending;
-        for (p, remote_mtime, mode) in to_open {
+        for (p, remote_mtime, mode, _temp) in to_open {
             // Baseline the edit-watch to the freshly downloaded content so we
             // don't immediately re-upload it; only the user's saves count. Record
             // the remote's mtime so save-back can detect a concurrent change.
             let pb = PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR));
             let m = file_mtime_ms(&pb);
+            #[cfg(windows)]
+            let process = self.launch_for_edit(&p, mode);
+            #[cfg(not(windows))]
+            self.launch_for_edit(&p, mode);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
                 e.remote_known_mtime = remote_mtime;
-            }
-            match mode {
-                OpenMode::Default => self.open_path(&p),
-                OpenMode::With => self.open_with_path(&p),
+                e.dirty = false;
+                #[cfg(windows)]
+                {
+                    e.process = process;
+                }
             }
         }
     }
@@ -5211,9 +5546,14 @@ impl App {
         }
         self.last_edit_poll = std::time::Instant::now();
         let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String, i64)> = Vec::new();
+        let mut cleanup_done: Vec<PathBuf> = Vec::new();
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
             if m == 0 {
+                #[cfg(windows)]
+                if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
+                    cleanup_done.push(e.temp.clone());
+                }
                 continue;
             }
             // Sentinel: first time we actually see the file (e.g. after CfAPI
@@ -5222,11 +5562,17 @@ impl App {
             if e.baseline_mtime == i64::MAX {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
+                e.dirty = false;
                 continue;
             }
             if m == e.baseline_mtime {
+                #[cfg(windows)]
+                if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
+                    cleanup_done.push(e.temp.clone());
+                }
                 continue;
             }
+            e.dirty = true;
             if m == e.seen_mtime {
                 e.uploading = true;
                 e.baseline_mtime = m;
@@ -5240,6 +5586,13 @@ impl App {
             } else {
                 e.seen_mtime = m;
             }
+        }
+        if !cleanup_done.is_empty() {
+            for temp in &cleanup_done {
+                cleanup_temp_copy(temp);
+            }
+            self.remote_edits
+                .retain(|e| !cleanup_done.iter().any(|temp| temp == &e.temp));
         }
         for (temp, be, remote, name, known) in launch {
             let (tx, rx) = unbounded();
@@ -5284,6 +5637,7 @@ impl App {
                         match res {
                             SaveResult::Ok(new_remote) => {
                                 e.remote_known_mtime = new_remote;
+                                e.dirty = false;
                                 self.notice = Some((
                                     format!("✓ „{}“ auf dem Remote gespeichert", e.name),
                                     std::time::Instant::now(),
@@ -5297,6 +5651,7 @@ impl App {
                                 e.remote_known_mtime = remote_mtime;
                                 e.baseline_mtime = file_mtime_ms(&temp);
                                 e.seen_mtime = e.baseline_mtime;
+                                e.dirty = true;
                                 self.error_msg = Some(format!(
                                     "Konflikt „{}“: Die Remote-Datei wurde inzwischen geändert — \
                                      deine lokale Änderung wurde NICHT hochgeladen (kein Überschreiben). \
@@ -5307,6 +5662,7 @@ impl App {
                             }
                             SaveResult::Failed(err) => {
                                 e.baseline_mtime = 0; // let a later save retry
+                                e.dirty = true;
                                 self.error_msg =
                                     Some(format!("Remote speichern „{}“: {}", e.name, err));
                             }
@@ -6910,7 +7266,7 @@ impl App {
                         let r = download_to(&*src, p, &tmp)
                             .and_then(|_| upload_file(&*tgt, &tmp, &dest))
                             .map(|_| ());
-                        let _ = std::fs::remove_file(&tmp);
+                        cleanup_temp_copy(&tmp);
                         r.map_err(std::io::Error::other)
                     };
                     match r {
@@ -6988,9 +7344,11 @@ impl App {
                     self.drag_out_started = true;
                     self.drag_active = false;
                     let files = std::mem::take(&mut self.drag_files);
+                    let mut cleanup_after_drag = false;
                     // Remote source → materialize to temp copies first (Explorer
                     // needs real local paths). May briefly block on the download.
                     let files = if let Some(be) = self.drag_src.take() {
+                        cleanup_after_drag = true;
                         files
                             .iter()
                             .filter_map(|p| {
@@ -7002,6 +7360,11 @@ impl App {
                         files
                     };
                     crate::dragout::drag_out(&files);
+                    if cleanup_after_drag {
+                        for f in &files {
+                            cleanup_temp_copy(Path::new(f));
+                        }
+                    }
                     self.rescan();
                     return;
                 }
@@ -12562,5 +12925,31 @@ mod omni_tests {
         let got = expand_omni_path("~/docs", home, "");
         assert!(got.ends_with("docs"));
         assert!(got.starts_with("/home/u"));
+    }
+
+    #[test]
+    fn temp_names_are_sanitized() {
+        assert_eq!(safe_temp_name("a/b\\c:d.txt"), "a_b_c_d.txt");
+        assert_eq!(safe_temp_name("   "), "datei");
+    }
+
+    #[test]
+    fn download_part_is_sibling_not_final() {
+        let dest = PathBuf::from("C:/tmp/report.txt");
+        let part = download_part_path(&dest);
+        assert_eq!(part.parent(), dest.parent());
+        assert_ne!(part.file_name(), dest.file_name());
+        assert!(part
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("smart-explorer.part"));
+    }
+
+    #[test]
+    fn remote_temp_path_stays_sibling() {
+        let tmp = remote_temp_path("/remote/dir/report.txt");
+        assert!(tmp.starts_with("/remote/dir/report.txt.se-upload-"));
+        assert!(tmp.ends_with(".part"));
     }
 }

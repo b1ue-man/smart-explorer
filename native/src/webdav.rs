@@ -381,6 +381,10 @@ impl Backend for WebdavBackend {
         2 // HTTP keep-alive; a couple of concurrent requests are fine
     }
 
+    fn rename_overwrites(&self) -> bool {
+        true
+    }
+
     fn provides_content_hash(&self) -> bool {
         // Nextcloud/ownCloud expose an MD5 via the `oc:checksums` PROPFIND prop
         // (parsed into `content_md5`) — a free content hash, no download. Servers
