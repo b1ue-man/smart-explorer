@@ -35,6 +35,8 @@
 Unicode true
 Name "${APP_NAME} ${VERSION}"
 OutFile "../release-native/Smart Explorer Setup ${VERSION}.exe"
+Icon "${__FILEDIR__}\assets\smart-explorer-icon.ico"
+UninstallIcon "${__FILEDIR__}\assets\smart-explorer-icon.ico"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\Smart Explorer"
 SetCompressor /SOLID lzma

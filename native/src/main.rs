@@ -102,6 +102,7 @@ fn main() -> eframe::Result<()> {
             // the restore (un-maximized) size.
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([900.0, 600.0])
+            .with_icon(window_icon())
             .with_title("Smart Explorer"),
         ..Default::default()
     };
@@ -118,6 +119,14 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app::App::new(just_updated, initial_path)))
         }),
     )
+}
+
+fn window_icon() -> eframe::egui::IconData {
+    eframe::egui::IconData {
+        rgba: include_bytes!("../assets/smart-explorer-icon-256.rgba").to_vec(),
+        width: 256,
+        height: 256,
+    }
 }
 
 /// Capture panics from any thread to %APPDATA%\smart_explorer\crash.log so we
