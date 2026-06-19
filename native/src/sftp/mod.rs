@@ -1,0 +1,28 @@
+//! SFTP backend (`russh` + `russh-sftp`) implementing `vfs::Backend`.
+//!
+//! Auth: username/password OR keyfile (+ optional passphrase). Host keys use
+//! trust-on-first-use against `%APPDATA%\smart_explorer\known_hosts_sftp.txt`
+//! (accept + persist on first sight, reject on later mismatch).
+//!
+//! Async↔sync bridge: a private multi-threaded tokio runtime owned by the
+//! backend. A worker thread continuously drives russh's background connection
+//! task, while each blocking `Backend` method runs `rt.block_on(...)`. File I/O
+//! is adapted to `std::io::{Read,Write}` by `block_on`-ing the tokio async reads
+//! in chunks (no `SyncIoBridge` — it conflicts with this model). This keeps
+//! scanner / copy / UI fully synchronous; see docs/REMOTE_LAYER_PLAN.md §1,§3.
+
+mod backend;
+mod config;
+mod io_adapters;
+mod known_hosts;
+mod metadata;
+mod session;
+mod url;
+
+pub use backend::SftpBackend;
+pub use config::{SftpAuth, SftpConfig};
+pub use url::backend_from_url;
+
+fn io_err<E: std::fmt::Display>(e: E) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+}
