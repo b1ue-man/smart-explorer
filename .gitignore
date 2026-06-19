@@ -2,6 +2,11 @@
 native/target/
 native/explorer-command/target/
 
+# Graphify project graph lives at /graphify-out; avoid accidental nested runs.
+native/src/graphify-out/
+.codex/
+graphify-out/cache/
+
 # Built binaries & generated installer artifacts
 *.exe
 release-native/Smart Explorer*.exe
