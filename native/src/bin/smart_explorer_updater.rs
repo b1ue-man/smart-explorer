@@ -92,7 +92,7 @@ fn apply_update(args: ApplyArgs) -> Result<(), String> {
     }
     if !replaced {
         let msg = format!(
-            "Smart Explorer.exe konnte nicht ersetzt werden: {}",
+            "Smart Explorer konnte nicht ersetzt werden: {}",
             last_err.unwrap_or_else(|| "unbekannter Fehler".to_string())
         );
         if !args.elevated && last_needs_elevation {
@@ -130,9 +130,20 @@ fn arg_value(raw: &[String], key: &str) -> Option<String> {
 }
 
 fn appdata_dir() -> PathBuf {
+    #[cfg(windows)]
     let dir = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(target_os = "linux")]
+    let dir = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local")
+                .join("share")
+        });
     let app = dir.join("smart_explorer");
     let _ = std::fs::create_dir_all(&app);
     app

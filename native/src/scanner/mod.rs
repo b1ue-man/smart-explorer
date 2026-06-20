@@ -5,8 +5,8 @@ mod os;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod platform;
-#[cfg(not(windows))]
-#[path = "os/non_windows.rs"]
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os.rs"]
 mod platform;
 
 pub use os::*;
