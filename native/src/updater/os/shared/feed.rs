@@ -7,6 +7,66 @@ use super::core::{parse_sha256_file, parse_ver, staged_payload_path, verify_sha2
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 
+struct PayloadSpec {
+    local_names: &'static [&'static str],
+    http_names: &'static [&'static str],
+    hash_name: &'static str,
+}
+
+#[cfg(windows)]
+fn app_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer.exe", "Smart Explorer.exe"],
+        http_names: &["smart_explorer.exe", "Smart%20Explorer.exe"],
+        hash_name: "smart_explorer.exe.sha256",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn app_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer", "Smart Explorer"],
+        http_names: &["smart_explorer", "Smart%20Explorer"],
+        hash_name: "smart_explorer.sha256",
+    }
+}
+
+#[cfg(windows)]
+fn updater_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer_updater.exe", "Smart Explorer Updater.exe"],
+        http_names: &[
+            "smart_explorer_updater.exe",
+            "Smart%20Explorer%20Updater.exe",
+        ],
+        hash_name: "smart_explorer_updater.exe.sha256",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn updater_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer_updater", "Smart Explorer Updater"],
+        http_names: &["smart_explorer_updater", "Smart%20Explorer%20Updater"],
+        hash_name: "smart_explorer_updater.sha256",
+    }
+}
+
+fn app_release_asset_name() -> &'static str {
+    app_payload_spec().local_names[0]
+}
+
+fn staged_download_name(prefix: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{prefix}.exe")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        prefix.to_string()
+    }
+}
+
 pub(super) enum Feed {
     Local(PathBuf),
     Http(String), // base URL, no trailing slash
@@ -33,23 +93,22 @@ impl Feed {
     /// Stage the new app binary as a local file. Local feeds are copied too, so
     /// a detached helper can delete the staging file without touching the feed.
     pub(super) fn fetch_exe(&self, version: &str) -> Result<PathBuf, String> {
+        let spec = app_payload_spec();
         self.fetch_payload(
-            &["smart_explorer.exe", "Smart Explorer.exe"],
-            &["smart_explorer.exe", "Smart%20Explorer.exe"],
-            "smart_explorer.exe.sha256",
+            spec.local_names,
+            spec.http_names,
+            spec.hash_name,
             "update_download",
             version,
         )
     }
 
     pub(super) fn fetch_updater_exe(&self, version: &str) -> Result<PathBuf, String> {
+        let spec = updater_payload_spec();
         self.fetch_payload(
-            &["smart_explorer_updater.exe", "Smart Explorer Updater.exe"],
-            &[
-                "smart_explorer_updater.exe",
-                "Smart%20Explorer%20Updater.exe",
-            ],
-            "smart_explorer_updater.exe.sha256",
+            spec.local_names,
+            spec.http_names,
+            spec.hash_name,
             "updater_download",
             version,
         )
@@ -274,7 +333,7 @@ pub fn list_remote_versions() -> Vec<String> {
                 .and_then(|v| v.as_array())
                 .map(|assets| {
                     assets.iter().any(|asset| {
-                        asset.get("name").and_then(|v| v.as_str()) == Some("smart_explorer.exe")
+                        asset.get("name").and_then(|v| v.as_str()) == Some(app_release_asset_name())
                     })
                 })
                 .unwrap_or(true);
@@ -317,13 +376,14 @@ pub fn download_version(version: &str) -> Result<PathBuf, String> {
     let (owner, repo) =
         github_repo(&raw).ok_or("Frühere Versionen sind nur über einen GitHub-Feed abrufbar")?;
     let url = format!(
-        "https://github.com/{owner}/{repo}/releases/download/v{version}/smart_explorer.exe"
+        "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
+        app_release_asset_name()
     );
-    let dest = appdata_dir().join("rollback_download.exe");
+    let dest = appdata_dir().join(staged_download_name("rollback_download"));
     let _ = std::fs::remove_file(&dest);
     if let Err(release_err) = http_download(&url, &dest) {
         let branch_url = format!(
-            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/smart_explorer.exe"
+            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/{}", app_release_asset_name()
         );
         http_download(&branch_url, &dest).map_err(|branch_err| {
             format!(
