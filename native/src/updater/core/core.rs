@@ -3,6 +3,15 @@ use std::path::{Path, PathBuf};
 
 use super::config::appdata_dir;
 
+#[cfg(windows)]
+fn payload_suffix() -> &'static str {
+    ".exe"
+}
+#[cfg(target_os = "linux")]
+fn payload_suffix() -> &'static str {
+    ""
+}
+
 pub(super) fn staged_payload_path(prefix: &str, version: &str) -> PathBuf {
     let safe_version: String = version
         .chars()
@@ -18,12 +27,14 @@ pub(super) fn staged_payload_path(prefix: &str, version: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let suffix = payload_suffix();
     appdata_dir().join(format!(
-        "{}_{}_{}_{}.exe",
+        "{}_{}_{}_{}{}",
         prefix,
         safe_version,
         std::process::id(),
-        nanos
+        nanos,
+        suffix
     ))
 }
 

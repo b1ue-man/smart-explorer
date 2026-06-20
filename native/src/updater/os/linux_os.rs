@@ -5,14 +5,14 @@ use super::archive::{archive_binary, exe_stem, new_old_binary_path, resume_auto_
 use super::config::{last_applied_path, updater_error_path};
 use super::feed::Feed;
 
-const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
+const INSTALLED_UPDATER: &str = "smart_explorer_updater";
 
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
 fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
     let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let stem = exe_stem(&cur_exe);
-    let pending = cur_exe.with_file_name(format!("{}_update_pending.exe", stem));
+    let pending = cur_exe.with_file_name(format!("{}_update_pending", stem));
     let old = new_old_binary_path(&cur_exe);
 
     std::fs::copy(new_exe, &pending).map_err(|e| format!("Kopieren fehlgeschlagen: {}", e))?;
@@ -43,7 +43,7 @@ fn installed_updater_path() -> Result<PathBuf, String> {
     let dir = cur
         .parent()
         .ok_or_else(|| format!("Installationsordner unbekannt: {}", cur.display()))?;
-    Ok(dir.join(INSTALLED_UPDATER_EXE))
+    Ok(dir.join(INSTALLED_UPDATER))
 }
 
 fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), String> {

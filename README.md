@@ -43,7 +43,13 @@ angezeigt). Keine Rechtsberatung.
 
 ## ⬇️ Installieren
 
-Kein Admin, kein Setup-Zwang. Zwei Wege:
+**Linux desktop (one line):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
+```
+
+**Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
 1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.75.exe`](release-native/Smart%20Explorer%20Setup%200.5.75.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
