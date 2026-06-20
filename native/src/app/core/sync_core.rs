@@ -39,10 +39,13 @@ impl App {
             None => return,
         };
         match msg {
-            crate::sync::SyncMsg::Progress(_) => {}
+            crate::sync::SyncMsg::Progress(p) => {
+                self.sync_progress = Some(p);
+            }
             crate::sync::SyncMsg::Done(r) => {
                 self.sync_rx = None;
                 self.sync_running = false;
+                self.sync_progress = None;
                 self.sync_cancel = None;
                 if r.stats.errors > 0 {
                     self.error_msg = Some(format!(

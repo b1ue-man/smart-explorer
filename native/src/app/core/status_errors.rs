@@ -127,6 +127,18 @@ impl App {
                     Color32::from_gray(140),
                     format!("v{}", env!("CARGO_PKG_VERSION")),
                 );
+                if let Some(p) = self.transfer_progress.as_ref().filter(|p| !p.done) {
+                    ui_transfer_chip(ui, p);
+                }
+                if let Some(p) = self.copy_progress.as_ref().filter(|p| !p.done) {
+                    ui_copy_chip(ui, p);
+                }
+                if self.sync_running {
+                    ui_sync_chip(ui, self.sync_progress.as_ref());
+                }
+                if self.bisync_running {
+                    ui.colored_label(Color32::from_rgb(160, 190, 230), "2-Wege-Sync laeuft...");
+                }
                 if let Some((ref msg, ts)) = self.notice {
                     if ts.elapsed().as_secs() < 6 {
                         ui.colored_label(Color32::from_rgb(120, 200, 130), msg.clone());
@@ -223,5 +235,117 @@ impl App {
         if close {
             self.show_errors_dialog = false;
         }
+    }
+}
+
+fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress) {
+    let title = if p.label.trim().is_empty() {
+        p.kind.label().to_string()
+    } else if p.label == p.kind.label() {
+        p.label.clone()
+    } else {
+        format!("{}: {}", p.kind.label(), p.label)
+    };
+    let detail = transfer_detail(
+        p.bytes_done,
+        p.bytes_total,
+        p.files_done,
+        p.files_total,
+        p.elapsed_ms,
+        p.errors,
+    );
+    ui_progress_chip(ui, &format!("{title}: {detail}"), Some(p.fraction()));
+}
+
+fn ui_copy_chip(ui: &mut egui::Ui, p: &CopyProgress) {
+    let detail = transfer_detail(
+        p.bytes_done,
+        p.bytes_total,
+        p.files_done,
+        p.files_total,
+        p.elapsed_ms,
+        p.errors,
+    );
+    ui_progress_chip(ui, &format!("Kopie: {detail}"), Some(copy_fraction(p)));
+}
+
+fn ui_sync_chip(ui: &mut egui::Ui, progress: Option<&crate::sync::SyncProgress>) {
+    if let Some(p) = progress {
+        let rate = rate_text(p.stats.bytes, p.elapsed_ms);
+        let detail = format!(
+            "{} kopiert, {} geloescht, {} | {}",
+            p.stats.copied,
+            p.stats.deleted,
+            format_bytes(p.stats.bytes),
+            rate
+        );
+        ui_progress_chip(ui, &format!("Sync: {detail}"), None);
+    } else {
+        ui_progress_chip(ui, "Sync laeuft...", None);
+    }
+}
+
+fn ui_progress_chip(ui: &mut egui::Ui, text: &str, fraction: Option<f32>) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(280.0, 18.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let bar = match fraction {
+                Some(fraction) => egui::ProgressBar::new(fraction.clamp(0.0, 1.0)),
+                None => egui::ProgressBar::new(0.35).animate(true),
+            };
+            ui.add(bar.desired_width(76.0).desired_height(6.0));
+            ui.colored_label(Color32::from_gray(160), RichText::new(text).small());
+        },
+    );
+}
+
+fn transfer_detail(
+    bytes_done: u64,
+    bytes_total: u64,
+    files_done: u64,
+    files_total: u64,
+    elapsed_ms: u64,
+    errors: u64,
+) -> String {
+    let bytes = if bytes_total > 0 {
+        format!("{}/{}", format_bytes(bytes_done), format_bytes(bytes_total))
+    } else {
+        format_bytes(bytes_done)
+    };
+    let files = if files_total > 0 {
+        format!("{} von {}", files_done, files_total)
+    } else {
+        format!("{} Dateien", files_done)
+    };
+    let err = if errors > 0 {
+        format!(" | {} Fehler", errors)
+    } else {
+        String::new()
+    };
+    format!(
+        "{} | {} | {}{}",
+        bytes,
+        rate_text(bytes_done, elapsed_ms),
+        files,
+        err
+    )
+}
+
+fn rate_text(bytes_done: u64, elapsed_ms: u64) -> String {
+    if elapsed_ms == 0 {
+        return "0 B/s".to_string();
+    }
+    let bps = (bytes_done as f64 / elapsed_ms as f64 * 1000.0).max(0.0);
+    format!("{}/s", format_bytes(bps as u64))
+}
+
+fn copy_fraction(p: &CopyProgress) -> f32 {
+    if p.bytes_total > 0 {
+        (p.bytes_done as f32 / p.bytes_total as f32).clamp(0.0, 1.0)
+    } else if p.files_total > 0 {
+        (p.files_done as f32 / p.files_total as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }

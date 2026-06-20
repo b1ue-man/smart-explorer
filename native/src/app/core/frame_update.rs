@@ -176,6 +176,8 @@ impl App {
         if self.scan_running
             || self.tabs.iter().any(|t| t.scan_running)
             || matches!(&self.copy_progress, Some(p) if !p.done)
+            || self.sync_running
+            || self.bisync_running
             || self.index_building
             || self.band_active
             || !self.file_open_rx.is_empty()

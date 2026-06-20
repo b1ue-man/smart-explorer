@@ -374,12 +374,30 @@ impl App {
     }
 
     pub(in crate::app) fn drain_upload(&mut self) {
-        let res = match self.upload_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(r) => r,
+        let rx = match self.upload_rx.as_ref() {
+            Some(rx) => rx,
+            None => return,
+        };
+        let mut done: Option<(TransferProgress, Vec<String>)> = None;
+        for _ in 0..16 {
+            match rx.try_recv() {
+                Ok(TransferMsg::Progress(progress)) => {
+                    self.transfer_progress = Some(progress);
+                }
+                Ok(TransferMsg::Done { progress, errors }) => {
+                    self.transfer_progress = Some(progress.clone());
+                    done = Some((progress, errors));
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        let (progress, errors) = match done {
+            Some(done) => done,
             None => return,
         };
         self.upload_rx = None;
-        let (copied, errors) = res;
+        self.transfer_progress = None;
         if !errors.is_empty() {
             self.error_msg = Some(format!(
                 "Übertragung: {} Fehler (z. B. {})",
@@ -388,7 +406,7 @@ impl App {
             ));
         }
         self.notice = Some((
-            format!("✓ {} übertragen", copied),
+            format!("✓ {} übertragen", progress.files_done),
             std::time::Instant::now(),
         ));
         // Show the newly uploaded files.

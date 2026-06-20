@@ -358,102 +358,496 @@ pub(in crate::app) fn upload_file(
 /// `copy_file` (server-local + instant on the agent; SFTP streams through the
 /// client as a fallback), directories are recreated and walked. Used for
 /// same-connection remote→remote copy/move so nothing round-trips via a temp.
-pub(in crate::app) fn copy_remote_tree(
-    be: &dyn crate::vfs::Backend,
-    src: &str,
-    dst: &str,
-) -> std::io::Result<()> {
-    let m = be.stat(src)?;
-    if m.is_dir {
-        be.mkdir_all(dst)?;
-        for e in be.list_dir(src)? {
-            let cs = format!("{}/{}", src.trim_end_matches('/'), e.name);
-            let cd = format!("{}/{}", dst.trim_end_matches('/'), e.name);
-            copy_remote_tree(be, &cs, &cd)?;
-        }
-        Ok(())
-    } else {
-        if let Some((parent, _)) = dst.rsplit_once('/') {
-            let _ = be.mkdir_all(parent);
-        }
-        be.copy_file(src, dst).map(|_| ())
+struct UploadEntry {
+    src: PathBuf,
+    rel: String,
+    size: u64,
+}
+
+struct RemoteFileEntry {
+    src: String,
+    rel: String,
+    size: u64,
+}
+
+fn send_transfer_progress(
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    progress: &TransferProgress,
+    last: &mut std::time::Instant,
+    force: bool,
+) {
+    if force || last.elapsed().as_millis() >= 80 {
+        let _ = tx.send(TransferMsg::Progress(progress.clone()));
+        *last = std::time::Instant::now();
     }
 }
 
-pub(in crate::app) fn upload_dir(
-    be: &dyn crate::vfs::Backend,
-    dir: &std::path::Path,
-    dest: &str,
-    copied: &mut u64,
+fn collect_upload_entries(
+    path: &Path,
+    rel: String,
+    files: &mut Vec<UploadEntry>,
+    dirs: &mut Vec<String>,
     errors: &mut Vec<String>,
 ) {
-    if let Err(e) = be.mkdir_all(dest) {
-        errors.push(format!("{}: {}", dest, e));
-        return;
-    }
-    let rd = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
         Err(e) => {
-            errors.push(format!("{}: {}", dir.display(), e));
+            errors.push(format!("{}: {}", path.display(), e));
             return;
         }
     };
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child = rjoin(dest, &name);
-        let path = entry.path();
-        if path.is_dir() {
-            upload_dir(be, &path, &child, copied, errors);
-        } else {
-            match upload_file(be, &path, &child) {
-                Ok(_) => *copied += 1,
-                Err(e) => errors.push(format!("{}: {}", name, e)),
+    if meta.is_dir() {
+        dirs.push(rel.clone());
+        let rd = match std::fs::read_dir(path) {
+            Ok(rd) => rd,
+            Err(e) => {
+                errors.push(format!("{}: {}", path.display(), e));
+                return;
+            }
+        };
+        for entry in rd {
+            match entry {
+                Ok(entry) => {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let child_rel = if rel.is_empty() {
+                        name
+                    } else {
+                        format!("{}/{}", rel, name)
+                    };
+                    collect_upload_entries(&entry.path(), child_rel, files, dirs, errors);
+                }
+                Err(e) => errors.push(format!("{}: {}", path.display(), e)),
             }
         }
+    } else {
+        files.push(UploadEntry {
+            src: path.to_path_buf(),
+            rel,
+            size: meta.len(),
+        });
     }
 }
 
-/// Upload a set of local paths (files/folders) into `dest_root` on the backend.
-/// Returns (files uploaded, error messages). Conflicts overwrite by name.
-pub(in crate::app) fn upload_paths(
+fn upload_file_direct_progress(
+    be: &dyn crate::vfs::Backend,
+    src: &Path,
+    dest: &str,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    progress: &mut TransferProgress,
+    last: &mut std::time::Instant,
+) -> Result<(), String> {
+    use std::io::{Read, Write};
+    if let Some((parent, _)) = dest.rsplit_once('/') {
+        let _ = be.mkdir_all(parent);
+    }
+    let mut r = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut w = be.open_write(dest).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = r.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        w.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        progress.bytes_done = progress.bytes_done.saturating_add(n as u64);
+        send_transfer_progress(tx, progress, last, false);
+    }
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn upload_file_progress(
+    be: &dyn crate::vfs::Backend,
+    src: &Path,
+    dest: &str,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    progress: &mut TransferProgress,
+    last: &mut std::time::Instant,
+) -> Result<(), String> {
+    if !be.rename_overwrites() {
+        return upload_file_direct_progress(be, src, dest, tx, progress, last);
+    }
+    let tmp = remote_temp_path(dest);
+    if let Err(e) = upload_file_direct_progress(be, src, &tmp, tx, progress, last) {
+        let _ = be.remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = be.rename(&tmp, dest) {
+        let _ = be.remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+pub(in crate::app) fn upload_paths_progress(
     be: &dyn crate::vfs::Backend,
     paths: &[String],
     dest_root: &str,
-) -> (u64, Vec<String>) {
-    let mut copied = 0u64;
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
     let mut errors = Vec::new();
     for p in paths {
-        let src = std::path::PathBuf::from(p);
-        let base = src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if base.is_empty() {
+        let src = PathBuf::from(p);
+        let base = match src.file_name().map(|n| n.to_string_lossy().to_string()) {
+            Some(base) if !base.is_empty() => base,
+            _ => continue,
+        };
+        collect_upload_entries(&src, base, &mut files, &mut dirs, &mut errors);
+    }
+
+    dirs.sort();
+    dirs.dedup();
+    let bytes_total = files.iter().map(|f| f.size).sum();
+    let mut progress = TransferProgress::new(
+        TransferKind::Upload,
+        "Lade hoch",
+        files.len() as u64,
+        bytes_total,
+    );
+    progress.errors = errors.len() as u64;
+    let mut last = std::time::Instant::now();
+    send_transfer_progress(tx, &progress, &mut last, true);
+
+    for dir in dirs {
+        if dir.is_empty() {
             continue;
         }
-        let dest = rjoin(dest_root, &base);
-        if src.is_dir() {
-            // Bulk fast path: stream the whole folder in one agent session
-            // (no per-file round-trip). Falls back to the recursive per-file
-            // upload on plain SFTP / on any agent error.
-            if be.supports_bulk_tree() {
-                match be.put_tree(&src, &dest) {
-                    Ok(n) => {
-                        copied += n;
-                        continue;
-                    }
-                    Err(_) => {} // fall through to the per-file walk
-                }
-            }
-            upload_dir(be, &src, &dest, &mut copied, &mut errors);
-        } else {
-            match upload_file(be, &src, &dest) {
-                Ok(_) => copied += 1,
-                Err(e) => errors.push(format!("{}: {}", base, e)),
-            }
+        let dest = rjoin(dest_root, &dir);
+        if let Err(e) = be.mkdir_all(&dest) {
+            errors.push(format!("{}: {}", dest, e));
+            progress.errors = errors.len() as u64;
         }
     }
-    (copied, errors)
+
+    let start = std::time::Instant::now();
+    for file in files {
+        let dest = rjoin(dest_root, &file.rel);
+        progress.current = file.rel.clone();
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+        match upload_file_progress(be, &file.src, &dest, tx, &mut progress, &mut last) {
+            Ok(()) => {
+                progress.files_done = progress.files_done.saturating_add(1);
+            }
+            Err(e) => {
+                errors.push(format!("{}: {}", file.rel, e));
+                progress.errors = errors.len() as u64;
+                progress.files_done = progress.files_done.saturating_add(1);
+                progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+            }
+        }
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+    }
+
+    progress.done = true;
+    progress.elapsed_ms = start.elapsed().as_millis() as u64;
+    progress.errors = errors.len() as u64;
+    let _ = tx.send(TransferMsg::Done { progress, errors });
+}
+
+fn collect_remote_entries(
+    be: &dyn crate::vfs::Backend,
+    src: &str,
+    rel: String,
+    files: &mut Vec<RemoteFileEntry>,
+    dirs: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let meta = match be.stat(src) {
+        Ok(m) => m,
+        Err(e) => {
+            errors.push(format!("{}: {}", src, e));
+            return;
+        }
+    };
+    if meta.is_dir {
+        dirs.push(rel.clone());
+        let entries = match be.list_dir(src) {
+            Ok(entries) => entries,
+            Err(e) => {
+                errors.push(format!("{}: {}", src, e));
+                return;
+            }
+        };
+        for entry in entries {
+            let child_src = format!("{}/{}", src.trim_end_matches('/'), entry.name);
+            let child_rel = if rel.is_empty() {
+                entry.name
+            } else {
+                format!("{}/{}", rel, entry.name)
+            };
+            collect_remote_entries(be, &child_src, child_rel, files, dirs, errors);
+        }
+    } else {
+        files.push(RemoteFileEntry {
+            src: src.to_string(),
+            rel,
+            size: meta.size,
+        });
+    }
+}
+
+fn download_file_progress(
+    be: &dyn crate::vfs::Backend,
+    src: &str,
+    dest: &Path,
+    expected: u64,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    progress: &mut TransferProgress,
+    last: &mut std::time::Instant,
+) -> Result<String, String> {
+    use std::io::{Read, Write};
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    ensure_local_space(dest, expected)?;
+    let part = download_part_path(dest);
+    cleanup_partial(&part);
+    let mut r = be.open_read(src).map_err(|e| e.to_string())?;
+    let mut f = match std::fs::File::create(&part) {
+        Ok(f) => f,
+        Err(e) => {
+            cleanup_partial(&part);
+            return Err(e.to_string());
+        }
+    };
+    let mut copied = 0u64;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                cleanup_partial(&part);
+                return Err(e.to_string());
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        if let Err(e) = f.write_all(&buf[..n]) {
+            cleanup_partial(&part);
+            return Err(e.to_string());
+        }
+        copied = copied.saturating_add(n as u64);
+        progress.bytes_done = progress.bytes_done.saturating_add(n as u64);
+        send_transfer_progress(tx, progress, last, false);
+    }
+    if let Err(e) = f.flush().and_then(|_| f.sync_all()) {
+        cleanup_partial(&part);
+        return Err(e.to_string());
+    }
+    drop(f);
+    if expected != 0 && copied != expected {
+        cleanup_partial(&part);
+        return Err(format!(
+            "Download unvollstaendig: {} von {} Bytes",
+            copied, expected
+        ));
+    }
+    if let Err(e) = replace_file_atomic(&part, dest) {
+        cleanup_partial(&part);
+        return Err(e.to_string());
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
+pub(in crate::app) fn download_paths_progress(
+    be: &dyn crate::vfs::Backend,
+    paths: &[String],
+    dest_local: &str,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    let mut errors = Vec::new();
+    let dest_root = PathBuf::from(dest_local.replace('/', std::path::MAIN_SEPARATOR_STR));
+    for src in paths {
+        let name = src
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("datei");
+        collect_remote_entries(
+            be,
+            src,
+            name.to_string(),
+            &mut files,
+            &mut dirs,
+            &mut errors,
+        );
+    }
+    dirs.sort();
+    dirs.dedup();
+    let bytes_total = files.iter().map(|f| f.size).sum();
+    let mut progress = TransferProgress::new(
+        TransferKind::Download,
+        "Lade herunter",
+        files.len() as u64,
+        bytes_total,
+    );
+    progress.errors = errors.len() as u64;
+    let mut last = std::time::Instant::now();
+    send_transfer_progress(tx, &progress, &mut last, true);
+
+    for dir in dirs {
+        let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Err(e) = std::fs::create_dir_all(&local) {
+            errors.push(format!("{}: {}", local.display(), e));
+            progress.errors = errors.len() as u64;
+        }
+    }
+
+    let start = std::time::Instant::now();
+    for file in files {
+        let dest = dest_root.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        progress.current = file.rel.clone();
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+        match download_file_progress(
+            be,
+            &file.src,
+            &dest,
+            file.size,
+            tx,
+            &mut progress,
+            &mut last,
+        ) {
+            Ok(_) => {
+                progress.files_done = progress.files_done.saturating_add(1);
+            }
+            Err(e) => {
+                errors.push(format!("{}: {}", file.rel, e));
+                progress.errors = errors.len() as u64;
+                progress.files_done = progress.files_done.saturating_add(1);
+                progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+            }
+        }
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+    }
+
+    progress.done = true;
+    progress.elapsed_ms = start.elapsed().as_millis() as u64;
+    progress.errors = errors.len() as u64;
+    let _ = tx.send(TransferMsg::Done { progress, errors });
+}
+
+pub(in crate::app) fn copy_remote_paths_progress(
+    src: &dyn crate::vfs::Backend,
+    paths: &[String],
+    tgt: &dyn crate::vfs::Backend,
+    dest_root: &str,
+    same_server: bool,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    let mut errors = Vec::new();
+    for src_path in paths {
+        let name = src_path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("datei");
+        collect_remote_entries(
+            src,
+            src_path,
+            name.to_string(),
+            &mut files,
+            &mut dirs,
+            &mut errors,
+        );
+    }
+    dirs.sort();
+    dirs.dedup();
+    let file_bytes = files.iter().map(|f| f.size).sum::<u64>();
+    let bytes_total = if same_server {
+        file_bytes
+    } else {
+        file_bytes.saturating_mul(2)
+    };
+    let mut progress = TransferProgress::new(
+        TransferKind::RemoteCopy,
+        if same_server {
+            "Kopiere remote"
+        } else {
+            "Uebertrage remote"
+        },
+        files.len() as u64,
+        bytes_total,
+    );
+    progress.errors = errors.len() as u64;
+    let mut last = std::time::Instant::now();
+    send_transfer_progress(tx, &progress, &mut last, true);
+
+    for dir in dirs {
+        let dest = rjoin(dest_root, &dir);
+        if let Err(e) = tgt.mkdir_all(&dest) {
+            errors.push(format!("{}: {}", dest, e));
+            progress.errors = errors.len() as u64;
+        }
+    }
+
+    let start = std::time::Instant::now();
+    for file in files {
+        let dest = rjoin(dest_root, &file.rel);
+        progress.current = file.rel.clone();
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+        let result = if same_server {
+            if let Some((parent, _)) = dest.rsplit_once('/') {
+                let _ = tgt.mkdir_all(parent);
+            }
+            tgt.copy_file(&file.src, &dest)
+                .map(|_| {
+                    progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+                })
+                .map_err(|e| e.to_string())
+        } else {
+            let name = file.rel.rsplit('/').next().unwrap_or("datei");
+            let tmp = open_temp_path(name);
+            let downloaded = download_file_progress(
+                src,
+                &file.src,
+                &tmp,
+                file.size,
+                tx,
+                &mut progress,
+                &mut last,
+            );
+            let uploaded = downloaded
+                .and_then(|_| upload_file_progress(tgt, &tmp, &dest, tx, &mut progress, &mut last));
+            cleanup_temp_copy(&tmp);
+            uploaded
+        };
+        match result {
+            Ok(()) => {
+                progress.files_done = progress.files_done.saturating_add(1);
+            }
+            Err(e) => {
+                errors.push(format!("{}: {}", file.rel, e));
+                progress.errors = errors.len() as u64;
+                progress.files_done = progress.files_done.saturating_add(1);
+                let missing = if same_server {
+                    file.size
+                } else {
+                    file.size.saturating_mul(2)
+                };
+                progress.bytes_done = progress.bytes_done.saturating_add(missing);
+            }
+        }
+        progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        send_transfer_progress(tx, &progress, &mut last, true);
+    }
+
+    progress.done = true;
+    progress.elapsed_ms = start.elapsed().as_millis() as u64;
+    progress.errors = errors.len() as u64;
+    let _ = tx.send(TransferMsg::Done { progress, errors });
 }
 
 /// A bare drive letter like `C:` is **drive-relative** on Windows (it means
