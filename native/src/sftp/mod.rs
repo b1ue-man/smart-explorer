@@ -1,7 +1,7 @@
 //! SFTP backend (`russh` + `russh-sftp`) implementing `vfs::Backend`.
 //!
 //! Auth: username/password OR keyfile (+ optional passphrase). Host keys use
-//! trust-on-first-use against `%APPDATA%\smart_explorer\known_hosts_sftp.txt`
+//! trust-on-first-use against the app data `known_hosts_sftp.txt`
 //! (accept + persist on first sight, reject on later mismatch).
 //!
 //! Async↔sync bridge: a private multi-threaded tokio runtime owned by the

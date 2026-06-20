@@ -21,15 +21,34 @@ echo "Building Smart Explorer $version for $target ..."
 cargo build --release --target "$target" --bin smart_explorer --bin smart_explorer_updater
 exe="target/$target/release/smart_explorer.exe"
 updater="target/$target/release/smart_explorer_updater.exe"
+host_os="$(uname -s 2>/dev/null || echo unknown)"
+linux_exe=""
+linux_updater=""
+if [ "$host_os" = "Linux" ]; then
+  echo "Building Smart Explorer $version for Linux host ..."
+  cargo build --release --bin smart_explorer --bin smart_explorer_updater
+  linux_exe="target/release/smart_explorer"
+  linux_updater="target/release/smart_explorer_updater"
+else
+  echo "Linux desktop feed payloads skipped (requires a Linux host; CI builds them on ubuntu)."
+fi
 
 mkdir -p "$feed"
 # EXE first, version.txt last — clients only see the new version once the new
 # binary is fully published (mirrors publish-update.ps1).
 cp "$exe" "$feed/smart_explorer.exe"
 cp "$updater" "$feed/smart_explorer_updater.exe"
+if [ -n "$linux_exe" ]; then
+  cp "$linux_exe" "$feed/smart_explorer"
+  cp "$linux_updater" "$feed/smart_explorer_updater"
+fi
 ( cd "$feed"
   sha256sum smart_explorer.exe > smart_explorer.exe.sha256
   sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
+  if [ -f smart_explorer ]; then
+    sha256sum smart_explorer > smart_explorer.sha256
+    sha256sum smart_explorer_updater > smart_explorer_updater.sha256
+  fi
 )
 printf '%s\n' "$version" > "$feed/version.txt"
 

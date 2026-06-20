@@ -33,6 +33,7 @@ mod shell_clipboard;
 mod shell_menu;
 #[cfg(windows)]
 mod shell_register;
+mod support_dirs;
 mod sync;
 mod syncjobs;
 mod types;
@@ -129,19 +130,17 @@ fn window_icon() -> eframe::egui::IconData {
     }
 }
 
-/// Capture panics from any thread to %APPDATA%\smart_explorer\crash.log so we
-/// can diagnose silent crashes / freezes after the fact. Each panic appends a
-/// timestamped block. Process still exits afterwards on a main-thread panic.
+/// Capture panics from any thread to the app data crash log so we can diagnose
+/// silent crashes / freezes after the fact. Each panic appends a timestamped
+/// block. Process still exits afterwards on a main-thread panic.
 fn install_panic_logger() {
     use std::io::Write;
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let log_path: std::path::PathBuf = std::env::var_os("APPDATA")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("smart_explorer")
-            .join("crash.log");
-        let _ = std::fs::create_dir_all(log_path.parent().unwrap());
+        let log_path = crate::support_dirs::app_data_file("crash.log");
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

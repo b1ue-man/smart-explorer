@@ -14,12 +14,7 @@ pub(crate) fn now_secs() -> i64 {
 }
 
 fn sync_dir() -> std::path::PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let d = base.join("smart_explorer").join("sync");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::support_dirs::sync_data_dir()
 }
 
 fn heartbeat_path() -> std::path::PathBuf {

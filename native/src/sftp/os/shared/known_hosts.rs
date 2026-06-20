@@ -2,12 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn app_data_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let d = base.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::support_dirs::app_data_dir()
 }
 
 fn known_hosts_path() -> PathBuf {

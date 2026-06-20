@@ -1,12 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub(super) fn appdata_dir() -> PathBuf {
-    let dir = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let app = dir.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&app);
-    app
+    crate::support_dirs::app_data_dir()
 }
 
 fn override_path() -> PathBuf {

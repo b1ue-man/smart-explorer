@@ -144,6 +144,8 @@ fn appdata_dir() -> PathBuf {
                 .join(".local")
                 .join("share")
         });
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let dir = std::env::temp_dir();
     let app = dir.join("smart_explorer");
     let _ = std::fs::create_dir_all(&app);
     app

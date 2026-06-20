@@ -3,12 +3,7 @@ use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, Versioni
 use std::path::PathBuf;
 
 pub(super) fn app_data_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let d = base.join("smart_explorer").join("sync");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::support_dirs::sync_data_dir()
 }
 
 /// Legacy single-file store (positional TSV), kept only for one-time import.

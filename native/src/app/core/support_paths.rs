@@ -43,12 +43,7 @@ pub(in crate::app) struct BisyncCtx {
 /// drive prefix, so this distinguishes "stay on the remote backend" from
 /// "switch back to the local std::fs scanner".
 pub(in crate::app) fn app_data_file(name: &str) -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let d = base.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&d);
-    d.join(name)
+    crate::support_dirs::app_data_file(name)
 }
 
 pub(in crate::app) fn share_server_path() -> PathBuf {
