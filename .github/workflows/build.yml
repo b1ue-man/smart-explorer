@@ -106,13 +106,17 @@ jobs:
           ver="${{ steps.stage.outputs.version }}"
           feed="$(cat ../release-native/update-feed/version.txt 2>/dev/null || echo '')"
           if [ "$feed" != "$ver" ]; then
-            echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh and commit release-native/ before releasing."
+            echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh on a Linux/WSL host and commit release-native/ before releasing."
             exit 1
           fi
           test -s ../release-native/update-feed/smart_explorer.exe
           test -s ../release-native/update-feed/smart_explorer_updater.exe
           test -s ../release-native/update-feed/smart_explorer.exe.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.exe.sha256
+          test -s ../release-native/update-feed/smart_explorer
+          test -s ../release-native/update-feed/smart_explorer_updater
+          test -s ../release-native/update-feed/smart_explorer.sha256
+          test -s ../release-native/update-feed/smart_explorer_updater.sha256
           echo "Feed matches Cargo.toml ($ver)."
 
       - name: Publish GitHub Release

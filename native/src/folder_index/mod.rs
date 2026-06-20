@@ -5,7 +5,7 @@
 // keystroke. Pre-computing paths once gives us O(N) scoring against an
 // in-memory array; for ~500k folders this is ~30-80 ms in release builds.
 //
-// Storage: plain UTF-8 paths, one per line, in %APPDATA%\smart_explorer\
+// Storage: plain UTF-8 paths, one per line, in the app data folder's
 // folder_index.txt. Loading is just split-on-newline.
 
 #[path = "core/filters.rs"]

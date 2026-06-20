@@ -177,21 +177,11 @@ pub(in crate::app) fn drive_info_list(_drives: &[String]) -> Vec<(String, u64, u
 }
 
 pub(in crate::app) fn settings_path() -> PathBuf {
-    let dir = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_home().join(".config"));
-    let app = dir.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&app);
-    app.join("recent.txt")
+    crate::support_dirs::app_data_file("recent.txt")
 }
 
 pub(in crate::app) fn folder_index_path() -> PathBuf {
-    let dir = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_home().join(".config"));
-    let app = dir.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&app);
-    app.join("folder_index.txt")
+    crate::support_dirs::app_data_file("folder_index.txt")
 }
 
 pub(in crate::app) fn load_folder_index_or_empty() -> FolderIndex {
@@ -199,12 +189,7 @@ pub(in crate::app) fn load_folder_index_or_empty() -> FolderIndex {
 }
 
 pub(in crate::app) fn appdata_file(name: &str) -> PathBuf {
-    let dir = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_home().join(".config"));
-    let app = dir.join("smart_explorer");
-    let _ = std::fs::create_dir_all(&app);
-    app.join(name)
+    crate::support_dirs::app_data_file(name)
 }
 
 pub(in crate::app) fn favorites_path() -> PathBuf {

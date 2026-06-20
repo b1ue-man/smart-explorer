@@ -8,12 +8,7 @@ use super::types::{Baseline, Sig, Versioning, VersioningScheme};
 // ── persistence (baseline TSV in appdata, keyed by the two roots) ────────────
 
 fn app_data_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let d = base.join("smart_explorer").join("sync");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::support_dirs::sync_data_dir()
 }
 
 /// Stable id for a sync pair (order-independent), used for the baseline file and

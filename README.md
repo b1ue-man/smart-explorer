@@ -1,6 +1,6 @@
 # Smart Explorer
 
-Schneller nativer Datei-Explorer für Windows (Rust + egui). Filtert Dateien/Ordner
+Schneller nativer Datei-Explorer für Windows und Linux (Rust + egui). Filtert Dateien/Ordner
 über die gesamte Ordnertiefe (Name/Regex/Glob, Größe, Datum via Kalender, Typ),
 kopiert gefiltert mit Strukturerhalt (auch über die Windows-Zwischenablage in den
 Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextmenü.
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.75.exe`](release-native/Smart%20Explorer%20Setup%200.5.75.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.86.exe`](release-native/Smart%20Explorer%20Setup%200.5.86.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
@@ -77,11 +77,13 @@ portablen EXE trägst du sie einmal selbst ein:
 > **→ „Speichern" klicken. Fertig.** Beim nächsten Start (oder „Jetzt prüfen")
 > zieht die App die neueste Version aus dem Git.
 
-Das ist alles. (Technisch lädt die App `version.txt` + `smart_explorer.exe` aus
+Das ist alles. (Technisch lädt die App `version.txt` + den OS-passenden Payload
+(`smart_explorer.exe` auf Windows, `smart_explorer` auf Linux) aus
 [`release-native/update-feed/`](release-native/update-feed) über
 `raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
 Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
-`%APPDATA%\smart_explorer\update_source.txt`.
+`%APPDATA%\smart_explorer\update_source.txt` bzw.
+`$XDG_DATA_HOME/smart_explorer/update_source.txt`.
 
 ## 📋 Für neue Entwickler — zuerst lesen
 
@@ -125,12 +127,14 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 
 1. `version` in `native/Cargo.toml` erhöhen, committen.
 2. Bauen + Artefakte stagen: `native/publish-feed.sh` (Linux/WSL/macOS) bzw.
-   `cd native; .\publish-update.ps1` (Windows) — erzeugt Feed, portable EXE und
-   NSIS-Installer.
+   `cd native; .\publish-update.ps1` (Windows) — erzeugt die Windows-Artefakte.
+   Für einen vollständigen Windows+Linux-Feed `native/publish-feed.sh` auf einem
+   Linux/WSL-Host ausführen.
 3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
 4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released
-   auf `v*`). Hängt EXE + Installer + DLL + `version.txt` an.
+   auf `v*`). Hängt Windows- und Linux-Binaries, Installer, Script, DLL und
+   `version.txt` an.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
@@ -145,6 +149,7 @@ sich automatisch (EXE-Tausch + Neustart).
 
 ## Daten der App
 
-- Einstellungen/Index: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt)
-- Crash-Log: `%APPDATA%\smart_explorer\crash.log`
-- Installation: `%LOCALAPPDATA%\Programs\Smart Explorer\`
+- Windows-Daten: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt)
+- Linux-Daten: `$XDG_DATA_HOME/smart_explorer/` bzw. `~/.local/share/smart_explorer/`
+- Windows-Installation: `%LOCALAPPDATA%\Programs\Smart Explorer\`
+- Linux-Installation: `~/.local/opt/smart-explorer/`

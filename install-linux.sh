@@ -13,6 +13,11 @@ UPDATER_BIN="$INSTALL_DIR/smart_explorer_updater"
 BASE_URL="https://github.com/$REPO/releases/latest/download"
 RAW_BASE_URL="https://raw.githubusercontent.com/$REPO/$REF"
 SRC_ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
+if [ "$REF" = "main" ]; then
+  UPDATE_SOURCE="https://github.com/$REPO"
+else
+  UPDATE_SOURCE="https://github.com/$REPO/tree/$REF"
+fi
 TMP_DIR=""
 DRY_RUN=0
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P || pwd)"
@@ -258,6 +263,11 @@ install_files() {
   run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
   run install -m 755 "$src_dir/smart_explorer" "$APP_BIN"
   run install -m 755 "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: write $INSTALL_DIR/update_source.txt"
+  else
+    printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
+  fi
   run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: fetch icon $RAW_BASE_URL/native/assets/smart-explorer-logo-256.png -> $ICON_DIR/smart-explorer.png"
