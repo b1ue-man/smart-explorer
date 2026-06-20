@@ -13,7 +13,7 @@ UPDATER_BIN="$INSTALL_DIR/smart_explorer_updater"
 BASE_URL="https://github.com/$REPO/releases/latest/download"
 RAW_BASE_URL="https://raw.githubusercontent.com/$REPO/$REF"
 SRC_ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
-TMP_DIR="$(mktemp -d)"
+TMP_DIR=""
 DRY_RUN=0
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P || pwd)"
 
@@ -24,7 +24,9 @@ case "${1:-}" in
 esac
 
 cleanup() {
-  rm -rf "$TMP_DIR"
+  if [ -n "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -43,6 +45,116 @@ run() {
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "smart-explorer install: missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+as_root() {
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: $*"
+    return 0
+  fi
+  if [ "$(id -u 2>/dev/null || printf 1)" = 0 ]; then
+    "$@"
+  elif have_cmd sudo; then
+    sudo "$@"
+  elif have_cmd doas; then
+    doas "$@"
+  elif have_cmd su; then
+    su -c "$(printf '%s ' "$@")"
+  else
+    echo "smart-explorer install: need root privileges to install missing system packages; install sudo/doas or run as root" >&2
+    exit 1
+  fi
+}
+
+missing_pkg_config_libs() {
+  if ! have_cmd pkg-config; then
+    printf '%s\n' pkg-config
+    return 0
+  fi
+  missing=0
+  for lib in x11 xcb xkbcommon xkbcommon-x11 wayland-client egl gl fontconfig; do
+    if ! pkg-config --exists "$lib" >/dev/null 2>&1; then
+      printf '%s\n' "$lib"
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+need_system_packages() {
+  missing=""
+  for cmd in install chmod mkdir mktemp sha256sum tar; do
+    if ! have_cmd "$cmd"; then
+      missing="$missing $cmd"
+    fi
+  done
+  if ! have_cmd curl && ! have_cmd wget; then
+    missing="$missing curl-or-wget"
+  fi
+  # Cargo is only needed when GitHub release assets are unavailable, but release
+  # assets are intentionally optional. Install it up front so this one script can
+  # always fall back to a source build without asking the user to do more work.
+  if ! have_cmd cargo; then
+    missing="$missing cargo"
+  fi
+  libs="$(missing_pkg_config_libs || true)"
+  if [ -n "$libs" ]; then
+    missing="$missing $(printf '%s' "$libs" | tr '\n' ' ')"
+  fi
+  [ -z "$(printf '%s' "$missing" | tr -d ' ')" ] && return 1
+  log "Missing installer/build prerequisites:$missing"
+  return 0
+}
+
+install_system_packages() {
+  if ! need_system_packages; then
+    log "System prerequisites already present."
+    return 0
+  fi
+
+  if have_cmd apt-get; then
+    as_root apt-get update
+    as_root apt-get install -y --no-install-recommends \
+      ca-certificates curl wget tar coreutils findutils util-linux \
+      build-essential cargo rustc pkg-config desktop-file-utils xdg-utils \
+      libx11-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+      libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libfontconfig1-dev
+  elif have_cmd dnf; then
+    as_root dnf install -y \
+      ca-certificates curl wget tar coreutils findutils util-linux \
+      gcc gcc-c++ make cargo rust pkgconf-pkg-config desktop-file-utils xdg-utils \
+      libX11-devel libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel \
+      wayland-devel mesa-libGL-devel mesa-libEGL-devel fontconfig-devel
+  elif have_cmd pacman; then
+    as_root pacman -Sy --needed --noconfirm \
+      ca-certificates curl wget tar coreutils findutils util-linux \
+      base-devel rust pkgconf desktop-file-utils xdg-utils \
+      libx11 libxcb libxkbcommon libxkbcommon-x11 wayland mesa fontconfig
+  elif have_cmd zypper; then
+    as_root zypper --non-interactive install \
+      ca-certificates curl wget tar coreutils findutils util-linux \
+      gcc gcc-c++ make cargo rust pkg-config desktop-file-utils xdg-utils \
+      libX11-devel libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel \
+      wayland-devel Mesa-libGL-devel Mesa-libEGL-devel fontconfig-devel
+  else
+    cat >&2 <<'EOF'
+smart-explorer install: unsupported Linux package manager.
+Install these prerequisites, then re-run this script:
+  curl or wget, tar, coreutils, findutils, util-linux, build tools, rust/cargo,
+  pkg-config, desktop-file-utils, xdg-utils, and development packages for
+  x11, xcb, xkbcommon, xkbcommon-x11, wayland-client, egl, gl, and fontconfig.
+EOF
+    exit 1
+  fi
+
+  if [ "$DRY_RUN" != 1 ] && need_system_packages; then
+    echo "smart-explorer install: some prerequisites are still missing after package installation" >&2
     exit 1
   fi
 }
@@ -82,6 +194,9 @@ case "$(uname -m)" in
   x86_64|amd64) ;;
   *) echo "smart-explorer install: only x86_64 Linux desktops are supported by this installer right now" >&2; exit 1 ;;
 esac
+
+install_system_packages
+TMP_DIR="$(mktemp -d)"
 
 need chmod
 need mkdir
