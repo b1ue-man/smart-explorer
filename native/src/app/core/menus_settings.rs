@@ -162,17 +162,22 @@ impl App {
             Color32::from_gray(140),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
+        let update_payload = if cfg!(windows) {
+            "smart_explorer.exe"
+        } else {
+            "smart_explorer"
+        };
         ui.add(
             egui::TextEdit::singleline(&mut self.update_feed_draft)
                 .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
                 .desired_width(f32::INFINITY),
         )
-        .on_hover_text(
-            "Quelle mit version.txt und smart_explorer.exe. Entweder ein Ordner \
+        .on_hover_text(format!(
+            "Quelle mit version.txt und {update_payload}. Entweder ein Ordner \
              (lokal/Netzlaufwerk) ODER eine https-URL bzw. ein GitHub-Repo-Link \
              (z. B. https://github.com/b1ue-man/smart-explorer) — dann updatet \
-             sich die App direkt aus dem Git. Beim Start wird automatisch geprüft.",
-        );
+             sich die App direkt aus dem Git. Beim Start wird automatisch geprüft."
+        ));
         ui.horizontal(|ui| {
             if ui.small_button("Speichern").clicked() {
                 match crate::updater::set_update_source(&self.update_feed_draft) {
