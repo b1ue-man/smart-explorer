@@ -49,7 +49,9 @@ jobs:
         run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
 
       - name: Release build
-        run: cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater
+          cargo build --release --bin smart_explorer --bin smart_explorer_updater
 
       - name: Build context-menu COM DLL
         working-directory: native/explorer-command
@@ -67,6 +69,9 @@ jobs:
           mkdir -p out
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
+          cp "target/release/smart_explorer" "out/smart_explorer"
+          cp "target/release/smart_explorer_updater" "out/smart_explorer_updater"
+          cp "../install-linux.sh" "out/install-linux.sh"
           cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
           cp "../share-server/target/x86_64-pc-windows-gnu/release/se-share-server.exe" "out/se-share-server.exe"
           cp "../share-server/target/release/se-share-server" "out/se-share-server-linux"
@@ -74,17 +79,19 @@ jobs:
           ( cd out
             sha256sum smart_explorer.exe > smart_explorer.exe.sha256
             sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
+            sha256sum smart_explorer > smart_explorer.sha256
+            sha256sum smart_explorer_updater > smart_explorer_updater.sha256
           )
           printf '%s\n' "$ver" > out/version.txt
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           # NSIS installer (per-user; sets the Git update source + context menu).
           makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" installer.nsi
           cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
-          echo "Built version $ver (exe + updater + dll + installer)"
+          echo "Built version $ver (Windows exe/updater + Linux desktop binaries + dll + installer)"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: smart-explorer-windows
+          name: smart-explorer-builds
           path: native/out
 
       - name: Verify committed feed matches the version (release only)
@@ -123,7 +130,12 @@ jobs:
           tag_name: v${{ steps.stage.outputs.version }}
           name: Smart Explorer ${{ steps.stage.outputs.version }}
           body: |
-            **Smart Explorer ${{ steps.stage.outputs.version }}** — Windows x64, no admin needed.
+            **Smart Explorer ${{ steps.stage.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
+
+            Linux one-line install:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
+            ```
 
             - **Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe** —
               installer (recommended). Sets up auto-update from the Git feed and
@@ -134,6 +146,8 @@ jobs:
             - **smart_explorer_command.dll** — Win11 modern context-menu
               IExplorerCommand handler (needs signing to register; see
               `docs/WIN11_CONTEXT_MENU.md`).
+            - **smart_explorer** / **smart_explorer_updater** — Linux x86_64
+              desktop app and updater payloads used by the one-line installer.
             - **se-share-server.exe** / **se-share-server-linux** —
               standalone rendezvous server for direct peer sharing.
 
@@ -145,6 +159,11 @@ jobs:
             native/out/smart_explorer_updater.exe
             native/out/smart_explorer.exe.sha256
             native/out/smart_explorer_updater.exe.sha256
+            native/out/smart_explorer
+            native/out/smart_explorer_updater
+            native/out/smart_explorer.sha256
+            native/out/smart_explorer_updater.sha256
+            native/out/install-linux.sh
             native/out/smart_explorer_command.dll
             native/out/se-share-server.exe
             native/out/se-share-server-linux

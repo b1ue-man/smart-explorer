@@ -11,8 +11,8 @@ mod flow;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod os;
-#[cfg(not(windows))]
-#[path = "os/non_windows.rs"]
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os.rs"]
 mod os;
 #[path = "core/types.rs"]
 mod types;
