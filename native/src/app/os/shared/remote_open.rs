@@ -354,11 +354,16 @@ impl App {
         std::thread::Builder::new()
             .name("remote-upload".into())
             .spawn(move || {
-                let r = upload_paths(&*backend, &paths, &dest_root);
-                let _ = tx.send(r);
+                upload_paths_progress(&*backend, &paths, &dest_root, &tx);
             })
             .ok();
         self.upload_rx = Some(rx);
+        self.transfer_progress = Some(TransferProgress::new(
+            TransferKind::Upload,
+            "Lade hoch",
+            n as u64,
+            0,
+        ));
         self.notice = Some((
             format!("⬆ Lade {} Element(e) hoch…", n),
             std::time::Instant::now(),

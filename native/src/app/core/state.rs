@@ -279,6 +279,7 @@ pub struct App {
     // One-way mirror of the current location to a chosen folder.
     pub(in crate::app) sync_rx: Option<Receiver<crate::sync::SyncMsg>>,
     pub(in crate::app) sync_running: bool,
+    pub(in crate::app) sync_progress: Option<crate::sync::SyncProgress>,
 
     /// Cached saved-connection list (avoids reading connections.txt per frame).
     pub(in crate::app) saved_connections: Vec<crate::creds::SavedConnection>,
@@ -347,8 +348,8 @@ pub struct App {
     pub(in crate::app) edit_save_rx: Vec<Receiver<(PathBuf, SaveResult)>>,
     pub(in crate::app) last_edit_poll: Instant,
     /// In-flight upload of clipboard/dropped files into a remote folder.
-    /// Result is (files uploaded, errors).
-    pub(in crate::app) upload_rx: Option<Receiver<(u64, Vec<String>)>>,
+    pub(in crate::app) upload_rx: Option<Receiver<TransferMsg>>,
+    pub(in crate::app) transfer_progress: Option<TransferProgress>,
     /// In-flight one-shot remote op (new folder, rename, download-to).
     /// Ok(notice)/Err(msg); the worker includes the op context in both.
     pub(in crate::app) remote_op_rx: Option<Receiver<Result<String, String>>>,

@@ -224,6 +224,7 @@ impl App {
 
             sync_rx: None,
             sync_running: false,
+            sync_progress: None,
 
             saved_connections: crate::creds::load_connections(),
 
@@ -260,6 +261,7 @@ impl App {
             edit_save_rx: Vec::new(),
             last_edit_poll: Instant::now(),
             upload_rx: None,
+            transfer_progress: None,
             remote_op_rx: None,
             agent_activate_rx: None,
             agent_activate_for: None,

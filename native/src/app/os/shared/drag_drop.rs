@@ -161,35 +161,20 @@ impl App {
         std::thread::Builder::new()
             .name("remote-to-remote".into())
             .spawn(move || {
-                let mut copied = 0u64;
-                let mut errors = Vec::new();
-                for p in &files {
-                    let name = p
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or("datei");
-                    let dest = format!("{}/{}", dest_root.trim_end_matches('/'), name);
-                    let r = if same_server {
-                        // No temp round-trip: copy in place on the server.
-                        copy_remote_tree(&*tgt, p, &dest)
-                    } else {
-                        let tmp = open_temp_path(name);
-                        let r = download_to(&*src, p, &tmp)
-                            .and_then(|_| upload_file(&*tgt, &tmp, &dest))
-                            .map(|_| ());
-                        cleanup_temp_copy(&tmp);
-                        r.map_err(std::io::Error::other)
-                    };
-                    match r {
-                        Ok(_) => copied += 1,
-                        Err(e) => errors.push(format!("{}: {}", name, e)),
-                    }
-                }
-                let _ = tx.send((copied, errors));
+                copy_remote_paths_progress(&*src, &files, &*tgt, &dest_root, same_server, &tx);
             })
             .ok();
         self.upload_rx = Some(rx);
+        self.transfer_progress = Some(TransferProgress::new(
+            TransferKind::RemoteCopy,
+            if same_server {
+                "Kopiere remote"
+            } else {
+                "Uebertrage remote"
+            },
+            n as u64,
+            0,
+        ));
         let how = if same_server {
             "Remote→Remote, serverseitig"
         } else {
@@ -221,26 +206,16 @@ impl App {
         std::thread::Builder::new()
             .name("remote-download-multi".into())
             .spawn(move || {
-                let mut copied = 0u64;
-                let mut errors = Vec::new();
-                for p in &files {
-                    let name = p
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or("datei");
-                    let dest = std::path::Path::new(&dest_local).join(name);
-                    // download_node handles folders (bulk get_tree / recursive)
-                    // as well as files.
-                    match download_node(&*backend, p, &dest) {
-                        Ok(_) => copied += 1,
-                        Err(e) => errors.push(format!("{}: {}", name, e)),
-                    }
-                }
-                let _ = tx.send((copied, errors));
+                download_paths_progress(&*backend, &files, &dest_local, &tx);
             })
             .ok();
         self.upload_rx = Some(rx);
+        self.transfer_progress = Some(TransferProgress::new(
+            TransferKind::Download,
+            "Lade herunter",
+            n as u64,
+            0,
+        ));
         self.notice = Some((
             format!("⬇ Lade {} Element(e) herunter…", n),
             std::time::Instant::now(),

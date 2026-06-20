@@ -1,7 +1,9 @@
 use super::prelude::*;
 use super::*;
 
+#[derive(Clone)]
 enum LandingAction {
+    ChooseFolder,
     OpenLocation(String),
     Connect(crate::creds::SavedConnection),
     OpenGDrive,
@@ -9,6 +11,56 @@ enum LandingAction {
     BuildIndex,
     RefreshIndex,
     ShowSyncJobs,
+    ShowShare,
+}
+
+#[derive(Clone)]
+struct LandingTile {
+    title: String,
+    detail: String,
+    meta: String,
+    action: Option<LandingAction>,
+    meter: Option<(f32, String)>,
+    warn: bool,
+}
+
+impl LandingTile {
+    fn action(
+        title: impl Into<String>,
+        detail: impl Into<String>,
+        meta: impl Into<String>,
+        action: LandingAction,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            detail: detail.into(),
+            meta: meta.into(),
+            action: Some(action),
+            meter: None,
+            warn: false,
+        }
+    }
+
+    fn status(title: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            detail: detail.into(),
+            meta: String::new(),
+            action: None,
+            meter: None,
+            warn: false,
+        }
+    }
+
+    fn meter(mut self, fraction: f32, label: impl Into<String>) -> Self {
+        self.meter = Some((fraction.clamp(0.0, 1.0), label.into()));
+        self
+    }
+
+    fn warn(mut self, warn: bool) -> Self {
+        self.warn = warn;
+        self
+    }
 }
 
 impl App {
@@ -83,6 +135,12 @@ impl App {
         let connections: Vec<crate::creds::SavedConnection> =
             self.saved_connections.iter().rev().cloned().collect();
         let gdrive_connected = crate::cloud::is_connected(crate::cloud::Provider::GDrive);
+        let sync_results = crate::syncjobs::load_results();
+
+        let action_tiles = self.landing_action_tiles();
+        let place_tiles = self.landing_place_tiles(&common, &recent, &favorites, &drives);
+        let remote_tiles = self.landing_remote_tiles(&connections, gdrive_connected);
+        let sync_tiles = self.landing_sync_tiles(&sync_results);
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -91,68 +149,25 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.heading("Startseite");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if self.index_building {
-                            ui.add(egui::Spinner::new().size(14.0));
-                            ui.label(
-                                RichText::new(format!("Index: {} Ordner", self.index_progress))
-                                    .small()
-                                    .color(Color32::from_gray(145)),
-                            );
-                        } else if self.folder_index.is_empty() {
-                            if ui.small_button("Index bauen").clicked() {
-                                action = Some(LandingAction::BuildIndex);
-                            }
-                        } else if ui.small_button("Index aktualisieren").clicked() {
-                            action = Some(LandingAction::RefreshIndex);
-                        }
+                        self.ui_landing_index_chip(ui, &mut action);
                     });
                 });
-                ui.separator();
                 ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(8.0);
 
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Ordner waehlen").clicked() {
-                        let init = self.root_path.clone();
-                        self.open_picker(PickerPurpose::ScanFolder, &init);
-                    }
-                    if ui.button("Neue Verbindung").clicked() {
-                        action = Some(LandingAction::NewConnection);
-                    }
-                    if ui.button("Sync-Jobs").clicked() {
-                        self.show_sync_jobs = true;
-                    }
-                    if ui.button("Teilen").clicked() {
-                        self.show_share = true;
-                    }
-                });
-                ui.add_space(14.0);
-
-                if ui.available_width() >= 760.0 {
-                    ui.columns(2, |columns| {
-                        self.ui_landing_left(
-                            &mut columns[0],
-                            &common,
-                            &recent,
-                            &favorites,
-                            &drives,
-                            &mut action,
-                        );
-                        self.ui_landing_right(
-                            &mut columns[1],
-                            &connections,
-                            gdrive_connected,
-                            &mut action,
-                        );
-                    });
-                } else {
-                    self.ui_landing_left(ui, &common, &recent, &favorites, &drives, &mut action);
-                    ui.add_space(12.0);
-                    self.ui_landing_right(ui, &connections, gdrive_connected, &mut action);
-                }
+                ui_landing_section(ui, "Aktionen", true, &action_tiles, &mut action);
+                ui_landing_section(ui, "Orte", true, &place_tiles, &mut action);
+                ui_landing_section(ui, "Remotes", true, &remote_tiles, &mut action);
+                ui_landing_section(ui, "Sync-Jobs", true, &sync_tiles, &mut action);
             });
 
         if let Some(action) = action {
             match action {
+                LandingAction::ChooseFolder => {
+                    let init = self.root_path.clone();
+                    self.open_picker(PickerPurpose::ScanFolder, &init);
+                }
                 LandingAction::OpenLocation(path) => self.navigate_to_location(&path),
                 LandingAction::Connect(c) => self.connect_saved(&c),
                 LandingAction::OpenGDrive => self.open_gdrive_browse(),
@@ -162,116 +177,199 @@ impl App {
                 }
                 LandingAction::BuildIndex | LandingAction::RefreshIndex => self.start_index_build(),
                 LandingAction::ShowSyncJobs => self.show_sync_jobs = true,
+                LandingAction::ShowShare => self.show_share = true,
             }
         }
     }
 
-    fn ui_landing_left(
+    fn ui_landing_index_chip(&self, ui: &mut egui::Ui, action: &mut Option<LandingAction>) {
+        if self.index_building {
+            ui.add(egui::Spinner::new().size(14.0));
+            ui.label(
+                RichText::new(format!("Index: {} Ordner", self.index_progress))
+                    .small()
+                    .color(Color32::from_gray(145)),
+            );
+        } else if self.folder_index.is_empty() {
+            if ui.small_button("Index bauen").clicked() {
+                *action = Some(LandingAction::BuildIndex);
+            }
+        } else if ui.small_button("Index aktualisieren").clicked() {
+            *action = Some(LandingAction::RefreshIndex);
+        }
+    }
+
+    fn landing_action_tiles(&self) -> Vec<LandingTile> {
+        let mut tiles = Vec::new();
+        tiles.push(LandingTile::action(
+            "Ordner waehlen",
+            "Lokalen Ordner oeffnen",
+            "Browse",
+            LandingAction::ChooseFolder,
+        ));
+        tiles.push(LandingTile::action(
+            "Neue Verbindung",
+            "SFTP, FTP, WebDAV oder Share",
+            "Remote",
+            LandingAction::NewConnection,
+        ));
+        tiles.push(LandingTile::action(
+            "Sync-Jobs",
+            "Jobs verwalten, starten, vergleichen",
+            "Sync",
+            LandingAction::ShowSyncJobs,
+        ));
+        tiles.push(LandingTile::action(
+            "Teilen",
+            "Peer-Share und Quick Share",
+            "Share",
+            LandingAction::ShowShare,
+        ));
+        if self.index_building {
+            tiles.push(LandingTile::status(
+                "Index laeuft",
+                format!("{} Ordner erfasst", self.index_progress),
+            ));
+        } else if self.folder_index.is_empty() {
+            tiles.push(LandingTile::action(
+                "Index bauen",
+                "Schnellere Ordnersuche vorbereiten",
+                "Suche",
+                LandingAction::BuildIndex,
+            ));
+        } else {
+            tiles.push(LandingTile::action(
+                "Index aktualisieren",
+                format!("{} Ordner im Index", self.folder_index.len()),
+                "Suche",
+                LandingAction::RefreshIndex,
+            ));
+        }
+        tiles
+    }
+
+    fn landing_place_tiles(
         &self,
-        ui: &mut egui::Ui,
         common: &[(String, String)],
         recent: &[String],
         favorites: &[String],
         drives: &[(String, u64, u64)],
-        action: &mut Option<LandingAction>,
-    ) {
-        ui_landing_section(ui, "Schnellzugriff", |ui| {
-            for (label, path) in common {
-                if landing_row(ui, label, path, false).clicked() {
-                    *action = Some(LandingAction::OpenLocation(path.clone()));
-                }
-            }
-        });
-
-        ui.add_space(12.0);
-        ui_landing_section(ui, "Zuletzt", |ui| {
-            if recent.is_empty() {
-                ui.colored_label(Color32::from_gray(125), "Noch keine Ordner");
+    ) -> Vec<LandingTile> {
+        let mut tiles = Vec::new();
+        for (label, path) in common {
+            tiles.push(LandingTile::action(
+                label,
+                path,
+                "Schnellzugriff",
+                LandingAction::OpenLocation(path.clone()),
+            ));
+        }
+        for path in recent.iter().take(8) {
+            let label = landing_basename(path);
+            tiles.push(LandingTile::action(
+                label,
+                path,
+                "Zuletzt",
+                LandingAction::OpenLocation(path.clone()),
+            ));
+        }
+        for path in favorites.iter().take(8) {
+            let label = landing_basename(path);
+            tiles.push(LandingTile::action(
+                label,
+                path,
+                "Favorit",
+                LandingAction::OpenLocation(path.clone()),
+            ));
+        }
+        for (drive, free, total) in drives {
+            let (detail, meter) = if *total > 0 {
+                let used = total.saturating_sub(*free);
+                (
+                    format!("{} frei von {}", format_bytes(*free), format_bytes(*total)),
+                    Some((
+                        used as f32 / *total as f32,
+                        format!("{} belegt", format_bytes(used)),
+                    )),
+                )
             } else {
-                for path in recent.iter().take(8) {
-                    let label = landing_basename(path);
-                    if landing_row(ui, &label, path, false).clicked() {
-                        *action = Some(LandingAction::OpenLocation(path.clone()));
-                    }
-                }
+                (String::new(), None)
+            };
+            let mut tile = LandingTile::action(
+                drive,
+                detail,
+                "Laufwerk",
+                LandingAction::OpenLocation(drive.clone()),
+            );
+            if let Some((fraction, label)) = meter {
+                tile = tile.meter(fraction, label);
             }
-        });
-
-        if !favorites.is_empty() {
-            ui.add_space(12.0);
-            ui_landing_section(ui, "Favoriten", |ui| {
-                for path in favorites.iter().take(8) {
-                    let label = landing_basename(path);
-                    if landing_row(ui, &label, path, false).clicked() {
-                        *action = Some(LandingAction::OpenLocation(path.clone()));
-                    }
-                }
-            });
+            tiles.push(tile);
         }
-
-        if !drives.is_empty() {
-            ui.add_space(12.0);
-            ui_landing_section(ui, "Laufwerke", |ui| {
-                for (drive, free, total) in drives {
-                    let detail = if *total > 0 {
-                        format!("{} frei von {}", format_bytes(*free), format_bytes(*total))
-                    } else {
-                        String::new()
-                    };
-                    if landing_row(ui, drive, &detail, false).clicked() {
-                        *action = Some(LandingAction::OpenLocation(drive.clone()));
-                    }
-                    if *total > 0 {
-                        let used = total.saturating_sub(*free);
-                        let frac = used as f32 / *total as f32;
-                        ui.add(
-                            egui::ProgressBar::new(frac)
-                                .desired_width(ui.available_width())
-                                .desired_height(5.0),
-                        );
-                    }
-                }
-            });
+        if tiles.is_empty() {
+            tiles.push(LandingTile::status("Keine Orte", "Noch nichts geoeffnet"));
         }
+        tiles
     }
 
-    fn ui_landing_right(
+    fn landing_remote_tiles(
         &self,
-        ui: &mut egui::Ui,
         connections: &[crate::creds::SavedConnection],
         gdrive_connected: bool,
-        action: &mut Option<LandingAction>,
-    ) {
-        ui_landing_section(ui, "Verbindungen", |ui| {
-            if gdrive_connected && landing_row(ui, "Google Drive", "gdrive://", false).clicked() {
-                *action = Some(LandingAction::OpenGDrive);
-            }
-            if connections.is_empty() && !gdrive_connected {
-                ui.colored_label(Color32::from_gray(125), "Noch keine Verbindungen");
-            }
-            for c in connections.iter().take(10) {
-                let title = c.display();
-                let detail = c.to_target();
-                if landing_row(ui, &title, &detail, false).clicked() {
-                    *action = Some(LandingAction::Connect(c.clone()));
-                }
-            }
-        });
-
-        if !self.sync_jobs.is_empty() {
-            ui.add_space(12.0);
-            ui_landing_section(ui, "Sync-Jobs", |ui| {
-                for job in self.sync_jobs.iter().take(8) {
-                    let detail = format!("{}  <->  {}", job.source, job.target);
-                    if landing_row(ui, &job.name, &detail, false).clicked() {
-                        *action = Some(LandingAction::ShowSyncJobs);
-                    }
-                }
-                if ui.button("Sync-Jobs anzeigen").clicked() {
-                    *action = Some(LandingAction::ShowSyncJobs);
-                }
-            });
+    ) -> Vec<LandingTile> {
+        let mut tiles = Vec::new();
+        if gdrive_connected {
+            tiles.push(LandingTile::action(
+                "Google Drive",
+                "gdrive://",
+                "Cloud",
+                LandingAction::OpenGDrive,
+            ));
         }
+        for c in connections.iter().take(10) {
+            tiles.push(LandingTile::action(
+                c.display(),
+                c.to_target(),
+                "Gespeichert",
+                LandingAction::Connect(c.clone()),
+            ));
+        }
+        if tiles.is_empty() {
+            tiles.push(LandingTile::status(
+                "Keine Remotes",
+                "Neue Verbindung anlegen",
+            ));
+        }
+        tiles
+    }
+
+    fn landing_sync_tiles(
+        &self,
+        results: &std::collections::BTreeMap<String, crate::syncjobs::JobResult>,
+    ) -> Vec<LandingTile> {
+        let mut tiles = Vec::new();
+        for job in self.sync_jobs.iter().take(12) {
+            let result = results.get(&job.id);
+            let detail = format!("{}  <->  {}", job.source, job.target);
+            let (meta, warn) = landing_sync_meta(job, result);
+            tiles.push(
+                LandingTile::action(job.name.clone(), detail, meta, LandingAction::ShowSyncJobs)
+                    .warn(warn),
+            );
+        }
+        if self.sync_jobs.is_empty() {
+            tiles.push(LandingTile::status(
+                "Keine Sync-Jobs",
+                "Jobs koennen im Sync-Fenster angelegt werden",
+            ));
+        }
+        tiles.push(LandingTile::action(
+            "Sync-Jobs verwalten",
+            "Editor, Vorschau, Konfliktmodus",
+            "Oeffnen",
+            LandingAction::ShowSyncJobs,
+        ));
+        tiles
     }
 
     fn landing_common_folders(&self) -> Vec<(String, String)> {
@@ -297,68 +395,180 @@ impl App {
     }
 }
 
-fn ui_landing_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    ui.label(
-        RichText::new(title)
+fn ui_landing_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    tiles: &[LandingTile],
+    action: &mut Option<LandingAction>,
+) {
+    let header = egui::CollapsingHeader::new(
+        RichText::new(format!("{} ({})", title, tiles.len()))
             .strong()
-            .small()
-            .color(Color32::from_gray(150)),
-    );
-    ui.add_space(3.0);
-    add(ui);
+            .color(Color32::from_gray(180)),
+    )
+    .id_salt(("landing_section", title))
+    .default_open(default_open)
+    .show(ui, |ui| {
+        ui.add_space(4.0);
+        landing_tile_grid(ui, tiles, action);
+    });
+    ui.add_space(if header.fully_open() { 12.0 } else { 6.0 });
 }
 
-fn landing_row(ui: &mut egui::Ui, title: &str, detail: &str, selected: bool) -> egui::Response {
-    let width = ui.available_width().max(160.0);
-    let height = if detail.is_empty() { 32.0 } else { 44.0 };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+fn landing_tile_grid(ui: &mut egui::Ui, tiles: &[LandingTile], action: &mut Option<LandingAction>) {
+    if tiles.is_empty() {
+        ui.colored_label(Color32::from_gray(125), "Leer");
+        return;
+    }
+    let gap = 8.0;
+    let min_width = 210.0;
+    let max_width = 330.0;
+    let available = ui.available_width().max(min_width);
+    let columns = ((available + gap) / (min_width + gap)).floor().max(1.0) as usize;
+    let tile_width = ((available - gap * (columns.saturating_sub(1) as f32)) / columns as f32)
+        .clamp(min_width.min(available), max_width);
+
+    for row in tiles.chunks(columns) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for tile in row {
+                let response = landing_tile(ui, tile, tile_width);
+                if response.clicked() {
+                    if let Some(next) = tile.action.clone() {
+                        *action = Some(next);
+                    }
+                }
+            }
+        });
+        ui.add_space(gap);
+    }
+}
+
+fn landing_tile(ui: &mut egui::Ui, tile: &LandingTile, width: f32) -> egui::Response {
+    let height = if tile.meter.is_some() {
+        88.0
+    } else if tile.meta.is_empty() {
+        58.0
+    } else {
+        72.0
+    };
+    let sense = if tile.action.is_some() {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), sense);
 
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
-        let fill = if selected {
-            ui.visuals().selection.bg_fill
-        } else if response.hovered() {
+        let fill = if response.hovered() && tile.action.is_some() {
             visuals.bg_fill
         } else {
-            Color32::TRANSPARENT
+            ui.visuals().faint_bg_color
         };
-        if fill != Color32::TRANSPARENT {
-            ui.painter().rect_filled(rect.shrink(1.0), 4.0, fill);
-        }
-        ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            4.0,
-            egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color),
+        let stroke_color = if tile.warn {
+            Color32::from_rgb(220, 150, 80)
+        } else {
+            ui.visuals().widgets.inactive.bg_stroke.color
+        };
+        ui.painter().rect_filled(rect.shrink(0.5), 6.0, fill);
+        ui.painter()
+            .rect_stroke(rect.shrink(0.5), 6.0, egui::Stroke::new(1.0, stroke_color));
+
+        let accent = if tile.warn {
+            Color32::from_rgb(220, 150, 80)
+        } else if tile.action.is_some() {
+            ui.visuals().selection.bg_fill
+        } else {
+            Color32::from_gray(100)
+        };
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                rect.left_top() + egui::vec2(0.0, 8.0),
+                egui::pos2(rect.left() + 3.0, rect.bottom() - 8.0),
+            ),
+            2.0,
+            accent,
         );
 
-        let title_rect = egui::Rect::from_min_max(
-            rect.left_top() + egui::vec2(8.0, 5.0),
-            egui::pos2(rect.right() - 8.0, rect.top() + 24.0),
-        );
+        let x0 = rect.left() + 12.0;
+        let x1 = rect.right() - 10.0;
         paint_landing_text(
             ui,
-            title_rect,
-            title,
+            egui::Rect::from_min_max(
+                egui::pos2(x0, rect.top() + 8.0),
+                egui::pos2(x1, rect.top() + 28.0),
+            ),
+            &tile.title,
             egui::TextStyle::Body.resolve(ui.style()),
             ui.visuals().text_color(),
         );
-
-        if !detail.is_empty() {
-            let detail_rect = egui::Rect::from_min_max(
-                rect.left_top() + egui::vec2(8.0, 24.0),
-                rect.right_bottom() - egui::vec2(8.0, 4.0),
-            );
+        paint_landing_text(
+            ui,
+            egui::Rect::from_min_max(
+                egui::pos2(x0, rect.top() + 30.0),
+                egui::pos2(x1, rect.top() + 49.0),
+            ),
+            &tile.detail,
+            egui::TextStyle::Small.resolve(ui.style()),
+            Color32::from_gray(135),
+        );
+        if !tile.meta.is_empty() {
+            let color = if tile.warn {
+                Color32::from_rgb(230, 175, 95)
+            } else {
+                Color32::from_gray(150)
+            };
             paint_landing_text(
                 ui,
-                detail_rect,
-                detail,
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.top() + 50.0),
+                    egui::pos2(x1, rect.top() + 68.0),
+                ),
+                &tile.meta,
+                egui::TextStyle::Small.resolve(ui.style()),
+                color,
+            );
+        }
+        if let Some((fraction, label)) = &tile.meter {
+            let bar_rect = egui::Rect::from_min_max(
+                egui::pos2(x0, rect.bottom() - 16.0),
+                egui::pos2(x1, rect.bottom() - 10.0),
+            );
+            ui.painter()
+                .rect_filled(bar_rect, 3.0, ui.visuals().widgets.inactive.bg_fill);
+            let fill_rect = egui::Rect::from_min_max(
+                bar_rect.left_top(),
+                egui::pos2(
+                    bar_rect.left() + bar_rect.width() * *fraction,
+                    bar_rect.bottom(),
+                ),
+            );
+            ui.painter().rect_filled(fill_rect, 3.0, accent);
+            paint_landing_text(
+                ui,
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.bottom() - 32.0),
+                    egui::pos2(x1, rect.bottom() - 17.0),
+                ),
+                label,
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_gray(135),
             );
         }
     }
 
-    response.on_hover_text(detail)
+    let hover = [tile.detail.as_str(), tile.meta.as_str()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if hover.is_empty() {
+        response
+    } else {
+        response.on_hover_text(hover)
+    }
 }
 
 fn paint_landing_text(
@@ -385,5 +595,43 @@ fn landing_basename(path: &str) -> String {
         path.to_string()
     } else {
         base.to_string()
+    }
+}
+
+fn landing_sync_meta(
+    job: &crate::syncjobs::SyncJob,
+    result: Option<&crate::syncjobs::JobResult>,
+) -> (String, bool) {
+    let last = result
+        .map(|r| landing_time_secs(r.when))
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if job.last_run > 0 {
+                Some(landing_time_secs(job.last_run))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "noch nie".to_string());
+    let mut warn = false;
+    let status = match result {
+        Some(r) => {
+            warn = r.conflicts > 0 || r.errors > 0;
+            format!(
+                "{} | Konflikte: {} | Fehler: {} | {} -> {}",
+                r.note, r.conflicts, r.errors, r.a_to_b, r.b_to_a
+            )
+        }
+        None => "kein Ergebnis gespeichert".to_string(),
+    };
+    let enabled = if job.enabled { "aktiv" } else { "pausiert" };
+    (format!("Zuletzt: {last} | {enabled} | {status}"), warn)
+}
+
+fn landing_time_secs(secs: i64) -> String {
+    if secs <= 0 {
+        String::new()
+    } else {
+        format_date(secs.saturating_mul(1000))
     }
 }

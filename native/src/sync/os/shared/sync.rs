@@ -33,9 +33,11 @@ pub struct SyncStats {
     pub errors: u64,
 }
 
+#[derive(Clone, Debug)]
 pub struct SyncProgress {
     pub current: String,
     pub stats: SyncStats,
+    pub elapsed_ms: u64,
 }
 
 pub struct SyncResult {
@@ -188,6 +190,7 @@ fn run(
                 let _ = tx.send(SyncMsg::Progress(SyncProgress {
                     current: dp.clone(),
                     stats: stats.clone(),
+                    elapsed_ms: start.elapsed().as_millis() as u64,
                 }));
                 last_progress = Instant::now();
             }
