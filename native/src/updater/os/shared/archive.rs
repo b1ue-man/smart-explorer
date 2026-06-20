@@ -24,6 +24,17 @@ fn is_archived_binary(path: &Path) -> bool {
     }
 }
 
+fn archived_name_without_binary_suffix(path: &Path) -> Option<&str> {
+    #[cfg(windows)]
+    {
+        path.file_stem().and_then(|s| s.to_str())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        path.file_name().and_then(|s| s.to_str())
+    }
+}
+
 /// Filename prefix for the renamed-out running binary (`<stem>_old`).
 pub(super) fn old_binary_prefix(cur_exe: &Path) -> String {
     let stem = cur_exe
@@ -159,8 +170,8 @@ pub fn list_archived_versions() -> Vec<(String, PathBuf)> {
                 if !is_archived_binary(&p) {
                     continue;
                 }
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    if let Some(ver) = stem.rsplit(' ').next() {
+                if let Some(name) = archived_name_without_binary_suffix(&p) {
+                    if let Some(ver) = name.rsplit(' ').next() {
                         if ver
                             .chars()
                             .next()
