@@ -5,8 +5,8 @@ status. Backends: **Local** (`vfs::LocalBackend`, std::fs), **SFTP**
 (`sftp.rs`, russh-sftp -> SSH-FXP packets), **FTP/FTPS** (`ftp.rs`, suppaftp ->
 RFC 959 commands), **WebDAV** (`webdav.rs`, RFC 4918 methods), **Drive**
 (`gdrive.rs`, Drive v3 REST), and **Peer via Share-Server**
-(`share::PeerBackend` over direct Noise-encrypted TCP; `se-share-server` is
-rendezvous only).
+(`share::PeerBackend` over persistent DirectContact/RoomDevice profiles,
+Noise-encrypted direct TCP; `se-share-server` is rendezvous only).
 
 Status: ✅ implemented & wired · ⚠️ partial/limitation · ❌ not supported.
 
@@ -45,16 +45,17 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 | Right-click menu | shell menu / egui menu | ✅ shell | ✅ egui | ✅ egui |
 | Copy -> paste into folder | clipboard / upload | ✅ | ✅ paste into remote = `open_write` | ✅ paste into peer = `open_write` |
 | Copy file -> Explorer | CF_HDROP / temp+CF_HDROP | ✅ | ✅ remote files -> temp -> CF_HDROP | ✅ peer files -> temp -> CF_HDROP |
-| Mirror / two-way sync | `sync`/`bisync` over `Backend` | ✅ | ✅ | ⚠️ active session only; no persistent peer endpoint yet |
+| Mirror / two-way sync | `sync`/`bisync` over `Backend` | ✅ | ✅ | ⚠️ works while peer is reachable; peer TCP channel is reopened on demand |
 | Drag rows between tabs/panes | internal drag -> copy/upload/download/cross-copy | ✅ local<->local | ✅ local<->remote, remote<->local, remote<->remote | ✅ via peer `Backend` |
 | Drag out to Explorer (OLE) | `dragout.rs` CF_HDROP | ✅ local | ✅ remote -> temp -> OLE | ✅ peer -> temp -> OLE |
 | Drop OS files into folder | `handle_os_drop` | ✅ copy | ✅ upload into remote | ✅ upload into peer |
 
 ## C. Current caveats
 
-1. **Peer via Share-Server is session-scoped.** The Share-Server only introduces
-   peers; after that the app dials the peer directly. Saved sync jobs cannot yet
-   reopen a peer later because there is no durable endpoint identity.
+1. **Peer identities are durable; channels are not.** Direct contacts, rooms,
+   room members, trust pins, secrets, auto-connect flags, and export scopes are
+   persisted. Each file operation opens a fresh authenticated peer channel after
+   validating signed presence and a Noise static key.
 2. **No relay/TURN.** Peer browsing requires a direct TCP path to one advertised
    candidate. The rendezvous server never relays file data.
 3. **Own saved connections are exported one level deep.** A peer can browse the

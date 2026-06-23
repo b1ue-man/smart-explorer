@@ -21,6 +21,9 @@ impl App {
         }
         let home = dirs_home();
         let default_share_path = home.to_string_lossy().replace('\\', "/");
+        let share_identity = crate::share::ShareIdentity::load_or_create(default_device_name());
+        let share_profiles = crate::share::ShareProfiles::load(Some(default_share_path.clone()));
+        let room_draft_code = crate::share::ShareProfiles::new_room_code();
         let drives = list_drives();
         let drive_info = drive_info_list(&drives);
         let recent: Vec<String> = std::fs::read_to_string(settings_path())
@@ -280,19 +283,26 @@ impl App {
             show_share: false,
             share_server: load_share_server(),
             share_server_draft: load_share_server(),
-            share_device_draft: default_device_name(),
-            share_code_input: String::new(),
-            share_my_code: String::new(),
-            share_session_code: String::new(),
-            share_room: false,
-            share_roster: Vec::new(),
-            share_exports: vec![crate::share::SharedRoot {
-                label: "Home".to_string(),
-                path: default_share_path.clone(),
-            }],
+            share_device_draft: share_identity.device_name.clone(),
+            share_identity,
+            share_profiles,
+            share_tab: 0,
+            share_direct_code_input: String::new(),
+            share_direct_name_input: String::new(),
+            share_room_code_input: String::new(),
+            share_room_name_input: String::new(),
+            share_room_create_name_input: "Raum".to_string(),
+            share_room_draft_code: room_draft_code,
+            share_export_scope: 0,
+            share_export_target_id: String::new(),
             share_export_path_draft: default_share_path,
             share_export_label_draft: "Home".to_string(),
-            share_include_connections: false,
+            share_block_symlink_escape: true,
+            share_regenerate_direct_confirm: false,
+            share_diag_log: String::new(),
+            share_manual_stop: false,
+            share_open_rx: None,
+            share_opening: None,
             share_incoming: Vec::new(),
             share_status: String::new(),
             share_progress: None,

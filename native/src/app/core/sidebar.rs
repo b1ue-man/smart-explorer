@@ -232,7 +232,7 @@ impl App {
         let mut to_remove: Option<String> = None;
         let mut open_gdrive = false;
         let mut disc_gdrive = false;
-        let mut open_share_peer: Option<crate::share::RemoteDevice> = None;
+        let mut open_share_target: Option<crate::share::PeerOpenTarget> = None;
 
         // Active connection indicator + one-click disconnect.
         if let Some(rs) = &self.remote {
@@ -362,56 +362,116 @@ impl App {
             );
         }
 
-        if !self.share_roster.is_empty() {
+        if !self.share_profiles.direct_contacts.is_empty() || !self.share_profiles.rooms.is_empty()
+        {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("SHARE-SERVER")
+                    RichText::new("SHARE DIREKT")
                         .small()
                         .color(Color32::from_gray(140)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
+                        .small_button("+")
+                        .on_hover_text("Direktgeraet hinzufuegen")
+                        .clicked()
+                    {
+                        self.show_share = true;
+                        self.share_tab = 0;
+                    }
+                    if ui
+                        .small_button("R")
+                        .on_hover_text("Direktkontakte aktualisieren")
+                        .clicked()
+                    {
+                        self.share_cmd(crate::share::ShareCmd::Refresh);
+                    }
+                    if ui
                         .small_button("...")
-                        .on_hover_text("Share-Server Sitzung")
+                        .on_hover_text("Share-Server Verbindungen")
                         .clicked()
                     {
                         self.show_share = true;
                     }
                 });
             });
-            if self.share_room {
-                let room = if self.share_session_code.is_empty() {
-                    "Raum".to_string()
-                } else {
-                    format!("Raum {}", self.share_session_code)
-                };
-                ui.label(RichText::new(room).small().color(Color32::from_gray(150)));
-                for p in self.share_roster.clone() {
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new(format!("  {}", p.device)).small())
-                                .frame(false),
+            for c in self.share_profiles.direct_contacts.clone() {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(format!("{} [{}]", c.display_name, c.status.label()))
+                                .small(),
                         )
-                        .on_hover_text(format!("{} via Share-Server oeffnen", p.fingerprint))
+                        .frame(false),
+                    )
+                    .on_hover_text(format!(
+                        "{} via Share-Server oeffnen",
+                        c.expected_fingerprint
+                    ))
+                    .clicked()
+                {
+                    open_share_target =
+                        Some(crate::share::PeerOpenTarget::Direct { contact_id: c.id });
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("SHARE RAEUME")
+                        .small()
+                        .color(Color32::from_gray(140)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("+")
+                        .on_hover_text("Raum erstellen/beitreten")
                         .clicked()
                     {
-                        open_share_peer = Some(p);
+                        self.show_share = true;
+                        self.share_tab = 1;
                     }
-                }
-            } else {
-                for p in self.share_roster.clone() {
+                    if ui
+                        .small_button("R")
+                        .on_hover_text("Raeume aktualisieren")
+                        .clicked()
+                    {
+                        self.share_cmd(crate::share::ShareCmd::Refresh);
+                    }
+                });
+            });
+            for r in self.share_profiles.rooms.clone() {
+                ui.label(
+                    RichText::new(format!(
+                        "{} [{}] ({})",
+                        r.name,
+                        r.status.label(),
+                        r.members.len()
+                    ))
+                    .small()
+                    .color(Color32::from_gray(150)),
+                );
+                for m in r.members {
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new(format!("Geraet {}", p.device)).small(),
+                                RichText::new(format!(
+                                    "  {} [{}]",
+                                    m.device_name,
+                                    m.status.label()
+                                ))
+                                .small(),
                             )
                             .frame(false),
                         )
-                        .on_hover_text(format!("{} via Share-Server oeffnen", p.fingerprint))
+                        .on_hover_text(format!("{} via Raum oeffnen", m.fingerprint))
                         .clicked()
                     {
-                        open_share_peer = Some(p);
+                        open_share_target = Some(crate::share::PeerOpenTarget::RoomDevice {
+                            room_id: r.id.clone(),
+                            device_id: m.device_id,
+                        });
                     }
                 }
             }
@@ -462,8 +522,8 @@ impl App {
                 std::time::Instant::now(),
             ));
         }
-        if let Some(peer) = open_share_peer {
-            self.open_share_peer(&peer);
+        if let Some(target) = open_share_target {
+            self.open_share_target(target);
         }
     }
 }

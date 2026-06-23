@@ -1,51 +1,62 @@
-use crossbeam_channel::{unbounded, Sender};
-use std::io::{self, Read, Write};
+use crossbeam_channel::Sender;
+use std::collections::HashSet;
+use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::core::{eio, sanitize_name};
+use super::core::{b64_decode, eio, relation_psk, room_psk, sanitize_name};
 use super::fs::{handle_fs_request, ShareExportConfig};
-use super::protocol::{Channel, TAG_CTRL, TAG_DATA};
-use super::session::{Answers, Session};
-use super::system::{hostname, quarantine_dir, unique_in};
-use super::types::{RemoteDevice, ShareEvent};
-use super::wire::{Ctrl, FileMeta};
+use super::identity::ShareIdentity;
+use super::protocol::{read_raw_frame, Channel, TAG_CTRL, TAG_DATA};
+use super::types::{DirectContact, RoomProfile, ShareEvent};
+use super::wire::{Ctrl, FileMeta, PeerPrelude};
 
-const CHUNK: usize = 60_000;
+#[derive(Clone)]
+pub(crate) struct ShareAuthState {
+    pub(crate) identity: ShareIdentity,
+    pub(crate) direct_secret: Vec<u8>,
+    pub(crate) default_direct_exports: ShareExportConfig,
+    pub(crate) direct_contacts: Vec<DirectContact>,
+    pub(crate) rooms: Vec<RoomProfile>,
+    pub(crate) seen_nonces: HashSet<String>,
+    pub(crate) direct_online: bool,
+}
 
 pub(crate) fn accept_loop(
     listener: TcpListener,
-    session: Arc<Mutex<Session>>,
-    answers: Answers,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    auth: Arc<Mutex<ShareAuthState>>,
     ev: Sender<ShareEvent>,
+    stopped: Arc<AtomicBool>,
 ) {
+    let _ = listener.set_nonblocking(true);
     let counter = Arc::new(Mutex::new(0u64));
-    for conn in listener.incoming() {
-        let stream = match conn {
-            Ok(s) => s,
-            Err(_) => continue,
+    while !stopped.load(Ordering::Relaxed) {
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => {
+                let _ = ev.send(ShareEvent::Error(format!("Listener: {e}")));
+                break;
+            }
         };
-        let psk = session.lock().unwrap().psk;
-        let psk = match psk {
-            Some(p) => p,
-            None => continue,
-        };
+        let auth = auth.clone();
         let ev = ev.clone();
-        let answers = answers.clone();
-        let exports = exports.clone();
         let counter = counter.clone();
         std::thread::Builder::new()
-            .name("share-recv".into())
+            .name("share-peer".into())
             .spawn(move || {
                 let id = {
                     let mut c = counter.lock().unwrap();
                     *c += 1;
                     *c
                 };
-                if let Err(e) = recv_from_peer(stream, &psk, id, &answers, exports, &ev) {
-                    let _ = ev.send(ShareEvent::Error(format!("Empfang: {}", e)));
+                if let Err(e) = recv_from_peer(stream, id, auth, &ev) {
+                    let _ = ev.send(ShareEvent::Error(format!("Peer: {e}")));
                 }
             })
             .ok();
@@ -53,158 +64,174 @@ pub(crate) fn accept_loop(
 }
 
 fn recv_from_peer(
-    stream: TcpStream,
-    psk: &[u8; 32],
-    id: u64,
-    answers: &Answers,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    mut stream: TcpStream,
+    _id: u64,
+    auth: Arc<Mutex<ShareAuthState>>,
     ev: &Sender<ShareEvent>,
 ) -> io::Result<()> {
-    let mut ch = Channel::responder(stream, psk)?;
-    let (tag, payload) = ch.recv()?;
-    if tag != TAG_CTRL {
-        return Err(eio("erwartete Steuernachricht"));
-    }
-    let ctrl: Ctrl = serde_json::from_slice(&payload).map_err(eio)?;
-    let (from, files) = match ctrl {
-        Ctrl::Offer { from, files } => (from, files),
-        Ctrl::Fs { req } => return handle_fs_request(ch, req, exports),
-        _ => return Err(eio("erwartetes Angebot")),
-    };
-    let (atx, arx) = unbounded::<bool>();
-    answers.lock().unwrap().insert(id, atx);
-    let _ = ev.send(ShareEvent::Incoming {
-        id,
-        from: from.clone(),
-        files: files.iter().map(|f| (f.name.clone(), f.size)).collect(),
-    });
-    let accept = arx.recv_timeout(Duration::from_secs(120)).unwrap_or(false);
-    answers.lock().unwrap().remove(&id);
-    if !accept {
-        ch.send(TAG_CTRL, &serde_json::to_vec(&Ctrl::Reject).unwrap())?;
-        return Ok(());
-    }
-    ch.send(TAG_CTRL, &serde_json::to_vec(&Ctrl::Accept).unwrap())?;
-
-    let dir = quarantine_dir()?;
-    let total: u64 = files.iter().map(|f| f.size).sum();
-    let mut done: u64 = 0;
-    let mut count = 0usize;
-    let mut cur: Option<std::fs::File> = None;
-    loop {
-        let (tag, payload) = ch.recv()?;
-        if tag == TAG_DATA {
-            if let Some(f) = cur.as_mut() {
-                f.write_all(&payload)?;
-                done += payload.len() as u64;
-                let _ = ev.send(ShareEvent::Progress { done, total });
-            }
-            continue;
-        }
-        let ctrl: Ctrl = serde_json::from_slice(&payload).map_err(eio)?;
-        match ctrl {
-            Ctrl::FileStart { name, .. } => {
-                let safe = sanitize_name(&name);
-                let path = unique_in(&dir, &safe);
-                cur = Some(std::fs::File::create(&path)?);
-            }
-            Ctrl::FileEnd => {
-                if let Some(f) = cur.take() {
-                    drop(f);
-                    count += 1;
-                }
-            }
-            Ctrl::Done => break,
-            _ => {}
-        }
-    }
-    let _ = ev.send(ShareEvent::Received {
-        count,
-        dir: dir.to_string_lossy().to_string(),
-    });
-    Ok(())
-}
-
-pub(crate) fn send_to_peer(
-    peer: &RemoteDevice,
-    psk: &[u8; 32],
-    paths: &[String],
-    ev: &Sender<ShareEvent>,
-) -> io::Result<()> {
-    let stream = dial_candidates(&peer.candidates)?;
-    let mut ch = Channel::initiator(stream, psk)?;
-
-    let mut metas = Vec::new();
-    let mut real: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
-    for p in paths {
-        let pb = std::path::PathBuf::from(p);
-        if let Ok(md) = std::fs::metadata(&pb) {
-            if md.is_file() {
-                let name = pb
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                metas.push(FileMeta {
-                    name: name.clone(),
-                    size: md.len(),
-                });
-                real.push((name, pb, md.len()));
-            }
-        }
-    }
-    if real.is_empty() {
-        return Err(eio(
-            "keine Dateien zum Senden (Ordner werden noch nicht unterstützt)",
-        ));
-    }
-    let device = hostname();
-    ch.send(
-        TAG_CTRL,
-        &serde_json::to_vec(&Ctrl::Offer {
-            from: device,
-            files: metas,
-        })
-        .unwrap(),
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+    let prelude: PeerPrelude =
+        serde_json::from_slice(&read_raw_frame(&mut stream)?).map_err(eio)?;
+    let (psk, expected_public, exports, identity) = resolve_incoming(&prelude, &auth)?;
+    let mut ch = Channel::responder(
+        stream,
+        &psk,
+        &identity.private_key,
+        expected_public.as_deref(),
     )?;
     let (tag, payload) = ch.recv()?;
     if tag != TAG_CTRL {
-        return Err(eio("unerwartete Antwort"));
+        return Err(eio("PeerHello fehlt"));
+    }
+    let ctrl: Ctrl = serde_json::from_slice(&payload).map_err(eio)?;
+    let Ctrl::PeerHello { hello } = ctrl else {
+        return Err(eio("PeerHello erwartet"));
+    };
+    if hello.protocol_version != 2 {
+        return Err(eio("Inkompatible Peer-Protokollversion"));
+    }
+    if hello.relation_kind != prelude.relation_kind
+        || hello.relation_id != prelude.relation_id
+        || hello.device_id != prelude.from_device_id
+    {
+        return Err(eio("PeerHello passt nicht zum Prelude"));
+    }
+    let public = b64_decode(&hello.public_key).map_err(eio)?;
+    if public != ch.remote_static() {
+        return Err(eio("PeerHello Public Key passt nicht zum Handshake"));
+    }
+    let _ = ev.send(ShareEvent::Status(format!(
+        "Peer authentifiziert: {} ({})",
+        hello.device_id,
+        ch.remote_fingerprint()
+    )));
+    ch.send(
+        TAG_CTRL,
+        &serde_json::to_vec(&Ctrl::PeerHelloOk).map_err(eio)?,
+    )?;
+
+    let (tag, payload) = ch.recv()?;
+    if tag != TAG_CTRL {
+        return Err(eio("Steuerframe erwartet"));
     }
     match serde_json::from_slice::<Ctrl>(&payload).map_err(eio)? {
-        Ctrl::Accept => {}
-        Ctrl::Reject => {
-            let _ = ev.send(ShareEvent::Status(format!("{} hat abgelehnt", peer.device)));
-            return Ok(());
-        }
-        _ => return Err(eio("unerwartete Antwort")),
+        Ctrl::Fs { req } => handle_fs_request(ch, req, Arc::new(Mutex::new(exports))),
+        Ctrl::Offer { from, files } => recv_offer(ch, from, files, ev),
+        _ => Err(eio("Dateioperation erwartet")),
     }
-    let total: u64 = real.iter().map(|(_, _, s)| *s).sum();
-    let mut done = 0u64;
-    for (name, pb, _) in &real {
-        ch.send(
-            TAG_CTRL,
-            &serde_json::to_vec(&Ctrl::FileStart {
-                name: name.clone(),
-                size: 0,
-            })
-            .unwrap(),
-        )?;
-        let mut f = std::fs::File::open(pb)?;
-        let mut buf = vec![0u8; CHUNK];
-        loop {
-            let n = f.read(&mut buf)?;
-            if n == 0 {
-                break;
+}
+
+fn resolve_incoming(
+    prelude: &PeerPrelude,
+    auth: &Arc<Mutex<ShareAuthState>>,
+) -> io::Result<([u8; 32], Option<Vec<u8>>, ShareExportConfig, ShareIdentity)> {
+    let state = auth.lock().map_err(|_| eio("Share-Auth gesperrt"))?.clone();
+    match prelude.relation_kind.as_str() {
+        "direct" if prelude.relation_id == state.identity.direct_lookup_id => {
+            if !state.direct_online {
+                return Err(eio("Direktverbindung ist offline"));
             }
-            ch.send(TAG_DATA, &buf[..n])?;
-            done += n as u64;
-            let _ = ev.send(ShareEvent::Progress { done, total });
+            let expected = state
+                .direct_contacts
+                .iter()
+                .find(|c| c.remote_device_id.as_deref() == Some(&prelude.from_device_id))
+                .and_then(|c| c.remote_public_key.as_ref())
+                .and_then(|pk| b64_decode(pk).ok());
+            Ok((
+                relation_psk(
+                    "direct",
+                    &state.direct_secret,
+                    &state.identity.device_id,
+                    &prelude.from_device_id,
+                ),
+                expected,
+                state.default_direct_exports,
+                state.identity,
+            ))
         }
-        ch.send(TAG_CTRL, &serde_json::to_vec(&Ctrl::FileEnd).unwrap())?;
+        "room" => {
+            let room = state
+                .rooms
+                .iter()
+                .find(|r| r.room_id == prelude.relation_id)
+                .cloned()
+                .ok_or_else(|| eio("Unbekannter Raum"))?;
+            let secret = super::profiles::ShareProfiles::room_secret(&room)
+                .ok_or_else(|| eio("Raum-Secret fehlt"))?;
+            let expected = room
+                .members
+                .iter()
+                .find(|m| m.device_id == prelude.from_device_id)
+                .and_then(|m| b64_decode(&m.public_key).ok());
+            Ok((
+                room_psk(&secret, &room.room_id),
+                expected,
+                room.exports,
+                state.identity,
+            ))
+        }
+        _ => Err(eio("Unbekannte oder nicht autorisierte Relation")),
     }
-    ch.send(TAG_CTRL, &serde_json::to_vec(&Ctrl::Done).unwrap())?;
-    let _ = ev.send(ShareEvent::Sent { count: real.len() });
-    Ok(())
+}
+
+fn recv_offer(
+    mut ch: Channel,
+    from: String,
+    files: Vec<FileMeta>,
+    ev: &Sender<ShareEvent>,
+) -> io::Result<()> {
+    let count = files.len();
+    let dir = super::system::quarantine_dir()?;
+    ch.send(TAG_CTRL, &serde_json::to_vec(&Ctrl::Accept).map_err(eio)?)?;
+    loop {
+        let (tag, payload) = ch.recv()?;
+        if tag != TAG_CTRL {
+            return Err(eio("Steuerframe erwartet"));
+        }
+        match serde_json::from_slice::<Ctrl>(&payload).map_err(eio)? {
+            Ctrl::FileStart { name, size: _ } => {
+                let safe = sanitize_name(&name);
+                let path = super::system::unique_in(&dir, &safe);
+                let mut f = std::fs::File::create(&path)?;
+                loop {
+                    let (tag, payload) = ch.recv()?;
+                    if tag == TAG_DATA {
+                        std::io::Write::write_all(&mut f, &payload)?;
+                        continue;
+                    }
+                    if tag != TAG_CTRL {
+                        return Err(eio("Steuerframe erwartet"));
+                    }
+                    match serde_json::from_slice::<Ctrl>(&payload).map_err(eio)? {
+                        Ctrl::FileEnd => break,
+                        _ => return Err(eio("Dateiende erwartet")),
+                    }
+                }
+            }
+            Ctrl::Done => {
+                let _ = ev.send(ShareEvent::Received {
+                    count,
+                    dir: dir.display().to_string(),
+                });
+                let _ = ev.send(ShareEvent::Status(format!("{count} Datei(en) von {from}")));
+                return Ok(());
+            }
+            _ => return Err(eio("Dateistart erwartet")),
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn send_to_peer(
+    _peer: &super::types::PeerEndpoint,
+    _identity: &ShareIdentity,
+    _paths: &[String],
+    _ev: &Sender<ShareEvent>,
+) -> io::Result<()> {
+    Err(eio(
+        "Push-Transfer ist fuer Share-Server-Verbindungen deaktiviert",
+    ))
 }
 
 pub(crate) fn dial_candidates(candidates: &[String]) -> io::Result<TcpStream> {
