@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::core::{eio, sanitize_name};
+use super::fs::{handle_fs_request, ShareExportConfig};
 use super::protocol::{Channel, TAG_CTRL, TAG_DATA};
 use super::session::{Answers, Session};
 use super::system::{hostname, quarantine_dir, unique_in};
@@ -17,6 +18,7 @@ pub(crate) fn accept_loop(
     listener: TcpListener,
     session: Arc<Mutex<Session>>,
     answers: Answers,
+    exports: Arc<Mutex<ShareExportConfig>>,
     ev: Sender<ShareEvent>,
 ) {
     let counter = Arc::new(Mutex::new(0u64));
@@ -32,6 +34,7 @@ pub(crate) fn accept_loop(
         };
         let ev = ev.clone();
         let answers = answers.clone();
+        let exports = exports.clone();
         let counter = counter.clone();
         std::thread::Builder::new()
             .name("share-recv".into())
@@ -41,7 +44,7 @@ pub(crate) fn accept_loop(
                     *c += 1;
                     *c
                 };
-                if let Err(e) = recv_from_peer(stream, &psk, id, &answers, &ev) {
+                if let Err(e) = recv_from_peer(stream, &psk, id, &answers, exports, &ev) {
                     let _ = ev.send(ShareEvent::Error(format!("Empfang: {}", e)));
                 }
             })
@@ -54,6 +57,7 @@ fn recv_from_peer(
     psk: &[u8; 32],
     id: u64,
     answers: &Answers,
+    exports: Arc<Mutex<ShareExportConfig>>,
     ev: &Sender<ShareEvent>,
 ) -> io::Result<()> {
     let mut ch = Channel::responder(stream, psk)?;
@@ -64,6 +68,7 @@ fn recv_from_peer(
     let ctrl: Ctrl = serde_json::from_slice(&payload).map_err(eio)?;
     let (from, files) = match ctrl {
         Ctrl::Offer { from, files } => (from, files),
+        Ctrl::Fs { req } => return handle_fs_request(ch, req, exports),
         _ => return Err(eio("erwartetes Angebot")),
     };
     let (atx, arx) = unbounded::<bool>();
@@ -202,7 +207,7 @@ pub(crate) fn send_to_peer(
     Ok(())
 }
 
-fn dial_candidates(candidates: &[String]) -> io::Result<TcpStream> {
+pub(crate) fn dial_candidates(candidates: &[String]) -> io::Result<TcpStream> {
     let mut last = eio("keine Kandidaten");
     for c in candidates {
         if let Ok(addr) = c.parse::<std::net::SocketAddr>() {

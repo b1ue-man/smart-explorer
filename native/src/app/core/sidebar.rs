@@ -232,6 +232,7 @@ impl App {
         let mut to_remove: Option<String> = None;
         let mut open_gdrive = false;
         let mut disc_gdrive = false;
+        let mut open_share_peer: Option<crate::share::RemoteDevice> = None;
 
         // Active connection indicator + one-click disconnect.
         if let Some(rs) = &self.remote {
@@ -361,6 +362,61 @@ impl App {
             );
         }
 
+        if !self.share_roster.is_empty() {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("SHARE-SERVER")
+                        .small()
+                        .color(Color32::from_gray(140)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("...")
+                        .on_hover_text("Share-Server Sitzung")
+                        .clicked()
+                    {
+                        self.show_share = true;
+                    }
+                });
+            });
+            if self.share_room {
+                let room = if self.share_session_code.is_empty() {
+                    "Raum".to_string()
+                } else {
+                    format!("Raum {}", self.share_session_code)
+                };
+                ui.label(RichText::new(room).small().color(Color32::from_gray(150)));
+                for p in self.share_roster.clone() {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(format!("  {}", p.device)).small())
+                                .frame(false),
+                        )
+                        .on_hover_text(format!("{} via Share-Server oeffnen", p.fingerprint))
+                        .clicked()
+                    {
+                        open_share_peer = Some(p);
+                    }
+                }
+            } else {
+                for p in self.share_roster.clone() {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(format!("Geraet {}", p.device)).small(),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text(format!("{} via Share-Server oeffnen", p.fingerprint))
+                        .clicked()
+                    {
+                        open_share_peer = Some(p);
+                    }
+                }
+            }
+        }
+
         if disconnect {
             // Closing a ZIP returns to the folder it lives in; a real connection
             // just drops (entries clear on the next navigation).
@@ -405,6 +461,9 @@ impl App {
                 "Google Drive getrennt".to_string(),
                 std::time::Instant::now(),
             ));
+        }
+        if let Some(peer) = open_share_peer {
+            self.open_share_peer(&peer);
         }
     }
 }

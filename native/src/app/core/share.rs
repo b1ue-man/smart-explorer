@@ -24,7 +24,7 @@ impl App {
                 true
             }
             Err(e) => {
-                self.error_msg = Some(format!("Teilen-Dienst: {}", e));
+                self.error_msg = Some(format!("Share-Server-Dienst: {}", e));
                 false
             }
         }
@@ -38,17 +38,9 @@ impl App {
         }
     }
 
-    /// Lazily start Quick Share LAN discovery while the Teilen view is open, and
-    /// drain discovered devices.
+    /// Drain Quick Share discovery if some other entry point started it. The
+    /// Share-Server connection panel does not start Quick Share.
     pub(in crate::app) fn drain_quickshare(&mut self) {
-        if self.show_share && self.quickshare.is_none() {
-            let name = if self.share_device_draft.trim().is_empty() {
-                default_device_name()
-            } else {
-                self.share_device_draft.trim().to_string()
-            };
-            self.quickshare = crate::quickshare::QuickShare::start(&name);
-        }
         if let Some(qs) = &self.quickshare {
             for list in qs.events.try_iter() {
                 self.qs_devices = list;
@@ -67,7 +59,7 @@ impl App {
                 E::Status(s) => self.share_status = s,
                 E::Error(e) => {
                     self.share_status = format!("Fehler: {}", e);
-                    self.error_msg = Some(format!("Teilen: {}", e));
+                    self.error_msg = Some(format!("Share-Server: {}", e));
                 }
                 E::Roster(r) => self.share_roster = r,
                 E::Incoming { id, from, files } => {
@@ -91,17 +83,72 @@ impl App {
         }
     }
 
-    /// Local file paths in the current selection (sharing sends local files;
-    /// remote selections aren't supported yet).
-    pub(in crate::app) fn selected_local_files(&self) -> Vec<String> {
-        if self.remote.is_some() {
-            return Vec::new();
+    pub(in crate::app) fn share_export_config(&self) -> crate::share::ShareExportConfig {
+        crate::share::ShareExportConfig {
+            roots: self.share_exports.clone(),
+            include_connections: self.share_include_connections,
         }
-        self.entries
-            .iter()
-            .filter(|e| !e.is_dir && self.selection.contains(&e.key()))
-            .map(|e| e.path.replace('/', std::path::MAIN_SEPARATOR_STR))
-            .collect()
+    }
+
+    pub(in crate::app) fn add_share_export(&mut self, path: String, label: String) {
+        let path = path.trim().replace('\\', "/");
+        if path.is_empty() {
+            return;
+        }
+        let label = if label.trim().is_empty() {
+            path.trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Freigabe")
+                .to_string()
+        } else {
+            label.trim().to_string()
+        };
+        if self.share_exports.iter().any(|r| r.path == path) {
+            return;
+        }
+        self.share_exports
+            .push(crate::share::SharedRoot { label, path });
+        self.share_cmd(crate::share::ShareCmd::SetExports(
+            self.share_export_config(),
+        ));
+    }
+
+    pub(in crate::app) fn open_share_peer(&mut self, peer: &crate::share::RemoteDevice) {
+        let backend = match self
+            .share
+            .as_ref()
+            .and_then(|svc| svc.backend_for_peer(&peer.fingerprint))
+        {
+            Some(be) => be,
+            None => {
+                self.error_msg = Some("Share-Server: keine aktive Peer-Sitzung".to_string());
+                return;
+            }
+        };
+        let label = if self.share_room {
+            let room = if self.share_session_code.is_empty() {
+                "Raum".to_string()
+            } else {
+                format!("Raum {}", self.share_session_code)
+            };
+            format!("Share: {} / {}", room, peer.device)
+        } else {
+            format!("Share: {}", peer.device)
+        };
+        self.remote = Some(crate::connect::RemoteState {
+            backend: cache_remote(backend),
+            label: label.clone(),
+            agent_version: None,
+            zip_return: None,
+            sftp: None,
+            account: None,
+            endpoint_prefix: None,
+        });
+        self.net_conn = None;
+        self.notice = Some((format!("Verbunden: {}", label), std::time::Instant::now()));
+        self.start_scan(PathBuf::from("/"));
     }
 
     pub(in crate::app) fn ui_share(&mut self, ctx: &egui::Context) {
@@ -110,47 +157,118 @@ impl App {
         let mut pair_connect = false;
         let mut room_join = false;
         let mut leave = false;
-        let mut send = false;
-        let mut answer: Option<(u64, bool)> = None;
+        let mut add_export = false;
+        let mut add_current = false;
+        let mut add_all_drives = false;
+        let mut pick_export = false;
+        let mut remove_export: Option<usize> = None;
+        let mut open_peer: Option<crate::share::RemoteDevice> = None;
+        let mut exports_changed = false;
 
         let roster = self.share_roster.clone();
-        let incoming = self.share_incoming.clone();
         let status = self.share_status.clone();
-        let progress = self.share_progress;
         let my_code = self.share_my_code.clone();
+        let session_code = self.share_session_code.clone();
         let fingerprint = self
             .share
             .as_ref()
             .map(|s| s.fingerprint.clone())
             .unwrap_or_default();
-        let sel = self.selected_local_files().len();
-        let qs_devices = self.qs_devices.clone();
+        let exports = self.share_exports.clone();
+        let server_missing = self.share_server.trim().is_empty();
 
-        egui::Window::new("📡 Teilen — Geräte & Räume")
+        egui::Window::new("Verbinden via Share-Server")
             .open(&mut open)
             .resizable(true)
-            .default_size([460.0, 520.0])
+            .default_size([520.0, 560.0])
             .show(ctx, |ui| {
-                if self.share_server.trim().is_empty() {
+                if server_missing {
                     ui.colored_label(
                         Color32::from_rgb(255, 185, 120),
-                        "Kein Rendezvous-Server eingetragen.",
+                        "Kein Share-Server eingetragen.",
                     );
-                    ui.label("Einstellungen → TEILEN: Server-Adresse (host:port) setzen.");
+                    ui.label("Einstellungen -> TEILEN: Server-Adresse (host:port) setzen.");
                     return;
                 }
                 if !fingerprint.is_empty() {
                     ui.label(
-                        RichText::new(format!("Dieses Gerät: {}", fingerprint))
+                        RichText::new(format!("Dieses Geraet: {}", fingerprint))
                             .small()
                             .color(Color32::from_gray(140)),
                     );
                 }
 
                 ui.add_space(6.0);
-                ui.label(RichText::new("DIREKT KOPPELN").small().color(Color32::from_gray(140)));
+                ui.label(
+                    RichText::new("FREIGABEN")
+                        .small()
+                        .color(Color32::from_gray(140)),
+                );
+                if exports.is_empty() && !self.share_include_connections {
+                    ui.colored_label(Color32::from_gray(140), "(nichts freigegeben)");
+                }
+                for (i, r) in exports.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} -> {}", r.label, r.path));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("x")
+                                .on_hover_text("Freigabe entfernen")
+                                .clicked()
+                            {
+                                remove_export = Some(i);
+                            }
+                        });
+                    });
+                }
+                if ui
+                    .checkbox(
+                        &mut self.share_include_connections,
+                        "Eigene gespeicherte Verbindungen freigeben (ohne Peer-Share-Rekursion)",
+                    )
+                    .changed()
+                {
+                    exports_changed = true;
+                }
                 ui.horizontal(|ui| {
-                    if ui.button("Code anzeigen").on_hover_text("Erzeugt einen Code; das andere Gerät gibt ihn ein").clicked() {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.share_export_label_draft)
+                            .hint_text("Name")
+                            .desired_width(120.0),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.share_export_path_draft)
+                            .hint_text("Ordner, Laufwerk oder UNC")
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Aktuellen Ordner").clicked() {
+                        add_current = true;
+                    }
+                    if ui.button("Waehlen...").clicked() {
+                        pick_export = true;
+                    }
+                    if ui.button("Hinzufuegen").clicked() {
+                        add_export = true;
+                    }
+                    if ui.button("Alle Laufwerke").clicked() {
+                        add_all_drives = true;
+                    }
+                });
+
+                ui.separator();
+                ui.label(
+                    RichText::new("DIREKT")
+                        .small()
+                        .color(Color32::from_gray(140)),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Code anzeigen")
+                        .on_hover_text("Erzeugt einen Code; das andere Geraet gibt ihn ein")
+                        .clicked()
+                    {
                         pair_show = true;
                     }
                     if !my_code.is_empty() {
@@ -158,8 +276,12 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.share_code_input).hint_text("Code vom anderen Gerät").desired_width(160.0));
-                    if ui.button("Verbinden").clicked() {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.share_code_input)
+                            .hint_text("Code")
+                            .desired_width(160.0),
+                    );
+                    if ui.button("Direkt verbinden").clicked() {
                         pair_connect = true;
                     }
                 });
@@ -168,99 +290,114 @@ impl App {
                 ui.label(RichText::new("RAUM").small().color(Color32::from_gray(140)));
                 ui.horizontal(|ui| {
                     if ui.button("Raum erstellen").clicked() {
-                        room_join = true; // generates a code below
-                    }
-                    if ui.button("Beitreten").clicked() {
                         room_join = true;
+                    }
+                    if ui.button("Raum beitreten").clicked() {
+                        room_join = true;
+                    }
+                    if !session_code.is_empty() {
+                        ui.label(RichText::new(format!("Raum/Code: {session_code}")).monospace());
                     }
                 });
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Verbundene Geräte ({})", roster.len())).strong());
+                    ui.label(RichText::new(format!("Geraete ({})", roster.len())).strong());
                     if !roster.is_empty() && ui.small_button("Verlassen").clicked() {
                         leave = true;
                     }
                 });
                 if roster.is_empty() {
-                    ui.colored_label(Color32::from_gray(140), "(noch keine — Code teilen oder Raum beitreten)");
+                    ui.colored_label(Color32::from_gray(140), "(noch keine Geraete gefunden)");
                 }
                 for d in &roster {
-                    ui.label(format!("● {}  ({})", d.device, d.fingerprint));
-                }
-
-                ui.add_space(6.0);
-                if ui
-                    .add_enabled(sel > 0 && !roster.is_empty(), egui::Button::new(format!("⮝ {} ausgewählte Datei(en) senden", sel)))
-                    .on_hover_text("Sendet die in der Liste markierten lokalen Dateien an alle verbundenen Geräte")
-                    .clicked()
-                {
-                    send = true;
-                }
-                if sel == 0 {
-                    ui.label(RichText::new("Markiere lokale Dateien in der Liste, um sie zu senden.").small().color(Color32::from_gray(120)));
-                }
-
-                if let Some((done, total)) = progress {
-                    let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
-                    ui.add(egui::ProgressBar::new(frac).show_percentage());
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} ({})", d.device, d.fingerprint));
+                        if ui.button("Oeffnen").clicked() {
+                            open_peer = Some(d.clone());
+                        }
+                    });
                 }
                 if !status.is_empty() {
-                    ui.label(RichText::new(&status).small().color(Color32::from_gray(150)));
-                }
-
-                // Quick Share (Android) devices seen on the LAN.
-                ui.separator();
-                egui::CollapsingHeader::new(format!("📱 Quick Share (LAN) — {} gefunden", qs_devices.len()))
-                    .id_salt("qs_devices")
-                    .show(ui, |ui| {
-                        if qs_devices.is_empty() {
-                            ui.colored_label(Color32::from_gray(140), "(Suche… Android: Quick Share auf „Alle“ stellen)");
-                        }
-                        for d in &qs_devices {
-                            ui.label(format!("📱 {}  {}", d.name, d.addr));
-                        }
-                        ui.label(
-                            RichText::new(
-                                "Übertragung zu/von Quick Share ist in Arbeit (UKEY2/Protobuf, \
-                                 siehe docs/QUICKSHARE.md). Für Geräte mit Smart Explorer nutze \
-                                 oben Direkt koppeln / Raum.",
-                            )
+                    ui.label(
+                        RichText::new(&status)
                             .small()
-                            .color(Color32::from_gray(120)),
-                        );
-                    });
-
-                if !incoming.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new("EINGEHEND").small().color(Color32::from_gray(140)));
-                    for (id, from, files) in &incoming {
-                        let total: u64 = files.iter().map(|(_, s)| *s).sum();
-                        ui.label(format!("{} möchte {} Datei(en) senden ({})", from, files.len(), format_bytes(total)));
-                        ui.horizontal(|ui| {
-                            if ui.button("Annehmen").clicked() {
-                                answer = Some((*id, true));
-                            }
-                            if ui.button("Ablehnen").clicked() {
-                                answer = Some((*id, false));
-                            }
-                        });
-                    }
+                            .color(Color32::from_gray(150)),
+                    );
                 }
             });
         self.show_share = open;
 
+        if let Some(i) = remove_export {
+            if i < self.share_exports.len() {
+                self.share_exports.remove(i);
+                self.share_cmd(crate::share::ShareCmd::SetExports(
+                    self.share_export_config(),
+                ));
+            }
+        }
+        if add_current && !self.root_path.is_empty() && self.remote.is_none() {
+            let label = self
+                .root_path
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Aktuell")
+                .to_string();
+            self.add_share_export(self.root_path.clone(), label);
+        }
+        if pick_export {
+            if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                let path = p.to_string_lossy().replace('\\', "/");
+                self.share_export_path_draft = path.clone();
+                self.share_export_label_draft = path
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Freigabe")
+                    .to_string();
+            }
+        }
+        if add_export {
+            self.add_share_export(
+                self.share_export_path_draft.clone(),
+                self.share_export_label_draft.clone(),
+            );
+        }
+        if add_all_drives {
+            for d in self.drives.clone() {
+                let label = d.trim_end_matches(['\\', '/']).to_string();
+                self.add_share_export(d, label);
+            }
+        }
+        if exports_changed {
+            self.share_cmd(crate::share::ShareCmd::SetExports(
+                self.share_export_config(),
+            ));
+        }
+
         if pair_show {
             let code = crate::share::gen_code();
             self.share_my_code = code.clone();
+            self.share_session_code = code.clone();
             self.share_room = false;
-            self.share_cmd(crate::share::ShareCmd::Pair(code));
+            self.share_cmd(crate::share::ShareCmd::Pair {
+                code,
+                exports: self.share_export_config(),
+            });
         }
         if pair_connect {
             let code = self.share_code_input.trim().to_string();
             if !code.is_empty() {
                 self.share_my_code.clear();
-                self.share_cmd(crate::share::ShareCmd::Pair(code));
+                self.share_session_code = code.clone();
+                self.share_room = false;
+                self.share_cmd(crate::share::ShareCmd::Pair {
+                    code,
+                    exports: self.share_export_config(),
+                });
             }
         }
         if room_join {
@@ -271,25 +408,21 @@ impl App {
             } else {
                 self.share_code_input.trim().to_string()
             };
+            self.share_session_code = code.clone();
             self.share_room = true;
-            self.share_cmd(crate::share::ShareCmd::JoinRoom(code));
+            self.share_cmd(crate::share::ShareCmd::JoinRoom {
+                code,
+                exports: self.share_export_config(),
+            });
         }
         if leave {
             self.share_roster.clear();
             self.share_my_code.clear();
+            self.share_session_code.clear();
             self.share_cmd(crate::share::ShareCmd::Leave);
         }
-        if send {
-            let files = self.selected_local_files();
-            if files.is_empty() {
-                self.error_msg = Some("Keine lokalen Dateien ausgewählt.".to_string());
-            } else {
-                self.share_cmd(crate::share::ShareCmd::Send(files));
-            }
-        }
-        if let Some((id, accept)) = answer {
-            self.share_incoming.retain(|(i, _, _)| *i != id);
-            self.share_cmd(crate::share::ShareCmd::Answer { id, accept });
+        if let Some(peer) = open_peer {
+            self.open_share_peer(&peer);
         }
     }
 }

@@ -319,9 +319,9 @@ impl App {
                 self.ui_menu_settings(ui);
             });
             if ui
-                .selectable_label(self.show_share, "📡 Teilen")
+                .selectable_label(self.show_share, "Share-Server")
                 .on_hover_text(
-                    "Dateien direkt an gekoppelte Geräte / in Räume senden (P2P, verschlüsselt)",
+                    "Andere Smart-Explorer-Geraete via Share-Server als normale Remote-Verbindung oeffnen",
                 )
                 .clicked()
             {

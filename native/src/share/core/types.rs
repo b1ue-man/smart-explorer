@@ -1,5 +1,7 @@
 use crossbeam_channel::{Receiver, Sender};
 
+use super::fs::ShareExportConfig;
+
 #[derive(Clone, Debug)]
 pub struct RemoteDevice {
     pub device: String,
@@ -10,13 +12,23 @@ pub struct RemoteDevice {
 /// What the UI tells the share worker to do.
 pub enum ShareCmd {
     /// Announce ourselves for a 1:1 pairing under `code`.
-    Pair(String),
+    Pair {
+        code: String,
+        exports: ShareExportConfig,
+    },
     /// Join (or create) a room under `code`.
-    JoinRoom(String),
+    JoinRoom {
+        code: String,
+        exports: ShareExportConfig,
+    },
+    /// Change what this device exposes to already-connected peers.
+    SetExports(ShareExportConfig),
     /// Leave the current pairing/room.
     Leave,
+    #[allow(dead_code)]
     /// Send these local paths to every current peer (pair = the one peer).
     Send(Vec<String>),
+    #[allow(dead_code)]
     /// Answer an incoming offer (accept or reject).
     Answer { id: u64, accept: bool },
 }

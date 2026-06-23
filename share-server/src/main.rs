@@ -49,11 +49,24 @@ struct Member {
 #[derive(Serialize, Clone)]
 #[serde(tag = "t", rename_all = "lowercase")]
 enum Out {
-    Peer { device: String, candidates: Vec<String>, pubkey: String },
-    Roster { members: Vec<Member> },
-    Joined { member: Member },
-    Left { device: String, pubkey: String },
-    Error { msg: String },
+    Peer {
+        device: String,
+        candidates: Vec<String>,
+        pubkey: String,
+    },
+    Roster {
+        members: Vec<Member>,
+    },
+    Joined {
+        member: Member,
+    },
+    Left {
+        device: String,
+        pubkey: String,
+    },
+    Error {
+        msg: String,
+    },
 }
 
 /// A live connection we can push control messages to (its socket write half).
@@ -129,7 +142,10 @@ fn main() {
 }
 
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
-    let public_ip = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+    let public_ip = stream
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
     let writer: Writer = Arc::new(Mutex::new(stream.try_clone()?));
     let mut reader = BufReader::new(stream);
 
@@ -141,24 +157,53 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     let hello: In = match serde_json::from_str(line.trim()) {
         Ok(h) => h,
         Err(_) => {
-            send(&writer, &Out::Error { msg: "bad hello".into() });
+            send(
+                &writer,
+                &Out::Error {
+                    msg: "bad hello".into(),
+                },
+            );
             return Ok(());
         }
     };
-    let In::Hello { mode, code, device, listen_port, lan, pubkey } = hello;
+    let In::Hello {
+        mode,
+        code,
+        device,
+        listen_port,
+        lan,
+        pubkey,
+    } = hello;
     if code.is_empty() || code.len() > MAX_CODE {
-        send(&writer, &Out::Error { msg: "bad code".into() });
+        send(
+            &writer,
+            &Out::Error {
+                msg: "bad code".into(),
+            },
+        );
         return Ok(());
     }
     let candidates = build_candidates(&lan, &public_ip, listen_port);
-    let me = Member { device: device.clone(), candidates, pubkey: pubkey.clone() };
-    let peer = Peer { member: me.clone(), writer: writer.clone() };
+    let me = Member {
+        device: device.clone(),
+        candidates,
+        pubkey: pubkey.clone(),
+    };
+    let peer = Peer {
+        member: me.clone(),
+        writer: writer.clone(),
+    };
 
     match mode.as_str() {
         "pair" => handle_pair(&code, peer, &state, &mut reader),
         "room" => handle_room(&code, peer, &state, &mut reader),
         _ => {
-            send(&writer, &Out::Error { msg: "bad mode".into() });
+            send(
+                &writer,
+                &Out::Error {
+                    msg: "bad mode".into(),
+                },
+            );
             Ok(())
         }
     }
@@ -177,16 +222,22 @@ fn handle_pair(
     };
     if let Some(other) = waiting {
         // Tell each peer about the other; both then connect directly.
-        send(&other.writer, &Out::Peer {
-            device: peer.member.device.clone(),
-            candidates: peer.member.candidates.clone(),
-            pubkey: peer.member.pubkey.clone(),
-        });
-        send(&peer.writer, &Out::Peer {
-            device: other.member.device.clone(),
-            candidates: other.member.candidates.clone(),
-            pubkey: other.member.pubkey.clone(),
-        });
+        send(
+            &other.writer,
+            &Out::Peer {
+                device: peer.member.device.clone(),
+                candidates: peer.member.candidates.clone(),
+                pubkey: peer.member.pubkey.clone(),
+            },
+        );
+        send(
+            &peer.writer,
+            &Out::Peer {
+                device: other.member.device.clone(),
+                candidates: other.member.candidates.clone(),
+                pubkey: other.member.pubkey.clone(),
+            },
+        );
         return Ok(());
     }
     // Otherwise wait to be matched; hold the socket open until the client leaves.
@@ -220,13 +271,23 @@ fn handle_room(
         let members = st.rooms.entry(code.to_string()).or_default();
         if members.len() >= MAX_ROOM {
             drop(st);
-            send(&peer.writer, &Out::Error { msg: "room full".into() });
+            send(
+                &peer.writer,
+                &Out::Error {
+                    msg: "room full".into(),
+                },
+            );
             return Ok(());
         }
         let roster: Vec<Member> = members.iter().map(|p| p.member.clone()).collect();
         send(&peer.writer, &Out::Roster { members: roster });
         for m in members.iter() {
-            send(&m.writer, &Out::Joined { member: peer.member.clone() });
+            send(
+                &m.writer,
+                &Out::Joined {
+                    member: peer.member.clone(),
+                },
+            );
         }
         members.push(peer.clone());
     }
@@ -249,10 +310,13 @@ fn handle_room(
         }
         drop(st);
         for w in &remaining {
-            send(w, &Out::Left {
-                device: peer.member.device.clone(),
-                pubkey: peer.member.pubkey.clone(),
-            });
+            send(
+                w,
+                &Out::Left {
+                    device: peer.member.device.clone(),
+                    pubkey: peer.member.pubkey.clone(),
+                },
+            );
         }
     }
     Ok(())
@@ -264,12 +328,19 @@ mod tests {
 
     #[test]
     fn candidates_include_lan_and_public_no_dupes() {
-        let c = build_candidates(&["192.168.1.5".into(), "10.0.0.2".into()], "203.0.113.9", 51737);
-        assert_eq!(c, vec![
-            "192.168.1.5:51737".to_string(),
-            "10.0.0.2:51737".to_string(),
-            "203.0.113.9:51737".to_string(),
-        ]);
+        let c = build_candidates(
+            &["192.168.1.5".into(), "10.0.0.2".into()],
+            "203.0.113.9",
+            51737,
+        );
+        assert_eq!(
+            c,
+            vec![
+                "192.168.1.5:51737".to_string(),
+                "10.0.0.2:51737".to_string(),
+                "203.0.113.9:51737".to_string(),
+            ]
+        );
         // If the public IP equals a LAN entry (same network), no duplicate.
         let c2 = build_candidates(&["203.0.113.9".into()], "203.0.113.9", 22);
         assert_eq!(c2, vec!["203.0.113.9:22".to_string()]);
@@ -281,7 +352,12 @@ mod tests {
             r#"{"t":"hello","mode":"pair","code":"K7P2QX9F","device":"Laptop","listen_port":51737,"lan":["192.168.1.5"],"pubkey":"AAAA"}"#,
         )
         .unwrap();
-        let In::Hello { mode, code, listen_port, .. } = h;
+        let In::Hello {
+            mode,
+            code,
+            listen_port,
+            ..
+        } = h;
         assert_eq!(mode, "pair");
         assert_eq!(code, "K7P2QX9F");
         assert_eq!(listen_port, 51737);
@@ -289,9 +365,18 @@ mod tests {
 
     #[test]
     fn out_messages_serialize_tagged() {
-        let m = Out::Left { device: "X".into(), pubkey: "k".into() };
-        assert_eq!(serde_json::to_string(&m).unwrap(), r#"{"t":"left","device":"X","pubkey":"k"}"#);
+        let m = Out::Left {
+            device: "X".into(),
+            pubkey: "k".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&m).unwrap(),
+            r#"{"t":"left","device":"X","pubkey":"k"}"#
+        );
         let r = Out::Roster { members: vec![] };
-        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"t":"roster","members":[]}"#);
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"t":"roster","members":[]}"#
+        );
     }
 }

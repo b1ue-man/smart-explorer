@@ -382,8 +382,13 @@ pub struct App {
     /// Code typed to connect/join, and the code we generated to display.
     pub(in crate::app) share_code_input: String,
     pub(in crate::app) share_my_code: String,
+    pub(in crate::app) share_session_code: String,
     pub(in crate::app) share_room: bool,
     pub(in crate::app) share_roster: Vec<crate::share::RemoteDevice>,
+    pub(in crate::app) share_exports: Vec<crate::share::SharedRoot>,
+    pub(in crate::app) share_export_path_draft: String,
+    pub(in crate::app) share_export_label_draft: String,
+    pub(in crate::app) share_include_connections: bool,
     pub(in crate::app) share_incoming: Vec<(u64, String, Vec<(String, u64)>)>,
     pub(in crate::app) share_status: String,
     pub(in crate::app) share_progress: Option<(u64, u64)>,
