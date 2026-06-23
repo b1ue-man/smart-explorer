@@ -1,106 +1,118 @@
-//! Smart Explorer share **rendezvous/signaling server** (standalone, headless).
+//! Smart Explorer share rendezvous/signaling server.
 //!
-//! It ONLY routes discovery: it introduces two devices that share a pairing
-//! code, and tracks room membership, so peers can then connect **directly** and
-//! transfer files **peer-to-peer, end-to-end encrypted**. File bytes never pass
-//! through this server — it sees only the small JSON control messages below.
-//!
-//! Wire protocol: newline-delimited JSON over TCP.
-//!   client → server:  Hello { mode:"pair"|"room", code, device, listen_port, lan[], pubkey }
-//!   server → client:  Peer | Roster | Joined | Left | Error
-//!
-//! Usage: `se-share-server [BIND_ADDR]`   (default 0.0.0.0:51820; env SE_SHARE_BIND)
-//!
-//! Runs on Linux and Windows (thread-per-connection, std only + serde). For a
-//! personal/self-hosted deployment this scales fine.
+//! The server is intentionally untrusted: it stores and routes signed presence
+//! blobs for persistent direct contacts and rooms. It never sees relation
+//! secrets, private keys, file names, file bytes, or export configuration.
+//! Clients validate HMAC proofs and Noise static keys before opening a peer.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-const MAX_CODE: usize = 64;
-const MAX_LAN: usize = 8;
-const MAX_ROOM: usize = 32;
+const MAX_ROOM: usize = 64;
+const MAX_WATCHES: usize = 256;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PeerPresence {
+    kind: String,
+    relation_id: String,
+    device_id: String,
+    device_name: String,
+    public_key: String,
+    fingerprint: String,
+    candidates: Vec<String>,
+    expires_at: i64,
+    nonce: String,
+    proof: String,
+}
+
+#[allow(dead_code)]
 #[derive(Deserialize)]
-#[serde(tag = "t", rename_all = "lowercase")]
+#[serde(tag = "t", rename_all = "snake_case")]
 enum In {
     Hello {
-        mode: String,
-        code: String,
-        device: String,
+        protocol_version: u32,
+        device_id: String,
+        device_name: String,
         listen_port: u16,
         #[serde(default)]
         lan: Vec<String>,
-        #[serde(default)]
-        pubkey: String,
+        public_key: String,
+        fingerprint: String,
     },
+    PublishDirect {
+        presence: PeerPresence,
+    },
+    UnpublishDirect {
+        lookup_id: String,
+    },
+    WatchDirect {
+        lookup_id: String,
+    },
+    UnwatchDirect {
+        lookup_id: String,
+    },
+    JoinRoom {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    LeaveRoom {
+        room_id: String,
+    },
+    Heartbeat,
 }
 
 #[derive(Serialize, Clone)]
-struct Member {
-    device: String,
-    candidates: Vec<String>,
-    pubkey: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(tag = "t", rename_all = "lowercase")]
+#[serde(tag = "t", rename_all = "snake_case")]
 enum Out {
-    Peer {
-        device: String,
-        candidates: Vec<String>,
-        pubkey: String,
+    HelloOk,
+    DirectAvailable {
+        lookup_id: String,
+        presence: PeerPresence,
     },
-    Roster {
-        members: Vec<Member>,
+    DirectOffline {
+        lookup_id: String,
     },
-    Joined {
-        member: Member,
+    RoomRoster {
+        room_id: String,
+        members: Vec<PeerPresence>,
     },
-    Left {
-        device: String,
-        pubkey: String,
+    RoomJoined {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    RoomLeft {
+        room_id: String,
+        device_id: String,
     },
     Error {
+        scope: String,
         msg: String,
     },
+    Pong,
 }
 
-/// A live connection we can push control messages to (its socket write half).
 type Writer = Arc<Mutex<TcpStream>>;
 
 #[derive(Clone)]
-struct Peer {
-    member: Member,
+struct Client {
     writer: Writer,
+    device_id: String,
+    direct_lookup_ids: HashSet<String>,
+    watched_lookup_ids: HashSet<String>,
+    rooms: HashSet<String>,
 }
 
 #[derive(Default)]
 struct State {
-    /// code → the single peer waiting to be paired.
-    pairing: HashMap<String, Peer>,
-    /// code → current room members.
-    rooms: HashMap<String, Vec<Peer>>,
-}
-
-/// Build a peer's reachable candidates: each LAN IP and the public IP the server
-/// observed, all at the peer's advertised listen port.
-fn build_candidates(lan: &[String], public_ip: &str, port: u16) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for ip in lan.iter().take(MAX_LAN) {
-        let ip = ip.trim();
-        if !ip.is_empty() {
-            out.push(format!("{}:{}", ip, port));
-        }
-    }
-    let pub_c = format!("{}:{}", public_ip, port);
-    if !out.contains(&pub_c) {
-        out.push(pub_c);
-    }
-    out
+    next_id: u64,
+    clients: HashMap<u64, Client>,
+    direct: HashMap<String, (u64, PeerPresence)>,
+    watchers: HashMap<String, HashSet<u64>>,
+    rooms: HashMap<String, HashMap<String, (u64, PeerPresence)>>,
 }
 
 fn send(w: &Writer, msg: &Out) {
@@ -125,7 +137,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("se-share-server listening on {bind} (routes discovery only; no file data)");
+    eprintln!("se-share-server listening on {bind} (rendezvous only)");
     let state = Arc::new(Mutex::new(State::default()));
     for conn in listener.incoming() {
         let stream = match conn {
@@ -134,22 +146,15 @@ fn main() {
         };
         let state = state.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle(stream, state) {
-                let _ = e;
-            }
+            let _ = handle(stream, state);
         });
     }
 }
 
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
-    let public_ip = stream
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let writer: Writer = Arc::new(Mutex::new(stream.try_clone()?));
     let mut reader = BufReader::new(stream);
-
-    // First line must be Hello.
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
         return Ok(());
@@ -160,6 +165,7 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
             send(
                 &writer,
                 &Out::Error {
+                    scope: "server".into(),
                     msg: "bad hello".into(),
                 },
             );
@@ -167,216 +173,381 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
         }
     };
     let In::Hello {
-        mode,
-        code,
-        device,
-        listen_port,
-        lan,
-        pubkey,
-    } = hello;
-    if code.is_empty() || code.len() > MAX_CODE {
+        protocol_version,
+        device_id,
+        device_name: _,
+        listen_port: _,
+        lan: _,
+        public_key: _,
+        fingerprint: _,
+    } = hello
+    else {
         send(
             &writer,
             &Out::Error {
-                msg: "bad code".into(),
+                scope: "server".into(),
+                msg: "first message must be hello".into(),
+            },
+        );
+        return Ok(());
+    };
+    if protocol_version != 2 || device_id.trim().is_empty() {
+        send(
+            &writer,
+            &Out::Error {
+                scope: "server".into(),
+                msg: "unsupported hello".into(),
             },
         );
         return Ok(());
     }
-    let candidates = build_candidates(&lan, &public_ip, listen_port);
-    let me = Member {
-        device: device.clone(),
-        candidates,
-        pubkey: pubkey.clone(),
-    };
-    let peer = Peer {
-        member: me.clone(),
-        writer: writer.clone(),
-    };
 
-    match mode.as_str() {
-        "pair" => handle_pair(&code, peer, &state, &mut reader),
-        "room" => handle_room(&code, peer, &state, &mut reader),
-        _ => {
-            send(
-                &writer,
-                &Out::Error {
-                    msg: "bad mode".into(),
-                },
-            );
-            Ok(())
-        }
-    }
-}
-
-fn handle_pair(
-    code: &str,
-    peer: Peer,
-    state: &Arc<Mutex<State>>,
-    reader: &mut BufReader<TcpStream>,
-) -> std::io::Result<()> {
-    // If someone is already waiting on this code, introduce them and finish.
-    let waiting = {
+    let id = {
         let mut st = state.lock().unwrap();
-        st.pairing.remove(code)
-    };
-    if let Some(other) = waiting {
-        // Tell each peer about the other; both then connect directly.
-        send(
-            &other.writer,
-            &Out::Peer {
-                device: peer.member.device.clone(),
-                candidates: peer.member.candidates.clone(),
-                pubkey: peer.member.pubkey.clone(),
+        st.next_id += 1;
+        let id = st.next_id;
+        st.clients.insert(
+            id,
+            Client {
+                writer: writer.clone(),
+                device_id: device_id.clone(),
+                direct_lookup_ids: HashSet::new(),
+                watched_lookup_ids: HashSet::new(),
+                rooms: HashSet::new(),
             },
         );
-        send(
-            &peer.writer,
-            &Out::Peer {
-                device: other.member.device.clone(),
-                candidates: other.member.candidates.clone(),
-                pubkey: other.member.pubkey.clone(),
-            },
-        );
-        return Ok(());
-    }
-    // Otherwise wait to be matched; hold the socket open until the client leaves.
-    {
-        let mut st = state.lock().unwrap();
-        st.pairing.insert(code.to_string(), peer);
-    }
-    let mut line = String::new();
+        id
+    };
+    send(&writer, &Out::HelloOk);
+
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break, // disconnected
-            Ok(_) => {}              // ignore keepalives
+            Ok(0) => break,
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                break;
+            }
+            Err(_) => break,
+            Ok(_) => {}
         }
+        let msg: In = match serde_json::from_str(line.trim()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        dispatch(id, &writer, msg, &state);
     }
-    // Clean up if we left before being matched.
-    let mut st = state.lock().unwrap();
-    st.pairing.remove(code);
+    cleanup(id, &state);
     Ok(())
 }
 
-fn handle_room(
-    code: &str,
-    peer: Peer,
-    state: &Arc<Mutex<State>>,
-    reader: &mut BufReader<TcpStream>,
-) -> std::io::Result<()> {
-    // Join: send the newcomer the current roster, tell members someone joined.
-    {
+fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
+    match msg {
+        In::PublishDirect { presence } => publish_direct(id, presence, state),
+        In::UnpublishDirect { lookup_id } => unpublish_direct(id, &lookup_id, state),
+        In::WatchDirect { lookup_id } => watch_direct(id, writer, &lookup_id, state),
+        In::UnwatchDirect { lookup_id } => {
+            let mut st = state.lock().unwrap();
+            if let Some(c) = st.clients.get_mut(&id) {
+                c.watched_lookup_ids.remove(&lookup_id);
+            }
+            if let Some(w) = st.watchers.get_mut(&lookup_id) {
+                w.remove(&id);
+            }
+        }
+        In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
+        In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
+        In::Heartbeat => send(writer, &Out::Pong),
+        In::Hello { .. } => {}
+    }
+}
+
+fn publish_direct(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>) {
+    let lookup_id = presence.relation_id.clone();
+    let watchers = {
         let mut st = state.lock().unwrap();
-        let members = st.rooms.entry(code.to_string()).or_default();
-        if members.len() >= MAX_ROOM {
-            drop(st);
+        st.direct.insert(lookup_id.clone(), (id, presence.clone()));
+        if let Some(c) = st.clients.get_mut(&id) {
+            c.direct_lookup_ids.insert(lookup_id.clone());
+        }
+        st.watchers.get(&lookup_id).cloned().unwrap_or_default()
+    };
+    notify_direct_available(&lookup_id, &presence, watchers, state);
+}
+
+fn unpublish_direct(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
+    let watchers = {
+        let mut st = state.lock().unwrap();
+        if st.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id) {
+            st.direct.remove(lookup_id);
+        }
+        if let Some(c) = st.clients.get_mut(&id) {
+            c.direct_lookup_ids.remove(lookup_id);
+        }
+        st.watchers.get(lookup_id).cloned().unwrap_or_default()
+    };
+    notify_direct_offline(lookup_id, watchers, state);
+}
+
+fn watch_direct(id: u64, writer: &Writer, lookup_id: &str, state: &Arc<Mutex<State>>) {
+    let current = {
+        let mut st = state.lock().unwrap();
+        if st
+            .clients
+            .get(&id)
+            .map(|c| c.watched_lookup_ids.len() >= MAX_WATCHES)
+            .unwrap_or(false)
+        {
             send(
-                &peer.writer,
+                writer,
                 &Out::Error {
+                    scope: "direct".into(),
+                    msg: "too many watches".into(),
+                },
+            );
+            return;
+        }
+        st.watchers
+            .entry(lookup_id.to_string())
+            .or_default()
+            .insert(id);
+        if let Some(c) = st.clients.get_mut(&id) {
+            c.watched_lookup_ids.insert(lookup_id.to_string());
+        }
+        st.direct.get(lookup_id).map(|(_, p)| p.clone())
+    };
+    if let Some(presence) = current {
+        send(
+            writer,
+            &Out::DirectAvailable {
+                lookup_id: lookup_id.to_string(),
+                presence,
+            },
+        );
+    }
+}
+
+fn join_room(
+    id: u64,
+    writer: &Writer,
+    room_id: &str,
+    presence: PeerPresence,
+    state: &Arc<Mutex<State>>,
+) {
+    let (roster, joined_targets) = {
+        let mut st = state.lock().unwrap();
+        let members = st.rooms.entry(room_id.to_string()).or_default();
+        if members.len() >= MAX_ROOM && !members.contains_key(&presence.device_id) {
+            send(
+                writer,
+                &Out::Error {
+                    scope: "room".into(),
                     msg: "room full".into(),
                 },
             );
-            return Ok(());
+            return;
         }
-        let roster: Vec<Member> = members.iter().map(|p| p.member.clone()).collect();
-        send(&peer.writer, &Out::Roster { members: roster });
-        for m in members.iter() {
-            send(
-                &m.writer,
-                &Out::Joined {
-                    member: peer.member.clone(),
-                },
-            );
+        let roster: Vec<PeerPresence> = members.values().map(|(_, p)| p.clone()).collect();
+        let target_ids: Vec<u64> = members.values().map(|(client_id, _)| *client_id).collect();
+        members.insert(presence.device_id.clone(), (id, presence.clone()));
+        if let Some(c) = st.clients.get_mut(&id) {
+            c.rooms.insert(room_id.to_string());
         }
-        members.push(peer.clone());
+        let targets: Vec<Writer> = target_ids
+            .into_iter()
+            .filter_map(|client_id| st.clients.get(&client_id).map(|c| c.writer.clone()))
+            .collect();
+        (roster, targets)
+    };
+    send(
+        writer,
+        &Out::RoomRoster {
+            room_id: room_id.to_string(),
+            members: roster,
+        },
+    );
+    for target in joined_targets {
+        send(
+            &target,
+            &Out::RoomJoined {
+                room_id: room_id.to_string(),
+                presence: presence.clone(),
+            },
+        );
     }
-    // Stay connected for roster updates until the client leaves.
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+}
+
+fn leave_room(id: u64, room_id: &str, state: &Arc<Mutex<State>>) {
+    let (device_id, targets) = {
+        let mut st = state.lock().unwrap();
+        let device_id = st
+            .clients
+            .get(&id)
+            .map(|c| c.device_id.clone())
+            .unwrap_or_default();
+        let mut targets = Vec::new();
+        if let Some(members) = st.rooms.get_mut(room_id) {
+            members.retain(|_, (client_id, _)| *client_id != id);
+            let remaining_ids: Vec<u64> =
+                members.values().map(|(client_id, _)| *client_id).collect();
+            if members.is_empty() {
+                st.rooms.remove(room_id);
+            }
+            for client_id in remaining_ids {
+                if let Some(c) = st.clients.get(&client_id) {
+                    targets.push(c.writer.clone());
+                }
+            }
+        }
+        if let Some(c) = st.clients.get_mut(&id) {
+            c.rooms.remove(room_id);
+        }
+        (device_id, targets)
+    };
+    for target in targets {
+        send(
+            &target,
+            &Out::RoomLeft {
+                room_id: room_id.to_string(),
+                device_id: device_id.clone(),
+            },
+        );
+    }
+}
+
+fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
+    let (directs, watched, rooms) = {
+        let mut st = state.lock().unwrap();
+        let client = match st.clients.remove(&id) {
+            Some(c) => c,
+            None => return,
+        };
+        for lookup in &client.watched_lookup_ids {
+            if let Some(w) = st.watchers.get_mut(lookup) {
+                w.remove(&id);
+            }
+        }
+        (
+            client.direct_lookup_ids.into_iter().collect::<Vec<_>>(),
+            client.watched_lookup_ids.into_iter().collect::<Vec<_>>(),
+            client.rooms.into_iter().collect::<Vec<_>>(),
+        )
+    };
+    for lookup in directs {
+        unpublish_direct(id, &lookup, state);
+    }
+    for lookup in watched {
+        let mut st = state.lock().unwrap();
+        if let Some(w) = st.watchers.get_mut(&lookup) {
+            w.remove(&id);
         }
     }
-    // Leave: drop from the room and notify the rest.
-    let mut st = state.lock().unwrap();
-    if let Some(members) = st.rooms.get_mut(code) {
-        members.retain(|p| !Arc::ptr_eq(&p.writer, &peer.writer));
-        let remaining: Vec<Writer> = members.iter().map(|p| p.writer.clone()).collect();
-        if members.is_empty() {
-            st.rooms.remove(code);
-        }
-        drop(st);
-        for w in &remaining {
-            send(
-                w,
-                &Out::Left {
-                    device: peer.member.device.clone(),
-                    pubkey: peer.member.pubkey.clone(),
-                },
-            );
-        }
+    for room in rooms {
+        leave_room(id, &room, state);
     }
-    Ok(())
+}
+
+fn notify_direct_available(
+    lookup_id: &str,
+    presence: &PeerPresence,
+    watchers: HashSet<u64>,
+    state: &Arc<Mutex<State>>,
+) {
+    let writers = writers_for(watchers, state);
+    for w in writers {
+        send(
+            &w,
+            &Out::DirectAvailable {
+                lookup_id: lookup_id.to_string(),
+                presence: presence.clone(),
+            },
+        );
+    }
+}
+
+fn notify_direct_offline(lookup_id: &str, watchers: HashSet<u64>, state: &Arc<Mutex<State>>) {
+    let writers = writers_for(watchers, state);
+    for w in writers {
+        send(
+            &w,
+            &Out::DirectOffline {
+                lookup_id: lookup_id.to_string(),
+            },
+        );
+    }
+}
+
+fn writers_for(ids: HashSet<u64>, state: &Arc<Mutex<State>>) -> Vec<Writer> {
+    let st = state.lock().unwrap();
+    ids.into_iter()
+        .filter_map(|id| st.clients.get(&id).map(|c| c.writer.clone()))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn presence(kind: &str, relation: &str, device: &str) -> PeerPresence {
+        PeerPresence {
+            kind: kind.into(),
+            relation_id: relation.into(),
+            device_id: device.into(),
+            device_name: device.into(),
+            public_key: "pk".into(),
+            fingerprint: "fp".into(),
+            candidates: vec!["127.0.0.1:1".into()],
+            expires_at: 99,
+            nonce: "n".into(),
+            proof: "proof".into(),
+        }
+    }
+
     #[test]
-    fn candidates_include_lan_and_public_no_dupes() {
-        let c = build_candidates(
-            &["192.168.1.5".into(), "10.0.0.2".into()],
-            "203.0.113.9",
-            51737,
-        );
+    fn out_messages_serialize_tagged() {
+        let m = Out::DirectOffline {
+            lookup_id: "x".into(),
+        };
         assert_eq!(
-            c,
-            vec![
-                "192.168.1.5:51737".to_string(),
-                "10.0.0.2:51737".to_string(),
-                "203.0.113.9:51737".to_string(),
-            ]
+            serde_json::to_string(&m).unwrap(),
+            r#"{"t":"direct_offline","lookup_id":"x"}"#
         );
-        // If the public IP equals a LAN entry (same network), no duplicate.
-        let c2 = build_candidates(&["203.0.113.9".into()], "203.0.113.9", 22);
-        assert_eq!(c2, vec!["203.0.113.9:22".to_string()]);
+        let r = Out::RoomRoster {
+            room_id: "r".into(),
+            members: vec![],
+        };
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"t":"room_roster","room_id":"r","members":[]}"#
+        );
     }
 
     #[test]
     fn hello_parses() {
         let h: In = serde_json::from_str(
-            r#"{"t":"hello","mode":"pair","code":"K7P2QX9F","device":"Laptop","listen_port":51737,"lan":["192.168.1.5"],"pubkey":"AAAA"}"#,
+            r#"{"t":"hello","protocol_version":2,"device_id":"a","device_name":"Laptop","listen_port":51737,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
         )
         .unwrap();
         let In::Hello {
-            mode,
-            code,
+            protocol_version,
+            device_id,
             listen_port,
             ..
-        } = h;
-        assert_eq!(mode, "pair");
-        assert_eq!(code, "K7P2QX9F");
+        } = h
+        else {
+            panic!("not hello");
+        };
+        assert_eq!(protocol_version, 2);
+        assert_eq!(device_id, "a");
         assert_eq!(listen_port, 51737);
     }
 
     #[test]
-    fn out_messages_serialize_tagged() {
-        let m = Out::Left {
-            device: "X".into(),
-            pubkey: "k".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&m).unwrap(),
-            r#"{"t":"left","device":"X","pubkey":"k"}"#
-        );
-        let r = Out::Roster { members: vec![] };
-        assert_eq!(
-            serde_json::to_string(&r).unwrap(),
-            r#"{"t":"roster","members":[]}"#
-        );
+    fn presence_roundtrips() {
+        let p = presence("room", "r", "d");
+        let s = serde_json::to_string(&p).unwrap();
+        let back: PeerPresence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.kind, "room");
+        assert_eq!(back.relation_id, "r");
+        assert_eq!(back.device_id, "d");
     }
 }

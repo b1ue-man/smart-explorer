@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.87"
+version = "0.5.88"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -56,11 +56,12 @@ getrandom = "0.2"
 # expose natively (Google Drive md5Checksum, Nextcloud/ownCloud oc:checksums) —
 # so checksum-mode sync compares hashes WITHOUT downloading remote files.
 md5 = "0.7"
-# Peer file sharing (share.rs, #21): Noise NNpsk0 E2E channel (snow's default
+# Peer file sharing (share.rs, #21): Noise XXpsk3 E2E channel (snow's default
 # resolver is pure Rust — x25519-dalek + chacha20poly1305 + blake2/sha2, no
-# aws-lc) keyed by a PSK derived from the pairing/room code via HKDF.
+# aws-lc) keyed by per-direct/per-room relation secrets via HKDF/HMAC.
 snow = "0.9"
 hkdf = "0.12"
+hmac = "0.12"
 # Quick Share (quickshare.rs, #Q): mDNS discovery/advertisement of the Nearby
 # Share service so Android devices appear on the LAN. Pure Rust (if-addrs +
 # socket2), cross-compiles clean.

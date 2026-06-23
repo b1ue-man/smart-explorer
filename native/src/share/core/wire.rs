@@ -1,60 +1,89 @@
 use serde::{Deserialize, Serialize};
 
-use super::types::RemoteDevice;
+use super::types::PeerPresence;
 
-#[derive(Serialize)]
-pub(crate) struct Hello {
-    pub(crate) t: &'static str,
-    pub(crate) mode: String,
-    pub(crate) code: String,
-    pub(crate) device: String,
-    pub(crate) listen_port: u16,
-    pub(crate) lan: Vec<String>,
-    pub(crate) pubkey: String,
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub(crate) enum ClientMsg {
+    Hello {
+        protocol_version: u32,
+        device_id: String,
+        device_name: String,
+        listen_port: u16,
+        lan: Vec<String>,
+        public_key: String,
+        fingerprint: String,
+    },
+    PublishDirect {
+        presence: PeerPresence,
+    },
+    UnpublishDirect {
+        lookup_id: String,
+    },
+    WatchDirect {
+        lookup_id: String,
+    },
+    UnwatchDirect {
+        lookup_id: String,
+    },
+    JoinRoom {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    LeaveRoom {
+        room_id: String,
+    },
+    Heartbeat,
 }
 
-#[derive(Deserialize)]
-pub(crate) struct SrvMember {
-    device: String,
-    candidates: Vec<String>,
-    pubkey: String,
-}
-
-impl From<SrvMember> for RemoteDevice {
-    fn from(m: SrvMember) -> Self {
-        RemoteDevice {
-            device: m.device,
-            fingerprint: m.pubkey,
-            candidates: m.candidates,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "t", rename_all = "lowercase")]
+#[derive(Deserialize, Clone, Debug)]
+#[serde(tag = "t", rename_all = "snake_case")]
 pub(crate) enum SrvMsg {
-    Peer {
-        device: String,
-        candidates: Vec<String>,
-        pubkey: String,
+    HelloOk,
+    DirectAvailable {
+        lookup_id: String,
+        presence: PeerPresence,
     },
-    Roster {
-        members: Vec<SrvMember>,
+    DirectOffline {
+        lookup_id: String,
     },
-    Joined {
-        member: SrvMember,
+    RoomRoster {
+        room_id: String,
+        members: Vec<PeerPresence>,
     },
-    Left {
-        #[allow(dead_code)]
-        device: String,
-        pubkey: String,
+    RoomJoined {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    RoomLeft {
+        room_id: String,
+        device_id: String,
     },
     Error {
+        scope: String,
         msg: String,
     },
+    Pong,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct PeerPrelude {
+    pub(crate) relation_kind: String,
+    pub(crate) relation_id: String,
+    pub(crate) from_device_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct PeerHello {
+    pub(crate) protocol_version: u32,
+    pub(crate) relation_kind: String,
+    pub(crate) relation_id: String,
+    pub(crate) device_id: String,
+    pub(crate) public_key: String,
+    pub(crate) requested_capabilities: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct FileMeta {
     pub(crate) name: String,
     pub(crate) size: u64,
@@ -73,7 +102,7 @@ pub(crate) struct FsMeta {
     pub(crate) id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
     ListDir { path: String },
@@ -87,7 +116,7 @@ pub(crate) enum FsRequest {
     RemoveDir { path: String },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "r", rename_all = "snake_case")]
 pub(crate) enum FsResponse {
     Entries { entries: Vec<FsMeta> },
@@ -98,9 +127,11 @@ pub(crate) enum FsResponse {
     Err { msg: String },
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "c")]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "c", rename_all = "snake_case")]
 pub(crate) enum Ctrl {
+    PeerHello { hello: PeerHello },
+    PeerHelloOk,
     Offer { from: String, files: Vec<FileMeta> },
     Fs { req: FsRequest },
     FsResp { resp: FsResponse },

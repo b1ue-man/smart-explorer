@@ -2,25 +2,91 @@ use std::io::{self, Read, Write};
 
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 
-use super::core::eio;
-use super::protocol::{Channel, TAG_CTRL, TAG_DATA};
+use super::core::{b64_decode, eio, public_fingerprint, relation_psk, room_psk};
+use super::identity::ShareIdentity;
+use super::protocol::{write_raw_frame, Channel, TAG_CTRL, TAG_DATA};
 use super::transfer::dial_candidates;
-use super::types::RemoteDevice;
-use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
+use super::types::{PeerEndpoint, ShareScope};
+use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse, PeerHello, PeerPrelude};
 
 pub struct PeerBackend {
-    peer: RemoteDevice,
-    psk: [u8; 32],
+    endpoint: PeerEndpoint,
+    identity: ShareIdentity,
 }
 
 impl PeerBackend {
-    pub(crate) fn new(peer: RemoteDevice, psk: [u8; 32]) -> Self {
-        Self { peer, psk }
+    pub(crate) fn new(endpoint: PeerEndpoint, identity: ShareIdentity) -> Self {
+        Self { endpoint, identity }
+    }
+
+    pub(crate) fn probe_root(&self) -> io::Result<Vec<VfsMeta>> {
+        self.list_dir("/")
+    }
+
+    fn relation_kind_id(&self) -> (&'static str, String) {
+        match &self.endpoint.scope {
+            ShareScope::Direct { .. } => ("direct", self.endpoint.presence.relation_id.clone()),
+            ShareScope::Room { room_id } => ("room", room_id.clone()),
+        }
+    }
+
+    fn psk(&self) -> [u8; 32] {
+        match &self.endpoint.scope {
+            ShareScope::Direct { .. } => relation_psk(
+                "direct",
+                &self.endpoint.relation_secret,
+                &self.identity.device_id,
+                &self.endpoint.presence.device_id,
+            ),
+            ShareScope::Room { room_id } => room_psk(&self.endpoint.relation_secret, room_id),
+        }
     }
 
     fn channel(&self) -> io::Result<Channel> {
-        let stream = dial_candidates(&self.peer.candidates)?;
-        Channel::initiator(stream, &self.psk)
+        if self.endpoint.presence.expires_at < super::core::now_secs() {
+            return Err(eio("Peer-Presence ist abgelaufen"));
+        }
+        let expected_public = b64_decode(&self.endpoint.presence.public_key).map_err(eio)?;
+        if public_fingerprint(&expected_public) != self.endpoint.presence.fingerprint {
+            return Err(eio("Presence-Fingerprint passt nicht zum Public Key"));
+        }
+        if let Some(pinned) = &self.endpoint.expected_public_key {
+            if pinned != &expected_public {
+                return Err(eio(
+                    "Identitaetskonflikt: Presence passt nicht zum gepinnten Key",
+                ));
+            }
+        }
+        let mut stream = dial_candidates(&self.endpoint.presence.candidates)?;
+        let (kind, relation_id) = self.relation_kind_id();
+        let prelude = PeerPrelude {
+            relation_kind: kind.to_string(),
+            relation_id: relation_id.clone(),
+            from_device_id: self.identity.device_id.clone(),
+        };
+        write_raw_frame(&mut stream, &serde_json::to_vec(&prelude).map_err(eio)?)?;
+        let mut ch = Channel::initiator(
+            stream,
+            &self.psk(),
+            &self.identity.private_key,
+            Some(&expected_public),
+        )?;
+        let hello = PeerHello {
+            protocol_version: 2,
+            relation_kind: kind.to_string(),
+            relation_id,
+            device_id: self.identity.device_id.clone(),
+            public_key: self.identity.public_key.clone(),
+            requested_capabilities: vec!["fs".to_string()],
+        };
+        send_ctrl(&mut ch, Ctrl::PeerHello { hello })?;
+        match recv_ctrl(&mut ch)? {
+            Ctrl::PeerHelloOk => Ok(ch),
+            Ctrl::FsResp {
+                resp: FsResponse::Err { msg },
+            } => Err(eio(msg)),
+            _ => Err(eio("Peer akzeptiert den sicheren Kanal nicht")),
+        }
     }
 
     fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
@@ -234,18 +300,23 @@ impl Drop for PeerWriter {
 }
 
 fn send_req(ch: &mut Channel, req: FsRequest) -> io::Result<()> {
-    ch.send(
-        TAG_CTRL,
-        &serde_json::to_vec(&Ctrl::Fs { req }).map_err(eio)?,
-    )
+    send_ctrl(ch, Ctrl::Fs { req })
 }
 
-fn recv_resp(ch: &mut Channel) -> io::Result<FsResponse> {
+fn send_ctrl(ch: &mut Channel, ctrl: Ctrl) -> io::Result<()> {
+    ch.send(TAG_CTRL, &serde_json::to_vec(&ctrl).map_err(eio)?)
+}
+
+fn recv_ctrl(ch: &mut Channel) -> io::Result<Ctrl> {
     let (tag, payload) = ch.recv()?;
     if tag != TAG_CTRL {
         return Err(eio("Peer sendet keinen Steuerframe"));
     }
-    match serde_json::from_slice::<Ctrl>(&payload).map_err(eio)? {
+    serde_json::from_slice::<Ctrl>(&payload).map_err(eio)
+}
+
+fn recv_resp(ch: &mut Channel) -> io::Result<FsResponse> {
+    match recv_ctrl(ch)? {
         Ctrl::FsResp {
             resp: FsResponse::Err { msg },
         } => Err(eio(msg)),

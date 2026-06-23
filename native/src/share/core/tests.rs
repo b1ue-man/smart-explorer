@@ -1,21 +1,58 @@
-use super::core::{psk_from_code, sanitize_name};
-use super::gen_code;
+use super::core::{
+    hmac_proof, presence_payload, random_bytes, relation_psk, room_psk, sanitize_name, verify_hmac,
+};
+use super::profiles::ShareProfiles;
 use super::wire::{Ctrl, FileMeta};
 
 #[test]
-fn psk_is_deterministic_per_code_and_differs() {
-    assert_eq!(psk_from_code("ABC123"), psk_from_code("abc123 "));
-    assert_ne!(psk_from_code("ABC123"), psk_from_code("XYZ789"));
-    assert_eq!(psk_from_code("K7P2QX9F").len(), 32);
+fn relation_psk_is_stable_and_relation_specific() {
+    let secret = random_bytes::<32>();
+    assert_eq!(
+        relation_psk("direct", &secret, "device-a", "device-b"),
+        relation_psk("direct", &secret, "device-b", "device-a")
+    );
+    assert_ne!(
+        relation_psk("direct", &secret, "device-a", "device-b"),
+        room_psk(&secret, "room-a")
+    );
 }
 
 #[test]
-fn code_is_8_unambiguous_chars() {
-    let c = gen_code();
-    assert_eq!(c.len(), 8);
-    assert!(c
-        .chars()
-        .all(|ch| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(ch)));
+fn room_code_uses_persistent_secret_format() {
+    let code = ShareProfiles::new_room_code();
+    let parts: Vec<&str> = code.split('-').collect();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "SE");
+    assert_eq!(parts[1], "R1");
+    assert_eq!(parts[3].len(), 64);
+}
+
+#[test]
+fn presence_hmac_covers_candidates() {
+    let secret = random_bytes::<32>();
+    let candidates = vec!["192.168.1.20:1234".to_string()];
+    let payload = presence_payload(
+        "direct",
+        "lookup",
+        "device-a",
+        "pubkey",
+        &candidates,
+        42,
+        "nonce",
+    );
+    let proof = hmac_proof(&secret, &payload);
+    assert!(verify_hmac(&secret, &payload, &proof));
+
+    let changed_payload = presence_payload(
+        "direct",
+        "lookup",
+        "device-a",
+        "pubkey",
+        &["10.0.0.5:22".to_string()],
+        42,
+        "nonce",
+    );
+    assert!(!verify_hmac(&secret, &changed_payload, &proof));
 }
 
 #[test]

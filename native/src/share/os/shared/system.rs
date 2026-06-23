@@ -2,15 +2,6 @@ use std::io;
 
 const QUARANTINE: &str = "SmartExplorer-Empfangen";
 
-pub(crate) fn random_fingerprint() -> String {
-    let mut raw = [0u8; 6];
-    let _ = getrandom::getrandom(&mut raw);
-    raw.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
 pub(crate) fn lan_ips() -> Vec<String> {
     let mut v = Vec::new();
     if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
@@ -21,12 +12,6 @@ pub(crate) fn lan_ips() -> Vec<String> {
         }
     }
     v
-}
-
-pub(crate) fn hostname() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "Gerät".to_string())
 }
 
 pub(crate) fn quarantine_dir() -> io::Result<std::path::PathBuf> {

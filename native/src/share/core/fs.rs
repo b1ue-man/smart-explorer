@@ -1,23 +1,25 @@
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::creds::{Protocol, SavedConnection};
 use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
+use serde::{Deserialize, Serialize};
 
-use super::core::eio;
+use super::core::{eio, random_token};
 use super::protocol::{Channel, TAG_CTRL, TAG_DATA};
 use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
 
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
 const CHUNK: usize = 60_000;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedRoot {
     pub label: String,
     pub path: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShareExportConfig {
     pub roots: Vec<SharedRoot>,
     pub include_connections: bool,
@@ -211,29 +213,57 @@ fn write_file(
         Ok(t) => t,
         Err(e) => return reply_err(ch, e),
     };
-    let mut w = match t.backend.open_write(&t.path) {
+    let tmp_path = format!("{}.se-part-{}", t.path, random_token(8));
+    let w = match t.backend.open_write(&tmp_path) {
         Ok(w) => w,
         Err(e) => return reply_err(ch, e),
     };
+    let mut w = Some(w);
     reply(ch, FsResponse::Ready)?;
-    loop {
-        let (tag, payload) = ch.recv()?;
+    let result = loop {
+        let (tag, payload) = match ch.recv() {
+            Ok(frame) => frame,
+            Err(e) => break Err(e),
+        };
         if tag == TAG_DATA {
-            w.write_all(&payload)?;
+            let Some(writer) = w.as_mut() else {
+                break Err(eio("Schreibkanal ist geschlossen"));
+            };
+            if let Err(e) = writer.write_all(&payload) {
+                break Err(e);
+            }
             continue;
         }
         if tag != TAG_CTRL {
-            return reply_err(ch, eio("unerwarteter Frame beim Schreiben"));
+            break Err(eio("unerwarteter Frame beim Schreiben"));
         }
-        let ctrl: Ctrl = serde_json::from_slice(&payload).map_err(eio)?;
+        let ctrl: Ctrl = match serde_json::from_slice(&payload).map_err(eio) {
+            Ok(ctrl) => ctrl,
+            Err(e) => break Err(e),
+        };
         match ctrl {
             Ctrl::Fs {
                 req: FsRequest::WriteDone,
             } => {
-                w.flush()?;
-                return reply(ch, FsResponse::Ok);
+                let Some(mut writer) = w.take() else {
+                    break Err(eio("Schreibkanal ist geschlossen"));
+                };
+                if let Err(e) = writer.flush() {
+                    break Err(e);
+                }
+                drop(writer);
+                break t.backend.rename(&tmp_path, &t.path);
             }
-            _ => return reply_err(ch, eio("unerwartete Steuernachricht beim Schreiben")),
+            _ => break Err(eio("unerwartete Steuernachricht beim Schreiben")),
+        }
+    };
+    match result {
+        Ok(()) => reply(ch, FsResponse::Ok),
+        Err(e) => {
+            let msg = e.to_string();
+            drop(w.take());
+            let _ = t.backend.remove_file(&tmp_path);
+            reply_err(ch, eio(msg))
         }
     }
 }
@@ -265,7 +295,7 @@ fn resolve(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<Re
     let MountTarget::Local(root) = mount.target else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
-    let target = join_under(&root, rest);
+    let target = secure_local_target(&root, rest)?;
     Ok(ResolvedTarget {
         backend: Arc::new(LocalBackend::new(&root)),
         path: target,
@@ -283,9 +313,10 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
             secret.as_deref(),
         )?;
         let root = c.root.replace('\\', "/");
+        let path = secure_local_target(&root, rest)?;
         return Ok(ResolvedTarget {
             backend: Arc::new(LocalBackend::new(&root)),
-            path: join_under(&root, rest),
+            path,
             mount_key: c.account(),
             _net: Some(nc),
         });
@@ -412,6 +443,60 @@ fn join_under(root: &str, rest: &[String]) -> String {
     format!("{}/{}", base.trim_end_matches('/'), rest.join("/"))
 }
 
+fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
+    let root_norm = norm_root(root);
+    let root_os = to_os_path(&root_norm);
+    let root_canon = std::fs::canonicalize(&root_os)
+        .map_err(|e| eio(format!("Freigabe-Wurzel kann nicht gelesen werden: {e}")))?;
+    let target_os = rest
+        .iter()
+        .fold(root_canon.clone(), |p, segment| p.join(segment));
+    ensure_under_root(&root_canon, &target_os)?;
+    Ok(from_os_path(&target_os))
+}
+
+fn ensure_under_root(root_canon: &Path, target: &Path) -> io::Result<()> {
+    if target.exists() {
+        let target_canon = std::fs::canonicalize(target)?;
+        if !target_canon.starts_with(root_canon) {
+            return Err(eio("Symlink/Reparse-Point fuehrt aus der Freigabe heraus"));
+        }
+        return Ok(());
+    }
+
+    let mut existing = target;
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| eio("Ziel hat keinen gueltigen Elternordner"))?;
+    }
+    let existing_canon = std::fs::canonicalize(existing)?;
+    if !existing_canon.starts_with(root_canon) {
+        return Err(eio("Ziel liegt ausserhalb der Freigabe"));
+    }
+    Ok(())
+}
+
+fn to_os_path(path: &str) -> PathBuf {
+    let b = path.as_bytes();
+    let rooted;
+    let path = if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        rooted = format!("{path}/");
+        rooted.as_str()
+    } else {
+        path
+    };
+    if std::path::MAIN_SEPARATOR == '/' {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+    }
+}
+
+fn from_os_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn norm_root(root: &str) -> String {
     let r = root.trim().replace('\\', "/");
     if r.is_empty() {
@@ -459,5 +544,50 @@ impl From<VfsMeta> for FsMeta {
             system: m.system,
             id: m.id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{secure_local_target, split_clean, to_os_path};
+
+    #[test]
+    fn split_clean_blocks_traversal() {
+        assert!(split_clean("/root/../secret").is_err());
+        assert!(split_clean("/root\\secret").is_err());
+        assert!(split_clean("/root/ok").is_ok());
+    }
+
+    #[test]
+    fn local_target_stays_under_root() {
+        let root = std::env::temp_dir().join(format!("se-share-root-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let root_s = root.to_string_lossy().replace('\\', "/");
+        let p = secure_local_target(&root_s, &["sub".to_string(), "file.txt".to_string()]).unwrap();
+        let p = to_os_path(&p);
+        let parent = p.parent().unwrap().canonicalize().unwrap();
+        assert!(parent.starts_with(root.canonicalize().unwrap()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn symlink_escape_is_blocked_when_supported() {
+        let base = std::env::temp_dir().join(format!("se-share-symlink-{}", std::process::id()));
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = root.join("link");
+
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&outside, &link);
+        #[cfg(not(windows))]
+        let linked = std::os::unix::fs::symlink(&outside, &link);
+
+        if linked.is_ok() {
+            let root_s = root.to_string_lossy().replace('\\', "/");
+            assert!(secure_local_target(&root_s, &["link".to_string()]).is_err());
+        }
+        let _ = std::fs::remove_dir_all(base);
     }
 }
