@@ -4,6 +4,7 @@ use std::io;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
+use super::fs::ShareExportConfig;
 use super::session::{worker, Answers, Session};
 use super::system::random_fingerprint;
 use super::transfer::accept_loop;
@@ -13,11 +14,23 @@ pub struct ShareService {
     pub events: EventRx,
     cmds: CmdTx,
     pub fingerprint: String,
+    session: Arc<Mutex<Session>>,
 }
 
 impl ShareService {
     pub fn cmd(&self, c: ShareCmd) {
         let _ = self.cmds.send(c);
+    }
+
+    pub fn backend_for_peer(&self, fingerprint: &str) -> Option<crate::vfs::BackendHandle> {
+        let s = self.session.lock().ok()?;
+        let psk = s.psk?;
+        let peer = s
+            .peers
+            .iter()
+            .find(|p| p.fingerprint == fingerprint)
+            .cloned()?;
+        Some(Arc::new(super::backend::PeerBackend::new(peer, psk)))
     }
 
     /// Start the background worker: bind a listener, spawn the accept loop, and
@@ -32,14 +45,16 @@ impl ShareService {
 
         let session: Arc<Mutex<Session>> = Arc::new(Mutex::new(Session::default()));
         let answers: Answers = Arc::new(Mutex::new(HashMap::new()));
+        let exports = Arc::new(Mutex::new(ShareExportConfig::default()));
 
         {
             let session = session.clone();
             let answers = answers.clone();
+            let exports = exports.clone();
             let ev = ev_tx.clone();
             std::thread::Builder::new()
                 .name("share-accept".into())
-                .spawn(move || accept_loop(listener, session, answers, ev))
+                .spawn(move || accept_loop(listener, session, answers, exports, ev))
                 .ok();
         }
 
@@ -47,6 +62,8 @@ impl ShareService {
             let ev = ev_tx.clone();
             let device = device.clone();
             let fp = fingerprint.clone();
+            let session_worker = session.clone();
+            let exports = exports.clone();
             std::thread::Builder::new()
                 .name("share-worker".into())
                 .spawn(move || {
@@ -57,8 +74,9 @@ impl ShareService {
                         listen_port,
                         cmd_rx,
                         ev,
-                        session,
+                        session_worker,
                         answers,
+                        exports,
                     )
                 })
                 .ok();
@@ -68,6 +86,7 @@ impl ShareService {
             events: ev_rx,
             cmds: cmd_tx,
             fingerprint,
+            session,
         })
     }
 }

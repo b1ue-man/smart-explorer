@@ -210,10 +210,25 @@ impl App {
             std::thread::Builder::new()
                 .name("remote-delete".into())
                 .spawn(move || {
+                    fn remove_tree(be: &dyn crate::vfs::Backend, path: &str) -> Result<(), String> {
+                        let entries = be.list_dir(path).map_err(|e| e.to_string())?;
+                        for entry in entries {
+                            let child = format!("{}/{}", path.trim_end_matches('/'), entry.name);
+                            if entry.is_dir {
+                                remove_tree(be, &child)?;
+                            } else {
+                                be.remove_file_id(&child, entry.id.as_deref())
+                                    .map_err(|e| e.to_string())?;
+                            }
+                        }
+                        be.remove_dir(path).map_err(|e| e.to_string())
+                    }
+
                     let mut first_err: Option<String> = None;
                     for (p, id, is_dir) in &items {
                         let r = if *is_dir {
-                            backend.remove_dir(p)
+                            remove_tree(&*backend, p)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
                         } else {
                             backend.remove_file_id(p, id.as_deref())
                         };

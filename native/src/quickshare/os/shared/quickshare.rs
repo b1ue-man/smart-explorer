@@ -13,6 +13,7 @@
 //!
 //! Discovery is pure Rust (`mdns-sd`) and runs only while the Teilen view is
 //! open, so it adds no idle overhead.
+#![allow(dead_code)]
 
 use crossbeam_channel::{unbounded, Receiver};
 use std::collections::BTreeMap;

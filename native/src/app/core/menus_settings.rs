@@ -118,10 +118,10 @@ impl App {
     pub(in crate::app) fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         self.ui_menu_cloud(ui);
 
-        // ─── Teilen (peer file sharing) ───────────────────────────────
+        // ─── Share-Server remote connections ─────────────────────────
         ui.add_space(12.0);
         ui.label(
-            RichText::new("TEILEN (P2P)")
+            RichText::new("SHARE-SERVER")
                 .small()
                 .color(Color32::from_gray(140)),
         );
@@ -146,7 +146,7 @@ impl App {
             // Restart the service so the new server/name take effect.
             self.share = None;
             self.notice = Some((
-                "✓ Teilen-Einstellungen gespeichert".to_string(),
+                "✓ Share-Server-Einstellungen gespeichert".to_string(),
                 std::time::Instant::now(),
             ));
         }

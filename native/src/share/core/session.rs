@@ -4,6 +4,7 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
 use super::advertise::start_session;
+use super::fs::ShareExportConfig;
 use super::transfer::send_to_peer;
 use super::types::{RemoteDevice, ShareCmd, ShareEvent};
 
@@ -28,6 +29,7 @@ pub(crate) fn worker(
     ev: Sender<ShareEvent>,
     session: Arc<Mutex<Session>>,
     answers: Answers,
+    exports: Arc<Mutex<ShareExportConfig>>,
 ) {
     while let Ok(cmd) = cmds.recv() {
         dispatch(
@@ -39,6 +41,7 @@ pub(crate) fn worker(
             &ev,
             &session,
             &answers,
+            &exports,
         );
     }
 }
@@ -53,28 +56,39 @@ fn dispatch(
     ev: &Sender<ShareEvent>,
     session: &Arc<Mutex<Session>>,
     answers: &Answers,
+    exports: &Arc<Mutex<ShareExportConfig>>,
 ) {
     match cmd {
-        ShareCmd::Pair(code) => start_session(
-            code,
-            "pair",
-            server,
-            device,
-            fingerprint,
-            listen_port,
-            ev,
-            session,
-        ),
-        ShareCmd::JoinRoom(code) => start_session(
-            code,
-            "room",
-            server,
-            device,
-            fingerprint,
-            listen_port,
-            ev,
-            session,
-        ),
+        ShareCmd::Pair { code, exports: cfg } => {
+            *exports.lock().unwrap() = cfg;
+            start_session(
+                code,
+                "pair",
+                server,
+                device,
+                fingerprint,
+                listen_port,
+                ev,
+                session,
+            )
+        }
+        ShareCmd::JoinRoom { code, exports: cfg } => {
+            *exports.lock().unwrap() = cfg;
+            start_session(
+                code,
+                "room",
+                server,
+                device,
+                fingerprint,
+                listen_port,
+                ev,
+                session,
+            )
+        }
+        ShareCmd::SetExports(cfg) => {
+            *exports.lock().unwrap() = cfg;
+            let _ = ev.send(ShareEvent::Status("Freigaben aktualisiert".into()));
+        }
         ShareCmd::Leave => {
             let mut s = session.lock().unwrap();
             if let Some(sig) = s.signaling.take() {

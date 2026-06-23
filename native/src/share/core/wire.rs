@@ -60,10 +60,50 @@ pub(crate) struct FileMeta {
     pub(crate) size: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct FsMeta {
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) is_symlink: bool,
+    pub(crate) size: u64,
+    pub(crate) mtime_ms: i64,
+    pub(crate) btime_ms: i64,
+    pub(crate) hidden: bool,
+    pub(crate) system: bool,
+    pub(crate) id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub(crate) enum FsRequest {
+    ListDir { path: String },
+    Stat { path: String },
+    Read { path: String },
+    Write { path: String },
+    WriteDone,
+    MkdirAll { path: String },
+    Rename { src: String, dst: String },
+    RemoveFile { path: String },
+    RemoveDir { path: String },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "r", rename_all = "snake_case")]
+pub(crate) enum FsResponse {
+    Entries { entries: Vec<FsMeta> },
+    Meta { meta: FsMeta },
+    Data { size: u64 },
+    Ready,
+    Ok,
+    Err { msg: String },
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "c")]
 pub(crate) enum Ctrl {
     Offer { from: String, files: Vec<FileMeta> },
+    Fs { req: FsRequest },
+    FsResp { resp: FsResponse },
     Accept,
     Reject,
     FileStart { name: String, size: u64 },

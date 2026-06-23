@@ -34,6 +34,15 @@ impl App {
             self.connect_form = crate::connect::ConnectForm::default();
             self.show_connect = true;
         }
+        if ui
+            .small_button("Share-Server verbinden")
+            .on_hover_text(
+                "Direkt oder per Raum ein anderes Smart-Explorer-Geraet als Remote oeffnen",
+            )
+            .clicked()
+        {
+            self.show_share = true;
+        }
         // Established connections live on the sidebar (most recent first). Only
         // the overflow — older ones beyond the sidebar cap — appears here, so
         // the menu stays uncluttered but no saved connection is ever hidden.

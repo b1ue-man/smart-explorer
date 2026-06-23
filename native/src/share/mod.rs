@@ -13,8 +13,12 @@
 
 #[path = "core/advertise.rs"]
 mod advertise;
+#[path = "core/backend.rs"]
+mod backend;
 #[path = "core/crypto.rs"]
 mod core;
+#[path = "core/fs.rs"]
+mod fs;
 #[path = "core/protocol.rs"]
 mod protocol;
 #[path = "core/service.rs"]
@@ -31,6 +35,7 @@ mod types;
 mod wire;
 
 pub use self::core::gen_code;
+pub use self::fs::{ShareExportConfig, SharedRoot};
 pub use self::service::ShareService;
 pub use self::types::{RemoteDevice, ShareCmd, ShareEvent};
 
