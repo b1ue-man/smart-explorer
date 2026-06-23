@@ -180,26 +180,11 @@ impl App {
                     {
                         r.status = crate::share::ShareStatus::Available;
                         r.last_seen = Some(crate::share::core_now_secs());
-                        let old = r.members.clone();
-                        r.members = members
-                            .into_iter()
-                            .filter(|p| p.device_id != self.share_identity.device_id)
-                            .map(|p| {
-                                let old_member =
-                                    old.iter().find(|m| m.device_id == p.device_id).cloned();
-                                crate::share::RoomMember {
-                                    device_id: p.device_id.clone(),
-                                    device_name: p.device_name.clone(),
-                                    fingerprint: p.fingerprint.clone(),
-                                    public_key: p.public_key.clone(),
-                                    candidates: p.candidates.clone(),
-                                    last_seen: Some(crate::share::core_now_secs()),
-                                    status: crate::share::ShareStatus::Available,
-                                    blocked: old_member.map(|m| m.blocked).unwrap_or(false),
-                                    presence: Some(p),
-                                }
-                            })
-                            .collect();
+                        for p in members {
+                            if p.device_id != self.share_identity.device_id {
+                                upsert_room_member(r, p);
+                            }
+                        }
                         changed = true;
                     }
                 }
