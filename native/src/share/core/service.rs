@@ -17,7 +17,6 @@ use super::types::{PeerEndpoint, PeerOpenTarget, ShareCmd, ShareEvent, ShareScop
 use super::wire::{ClientMsg, SrvMsg};
 use std::collections::HashSet;
 
-#[derive(Clone)]
 pub struct ShareService {
     pub events: Receiver<ShareEvent>,
     cmds: super::types::CmdTx,
@@ -25,12 +24,25 @@ pub struct ShareService {
     pub listen_port: u16,
     auth: Arc<Mutex<ShareAuthState>>,
     stopped: Arc<AtomicBool>,
+    owner: bool,
 }
 
 impl ShareService {
     pub fn cmd(&self, c: ShareCmd) {
         if matches!(c, ShareCmd::Stop) {
             self.stopped.store(true, Ordering::Relaxed);
+        }
+        if let ShareCmd::Configure {
+            direct,
+            rooms,
+            default_direct_exports,
+        } = &c
+        {
+            if let Ok(mut s) = self.auth.lock() {
+                s.direct_contacts = direct.clone();
+                s.rooms = rooms.clone();
+                s.default_direct_exports = default_direct_exports.clone();
+            }
         }
         let _ = self.cmds.send(c);
     }
@@ -172,13 +184,30 @@ impl ShareService {
             listen_port,
             auth,
             stopped,
+            owner: true,
         })
+    }
+}
+
+impl Clone for ShareService {
+    fn clone(&self) -> Self {
+        Self {
+            events: self.events.clone(),
+            cmds: self.cmds.clone(),
+            identity: self.identity.clone(),
+            listen_port: self.listen_port,
+            auth: self.auth.clone(),
+            stopped: self.stopped.clone(),
+            owner: false,
+        }
     }
 }
 
 impl Drop for ShareService {
     fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Relaxed);
+        if self.owner {
+            self.stopped.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -559,8 +588,15 @@ fn remember_nonce(seen: &mut HashSet<String>, key: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::remember_nonce;
+    use super::{remember_nonce, ShareService};
+    use crate::share::fs::ShareExportConfig;
+    use crate::share::identity::ShareIdentity;
+    use crate::share::transfer::ShareAuthState;
+    use crate::share::types::{DirectContact, RoomProfile, ShareCmd, ShareStatus};
+    use crossbeam_channel::unbounded;
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn nonce_cache_detects_replay() {
@@ -569,5 +605,84 @@ mod tests {
         assert!(!seen.contains(&key));
         remember_nonce(&mut seen, key.clone());
         assert!(seen.contains(&key));
+    }
+
+    #[test]
+    fn dropping_probe_clone_does_not_stop_owner_service() {
+        let svc = test_service();
+        let stopped = svc.stopped.clone();
+        let probe_clone = svc.clone();
+        drop(probe_clone);
+        assert!(!stopped.load(Ordering::Relaxed));
+        drop(svc);
+        assert!(stopped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn configure_updates_auth_state_synchronously() {
+        let svc = test_service();
+        let contact = DirectContact {
+            id: "contact-a".into(),
+            display_name: "A".into(),
+            lookup_id: "lookup-a".into(),
+            expected_fingerprint: "00".repeat(16),
+            remote_device_id: None,
+            remote_public_key: None,
+            auto_connect: true,
+            auto_open: false,
+            last_seen: None,
+            status: ShareStatus::Waiting,
+            last_error: None,
+            presence: None,
+            exports: ShareExportConfig::default(),
+        };
+        let room = RoomProfile {
+            id: "room-profile-a".into(),
+            name: "Room A".into(),
+            room_id: "room-a".into(),
+            auto_join: true,
+            last_seen: None,
+            status: ShareStatus::Waiting,
+            members: Vec::new(),
+            exports: ShareExportConfig::default(),
+        };
+        svc.cmd(ShareCmd::Configure {
+            direct: vec![contact],
+            rooms: vec![room],
+            default_direct_exports: ShareExportConfig::default(),
+        });
+        assert_eq!(svc.auth.lock().unwrap().direct_contacts[0].id, "contact-a");
+        assert_eq!(svc.auth.lock().unwrap().rooms[0].room_id, "room-a");
+    }
+
+    fn test_service() -> ShareService {
+        let (cmd_tx, _cmd_rx) = unbounded();
+        let (_ev_tx, ev_rx) = unbounded();
+        let identity = ShareIdentity {
+            device_id: "device-a".into(),
+            device_name: "Device A".into(),
+            direct_lookup_id: "lookup-local".into(),
+            public_key: String::new(),
+            fingerprint: String::new(),
+            private_key: Vec::new(),
+        };
+        let auth = Arc::new(Mutex::new(ShareAuthState {
+            identity: identity.clone(),
+            direct_secret: vec![0u8; 32],
+            default_direct_exports: ShareExportConfig::default(),
+            direct_contacts: Vec::new(),
+            rooms: Vec::new(),
+            seen_nonces: HashSet::new(),
+            direct_online: true,
+        }));
+        ShareService {
+            events: ev_rx,
+            cmds: cmd_tx,
+            identity,
+            listen_port: 0,
+            auth,
+            stopped: Arc::new(AtomicBool::new(false)),
+            owner: true,
+        }
     }
 }
