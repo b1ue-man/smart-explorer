@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.93"
+version = "0.5.94"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -56,11 +56,10 @@ getrandom = "0.2"
 # expose natively (Google Drive md5Checksum, Nextcloud/ownCloud oc:checksums) —
 # so checksum-mode sync compares hashes WITHOUT downloading remote files.
 md5 = "0.7"
-# Peer file sharing (share.rs, #21): Noise XXpsk3 E2E channel (snow's default
-# resolver is pure Rust — x25519-dalek + chacha20poly1305 + blake2/sha2, no
-# aws-lc) keyed by per-direct/per-room relation secrets via HKDF/HMAC.
-snow = "0.9"
-hkdf = "0.12"
+# Peer file sharing (share.rs, #21): Iroh 1.0 provides authenticated P2P QUIC
+# connections by endpoint public key, with relay fallback over HTTP(S) relay
+# servers. Keep the default ring-backed TLS stack; do not enable aws-lc.
+iroh = { version = "1.0.0", default-features = true }
 hmac = "0.12"
 # Share-Server signaling fallback: WebSocket over HTTPS-friendly WSS. Keep
 # default-features off so TLS stays on rustls/webpki and avoids native TLS.

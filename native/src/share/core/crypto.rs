@@ -105,31 +105,13 @@ pub(crate) fn public_fingerprint(public_key: &[u8]) -> String {
     hex(&digest[..16])
 }
 
-pub(crate) fn relation_psk(kind: &str, secret: &[u8], a: &str, b: &str) -> [u8; 32] {
-    let mut ids = [a, b];
-    ids.sort_unstable();
-    let salt = format!("smart-explorer/share/{kind}/v2");
-    let info = format!("{}|{}", ids[0], ids[1]);
-    let hk = hkdf::Hkdf::<Sha256>::new(Some(salt.as_bytes()), secret);
-    let mut okm = [0u8; 32];
-    hk.expand(info.as_bytes(), &mut okm)
-        .expect("32 bytes is a valid HKDF length");
-    okm
-}
-
-pub(crate) fn room_psk(secret: &[u8], room_id: &str) -> [u8; 32] {
-    let hk = hkdf::Hkdf::<Sha256>::new(Some(b"smart-explorer/share/room/v2"), secret);
-    let mut okm = [0u8; 32];
-    hk.expand(room_id.as_bytes(), &mut okm)
-        .expect("32 bytes is a valid HKDF length");
-    okm
-}
-
 pub(crate) fn presence_payload(
     kind: &str,
     relation_id: &str,
     device_id: &str,
     public_key: &str,
+    node_id: &str,
+    relay_url: &str,
     candidates: &[String],
     expires_at: i64,
     nonce: &str,
@@ -137,7 +119,7 @@ pub(crate) fn presence_payload(
     let mut c = candidates.to_vec();
     c.sort();
     format!(
-        "{kind}|{relation_id}|{device_id}|{public_key}|{}|{expires_at}|{nonce}",
+        "{kind}|{relation_id}|{device_id}|{public_key}|{node_id}|{relay_url}|{}|{expires_at}|{nonce}",
         c.join(",")
     )
 }
@@ -159,6 +141,7 @@ pub(crate) fn verify_hmac(secret: &[u8], payload: &str, proof: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
+#[cfg(test)]
 pub(crate) fn sanitize_name(name: &str) -> String {
     let n: String = name
         .chars()

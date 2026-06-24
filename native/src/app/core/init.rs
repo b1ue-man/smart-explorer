@@ -304,9 +304,7 @@ impl App {
             share_manual_stop: false,
             share_open_rx: None,
             share_opening: None,
-            share_incoming: Vec::new(),
             share_status: String::new(),
-            share_progress: None,
             quickshare: None,
             qs_devices: Vec::new(),
         }

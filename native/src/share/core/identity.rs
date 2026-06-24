@@ -5,7 +5,7 @@ use super::core::{
 };
 
 const IDENTITY_FILE: &str = "share_identity.json";
-const IDENTITY_KEY_ACCOUNT: &str = "share:identity:noise_private";
+const IDENTITY_KEY_ACCOUNT: &str = "share:identity:iroh_secret";
 const DIRECT_SECRET_PREFIX: &str = "share:identity:direct_secret:";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,6 +15,8 @@ struct IdentityDisk {
     direct_lookup_id: String,
     public_key: String,
     fingerprint: String,
+    #[serde(default)]
+    node_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -24,7 +26,8 @@ pub struct ShareIdentity {
     pub direct_lookup_id: String,
     pub public_key: String,
     pub fingerprint: String,
-    pub private_key: Vec<u8>,
+    pub node_id: String,
+    pub iroh_secret: iroh::SecretKey,
 }
 
 impl ShareIdentity {
@@ -33,11 +36,12 @@ impl ShareIdentity {
         let disk = std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| serde_json::from_str::<IdentityDisk>(&s).ok());
-        let private = crate::creds::get_secret(IDENTITY_KEY_ACCOUNT)
-            .and_then(|s| b64_decode(&s).ok())
-            .filter(|v| v.len() == 32);
-        match (disk, private) {
-            (Some(d), Some(private_key)) => ShareIdentity {
+        let secret = load_iroh_secret().unwrap_or_else(store_new_iroh_secret);
+        let node_id = secret.public().to_string();
+        let public_key = node_id.clone();
+        let fingerprint = public_fingerprint(public_key.as_bytes());
+        match disk {
+            Some(d) => ShareIdentity {
                 device_id: d.device_id,
                 device_name: if d.device_name.trim().is_empty() {
                     default_name
@@ -45,39 +49,34 @@ impl ShareIdentity {
                     d.device_name
                 },
                 direct_lookup_id: d.direct_lookup_id,
-                public_key: d.public_key,
-                fingerprint: d.fingerprint,
-                private_key,
+                public_key,
+                fingerprint,
+                node_id,
+                iroh_secret: secret,
             },
             _ => {
-                let ident = Self::new(default_name);
+                let ident = Self::new(default_name, secret);
                 let _ = ident.save();
                 ident
             }
         }
     }
 
-    fn new(device_name: String) -> Self {
-        let params = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s"
-            .parse()
-            .expect("valid noise params");
-        let builder = snow::Builder::new(params);
-        let kp = builder
-            .generate_keypair()
-            .expect("noise keypair generation");
+    fn new(device_name: String, iroh_secret: iroh::SecretKey) -> Self {
         let lookup_id = random_hex_token::<12>();
         let direct_secret = random_bytes::<32>();
-        let _ = crate::creds::set_secret(IDENTITY_KEY_ACCOUNT, &b64(&kp.private));
         let _ = crate::creds::set_secret(&direct_secret_account(&lookup_id), &b64(&direct_secret));
-        let public_key = b64(&kp.public);
-        let fingerprint = public_fingerprint(&kp.public);
+        let node_id = iroh_secret.public().to_string();
+        let public_key = node_id.clone();
+        let fingerprint = public_fingerprint(public_key.as_bytes());
         ShareIdentity {
             device_id: random_uuid_v4(),
             device_name,
             direct_lookup_id: lookup_id,
             public_key,
             fingerprint,
-            private_key: kp.private,
+            node_id,
+            iroh_secret,
         }
     }
 
@@ -88,6 +87,7 @@ impl ShareIdentity {
             direct_lookup_id: self.direct_lookup_id.clone(),
             public_key: self.public_key.clone(),
             fingerprint: self.fingerprint.clone(),
+            node_id: Some(self.node_id.clone()),
         };
         let path = crate::support_dirs::app_data_file(IDENTITY_FILE);
         std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
@@ -110,10 +110,11 @@ impl ShareIdentity {
 
     pub fn direct_code(&self) -> String {
         format!(
-            "SE-D1-{}-{}-{}",
+            "SE-D3-{}-{}-{}-{}",
             self.direct_lookup_id,
             hex(&self.direct_secret()),
-            self.fingerprint
+            self.fingerprint,
+            self.node_id
         )
     }
 
@@ -139,4 +140,18 @@ impl ShareIdentity {
 
 pub(crate) fn direct_secret_account(lookup_id: &str) -> String {
     format!("{DIRECT_SECRET_PREFIX}{lookup_id}")
+}
+
+fn load_iroh_secret() -> Option<iroh::SecretKey> {
+    let raw = crate::creds::get_secret(IDENTITY_KEY_ACCOUNT)
+        .and_then(|s| b64_decode(&s).ok())
+        .filter(|v| v.len() == 32)?;
+    let bytes: [u8; 32] = raw.try_into().ok()?;
+    Some(iroh::SecretKey::from_bytes(&bytes))
+}
+
+fn store_new_iroh_secret() -> iroh::SecretKey {
+    let secret = iroh::SecretKey::generate();
+    let _ = crate::creds::set_secret(IDENTITY_KEY_ACCOUNT, &b64(&secret.to_bytes()));
+    secret
 }

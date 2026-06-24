@@ -13,9 +13,12 @@ use super::types::{
 const PROFILES_FILE: &str = "share_profiles.json";
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
+const SHARE_PROFILE_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShareProfiles {
+    #[serde(default)]
+    pub schema_version: u32,
     #[serde(default = "default_true")]
     pub auto_connect: bool,
     #[serde(default)]
@@ -31,6 +34,7 @@ pub struct ShareProfiles {
 impl Default for ShareProfiles {
     fn default() -> Self {
         Self {
+            schema_version: SHARE_PROFILE_VERSION,
             auto_connect: true,
             default_direct_exports: ShareExportConfig::default(),
             direct_contacts: Vec::new(),
@@ -51,6 +55,12 @@ impl ShareProfiles {
             .ok()
             .and_then(|s| serde_json::from_str::<ShareProfiles>(&s).ok())
             .unwrap_or_default();
+        if profiles.schema_version != SHARE_PROFILE_VERSION {
+            profiles.direct_contacts.clear();
+            profiles.direct_grants.clear();
+            profiles.rooms.clear();
+            profiles.schema_version = SHARE_PROFILE_VERSION;
+        }
         if profiles.default_direct_exports.roots.is_empty() {
             if let Some(home) = default_home {
                 profiles.default_direct_exports.roots.push(SharedRoot {
@@ -93,6 +103,7 @@ impl ShareProfiles {
             display_name: label,
             lookup_id: parsed.lookup_id,
             expected_fingerprint: parsed.fingerprint,
+            expected_node_id: parsed.node_id,
             remote_device_id: None,
             remote_public_key: None,
             auto_connect: true,
@@ -125,6 +136,7 @@ impl ShareProfiles {
             g.device_name = presence.device_name.clone();
             g.public_key = presence.public_key.clone();
             g.fingerprint = presence.fingerprint.clone();
+            g.node_id = presence.node_id.clone();
             g.state = state;
             g.updated_at = now;
         } else {
@@ -133,6 +145,7 @@ impl ShareProfiles {
                 device_name: presence.device_name.clone(),
                 public_key: presence.public_key.clone(),
                 fingerprint: presence.fingerprint.clone(),
+                node_id: presence.node_id.clone(),
                 state,
                 updated_at: now,
             });
@@ -169,7 +182,7 @@ impl ShareProfiles {
     pub fn new_room_code() -> String {
         let room_id = random_hex_token::<12>();
         let secret = random_bytes::<32>();
-        format!("SE-R1-{room_id}-{}", hex(&secret))
+        format!("SE-R3-{room_id}-{}", hex(&secret))
     }
 
     pub fn direct_secret(contact: &DirectContact) -> Option<Vec<u8>> {
@@ -182,7 +195,7 @@ impl ShareProfiles {
     }
 
     pub fn room_code(room: &RoomProfile) -> Option<String> {
-        Self::room_secret(room).map(|s| format!("SE-R1-{}-{}", room.room_id, hex(&s)))
+        Self::room_secret(room).map(|s| format!("SE-R3-{}-{}", room.room_id, hex(&s)))
     }
 }
 
@@ -198,30 +211,36 @@ struct DirectCode {
     lookup_id: String,
     secret: Vec<u8>,
     fingerprint: String,
+    node_id: String,
 }
 
 impl DirectCode {
     fn parse(code: &str) -> Result<Self, String> {
         let rest = code
             .trim()
-            .strip_prefix("SE-D1-")
+            .strip_prefix("SE-D3-")
             .ok_or_else(|| "Ungueltiger Direkt-Code".to_string())?;
-        let parts: Vec<&str> = rest.rsplitn(3, '-').collect();
-        if parts.len() != 3 || parts[2].trim().is_empty() {
+        let parts: Vec<&str> = rest.rsplitn(4, '-').collect();
+        if parts.len() != 4 || parts[3].trim().is_empty() {
             return Err("Ungueltiger Direkt-Code".into());
         }
-        let fingerprint = parts[0].to_ascii_lowercase();
-        let secret = hex_decode(parts[1])?;
+        let node_id = parts[0].trim().to_string();
+        let fingerprint = parts[1].to_ascii_lowercase();
+        let secret = hex_decode(parts[2])?;
         if secret.len() != 32 {
             return Err("Direkt-Code enthaelt kein gueltiges Secret".into());
         }
         if fingerprint.len() < 16 || !fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err("Direkt-Code enthaelt keinen gueltigen Fingerprint".into());
         }
+        if node_id.is_empty() {
+            return Err("Direkt-Code enthaelt keine Iroh NodeId".into());
+        }
         Ok(Self {
-            lookup_id: parts[2].to_string(),
+            lookup_id: parts[3].to_string(),
             secret,
             fingerprint,
+            node_id,
         })
     }
 }
@@ -235,7 +254,7 @@ impl RoomCode {
     fn parse(code: &str) -> Result<Self, String> {
         let rest = code
             .trim()
-            .strip_prefix("SE-R1-")
+            .strip_prefix("SE-R3-")
             .ok_or_else(|| "Ungueltiger Raum-Code".to_string())?;
         let parts: Vec<&str> = rest.rsplitn(2, '-').collect();
         if parts.len() != 2 || parts[1].trim().is_empty() {
@@ -253,9 +272,7 @@ impl RoomCode {
 }
 
 pub(crate) fn fingerprint_matches(public_key_b64: &str, expected: &str) -> bool {
-    b64_decode(public_key_b64)
-        .map(|pk| public_fingerprint(&pk) == expected.to_ascii_lowercase())
-        .unwrap_or(false)
+    public_fingerprint(public_key_b64.as_bytes()) == expected.to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -267,18 +284,27 @@ mod tests {
     fn direct_code_parses_lookup_ids_with_dashes() {
         let secret = "00".repeat(32);
         let fp = "11".repeat(16);
-        let parsed = DirectCode::parse(&format!("SE-D1-look-up-{secret}-{fp}")).unwrap();
+        let parsed = DirectCode::parse(&format!("SE-D3-look-up-{secret}-{fp}-node123")).unwrap();
         assert_eq!(parsed.lookup_id, "look-up");
         assert_eq!(parsed.secret.len(), 32);
         assert_eq!(parsed.fingerprint, fp);
+        assert_eq!(parsed.node_id, "node123");
     }
 
     #[test]
     fn room_code_parses_room_ids_with_dashes() {
         let secret = "22".repeat(32);
-        let parsed = RoomCode::parse(&format!("SE-R1-room-id-{secret}")).unwrap();
+        let parsed = RoomCode::parse(&format!("SE-R3-room-id-{secret}")).unwrap();
         assert_eq!(parsed.room_id, "room-id");
         assert_eq!(parsed.secret.len(), 32);
+    }
+
+    #[test]
+    fn legacy_codes_are_rejected() {
+        let secret = "00".repeat(32);
+        let fp = "11".repeat(16);
+        assert!(DirectCode::parse(&format!("SE-D1-look-up-{secret}-{fp}")).is_err());
+        assert!(RoomCode::parse(&format!("SE-R1-room-id-{secret}")).is_err());
     }
 
     #[test]
@@ -291,6 +317,8 @@ mod tests {
             device_name: "Device A".into(),
             public_key: "pk".into(),
             fingerprint: "fp".into(),
+            node_id: "node".into(),
+            relay_url: "http://relay".into(),
             candidates: Vec::new(),
             expires_at: 1,
             nonce: "n".into(),

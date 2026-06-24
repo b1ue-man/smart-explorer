@@ -397,12 +397,11 @@ pub struct App {
     pub(in crate::app) share_direct_requests: Vec<crate::share::PeerPresence>,
     pub(in crate::app) share_diag_log: String,
     pub(in crate::app) share_manual_stop: bool,
-    pub(in crate::app) share_open_rx:
-        Option<Receiver<Result<(String, crate::vfs::BackendHandle), String>>>,
+    pub(in crate::app) share_open_rx: Option<
+        Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>,
+    >,
     pub(in crate::app) share_opening: Option<crate::share::PeerOpenTarget>,
-    pub(in crate::app) share_incoming: Vec<(u64, String, Vec<(String, u64)>)>,
     pub(in crate::app) share_status: String,
-    pub(in crate::app) share_progress: Option<(u64, u64)>,
 
     // Quick Share (Android) LAN discovery — started lazily when Teilen opens.
     pub(in crate::app) quickshare: Option<crate::quickshare::QuickShare>,

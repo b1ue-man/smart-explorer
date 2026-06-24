@@ -34,17 +34,6 @@ pub(crate) enum ClientMsg {
         presence: Option<PeerPresence>,
         msg: Option<String>,
     },
-    RelayRequest {
-        relay_id: String,
-        relation_kind: String,
-        relation_id: String,
-        target_device_id: String,
-        requester_presence: PeerPresence,
-    },
-    RelayJoin {
-        relay_id: String,
-        device_id: String,
-    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -80,16 +69,6 @@ pub(crate) enum SrvMsg {
         presence: Option<PeerPresence>,
         msg: Option<String>,
     },
-    RelayRequest {
-        relay_id: String,
-        relation_kind: String,
-        relation_id: String,
-        requester_presence: PeerPresence,
-    },
-    RelayFailed {
-        relay_id: String,
-        msg: String,
-    },
     RoomRoster {
         room_id: String,
         members: Vec<PeerPresence>,
@@ -110,26 +89,19 @@ pub(crate) enum SrvMsg {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct PeerPrelude {
-    pub(crate) relation_kind: String,
-    pub(crate) relation_id: String,
-    pub(crate) from_device_id: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct PeerHello {
     pub(crate) protocol_version: u32,
     pub(crate) relation_kind: String,
     pub(crate) relation_id: String,
     pub(crate) device_id: String,
     pub(crate) public_key: String,
+    #[serde(default)]
+    pub(crate) node_id: String,
+    #[serde(default)]
+    pub(crate) session_nonce: String,
+    #[serde(default)]
+    pub(crate) session_proof: String,
     pub(crate) requested_capabilities: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct FileMeta {
-    pub(crate) name: String,
-    pub(crate) size: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -155,6 +127,7 @@ pub(crate) enum FsRequest {
     WriteDone,
     MkdirAll { path: String },
     Rename { src: String, dst: String },
+    CopyFile { src: String, dst: String },
     RemoveFile { path: String },
     RemoveDir { path: String },
 }
@@ -175,12 +148,8 @@ pub(crate) enum FsResponse {
 pub(crate) enum Ctrl {
     PeerHello { hello: PeerHello },
     PeerHelloOk,
-    Offer { from: String, files: Vec<FileMeta> },
+    Ping { nonce: String },
+    Pong { nonce: String },
     Fs { req: FsRequest },
     FsResp { resp: FsResponse },
-    Accept,
-    Reject,
-    FileStart { name: String, size: u64 },
-    FileEnd,
-    Done,
 }
