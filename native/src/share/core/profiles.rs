@@ -5,7 +5,10 @@ use super::core::{
     random_token,
 };
 use super::fs::{ShareExportConfig, SharedRoot};
-use super::types::{DirectContact, RoomProfile, ShareStatus};
+use super::types::{
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile,
+    ShareStatus,
+};
 
 const PROFILES_FILE: &str = "share_profiles.json";
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
@@ -20,6 +23,8 @@ pub struct ShareProfiles {
     #[serde(default)]
     pub direct_contacts: Vec<DirectContact>,
     #[serde(default)]
+    pub direct_grants: Vec<DirectGrant>,
+    #[serde(default)]
     pub rooms: Vec<RoomProfile>,
 }
 
@@ -29,6 +34,7 @@ impl Default for ShareProfiles {
             auto_connect: true,
             default_direct_exports: ShareExportConfig::default(),
             direct_contacts: Vec::new(),
+            direct_grants: Vec::new(),
             rooms: Vec::new(),
         }
     }
@@ -92,13 +98,45 @@ impl ShareProfiles {
             auto_connect: true,
             auto_open: false,
             last_seen: None,
-            status: ShareStatus::Waiting,
+            status: ShareStatus::WaitingForAccess,
             last_error: None,
             presence: None,
             exports: self.default_direct_exports.clone(),
+            access_state: DirectAccessState::Pending,
+            request_sent_at: Some(super::core::now_secs()),
+            accepted_at: None,
+            accepted_public_key: None,
         });
         let _ = self.save();
         Ok(id)
+    }
+
+    pub fn grant_for(&self, device_id: &str) -> Option<&DirectGrant> {
+        self.direct_grants.iter().find(|g| g.device_id == device_id)
+    }
+
+    pub fn set_direct_grant(&mut self, presence: &PeerPresence, state: DirectGrantState) {
+        let now = super::core::now_secs();
+        if let Some(g) = self
+            .direct_grants
+            .iter_mut()
+            .find(|g| g.device_id == presence.device_id)
+        {
+            g.device_name = presence.device_name.clone();
+            g.public_key = presence.public_key.clone();
+            g.fingerprint = presence.fingerprint.clone();
+            g.state = state;
+            g.updated_at = now;
+        } else {
+            self.direct_grants.push(DirectGrant {
+                device_id: presence.device_id.clone(),
+                device_name: presence.device_name.clone(),
+                public_key: presence.public_key.clone(),
+                fingerprint: presence.fingerprint.clone(),
+                state,
+                updated_at: now,
+            });
+        }
     }
 
     pub fn add_room_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
@@ -222,7 +260,8 @@ pub(crate) fn fingerprint_matches(public_key_b64: &str, expected: &str) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::{DirectCode, RoomCode};
+    use super::{DirectCode, RoomCode, ShareProfiles};
+    use crate::share::types::{DirectGrantState, PeerPresence};
 
     #[test]
     fn direct_code_parses_lookup_ids_with_dashes() {
@@ -240,5 +279,34 @@ mod tests {
         let parsed = RoomCode::parse(&format!("SE-R1-room-id-{secret}")).unwrap();
         assert_eq!(parsed.room_id, "room-id");
         assert_eq!(parsed.secret.len(), 32);
+    }
+
+    #[test]
+    fn direct_grant_upsert_persists_state_by_device() {
+        let mut profiles = ShareProfiles::default();
+        let presence = PeerPresence {
+            kind: "direct".into(),
+            relation_id: "lookup".into(),
+            device_id: "dev-a".into(),
+            device_name: "Device A".into(),
+            public_key: "pk".into(),
+            fingerprint: "fp".into(),
+            candidates: Vec::new(),
+            expires_at: 1,
+            nonce: "n".into(),
+            proof: "proof".into(),
+        };
+        profiles.set_direct_grant(&presence, DirectGrantState::Accepted);
+        assert_eq!(profiles.direct_grants.len(), 1);
+        assert_eq!(
+            profiles.grant_for("dev-a").unwrap().state,
+            DirectGrantState::Accepted
+        );
+        profiles.set_direct_grant(&presence, DirectGrantState::Ignored);
+        assert_eq!(profiles.direct_grants.len(), 1);
+        assert_eq!(
+            profiles.grant_for("dev-a").unwrap().state,
+            DirectGrantState::Ignored
+        );
     }
 }

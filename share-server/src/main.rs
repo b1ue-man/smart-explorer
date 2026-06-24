@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, BufReader, ErrorKind, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -58,6 +58,24 @@ enum In {
         lookup_id: String,
         presence: PeerPresence,
     },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    RelayRequest {
+        relay_id: String,
+        relation_kind: String,
+        relation_id: String,
+        target_device_id: String,
+        requester_presence: PeerPresence,
+    },
+    RelayJoin {
+        relay_id: String,
+        device_id: String,
+    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -85,6 +103,23 @@ enum Out {
     DirectAccessRequest {
         lookup_id: String,
         presence: PeerPresence,
+    },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    RelayRequest {
+        relay_id: String,
+        relation_kind: String,
+        relation_id: String,
+        requester_presence: PeerPresence,
+    },
+    RelayFailed {
+        relay_id: String,
+        msg: String,
     },
     RoomRoster {
         room_id: String,
@@ -123,6 +158,17 @@ struct State {
     direct: HashMap<String, (u64, PeerPresence)>,
     watchers: HashMap<String, HashSet<u64>>,
     rooms: HashMap<String, HashMap<String, (u64, PeerPresence)>>,
+    pending_relays: HashMap<String, PendingRelay>,
+}
+
+struct PendingRelay {
+    conn: RelayConn,
+    created_at: Instant,
+}
+
+enum RelayConn {
+    Tcp(TcpStream),
+    Ws(WebSocket<TcpStream>),
 }
 
 fn send(w: &Writer, msg: &Out) {
@@ -166,27 +212,25 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     handle_tcp(stream, state)
 }
 
-fn handle_tcp(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
+fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let writer = spawn_tcp_writer(stream.try_clone()?);
-    let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
+    if read_tcp_line_raw(&mut stream, &mut line)? == 0 {
         return Ok(());
     }
     let hello: In = match serde_json::from_str(line.trim()) {
         Ok(h) => h,
-        Err(_) => {
-            send(
-                &writer,
-                &Out::Error {
-                    scope: "server".into(),
-                    msg: "bad hello".into(),
-                },
-            );
-            return Ok(());
-        }
+        Err(_) => return Ok(()),
     };
+    if let In::RelayJoin {
+        relay_id,
+        device_id: _,
+    } = hello
+    {
+        return handle_relay_join(relay_id, RelayConn::Tcp(stream), state);
+    }
+    let writer = spawn_tcp_writer(stream.try_clone()?);
+    let mut reader = BufReader::new(stream);
     let In::Hello {
         protocol_version,
         device_id,
@@ -255,6 +299,25 @@ fn handle_tcp(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()
     Ok(())
 }
 
+fn read_tcp_line_raw(stream: &mut TcpStream, line: &mut String) -> io::Result<usize> {
+    let mut total = 0usize;
+    let mut byte = [0u8; 1];
+    loop {
+        match stream.read(&mut byte) {
+            Ok(0) => return Ok(total),
+            Ok(1) => {
+                total += 1;
+                if byte[0] == b'\n' {
+                    return Ok(total);
+                }
+                line.push(byte[0] as char);
+            }
+            Ok(_) => unreachable!(),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let mut ws = accept(stream).map_err(io_other)?;
@@ -267,6 +330,13 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
         }
         Err(e) => return Err(e),
     };
+    if let In::RelayJoin {
+        relay_id,
+        device_id: _,
+    } = hello
+    {
+        return handle_relay_join(relay_id, RelayConn::Ws(ws), state);
+    }
     let In::Hello {
         protocol_version,
         device_id,
@@ -424,6 +494,139 @@ fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, err.to_string())
 }
 
+fn handle_relay_join(
+    relay_id: String,
+    mut conn: RelayConn,
+    state: Arc<Mutex<State>>,
+) -> io::Result<()> {
+    conn.set_timeout(Duration::from_millis(200));
+    let peer = {
+        let mut st = state.lock().unwrap();
+        cleanup_pending_relays(&mut st);
+        if let Some(waiting) = st.pending_relays.remove(&relay_id) {
+            Some(waiting.conn)
+        } else {
+            st.pending_relays.insert(
+                relay_id,
+                PendingRelay {
+                    conn,
+                    created_at: Instant::now(),
+                },
+            );
+            return Ok(());
+        }
+    };
+    if let Some(peer) = peer {
+        bridge_relay(peer, conn)?;
+    }
+    Ok(())
+}
+
+fn cleanup_pending_relays(st: &mut State) {
+    let max_age = Duration::from_secs(60);
+    st.pending_relays
+        .retain(|_, pending| pending.created_at.elapsed() < max_age);
+}
+
+fn bridge_relay(mut a: RelayConn, mut b: RelayConn) -> io::Result<()> {
+    let started = Instant::now();
+    let mut last_data = Instant::now();
+    loop {
+        let mut moved = false;
+        match a.read_chunk() {
+            Ok(Some(bytes)) => {
+                b.write_chunk(&bytes)?;
+                last_data = Instant::now();
+                moved = true;
+            }
+            Ok(None) => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock => {}
+            Err(e) => return Err(e),
+        }
+        match b.read_chunk() {
+            Ok(Some(bytes)) => {
+                a.write_chunk(&bytes)?;
+                last_data = Instant::now();
+                moved = true;
+            }
+            Ok(None) => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock => {}
+            Err(e) => return Err(e),
+        }
+        if !moved {
+            if last_data.elapsed() > Duration::from_secs(300)
+                || started.elapsed() > Duration::from_secs(3600)
+            {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+impl RelayConn {
+    fn set_timeout(&mut self, timeout: Duration) {
+        match self {
+            RelayConn::Tcp(s) => {
+                let _ = s.set_read_timeout(Some(timeout));
+                let _ = s.set_write_timeout(Some(Duration::from_secs(20)));
+            }
+            RelayConn::Ws(ws) => {
+                let s = ws.get_mut();
+                let _ = s.set_read_timeout(Some(timeout));
+                let _ = s.set_write_timeout(Some(Duration::from_secs(20)));
+            }
+        }
+    }
+
+    fn read_chunk(&mut self) -> io::Result<Option<Vec<u8>>> {
+        match self {
+            RelayConn::Tcp(s) => {
+                let mut buf = vec![0u8; 16 * 1024];
+                match s.read(&mut buf) {
+                    Ok(0) => Ok(None),
+                    Ok(n) => {
+                        buf.truncate(n);
+                        Ok(Some(buf))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            RelayConn::Ws(ws) => loop {
+                match ws.read() {
+                    Ok(Message::Binary(bytes)) => return Ok(Some(bytes)),
+                    Ok(Message::Text(_)) | Ok(Message::Pong(_)) => {}
+                    Ok(Message::Ping(payload)) => {
+                        ws.send(Message::Pong(payload)).map_err(ws_to_io)?;
+                    }
+                    Ok(Message::Close(_)) => return Ok(None),
+                    Ok(_) => {}
+                    Err(WsError::Io(e))
+                        if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
+                    {
+                        return Err(e)
+                    }
+                    Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
+                    Err(e) => return Err(ws_to_io(e)),
+                }
+            },
+        }
+    }
+
+    fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            RelayConn::Tcp(s) => {
+                s.write_all(bytes)?;
+                s.flush()
+            }
+            RelayConn::Ws(ws) => {
+                ws.send(Message::Binary(bytes.to_vec())).map_err(ws_to_io)?;
+                ws.flush().map_err(ws_to_io)
+            }
+        }
+    }
+}
+
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
         In::PublishDirect { presence } => publish_direct(id, presence, state),
@@ -433,6 +636,36 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             lookup_id,
             presence,
         } => request_direct(writer, &lookup_id, presence, state),
+        In::DirectAccessAccepted {
+            lookup_id,
+            requester_device_id,
+            accepted,
+            presence,
+            msg,
+        } => direct_access_accepted(
+            &lookup_id,
+            &requester_device_id,
+            accepted,
+            presence,
+            msg,
+            state,
+        ),
+        In::RelayRequest {
+            relay_id,
+            relation_kind,
+            relation_id,
+            target_device_id,
+            requester_presence,
+        } => relay_request(
+            writer,
+            &relay_id,
+            &relation_kind,
+            &relation_id,
+            &target_device_id,
+            requester_presence,
+            state,
+        ),
+        In::RelayJoin { .. } => {}
         In::UnwatchDirect { lookup_id } => {
             let mut st = state.lock().unwrap();
             if let Some(c) = st.clients.get_mut(&id) {
@@ -475,6 +708,63 @@ fn request_direct(
             &Out::Error {
                 scope: "direct".into(),
                 msg: "Direktgeraet nicht online".into(),
+            },
+        );
+    }
+}
+
+fn direct_access_accepted(
+    lookup_id: &str,
+    requester_device_id: &str,
+    accepted: bool,
+    presence: Option<PeerPresence>,
+    msg: Option<String>,
+    state: &Arc<Mutex<State>>,
+) {
+    let targets = writers_by_device(requester_device_id, state);
+    for target in targets {
+        send(
+            &target,
+            &Out::DirectAccessAccepted {
+                lookup_id: lookup_id.to_string(),
+                requester_device_id: requester_device_id.to_string(),
+                accepted,
+                presence: presence.clone(),
+                msg: msg.clone(),
+            },
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relay_request(
+    writer: &Writer,
+    relay_id: &str,
+    relation_kind: &str,
+    relation_id: &str,
+    target_device_id: &str,
+    requester_presence: PeerPresence,
+    state: &Arc<Mutex<State>>,
+) {
+    let targets = writers_by_device(target_device_id, state);
+    if targets.is_empty() {
+        send(
+            writer,
+            &Out::RelayFailed {
+                relay_id: relay_id.to_string(),
+                msg: "Zielgeraet nicht online".into(),
+            },
+        );
+        return;
+    }
+    for target in targets {
+        send(
+            &target,
+            &Out::RelayRequest {
+                relay_id: relay_id.to_string(),
+                relation_kind: relation_kind.to_string(),
+                relation_id: relation_id.to_string(),
+                requester_presence: requester_presence.clone(),
             },
         );
     }
@@ -702,6 +992,15 @@ fn writers_for(ids: HashSet<u64>, state: &Arc<Mutex<State>>) -> Vec<Writer> {
         .collect()
 }
 
+fn writers_by_device(device_id: &str, state: &Arc<Mutex<State>>) -> Vec<Writer> {
+    let st = state.lock().unwrap();
+    st.clients
+        .values()
+        .filter(|c| c.device_id == device_id)
+        .map(|c| c.writer.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,6 +1115,130 @@ mod tests {
             _ => panic!("wrong message"),
         }
         assert!(requester_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn direct_accept_routes_to_requester_device() {
+        let mut state = State::default();
+        let (requester_tx, requester_rx) = mpsc::channel();
+        state.clients.insert(
+            1,
+            Client {
+                writer: requester_tx,
+                device_id: "requester".into(),
+                direct_lookup_ids: HashSet::new(),
+                watched_lookup_ids: HashSet::new(),
+                rooms: HashSet::new(),
+            },
+        );
+        let state = Arc::new(Mutex::new(state));
+        direct_access_accepted(
+            "lookup",
+            "requester",
+            true,
+            Some(presence("direct", "lookup", "owner")),
+            None,
+            &state,
+        );
+        match requester_rx.recv().unwrap() {
+            Out::DirectAccessAccepted {
+                lookup_id,
+                requester_device_id,
+                accepted,
+                presence,
+                ..
+            } => {
+                assert_eq!(lookup_id, "lookup");
+                assert_eq!(requester_device_id, "requester");
+                assert!(accepted);
+                assert_eq!(presence.unwrap().device_id, "owner");
+            }
+            _ => panic!("wrong message"),
+        }
+    }
+
+    #[test]
+    fn raw_relay_pairs_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(State::default()));
+        let server_state = state.clone();
+        let server = std::thread::spawn(move || {
+            let mut handles = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let st = server_state.clone();
+                handles.push(std::thread::spawn(move || handle(stream, st).unwrap()));
+            }
+            for h in handles {
+                let _ = h.join();
+            }
+        });
+
+        let mut a = TcpStream::connect(addr).unwrap();
+        let mut b = TcpStream::connect(addr).unwrap();
+        a.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        b.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        a.write_all(br#"{"t":"relay_join","relay_id":"relay-a","device_id":"a"}"#)
+            .unwrap();
+        a.write_all(b"\n").unwrap();
+        a.flush().unwrap();
+        b.write_all(br#"{"t":"relay_join","relay_id":"relay-a","device_id":"b"}"#)
+            .unwrap();
+        b.write_all(b"\n").unwrap();
+        b.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        a.write_all(b"ping").unwrap();
+        a.flush().unwrap();
+        let mut buf = [0u8; 4];
+        b.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ping");
+        b.write_all(b"pong").unwrap();
+        a.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"pong");
+        drop(a);
+        drop(b);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_relay_pairs_binary_messages() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(State::default()));
+        let server_state = state.clone();
+        let server = std::thread::spawn(move || {
+            let mut handles = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let st = server_state.clone();
+                handles.push(std::thread::spawn(move || handle(stream, st).unwrap()));
+            }
+            for h in handles {
+                let _ = h.join();
+            }
+        });
+
+        let (mut a, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
+        let (mut b, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
+        a.send(Message::Text(
+            r#"{"t":"relay_join","relay_id":"relay-ws","device_id":"a"}"#.to_string(),
+        ))
+        .unwrap();
+        b.send(Message::Text(
+            r#"{"t":"relay_join","relay_id":"relay-ws","device_id":"b"}"#.to_string(),
+        ))
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        a.send(Message::Binary(b"ping".to_vec())).unwrap();
+        assert_eq!(b.read().unwrap().into_data(), b"ping");
+        b.send(Message::Binary(b"pong".to_vec())).unwrap();
+        assert_eq!(a.read().unwrap().into_data(), b"pong");
+        a.close(None).unwrap();
+        b.close(None).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

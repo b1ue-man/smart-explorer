@@ -13,6 +13,7 @@ pub enum ShareScope {
 pub enum ShareStatus {
     Offline,
     Waiting,
+    WaitingForAccess,
     Available,
     Connecting,
     Connected,
@@ -31,6 +32,7 @@ impl ShareStatus {
         match self {
             ShareStatus::Offline => "Offline".into(),
             ShareStatus::Waiting => "Wartet".into(),
+            ShareStatus::WaitingForAccess => "Warte auf Freigabe".into(),
             ShareStatus::Available => "Online".into(),
             ShareStatus::Connecting => "Verbinde".into(),
             ShareStatus::Connected => "Verbunden".into(),
@@ -38,6 +40,45 @@ impl ShareStatus {
             ShareStatus::IdentityConflict => "Identitaetskonflikt".into(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DirectAccessState {
+    Pending,
+    Accepted,
+    Ignored,
+    IdentityConflict,
+}
+
+impl DirectAccessState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DirectAccessState::Pending => "Warte auf Freigabe",
+            DirectAccessState::Accepted => "Freigegeben",
+            DirectAccessState::Ignored => "Ignoriert",
+            DirectAccessState::IdentityConflict => "Identitaetskonflikt",
+        }
+    }
+}
+
+pub(crate) fn default_direct_access_state() -> DirectAccessState {
+    DirectAccessState::Accepted
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DirectGrantState {
+    Accepted,
+    Ignored,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DirectGrant {
+    pub device_id: String,
+    pub device_name: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub state: DirectGrantState,
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -73,6 +114,14 @@ pub struct DirectContact {
     pub presence: Option<PeerPresence>,
     #[serde(default)]
     pub exports: ShareExportConfig,
+    #[serde(default = "default_direct_access_state")]
+    pub access_state: DirectAccessState,
+    #[serde(default)]
+    pub request_sent_at: Option<i64>,
+    #[serde(default)]
+    pub accepted_at: Option<i64>,
+    #[serde(default)]
+    pub accepted_public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +162,7 @@ pub struct PeerEndpoint {
     pub presence: PeerPresence,
     pub relation_secret: Vec<u8>,
     pub expected_public_key: Option<Vec<u8>>,
+    pub server: String,
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +175,7 @@ pub enum PeerOpenTarget {
 pub enum ShareCmd {
     Configure {
         direct: Vec<DirectContact>,
+        direct_grants: Vec<DirectGrant>,
         rooms: Vec<RoomProfile>,
         default_direct_exports: ShareExportConfig,
     },
@@ -135,6 +186,14 @@ pub enum ShareCmd {
     },
     LeaveRoom {
         room_id: String,
+    },
+    RequestDirect {
+        contact_id: String,
+    },
+    AnswerDirectRequest {
+        lookup_id: String,
+        presence: PeerPresence,
+        accepted: bool,
     },
     #[allow(dead_code)]
     Send(Vec<String>),
@@ -161,6 +220,13 @@ pub enum ShareEvent {
     DirectAccessRequest {
         lookup_id: String,
         presence: PeerPresence,
+    },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
     },
     RoomRoster {
         room_id: String,

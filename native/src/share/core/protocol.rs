@@ -1,5 +1,4 @@
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 
 use super::core::{eio, hex, public_fingerprint};
 
@@ -8,15 +7,18 @@ const NOISE_PARAMS: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
 pub(crate) const TAG_CTRL: u8 = 0;
 pub(crate) const TAG_DATA: u8 = 1;
 
+pub(crate) trait IoStream: Read + Write + Send {}
+impl<T: Read + Write + Send> IoStream for T {}
+
 pub(crate) struct Channel {
     t: snow::TransportState,
-    s: TcpStream,
+    s: Box<dyn IoStream>,
     remote_static: Vec<u8>,
 }
 
 impl Channel {
-    pub(crate) fn initiator(
-        mut s: TcpStream,
+    pub(crate) fn initiator<S: IoStream + 'static>(
+        mut s: S,
         psk: &[u8; 32],
         local_private: &[u8],
         expected_remote_public: Option<&[u8]>,
@@ -47,13 +49,13 @@ impl Channel {
         let t = hs.into_transport_mode().map_err(eio)?;
         Ok(Channel {
             t,
-            s,
+            s: Box::new(s),
             remote_static,
         })
     }
 
-    pub(crate) fn responder(
-        mut s: TcpStream,
+    pub(crate) fn responder<S: IoStream + 'static>(
+        mut s: S,
         psk: &[u8; 32],
         local_private: &[u8],
         expected_remote_public: Option<&[u8]>,
@@ -84,7 +86,7 @@ impl Channel {
         let t = hs.into_transport_mode().map_err(eio)?;
         Ok(Channel {
             t,
-            s,
+            s: Box::new(s),
             remote_static,
         })
     }
@@ -132,7 +134,7 @@ fn verify_remote_static(remote: &[u8], expected: Option<&[u8]>) -> io::Result<()
     Ok(())
 }
 
-pub(crate) fn write_raw_frame(s: &mut TcpStream, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_raw_frame<W: Write + ?Sized>(s: &mut W, data: &[u8]) -> io::Result<()> {
     if data.len() > 70_000 {
         return Err(eio("Frame zu gross"));
     }
@@ -141,7 +143,7 @@ pub(crate) fn write_raw_frame(s: &mut TcpStream, data: &[u8]) -> io::Result<()> 
     s.flush()
 }
 
-pub(crate) fn read_raw_frame(s: &mut TcpStream) -> io::Result<Vec<u8>> {
+pub(crate) fn read_raw_frame<R: Read + ?Sized>(s: &mut R) -> io::Result<Vec<u8>> {
     let mut len4 = [0u8; 4];
     s.read_exact(&mut len4)?;
     let n = u32::from_be_bytes(len4) as usize;

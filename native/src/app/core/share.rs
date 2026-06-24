@@ -44,6 +44,7 @@ impl App {
         if let Some(svc) = &self.share {
             svc.cmd(crate::share::ShareCmd::Configure {
                 direct: self.share_profiles.direct_contacts.clone(),
+                direct_grants: self.share_profiles.direct_grants.clone(),
                 rooms: self.share_profiles.rooms.clone(),
                 default_direct_exports: self.share_profiles.default_direct_exports.clone(),
             });
@@ -148,10 +149,18 @@ impl App {
                             c.display_name.clone()
                         };
                         c.last_seen = Some(crate::share::core_now_secs());
-                        c.status = crate::share::ShareStatus::Available;
+                        c.status = if c.access_state == crate::share::DirectAccessState::Accepted {
+                            crate::share::ShareStatus::Available
+                        } else {
+                            crate::share::ShareStatus::WaitingForAccess
+                        };
                         c.last_error = None;
                         c.presence = Some(presence);
-                        if c.auto_open && self.share_opening.is_none() && self.remote.is_none() {
+                        if c.auto_open
+                            && c.access_state == crate::share::DirectAccessState::Accepted
+                            && self.share_opening.is_none()
+                            && self.remote.is_none()
+                        {
                             auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
                                 contact_id: c.id.clone(),
                             });
@@ -175,6 +184,33 @@ impl App {
                     lookup_id,
                     presence,
                 } => {
+                    match self.share_profiles.grant_for(&presence.device_id) {
+                        Some(g)
+                            if g.public_key == presence.public_key
+                                && g.state == crate::share::DirectGrantState::Accepted =>
+                        {
+                            self.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
+                                lookup_id,
+                                presence,
+                                accepted: true,
+                            });
+                            continue;
+                        }
+                        Some(g)
+                            if g.public_key == presence.public_key
+                                && g.state == crate::share::DirectGrantState::Ignored =>
+                        {
+                            continue;
+                        }
+                        Some(_) => {
+                            self.share_diag_log.push_str(&format!(
+                                "Direct-Anfrage Identitaetskonflikt: {} / {}\n",
+                                presence.device_name, presence.device_id
+                            ));
+                            continue;
+                        }
+                        None => {}
+                    }
                     if !self
                         .share_direct_requests
                         .iter()
@@ -198,6 +234,49 @@ impl App {
                         "Direct-Anfrage: lookup={}, device={}, fp={}, candidates={:?}\n",
                         lookup_id, presence.device_name, presence.fingerprint, presence.candidates
                     ));
+                }
+                E::DirectAccessAccepted {
+                    lookup_id,
+                    requester_device_id,
+                    accepted,
+                    presence,
+                    msg,
+                } => {
+                    if requester_device_id != self.share_identity.device_id {
+                        continue;
+                    }
+                    if let Some(c) = self
+                        .share_profiles
+                        .direct_contacts
+                        .iter_mut()
+                        .find(|c| c.lookup_id == lookup_id)
+                    {
+                        if accepted {
+                            c.access_state = crate::share::DirectAccessState::Accepted;
+                            c.accepted_at = Some(crate::share::core_now_secs());
+                            if let Some(p) = presence.clone() {
+                                c.remote_device_id = Some(p.device_id.clone());
+                                c.remote_public_key = Some(p.public_key.clone());
+                                c.accepted_public_key = Some(p.public_key.clone());
+                                c.presence = Some(p);
+                            }
+                            c.status = crate::share::ShareStatus::Available;
+                            c.last_error = None;
+                            changed = true;
+                            if c.auto_open && self.share_opening.is_none() && self.remote.is_none()
+                            {
+                                auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
+                                    contact_id: c.id.clone(),
+                                });
+                            }
+                        } else {
+                            c.access_state = crate::share::DirectAccessState::Ignored;
+                            c.status = crate::share::ShareStatus::Failed(
+                                msg.unwrap_or_else(|| "Freigabe abgelehnt".into()),
+                            );
+                            changed = true;
+                        }
+                    }
                 }
                 E::RoomRoster { room_id, members } => {
                     if let Some(r) = self
@@ -298,6 +377,24 @@ impl App {
     pub(in crate::app) fn open_share_target(&mut self, target: crate::share::PeerOpenTarget) {
         if !self.ensure_share() {
             return;
+        }
+        if let crate::share::PeerOpenTarget::Direct { contact_id } = &target {
+            if let Some(c) = self
+                .share_profiles
+                .direct_contacts
+                .iter_mut()
+                .find(|c| &c.id == contact_id)
+            {
+                if c.access_state != crate::share::DirectAccessState::Accepted {
+                    c.status = crate::share::ShareStatus::WaitingForAccess;
+                    self.notice = Some((
+                        "Warte auf Freigabe am anderen Geraet".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    self.save_share_profiles();
+                    return;
+                }
+            }
         }
         self.share_opening = Some(target.clone());
         self.mark_opening_status(crate::share::ShareStatus::Connecting);
@@ -505,9 +602,16 @@ impl App {
                         self.share_tab = 2;
                     }
                     if ui.button("Freigeben").clicked() {
+                        self.share_profiles
+                            .set_direct_grant(&req, crate::share::DirectGrantState::Accepted);
+                        self.save_share_profiles();
                         self.ensure_share();
+                        self.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
+                            lookup_id: self.share_identity.direct_lookup_id.clone(),
+                            presence: req.clone(),
+                            accepted: true,
+                        });
                         self.share_cmd(crate::share::ShareCmd::SetDirectOnline { online: true });
-                        self.share_cmd(crate::share::ShareCmd::Refresh);
                         remove_request = Some(req.device_id.clone());
                         self.notice = Some((
                             format!("Freigabe fuer {} aktiv", req.device_name),
@@ -515,6 +619,14 @@ impl App {
                         ));
                     }
                     if ui.button("Ignorieren").clicked() {
+                        self.share_profiles
+                            .set_direct_grant(&req, crate::share::DirectGrantState::Ignored);
+                        self.save_share_profiles();
+                        self.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
+                            lookup_id: self.share_identity.direct_lookup_id.clone(),
+                            presence: req.clone(),
+                            accepted: false,
+                        });
                         remove_request = Some(req.device_id.clone());
                     }
                 });
@@ -562,13 +674,12 @@ impl App {
                         {
                             c.auto_connect = true;
                             c.auto_open = true;
-                            c.status = crate::share::ShareStatus::Connecting;
+                            c.status = crate::share::ShareStatus::WaitingForAccess;
                         }
                         self.share_direct_code_input.clear();
                         self.share_direct_name_input.clear();
                         self.save_share_profiles();
                         self.ensure_share();
-                        self.share_cmd(crate::share::ShareCmd::Refresh);
                         self.notice = Some((
                             "Direktgeraet hinzugefuegt, Anfrage gesendet".to_string(),
                             std::time::Instant::now(),
@@ -591,14 +702,27 @@ impl App {
         );
         let mut remove: Option<String> = None;
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
+        let mut request_direct: Option<String> = None;
         let mut changed = false;
         for c in &mut self.share_profiles.direct_contacts {
             ui.horizontal(|ui| {
-                ui.label(format!("{} [{}]", c.display_name, c.status.label()));
+                ui.label(format!(
+                    "{} [{} / {}]",
+                    c.display_name,
+                    c.status.label(),
+                    c.access_state.label()
+                ));
                 if ui.button("Oeffnen").clicked() {
                     open_target = Some(crate::share::PeerOpenTarget::Direct {
                         contact_id: c.id.clone(),
                     });
+                }
+                if ui.button("Anfrage erneut senden").clicked() {
+                    c.access_state = crate::share::DirectAccessState::Pending;
+                    c.request_sent_at = Some(crate::share::core_now_secs());
+                    c.status = crate::share::ShareStatus::WaitingForAccess;
+                    changed = true;
+                    request_direct = Some(c.id.clone());
                 }
                 if ui.checkbox(&mut c.auto_connect, "Auto").changed() {
                     changed = true;
@@ -650,6 +774,9 @@ impl App {
         }
         if changed {
             self.save_share_profiles();
+        }
+        if let Some(contact_id) = request_direct {
+            self.share_cmd(crate::share::ShareCmd::RequestDirect { contact_id });
         }
         if let Some(target) = open_target {
             self.open_share_target(target);

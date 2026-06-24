@@ -1,6 +1,6 @@
 use crossbeam_channel::Sender;
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use super::core::{b64_decode, eio, relation_psk, room_psk, sanitize_name};
 use super::fs::{handle_fs_request, ShareExportConfig};
 use super::identity::ShareIdentity;
 use super::protocol::{read_raw_frame, Channel, TAG_CTRL, TAG_DATA};
-use super::types::{DirectContact, RoomProfile, ShareEvent};
+use super::types::{DirectContact, DirectGrant, DirectGrantState, RoomProfile, ShareEvent};
 use super::wire::{Ctrl, FileMeta, PeerPrelude};
 
 #[derive(Clone)]
@@ -19,6 +19,7 @@ pub(crate) struct ShareAuthState {
     pub(crate) direct_secret: Vec<u8>,
     pub(crate) default_direct_exports: ShareExportConfig,
     pub(crate) direct_contacts: Vec<DirectContact>,
+    pub(crate) direct_grants: Vec<DirectGrant>,
     pub(crate) rooms: Vec<RoomProfile>,
     pub(crate) seen_nonces: HashSet<String>,
     pub(crate) direct_online: bool,
@@ -44,12 +45,15 @@ pub(crate) fn accept_loop(
                 break;
             }
         };
+        let _ = stream.set_nonblocking(false);
         let auth = auth.clone();
         let ev = ev.clone();
         let counter = counter.clone();
         std::thread::Builder::new()
             .name("share-peer".into())
             .spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
                 let id = {
                     let mut c = counter.lock().unwrap();
                     *c += 1;
@@ -63,14 +67,15 @@ pub(crate) fn accept_loop(
     }
 }
 
-fn recv_from_peer(
-    mut stream: TcpStream,
+pub(crate) fn recv_from_peer<S>(
+    mut stream: S,
     _id: u64,
     auth: Arc<Mutex<ShareAuthState>>,
     ev: &Sender<ShareEvent>,
-) -> io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+) -> io::Result<()>
+where
+    S: Read + Write + Send + 'static,
+{
     let prelude: PeerPrelude =
         serde_json::from_slice(&read_raw_frame(&mut stream)?).map_err(eio)?;
     let (psk, expected_public, exports, identity) = resolve_incoming(&prelude, &auth)?;
@@ -132,12 +137,14 @@ fn resolve_incoming(
             if !state.direct_online {
                 return Err(eio("Direktverbindung ist offline"));
             }
-            let expected = state
-                .direct_contacts
+            let grant = state
+                .direct_grants
                 .iter()
-                .find(|c| c.remote_device_id.as_deref() == Some(&prelude.from_device_id))
-                .and_then(|c| c.remote_public_key.as_ref())
-                .and_then(|pk| b64_decode(pk).ok());
+                .find(|g| {
+                    g.device_id == prelude.from_device_id && g.state == DirectGrantState::Accepted
+                })
+                .ok_or_else(|| eio("Direktfreigabe nicht akzeptiert"))?;
+            let expected = b64_decode(&grant.public_key).ok();
             Ok((
                 relation_psk(
                     "direct",
