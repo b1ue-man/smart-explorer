@@ -171,6 +171,34 @@ impl App {
                         changed = true;
                     }
                 }
+                E::DirectAccessRequest {
+                    lookup_id,
+                    presence,
+                } => {
+                    if !self
+                        .share_direct_requests
+                        .iter()
+                        .any(|p| p.device_id == presence.device_id)
+                    {
+                        self.share_direct_requests.push(presence.clone());
+                    } else if let Some(existing) = self
+                        .share_direct_requests
+                        .iter_mut()
+                        .find(|p| p.device_id == presence.device_id)
+                    {
+                        *existing = presence.clone();
+                    }
+                    self.show_share = true;
+                    self.share_tab = 0;
+                    self.share_status = format!(
+                        "Anfrage von {} fuer deinen Direkt-Code",
+                        presence.device_name
+                    );
+                    self.share_diag_log.push_str(&format!(
+                        "Direct-Anfrage: lookup={}, device={}, fp={}, candidates={:?}\n",
+                        lookup_id, presence.device_name, presence.fingerprint, presence.candidates
+                    ));
+                }
                 E::RoomRoster { room_id, members } => {
                     if let Some(r) = self
                         .share_profiles
@@ -409,10 +437,19 @@ impl App {
             if ui.button("Code kopieren").clicked() {
                 ui.ctx().copy_text(self.share_identity.direct_code());
             }
+            if ui.button("Freigaben fuer diesen Code").clicked() {
+                self.share_export_scope = 0;
+                self.share_export_target_id.clear();
+                self.share_tab = 2;
+            }
             if ui.button("Fingerprint kopieren").clicked() {
                 ui.ctx().copy_text(self.share_identity.fingerprint.clone());
             }
         });
+        ui.label(format!(
+            "Freigegeben: {}",
+            export_summary(&self.share_profiles.default_direct_exports)
+        ));
         ui.horizontal(|ui| {
             if ui.button("Name aendern").clicked() {
                 self.share_identity
@@ -447,6 +484,47 @@ impl App {
             });
         }
 
+        if !self.share_direct_requests.is_empty() {
+            ui.separator();
+            ui.label(
+                RichText::new("ANFRAGEN AN DIESES GERAET")
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
+            let mut remove_request: Option<String> = None;
+            let requests = self.share_direct_requests.clone();
+            for req in requests {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "{} moechte deinen Direkt-Code nutzen [{}]",
+                        req.device_name, req.fingerprint
+                    ));
+                    if ui.button("Freigaben waehlen").clicked() {
+                        self.share_export_scope = 0;
+                        self.share_export_target_id.clear();
+                        self.share_tab = 2;
+                    }
+                    if ui.button("Freigeben").clicked() {
+                        self.ensure_share();
+                        self.share_cmd(crate::share::ShareCmd::SetDirectOnline { online: true });
+                        self.share_cmd(crate::share::ShareCmd::Refresh);
+                        remove_request = Some(req.device_id.clone());
+                        self.notice = Some((
+                            format!("Freigabe fuer {} aktiv", req.device_name),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    if ui.button("Ignorieren").clicked() {
+                        remove_request = Some(req.device_id.clone());
+                    }
+                });
+            }
+            if let Some(device_id) = remove_request {
+                self.share_direct_requests
+                    .retain(|p| p.device_id != device_id);
+            }
+        }
+
         ui.separator();
         ui.label(
             RichText::new("DIREKTGERAET HINZUFUEGEN")
@@ -475,10 +553,26 @@ impl App {
                     &self.share_direct_code_input,
                     &self.share_direct_name_input,
                 ) {
-                    Ok(_) => {
+                    Ok(id) => {
+                        if let Some(c) = self
+                            .share_profiles
+                            .direct_contacts
+                            .iter_mut()
+                            .find(|c| c.id == id)
+                        {
+                            c.auto_connect = true;
+                            c.auto_open = true;
+                            c.status = crate::share::ShareStatus::Connecting;
+                        }
                         self.share_direct_code_input.clear();
                         self.share_direct_name_input.clear();
                         self.save_share_profiles();
+                        self.ensure_share();
+                        self.share_cmd(crate::share::ShareCmd::Refresh);
+                        self.notice = Some((
+                            "Direktgeraet hinzugefuegt, Anfrage gesendet".to_string(),
+                            std::time::Instant::now(),
+                        ));
                     }
                     Err(e) => self.error_msg = Some(e),
                 }
@@ -1022,4 +1116,19 @@ fn selected_room_label(app: &App) -> String {
         .find(|r| r.id == app.share_export_target_id)
         .map(|r| r.name.clone())
         .unwrap_or_else(|| "Raum waehlen".into())
+}
+
+fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
+    let mut parts = Vec::new();
+    if cfg.roots.is_empty() {
+        parts.push("keine Ordner".to_string());
+    } else if cfg.roots.len() == 1 {
+        parts.push(format!("1 Ordner ({})", cfg.roots[0].label));
+    } else {
+        parts.push(format!("{} Ordner/Laufwerke", cfg.roots.len()));
+    }
+    if cfg.include_connections {
+        parts.push("gespeicherte Verbindungen".to_string());
+    }
+    parts.join(", ")
 }

@@ -23,6 +23,10 @@ pub(crate) enum ClientMsg {
     WatchDirect {
         lookup_id: String,
     },
+    RequestDirect {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -46,6 +50,10 @@ pub(crate) enum SrvMsg {
     },
     DirectOffline {
         lookup_id: String,
+    },
+    DirectAccessRequest {
+        lookup_id: String,
+        presence: PeerPresence,
     },
     RoomRoster {
         room_id: String,

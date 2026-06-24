@@ -381,6 +381,22 @@ fn publish_all(
                 lookup_id: contact.lookup_id.clone(),
             },
         )?;
+        if let Some(secret) = ShareProfiles::direct_secret(contact) {
+            let request = build_presence(
+                "direct",
+                &contact.lookup_id,
+                &state.identity,
+                &secret,
+                listen_port,
+            );
+            send_line(
+                stream,
+                &ClientMsg::RequestDirect {
+                    lookup_id: contact.lookup_id.clone(),
+                    presence: request,
+                },
+            )?;
+        }
     }
     for room in state.rooms.iter().filter(|r| r.auto_join) {
         if let Some(secret) = ShareProfiles::room_secret(room) {
@@ -645,6 +661,17 @@ fn handle_server_msg(
         SrvMsg::DirectOffline { lookup_id } => {
             let _ = ev.send(ShareEvent::DirectOffline { lookup_id });
         }
+        SrvMsg::DirectAccessRequest {
+            lookup_id,
+            presence,
+        } => {
+            if verify_local_direct_request(&lookup_id, &presence, auth) {
+                let _ = ev.send(ShareEvent::DirectAccessRequest {
+                    lookup_id,
+                    presence,
+                });
+            }
+        }
         SrvMsg::RoomRoster { room_id, members } => {
             let valid: Vec<_> = members
                 .into_iter()
@@ -667,6 +694,47 @@ fn handle_server_msg(
             let _ = ev.send(ShareEvent::Error(format!("{scope}: {msg}")));
         }
     }
+}
+
+fn verify_local_direct_request(
+    lookup_id: &str,
+    presence: &super::types::PeerPresence,
+    auth: &Arc<Mutex<ShareAuthState>>,
+) -> bool {
+    if presence.expires_at < now_secs()
+        || presence.kind != "direct"
+        || presence.relation_id != lookup_id
+    {
+        return false;
+    }
+    let mut state = match auth.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if lookup_id != state.identity.direct_lookup_id {
+        return false;
+    }
+    let replay_key = format!(
+        "direct-request:{lookup_id}:{}:{}",
+        presence.device_id, presence.nonce
+    );
+    if state.seen_nonces.contains(&replay_key) {
+        return false;
+    }
+    let payload = presence_payload(
+        "direct",
+        lookup_id,
+        &presence.device_id,
+        &presence.public_key,
+        &presence.candidates,
+        presence.expires_at,
+        &presence.nonce,
+    );
+    if !verify_hmac(&state.direct_secret, &payload, &presence.proof) {
+        return false;
+    }
+    remember_nonce(&mut state.seen_nonces, replay_key);
+    true
 }
 
 fn verify_direct_presence(
@@ -768,8 +836,8 @@ fn remember_nonce(seen: &mut HashSet<String>, key: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_signal_endpoint, normalize_tcp_addr, remember_nonce, signal_endpoints,
-        ShareService,
+        build_presence, normalize_signal_endpoint, normalize_tcp_addr, remember_nonce,
+        signal_endpoints, verify_local_direct_request, ShareService,
     };
     use crate::share::fs::ShareExportConfig;
     use crate::share::identity::ShareIdentity;
@@ -861,6 +929,38 @@ mod tests {
         assert_eq!(normalize_tcp_addr("share.example"), "share.example:51820");
         assert_eq!(normalize_tcp_addr("share.example:443"), "share.example:443");
         assert_eq!(normalize_tcp_addr("[::1]:51820"), "[::1]:51820");
+    }
+
+    #[test]
+    fn local_direct_request_requires_own_direct_secret() {
+        let svc = test_service();
+        let identity = svc.identity.clone();
+        let secret = svc.auth.lock().unwrap().direct_secret.clone();
+        let presence = build_presence(
+            "direct",
+            &identity.direct_lookup_id,
+            &identity,
+            &secret,
+            12345,
+        );
+        assert!(verify_local_direct_request(
+            &identity.direct_lookup_id,
+            &presence,
+            &svc.auth
+        ));
+
+        let wrong = build_presence(
+            "direct",
+            &identity.direct_lookup_id,
+            &identity,
+            &[9u8; 32],
+            12345,
+        );
+        assert!(!verify_local_direct_request(
+            &identity.direct_lookup_id,
+            &wrong,
+            &svc.auth
+        ));
     }
 
     fn test_service() -> ShareService {

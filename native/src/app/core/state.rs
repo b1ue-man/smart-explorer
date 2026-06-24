@@ -394,6 +394,7 @@ pub struct App {
     pub(in crate::app) share_export_label_draft: String,
     pub(in crate::app) share_block_symlink_escape: bool,
     pub(in crate::app) share_regenerate_direct_confirm: bool,
+    pub(in crate::app) share_direct_requests: Vec<crate::share::PeerPresence>,
     pub(in crate::app) share_diag_log: String,
     pub(in crate::app) share_manual_stop: bool,
     pub(in crate::app) share_open_rx:

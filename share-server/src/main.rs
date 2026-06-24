@@ -54,6 +54,10 @@ enum In {
     WatchDirect {
         lookup_id: String,
     },
+    RequestDirect {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -77,6 +81,10 @@ enum Out {
     },
     DirectOffline {
         lookup_id: String,
+    },
+    DirectAccessRequest {
+        lookup_id: String,
+        presence: PeerPresence,
     },
     RoomRoster {
         room_id: String,
@@ -421,6 +429,10 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
         In::PublishDirect { presence } => publish_direct(id, presence, state),
         In::UnpublishDirect { lookup_id } => unpublish_direct(id, &lookup_id, state),
         In::WatchDirect { lookup_id } => watch_direct(id, writer, &lookup_id, state),
+        In::RequestDirect {
+            lookup_id,
+            presence,
+        } => request_direct(writer, &lookup_id, presence, state),
         In::UnwatchDirect { lookup_id } => {
             let mut st = state.lock().unwrap();
             if let Some(c) = st.clients.get_mut(&id) {
@@ -434,6 +446,37 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
         In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
         In::Heartbeat => send(writer, &Out::Pong),
         In::Hello { .. } => {}
+    }
+}
+
+fn request_direct(
+    writer: &Writer,
+    lookup_id: &str,
+    presence: PeerPresence,
+    state: &Arc<Mutex<State>>,
+) {
+    let target = {
+        let st = state.lock().unwrap();
+        st.direct
+            .get(lookup_id)
+            .and_then(|(owner_id, _)| st.clients.get(owner_id).map(|c| c.writer.clone()))
+    };
+    if let Some(target) = target {
+        send(
+            &target,
+            &Out::DirectAccessRequest {
+                lookup_id: lookup_id.to_string(),
+                presence,
+            },
+        );
+    } else {
+        send(
+            writer,
+            &Out::Error {
+                scope: "direct".into(),
+                msg: "Direktgeraet nicht online".into(),
+            },
+        );
     }
 }
 
@@ -725,6 +768,54 @@ mod tests {
         assert_eq!(back.kind, "room");
         assert_eq!(back.relation_id, "r");
         assert_eq!(back.device_id, "d");
+    }
+
+    #[test]
+    fn direct_request_routes_to_lookup_owner() {
+        let mut state = State::default();
+        let (owner_tx, owner_rx) = mpsc::channel();
+        let (requester_tx, requester_rx) = mpsc::channel();
+        state.clients.insert(
+            1,
+            Client {
+                writer: owner_tx,
+                device_id: "owner".into(),
+                direct_lookup_ids: HashSet::from(["lookup".into()]),
+                watched_lookup_ids: HashSet::new(),
+                rooms: HashSet::new(),
+            },
+        );
+        state.clients.insert(
+            2,
+            Client {
+                writer: requester_tx.clone(),
+                device_id: "requester".into(),
+                direct_lookup_ids: HashSet::new(),
+                watched_lookup_ids: HashSet::new(),
+                rooms: HashSet::new(),
+            },
+        );
+        state
+            .direct
+            .insert("lookup".into(), (1, presence("direct", "lookup", "owner")));
+        let state = Arc::new(Mutex::new(state));
+        request_direct(
+            &requester_tx,
+            "lookup",
+            presence("direct", "lookup", "requester"),
+            &state,
+        );
+        match owner_rx.recv().unwrap() {
+            Out::DirectAccessRequest {
+                lookup_id,
+                presence,
+            } => {
+                assert_eq!(lookup_id, "lookup");
+                assert_eq!(presence.device_id, "requester");
+            }
+            _ => panic!("wrong message"),
+        }
+        assert!(requester_rx.try_recv().is_err());
     }
 
     #[test]
