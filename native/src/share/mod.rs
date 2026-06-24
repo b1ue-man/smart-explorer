@@ -1,7 +1,8 @@
 //! Share-Server client side. The server is rendezvous-only and untrusted: it
 //! routes signed presence for persistent direct contacts and rooms. File
-//! operations run directly peer-to-peer over Noise XXpsk3 channels whose static
-//! keys are pinned by direct/room relation secrets.
+//! operations run through persistent Iroh/QUIC sessions. Iroh attempts direct
+//! peer-to-peer paths first and falls back to the configured relay while all
+//! file frames remain end-to-end authenticated by the pinned relation.
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -13,16 +14,10 @@ mod fs;
 mod identity;
 #[path = "core/profiles.rs"]
 mod profiles;
-#[path = "core/protocol.rs"]
-mod protocol;
-#[path = "core/relay.rs"]
-mod relay;
 #[path = "core/service.rs"]
 mod service;
 #[path = "os/shared/system.rs"]
 mod system;
-#[path = "os/shared/transfer.rs"]
-mod transfer;
 #[path = "core/types.rs"]
 mod types;
 #[path = "core/wire.rs"]
@@ -39,10 +34,6 @@ pub use self::types::{
 
 pub fn core_now_secs() -> i64 {
     self::core::now_secs()
-}
-
-pub fn local_lan_ips() -> Vec<String> {
-    self::system::lan_ips()
 }
 
 #[cfg(test)]

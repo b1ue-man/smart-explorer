@@ -186,7 +186,6 @@ impl App {
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
             || self.cloud_authing
-            || self.share_progress.is_some()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         } else if self.share.is_some() || !self.remote_edits.is_empty() || self.quickshare.is_some()

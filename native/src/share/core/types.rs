@@ -1,7 +1,9 @@
 use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::fs::ShareExportConfig;
+use super::identity::ShareIdentity;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShareScope {
@@ -17,6 +19,8 @@ pub enum ShareStatus {
     Available,
     Connecting,
     Connected,
+    ConnectedDirect,
+    ConnectedRelay,
     Failed(String),
     IdentityConflict,
 }
@@ -36,6 +40,8 @@ impl ShareStatus {
             ShareStatus::Available => "Online".into(),
             ShareStatus::Connecting => "Verbinde".into(),
             ShareStatus::Connected => "Verbunden".into(),
+            ShareStatus::ConnectedDirect => "Direkt verbunden".into(),
+            ShareStatus::ConnectedRelay => "Relay verbunden".into(),
             ShareStatus::Failed(e) => format!("Fehler: {e}"),
             ShareStatus::IdentityConflict => "Identitaetskonflikt".into(),
         }
@@ -77,6 +83,8 @@ pub struct DirectGrant {
     pub device_name: String,
     pub public_key: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub node_id: String,
     pub state: DirectGrantState,
     pub updated_at: i64,
 }
@@ -89,6 +97,10 @@ pub struct PeerPresence {
     pub device_name: String,
     pub public_key: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub relay_url: String,
     pub candidates: Vec<String>,
     pub expires_at: i64,
     pub nonce: String,
@@ -101,6 +113,8 @@ pub struct DirectContact {
     pub display_name: String,
     pub lookup_id: String,
     pub expected_fingerprint: String,
+    #[serde(default)]
+    pub expected_node_id: String,
     pub remote_device_id: Option<String>,
     pub remote_public_key: Option<String>,
     pub auto_connect: bool,
@@ -130,6 +144,10 @@ pub struct RoomMember {
     pub device_name: String,
     pub fingerprint: String,
     pub public_key: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub relay_url: String,
     pub candidates: Vec<String>,
     pub last_seen: Option<i64>,
     #[serde(default)]
@@ -161,8 +179,7 @@ pub struct PeerEndpoint {
     pub scope: ShareScope,
     pub presence: PeerPresence,
     pub relation_secret: Vec<u8>,
-    pub expected_public_key: Option<Vec<u8>>,
-    pub server: String,
+    pub expected_node_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -194,13 +211,6 @@ pub enum ShareCmd {
         lookup_id: String,
         presence: PeerPresence,
         accepted: bool,
-    },
-    #[allow(dead_code)]
-    Send(Vec<String>),
-    #[allow(dead_code)]
-    Answer {
-        id: u64,
-        accept: bool,
     },
 }
 
@@ -240,26 +250,18 @@ pub enum ShareEvent {
         room_id: String,
         device_id: String,
     },
-    #[allow(dead_code)]
-    Incoming {
-        id: u64,
-        from: String,
-        files: Vec<(String, u64)>,
-    },
-    #[allow(dead_code)]
-    Progress {
-        done: u64,
-        total: u64,
-    },
-    #[allow(dead_code)]
-    Received {
-        count: usize,
-        dir: String,
-    },
-    #[allow(dead_code)]
-    Sent {
-        count: usize,
-    },
 }
 
 pub(crate) type CmdTx = Sender<ShareCmd>;
+
+#[derive(Clone)]
+pub(crate) struct ShareAuthState {
+    pub(crate) identity: ShareIdentity,
+    pub(crate) direct_secret: Vec<u8>,
+    pub(crate) default_direct_exports: ShareExportConfig,
+    pub(crate) direct_contacts: Vec<DirectContact>,
+    pub(crate) direct_grants: Vec<DirectGrant>,
+    pub(crate) rooms: Vec<RoomProfile>,
+    pub(crate) seen_nonces: HashSet<String>,
+    pub(crate) direct_online: bool,
+}

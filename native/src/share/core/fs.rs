@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -6,12 +6,11 @@ use crate::creds::{Protocol, SavedConnection};
 use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
 use serde::{Deserialize, Serialize};
 
-use super::core::{eio, random_token};
-use super::protocol::{Channel, TAG_CTRL, TAG_DATA};
-use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
+use super::core::eio;
+use super::wire::FsMeta;
 
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
-const CHUNK: usize = 60_000;
+pub(crate) const CHUNK: usize = 256 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedRoot {
@@ -37,87 +36,17 @@ struct Mount {
     target: MountTarget,
 }
 
-struct ResolvedTarget {
-    backend: BackendHandle,
-    path: String,
-    mount_key: String,
+pub(crate) struct ResolvedTarget {
+    pub(crate) backend: BackendHandle,
+    pub(crate) path: String,
+    pub(crate) mount_key: String,
     _net: Option<crate::net::NetConnection>,
 }
 
-pub(crate) fn handle_fs_request(
-    mut ch: Channel,
-    req: FsRequest,
-    exports: Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<()> {
-    match req {
-        FsRequest::ListDir { path } => match list_dir(&path, &exports) {
-            Ok(entries) => reply(&mut ch, FsResponse::Entries { entries }),
-            Err(e) => reply_err(&mut ch, e),
-        },
-        FsRequest::Stat { path } => match stat(&path, &exports) {
-            Ok(meta) => reply(&mut ch, FsResponse::Meta { meta }),
-            Err(e) => reply_err(&mut ch, e),
-        },
-        FsRequest::Read { path } => read_file(&mut ch, &path, &exports),
-        FsRequest::Write { path } => write_file(&mut ch, &path, &exports),
-        FsRequest::MkdirAll { path } => {
-            simple(&mut ch, &path, &exports, |t| t.backend.mkdir_all(&t.path))
-        }
-        FsRequest::Rename { src, dst } => {
-            match (resolve(&src, &exports), resolve(&dst, &exports)) {
-                (Ok(a), Ok(b)) => {
-                    if a.mount_key == b.mount_key {
-                        match a.backend.rename(&a.path, &b.path) {
-                            Ok(()) => reply(&mut ch, FsResponse::Ok),
-                            Err(e) => reply_err(&mut ch, e),
-                        }
-                    } else {
-                        reply_err(
-                            &mut ch,
-                            eio("Quelle und Ziel liegen nicht auf derselben Freigabe"),
-                        )
-                    }
-                }
-                (Err(e), _) | (_, Err(e)) => reply_err(&mut ch, e),
-            }
-        }
-        FsRequest::RemoveFile { path } => {
-            simple(&mut ch, &path, &exports, |t| t.backend.remove_file(&t.path))
-        }
-        FsRequest::RemoveDir { path } => simple(&mut ch, &path, &exports, |t| {
-            remove_dir_recursive(&*t.backend, &t.path)
-        }),
-        FsRequest::WriteDone => reply_err(&mut ch, eio("unerwartetes Schreib-Ende")),
-    }
-}
-
-fn reply(ch: &mut Channel, resp: FsResponse) -> io::Result<()> {
-    ch.send(
-        TAG_CTRL,
-        &serde_json::to_vec(&Ctrl::FsResp { resp }).map_err(eio)?,
-    )
-}
-
-fn reply_err(ch: &mut Channel, e: io::Error) -> io::Result<()> {
-    reply(&mut *ch, FsResponse::Err { msg: e.to_string() })
-}
-
-fn simple<F>(
-    ch: &mut Channel,
+pub(crate) fn list_dir(
     path: &str,
     exports: &Arc<Mutex<ShareExportConfig>>,
-    f: F,
-) -> io::Result<()>
-where
-    F: FnOnce(ResolvedTarget) -> io::Result<()>,
-{
-    match resolve(path, exports).and_then(f) {
-        Ok(()) => reply(ch, FsResponse::Ok),
-        Err(e) => reply_err(ch, e),
-    }
-}
-
-fn list_dir(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<Vec<FsMeta>> {
+) -> io::Result<Vec<FsMeta>> {
     let parts = split_clean(path)?;
     if parts.is_empty() {
         let cfg = snapshot(exports);
@@ -147,7 +76,7 @@ fn list_dir(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<V
         .collect())
 }
 
-fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<FsMeta> {
+pub(crate) fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<FsMeta> {
     let parts = split_clean(path)?;
     if parts.is_empty() {
         return Ok(dir_meta("/".to_string()));
@@ -174,101 +103,10 @@ fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<FsMet
     Ok(t.backend.stat(&t.path)?.into())
 }
 
-fn read_file(
-    ch: &mut Channel,
+pub(crate) fn resolve(
     path: &str,
     exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<()> {
-    let t = match resolve(path, exports) {
-        Ok(t) => t,
-        Err(e) => return reply_err(ch, e),
-    };
-    let size = match t.backend.stat(&t.path) {
-        Ok(m) if !m.is_dir => m.size,
-        Ok(_) => return reply_err(ch, eio("Ordner kann nicht als Datei gelesen werden")),
-        Err(e) => return reply_err(ch, e),
-    };
-    let mut r = match t.backend.open_read(&t.path) {
-        Ok(r) => r,
-        Err(e) => return reply_err(ch, e),
-    };
-    reply(ch, FsResponse::Data { size })?;
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        let n = r.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        ch.send(TAG_DATA, &buf[..n])?;
-    }
-    Ok(())
-}
-
-fn write_file(
-    ch: &mut Channel,
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<()> {
-    let t = match resolve(path, exports) {
-        Ok(t) => t,
-        Err(e) => return reply_err(ch, e),
-    };
-    let tmp_path = format!("{}.se-part-{}", t.path, random_token(8));
-    let w = match t.backend.open_write(&tmp_path) {
-        Ok(w) => w,
-        Err(e) => return reply_err(ch, e),
-    };
-    let mut w = Some(w);
-    reply(ch, FsResponse::Ready)?;
-    let result = loop {
-        let (tag, payload) = match ch.recv() {
-            Ok(frame) => frame,
-            Err(e) => break Err(e),
-        };
-        if tag == TAG_DATA {
-            let Some(writer) = w.as_mut() else {
-                break Err(eio("Schreibkanal ist geschlossen"));
-            };
-            if let Err(e) = writer.write_all(&payload) {
-                break Err(e);
-            }
-            continue;
-        }
-        if tag != TAG_CTRL {
-            break Err(eio("unerwarteter Frame beim Schreiben"));
-        }
-        let ctrl: Ctrl = match serde_json::from_slice(&payload).map_err(eio) {
-            Ok(ctrl) => ctrl,
-            Err(e) => break Err(e),
-        };
-        match ctrl {
-            Ctrl::Fs {
-                req: FsRequest::WriteDone,
-            } => {
-                let Some(mut writer) = w.take() else {
-                    break Err(eio("Schreibkanal ist geschlossen"));
-                };
-                if let Err(e) = writer.flush() {
-                    break Err(e);
-                }
-                drop(writer);
-                break t.backend.rename(&tmp_path, &t.path);
-            }
-            _ => break Err(eio("unerwartete Steuernachricht beim Schreiben")),
-        }
-    };
-    match result {
-        Ok(()) => reply(ch, FsResponse::Ok),
-        Err(e) => {
-            let msg = e.to_string();
-            drop(w.take());
-            let _ = t.backend.remove_file(&tmp_path);
-            reply_err(ch, eio(msg))
-        }
-    }
-}
-
-fn resolve(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<ResolvedTarget> {
+) -> io::Result<ResolvedTarget> {
     let parts = split_clean(path)?;
     let (head, rest) = parts
         .split_first()
@@ -332,7 +170,7 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
     })
 }
 
-fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
+pub(crate) fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
     for entry in be.list_dir(path)? {
         let child = format!("{}/{}", path.trim_end_matches('/'), entry.name);
         if entry.is_dir {

@@ -78,7 +78,7 @@ impl App {
         if let Some(rx) = &self.share_open_rx {
             if let Ok(result) = rx.try_recv() {
                 match result {
-                    Ok((label, backend)) => {
+                    Ok((label, backend, status)) => {
                         self.remote = Some(crate::connect::RemoteState {
                             backend: cache_remote(backend),
                             label: label.clone(),
@@ -92,7 +92,7 @@ impl App {
                         self.notice =
                             Some((format!("Verbunden: {}", label), std::time::Instant::now()));
                         self.start_scan(PathBuf::from("/"));
-                        self.mark_opening_status(crate::share::ShareStatus::Connected);
+                        self.mark_opening_status(status);
                     }
                     Err(e) => {
                         self.mark_opening_status(crate::share::ShareStatus::Failed(e.clone()));
@@ -141,6 +141,17 @@ impl App {
                         .iter_mut()
                         .find(|c| c.lookup_id == lookup_id)
                     {
+                        if !c.expected_node_id.trim().is_empty()
+                            && c.expected_node_id != presence.node_id
+                        {
+                            c.status = crate::share::ShareStatus::IdentityConflict;
+                            c.last_error = Some("Iroh NodeId passt nicht zum Code".into());
+                            changed = true;
+                            continue;
+                        }
+                        if c.expected_node_id.trim().is_empty() {
+                            c.expected_node_id = presence.node_id.clone();
+                        }
                         c.remote_device_id = Some(presence.device_id.clone());
                         c.remote_public_key = Some(presence.public_key.clone());
                         c.display_name = if c.display_name.trim().is_empty() {
@@ -187,6 +198,7 @@ impl App {
                     match self.share_profiles.grant_for(&presence.device_id) {
                         Some(g)
                             if g.public_key == presence.public_key
+                                && g.node_id == presence.node_id
                                 && g.state == crate::share::DirectGrantState::Accepted =>
                         {
                             self.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
@@ -198,6 +210,7 @@ impl App {
                         }
                         Some(g)
                             if g.public_key == presence.public_key
+                                && g.node_id == presence.node_id
                                 && g.state == crate::share::DirectGrantState::Ignored =>
                         {
                             continue;
@@ -255,6 +268,19 @@ impl App {
                             c.access_state = crate::share::DirectAccessState::Accepted;
                             c.accepted_at = Some(crate::share::core_now_secs());
                             if let Some(p) = presence.clone() {
+                                if !c.expected_node_id.trim().is_empty()
+                                    && c.expected_node_id != p.node_id
+                                {
+                                    c.access_state =
+                                        crate::share::DirectAccessState::IdentityConflict;
+                                    c.status = crate::share::ShareStatus::IdentityConflict;
+                                    c.last_error = Some("Iroh NodeId passt nicht zum Code".into());
+                                    changed = true;
+                                    continue;
+                                }
+                                if c.expected_node_id.trim().is_empty() {
+                                    c.expected_node_id = p.node_id.clone();
+                                }
                                 c.remote_device_id = Some(p.device_id.clone());
                                 c.remote_public_key = Some(p.public_key.clone());
                                 c.accepted_public_key = Some(p.public_key.clone());
@@ -321,19 +347,6 @@ impl App {
                             changed = true;
                         }
                     }
-                }
-                E::Incoming { id, from, files } => {
-                    self.share_incoming.push((id, from, files));
-                    self.show_share = true;
-                }
-                E::Progress { done, total } => self.share_progress = Some((done, total)),
-                E::Received { count, dir } => {
-                    self.share_progress = None;
-                    self.share_status = format!("{} empfangen -> {}", count, dir);
-                }
-                E::Sent { count } => {
-                    self.share_progress = None;
-                    self.share_status = format!("{} gesendet", count);
                 }
             }
         }
@@ -646,7 +659,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_direct_code_input)
-                    .hint_text("SE-D1-...")
+                    .hint_text("SE-D3-...")
                     .desired_width(360.0),
             );
             ui.add(
@@ -740,7 +753,10 @@ impl App {
                         .presence
                         .as_ref()
                         .map(|p| {
-                            format!("candidates={:?}, expires_at={}", p.candidates, p.expires_at)
+                            format!(
+                                "node={}, relay={}, candidates={:?}, expires_at={}",
+                                p.node_id, p.relay_url, p.candidates, p.expires_at
+                            )
                         })
                         .unwrap_or_else(|| "keine Presence".to_string());
                     self.share_diag_log.push_str(&format!(
@@ -824,7 +840,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_room_code_input)
-                    .hint_text("SE-R1-...")
+                    .hint_text("SE-R3-...")
                     .desired_width(360.0),
             );
             ui.add(
@@ -1160,17 +1176,19 @@ impl App {
                 let candidates = self
                     .share
                     .as_ref()
-                    .map(|svc| {
-                        crate::share::local_lan_ips()
-                            .into_iter()
-                            .map(|ip| format!("{ip}:{}", svc.listen_port))
-                            .collect::<Vec<_>>()
-                    })
+                    .map(|svc| svc.peer_candidates())
                     .unwrap_or_default();
+                let relay = self
+                    .share
+                    .as_ref()
+                    .map(|svc| svc.relay_url())
+                    .unwrap_or_else(|| "-".into());
                 self.share_diag_log.push_str(&format!(
-                    "device_id={}\nfingerprint={}\nlistener=aktiv wenn verbunden\nlokale Kandidaten={:?}\n",
+                    "device_id={}\nnode_id={}\nfingerprint={}\niroh=aktiv wenn verbunden\nrelay={}\nkandidaten={:?}\n",
                     self.share_identity.device_id,
+                    self.share_identity.node_id,
                     self.share_identity.fingerprint,
+                    relay,
                     candidates
                 ));
             }
@@ -1185,11 +1203,11 @@ impl App {
             }
         ));
         if let Some(svc) = &self.share {
-            ui.label(format!("Listen-Port: {}", svc.listen_port));
+            ui.label(format!("Iroh-Relay: {}", svc.relay_url()));
         }
         ui.label(format!("Signaling: {}", self.share_status));
         ui.label(format!(
-            "Noise-Fingerprint: {}",
+            "SmartExplorer-Fingerprint: {}",
             self.share_identity.fingerprint
         ));
         egui::ScrollArea::vertical()
@@ -1202,13 +1220,15 @@ impl App {
 
 fn upsert_room_member(room: &mut crate::share::RoomProfile, p: crate::share::PeerPresence) {
     if let Some(m) = room.members.iter_mut().find(|m| m.device_id == p.device_id) {
-        if m.public_key != p.public_key {
+        if m.public_key != p.public_key || (!m.node_id.is_empty() && m.node_id != p.node_id) {
             m.status = crate::share::ShareStatus::IdentityConflict;
             return;
         }
         m.device_name = p.device_name.clone();
         m.fingerprint = p.fingerprint.clone();
         m.candidates = p.candidates.clone();
+        m.node_id = p.node_id.clone();
+        m.relay_url = p.relay_url.clone();
         m.last_seen = Some(crate::share::core_now_secs());
         m.status = crate::share::ShareStatus::Available;
         m.presence = Some(p);
@@ -1218,6 +1238,8 @@ fn upsert_room_member(room: &mut crate::share::RoomProfile, p: crate::share::Pee
             device_name: p.device_name.clone(),
             fingerprint: p.fingerprint.clone(),
             public_key: p.public_key.clone(),
+            node_id: p.node_id.clone(),
+            relay_url: p.relay_url.clone(),
             candidates: p.candidates.clone(),
             last_seen: Some(crate::share::core_now_secs()),
             status: crate::share::ShareStatus::Available,

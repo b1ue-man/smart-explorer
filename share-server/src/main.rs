@@ -3,7 +3,8 @@
 //! The server is intentionally untrusted: it stores and routes signed presence
 //! blobs for persistent direct contacts and rooms. It never sees relation
 //! secrets, private keys, file names, file bytes, or export configuration.
-//! Clients validate HMAC proofs and Noise static keys before opening a peer.
+//! Clients validate HMAC proofs, pinned SmartExplorer identities, and Iroh
+//! NodeIds before opening a peer session.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -25,6 +26,10 @@ struct PeerPresence {
     device_name: String,
     public_key: String,
     fingerprint: String,
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    relay_url: String,
     candidates: Vec<String>,
     expires_at: i64,
     nonce: String,
@@ -65,17 +70,6 @@ enum In {
         presence: Option<PeerPresence>,
         msg: Option<String>,
     },
-    RelayRequest {
-        relay_id: String,
-        relation_kind: String,
-        relation_id: String,
-        target_device_id: String,
-        requester_presence: PeerPresence,
-    },
-    RelayJoin {
-        relay_id: String,
-        device_id: String,
-    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -110,16 +104,6 @@ enum Out {
         accepted: bool,
         presence: Option<PeerPresence>,
         msg: Option<String>,
-    },
-    RelayRequest {
-        relay_id: String,
-        relation_kind: String,
-        relation_id: String,
-        requester_presence: PeerPresence,
-    },
-    RelayFailed {
-        relay_id: String,
-        msg: String,
     },
     RoomRoster {
         room_id: String,
@@ -158,17 +142,6 @@ struct State {
     direct: HashMap<String, (u64, PeerPresence)>,
     watchers: HashMap<String, HashSet<u64>>,
     rooms: HashMap<String, HashMap<String, (u64, PeerPresence)>>,
-    pending_relays: HashMap<String, PendingRelay>,
-}
-
-struct PendingRelay {
-    conn: RelayConn,
-    created_at: Instant,
-}
-
-enum RelayConn {
-    Tcp(TcpStream),
-    Ws(WebSocket<TcpStream>),
 }
 
 fn send(w: &Writer, msg: &Out) {
@@ -180,6 +153,7 @@ fn main() {
         .nth(1)
         .or_else(|| std::env::var("SE_SHARE_BIND").ok())
         .unwrap_or_else(|| "0.0.0.0:51820".to_string());
+    let _relay_guard = start_iroh_relay(&bind);
     let listener = match TcpListener::bind(&bind) {
         Ok(l) => l,
         Err(e) => {
@@ -199,6 +173,75 @@ fn main() {
             let _ = handle(stream, state);
         });
     }
+}
+
+struct RelayGuard {
+    _rt: tokio::runtime::Runtime,
+    _server: iroh_relay::server::Server,
+}
+
+fn start_iroh_relay(signal_bind: &str) -> Option<RelayGuard> {
+    if std::env::var("SE_IROH_RELAY_DISABLE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        eprintln!("iroh relay disabled via SE_IROH_RELAY_DISABLE");
+        return None;
+    }
+    let bind = std::env::var("SE_IROH_RELAY_BIND")
+        .ok()
+        .unwrap_or_else(|| default_relay_bind(signal_bind));
+    let addr = match bind.parse::<std::net::SocketAddr>() {
+        Ok(addr) => addr,
+        Err(e) => {
+            eprintln!("iroh relay disabled: invalid SE_IROH_RELAY_BIND/default {bind}: {e}");
+            return None;
+        }
+    };
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("se-iroh-relay")
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("iroh relay disabled: cannot create runtime: {e}");
+            return None;
+        }
+    };
+    let server = match rt.block_on(async {
+        let mut cfg = iroh_relay::server::ServerConfig::default();
+        cfg.relay = Some(iroh_relay::server::RelayConfig::new(addr));
+        iroh_relay::server::Server::spawn(cfg).await
+    }) {
+        Ok(server) => server,
+        Err(e) => {
+            eprintln!("iroh relay disabled: cannot bind {addr}: {e}");
+            return None;
+        }
+    };
+    let relay_url = server
+        .http_addr()
+        .map(|addr| format!("http://{addr}"))
+        .unwrap_or_else(|| format!("http://{addr}"));
+    eprintln!("se-share-server iroh relay listening on {relay_url}");
+    Some(RelayGuard {
+        _rt: rt,
+        _server: server,
+    })
+}
+
+fn default_relay_bind(signal_bind: &str) -> String {
+    let host_port = signal_bind
+        .trim()
+        .trim_start_matches("tcp://")
+        .trim_end_matches('/');
+    if let Ok(addr) = host_port.parse::<std::net::SocketAddr>() {
+        let mut next = addr;
+        next.set_port(addr.port().saturating_add(1));
+        return next.to_string();
+    }
+    "0.0.0.0:51821".to_string()
 }
 
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
@@ -222,13 +265,6 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
         Ok(h) => h,
         Err(_) => return Ok(()),
     };
-    if let In::RelayJoin {
-        relay_id,
-        device_id: _,
-    } = hello
-    {
-        return handle_relay_join(relay_id, RelayConn::Tcp(stream), state);
-    }
     let writer = spawn_tcp_writer(stream.try_clone()?);
     let mut reader = BufReader::new(stream);
     let In::Hello {
@@ -250,7 +286,7 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
         );
         return Ok(());
     };
-    if protocol_version != 2 || device_id.trim().is_empty() {
+    if protocol_version != 3 || device_id.trim().is_empty() {
         send(
             &writer,
             &Out::Error {
@@ -330,13 +366,6 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
         }
         Err(e) => return Err(e),
     };
-    if let In::RelayJoin {
-        relay_id,
-        device_id: _,
-    } = hello
-    {
-        return handle_relay_join(relay_id, RelayConn::Ws(ws), state);
-    }
     let In::Hello {
         protocol_version,
         device_id,
@@ -357,7 +386,7 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
         flush_ws_out(&mut ws, &out_rx)?;
         return Ok(());
     };
-    if protocol_version != 2 || device_id.trim().is_empty() {
+    if protocol_version != 3 || device_id.trim().is_empty() {
         send(
             &writer,
             &Out::Error {
@@ -494,139 +523,6 @@ fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, err.to_string())
 }
 
-fn handle_relay_join(
-    relay_id: String,
-    mut conn: RelayConn,
-    state: Arc<Mutex<State>>,
-) -> io::Result<()> {
-    conn.set_timeout(Duration::from_millis(200));
-    let peer = {
-        let mut st = state.lock().unwrap();
-        cleanup_pending_relays(&mut st);
-        if let Some(waiting) = st.pending_relays.remove(&relay_id) {
-            Some(waiting.conn)
-        } else {
-            st.pending_relays.insert(
-                relay_id,
-                PendingRelay {
-                    conn,
-                    created_at: Instant::now(),
-                },
-            );
-            return Ok(());
-        }
-    };
-    if let Some(peer) = peer {
-        bridge_relay(peer, conn)?;
-    }
-    Ok(())
-}
-
-fn cleanup_pending_relays(st: &mut State) {
-    let max_age = Duration::from_secs(60);
-    st.pending_relays
-        .retain(|_, pending| pending.created_at.elapsed() < max_age);
-}
-
-fn bridge_relay(mut a: RelayConn, mut b: RelayConn) -> io::Result<()> {
-    let started = Instant::now();
-    let mut last_data = Instant::now();
-    loop {
-        let mut moved = false;
-        match a.read_chunk() {
-            Ok(Some(bytes)) => {
-                b.write_chunk(&bytes)?;
-                last_data = Instant::now();
-                moved = true;
-            }
-            Ok(None) => return Ok(()),
-            Err(e) if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
-        }
-        match b.read_chunk() {
-            Ok(Some(bytes)) => {
-                a.write_chunk(&bytes)?;
-                last_data = Instant::now();
-                moved = true;
-            }
-            Ok(None) => return Ok(()),
-            Err(e) if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
-        }
-        if !moved {
-            if last_data.elapsed() > Duration::from_secs(300)
-                || started.elapsed() > Duration::from_secs(3600)
-            {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-impl RelayConn {
-    fn set_timeout(&mut self, timeout: Duration) {
-        match self {
-            RelayConn::Tcp(s) => {
-                let _ = s.set_read_timeout(Some(timeout));
-                let _ = s.set_write_timeout(Some(Duration::from_secs(20)));
-            }
-            RelayConn::Ws(ws) => {
-                let s = ws.get_mut();
-                let _ = s.set_read_timeout(Some(timeout));
-                let _ = s.set_write_timeout(Some(Duration::from_secs(20)));
-            }
-        }
-    }
-
-    fn read_chunk(&mut self) -> io::Result<Option<Vec<u8>>> {
-        match self {
-            RelayConn::Tcp(s) => {
-                let mut buf = vec![0u8; 16 * 1024];
-                match s.read(&mut buf) {
-                    Ok(0) => Ok(None),
-                    Ok(n) => {
-                        buf.truncate(n);
-                        Ok(Some(buf))
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            RelayConn::Ws(ws) => loop {
-                match ws.read() {
-                    Ok(Message::Binary(bytes)) => return Ok(Some(bytes)),
-                    Ok(Message::Text(_)) | Ok(Message::Pong(_)) => {}
-                    Ok(Message::Ping(payload)) => {
-                        ws.send(Message::Pong(payload)).map_err(ws_to_io)?;
-                    }
-                    Ok(Message::Close(_)) => return Ok(None),
-                    Ok(_) => {}
-                    Err(WsError::Io(e))
-                        if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
-                    {
-                        return Err(e)
-                    }
-                    Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
-                    Err(e) => return Err(ws_to_io(e)),
-                }
-            },
-        }
-    }
-
-    fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<()> {
-        match self {
-            RelayConn::Tcp(s) => {
-                s.write_all(bytes)?;
-                s.flush()
-            }
-            RelayConn::Ws(ws) => {
-                ws.send(Message::Binary(bytes.to_vec())).map_err(ws_to_io)?;
-                ws.flush().map_err(ws_to_io)
-            }
-        }
-    }
-}
-
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
         In::PublishDirect { presence } => publish_direct(id, presence, state),
@@ -650,22 +546,6 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             msg,
             state,
         ),
-        In::RelayRequest {
-            relay_id,
-            relation_kind,
-            relation_id,
-            target_device_id,
-            requester_presence,
-        } => relay_request(
-            writer,
-            &relay_id,
-            &relation_kind,
-            &relation_id,
-            &target_device_id,
-            requester_presence,
-            state,
-        ),
-        In::RelayJoin { .. } => {}
         In::UnwatchDirect { lookup_id } => {
             let mut st = state.lock().unwrap();
             if let Some(c) = st.clients.get_mut(&id) {
@@ -731,40 +611,6 @@ fn direct_access_accepted(
                 accepted,
                 presence: presence.clone(),
                 msg: msg.clone(),
-            },
-        );
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn relay_request(
-    writer: &Writer,
-    relay_id: &str,
-    relation_kind: &str,
-    relation_id: &str,
-    target_device_id: &str,
-    requester_presence: PeerPresence,
-    state: &Arc<Mutex<State>>,
-) {
-    let targets = writers_by_device(target_device_id, state);
-    if targets.is_empty() {
-        send(
-            writer,
-            &Out::RelayFailed {
-                relay_id: relay_id.to_string(),
-                msg: "Zielgeraet nicht online".into(),
-            },
-        );
-        return;
-    }
-    for target in targets {
-        send(
-            &target,
-            &Out::RelayRequest {
-                relay_id: relay_id.to_string(),
-                relation_kind: relation_kind.to_string(),
-                relation_id: relation_id.to_string(),
-                requester_presence: requester_presence.clone(),
             },
         );
     }
@@ -1013,6 +859,8 @@ mod tests {
             device_name: device.into(),
             public_key: "pk".into(),
             fingerprint: "fp".into(),
+            node_id: "node".into(),
+            relay_url: "http://127.0.0.1:51821".into(),
             candidates: vec!["127.0.0.1:1".into()],
             expires_at: 99,
             nonce: "n".into(),
@@ -1042,7 +890,7 @@ mod tests {
     #[test]
     fn hello_parses() {
         let h: In = serde_json::from_str(
-            r#"{"t":"hello","protocol_version":2,"device_id":"a","device_name":"Laptop","listen_port":51737,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
+            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
         )
         .unwrap();
         let In::Hello {
@@ -1054,9 +902,9 @@ mod tests {
         else {
             panic!("not hello");
         };
-        assert_eq!(protocol_version, 2);
+        assert_eq!(protocol_version, 3);
         assert_eq!(device_id, "a");
-        assert_eq!(listen_port, 51737);
+        assert_eq!(listen_port, 0);
     }
 
     #[test]
@@ -1158,87 +1006,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_relay_pairs_bytes() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(State::default()));
-        let server_state = state.clone();
-        let server = std::thread::spawn(move || {
-            let mut handles = Vec::new();
-            for _ in 0..2 {
-                let (stream, _) = listener.accept().unwrap();
-                let st = server_state.clone();
-                handles.push(std::thread::spawn(move || handle(stream, st).unwrap()));
-            }
-            for h in handles {
-                let _ = h.join();
-            }
-        });
-
-        let mut a = TcpStream::connect(addr).unwrap();
-        let mut b = TcpStream::connect(addr).unwrap();
-        a.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        b.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        a.write_all(br#"{"t":"relay_join","relay_id":"relay-a","device_id":"a"}"#)
-            .unwrap();
-        a.write_all(b"\n").unwrap();
-        a.flush().unwrap();
-        b.write_all(br#"{"t":"relay_join","relay_id":"relay-a","device_id":"b"}"#)
-            .unwrap();
-        b.write_all(b"\n").unwrap();
-        b.flush().unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-
-        a.write_all(b"ping").unwrap();
-        a.flush().unwrap();
-        let mut buf = [0u8; 4];
-        b.read_exact(&mut buf).unwrap();
-        assert_eq!(&buf, b"ping");
-        b.write_all(b"pong").unwrap();
-        a.read_exact(&mut buf).unwrap();
-        assert_eq!(&buf, b"pong");
-        drop(a);
-        drop(b);
-        server.join().unwrap();
-    }
-
-    #[test]
-    fn websocket_relay_pairs_binary_messages() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(State::default()));
-        let server_state = state.clone();
-        let server = std::thread::spawn(move || {
-            let mut handles = Vec::new();
-            for _ in 0..2 {
-                let (stream, _) = listener.accept().unwrap();
-                let st = server_state.clone();
-                handles.push(std::thread::spawn(move || handle(stream, st).unwrap()));
-            }
-            for h in handles {
-                let _ = h.join();
-            }
-        });
-
-        let (mut a, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
-        let (mut b, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
-        a.send(Message::Text(
-            r#"{"t":"relay_join","relay_id":"relay-ws","device_id":"a"}"#.to_string(),
-        ))
-        .unwrap();
-        b.send(Message::Text(
-            r#"{"t":"relay_join","relay_id":"relay-ws","device_id":"b"}"#.to_string(),
-        ))
-        .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-
-        a.send(Message::Binary(b"ping".to_vec())).unwrap();
-        assert_eq!(b.read().unwrap().into_data(), b"ping");
-        b.send(Message::Binary(b"pong".to_vec())).unwrap();
-        assert_eq!(a.read().unwrap().into_data(), b"pong");
-        a.close(None).unwrap();
-        b.close(None).unwrap();
-        server.join().unwrap();
+    fn relay_bind_defaults_to_next_port() {
+        assert_eq!(default_relay_bind("127.0.0.1:51820"), "127.0.0.1:51821");
+        assert_eq!(default_relay_bind("0.0.0.0:443"), "0.0.0.0:444");
     }
 
     #[test]
@@ -1254,7 +1024,7 @@ mod tests {
 
         let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
         ws.send(Message::Text(
-            r#"{"t":"hello","protocol_version":2,"device_id":"a","device_name":"Laptop","listen_port":51737,"lan":["127.0.0.1"],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
+            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["127.0.0.1"],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
         ))
         .unwrap();
         let first = ws.read().unwrap().into_text().unwrap();
