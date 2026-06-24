@@ -182,10 +182,103 @@ pub struct PeerEndpoint {
     pub expected_node_id: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PeerOpenTarget {
     Direct { contact_id: String },
     RoomDevice { room_id: String, device_id: String },
+}
+
+impl PeerOpenTarget {
+    pub fn endpoint_prefix(&self) -> String {
+        match self {
+            PeerOpenTarget::Direct { contact_id } => format!("share://direct/{contact_id}"),
+            PeerOpenTarget::RoomDevice { room_id, device_id } => {
+                format!("share://room/{room_id}/{device_id}")
+            }
+        }
+    }
+
+    pub fn from_endpoint(endpoint: &str) -> Option<(Self, String)> {
+        let rest = endpoint.trim().strip_prefix("share://")?;
+        if let Some(rest) = rest.strip_prefix("direct/") {
+            let mut parts = rest.splitn(2, '/');
+            let contact_id = parts.next()?.trim();
+            if contact_id.is_empty() {
+                return None;
+            }
+            let path = parts
+                .next()
+                .map(|p| format!("/{}", p.trim_start_matches('/')))
+                .unwrap_or_else(|| "/".to_string());
+            return Some((
+                PeerOpenTarget::Direct {
+                    contact_id: contact_id.to_string(),
+                },
+                normalize_endpoint_path(&path),
+            ));
+        }
+        if let Some(rest) = rest.strip_prefix("room/") {
+            let mut parts = rest.splitn(3, '/');
+            let room_id = parts.next()?.trim();
+            let device_id = parts.next()?.trim();
+            if room_id.is_empty() || device_id.is_empty() {
+                return None;
+            }
+            let path = parts
+                .next()
+                .map(|p| format!("/{}", p.trim_start_matches('/')))
+                .unwrap_or_else(|| "/".to_string());
+            return Some((
+                PeerOpenTarget::RoomDevice {
+                    room_id: room_id.to_string(),
+                    device_id: device_id.to_string(),
+                },
+                normalize_endpoint_path(&path),
+            ));
+        }
+        None
+    }
+}
+
+fn normalize_endpoint_path(path: &str) -> String {
+    let p = path.trim().replace('\\', "/");
+    if p.is_empty() {
+        "/".to_string()
+    } else if p.starts_with('/') {
+        p
+    } else {
+        format!("/{p}")
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::PeerOpenTarget;
+
+    #[test]
+    fn direct_endpoint_round_trips_with_path() {
+        let target = PeerOpenTarget::Direct {
+            contact_id: "contact-a".into(),
+        };
+        assert_eq!(target.endpoint_prefix(), "share://direct/contact-a");
+        let (parsed, root) =
+            PeerOpenTarget::from_endpoint("share://direct/contact-a/Gate/Sub").unwrap();
+        assert_eq!(parsed, target);
+        assert_eq!(root, "/Gate/Sub");
+    }
+
+    #[test]
+    fn room_endpoint_round_trips_with_path() {
+        let target = PeerOpenTarget::RoomDevice {
+            room_id: "room-a".into(),
+            device_id: "device-b".into(),
+        };
+        assert_eq!(target.endpoint_prefix(), "share://room/room-a/device-b");
+        let (parsed, root) =
+            PeerOpenTarget::from_endpoint("share://room/room-a/device-b/Docs").unwrap();
+        assert_eq!(parsed, target);
+        assert_eq!(root, "/Docs");
+    }
 }
 
 /// What the UI tells the share worker to do.

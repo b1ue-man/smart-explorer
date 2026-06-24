@@ -5,19 +5,18 @@ impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
         // Clean up dead-session temp copies and mark this live session.
         init_temp_session();
-        // Keep the background sync service alive across startup and self-update:
-        // if it's registered to autostart but isn't beating, (re)spawn it. After a
-        // self-update, also cycle a stale daemon so it picks up the new exe.
-        if crate::autostart::is_enabled() {
-            if just_updated {
-                // Hand off to a fresh daemon running the new exe: ask the old one
-                // to stop and spawn a new one (which waits for the old to exit).
-                crate::daemon::request_stop();
-                crate::autostart::spawn_daemon_now();
-            } else if !crate::daemon::is_running() {
-                crate::daemon::clear_stop();
-                crate::autostart::spawn_daemon_now();
-            }
+        // Keep the background worker alive across startup and self-update. It
+        // owns background sync and persistent Share sessions, so it is started
+        // even when no sync job is currently due.
+        let _ = crate::autostart::enable();
+        if just_updated {
+            // Hand off to a fresh daemon running the new exe: ask the old one to
+            // stop and spawn a new one (which waits for the old to exit).
+            crate::daemon::request_stop();
+            crate::autostart::spawn_daemon_now();
+        } else if !crate::daemon::is_running() {
+            crate::daemon::clear_stop();
+            crate::autostart::spawn_daemon_now();
         }
         let home = dirs_home();
         let default_share_path = home.to_string_lossy().replace('\\', "/");

@@ -1,7 +1,9 @@
-use crate::syncjobs::Trigger;
+use crate::syncjobs::{SyncJob, Trigger};
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 
+use super::ipc::{start_listener, ShareHost};
 use super::job::run_one;
 use super::platform;
 use super::state::{
@@ -118,6 +120,12 @@ pub fn run_daemon() {
     clear_stop();
     log("daemon started");
     write_heartbeat();
+    let share_host = ShareHost::new();
+    if let Err(e) = start_listener(share_host.clone()) {
+        log(&format!("background worker IPC failed: {e}"));
+    }
+    let (job_done_tx, job_done_rx) = channel::<String>();
+    let mut active_jobs: HashSet<String> = HashSet::new();
 
     // On-startup jobs run once now (subject to pause).
     if !paused() {
@@ -128,8 +136,7 @@ pub fn run_daemon() {
             if stop_requested() {
                 break;
             }
-            run_one(&job);
-            write_heartbeat();
+            spawn_job(&job, &mut active_jobs, &job_done_tx);
         }
     }
 
@@ -139,6 +146,8 @@ pub fn run_daemon() {
     let mut seen_drives = current_drives();
 
     loop {
+        drain_finished_jobs(&mut active_jobs, &job_done_rx);
+        share_host.tick();
         if stop_requested() {
             clear_stop();
             log("daemon stopping (stop requested)");
@@ -151,8 +160,7 @@ pub fn run_daemon() {
         if !paused() {
             // 1) Timer jobs (interval + calendar), gated by active-hours in due().
             for job in jobs.iter().filter(|j| j.due(now)) {
-                run_one(job);
-                write_heartbeat();
+                spawn_job(job, &mut active_jobs, &job_done_tx);
                 if stop_requested() {
                     break;
                 }
@@ -179,9 +187,8 @@ pub fn run_daemon() {
                         // Unchanged since last tick - run if a pending change has settled.
                         if let Some(&since) = rt_dirty_since.get(&job.id) {
                             if now - since >= job.rt_debounce_secs as i64 {
-                                run_one(job);
+                                spawn_job(job, &mut active_jobs, &job_done_tx);
                                 rt_dirty_since.remove(&job.id);
-                                write_heartbeat();
                             }
                         }
                     }
@@ -206,8 +213,7 @@ pub fn run_daemon() {
                     }) {
                         if drive_matches(&job.connect_match, d) {
                             log(&format!("device connected → '{}'", job.name));
-                            run_one(job);
-                            write_heartbeat();
+                            spawn_job(job, &mut active_jobs, &job_done_tx);
                         }
                     }
                 }
@@ -224,7 +230,34 @@ pub fn run_daemon() {
                 break;
             }
             std::thread::sleep(Duration::from_secs(2));
+            drain_finished_jobs(&mut active_jobs, &job_done_rx);
+            share_host.tick();
+            write_heartbeat();
             slept += 2;
         }
+    }
+}
+
+fn spawn_job(job: &SyncJob, active: &mut HashSet<String>, done: &Sender<String>) {
+    if active.contains(&job.id) {
+        return;
+    }
+    active.insert(job.id.clone());
+    let job = job.clone();
+    let done = done.clone();
+    log(&format!("job queued '{}'", job.name));
+    std::thread::Builder::new()
+        .name(format!("daemon-job-{}", job.id))
+        .spawn(move || {
+            run_one(&job);
+            let _ = done.send(job.id);
+        })
+        .ok();
+}
+
+fn drain_finished_jobs(active: &mut HashSet<String>, done: &Receiver<String>) {
+    while let Ok(id) = done.try_recv() {
+        active.remove(&id);
+        write_heartbeat();
     }
 }

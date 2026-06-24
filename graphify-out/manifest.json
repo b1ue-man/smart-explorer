@@ -160,9 +160,9 @@
     "semantic_hash": "7e8922beb45f5a335798ee4111316ebf"
   },
   "app/core/init.rs": {
-    "mtime": 1782312154.4865258,
-    "ast_hash": "85963a56f221fe0a9f2f4d137e78dc53",
-    "semantic_hash": "85963a56f221fe0a9f2f4d137e78dc53"
+    "mtime": 1782318652.9755127,
+    "ast_hash": "c61f9bbce29a203255c9c06ae7475d58",
+    "semantic_hash": "c61f9bbce29a203255c9c06ae7475d58"
   },
   "app/core/job_editor.rs": {
     "mtime": 1781859538.0986621,
@@ -230,9 +230,9 @@
     "semantic_hash": "3866f468a59c13d5fa9ca2d2ee23ca72"
   },
   "app/core/share.rs": {
-    "mtime": 1782317117.0584636,
-    "ast_hash": "e83aa6560f7aec664a8d65b3329a8222",
-    "semantic_hash": "e83aa6560f7aec664a8d65b3329a8222"
+    "mtime": 1782320744.7990332,
+    "ast_hash": "99762b3a61070ffbfcd7c6c49e3da9ce",
+    "semantic_hash": "99762b3a61070ffbfcd7c6c49e3da9ce"
   },
   "app/core/shell_toolbar.rs": {
     "mtime": 1782245242.019333,
@@ -430,9 +430,9 @@
     "semantic_hash": "d151208dba17bfbf52564b5448282cc7"
   },
   "connect/core/endpoint.rs": {
-    "mtime": 1781861869.9861443,
-    "ast_hash": "c76d3893f2648cf5c825d94adf1e18cb",
-    "semantic_hash": "c76d3893f2648cf5c825d94adf1e18cb"
+    "mtime": 1782318746.6133869,
+    "ast_hash": "61876a2fd37c74603835c2c9255349f3",
+    "semantic_hash": "61876a2fd37c74603835c2c9255349f3"
   },
   "connect/core/types.rs": {
     "mtime": 1781861870.000298,
@@ -445,9 +445,9 @@
     "semantic_hash": "03ed0e8003e74b71dec9e8ce0b6ac835"
   },
   "connect/os/shared/connector.rs": {
-    "mtime": 1781866442.8157518,
-    "ast_hash": "fecf4d00f3bc30c4d41a1703688ac3db",
-    "semantic_hash": "fecf4d00f3bc30c4d41a1703688ac3db"
+    "mtime": 1782318631.0917327,
+    "ast_hash": "97530675de571a6c0a5df15049789b8f",
+    "semantic_hash": "97530675de571a6c0a5df15049789b8f"
   },
   "connect/os/shared/persistence.rs": {
     "mtime": 1781866442.8167555,
@@ -485,14 +485,24 @@
     "semantic_hash": "f998c4b2a0b0319b57a369e40b0eb936"
   },
   "daemon/mod.rs": {
-    "mtime": 1781981257.2472088,
-    "ast_hash": "e861a0000ca1f3ca71fefedd8d936dcd",
-    "semantic_hash": "e861a0000ca1f3ca71fefedd8d936dcd"
+    "mtime": 1782318746.627901,
+    "ast_hash": "6532d03c047851e369f5ddaa4fe3f767",
+    "semantic_hash": "6532d03c047851e369f5ddaa4fe3f767"
   },
   "daemon/os/linux_os/platform.rs": {
     "mtime": 1781981257.2482092,
     "ast_hash": "24983bcd4ddf83eb0e3ec7a54ba99068",
     "semantic_hash": "24983bcd4ddf83eb0e3ec7a54ba99068"
+  },
+  "daemon/os/shared/backend_server.rs": {
+    "mtime": 1782319813.6900072,
+    "ast_hash": "5d2d0be38dd70e1766e054e053c496da",
+    "semantic_hash": "5d2d0be38dd70e1766e054e053c496da"
+  },
+  "daemon/os/shared/ipc.rs": {
+    "mtime": 1782318746.6434462,
+    "ast_hash": "b6bb1de87aadbbd68e631ee60772cd15",
+    "semantic_hash": "b6bb1de87aadbbd68e631ee60772cd15"
   },
   "daemon/os/shared/job.rs": {
     "mtime": 1781866442.8372824,
@@ -500,9 +510,9 @@
     "semantic_hash": "f7715ea9dc03c8b5273b638fa2c7332c"
   },
   "daemon/os/shared/schedule.rs": {
-    "mtime": 1781866442.8398006,
-    "ast_hash": "48e11bc65f7927cf818719780bc63dba",
-    "semantic_hash": "48e11bc65f7927cf818719780bc63dba"
+    "mtime": 1782318746.6474538,
+    "ast_hash": "a5a5e42e0752e6c1a558ddd5f94ccbf8",
+    "semantic_hash": "a5a5e42e0752e6c1a558ddd5f94ccbf8"
   },
   "daemon/os/shared/state.rs": {
     "mtime": 1781981573.797673,
@@ -810,9 +820,9 @@
     "semantic_hash": "6cd59b62587198db6e342c2b2aef6682"
   },
   "share/core/types.rs": {
-    "mtime": 1782312092.8671987,
-    "ast_hash": "84e05a959d5a3b911ea8d5e170a3206a",
-    "semantic_hash": "84e05a959d5a3b911ea8d5e170a3206a"
+    "mtime": 1782318670.8393803,
+    "ast_hash": "0deac7587c5c2d56462617b643f7dbd7",
+    "semantic_hash": "0deac7587c5c2d56462617b643f7dbd7"
   },
   "share/core/wire.rs": {
     "mtime": 1782312108.1304994,
