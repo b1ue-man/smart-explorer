@@ -402,6 +402,9 @@ pub struct App {
     >,
     pub(in crate::app) share_opening: Option<crate::share::PeerOpenTarget>,
     pub(in crate::app) share_status: String,
+    pub(in crate::app) share_worker_running: bool,
+    pub(in crate::app) share_worker_relay_url: String,
+    pub(in crate::app) share_worker_candidates: Vec<String>,
 
     // Quick Share (Android) LAN discovery — started lazily when Teilen opens.
     pub(in crate::app) quickshare: Option<crate::quickshare::QuickShare>,

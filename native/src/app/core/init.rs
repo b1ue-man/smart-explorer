@@ -304,6 +304,9 @@ impl App {
             share_open_rx: None,
             share_opening: None,
             share_status: String::new(),
+            share_worker_running: false,
+            share_worker_relay_url: String::new(),
+            share_worker_candidates: Vec::new(),
             quickshare: None,
             qs_devices: Vec::new(),
         }

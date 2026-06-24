@@ -144,8 +144,10 @@ impl App {
         if ui.small_button("Speichern").clicked() {
             self.share_server = self.share_server_draft.trim().to_string();
             let _ = std::fs::write(share_server_path(), &self.share_server);
-            // Restart the service so the new server/name take effect.
-            self.share = None;
+            if let Some(svc) = self.share.take() {
+                svc.cmd(crate::share::ShareCmd::Stop);
+            }
+            crate::daemon::refresh_share_worker();
             self.notice = Some((
                 "✓ Share-Server-Einstellungen gespeichert".to_string(),
                 std::time::Instant::now(),
