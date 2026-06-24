@@ -15,6 +15,8 @@ mod identity;
 mod profiles;
 #[path = "core/protocol.rs"]
 mod protocol;
+#[path = "core/relay.rs"]
+mod relay;
 #[path = "core/service.rs"]
 mod service;
 #[path = "os/shared/system.rs"]
@@ -31,7 +33,8 @@ pub use self::identity::ShareIdentity;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;
 pub use self::types::{
-    PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent, ShareStatus,
+    DirectAccessState, DirectGrantState, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile,
+    ShareCmd, ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {

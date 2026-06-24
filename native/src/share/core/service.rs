@@ -14,9 +14,13 @@ use super::core::{
 };
 use super::identity::ShareIdentity;
 use super::profiles::{fingerprint_matches, ShareProfiles};
+use super::relay::RelayStream;
 use super::system::lan_ips;
-use super::transfer::{accept_loop, ShareAuthState};
-use super::types::{PeerEndpoint, PeerOpenTarget, ShareCmd, ShareEvent, ShareScope};
+use super::transfer::{accept_loop, recv_from_peer, ShareAuthState};
+use super::types::{
+    DirectAccessState, DirectGrantState, PeerEndpoint, PeerOpenTarget, ShareCmd, ShareEvent,
+    ShareScope,
+};
 use super::wire::{ClientMsg, SrvMsg};
 use std::collections::HashSet;
 
@@ -27,6 +31,7 @@ pub struct ShareService {
     pub listen_port: u16,
     auth: Arc<Mutex<ShareAuthState>>,
     stopped: Arc<AtomicBool>,
+    server: String,
     owner: bool,
 }
 
@@ -37,12 +42,14 @@ impl ShareService {
         }
         if let ShareCmd::Configure {
             direct,
+            direct_grants,
             rooms,
             default_direct_exports,
         } = &c
         {
             if let Ok(mut s) = self.auth.lock() {
                 s.direct_contacts = direct.clone();
+                s.direct_grants = direct_grants.clone();
                 s.rooms = rooms.clone();
                 s.default_direct_exports = default_direct_exports.clone();
             }
@@ -93,6 +100,7 @@ impl ShareService {
                     presence,
                     relation_secret: secret,
                     expected_public_key,
+                    server: self.server.clone(),
                 })
             }
             PeerOpenTarget::RoomDevice { room_id, device_id } => {
@@ -123,6 +131,7 @@ impl ShareService {
                     presence,
                     relation_secret: secret,
                     expected_public_key: b64_decode(&member.public_key).ok(),
+                    server: self.server.clone(),
                 })
             }
         }
@@ -154,6 +163,7 @@ impl ShareService {
             identity: identity.clone(),
             default_direct_exports: profiles.default_direct_exports.clone(),
             direct_contacts: profiles.direct_contacts.clone(),
+            direct_grants: profiles.direct_grants.clone(),
             rooms: profiles.rooms.clone(),
             seen_nonces: HashSet::new(),
             direct_online: true,
@@ -174,11 +184,12 @@ impl ShareService {
             let ev = ev_tx.clone();
             let identity_worker = identity.clone();
             let stopped = stopped.clone();
+            let worker_server = server.clone();
             std::thread::Builder::new()
                 .name("share-signal".into())
                 .spawn(move || {
                     worker(
-                        server,
+                        worker_server,
                         identity_worker,
                         listen_port,
                         auth,
@@ -197,6 +208,7 @@ impl ShareService {
             listen_port,
             auth,
             stopped,
+            server,
             owner: true,
         })
     }
@@ -211,6 +223,7 @@ impl Clone for ShareService {
             listen_port: self.listen_port,
             auth: self.auth.clone(),
             stopped: self.stopped.clone(),
+            server: self.server.clone(),
             owner: false,
         }
     }
@@ -235,6 +248,7 @@ fn worker(
 ) {
     let mut stopped = false;
     let mut backoff = Duration::from_secs(1);
+    let mut direct_requests_sent = HashSet::new();
     while !stopped && !stopped_flag.load(Ordering::Relaxed) {
         match SignalConnection::connect(&server) {
             Ok(mut signal) => {
@@ -250,7 +264,7 @@ fn worker(
                     "Share-Server verbunden ({transport})"
                 )));
                 backoff = Duration::from_secs(1);
-                let _ = publish_all(&mut signal, &auth, listen_port);
+                let _ = publish_all(&mut signal, &auth, listen_port, &mut direct_requests_sent);
                 let mut last_heartbeat = Instant::now();
                 loop {
                     if stopped_flag.load(Ordering::Relaxed) {
@@ -261,18 +275,30 @@ fn worker(
                         match cmd {
                             ShareCmd::Configure {
                                 direct,
+                                direct_grants,
                                 rooms,
                                 default_direct_exports,
                             } => {
                                 if let Ok(mut s) = auth.lock() {
                                     s.direct_contacts = direct;
+                                    s.direct_grants = direct_grants;
                                     s.rooms = rooms;
                                     s.default_direct_exports = default_direct_exports;
                                 }
-                                let _ = publish_all(&mut signal, &auth, listen_port);
+                                let _ = publish_all(
+                                    &mut signal,
+                                    &auth,
+                                    listen_port,
+                                    &mut direct_requests_sent,
+                                );
                             }
                             ShareCmd::Refresh => {
-                                let _ = publish_all(&mut signal, &auth, listen_port);
+                                let _ = publish_all(
+                                    &mut signal,
+                                    &auth,
+                                    listen_port,
+                                    &mut direct_requests_sent,
+                                );
                             }
                             ShareCmd::SetDirectOnline { online } => {
                                 let lookup_id = {
@@ -284,7 +310,12 @@ fn worker(
                                     }
                                 };
                                 if online {
-                                    let _ = publish_all(&mut signal, &auth, listen_port);
+                                    let _ = publish_all(
+                                        &mut signal,
+                                        &auth,
+                                        listen_port,
+                                        &mut direct_requests_sent,
+                                    );
                                 } else if !lookup_id.is_empty() {
                                     let _ = send_line(
                                         &mut signal,
@@ -300,6 +331,29 @@ fn worker(
                             ShareCmd::LeaveRoom { room_id } => {
                                 let _ = send_line(&mut signal, &ClientMsg::LeaveRoom { room_id });
                             }
+                            ShareCmd::RequestDirect { contact_id } => {
+                                let _ = send_direct_request(
+                                    &mut signal,
+                                    &auth,
+                                    listen_port,
+                                    &contact_id,
+                                );
+                                direct_requests_sent.insert(contact_id);
+                            }
+                            ShareCmd::AnswerDirectRequest {
+                                lookup_id,
+                                presence,
+                                accepted,
+                            } => {
+                                let _ = send_direct_answer(
+                                    &mut signal,
+                                    &auth,
+                                    listen_port,
+                                    lookup_id,
+                                    presence,
+                                    accepted,
+                                );
+                            }
                             ShareCmd::Send(_) | ShareCmd::Answer { .. } => {}
                         }
                     }
@@ -313,7 +367,7 @@ fn worker(
                         last_heartbeat = Instant::now();
                     }
                     match signal.read_message() {
-                        Ok(Some(line)) => handle_server_msg(line.trim(), &auth, &ev),
+                        Ok(Some(line)) => handle_server_msg(line.trim(), &auth, &ev, &server),
                         Ok(None) => break,
                         Err(e)
                             if e.kind() == io::ErrorKind::WouldBlock
@@ -359,6 +413,7 @@ fn publish_all(
     stream: &mut SignalConnection,
     auth: &Arc<Mutex<ShareAuthState>>,
     listen_port: u16,
+    direct_requests_sent: &mut HashSet<String>,
 ) -> io::Result<()> {
     let state = auth
         .lock()
@@ -381,21 +436,11 @@ fn publish_all(
                 lookup_id: contact.lookup_id.clone(),
             },
         )?;
-        if let Some(secret) = ShareProfiles::direct_secret(contact) {
-            let request = build_presence(
-                "direct",
-                &contact.lookup_id,
-                &state.identity,
-                &secret,
-                listen_port,
-            );
-            send_line(
-                stream,
-                &ClientMsg::RequestDirect {
-                    lookup_id: contact.lookup_id.clone(),
-                    presence: request,
-                },
-            )?;
+        if contact.access_state == DirectAccessState::Pending
+            && !direct_requests_sent.contains(&contact.id)
+        {
+            send_direct_request_locked(stream, &state, contact, listen_port)?;
+            direct_requests_sent.insert(contact.id.clone());
         }
     }
     for room in state.rooms.iter().filter(|r| r.auto_join) {
@@ -412,6 +457,78 @@ fn publish_all(
         }
     }
     Ok(())
+}
+
+fn send_direct_request(
+    stream: &mut SignalConnection,
+    auth: &Arc<Mutex<ShareAuthState>>,
+    listen_port: u16,
+    contact_id: &str,
+) -> io::Result<()> {
+    let state = auth
+        .lock()
+        .map_err(|_| eio("Share-State gesperrt"))?
+        .clone();
+    let contact = state
+        .direct_contacts
+        .iter()
+        .find(|c| c.id == contact_id)
+        .ok_or_else(|| eio("Direktgeraet nicht gefunden"))?;
+    send_direct_request_locked(stream, &state, contact, listen_port)
+}
+
+fn send_direct_request_locked(
+    stream: &mut SignalConnection,
+    state: &ShareAuthState,
+    contact: &super::types::DirectContact,
+    listen_port: u16,
+) -> io::Result<()> {
+    let secret = ShareProfiles::direct_secret(contact).ok_or_else(|| eio("Direkt-Secret fehlt"))?;
+    let request = build_presence(
+        "direct",
+        &contact.lookup_id,
+        &state.identity,
+        &secret,
+        listen_port,
+    );
+    send_line(
+        stream,
+        &ClientMsg::RequestDirect {
+            lookup_id: contact.lookup_id.clone(),
+            presence: request,
+        },
+    )
+}
+
+fn send_direct_answer(
+    stream: &mut SignalConnection,
+    auth: &Arc<Mutex<ShareAuthState>>,
+    listen_port: u16,
+    lookup_id: String,
+    requester: super::types::PeerPresence,
+    accepted: bool,
+) -> io::Result<()> {
+    let state = auth
+        .lock()
+        .map_err(|_| eio("Share-State gesperrt"))?
+        .clone();
+    let presence = Some(build_presence(
+        "direct",
+        &lookup_id,
+        &state.identity,
+        &state.direct_secret,
+        listen_port,
+    ));
+    send_line(
+        stream,
+        &ClientMsg::DirectAccessAccepted {
+            lookup_id,
+            requester_device_id: requester.device_id,
+            accepted,
+            presence,
+            msg: None,
+        },
+    )
 }
 
 fn build_presence(
@@ -634,6 +751,7 @@ fn handle_server_msg(
     line: &str,
     auth: &Arc<Mutex<ShareAuthState>>,
     ev: &crossbeam_channel::Sender<ShareEvent>,
+    server: &str,
 ) {
     if line.is_empty() {
         return;
@@ -671,6 +789,54 @@ fn handle_server_msg(
                     presence,
                 });
             }
+        }
+        SrvMsg::DirectAccessAccepted {
+            lookup_id,
+            requester_device_id,
+            accepted,
+            presence,
+            msg,
+        } => {
+            if verify_direct_access_accepted(
+                &lookup_id,
+                &requester_device_id,
+                accepted,
+                presence.as_ref(),
+                auth,
+            ) {
+                let _ = ev.send(ShareEvent::DirectAccessAccepted {
+                    lookup_id,
+                    requester_device_id,
+                    accepted,
+                    presence,
+                    msg,
+                });
+            }
+        }
+        SrvMsg::RelayRequest {
+            relay_id,
+            relation_kind,
+            relation_id,
+            requester_presence,
+        } => {
+            if verify_relay_request(&relation_kind, &relation_id, &requester_presence, auth) {
+                spawn_relay_responder(
+                    server.to_string(),
+                    relay_id.clone(),
+                    relation_kind.clone(),
+                    relation_id.clone(),
+                    requester_presence.clone(),
+                    auth.clone(),
+                    ev.clone(),
+                );
+                let _ = ev.send(ShareEvent::Status(format!(
+                    "Relay-Anfrage: {relation_kind}/{relation_id} von {}",
+                    requester_presence.device_name
+                )));
+            }
+        }
+        SrvMsg::RelayFailed { relay_id, msg } => {
+            let _ = ev.send(ShareEvent::Error(format!("Relay {relay_id}: {msg}")));
         }
         SrvMsg::RoomRoster { room_id, members } => {
             let valid: Vec<_> = members
@@ -735,6 +901,180 @@ fn verify_local_direct_request(
     }
     remember_nonce(&mut state.seen_nonces, replay_key);
     true
+}
+
+fn verify_direct_access_accepted(
+    lookup_id: &str,
+    requester_device_id: &str,
+    _accepted: bool,
+    presence: Option<&super::types::PeerPresence>,
+    auth: &Arc<Mutex<ShareAuthState>>,
+) -> bool {
+    verify_direct_access_accepted_using(
+        lookup_id,
+        requester_device_id,
+        presence,
+        auth,
+        ShareProfiles::direct_secret,
+    )
+}
+
+fn verify_direct_access_accepted_using<F>(
+    lookup_id: &str,
+    requester_device_id: &str,
+    presence: Option<&super::types::PeerPresence>,
+    auth: &Arc<Mutex<ShareAuthState>>,
+    secret_for: F,
+) -> bool
+where
+    F: FnOnce(&super::types::DirectContact) -> Option<Vec<u8>>,
+{
+    let mut state = match auth.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if requester_device_id != state.identity.device_id {
+        return false;
+    }
+    let Some(presence) = presence else {
+        return false;
+    };
+    if presence.expires_at < now_secs()
+        || presence.kind != "direct"
+        || presence.relation_id != lookup_id
+    {
+        return false;
+    }
+    let Some(contact) = state
+        .direct_contacts
+        .iter()
+        .find(|c| c.lookup_id == lookup_id)
+    else {
+        return false;
+    };
+    if !fingerprint_matches(&presence.public_key, &contact.expected_fingerprint) {
+        return false;
+    }
+    let Some(secret) = secret_for(contact) else {
+        return false;
+    };
+    let replay_key = format!(
+        "direct-accepted:{lookup_id}:{}:{}",
+        presence.device_id, presence.nonce
+    );
+    if state.seen_nonces.contains(&replay_key) {
+        return false;
+    }
+    let payload = presence_payload(
+        "direct",
+        lookup_id,
+        &presence.device_id,
+        &presence.public_key,
+        &presence.candidates,
+        presence.expires_at,
+        &presence.nonce,
+    );
+    if !verify_hmac(&secret, &payload, &presence.proof) {
+        return false;
+    }
+    remember_nonce(&mut state.seen_nonces, replay_key);
+    true
+}
+
+fn verify_relay_request(
+    relation_kind: &str,
+    relation_id: &str,
+    presence: &super::types::PeerPresence,
+    auth: &Arc<Mutex<ShareAuthState>>,
+) -> bool {
+    if presence.expires_at < now_secs()
+        || presence.kind != relation_kind
+        || presence.relation_id != relation_id
+    {
+        return false;
+    }
+    let mut state = match auth.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let secret = match relation_kind {
+        "direct" if relation_id == state.identity.direct_lookup_id => {
+            let grant = state.direct_grants.iter().find(|g| {
+                g.device_id == presence.device_id
+                    && g.public_key == presence.public_key
+                    && g.state == DirectGrantState::Accepted
+            });
+            if grant.is_none() {
+                return false;
+            }
+            state.direct_secret.clone()
+        }
+        "room" => {
+            let Some(room) = state.rooms.iter().find(|r| r.room_id == relation_id) else {
+                return false;
+            };
+            let Some(secret) = ShareProfiles::room_secret(room) else {
+                return false;
+            };
+            secret
+        }
+        _ => return false,
+    };
+    let replay_key = format!(
+        "relay-request:{relation_kind}:{relation_id}:{}:{}",
+        presence.device_id, presence.nonce
+    );
+    if state.seen_nonces.contains(&replay_key) {
+        return false;
+    }
+    let payload = presence_payload(
+        relation_kind,
+        relation_id,
+        &presence.device_id,
+        &presence.public_key,
+        &presence.candidates,
+        presence.expires_at,
+        &presence.nonce,
+    );
+    if !verify_hmac(&secret, &payload, &presence.proof) {
+        return false;
+    }
+    remember_nonce(&mut state.seen_nonces, replay_key);
+    true
+}
+
+fn spawn_relay_responder(
+    server: String,
+    relay_id: String,
+    _relation_kind: String,
+    _relation_id: String,
+    _requester_presence: super::types::PeerPresence,
+    auth: Arc<Mutex<ShareAuthState>>,
+    ev: crossbeam_channel::Sender<ShareEvent>,
+) {
+    std::thread::Builder::new()
+        .name("share-relay-peer".into())
+        .spawn(move || {
+            let device_id = match auth.lock() {
+                Ok(s) => s.identity.device_id.clone(),
+                Err(_) => {
+                    let _ = ev.send(ShareEvent::Error("Relay: Share-State gesperrt".into()));
+                    return;
+                }
+            };
+            match RelayStream::connect(&server, &relay_id, &device_id) {
+                Ok(stream) => {
+                    let _ = ev.send(ShareEvent::Status(format!("Relay verbunden: {relay_id}")));
+                    if let Err(e) = recv_from_peer(stream, 0, auth, &ev) {
+                        let _ = ev.send(ShareEvent::Error(format!("Relay-Peer: {e}")));
+                    }
+                }
+                Err(e) => {
+                    let _ = ev.send(ShareEvent::Error(format!("Relay verbinden: {e}")));
+                }
+            }
+        })
+        .ok();
 }
 
 fn verify_direct_presence(
@@ -837,12 +1177,17 @@ fn remember_nonce(seen: &mut HashSet<String>, key: String) {
 mod tests {
     use super::{
         build_presence, normalize_signal_endpoint, normalize_tcp_addr, remember_nonce,
-        signal_endpoints, verify_local_direct_request, ShareService,
+        signal_endpoints, verify_direct_access_accepted_using, verify_local_direct_request,
+        verify_relay_request, ShareService,
     };
+    use crate::share::core::{b64, public_fingerprint};
     use crate::share::fs::ShareExportConfig;
     use crate::share::identity::ShareIdentity;
     use crate::share::transfer::ShareAuthState;
-    use crate::share::types::{DirectContact, RoomProfile, ShareCmd, ShareStatus};
+    use crate::share::types::{
+        DirectAccessState, DirectContact, DirectGrant, DirectGrantState, RoomProfile, ShareCmd,
+        ShareStatus,
+    };
     use crossbeam_channel::unbounded;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -885,6 +1230,10 @@ mod tests {
             last_error: None,
             presence: None,
             exports: ShareExportConfig::default(),
+            access_state: DirectAccessState::Pending,
+            request_sent_at: None,
+            accepted_at: None,
+            accepted_public_key: None,
         };
         let room = RoomProfile {
             id: "room-profile-a".into(),
@@ -898,6 +1247,7 @@ mod tests {
         };
         svc.cmd(ShareCmd::Configure {
             direct: vec![contact],
+            direct_grants: Vec::new(),
             rooms: vec![room],
             default_direct_exports: ShareExportConfig::default(),
         });
@@ -963,6 +1313,111 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn direct_accept_or_reject_requires_signed_owner_presence() {
+        let svc = test_service();
+        let secret = vec![7u8; 32];
+        let owner_public = vec![1u8; 32];
+        let owner_public_key = b64(&owner_public);
+        let owner_fingerprint = public_fingerprint(&owner_public);
+        let contact = DirectContact {
+            id: "contact-owner".into(),
+            display_name: "Owner".into(),
+            lookup_id: "lookup-owner".into(),
+            expected_fingerprint: owner_fingerprint.clone(),
+            remote_device_id: None,
+            remote_public_key: None,
+            auto_connect: true,
+            auto_open: false,
+            last_seen: None,
+            status: ShareStatus::WaitingForAccess,
+            last_error: None,
+            presence: None,
+            exports: ShareExportConfig::default(),
+            access_state: DirectAccessState::Pending,
+            request_sent_at: None,
+            accepted_at: None,
+            accepted_public_key: None,
+        };
+        svc.auth.lock().unwrap().direct_contacts = vec![contact];
+        let owner = ShareIdentity {
+            device_id: "owner".into(),
+            device_name: "Owner".into(),
+            direct_lookup_id: "lookup-owner".into(),
+            public_key: owner_public_key,
+            fingerprint: owner_fingerprint,
+            private_key: Vec::new(),
+        };
+        let signed = build_presence("direct", "lookup-owner", &owner, &secret, 12345);
+        assert!(verify_direct_access_accepted_using(
+            "lookup-owner",
+            &svc.identity.device_id,
+            Some(&signed),
+            &svc.auth,
+            |_| Some(secret.clone())
+        ));
+        assert!(!verify_direct_access_accepted_using(
+            "lookup-owner",
+            &svc.identity.device_id,
+            None,
+            &svc.auth,
+            |_| Some(secret.clone())
+        ));
+        let wrong = build_presence("direct", "lookup-owner", &owner, &[9u8; 32], 12345);
+        assert!(!verify_direct_access_accepted_using(
+            "lookup-owner",
+            &svc.identity.device_id,
+            Some(&wrong),
+            &svc.auth,
+            |_| Some(secret.clone())
+        ));
+    }
+
+    #[test]
+    fn relay_request_requires_hmac_and_accepted_direct_grant() {
+        let svc = test_service();
+        let relation_id = svc.identity.direct_lookup_id.clone();
+        let secret = svc.auth.lock().unwrap().direct_secret.clone();
+        let requester_public = vec![2u8; 32];
+        let requester = ShareIdentity {
+            device_id: "requester".into(),
+            device_name: "Requester".into(),
+            direct_lookup_id: "requester-lookup".into(),
+            public_key: b64(&requester_public),
+            fingerprint: public_fingerprint(&requester_public),
+            private_key: Vec::new(),
+        };
+        let presence = build_presence("direct", &relation_id, &requester, &secret, 12345);
+        assert!(!verify_relay_request(
+            "direct",
+            &relation_id,
+            &presence,
+            &svc.auth
+        ));
+        svc.auth.lock().unwrap().direct_grants.push(DirectGrant {
+            device_id: requester.device_id.clone(),
+            device_name: requester.device_name.clone(),
+            public_key: requester.public_key.clone(),
+            fingerprint: requester.fingerprint.clone(),
+            state: DirectGrantState::Accepted,
+            updated_at: 1,
+        });
+        let accepted_presence = build_presence("direct", &relation_id, &requester, &secret, 12345);
+        assert!(verify_relay_request(
+            "direct",
+            &relation_id,
+            &accepted_presence,
+            &svc.auth
+        ));
+        let wrong_presence = build_presence("direct", &relation_id, &requester, &[9u8; 32], 12345);
+        assert!(!verify_relay_request(
+            "direct",
+            &relation_id,
+            &wrong_presence,
+            &svc.auth
+        ));
+    }
+
     fn test_service() -> ShareService {
         let (cmd_tx, _cmd_rx) = unbounded();
         let (_ev_tx, ev_rx) = unbounded();
@@ -979,6 +1434,7 @@ mod tests {
             direct_secret: vec![0u8; 32],
             default_direct_exports: ShareExportConfig::default(),
             direct_contacts: Vec::new(),
+            direct_grants: Vec::<DirectGrant>::new(),
             rooms: Vec::new(),
             seen_nonces: HashSet::new(),
             direct_online: true,
@@ -990,6 +1446,7 @@ mod tests {
             listen_port: 0,
             auth,
             stopped: Arc::new(AtomicBool::new(false)),
+            server: "127.0.0.1:0".into(),
             owner: true,
         }
     }

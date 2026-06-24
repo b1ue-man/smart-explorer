@@ -27,6 +27,24 @@ pub(crate) enum ClientMsg {
         lookup_id: String,
         presence: PeerPresence,
     },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    RelayRequest {
+        relay_id: String,
+        relation_kind: String,
+        relation_id: String,
+        target_device_id: String,
+        requester_presence: PeerPresence,
+    },
+    RelayJoin {
+        relay_id: String,
+        device_id: String,
+    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -54,6 +72,23 @@ pub(crate) enum SrvMsg {
     DirectAccessRequest {
         lookup_id: String,
         presence: PeerPresence,
+    },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    RelayRequest {
+        relay_id: String,
+        relation_kind: String,
+        relation_id: String,
+        requester_presence: PeerPresence,
+    },
+    RelayFailed {
+        relay_id: String,
+        msg: String,
     },
     RoomRoster {
         room_id: String,
