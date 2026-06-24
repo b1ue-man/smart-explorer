@@ -96,6 +96,13 @@ Section "Install"
 
   File "${__FILEDIR__}\..\LICENSE"
 
+  ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
+  ; The app binds a dynamic local TCP port, so the rule is program-based.
+  ; Managed machines may require admin/policy approval; the app also retries at
+  ; Share startup and reports failure in diagnostics.
+  nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="Smart Explorer Share Peer Listener" dir=in action=allow program="$INSTDIR\${EXE_NAME}" enable=yes profile=any'
+
   ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
   ; update_source.txt ships the raw.githubusercontent feed URL, so a fresh
   ; install auto-updates from Git with no configuration.
@@ -156,6 +163,7 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Classes\Directory\shell\${VERB}"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\${VERB}"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\${VERB}"
+  nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
 
   Delete "$INSTDIR\${EXE_NAME}"
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"

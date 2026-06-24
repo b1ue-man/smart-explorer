@@ -38,6 +38,10 @@ pub fn core_now_secs() -> i64 {
     self::core::now_secs()
 }
 
+pub fn local_lan_ips() -> Vec<String> {
+    self::system::lan_ips()
+}
+
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

@@ -135,6 +135,16 @@ impl ShareService {
         let (cmd_tx, cmd_rx) = unbounded::<ShareCmd>();
         let (ev_tx, ev_rx) = unbounded::<ShareEvent>();
         let stopped = Arc::new(AtomicBool::new(false));
+        match super::system::ensure_firewall_rule() {
+            Ok(msg) => {
+                let _ = ev_tx.send(ShareEvent::Status(msg));
+            }
+            Err(e) => {
+                let _ = ev_tx.send(ShareEvent::Status(format!(
+                    "Firewall-Regel fuer Peer-Listener nicht gesetzt: {e}"
+                )));
+            }
+        }
 
         let auth = Arc::new(Mutex::new(ShareAuthState {
             direct_secret: identity.direct_secret(),

@@ -4284,7 +4284,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smart_explorer"
-version = "0.5.89"
+version = "0.5.90"
 dependencies = [
  "base64",
  "chrono",
@@ -4295,6 +4295,7 @@ dependencies = [
  "globset",
  "hkdf 0.12.4",
  "hmac 0.12.1",
+ "if-addrs",
  "keyring",
  "md5 0.7.0",
  "mdns-sd",
