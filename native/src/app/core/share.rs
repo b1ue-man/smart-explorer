@@ -4,8 +4,8 @@ use super::*;
 impl App {
     pub(in crate::app) fn ensure_share(&mut self) -> bool {
         self.share_manual_stop = false;
-        if self.share.is_some() {
-            return true;
+        if let Some(svc) = self.share.take() {
+            svc.cmd(crate::share::ShareCmd::Stop);
         }
         let server = self.share_server.trim().to_string();
         if server.is_empty() {
@@ -14,41 +14,46 @@ impl App {
         }
         self.share_identity
             .set_device_name(self.share_device_draft.clone());
-        match crate::share::ShareService::start(
-            server,
-            self.share_identity.clone(),
-            self.share_profiles.clone(),
-        ) {
-            Ok(svc) => {
-                self.share = Some(svc);
-                self.share_status = "Share-Server startet".to_string();
-                self.configure_share_service();
-                true
-            }
-            Err(e) => {
-                self.error_msg = Some(format!("Share-Server-Dienst: {}", e));
-                false
+        if !self.share_profiles.auto_connect {
+            self.share_profiles.auto_connect = true;
+            if let Err(e) = self.share_profiles.save() {
+                self.error_msg = Some(format!("Share-Profile speichern: {}", e));
             }
         }
+        crate::daemon::refresh_share_worker();
+        self.share_status = format!("Share-Worker aktiv ({server})");
+        true
     }
 
     pub(in crate::app) fn share_cmd(&mut self, c: crate::share::ShareCmd) {
+        if matches!(&c, crate::share::ShareCmd::Stop) {
+            if let Some(svc) = self.share.take() {
+                svc.cmd(crate::share::ShareCmd::Stop);
+            }
+            self.share_manual_stop = true;
+            self.share_profiles.auto_connect = false;
+            if let Err(e) = self.share_profiles.save() {
+                self.error_msg = Some(format!("Share-Profile speichern: {}", e));
+            }
+            if let Err(e) = crate::daemon::send_share_command(c) {
+                self.share_diag_log
+                    .push_str(&format!("Share-Worker Stop: {e}\n"));
+            }
+            self.share_worker_running = false;
+            self.share_status = "Getrennt".to_string();
+            return;
+        }
         if self.ensure_share() {
-            if let Some(svc) = &self.share {
-                svc.cmd(c);
+            if let Err(e) = crate::daemon::send_share_command(c) {
+                self.share_status = format!("Share-Worker Fehler: {e}");
+                self.share_diag_log
+                    .push_str(&format!("Share-Worker Kommando: {e}\n"));
             }
         }
     }
 
     fn configure_share_service(&mut self) {
-        if let Some(svc) = &self.share {
-            svc.cmd(crate::share::ShareCmd::Configure {
-                direct: self.share_profiles.direct_contacts.clone(),
-                direct_grants: self.share_profiles.direct_grants.clone(),
-                rooms: self.share_profiles.rooms.clone(),
-                default_direct_exports: self.share_profiles.default_direct_exports.clone(),
-            });
-        }
+        crate::daemon::refresh_share_worker();
     }
 
     fn save_share_profiles(&mut self) {
@@ -68,12 +73,8 @@ impl App {
     }
 
     pub(in crate::app) fn drain_share(&mut self) {
-        if self.share.is_none()
-            && self.share_profiles.auto_connect
-            && !self.share_manual_stop
-            && !self.share_server.trim().is_empty()
-        {
-            self.ensure_share();
+        if let Some(svc) = self.share.take() {
+            svc.cmd(crate::share::ShareCmd::Stop);
         }
 
         if let Some(rx) = &self.share_open_rx {
@@ -120,10 +121,34 @@ impl App {
             }
         }
 
-        let events: Vec<crate::share::ShareEvent> = match &self.share {
-            Some(svc) => svc.events.try_iter().collect(),
-            None => return,
+        let snapshot = match crate::daemon::drain_share_worker_events() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                if self.share_profiles.auto_connect
+                    && !self.share_manual_stop
+                    && !self.share_server.trim().is_empty()
+                {
+                    self.share_status = format!("Share-Worker nicht erreichbar: {e}");
+                }
+                return;
+            }
         };
+        self.share_worker_running = snapshot.running;
+        self.share_worker_relay_url = snapshot.relay_url;
+        self.share_worker_candidates = snapshot.candidates;
+        for presence in snapshot.pending_direct_requests {
+            if self.share_profiles.grant_for(&presence.device_id).is_none()
+                && !self
+                    .share_direct_requests
+                    .iter()
+                    .any(|p| p.device_id == presence.device_id)
+            {
+                self.share_direct_requests.push(presence);
+                self.show_share = true;
+                self.share_tab = 0;
+            }
+        }
+        let events: Vec<crate::share::ShareEvent> = snapshot.events;
         let mut changed = false;
         let mut auto_open_target: Option<crate::share::PeerOpenTarget> = None;
         for ev in events {
@@ -599,12 +624,7 @@ impl App {
                 self.ensure_share();
             }
             if ui.button("Trennen").clicked() {
-                if let Some(svc) = &self.share {
-                    svc.cmd(crate::share::ShareCmd::Stop);
-                }
-                self.share = None;
-                self.share_manual_stop = true;
-                self.share_status = "Getrennt".to_string();
+                self.share_cmd(crate::share::ShareCmd::Stop);
             }
             if ui.button("Aktualisieren").clicked() {
                 self.share_cmd(crate::share::ShareCmd::Refresh);
@@ -1000,11 +1020,9 @@ impl App {
                     changed = true;
                 }
                 if ui.button("Verlassen").clicked() {
-                    if let Some(svc) = &self.share {
-                        svc.cmd(crate::share::ShareCmd::LeaveRoom {
-                            room_id: room.room_id.clone(),
-                        });
-                    }
+                    let _ = crate::daemon::send_share_command(crate::share::ShareCmd::LeaveRoom {
+                        room_id: room.room_id.clone(),
+                    });
                     room.auto_join = false;
                     room.status = crate::share::ShareStatus::Offline;
                     changed = true;
@@ -1280,39 +1298,29 @@ impl App {
                 ui.ctx().copy_text(self.share_diag_log.clone());
             }
             if ui.button("Security-Details anzeigen").clicked() {
-                let candidates = self
-                    .share
-                    .as_ref()
-                    .map(|svc| svc.peer_candidates())
-                    .unwrap_or_default();
-                let relay = self
-                    .share
-                    .as_ref()
-                    .map(|svc| svc.relay_url())
-                    .unwrap_or_else(|| "-".into());
                 self.share_diag_log.push_str(&format!(
                     "device_id={}\nnode_id={}\nfingerprint={}\niroh=aktiv wenn verbunden\nrelay={}\nkandidaten={:?}\n",
                     self.share_identity.device_id,
                     self.share_identity.node_id,
                     self.share_identity.fingerprint,
-                    relay,
-                    candidates
+                    self.share_worker_relay_url,
+                    self.share_worker_candidates
                 ));
             }
         });
         ui.separator();
         ui.label(format!(
             "Listener: {}",
-            if self.share.is_some() {
+            if self.share_worker_running {
                 "aktiv"
             } else {
                 "inaktiv"
             }
         ));
-        if let Some(svc) = &self.share {
+        if !self.share_worker_relay_url.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Iroh-Relay:");
-                share_value_field(ui, &svc.relay_url());
+                share_value_field(ui, &self.share_worker_relay_url);
             });
         }
         ui.horizontal_wrapped(|ui| {

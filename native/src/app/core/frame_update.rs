@@ -188,7 +188,10 @@ impl App {
             || self.cloud_authing
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        } else if self.share.is_some() || !self.remote_edits.is_empty() || self.quickshare.is_some()
+        } else if self.share_worker_running
+            || self.share_profiles.auto_connect
+            || !self.remote_edits.is_empty()
+            || self.quickshare.is_some()
         {
             // Poll for incoming share offers / roster changes at a calm cadence.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

@@ -15,6 +15,15 @@ pub(crate) struct ShareHost {
     state: Arc<Mutex<ShareHostState>>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShareWorkerSnapshot {
+    pub events: Vec<crate::share::ShareEvent>,
+    pub pending_direct_requests: Vec<crate::share::PeerPresence>,
+    pub running: bool,
+    pub relay_url: String,
+    pub candidates: Vec<String>,
+}
+
 struct ShareHostState {
     service: Option<crate::share::ShareService>,
     identity: crate::share::ShareIdentity,
@@ -22,6 +31,8 @@ struct ShareHostState {
     server: String,
     running_server: String,
     last_reload: Instant,
+    ui_events: Vec<crate::share::ShareEvent>,
+    pending_direct_requests: Vec<crate::share::PeerPresence>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -31,6 +42,13 @@ enum IpcRequest {
         token: String,
     },
     RefreshShare {
+        token: String,
+    },
+    ShareCommand {
+        token: String,
+        cmd: crate::share::ShareCmd,
+    },
+    DrainShareEvents {
         token: String,
     },
     OpenShare {
@@ -47,6 +65,9 @@ enum IpcResponse {
     OpenOk {
         label: String,
         status: crate::share::ShareStatus,
+    },
+    ShareEvents {
+        snapshot: ShareWorkerSnapshot,
     },
     Err {
         msg: String,
@@ -111,6 +132,16 @@ fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Res
             host.reload_now();
             write_response(&mut stream, &IpcResponse::Ok)
         }
+        IpcRequest::ShareCommand { token: t, cmd } => {
+            require_token(token, &t)?;
+            host.send_command(cmd);
+            write_response(&mut stream, &IpcResponse::Ok)
+        }
+        IpcRequest::DrainShareEvents { token: t } => {
+            require_token(token, &t)?;
+            let snapshot = host.drain_for_ui();
+            write_response(&mut stream, &IpcResponse::ShareEvents { snapshot })
+        }
         IpcRequest::OpenShare { token: t, target } => {
             require_token(token, &t)?;
             match host.open_share(target) {
@@ -155,6 +186,8 @@ impl ShareHost {
             server,
             running_server: String::new(),
             last_reload: Instant::now() - Duration::from_secs(60),
+            ui_events: Vec::new(),
+            pending_direct_requests: Vec::new(),
         };
         let host = ShareHost {
             state: Arc::new(Mutex::new(state)),
@@ -187,6 +220,90 @@ impl ShareHost {
         configure_or_restart_locked(&mut state);
     }
 
+    fn send_command(&self, cmd: crate::share::ShareCmd) {
+        let mut answer: Option<(String, crate::share::PeerPresence)> = None;
+        {
+            let mut state = match self.state.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            match &cmd {
+                crate::share::ShareCmd::Stop => {
+                    if let Some(svc) = state.service.take() {
+                        svc.cmd(crate::share::ShareCmd::Stop);
+                    }
+                    state.running_server.clear();
+                    state.ui_events.push(crate::share::ShareEvent::Status(
+                        "Share-Worker getrennt".to_string(),
+                    ));
+                    return;
+                }
+                crate::share::ShareCmd::AnswerDirectRequest {
+                    lookup_id,
+                    presence,
+                    accepted: _,
+                } => {
+                    state
+                        .pending_direct_requests
+                        .retain(|p| p.device_id != presence.device_id);
+                    answer = Some((lookup_id.clone(), presence.clone()));
+                }
+                _ => {}
+            }
+        }
+        self.reload_now();
+        let service = {
+            let state = match self.state.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            state.service.clone()
+        };
+        if let Some(service) = service {
+            service.cmd(cmd);
+        } else if let Some((lookup_id, presence)) = answer {
+            if let Ok(mut state) = self.state.lock() {
+                state
+                    .pending_direct_requests
+                    .retain(|p| p.device_id != presence.device_id);
+                state
+                    .ui_events
+                    .push(crate::share::ShareEvent::Error(format!(
+                        "Share-Antwort konnte nicht gesendet werden: {lookup_id}"
+                    )));
+            }
+        }
+    }
+
+    fn drain_for_ui(&self) -> ShareWorkerSnapshot {
+        let should_reload = self
+            .state
+            .lock()
+            .map(|s| s.last_reload.elapsed() >= Duration::from_secs(5))
+            .unwrap_or(false);
+        if should_reload {
+            self.reload_now();
+        }
+        self.drain_events();
+        let mut state = match self.state.lock() {
+            Ok(s) => s,
+            Err(_) => return ShareWorkerSnapshot::default(),
+        };
+        let running = state.service.is_some();
+        let (relay_url, candidates) = state
+            .service
+            .as_ref()
+            .map(|svc| (svc.relay_url(), svc.peer_candidates()))
+            .unwrap_or_default();
+        ShareWorkerSnapshot {
+            events: std::mem::take(&mut state.ui_events),
+            pending_direct_requests: state.pending_direct_requests.clone(),
+            running,
+            relay_url,
+            candidates,
+        }
+    }
+
     fn drain_events(&self) {
         let mut state = match self.state.lock() {
             Ok(s) => s,
@@ -203,6 +320,7 @@ impl ShareHost {
         let mut answers = Vec::new();
         for event in events {
             use crate::share::ShareEvent as E;
+            let mut ui_event = Some(event.clone());
             match event {
                 E::Status(s) => log(&format!("share: {s}")),
                 E::Error(e) => log(&format!("share error: {e}")),
@@ -263,13 +381,32 @@ impl ShareHost {
                             && g.state == crate::share::DirectGrantState::Accepted =>
                     {
                         answers.push((lookup_id, presence, true));
+                        ui_event = None;
                     }
                     Some(g)
                         if g.public_key == presence.public_key
                             && g.node_id == presence.node_id
-                            && g.state == crate::share::DirectGrantState::Ignored => {}
+                            && g.state == crate::share::DirectGrantState::Ignored =>
+                    {
+                        ui_event = None;
+                    }
                     Some(_) => log("share direct request identity conflict"),
-                    None => log("share direct request pending in GUI"),
+                    None => {
+                        if !state
+                            .pending_direct_requests
+                            .iter()
+                            .any(|p| p.device_id == presence.device_id)
+                        {
+                            state.pending_direct_requests.push(presence.clone());
+                        } else if let Some(existing) = state
+                            .pending_direct_requests
+                            .iter_mut()
+                            .find(|p| p.device_id == presence.device_id)
+                        {
+                            *existing = presence.clone();
+                        }
+                        log("share direct request pending in GUI");
+                    }
                 },
                 E::DirectAccessAccepted {
                     lookup_id,
@@ -354,6 +491,13 @@ impl ShareHost {
                             changed = true;
                         }
                     }
+                }
+            }
+            if let Some(event) = ui_event {
+                state.ui_events.push(event);
+                let overflow = state.ui_events.len().saturating_sub(512);
+                if overflow > 0 {
+                    state.ui_events.drain(0..overflow);
                 }
             }
         }
@@ -513,6 +657,36 @@ pub fn refresh_share_worker() {
         if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
             let _ = write_request(&mut stream, &IpcRequest::RefreshShare { token });
         }
+    }
+}
+
+pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
+    ensure_running_for_client();
+    let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
+    let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    write_request(&mut stream, &IpcRequest::ShareCommand { token, cmd })
+        .map_err(|e| e.to_string())?;
+    match read_response(&stream).map_err(|e| e.to_string())? {
+        IpcResponse::Ok => Ok(()),
+        IpcResponse::Err { msg } => Err(msg),
+        _ => Err("Unerwartete Worker-Antwort".into()),
+    }
+}
+
+pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
+    ensure_running_for_client();
+    let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
+    let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
+        .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
+        .map_err(|e| e.to_string())?;
+    match read_response(&stream).map_err(|e| e.to_string())? {
+        IpcResponse::ShareEvents { snapshot } => Ok(snapshot),
+        IpcResponse::Err { msg } => Err(msg),
+        _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }
 

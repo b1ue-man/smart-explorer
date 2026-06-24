@@ -215,6 +215,7 @@ pub(crate) struct ShareIrohNode {
     auth: Arc<Mutex<ShareAuthState>>,
     ev: crossbeam_channel::Sender<ShareEvent>,
     sessions: Mutex<HashMap<String, Connection>>,
+    accept_errors: Mutex<HashMap<String, (Instant, u32)>>,
     relay_url: String,
 }
 
@@ -253,6 +254,7 @@ impl ShareIrohNode {
             auth,
             ev,
             sessions: Mutex::new(HashMap::new()),
+            accept_errors: Mutex::new(HashMap::new()),
             relay_url,
         });
         node.spawn_accept_loop();
@@ -385,12 +387,35 @@ impl ShareIrohNode {
                             }
                         }
                         Err(e) => {
-                            let _ = node.ev.send(ShareEvent::Error(format!("Iroh-Accept: {e}")));
+                            node.emit_accept_error(e.to_string());
                         }
                     }
                 });
             }
         });
+    }
+
+    fn emit_accept_error(&self, msg: String) {
+        let mut send = Some(format!("Iroh-Accept: {msg}"));
+        if let Ok(mut seen) = self.accept_errors.lock() {
+            let now = Instant::now();
+            let entry = seen.entry(msg.clone()).or_insert((now, 0));
+            entry.1 = entry.1.saturating_add(1);
+            if entry.1 > 1 && entry.0.elapsed() < Duration::from_secs(30) {
+                send = None;
+            } else if entry.1 > 1 {
+                send = Some(format!(
+                    "Iroh-Accept: {msg} ({} Wiederholungen in 30s)",
+                    entry.1
+                ));
+                *entry = (now, 1);
+            } else {
+                entry.0 = now;
+            }
+        }
+        if let Some(msg) = send {
+            let _ = self.ev.send(ShareEvent::Error(msg));
+        }
     }
 
     async fn handle_connection(self: Arc<Self>, conn: Connection) -> io::Result<()> {

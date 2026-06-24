@@ -282,6 +282,7 @@ mod endpoint_tests {
 }
 
 /// What the UI tells the share worker to do.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ShareCmd {
     Configure {
         direct: Vec<DirectContact>,
@@ -307,7 +308,7 @@ pub enum ShareCmd {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ShareEvent {
     Status(String),
     Error(String),
