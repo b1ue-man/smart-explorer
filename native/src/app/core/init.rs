@@ -299,6 +299,7 @@ impl App {
             share_export_label_draft: "Home".to_string(),
             share_block_symlink_escape: true,
             share_regenerate_direct_confirm: false,
+            share_direct_requests: Vec::new(),
             share_diag_log: String::new(),
             share_manual_stop: false,
             share_open_rx: None,

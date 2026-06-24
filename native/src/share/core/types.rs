@@ -158,6 +158,10 @@ pub enum ShareEvent {
     DirectOffline {
         lookup_id: String,
     },
+    DirectAccessRequest {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
     RoomRoster {
         room_id: String,
         members: Vec<PeerPresence>,

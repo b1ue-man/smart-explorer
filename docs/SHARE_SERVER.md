@@ -47,3 +47,19 @@ location /se-share {
 This improves the signaling path on restrictive networks. It does not relay peer
 file traffic; if two devices cannot open a direct TCP path, the peer connection
 will still show as not directly reachable until relay/TURN support exists.
+
+## Direct Add Flow
+
+Adding a direct code now does more than create a local row:
+
+1. The app starts Share-Service if needed.
+2. It watches the remote direct lookup.
+3. It sends a signed direct-access request to the device that owns the code.
+4. The code owner sees the request under `Direkt` -> `Dieses Geraet`.
+5. The owner can choose `Freigaben fuer diesen Code` / `Freigaben waehlen`.
+6. Windows firewall setup is attempted automatically; if a normal rule fails,
+   the app asks Windows for elevated firewall permission through UAC.
+
+The direct code grants access to the owner's `Standard Direkt` export scope.
+That scope is visible next to the code and can be changed before accepting or
+while the service is online.
