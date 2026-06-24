@@ -57,7 +57,7 @@ enum IpcRequest {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum IpcResponse {
     Pong,
@@ -616,7 +616,7 @@ pub fn open_share_backend(
                     std::thread::sleep(Duration::from_millis(250));
                     continue;
                 }
-                let response = match read_response(&stream) {
+                let response = match read_response(&mut stream) {
                     Ok(r) => r,
                     Err(e) => {
                         last = e.to_string();
@@ -630,12 +630,20 @@ pub fn open_share_backend(
                         let inner: crate::vfs::BackendHandle = Arc::new(UnavailableBackend {
                             label: label.clone(),
                         });
-                        let agent = crate::agent::AgentBackend::from_streams(
+                        let agent = match crate::agent::AgentBackend::from_streams(
                             Box::new(read),
                             Box::new(stream),
                             inner,
-                        )
-                        .map_err(|e| format!("Worker-Backend: {e}"))?;
+                        ) {
+                            Ok(agent) => agent,
+                            Err(e) => {
+                                last = format!("Worker-Backend: {e}");
+                                clear_stop();
+                                crate::autostart::spawn_daemon_now();
+                                std::thread::sleep(Duration::from_millis(300));
+                                continue;
+                            }
+                        };
                         return Ok((label, Arc::new(agent), status));
                     }
                     IpcResponse::Err { msg } => return Err(msg),
@@ -668,7 +676,7 @@ pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
         .map_err(|e| format!("Background-Worker IPC: {e}"))?;
     write_request(&mut stream, &IpcRequest::ShareCommand { token, cmd })
         .map_err(|e| e.to_string())?;
-    match read_response(&stream).map_err(|e| e.to_string())? {
+    match read_response(&mut stream).map_err(|e| e.to_string())? {
         IpcResponse::Ok => Ok(()),
         IpcResponse::Err { msg } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
@@ -683,7 +691,7 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
         .map_err(|e| format!("Background-Worker IPC: {e}"))?;
     write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
         .map_err(|e| e.to_string())?;
-    match read_response(&stream).map_err(|e| e.to_string())? {
+    match read_response(&mut stream).map_err(|e| e.to_string())? {
         IpcResponse::ShareEvents { snapshot } => Ok(snapshot),
         IpcResponse::Err { msg } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
@@ -705,11 +713,29 @@ fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
     stream.flush()
 }
 
-fn read_response(stream: &TcpStream) -> io::Result<IpcResponse> {
-    let mut reader = io::BufReader::new(stream.try_clone()?);
+fn read_response(stream: &mut TcpStream) -> io::Result<IpcResponse> {
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    read_line_no_buffer(stream, &mut line)?;
     serde_json::from_str(line.trim()).map_err(eio)
+}
+
+fn read_line_no_buffer(stream: &mut TcpStream, line: &mut String) -> io::Result<usize> {
+    let mut total = 0usize;
+    let mut byte = [0u8; 1];
+    loop {
+        match stream.read(&mut byte) {
+            Ok(0) => return Ok(total),
+            Ok(1) => {
+                total += 1;
+                if byte[0] == b'\n' {
+                    return Ok(total);
+                }
+                line.push(byte[0] as char);
+            }
+            Ok(_) => unreachable!(),
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn load_share_server() -> String {
@@ -888,5 +914,29 @@ mod tests {
     fn token_rejects_mismatch() {
         assert!(require_token("abc", "abc").is_ok());
         assert!(require_token("abc", "def").is_err());
+    }
+
+    #[test]
+    fn response_read_preserves_following_stream_bytes() {
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            sock.write_all(br#"{"t":"ok"}"#).unwrap();
+            sock.write_all(b"\nAGENT").unwrap();
+            sock.flush().unwrap();
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        match read_response(&mut client).unwrap() {
+            IpcResponse::Ok => {}
+            other => panic!("unexpected response: {other:?}"),
+        }
+        let mut rest = [0u8; 5];
+        client.read_exact(&mut rest).unwrap();
+        assert_eq!(&rest, b"AGENT");
+        server.join().unwrap();
     }
 }

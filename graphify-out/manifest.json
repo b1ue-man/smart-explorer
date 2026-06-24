@@ -500,9 +500,9 @@
     "semantic_hash": "5d2d0be38dd70e1766e054e053c496da"
   },
   "daemon/os/shared/ipc.rs": {
-    "mtime": 1782332935.7661636,
-    "ast_hash": "dc038f93c59348b474b87f012bce5a8e",
-    "semantic_hash": "dc038f93c59348b474b87f012bce5a8e"
+    "mtime": 1782338315.8112,
+    "ast_hash": "a46ba2ba1d9b947c1accee063e596752",
+    "semantic_hash": "a46ba2ba1d9b947c1accee063e596752"
   },
   "daemon/os/shared/job.rs": {
     "mtime": 1781866442.8372824,
