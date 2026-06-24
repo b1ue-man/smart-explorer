@@ -57,9 +57,16 @@ pub fn saved_and_path(url: &str) -> Option<(SavedConnection, String)> {
 /// in-app picker to decide whether a saved connection must be re-opened.
 pub fn is_remote_url(s: &str) -> bool {
     let s = s.trim();
-    ["sftp://", "ftp://", "ftps://", "webdav://", "gdrive://"]
-        .iter()
-        .any(|p| s.starts_with(p))
+    [
+        "sftp://",
+        "ftp://",
+        "ftps://",
+        "webdav://",
+        "gdrive://",
+        "share://",
+    ]
+    .iter()
+    .any(|p| s.starts_with(p))
 }
 
 /// Build the `gdrive://` endpoint string for a chosen Drive folder.
@@ -122,6 +129,7 @@ mod tests {
     fn remote_url_detection_and_parse() {
         assert!(is_remote_url("sftp://u@h:22/x"));
         assert!(is_remote_url("webdav://u@h:443/dav"));
+        assert!(is_remote_url("share://direct/contact-a/Gate"));
         assert!(!is_remote_url("C:/local"));
         assert!(!is_remote_url(r"\\srv\share"));
         let (p, u, h, port, path) =

@@ -10,6 +10,10 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
+#[path = "os/shared/backend_server.rs"]
+mod backend_server;
+#[path = "os/shared/ipc.rs"]
+mod ipc;
 #[path = "os/shared/job.rs"]
 mod job;
 #[cfg(windows)]
@@ -23,6 +27,7 @@ mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
 
+pub use ipc::{open_share_backend, refresh_share_worker};
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
 pub use schedule::run_daemon;

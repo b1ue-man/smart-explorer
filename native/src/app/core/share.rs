@@ -56,6 +56,7 @@ impl App {
             self.error_msg = Some(format!("Share-Profile speichern: {}", e));
         }
         self.configure_share_service();
+        crate::daemon::refresh_share_worker();
     }
 
     pub(in crate::app) fn drain_quickshare(&mut self) {
@@ -77,21 +78,35 @@ impl App {
 
         if let Some(rx) = &self.share_open_rx {
             if let Ok(result) = rx.try_recv() {
+                let opening = self.share_opening.clone();
                 match result {
                     Ok((label, backend, status)) => {
-                        self.remote = Some(crate::connect::RemoteState {
-                            backend: cache_remote(backend),
-                            label: label.clone(),
-                            agent_version: None,
-                            zip_return: None,
-                            sftp: None,
-                            account: None,
-                            endpoint_prefix: None,
-                        });
-                        self.net_conn = None;
-                        self.notice =
-                            Some((format!("Verbunden: {}", label), std::time::Instant::now()));
-                        self.start_scan(PathBuf::from("/"));
+                        let endpoint_prefix =
+                            opening.as_ref().map(|target| target.endpoint_prefix());
+                        let already_open = opening
+                            .as_ref()
+                            .map(|target| self.share_target_is_open(target))
+                            .unwrap_or(false);
+                        if !already_open {
+                            self.remote = Some(crate::connect::RemoteState {
+                                backend: cache_remote(backend),
+                                label: label.clone(),
+                                agent_version: None,
+                                zip_return: None,
+                                sftp: None,
+                                account: None,
+                                endpoint_prefix,
+                            });
+                            self.net_conn = None;
+                            self.notice =
+                                Some((format!("Verbunden: {}", label), std::time::Instant::now()));
+                            self.start_scan(PathBuf::from("/"));
+                        } else {
+                            self.notice = Some((
+                                format!("Bereits verbunden: {}", label),
+                                std::time::Instant::now(),
+                            ));
+                        }
                         self.mark_opening_status(status);
                     }
                     Err(e) => {
@@ -391,6 +406,14 @@ impl App {
         if !self.ensure_share() {
             return;
         }
+        if self.share_target_is_open(&target) {
+            self.mark_target_status(&target, crate::share::ShareStatus::Connected);
+            self.notice = Some((
+                "Share-Verbindung ist bereits offen".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
         if let crate::share::PeerOpenTarget::Direct { contact_id } = &target {
             if let Some(c) = self
                 .share_profiles
@@ -410,18 +433,57 @@ impl App {
             }
         }
         self.share_opening = Some(target.clone());
-        self.mark_opening_status(crate::share::ShareStatus::Connecting);
-        let Some(svc) = self.share.clone() else {
-            return;
-        };
+        self.mark_target_status(&target, crate::share::ShareStatus::Connecting);
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
             .name("share-open".into())
             .spawn(move || {
-                let _ = tx.send(svc.probe_backend_for_target(&target));
+                let _ = tx.send(crate::daemon::open_share_backend(target));
             })
             .ok();
         self.share_open_rx = Some(rx);
+    }
+
+    fn share_target_is_open(&self, target: &crate::share::PeerOpenTarget) -> bool {
+        let Some(remote) = &self.remote else {
+            return false;
+        };
+        remote
+            .endpoint_prefix
+            .as_deref()
+            .map(|prefix| prefix == target.endpoint_prefix())
+            .unwrap_or(false)
+    }
+
+    fn mark_target_status(
+        &mut self,
+        target: &crate::share::PeerOpenTarget,
+        status: crate::share::ShareStatus,
+    ) {
+        match target {
+            crate::share::PeerOpenTarget::Direct { contact_id } => {
+                if let Some(c) = self
+                    .share_profiles
+                    .direct_contacts
+                    .iter_mut()
+                    .find(|c| &c.id == contact_id)
+                {
+                    c.status = status;
+                }
+            }
+            crate::share::PeerOpenTarget::RoomDevice { room_id, device_id } => {
+                if let Some(r) = self
+                    .share_profiles
+                    .rooms
+                    .iter_mut()
+                    .find(|r| &r.id == room_id || &r.room_id == room_id)
+                {
+                    if let Some(m) = r.members.iter_mut().find(|m| &m.device_id == device_id) {
+                        m.status = status;
+                    }
+                }
+            }
+        }
     }
 
     fn selected_export_config(&self) -> crate::share::ShareExportConfig {
@@ -474,8 +536,12 @@ impl App {
     pub(in crate::app) fn ui_share(&mut self, ctx: &egui::Context) {
         let mut open = self.show_share;
         let screen = ctx.screen_rect();
-        let max_w = (screen.width() - 24.0).max(360.0);
-        let max_h = (screen.height() - 24.0).max(360.0);
+        let max_w = (screen.width() - 16.0)
+            .max(240.0)
+            .min(screen.width().max(1.0));
+        let max_h = (screen.height() - 16.0)
+            .max(240.0)
+            .min(screen.height().max(1.0));
         egui::Window::new("Share-Server-Verbindungen")
             .open(&mut open)
             .resizable(true)
@@ -484,6 +550,7 @@ impl App {
             .max_height(max_h)
             .constrain_to(screen.shrink(8.0))
             .show(ctx, |ui| {
+                ui.set_max_width(max_w - 16.0);
                 self.ui_share_top(ui);
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -497,12 +564,14 @@ impl App {
                     }
                 });
                 ui.separator();
-                match self.share_tab {
-                    0 => self.ui_share_direct(ui),
-                    1 => self.ui_share_rooms(ui),
-                    2 => self.ui_share_exports(ui),
-                    _ => self.ui_share_diagnostics(ui),
-                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.share_tab {
+                        0 => self.ui_share_direct(ui),
+                        1 => self.ui_share_rooms(ui),
+                        2 => self.ui_share_exports(ui),
+                        _ => self.ui_share_diagnostics(ui),
+                    });
             });
         self.show_share = open;
     }
@@ -681,7 +750,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_direct_code_input)
                     .hint_text("SE-D3-...")
-                    .desired_width(360.0_f32.min(ui.available_width().max(180.0)))
+                    .desired_width(share_input_width(ui, 360.0))
                     .clip_text(true),
             );
             ui.add(
@@ -870,7 +939,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_room_code_input)
                     .hint_text("SE-R3-...")
-                    .desired_width(360.0_f32.min(ui.available_width().max(180.0)))
+                    .desired_width(share_input_width(ui, 360.0))
                     .clip_text(true),
             );
             ui.add(
@@ -1127,7 +1196,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_export_path_draft)
                     .hint_text("Ordner, Laufwerk oder UNC")
-                    .desired_width(300.0_f32.min(ui.available_width().max(180.0)))
+                    .desired_width(share_input_width(ui, 300.0))
                     .clip_text(true),
             );
         });
@@ -1258,10 +1327,12 @@ impl App {
             .max_height(420.0)
             .show(ui, |ui| {
                 ui.add(
-                    egui::TextEdit::multiline(&mut self.share_diag_log.as_str())
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(ui.available_width())
-                        .desired_rows(18),
+                    egui::Label::new(
+                        RichText::new(self.share_diag_log.as_str())
+                            .monospace()
+                            .color(Color32::from_gray(210)),
+                    )
+                    .wrap(),
                 );
             });
     }
@@ -1269,7 +1340,7 @@ impl App {
 
 fn share_value_field(ui: &mut egui::Ui, value: &str) -> egui::Response {
     let mut text = value.to_string();
-    let width = ui.available_width().clamp(160.0, 520.0);
+    let width = share_input_width(ui, 420.0);
     ui.add(
         egui::TextEdit::singleline(&mut text)
             .font(egui::TextStyle::Monospace)
@@ -1277,6 +1348,11 @@ fn share_value_field(ui: &mut egui::Ui, value: &str) -> egui::Response {
             .clip_text(true)
             .interactive(false),
     )
+}
+
+fn share_input_width(ui: &egui::Ui, preferred: f32) -> f32 {
+    let available = ui.available_width().max(64.0);
+    preferred.min(available).max(64.0)
 }
 
 fn upsert_room_member(room: &mut crate::share::RoomProfile, p: crate::share::PeerPresence) {

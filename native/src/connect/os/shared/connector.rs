@@ -278,6 +278,10 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
     if endpoint.is_empty() {
         return Err("Leerer Pfad".into());
     }
+    if let Some((target, root)) = crate::share::PeerOpenTarget::from_endpoint(endpoint) {
+        let (_label, backend, _status) = crate::daemon::open_share_backend(target)?;
+        return Ok((backend, root));
+    }
     if !is_remote_url(endpoint) {
         return Ok((
             Arc::new(crate::vfs::LocalBackend::new(endpoint)),
