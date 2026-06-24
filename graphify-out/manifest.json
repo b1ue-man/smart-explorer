@@ -180,9 +180,9 @@
     "semantic_hash": "c3f80e5bd592477701bb225cef1f5327"
   },
   "app/core/menus_settings.rs": {
-    "mtime": 1782245273.4622183,
-    "ast_hash": "14a2f8f589ae9fcbf1fad56ef4021209",
-    "semantic_hash": "14a2f8f589ae9fcbf1fad56ef4021209"
+    "mtime": 1782293493.3824434,
+    "ast_hash": "d9beef3e84880d1fdc6c3132b2c193da",
+    "semantic_hash": "d9beef3e84880d1fdc6c3132b2c193da"
   },
   "app/core/menus_sync.rs": {
     "mtime": 1782245472.340253,
@@ -795,9 +795,9 @@
     "semantic_hash": "e81211097503b2ce1050a43b56bdfa43"
   },
   "share/core/service.rs": {
-    "mtime": 1782290091.8023427,
-    "ast_hash": "5e64df62cb0f281b2dd42b23d94578b5",
-    "semantic_hash": "5e64df62cb0f281b2dd42b23d94578b5"
+    "mtime": 1782293523.017838,
+    "ast_hash": "023da808314696f7e8fe256c2c863875",
+    "semantic_hash": "023da808314696f7e8fe256c2c863875"
   },
   "share/core/tests.rs": {
     "mtime": 1782250254.781312,
