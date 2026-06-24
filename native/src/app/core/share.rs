@@ -473,10 +473,16 @@ impl App {
 
     pub(in crate::app) fn ui_share(&mut self, ctx: &egui::Context) {
         let mut open = self.show_share;
+        let screen = ctx.screen_rect();
+        let max_w = (screen.width() - 24.0).max(360.0);
+        let max_h = (screen.height() - 24.0).max(360.0);
         egui::Window::new("Share-Server-Verbindungen")
             .open(&mut open)
             .resizable(true)
-            .default_size([760.0, 640.0])
+            .default_size([760.0_f32.min(max_w), 640.0_f32.min(max_h)])
+            .max_width(max_w)
+            .max_height(max_h)
+            .constrain_to(screen.shrink(8.0))
             .show(ctx, |ui| {
                 self.ui_share_top(ui);
                 ui.separator();
@@ -502,13 +508,24 @@ impl App {
     }
 
     fn ui_share_top(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(format!("Server: {}", self.share_server));
-            ui.label(format!("Status: {}", self.share_status));
-        });
-        ui.horizontal(|ui| {
+        egui::Grid::new("share_top_grid")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("Server:");
+                share_value_field(ui, &self.share_server);
+                ui.end_row();
+                ui.label("Status:");
+                ui.add(egui::Label::new(self.share_status.clone()).wrap());
+                ui.end_row();
+            });
+        ui.horizontal_wrapped(|ui| {
             ui.label("Geraet:");
-            ui.text_edit_singleline(&mut self.share_device_draft);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.share_device_draft)
+                    .desired_width(180.0)
+                    .clip_text(true),
+            );
             if ui.button("Verbinden").clicked() {
                 self.ensure_share();
             }
@@ -541,9 +558,9 @@ impl App {
                 .small()
                 .color(Color32::from_gray(140)),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Direkt-Code:");
-            ui.monospace(self.share_identity.direct_code());
+            share_value_field(ui, &self.share_identity.direct_code());
             if ui.button("Code kopieren").clicked() {
                 ui.ctx().copy_text(self.share_identity.direct_code());
             }
@@ -560,7 +577,7 @@ impl App {
             "Freigegeben: {}",
             export_summary(&self.share_profiles.default_direct_exports)
         ));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Name aendern").clicked() {
                 self.share_identity
                     .set_device_name(self.share_device_draft.clone());
@@ -582,7 +599,7 @@ impl App {
                 Color32::from_rgb(255, 185, 120),
                 "Neuer Code invalidiert alte Direktkontakte zu diesem Geraet.",
             );
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("Wirklich neu generieren").clicked() {
                     self.share_identity.regenerate_direct_code();
                     self.share_regenerate_direct_confirm = false;
@@ -604,11 +621,15 @@ impl App {
             let mut remove_request: Option<String> = None;
             let requests = self.share_direct_requests.clone();
             for req in requests {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "{} moechte deinen Direkt-Code nutzen [{}]",
-                        req.device_name, req.fingerprint
-                    ));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::Label::new(format!(
+                            "{} moechte deinen Direkt-Code nutzen",
+                            req.device_name
+                        ))
+                        .wrap(),
+                    );
+                    share_value_field(ui, &req.fingerprint);
                     if ui.button("Freigaben waehlen").clicked() {
                         self.share_export_scope = 0;
                         self.share_export_target_id.clear();
@@ -656,11 +677,12 @@ impl App {
                 .small()
                 .color(Color32::from_gray(140)),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_direct_code_input)
                     .hint_text("SE-D3-...")
-                    .desired_width(360.0),
+                    .desired_width(360.0_f32.min(ui.available_width().max(180.0)))
+                    .clip_text(true),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_direct_name_input)
@@ -718,13 +740,16 @@ impl App {
         let mut request_direct: Option<String> = None;
         let mut changed = false;
         for c in &mut self.share_profiles.direct_contacts {
-            ui.horizontal(|ui| {
-                ui.label(format!(
-                    "{} [{} / {}]",
-                    c.display_name,
-                    c.status.label(),
-                    c.access_state.label()
-                ));
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::Label::new(format!(
+                        "{} [{} / {}]",
+                        c.display_name,
+                        c.status.label(),
+                        c.access_state.label()
+                    ))
+                    .wrap(),
+                );
                 if ui.button("Oeffnen").clicked() {
                     open_target = Some(crate::share::PeerOpenTarget::Direct {
                         contact_id: c.id.clone(),
@@ -805,9 +830,13 @@ impl App {
                 .small()
                 .color(Color32::from_gray(140)),
         );
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.share_room_create_name_input);
-            ui.monospace(&self.share_room_draft_code);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.share_room_create_name_input)
+                    .desired_width(160.0)
+                    .clip_text(true),
+            );
+            share_value_field(ui, &self.share_room_draft_code);
             if ui.button("Neuen Code").clicked() {
                 self.share_room_draft_code = crate::share::ShareProfiles::new_room_code();
             }
@@ -837,11 +866,12 @@ impl App {
                 .small()
                 .color(Color32::from_gray(140)),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_room_code_input)
                     .hint_text("SE-R3-...")
-                    .desired_width(360.0),
+                    .desired_width(360.0_f32.min(ui.available_width().max(180.0)))
+                    .clip_text(true),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_room_name_input)
@@ -883,13 +913,16 @@ impl App {
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
         let mut changed = false;
         for room in &mut self.share_profiles.rooms {
-            ui.horizontal(|ui| {
-                ui.label(format!(
-                    "{} [{}] Mitglieder: {}",
-                    room.name,
-                    room.status.label(),
-                    room.members.len()
-                ));
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::Label::new(format!(
+                        "{} [{}] Mitglieder: {}",
+                        room.name,
+                        room.status.label(),
+                        room.members.len()
+                    ))
+                    .wrap(),
+                );
                 if ui.button("Oeffnen").clicked() {
                     room.status = crate::share::ShareStatus::Available;
                 }
@@ -929,12 +962,15 @@ impl App {
                 }
             });
             for member in &mut room.members {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "  {} [{}]",
-                        member.device_name,
-                        member.status.label()
-                    ));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::Label::new(format!(
+                            "  {} [{}]",
+                            member.device_name,
+                            member.status.label()
+                        ))
+                        .wrap(),
+                    );
                     if ui.button("Oeffnen").clicked() {
                         open_target = Some(crate::share::PeerOpenTarget::RoomDevice {
                             room_id: room.id.clone(),
@@ -989,7 +1025,7 @@ impl App {
     }
 
     fn ui_share_exports(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.share_export_scope, 0, "Standard Direkt");
             ui.selectable_value(&mut self.share_export_scope, 1, "Direktgeraet");
             ui.selectable_value(&mut self.share_export_scope, 2, "Raum");
@@ -1044,8 +1080,9 @@ impl App {
             egui::Checkbox::new(&mut true, "Share-Server-Verbindungen ausschliessen"),
         );
         for (i, root) in cfg.roots.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(format!("{} -> {}", root.label, root.path));
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(format!("{} ->", root.label)).wrap());
+                share_value_field(ui, &root.path);
                 if ui.button("Test").clicked() {
                     self.share_diag_log.push_str(&format!(
                         "Freigabe-Test {}: {}\n",
@@ -1081,7 +1118,7 @@ impl App {
             changed = true;
         }
         ui.separator();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_export_label_draft)
                     .hint_text("Name")
@@ -1090,10 +1127,11 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_export_path_draft)
                     .hint_text("Ordner, Laufwerk oder UNC")
-                    .desired_width(300.0),
+                    .desired_width(300.0_f32.min(ui.available_width().max(180.0)))
+                    .clip_text(true),
             );
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Ordner hinzufuegen").clicked() {
                 if let Some(p) = rfd::FileDialog::new().pick_folder() {
                     self.share_export_path_draft = p.to_string_lossy().replace('\\', "/");
@@ -1148,7 +1186,7 @@ impl App {
     }
 
     fn ui_share_diagnostics(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Server testen").clicked() {
                 self.ensure_share();
             }
@@ -1203,19 +1241,42 @@ impl App {
             }
         ));
         if let Some(svc) = &self.share {
-            ui.label(format!("Iroh-Relay: {}", svc.relay_url()));
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Iroh-Relay:");
+                share_value_field(ui, &svc.relay_url());
+            });
         }
-        ui.label(format!("Signaling: {}", self.share_status));
-        ui.label(format!(
-            "SmartExplorer-Fingerprint: {}",
-            self.share_identity.fingerprint
-        ));
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Signaling:");
+            ui.add(egui::Label::new(self.share_status.clone()).wrap());
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("SmartExplorer-Fingerprint:");
+            share_value_field(ui, &self.share_identity.fingerprint);
+        });
         egui::ScrollArea::vertical()
             .max_height(420.0)
             .show(ui, |ui| {
-                ui.monospace(&self.share_diag_log);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.share_diag_log.as_str())
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(ui.available_width())
+                        .desired_rows(18),
+                );
             });
     }
+}
+
+fn share_value_field(ui: &mut egui::Ui, value: &str) -> egui::Response {
+    let mut text = value.to_string();
+    let width = ui.available_width().clamp(160.0, 520.0);
+    ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .font(egui::TextStyle::Monospace)
+            .desired_width(width)
+            .clip_text(true)
+            .interactive(false),
+    )
 }
 
 fn upsert_room_member(room: &mut crate::share::RoomProfile, p: crate::share::PeerPresence) {
