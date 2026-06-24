@@ -7,10 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tungstenite::{accept, Error as WsError, Message, WebSocket};
 
 const MAX_ROOM: usize = 64;
 const MAX_WATCHES: usize = 256;
@@ -95,7 +97,7 @@ enum Out {
     Pong,
 }
 
-type Writer = Arc<Mutex<TcpStream>>;
+type Writer = Sender<Out>;
 
 #[derive(Clone)]
 struct Client {
@@ -116,13 +118,7 @@ struct State {
 }
 
 fn send(w: &Writer, msg: &Out) {
-    if let Ok(mut s) = w.lock() {
-        if let Ok(mut line) = serde_json::to_string(msg) {
-            line.push('\n');
-            let _ = s.write_all(line.as_bytes());
-            let _ = s.flush();
-        }
-    }
+    let _ = w.send(msg.clone());
 }
 
 fn main() {
@@ -137,7 +133,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("se-share-server listening on {bind} (rendezvous only)");
+    eprintln!("se-share-server listening on {bind} (raw TCP + ws upgrade, rendezvous only)");
     let state = Arc::new(Mutex::new(State::default()));
     for conn in listener.incoming() {
         let stream = match conn {
@@ -152,8 +148,19 @@ fn main() {
 }
 
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut probe = [0u8; 3];
+    let n = stream.peek(&mut probe)?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let writer: Writer = Arc::new(Mutex::new(stream.try_clone()?));
+    if n >= 1 && probe[0] == b'G' {
+        return handle_ws(stream, state);
+    }
+    handle_tcp(stream, state)
+}
+
+fn handle_tcp(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let writer = spawn_tcp_writer(stream.try_clone()?);
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
@@ -238,6 +245,175 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     }
     cleanup(id, &state);
     Ok(())
+}
+
+fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut ws = accept(stream).map_err(io_other)?;
+    let (writer, out_rx) = mpsc::channel::<Out>();
+    let hello = match read_ws_json(&mut ws, &out_rx, Duration::from_secs(60)) {
+        Ok(Some(msg)) => msg,
+        Ok(None) => return Ok(()),
+        Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+            return Ok(())
+        }
+        Err(e) => return Err(e),
+    };
+    let In::Hello {
+        protocol_version,
+        device_id,
+        device_name: _,
+        listen_port: _,
+        lan: _,
+        public_key: _,
+        fingerprint: _,
+    } = hello
+    else {
+        send(
+            &writer,
+            &Out::Error {
+                scope: "server".into(),
+                msg: "first message must be hello".into(),
+            },
+        );
+        flush_ws_out(&mut ws, &out_rx)?;
+        return Ok(());
+    };
+    if protocol_version != 2 || device_id.trim().is_empty() {
+        send(
+            &writer,
+            &Out::Error {
+                scope: "server".into(),
+                msg: "unsupported hello".into(),
+            },
+        );
+        flush_ws_out(&mut ws, &out_rx)?;
+        return Ok(());
+    }
+
+    let id = register_client(&state, writer.clone(), device_id);
+    send(&writer, &Out::HelloOk);
+
+    loop {
+        flush_ws_out(&mut ws, &out_rx)?;
+        match read_ws_json(&mut ws, &out_rx, Duration::from_millis(500)) {
+            Ok(Some(msg)) => dispatch(id, &writer, msg, &state),
+            Ok(None) => break,
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
+            Err(e) => return Err(e),
+        }
+    }
+    cleanup(id, &state);
+    Ok(())
+}
+
+fn register_client(state: &Arc<Mutex<State>>, writer: Writer, device_id: String) -> u64 {
+    let mut st = state.lock().unwrap();
+    st.next_id += 1;
+    let id = st.next_id;
+    st.clients.insert(
+        id,
+        Client {
+            writer,
+            device_id,
+            direct_lookup_ids: HashSet::new(),
+            watched_lookup_ids: HashSet::new(),
+            rooms: HashSet::new(),
+        },
+    );
+    id
+}
+
+fn spawn_tcp_writer(mut stream: TcpStream) -> Writer {
+    let (tx, rx) = mpsc::channel::<Out>();
+    std::thread::Builder::new()
+        .name("share-server-tcp-writer".into())
+        .spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                if write_tcp_msg(&mut stream, &msg).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok();
+    tx
+}
+
+fn write_tcp_msg(stream: &mut TcpStream, msg: &Out) -> io::Result<()> {
+    let mut line = serde_json::to_string(msg).map_err(io_other)?;
+    line.push('\n');
+    stream.write_all(line.as_bytes())?;
+    stream.flush()
+}
+
+fn flush_ws_out(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Out>) -> io::Result<()> {
+    while let Ok(msg) = rx.try_recv() {
+        let text = serde_json::to_string(&msg).map_err(io_other)?;
+        ws.send(Message::Text(text)).map_err(ws_to_io)?;
+        ws.flush().map_err(ws_to_io)?;
+    }
+    Ok(())
+}
+
+fn read_ws_json(
+    ws: &mut WebSocket<TcpStream>,
+    out_rx: &Receiver<Out>,
+    timeout: Duration,
+) -> io::Result<Option<In>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        flush_ws_out(ws, out_rx)?;
+        match ws.read() {
+            Ok(Message::Text(text)) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str(text) {
+                    Ok(msg) => return Ok(Some(msg)),
+                    Err(_) => continue,
+                }
+            }
+            Ok(Message::Binary(bytes)) => {
+                let text = String::from_utf8(bytes).map_err(io_other)?;
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str(text) {
+                    Ok(msg) => return Ok(Some(msg)),
+                    Err(_) => continue,
+                }
+            }
+            Ok(Message::Ping(payload)) => {
+                ws.send(Message::Pong(payload)).map_err(ws_to_io)?;
+                ws.flush().map_err(ws_to_io)?;
+            }
+            Ok(Message::Pong(_)) => {}
+            Ok(Message::Close(_)) => return Ok(None),
+            Ok(_) => {}
+            Err(WsError::Io(e))
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(ErrorKind::TimedOut, "websocket idle"));
+                }
+            }
+            Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
+            Err(e) => return Err(ws_to_io(e)),
+        }
+    }
+}
+
+fn ws_to_io(err: WsError) -> io::Error {
+    match err {
+        WsError::Io(e) => e,
+        other => io_other(other),
+    }
+}
+
+fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, err.to_string())
 }
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
@@ -549,5 +725,40 @@ mod tests {
         assert_eq!(back.kind, "room");
         assert_eq!(back.relation_id, "r");
         assert_eq!(back.device_id, "d");
+    }
+
+    #[test]
+    fn websocket_client_can_hello_and_heartbeat() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(State::default()));
+        let server_state = state.clone();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle(stream, server_state).unwrap();
+        });
+
+        let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
+        ws.send(Message::Text(
+            r#"{"t":"hello","protocol_version":2,"device_id":"a","device_name":"Laptop","listen_port":51737,"lan":["127.0.0.1"],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
+        ))
+        .unwrap();
+        let first = ws.read().unwrap().into_text().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&first).unwrap()["t"],
+            "hello_ok"
+        );
+
+        std::thread::sleep(Duration::from_millis(750));
+        ws.send(Message::Text(r#"{"t":"heartbeat"}"#.to_string()))
+            .unwrap();
+        let second = ws.read().unwrap().into_text().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&second).unwrap()["t"],
+            "pong"
+        );
+
+        ws.close(None).unwrap();
+        handle.join().unwrap();
     }
 }

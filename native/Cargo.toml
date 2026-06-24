@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.90"
+version = "0.5.91"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -62,6 +62,9 @@ md5 = "0.7"
 snow = "0.9"
 hkdf = "0.12"
 hmac = "0.12"
+# Share-Server signaling fallback: WebSocket over HTTPS-friendly WSS. Keep
+# default-features off so TLS stays on rustls/webpki and avoids native TLS.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 # Quick Share (quickshare.rs, #Q): mDNS discovery/advertisement of the Nearby
 # Share service so Android devices appear on the LAN. Pure Rust (if-addrs +
 # socket2), cross-compiles clean.

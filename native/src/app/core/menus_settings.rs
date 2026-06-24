@@ -127,13 +127,14 @@ impl App {
         );
         ui.add(
             egui::TextEdit::singleline(&mut self.share_server_draft)
-                .hint_text("Rendezvous-Server  host:port")
+                .hint_text("Rendezvous-Server  host:port / wss://host/pfad")
                 .desired_width(f32::INFINITY),
         )
         .on_hover_text(
             "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
              nur die Verbindung — die Dateien gehen direkt zwischen den Geräten, \
-             Ende-zu-Ende-verschlüsselt.",
+             Ende-zu-Ende-verschlüsselt. Mehrere Fallbacks mit Komma trennen; \
+             https:// wird als wss:// benutzt.",
         );
         ui.add(
             egui::TextEdit::singleline(&mut self.share_device_draft)

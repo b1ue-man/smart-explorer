@@ -4,6 +4,9 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tungstenite::{
+    connect as ws_connect, stream::MaybeTlsStream, Error as WsError, Message, WebSocket,
+};
 
 use super::backend::PeerBackend;
 use super::core::{
@@ -233,27 +236,21 @@ fn worker(
     let mut stopped = false;
     let mut backoff = Duration::from_secs(1);
     while !stopped && !stopped_flag.load(Ordering::Relaxed) {
-        match TcpStream::connect(&server) {
-            Ok(mut stream) => {
-                let _ = stream.set_nodelay(true);
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-                if let Err(e) = send_hello(&mut stream, &identity, listen_port) {
+        match SignalConnection::connect(&server) {
+            Ok(mut signal) => {
+                let transport = signal.label().to_string();
+                if let Err(e) = send_hello(&mut signal, &identity, listen_port) {
                     let _ = ev.send(ShareEvent::ServerDisconnected(e.to_string()));
                     std::thread::sleep(backoff);
                     backoff = (backoff * 2).min(Duration::from_secs(30));
                     continue;
                 }
                 let _ = ev.send(ShareEvent::ServerConnected);
-                let _ = ev.send(ShareEvent::Status("Share-Server verbunden".into()));
+                let _ = ev.send(ShareEvent::Status(format!(
+                    "Share-Server verbunden ({transport})"
+                )));
                 backoff = Duration::from_secs(1);
-                let mut reader = match stream.try_clone() {
-                    Ok(s) => io::BufReader::new(s),
-                    Err(e) => {
-                        let _ = ev.send(ShareEvent::ServerDisconnected(e.to_string()));
-                        continue;
-                    }
-                };
-                let _ = publish_all(&mut stream, &auth, listen_port);
+                let _ = publish_all(&mut signal, &auth, listen_port);
                 let mut last_heartbeat = Instant::now();
                 loop {
                     if stopped_flag.load(Ordering::Relaxed) {
@@ -272,10 +269,10 @@ fn worker(
                                     s.rooms = rooms;
                                     s.default_direct_exports = default_direct_exports;
                                 }
-                                let _ = publish_all(&mut stream, &auth, listen_port);
+                                let _ = publish_all(&mut signal, &auth, listen_port);
                             }
                             ShareCmd::Refresh => {
-                                let _ = publish_all(&mut stream, &auth, listen_port);
+                                let _ = publish_all(&mut signal, &auth, listen_port);
                             }
                             ShareCmd::SetDirectOnline { online } => {
                                 let lookup_id = {
@@ -287,10 +284,10 @@ fn worker(
                                     }
                                 };
                                 if online {
-                                    let _ = publish_all(&mut stream, &auth, listen_port);
+                                    let _ = publish_all(&mut signal, &auth, listen_port);
                                 } else if !lookup_id.is_empty() {
                                     let _ = send_line(
-                                        &mut stream,
+                                        &mut signal,
                                         &ClientMsg::UnpublishDirect { lookup_id },
                                     );
                                 }
@@ -301,7 +298,7 @@ fn worker(
                                 break;
                             }
                             ShareCmd::LeaveRoom { room_id } => {
-                                let _ = send_line(&mut stream, &ClientMsg::LeaveRoom { room_id });
+                                let _ = send_line(&mut signal, &ClientMsg::LeaveRoom { room_id });
                             }
                             ShareCmd::Send(_) | ShareCmd::Answer { .. } => {}
                         }
@@ -310,15 +307,14 @@ fn worker(
                         break;
                     }
                     if last_heartbeat.elapsed() >= Duration::from_secs(20) {
-                        if send_line(&mut stream, &ClientMsg::Heartbeat).is_err() {
+                        if send_line(&mut signal, &ClientMsg::Heartbeat).is_err() {
                             break;
                         }
                         last_heartbeat = Instant::now();
                     }
-                    let mut line = String::new();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => break,
-                        Ok(_) => handle_server_msg(line.trim(), &auth, &ev),
+                    match signal.read_message() {
+                        Ok(Some(line)) => handle_server_msg(line.trim(), &auth, &ev),
+                        Ok(None) => break,
                         Err(e)
                             if e.kind() == io::ErrorKind::WouldBlock
                                 || e.kind() == io::ErrorKind::TimedOut => {}
@@ -341,7 +337,7 @@ fn worker(
 }
 
 fn send_hello(
-    stream: &mut TcpStream,
+    stream: &mut SignalConnection,
     identity: &ShareIdentity,
     listen_port: u16,
 ) -> io::Result<()> {
@@ -360,7 +356,7 @@ fn send_hello(
 }
 
 fn publish_all(
-    stream: &mut TcpStream,
+    stream: &mut SignalConnection,
     auth: &Arc<Mutex<ShareAuthState>>,
     listen_port: u16,
 ) -> io::Result<()> {
@@ -438,11 +434,184 @@ fn build_presence(
     }
 }
 
-fn send_line(stream: &mut TcpStream, msg: &ClientMsg) -> io::Result<()> {
-    let mut line = serde_json::to_string(msg).map_err(eio)?;
-    line.push('\n');
-    stream.write_all(line.as_bytes())?;
-    stream.flush()
+enum SignalConnection {
+    Tcp {
+        label: String,
+        stream: TcpStream,
+        reader: io::BufReader<TcpStream>,
+    },
+    WebSocket {
+        label: String,
+        socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    },
+}
+
+impl SignalConnection {
+    fn connect(config: &str) -> io::Result<Self> {
+        let endpoints = signal_endpoints(config);
+        if endpoints.is_empty() {
+            return Err(eio("Share-Server-Adresse fehlt"));
+        }
+        let mut errors = Vec::new();
+        for endpoint in endpoints {
+            match Self::connect_one(&endpoint) {
+                Ok(conn) => return Ok(conn),
+                Err(e) => errors.push(format!("{endpoint}: {e}")),
+            }
+        }
+        Err(eio(format!(
+            "keine Signaling-Verbindung moeglich ({})",
+            errors.join("; ")
+        )))
+    }
+
+    fn connect_one(endpoint: &str) -> io::Result<Self> {
+        let normalized = normalize_signal_endpoint(endpoint);
+        if normalized.starts_with("ws://") || normalized.starts_with("wss://") {
+            return Self::connect_ws(&normalized);
+        }
+        if let Some(raw) = normalized.strip_prefix("tcp://") {
+            return Self::connect_tcp(&normalize_tcp_addr(raw));
+        }
+        if normalized.contains("://") {
+            return Err(eio("unbekanntes Share-Server-Schema"));
+        }
+        Self::connect_tcp(&normalize_tcp_addr(&normalized))
+    }
+
+    fn connect_tcp(addr: &str) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr)?;
+        let _ = stream.set_nodelay(true);
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let reader = io::BufReader::new(stream.try_clone()?);
+        Ok(Self::Tcp {
+            label: format!("tcp://{addr}"),
+            stream,
+            reader,
+        })
+    }
+
+    fn connect_ws(url: &str) -> io::Result<Self> {
+        let (mut socket, _) = ws_connect(url).map_err(ws_to_io)?;
+        set_ws_timeout(socket.get_mut(), Duration::from_millis(500));
+        Ok(Self::WebSocket {
+            label: url.to_string(),
+            socket,
+        })
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Tcp { label, .. } | Self::WebSocket { label, .. } => label,
+        }
+    }
+
+    fn send(&mut self, msg: &ClientMsg) -> io::Result<()> {
+        match self {
+            Self::Tcp { stream, .. } => {
+                let mut line = serde_json::to_string(msg).map_err(eio)?;
+                line.push('\n');
+                stream.write_all(line.as_bytes())?;
+                stream.flush()
+            }
+            Self::WebSocket { socket, .. } => {
+                let text = serde_json::to_string(msg).map_err(eio)?;
+                socket.send(Message::Text(text)).map_err(ws_to_io)?;
+                socket.flush().map_err(ws_to_io)
+            }
+        }
+    }
+
+    fn read_message(&mut self) -> io::Result<Option<String>> {
+        match self {
+            Self::Tcp { reader, .. } => {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => Ok(None),
+                    Ok(_) => Ok(Some(line)),
+                    Err(e) => Err(e),
+                }
+            }
+            Self::WebSocket { socket, .. } => loop {
+                match socket.read() {
+                    Ok(Message::Text(text)) => return Ok(Some(text)),
+                    Ok(Message::Binary(bytes)) => {
+                        return String::from_utf8(bytes).map(Some).map_err(eio);
+                    }
+                    Ok(Message::Ping(payload)) => {
+                        socket.send(Message::Pong(payload)).map_err(ws_to_io)?;
+                        socket.flush().map_err(ws_to_io)?;
+                    }
+                    Ok(Message::Pong(_)) => {}
+                    Ok(Message::Close(_)) => return Ok(None),
+                    Ok(_) => {}
+                    Err(WsError::Io(e))
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        return Err(e)
+                    }
+                    Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
+                    Err(e) => return Err(ws_to_io(e)),
+                }
+            },
+        }
+    }
+}
+
+fn send_line(stream: &mut SignalConnection, msg: &ClientMsg) -> io::Result<()> {
+    stream.send(msg)
+}
+
+fn signal_endpoints(config: &str) -> Vec<String> {
+    config
+        .split([',', ';'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn normalize_signal_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim();
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_tcp_addr(addr: &str) -> String {
+    let addr = addr.trim().trim_end_matches('/');
+    if addr.is_empty() || addr.starts_with('[') || addr.rsplit_once(':').is_some() {
+        addr.to_string()
+    } else {
+        format!("{addr}:51820")
+    }
+}
+
+fn set_ws_timeout(stream: &mut MaybeTlsStream<TcpStream>, timeout: Duration) {
+    match stream {
+        MaybeTlsStream::Plain(tcp) => {
+            let _ = tcp.set_read_timeout(Some(timeout));
+            let _ = tcp.set_write_timeout(Some(timeout));
+        }
+        MaybeTlsStream::Rustls(tls) => {
+            let _ = tls.sock.set_read_timeout(Some(timeout));
+            let _ = tls.sock.set_write_timeout(Some(timeout));
+        }
+        #[allow(unreachable_patterns)]
+        _ => {}
+    }
+}
+
+fn ws_to_io(err: WsError) -> io::Error {
+    match err {
+        WsError::Io(e) => e,
+        other => eio(other),
+    }
 }
 
 fn handle_server_msg(
@@ -598,7 +767,10 @@ fn remember_nonce(seen: &mut HashSet<String>, key: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{remember_nonce, ShareService};
+    use super::{
+        normalize_signal_endpoint, normalize_tcp_addr, remember_nonce, signal_endpoints,
+        ShareService,
+    };
     use crate::share::fs::ShareExportConfig;
     use crate::share::identity::ShareIdentity;
     use crate::share::transfer::ShareAuthState;
@@ -663,6 +835,32 @@ mod tests {
         });
         assert_eq!(svc.auth.lock().unwrap().direct_contacts[0].id, "contact-a");
         assert_eq!(svc.auth.lock().unwrap().rooms[0].room_id, "room-a");
+    }
+
+    #[test]
+    fn signal_endpoint_config_supports_https_and_fallbacks() {
+        assert_eq!(
+            signal_endpoints(" wss://share.example/ws ; 10.0.0.5:51820 "),
+            vec![
+                "wss://share.example/ws".to_string(),
+                "10.0.0.5:51820".to_string()
+            ]
+        );
+        assert_eq!(
+            normalize_signal_endpoint("https://share.example/ws"),
+            "wss://share.example/ws"
+        );
+        assert_eq!(
+            normalize_signal_endpoint("http://share.example/ws"),
+            "ws://share.example/ws"
+        );
+    }
+
+    #[test]
+    fn tcp_endpoint_defaults_to_share_port() {
+        assert_eq!(normalize_tcp_addr("share.example"), "share.example:51820");
+        assert_eq!(normalize_tcp_addr("share.example:443"), "share.example:443");
+        assert_eq!(normalize_tcp_addr("[::1]:51820"), "[::1]:51820");
     }
 
     fn test_service() -> ShareService {
