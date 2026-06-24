@@ -392,7 +392,7 @@ impl App {
                 self.virtual_clip = None;
                 self.notice = Some((
                     format!(
-                        "✓ {} Datei(en) kopiert — in Explorer einfügbar (Ctrl+V)",
+                        "✓ {} Element(e) kopiert - in Explorer einfuegbar (Ctrl+V)",
                         local.len()
                     ),
                     std::time::Instant::now(),

@@ -655,6 +655,116 @@ fn download_file_progress(
     Ok(dest.to_string_lossy().to_string())
 }
 
+fn download_remote_dir_for_clipboard(
+    be: &dyn crate::vfs::Backend,
+    src: &str,
+    local_dir: &Path,
+) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(local_dir);
+    std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
+    if be.supports_bulk_tree() {
+        match be.get_tree(src, local_dir) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(local_dir);
+                std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    let mut errors = Vec::new();
+    collect_remote_entries(be, src, String::new(), &mut files, &mut dirs, &mut errors);
+    dirs.sort();
+    dirs.dedup();
+    for dir in dirs {
+        if dir.is_empty() {
+            continue;
+        }
+        std::fs::create_dir_all(local_dir.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            .map_err(|e| e.to_string())?;
+    }
+    for file in files {
+        let dest = local_dir.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        download_to(be, &file.src, &dest)?;
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+pub(in crate::app) fn download_remote_clipboard_items(
+    be: &dyn crate::vfs::Backend,
+    items: &[(String, String, bool)],
+) -> Vec<String> {
+    let mut local = Vec::new();
+    for (path, name, is_dir) in items {
+        if *is_dir {
+            let local_dir = open_temp_path(name);
+            if download_remote_dir_for_clipboard(be, path, &local_dir).is_ok() {
+                local.push(local_dir.to_string_lossy().to_string());
+            } else {
+                let _ = std::fs::remove_dir_all(&local_dir);
+            }
+        } else {
+            let local_name = be.download_name(path, name);
+            if let Ok(p) = download_to_temp(be, path, &local_name) {
+                local.push(p);
+            }
+        }
+    }
+    local
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!(
+            "se_clip_test_{}_{}_{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn fwd(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    #[test]
+    fn remote_clipboard_downloads_folder_tree() {
+        let remote = temp_dir("remote");
+        std::fs::create_dir_all(remote.join("Gate/sub")).unwrap();
+        std::fs::write(remote.join("Gate/a.txt"), b"alpha").unwrap();
+        std::fs::write(remote.join("Gate/sub/b.txt"), b"beta").unwrap();
+        let be = crate::vfs::LocalBackend::new(&fwd(&remote));
+        let item = (format!("{}/Gate", fwd(&remote)), "Gate".to_string(), true);
+
+        let local = download_remote_clipboard_items(&be, &[item]);
+
+        assert_eq!(local.len(), 1);
+        let local_dir = PathBuf::from(&local[0]);
+        assert!(local_dir.is_dir());
+        assert_eq!(std::fs::read(local_dir.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(local_dir.join("sub/b.txt")).unwrap(), b"beta");
+
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(local_dir);
+    }
+}
+
 pub(in crate::app) fn download_paths_progress(
     be: &dyn crate::vfs::Backend,
     paths: &[String],

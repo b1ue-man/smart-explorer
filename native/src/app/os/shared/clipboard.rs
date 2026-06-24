@@ -11,39 +11,34 @@ impl App {
             ));
             return;
         }
-        // Remote selection → download the files to temp, then put those local
-        // paths on the clipboard so they paste into Explorer (or back into us).
+        // Remote selection -> materialize files/folders in temp, then put those
+        // local paths on the clipboard so they paste into Explorer or back here.
         if let Some(rs) = &self.remote {
-            let files: Vec<(String, String)> = self
+            let items: Vec<(String, String, bool)> = self
                 .entries
                 .iter()
-                .filter(|e| !e.is_dir && self.selection.contains(&e.key()))
-                .map(|e| (e.path.to_string(), e.name.to_string()))
+                .filter(|e| self.selection.contains(&e.key()))
+                .map(|e| (e.path.to_string(), e.name.to_string(), e.is_dir))
                 .collect();
-            if files.is_empty() {
+            if items.is_empty() {
                 self.notice = Some((
-                    "Remote: nur Dateien können in die Zwischenablage kopiert werden (keine Ordner).".to_string(),
+                    "Remote: nichts fuer die Zwischenablage ausgewaehlt.".to_string(),
                     std::time::Instant::now(),
                 ));
                 return;
             }
             let backend = rs.backend.clone();
-            let n = files.len();
+            let n = items.len();
             let (tx, rx) = unbounded();
             self.clip_download_rx = Some(rx);
             self.notice = Some((
-                format!("⬇ Bereite {} Datei(en) für die Zwischenablage vor…", n),
+                format!("Bereite {} Element(e) fuer die Zwischenablage vor...", n),
                 std::time::Instant::now(),
             ));
             std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
-                    let mut local = Vec::new();
-                    for (path, name) in &files {
-                        if let Ok(p) = download_to_temp(&*backend, path, name) {
-                            local.push(p);
-                        }
-                    }
+                    let local = download_remote_clipboard_items(&*backend, &items);
                     let _ = tx.send(local);
                 })
                 .ok();
