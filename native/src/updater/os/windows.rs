@@ -6,6 +6,7 @@ use super::config::{last_applied_path, updater_error_path};
 use super::feed::Feed;
 
 const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
+const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
@@ -252,7 +253,48 @@ pub fn run_apply_worker(args: &[String]) {
         std::thread::sleep(Duration::from_millis(500));
     }
     if replaced {
+        let _ = ensure_share_firewall_rule_for(&target);
         let _ = spawn_detached(&target, &["--updated"]);
+    }
+}
+
+fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let exe = exe.to_string_lossy().to_string();
+    let _ = std::process::Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            &format!("name={SHARE_FIREWALL_RULE}"),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    let output = std::process::Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            &format!("name={SHARE_FIREWALL_RULE}"),
+            "dir=in",
+            "action=allow",
+            &format!("program={exe}"),
+            "enable=yes",
+            "profile=any",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 }
 
@@ -282,6 +324,7 @@ pub fn revert_to(archived: &Path, version: &str) -> Result<PathBuf, String> {
     }
     archive_binary(env!("CARGO_PKG_VERSION"));
     let cur_exe = swap_in(archived)?;
+    let _ = ensure_share_firewall_rule_for(&cur_exe);
     set_pin(version);
     Ok(cur_exe)
 }
@@ -300,6 +343,7 @@ pub fn install_version(downloaded: &Path, version: &str) -> Result<PathBuf, Stri
         }
     }
     let cur_exe = swap_in(downloaded)?;
+    let _ = ensure_share_firewall_rule_for(&cur_exe);
     resume_auto_update();
     Ok(cur_exe)
 }

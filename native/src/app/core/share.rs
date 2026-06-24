@@ -518,12 +518,20 @@ impl App {
                     self.share_tab = 2;
                 }
                 if ui.button("Diagnose").clicked() {
+                    let presence = c
+                        .presence
+                        .as_ref()
+                        .map(|p| {
+                            format!("candidates={:?}, expires_at={}", p.candidates, p.expires_at)
+                        })
+                        .unwrap_or_else(|| "keine Presence".to_string());
                     self.share_diag_log.push_str(&format!(
-                        "Direct {}: lookup={}, fp={}, status={}\n",
+                        "Direct {}: lookup={}, fp={}, status={}, {}\n",
                         c.display_name,
                         c.lookup_id,
                         c.expected_fingerprint,
-                        c.status.label()
+                        c.status.label(),
+                        presence
                     ));
                     self.share_tab = 3;
                 }
@@ -697,12 +705,23 @@ impl App {
                         });
                     }
                     if ui.button("Diagnose").clicked() {
+                        let presence = member
+                            .presence
+                            .as_ref()
+                            .map(|p| {
+                                format!(
+                                    "candidates={:?}, expires_at={}",
+                                    p.candidates, p.expires_at
+                                )
+                            })
+                            .unwrap_or_else(|| "keine Presence".to_string());
                         self.share_diag_log.push_str(&format!(
-                            "Raum {} / {}: fp={}, status={}\n",
+                            "Raum {} / {}: fp={}, status={}, {}\n",
                             room.name,
                             member.device_name,
                             member.fingerprint,
-                            member.status.label()
+                            member.status.label(),
+                            presence
                         ));
                         self.share_tab = 3;
                     }
@@ -917,9 +936,21 @@ impl App {
                 ui.ctx().copy_text(self.share_diag_log.clone());
             }
             if ui.button("Security-Details anzeigen").clicked() {
+                let candidates = self
+                    .share
+                    .as_ref()
+                    .map(|svc| {
+                        crate::share::local_lan_ips()
+                            .into_iter()
+                            .map(|ip| format!("{ip}:{}", svc.listen_port))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 self.share_diag_log.push_str(&format!(
-                    "device_id={}\nfingerprint={}\nlistener=aktiv wenn verbunden\n",
-                    self.share_identity.device_id, self.share_identity.fingerprint
+                    "device_id={}\nfingerprint={}\nlistener=aktiv wenn verbunden\nlokale Kandidaten={:?}\n",
+                    self.share_identity.device_id,
+                    self.share_identity.fingerprint,
+                    candidates
                 ));
             }
         });

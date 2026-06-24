@@ -235,17 +235,36 @@ pub(crate) fn send_to_peer(
 }
 
 pub(crate) fn dial_candidates(candidates: &[String]) -> io::Result<TcpStream> {
-    let mut last = eio("keine Kandidaten");
+    let mut attempts = Vec::new();
     for c in candidates {
-        if let Ok(addr) = c.parse::<std::net::SocketAddr>() {
-            match TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
+        match c.parse::<std::net::SocketAddr>() {
+            Ok(addr) => match TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
                 Ok(s) => {
                     let _ = s.set_nodelay(true);
                     return Ok(s);
                 }
-                Err(e) => last = e,
-            }
+                Err(e) => attempts.push(format!("{c}: {e}")),
+            },
+            Err(e) => attempts.push(format!("{c}: ungueltig ({e})")),
         }
     }
-    Err(last)
+    if attempts.is_empty() {
+        Err(eio("keine Kandidaten"))
+    } else {
+        Err(eio(format!(
+            "kein direkter Peer-Kandidat erreichbar: {}",
+            attempts.join("; ")
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dial_candidates;
+
+    #[test]
+    fn dial_error_lists_candidates() {
+        let err = dial_candidates(&["not-an-addr".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("not-an-addr"));
+    }
 }
