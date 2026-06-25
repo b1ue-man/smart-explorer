@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.100"
+version = "0.5.101"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -81,6 +81,7 @@ rfd = { version = "0.15", default-features = false, features = ["common-controls
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WNet",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",

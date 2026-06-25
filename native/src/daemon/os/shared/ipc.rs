@@ -9,6 +9,7 @@ use super::state::{clear_heartbeat, clear_stop, log, request_stop, stop_requeste
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
 const IPC_TOKEN_FILE: &str = "daemon.token";
+static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone)]
 pub(crate) struct ShareHost {
@@ -97,6 +98,10 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<()> {
                         if !peer.ip().is_loopback() {
                             continue;
                         }
+                        if let Err(e) = prepare_ipc_client_stream(&stream) {
+                            log(&format!("daemon IPC client setup failed: {e}"));
+                            continue;
+                        }
                         let host = host.clone();
                         let token = token.clone();
                         std::thread::spawn(move || {
@@ -116,6 +121,10 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<()> {
             }
         })?;
     Ok(())
+}
+
+fn prepare_ipc_client_stream(stream: &TcpStream) -> io::Result<()> {
+    stream.set_nonblocking(false)
 }
 
 fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Result<()> {
@@ -610,7 +619,9 @@ pub fn open_share_backend(
     ensure_worker_ready();
     let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
     let mut last = "Background-Worker nicht erreichbar".to_string();
-    for _ in 0..30 {
+    let mut restarted_after_agent_error = false;
+    let mut restarted_after_missing_ipc = false;
+    for _ in 0..8 {
         match read_ipc_addr()
             .and_then(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok())
         {
@@ -646,11 +657,12 @@ pub fn open_share_backend(
                             Ok(agent) => agent,
                             Err(e) => {
                                 last = format!("Worker-Backend: {e}");
-                                clear_stop();
-                                clear_heartbeat();
-                                clear_ipc_addr();
-                                crate::autostart::spawn_daemon_now();
-                                std::thread::sleep(Duration::from_millis(300));
+                                if restarted_after_agent_error {
+                                    return Err(last);
+                                }
+                                restarted_after_agent_error = true;
+                                restart_worker_for_client(true);
+                                std::thread::sleep(Duration::from_millis(750));
                                 continue;
                             }
                         };
@@ -661,11 +673,11 @@ pub fn open_share_backend(
                 }
             }
             None => {
-                clear_stop();
-                clear_heartbeat();
-                clear_ipc_addr();
-                crate::autostart::spawn_daemon_now();
-                std::thread::sleep(Duration::from_millis(300));
+                if !restarted_after_missing_ipc {
+                    restarted_after_missing_ipc = true;
+                    restart_worker_for_client(false);
+                }
+                std::thread::sleep(Duration::from_millis(750));
             }
         }
     }
@@ -722,6 +734,16 @@ pub fn ensure_worker_ready() {
 }
 
 fn restart_worker_for_client(stop_existing: bool) {
+    let Ok(_guard) = WORKER_RESTART_LOCK.lock() else {
+        return;
+    };
+    match probe_worker(Duration::from_millis(500)) {
+        WorkerProbe::Ready => return,
+        WorkerProbe::Stale => {}
+        WorkerProbe::Missing if stop_existing => {}
+        WorkerProbe::Missing => {}
+    }
+
     if stop_existing {
         request_stop();
         let deadline = Instant::now() + Duration::from_secs(6);
@@ -1037,5 +1059,47 @@ mod tests {
             IpcResponse::Pong { version } => assert!(version.is_empty()),
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn accepted_ipc_stream_is_forced_back_to_blocking() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (mut server, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        };
+        server.set_nonblocking(true).unwrap();
+        prepare_ipc_client_stream(&server).unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(120)))
+            .unwrap();
+
+        let started = Instant::now();
+        let mut one = [0u8; 1];
+        let err = server.read(&mut one).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "unexpected read error: {err}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(40),
+            "read returned immediately; stream is still nonblocking"
+        );
+        drop(client);
     }
 }
