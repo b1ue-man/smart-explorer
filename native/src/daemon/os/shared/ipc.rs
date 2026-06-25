@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend_server::serve_backend;
-use super::state::{clear_heartbeat, clear_stop, log, stop_requested};
+use super::state::{clear_heartbeat, clear_stop, log, request_stop, stop_requested};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
 const IPC_TOKEN_FILE: &str = "daemon.token";
@@ -60,7 +60,10 @@ enum IpcRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum IpcResponse {
-    Pong,
+    Pong {
+        #[serde(default)]
+        version: String,
+    },
     Ok,
     OpenOk {
         label: String,
@@ -125,7 +128,12 @@ fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Res
     match req {
         IpcRequest::Ping { token: t } => {
             require_token(token, &t)?;
-            write_response(&mut stream, &IpcResponse::Pong)
+            write_response(
+                &mut stream,
+                &IpcResponse::Pong {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+            )
         }
         IpcRequest::RefreshShare { token: t } => {
             require_token(token, &t)?;
@@ -706,8 +714,26 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
 
 pub fn ensure_worker_ready() {
     let _ = crate::autostart::enable();
-    if ping_worker(Duration::from_millis(700)) {
-        return;
+    match probe_worker(Duration::from_millis(700)) {
+        WorkerProbe::Ready => return,
+        WorkerProbe::Stale => restart_worker_for_client(true),
+        WorkerProbe::Missing => restart_worker_for_client(false),
+    }
+}
+
+fn restart_worker_for_client(stop_existing: bool) {
+    if stop_existing {
+        request_stop();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            if matches!(
+                probe_worker(Duration::from_millis(400)),
+                WorkerProbe::Missing
+            ) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
 
     clear_stop();
@@ -717,29 +743,47 @@ pub fn ensure_worker_ready() {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if ping_worker(Duration::from_millis(700)) {
+        if matches!(probe_worker(Duration::from_millis(700)), WorkerProbe::Ready) {
             return;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
 }
 
-fn ping_worker(timeout: Duration) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerProbe {
+    Ready,
+    Stale,
+    Missing,
+}
+
+fn probe_worker(timeout: Duration) -> WorkerProbe {
     let Ok(token) = read_token() else {
-        return false;
+        return WorkerProbe::Missing;
     };
     let Some(addr) = read_ipc_addr() else {
-        return false;
+        return WorkerProbe::Missing;
     };
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
-        return false;
+        return WorkerProbe::Missing;
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     if write_request(&mut stream, &IpcRequest::Ping { token }).is_err() {
-        return false;
+        return WorkerProbe::Missing;
     }
-    matches!(read_response(&mut stream), Ok(IpcResponse::Pong))
+    match read_response(&mut stream) {
+        Ok(IpcResponse::Pong { version }) if worker_version_is_current(&version) => {
+            WorkerProbe::Ready
+        }
+        Ok(IpcResponse::Pong { .. }) => WorkerProbe::Stale,
+        Ok(_) => WorkerProbe::Missing,
+        Err(_) => WorkerProbe::Missing,
+    }
+}
+
+fn worker_version_is_current(version: &str) -> bool {
+    version == env!("CARGO_PKG_VERSION")
 }
 
 fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
@@ -978,5 +1022,20 @@ mod tests {
         client.read_exact(&mut rest).unwrap();
         assert_eq!(&rest, b"AGENT");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn worker_ping_requires_current_version() {
+        assert!(worker_version_is_current(env!("CARGO_PKG_VERSION")));
+        assert!(!worker_version_is_current(""));
+        assert!(!worker_version_is_current("0.0.0"));
+    }
+
+    #[test]
+    fn old_unit_pong_deserializes_as_stale_version() {
+        match serde_json::from_str::<IpcResponse>(r#"{"t":"pong"}"#).unwrap() {
+            IpcResponse::Pong { version } => assert!(version.is_empty()),
+            other => panic!("unexpected response: {other:?}"),
+        }
     }
 }
