@@ -1119,8 +1119,17 @@ mod tests {
             direct_online: true,
         }));
 
-        let node_b = ShareIrohNode::start("tcp://127.0.0.1:51820", &b, auth_b, tx_b).unwrap();
-        let node_a = ShareIrohNode::start("tcp://127.0.0.1:51820", &a, auth_a, tx_a).unwrap();
+        let node_b = ShareIrohNode::start("relay-disabled://test", &b, auth_b, tx_b).unwrap();
+        let node_a = ShareIrohNode::start("relay-disabled://test", &a, auth_a, tx_a).unwrap();
+        let mut candidates = node_b.candidates();
+        if let Some(port) = candidates
+            .iter()
+            .filter_map(|c| c.parse::<std::net::SocketAddr>().ok())
+            .next()
+            .map(|addr| addr.port())
+        {
+            candidates.insert(0, format!("127.0.0.1:{port}"));
+        }
         let presence = PeerPresence {
             kind: "direct".into(),
             relation_id: b.direct_lookup_id.clone(),
@@ -1130,7 +1139,7 @@ mod tests {
             fingerprint: b.fingerprint.clone(),
             node_id: b.node_id.clone(),
             relay_url: String::new(),
-            candidates: node_b.candidates(),
+            candidates,
             expires_at: crate::share::core_now_secs() + 300,
             nonce: "test".into(),
             proof: String::new(),

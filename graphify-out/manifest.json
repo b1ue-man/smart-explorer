@@ -160,9 +160,9 @@
     "semantic_hash": "966169f8d0ede027daa4cf9cb49969b9"
   },
   "app/core/init.rs": {
-    "mtime": 1782332827.557098,
-    "ast_hash": "26904b74cf648cd6e150cff764bdad01",
-    "semantic_hash": "26904b74cf648cd6e150cff764bdad01"
+    "mtime": 1782372834.2501009,
+    "ast_hash": "b25fb0493b0c9052b7b9d56521aa39c5",
+    "semantic_hash": "b25fb0493b0c9052b7b9d56521aa39c5"
   },
   "app/core/job_editor.rs": {
     "mtime": 1781859538.0986621,
@@ -350,9 +350,9 @@
     "semantic_hash": "6944382863da6bfa1efadcdfb0a5d38c"
   },
   "bin/smart_explorer_updater.rs": {
-    "mtime": 1781981573.8006802,
-    "ast_hash": "91221b7319e93ba228fef5e2ea780255",
-    "semantic_hash": "91221b7319e93ba228fef5e2ea780255"
+    "mtime": 1782372891.2394598,
+    "ast_hash": "781c4be036682663094cf3b9ec958969",
+    "semantic_hash": "781c4be036682663094cf3b9ec958969"
   },
   "bisync/core/paths.rs": {
     "mtime": 1781866442.7690866,
@@ -485,9 +485,9 @@
     "semantic_hash": "f998c4b2a0b0319b57a369e40b0eb936"
   },
   "daemon/mod.rs": {
-    "mtime": 1782332762.4084942,
-    "ast_hash": "881ea8460b6baabfc5d54f55b1ac90f3",
-    "semantic_hash": "881ea8460b6baabfc5d54f55b1ac90f3"
+    "mtime": 1782372831.0096924,
+    "ast_hash": "0e7a2b5d501c59837bdc9768c65f459d",
+    "semantic_hash": "0e7a2b5d501c59837bdc9768c65f459d"
   },
   "daemon/os/linux_os/platform.rs": {
     "mtime": 1781981257.2482092,
@@ -500,9 +500,9 @@
     "semantic_hash": "5d2d0be38dd70e1766e054e053c496da"
   },
   "daemon/os/shared/ipc.rs": {
-    "mtime": 1782338315.8112,
-    "ast_hash": "a46ba2ba1d9b947c1accee063e596752",
-    "semantic_hash": "a46ba2ba1d9b947c1accee063e596752"
+    "mtime": 1782372916.5198164,
+    "ast_hash": "c96ac6bc8256ce6eda545b2c7435e4f6",
+    "semantic_hash": "c96ac6bc8256ce6eda545b2c7435e4f6"
   },
   "daemon/os/shared/job.rs": {
     "mtime": 1781866442.8372824,
@@ -785,9 +785,9 @@
     "semantic_hash": "993045f8db1fcc0d7ab7436c2e7db264"
   },
   "share/core/backend.rs": {
-    "mtime": 1782332972.2143235,
-    "ast_hash": "52e12b716176d1cd15db0454f03fcfbd",
-    "semantic_hash": "52e12b716176d1cd15db0454f03fcfbd"
+    "mtime": 1782373259.0894003,
+    "ast_hash": "5e1e94f340d3605acbd929769eb0278a",
+    "semantic_hash": "5e1e94f340d3605acbd929769eb0278a"
   },
   "share/core/crypto.rs": {
     "mtime": 1782312173.597607,
@@ -965,9 +965,9 @@
     "semantic_hash": "6a4ce9b1a2540e9a80bc61a7d83b8793"
   },
   "updater/os/windows.rs": {
-    "mtime": 1782290069.8633103,
-    "ast_hash": "a8a6c692a4508ec8f55551a037270cff",
-    "semantic_hash": "a8a6c692a4508ec8f55551a037270cff"
+    "mtime": 1782374080.4624765,
+    "ast_hash": "a543b0f4b499dd8cecfc90911f741656",
+    "semantic_hash": "a543b0f4b499dd8cecfc90911f741656"
   },
   "vfs/core/cache.rs": {
     "mtime": 1781866442.995648,

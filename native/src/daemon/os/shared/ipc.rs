@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend_server::serve_backend;
-use super::state::{clear_stop, is_running, log, stop_requested};
+use super::state::{clear_heartbeat, clear_stop, log, stop_requested};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
 const IPC_TOKEN_FILE: &str = "daemon.token";
@@ -599,7 +599,7 @@ fn configure_service(svc: &crate::share::ShareService, profiles: &crate::share::
 pub fn open_share_backend(
     target: crate::share::PeerOpenTarget,
 ) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String> {
-    ensure_running_for_client();
+    ensure_worker_ready();
     let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
     let mut last = "Background-Worker nicht erreichbar".to_string();
     for _ in 0..30 {
@@ -639,6 +639,8 @@ pub fn open_share_backend(
                             Err(e) => {
                                 last = format!("Worker-Backend: {e}");
                                 clear_stop();
+                                clear_heartbeat();
+                                clear_ipc_addr();
                                 crate::autostart::spawn_daemon_now();
                                 std::thread::sleep(Duration::from_millis(300));
                                 continue;
@@ -652,6 +654,8 @@ pub fn open_share_backend(
             }
             None => {
                 clear_stop();
+                clear_heartbeat();
+                clear_ipc_addr();
                 crate::autostart::spawn_daemon_now();
                 std::thread::sleep(Duration::from_millis(300));
             }
@@ -661,15 +665,17 @@ pub fn open_share_backend(
 }
 
 pub fn refresh_share_worker() {
+    ensure_worker_ready();
     if let (Ok(token), Some(addr)) = (read_token(), read_ipc_addr()) {
         if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
             let _ = write_request(&mut stream, &IpcRequest::RefreshShare { token });
+            let _ = read_response(&mut stream);
         }
     }
 }
 
 pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
-    ensure_running_for_client();
+    ensure_worker_ready();
     let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
@@ -684,7 +690,7 @@ pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
 }
 
 pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
-    ensure_running_for_client();
+    ensure_worker_ready();
     let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
@@ -698,12 +704,42 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
     }
 }
 
-fn ensure_running_for_client() {
+pub fn ensure_worker_ready() {
     let _ = crate::autostart::enable();
-    if !is_running() {
-        clear_stop();
-        crate::autostart::spawn_daemon_now();
+    if ping_worker(Duration::from_millis(700)) {
+        return;
     }
+
+    clear_stop();
+    clear_heartbeat();
+    clear_ipc_addr();
+    crate::autostart::spawn_daemon_now();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if ping_worker(Duration::from_millis(700)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn ping_worker(timeout: Duration) -> bool {
+    let Ok(token) = read_token() else {
+        return false;
+    };
+    let Some(addr) = read_ipc_addr() else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    if write_request(&mut stream, &IpcRequest::Ping { token }).is_err() {
+        return false;
+    }
+    matches!(read_response(&mut stream), Ok(IpcResponse::Pong))
 }
 
 fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
@@ -761,6 +797,10 @@ fn default_home() -> String {
 
 fn ipc_addr_path() -> std::path::PathBuf {
     crate::support_dirs::sync_data_dir().join(IPC_ADDR_FILE)
+}
+
+fn clear_ipc_addr() {
+    let _ = std::fs::remove_file(ipc_addr_path());
 }
 
 fn ipc_token_path() -> std::path::PathBuf {

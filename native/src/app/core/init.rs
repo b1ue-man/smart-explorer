@@ -18,6 +18,7 @@ impl App {
             crate::daemon::clear_stop();
             crate::autostart::spawn_daemon_now();
         }
+        crate::daemon::ensure_worker_ready();
         let home = dirs_home();
         let default_share_path = home.to_string_lossy().replace('\\', "/");
         let share_identity = crate::share::ShareIdentity::load_or_create(default_device_name());
