@@ -397,10 +397,15 @@ pub struct App {
     pub(in crate::app) share_direct_requests: Vec<crate::share::PeerPresence>,
     pub(in crate::app) share_diag_log: String,
     pub(in crate::app) share_manual_stop: bool,
+    pub(in crate::app) share_poll_rx:
+        Option<Receiver<Result<crate::daemon::ShareWorkerSnapshot, String>>>,
+    pub(in crate::app) share_next_poll_at: Instant,
+    pub(in crate::app) share_last_op_log_at: Instant,
     pub(in crate::app) share_open_rx: Option<
         Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>,
     >,
     pub(in crate::app) share_opening: Option<crate::share::PeerOpenTarget>,
+    pub(in crate::app) share_opening_origin: Option<String>,
     pub(in crate::app) share_status: String,
     pub(in crate::app) share_worker_running: bool,
     pub(in crate::app) share_worker_relay_url: String,
