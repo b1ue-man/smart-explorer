@@ -180,6 +180,11 @@ fn write_response(stream: &mut TcpStream, response: &IpcResponse) -> io::Result<
     stream.flush()
 }
 
+fn set_stream_timeout(stream: &TcpStream, timeout: Option<Duration>) {
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+}
+
 fn require_token(want: &str, got: &str) -> io::Result<()> {
     if want == got {
         Ok(())
@@ -626,6 +631,7 @@ pub fn open_share_backend(
             .and_then(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok())
         {
             Some(mut stream) => {
+                set_stream_timeout(&stream, Some(Duration::from_secs(3)));
                 let req = IpcRequest::OpenShare {
                     token: token.clone(),
                     target: target.clone(),
@@ -645,6 +651,7 @@ pub fn open_share_backend(
                 };
                 match response {
                     IpcResponse::OpenOk { label, status } => {
+                        set_stream_timeout(&stream, None);
                         let read = stream.try_clone().map_err(|e| e.to_string())?;
                         let inner: crate::vfs::BackendHandle = Arc::new(UnavailableBackend {
                             label: label.clone(),
@@ -688,6 +695,7 @@ pub fn refresh_share_worker() {
     ensure_worker_ready();
     if let (Ok(token), Some(addr)) = (read_token(), read_ipc_addr()) {
         if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+            set_stream_timeout(&stream, Some(Duration::from_secs(1)));
             let _ = write_request(&mut stream, &IpcRequest::RefreshShare { token });
             let _ = read_response(&mut stream);
         }
@@ -700,6 +708,7 @@ pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
         .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    set_stream_timeout(&stream, Some(Duration::from_secs(2)));
     write_request(&mut stream, &IpcRequest::ShareCommand { token, cmd })
         .map_err(|e| e.to_string())?;
     match read_response(&mut stream).map_err(|e| e.to_string())? {
@@ -715,6 +724,7 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
         .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    set_stream_timeout(&stream, Some(Duration::from_millis(900)));
     write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
         .map_err(|e| e.to_string())?;
     match read_response(&mut stream).map_err(|e| e.to_string())? {

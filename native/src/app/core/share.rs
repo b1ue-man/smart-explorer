@@ -1,6 +1,10 @@
 use super::prelude::*;
 use super::*;
 
+const SHARE_ACTIVE_POLL: std::time::Duration = std::time::Duration::from_millis(300);
+const SHARE_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(900);
+const SHARE_DIAG_MAX_BYTES: usize = 48 * 1024;
+
 impl App {
     pub(in crate::app) fn ensure_share(&mut self) -> bool {
         self.share_manual_stop = false;
@@ -61,7 +65,28 @@ impl App {
             self.error_msg = Some(format!("Share-Profile speichern: {}", e));
         }
         self.configure_share_service();
-        crate::daemon::refresh_share_worker();
+    }
+
+    fn persist_share_profiles_only(&mut self) {
+        if let Err(e) = self.share_profiles.save() {
+            self.error_msg = Some(format!("Share-Profile speichern: {}", e));
+        }
+    }
+
+    fn append_share_diag(&mut self, line: impl AsRef<str>) {
+        self.share_diag_log.push_str(line.as_ref());
+        if !self.share_diag_log.ends_with('\n') {
+            self.share_diag_log.push('\n');
+        }
+        trim_share_diag_log(&mut self.share_diag_log);
+    }
+
+    fn should_log_share_op(&mut self) -> bool {
+        if self.share_last_op_log_at.elapsed() < std::time::Duration::from_secs(2) {
+            return false;
+        }
+        self.share_last_op_log_at = Instant::now();
+        true
     }
 
     pub(in crate::app) fn drain_quickshare(&mut self) {
@@ -80,6 +105,14 @@ impl App {
         if let Some(rx) = &self.share_open_rx {
             if let Ok(result) = rx.try_recv() {
                 let opening = self.share_opening.clone();
+                let opening_origin = self.share_opening_origin.clone();
+                let current_open_origin = self.share_open_context_key();
+                let still_current_open = share_open_result_is_current(
+                    opening.as_ref(),
+                    self.share_opening.as_ref(),
+                    opening_origin.as_deref(),
+                    &current_open_origin,
+                );
                 match result {
                     Ok((label, backend, status)) => {
                         let endpoint_prefix =
@@ -88,7 +121,12 @@ impl App {
                             .as_ref()
                             .map(|target| self.share_target_is_open(target))
                             .unwrap_or(false);
-                        if !already_open {
+                        if !still_current_open {
+                            self.notice = Some((
+                                format!("Share-Verbindung bereit: {}", label),
+                                std::time::Instant::now(),
+                            ));
+                        } else if !already_open {
                             self.remote = Some(crate::connect::RemoteState {
                                 backend: cache_remote(backend),
                                 label: label.clone(),
@@ -112,16 +150,56 @@ impl App {
                     }
                     Err(e) => {
                         self.mark_opening_status(crate::share::ShareStatus::Failed(e.clone()));
-                        self.error_msg = Some(format!("Share-Server: {}", e));
+                        if still_current_open {
+                            self.error_msg = Some(format!("Share-Server: {}", e));
+                        } else {
+                            self.append_share_diag(format!("Verspaeteter Share-Open Fehler: {e}"));
+                        }
                     }
                 }
                 self.share_open_rx = None;
                 self.share_opening = None;
-                self.save_share_profiles();
+                self.share_opening_origin = None;
+                self.persist_share_profiles_only();
             }
         }
 
-        let snapshot = match crate::daemon::drain_share_worker_events() {
+        let mut poll_result = None;
+        if let Some(rx) = &self.share_poll_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    poll_result = Some(result);
+                    self.share_poll_rx = None;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    poll_result = Some(Err("Share-Worker Poll abgebrochen".to_string()));
+                    self.share_poll_rx = None;
+                }
+            }
+        }
+        if self.share_poll_rx.is_none()
+            && Instant::now() >= self.share_next_poll_at
+            && (self.share_profiles.auto_connect
+                || self.share_worker_running
+                || !self.share_server.trim().is_empty())
+        {
+            let (tx, rx) = unbounded();
+            std::thread::Builder::new()
+                .name("share-ui-poll".into())
+                .spawn(move || {
+                    let _ = tx.send(crate::daemon::drain_share_worker_events());
+                })
+                .ok();
+            self.share_poll_rx = Some(rx);
+            self.share_next_poll_at = Instant::now() + SHARE_ACTIVE_POLL;
+        }
+
+        let Some(poll_result) = poll_result else {
+            return;
+        };
+
+        let snapshot = match poll_result {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 if self.share_profiles.auto_connect
@@ -130,9 +208,16 @@ impl App {
                 {
                     self.share_status = format!("Share-Worker nicht erreichbar: {e}");
                 }
+                self.share_next_poll_at = Instant::now() + SHARE_IDLE_POLL;
                 return;
             }
         };
+        self.share_next_poll_at = Instant::now()
+            + if snapshot.running || self.share_profiles.auto_connect {
+                SHARE_ACTIVE_POLL
+            } else {
+                SHARE_IDLE_POLL
+            };
         self.share_worker_running = snapshot.running;
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
@@ -151,25 +236,32 @@ impl App {
         let events: Vec<crate::share::ShareEvent> = snapshot.events;
         let mut changed = false;
         let mut auto_open_target: Option<crate::share::PeerOpenTarget> = None;
+        let can_auto_open = self.share_can_auto_open();
         for ev in events {
             use crate::share::ShareEvent as E;
             match ev {
                 E::Status(s) => {
-                    self.share_status = s.clone();
-                    self.share_diag_log.push_str(&format!("{s}\n"));
+                    if s.starts_with("Share-Op ") {
+                        if self.should_log_share_op() {
+                            self.share_status = s.clone();
+                            self.append_share_diag(s);
+                        }
+                    } else {
+                        self.share_status = s.clone();
+                        self.append_share_diag(s);
+                    }
                 }
                 E::Error(e) => {
                     self.share_status = format!("Fehler: {}", e);
-                    self.share_diag_log.push_str(&format!("Fehler: {e}\n"));
+                    self.append_share_diag(format!("Fehler: {e}"));
                 }
                 E::ServerConnected => {
                     self.share_status = "Share-Server verbunden".to_string();
-                    self.share_diag_log.push_str("Server verbunden\n");
+                    self.append_share_diag("Server verbunden");
                 }
                 E::ServerDisconnected(e) => {
                     self.share_status = format!("Share-Server getrennt: {}", e);
-                    self.share_diag_log
-                        .push_str(&format!("Server getrennt: {e}\n"));
+                    self.append_share_diag(format!("Server getrennt: {e}"));
                 }
                 E::DirectAvailable {
                     lookup_id,
@@ -209,8 +301,7 @@ impl App {
                         c.presence = Some(presence);
                         if c.auto_open
                             && c.access_state == crate::share::DirectAccessState::Accepted
-                            && self.share_opening.is_none()
-                            && self.remote.is_none()
+                            && can_auto_open
                         {
                             auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
                                 contact_id: c.id.clone(),
@@ -256,7 +347,7 @@ impl App {
                             continue;
                         }
                         Some(_) => {
-                            self.share_diag_log.push_str(&format!(
+                            self.append_share_diag(format!(
                                 "Direct-Anfrage Identitaetskonflikt: {} / {}\n",
                                 presence.device_name, presence.device_id
                             ));
@@ -283,7 +374,7 @@ impl App {
                         "Anfrage von {} fuer deinen Direkt-Code",
                         presence.device_name
                     );
-                    self.share_diag_log.push_str(&format!(
+                    self.append_share_diag(format!(
                         "Direct-Anfrage: lookup={}, device={}, fp={}, candidates={:?}\n",
                         lookup_id, presence.device_name, presence.fingerprint, presence.candidates
                     ));
@@ -329,8 +420,7 @@ impl App {
                             c.status = crate::share::ShareStatus::Available;
                             c.last_error = None;
                             changed = true;
-                            if c.auto_open && self.share_opening.is_none() && self.remote.is_none()
-                            {
+                            if c.auto_open && can_auto_open {
                                 auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
                                     contact_id: c.id.clone(),
                                 });
@@ -391,7 +481,7 @@ impl App {
             }
         }
         if changed {
-            self.save_share_profiles();
+            self.persist_share_profiles_only();
         }
         if let Some(target) = auto_open_target {
             self.open_share_target(target);
@@ -458,6 +548,7 @@ impl App {
             }
         }
         self.share_opening = Some(target.clone());
+        self.share_opening_origin = Some(self.share_open_context_key());
         self.mark_target_status(&target, crate::share::ShareStatus::Connecting);
         let (tx, rx) = unbounded();
         std::thread::Builder::new()
@@ -478,6 +569,23 @@ impl App {
             .as_deref()
             .map(|prefix| prefix == target.endpoint_prefix())
             .unwrap_or(false)
+    }
+
+    fn share_open_context_key(&self) -> String {
+        let endpoint = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.endpoint_prefix.clone())
+            .unwrap_or_else(|| "local".to_string());
+        format!("{endpoint}|{}", self.root_path)
+    }
+
+    fn share_can_auto_open(&self) -> bool {
+        self.root_path.is_empty()
+            && self.remote.is_none()
+            && self.net_conn.is_none()
+            && self.share_opening.is_none()
+            && !self.scan_running
     }
 
     fn mark_target_status(
@@ -797,7 +905,7 @@ impl App {
                             .find(|c| c.id == id)
                         {
                             c.auto_connect = true;
-                            c.auto_open = true;
+                            c.auto_open = false;
                             c.status = crate::share::ShareStatus::WaitingForAccess;
                         }
                         self.share_direct_code_input.clear();
@@ -827,6 +935,7 @@ impl App {
         let mut remove: Option<String> = None;
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
         let mut request_direct: Option<String> = None;
+        let mut pending_diag: Option<String> = None;
         let mut changed = false;
         for c in &mut self.share_profiles.direct_contacts {
             ui.horizontal_wrapped(|ui| {
@@ -873,7 +982,7 @@ impl App {
                             )
                         })
                         .unwrap_or_else(|| "keine Presence".to_string());
-                    self.share_diag_log.push_str(&format!(
+                    pending_diag = Some(format!(
                         "Direct {}: lookup={}, fp={}, status={}, {}\n",
                         c.display_name,
                         c.lookup_id,
@@ -881,7 +990,6 @@ impl App {
                         c.status.label(),
                         presence
                     ));
-                    self.share_tab = 3;
                 }
                 if ui.button("Fingerprint").clicked() {
                     ui.ctx().copy_text(c.expected_fingerprint.clone());
@@ -897,6 +1005,10 @@ impl App {
                     remove = Some(c.id.clone());
                 }
             });
+        }
+        if let Some(line) = pending_diag {
+            self.append_share_diag(line);
+            self.share_tab = 3;
         }
         if let Some(id) = remove {
             self.share_profiles.direct_contacts.retain(|c| c.id != id);
@@ -1000,6 +1112,7 @@ impl App {
         );
         let mut remove_room: Option<String> = None;
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
+        let mut pending_diag: Option<String> = None;
         let mut changed = false;
         for room in &mut self.share_profiles.rooms {
             ui.horizontal_wrapped(|ui| {
@@ -1075,7 +1188,7 @@ impl App {
                                 )
                             })
                             .unwrap_or_else(|| "keine Presence".to_string());
-                        self.share_diag_log.push_str(&format!(
+                        pending_diag = Some(format!(
                             "Raum {} / {}: fp={}, status={}, {}\n",
                             room.name,
                             member.device_name,
@@ -1083,7 +1196,6 @@ impl App {
                             member.status.label(),
                             presence
                         ));
-                        self.share_tab = 3;
                     }
                     if ui.button("Fingerprint").clicked() {
                         ui.ctx().copy_text(member.fingerprint.clone());
@@ -1098,6 +1210,10 @@ impl App {
                     }
                 });
             }
+        }
+        if let Some(line) = pending_diag {
+            self.append_share_diag(line);
+            self.share_tab = 3;
         }
         if let Some(id) = remove_room {
             self.share_profiles.rooms.retain(|r| r.id != id);
@@ -1171,7 +1287,7 @@ impl App {
                 ui.add(egui::Label::new(format!("{} ->", root.label)).wrap());
                 share_value_field(ui, &root.path);
                 if ui.button("Test").clicked() {
-                    self.share_diag_log.push_str(&format!(
+                    self.append_share_diag(format!(
                         "Freigabe-Test {}: {}\n",
                         root.label,
                         if std::path::Path::new(&root.path).exists() {
@@ -1287,18 +1403,16 @@ impl App {
                 self.share_cmd(crate::share::ShareCmd::Refresh);
             }
             if ui.button("Alle Peers pruefen").clicked() {
-                self.share_diag_log
-                    .push_str("Peer-Pruefung ueber Oeffnen/Diagnose pro Geraet\n");
+                self.append_share_diag("Peer-Pruefung ueber Oeffnen/Diagnose pro Geraet");
             }
             if ui.button("Aktiven Peer pruefen").clicked() {
-                self.share_diag_log
-                    .push_str("Aktiver Peer: Root-Probe laeuft beim Oeffnen\n");
+                self.append_share_diag("Aktiver Peer: Root-Probe laeuft beim Oeffnen");
             }
             if ui.button("Log kopieren").clicked() {
                 ui.ctx().copy_text(self.share_diag_log.clone());
             }
             if ui.button("Security-Details anzeigen").clicked() {
-                self.share_diag_log.push_str(&format!(
+                self.append_share_diag(format!(
                     "device_id={}\nnode_id={}\nfingerprint={}\niroh=aktiv wenn verbunden\nrelay={}\nkandidaten={:?}\n",
                     self.share_identity.device_id,
                     self.share_identity.node_id,
@@ -1425,4 +1539,82 @@ fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
         parts.push("gespeicherte Verbindungen".to_string());
     }
     parts.join(", ")
+}
+
+fn share_open_result_is_current(
+    opening: Option<&crate::share::PeerOpenTarget>,
+    active: Option<&crate::share::PeerOpenTarget>,
+    opening_origin: Option<&str>,
+    current_origin: &str,
+) -> bool {
+    match (opening, active, opening_origin) {
+        (Some(opening), Some(active), Some(origin)) => {
+            opening == active && origin == current_origin
+        }
+        _ => false,
+    }
+}
+
+fn trim_share_diag_log(log: &mut String) {
+    if log.len() <= SHARE_DIAG_MAX_BYTES {
+        return;
+    }
+    let keep_from = log.len() - SHARE_DIAG_MAX_BYTES;
+    let drain_to = log[keep_from..]
+        .find('\n')
+        .map(|idx| keep_from + idx + 1)
+        .unwrap_or(keep_from);
+    log.drain(..drain_to);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_share_open_result_is_rejected() {
+        let target = crate::share::PeerOpenTarget::Direct {
+            contact_id: "contact-a".to_string(),
+        };
+        let other = crate::share::PeerOpenTarget::Direct {
+            contact_id: "contact-b".to_string(),
+        };
+
+        assert!(share_open_result_is_current(
+            Some(&target),
+            Some(&target),
+            Some("local|C:/Work"),
+            "local|C:/Work"
+        ));
+        assert!(!share_open_result_is_current(
+            Some(&target),
+            Some(&target),
+            Some("local|C:/Work"),
+            "local|C:/Other"
+        ));
+        assert!(!share_open_result_is_current(
+            Some(&target),
+            Some(&other),
+            Some("local|C:/Work"),
+            "local|C:/Work"
+        ));
+        assert!(!share_open_result_is_current(
+            Some(&target),
+            Some(&target),
+            None,
+            "local|C:/Work"
+        ));
+    }
+
+    #[test]
+    fn share_diag_log_is_bounded_on_line_boundary() {
+        let mut log = String::new();
+        for i in 0..3000 {
+            log.push_str(&format!("line {i:04} {}\n", "x".repeat(40)));
+            trim_share_diag_log(&mut log);
+        }
+        assert!(log.len() <= SHARE_DIAG_MAX_BYTES);
+        assert!(!log.starts_with('x'));
+        assert!(log.contains("line 2999"));
+    }
 }
