@@ -1,13 +1,13 @@
 use crate::syncjobs::{SyncJob, Trigger};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::ipc::{start_listener, ShareHost};
 use super::job::run_one;
 use super::platform;
 use super::state::{
-    cadence_secs, clear_heartbeat, clear_stop, is_running, log, now_secs, paused, stop_requested,
+    cadence_secs, clear_heartbeat, clear_stop, log, now_secs, paused, stop_requested,
     write_heartbeat,
 };
 
@@ -103,20 +103,9 @@ pub(crate) fn wildcard_ci(pat: &str, s: &str) -> bool {
 
 /// The headless loop.
 pub fn run_daemon() {
-    // Handoff: if a stop was requested (e.g. an updated GUI cycling the daemon),
-    // wait for the previous instance to exit before taking over. Otherwise the
-    // single-instance guard applies - a fresh heartbeat means one already runs.
-    if stop_requested() {
-        for _ in 0..15 {
-            if !is_running() {
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        clear_stop();
-    } else if is_running() {
+    let Some(_instance_guard) = acquire_daemon_instance_guard(Duration::from_secs(20)) else {
         return;
-    }
+    };
     clear_stop();
     log("daemon started");
     write_heartbeat();
@@ -236,6 +225,68 @@ pub fn run_daemon() {
             slept += 2;
         }
     }
+}
+
+#[cfg(windows)]
+struct DaemonInstanceGuard(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for DaemonInstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::System::Threading::ReleaseMutex(self.0);
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn acquire_daemon_instance_guard(timeout: Duration) -> Option<DaemonInstanceGuard> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match try_acquire_daemon_mutex() {
+            Ok(Some(guard)) => return Some(guard),
+            Ok(None) if stop_requested() && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Ok(None) => return None,
+            Err(e) => {
+                log(&format!("daemon single-instance lock failed: {e}"));
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn try_acquire_daemon_mutex() -> std::io::Result<Option<DaemonInstanceGuard>> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+
+    let name: Vec<u16> = std::ffi::OsStr::new(r"Local\SmartExplorerSyncDaemon")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr());
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(handle);
+            return Ok(None);
+        }
+        Ok(Some(DaemonInstanceGuard(handle)))
+    }
+}
+
+#[cfg(not(windows))]
+struct DaemonInstanceGuard;
+
+#[cfg(not(windows))]
+fn acquire_daemon_instance_guard(_timeout: Duration) -> Option<DaemonInstanceGuard> {
+    Some(DaemonInstanceGuard)
 }
 
 fn spawn_job(job: &SyncJob, active: &mut HashSet<String>, done: &Sender<String>) {
