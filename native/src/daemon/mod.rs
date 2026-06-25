@@ -28,7 +28,8 @@ mod schedule;
 mod state;
 
 pub use ipc::{
-    drain_share_worker_events, open_share_backend, refresh_share_worker, send_share_command,
+    drain_share_worker_events, ensure_worker_ready, open_share_backend, refresh_share_worker,
+    send_share_command,
 };
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
