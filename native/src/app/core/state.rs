@@ -137,6 +137,9 @@ pub struct App {
     /// Backend the drag started from when the source view is remote (None =
     /// local). Lets a drop download/upload/cross-copy as needed.
     pub(in crate::app) drag_src: Option<crate::vfs::BackendHandle>,
+    /// Filter that was active in the source view when a drag started. Remote
+    /// folder copies use it to expand selected folders like the recursive view.
+    pub(in crate::app) drag_filter: Option<(FilterDef, String)>,
     /// Tab the drag started from (drop onto the same tab is a no-op).
     pub(in crate::app) drag_source_tab: usize,
     /// Once we've handed an active drag to the OS (drag-out), don't re-trigger.

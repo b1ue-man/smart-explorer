@@ -27,6 +27,8 @@ impl App {
                 ));
                 return;
             }
+            let filter = (items.iter().any(|(_, _, is_dir)| *is_dir) && self.filter_is_active())
+                .then(|| (self.filter.clone(), self.root_prefix()));
             let backend = rs.backend.clone();
             let n = items.len();
             let (tx, rx) = unbounded();
@@ -38,7 +40,7 @@ impl App {
             std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
-                    let local = download_remote_clipboard_items(&*backend, &items);
+                    let local = download_remote_clipboard_items(&*backend, &items, filter);
                     let _ = tx.send(local);
                 })
                 .ok();

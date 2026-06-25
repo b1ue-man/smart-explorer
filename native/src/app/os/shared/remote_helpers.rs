@@ -370,6 +370,92 @@ struct RemoteFileEntry {
     size: u64,
 }
 
+struct RemoteFilterCtx {
+    cf: CompiledFilter,
+    filter: FilterDef,
+    root_prefix: String,
+}
+
+impl RemoteFilterCtx {
+    fn new(filter: FilterDef, root_prefix: String) -> Self {
+        Self {
+            cf: CompiledFilter::compile(&filter),
+            filter,
+            root_prefix: root_prefix.trim_end_matches('/').to_string(),
+        }
+    }
+
+    fn depth_for(&self, path: &str) -> u32 {
+        let path = path.trim_end_matches('/');
+        let root = self.root_prefix.as_str();
+        if path == root {
+            return 0;
+        }
+        let rel = if root.is_empty() {
+            path.trim_start_matches('/')
+        } else {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .trim_start_matches('/')
+        };
+        rel.split('/').filter(|s| !s.is_empty()).count() as u32
+    }
+
+    fn matches(&self, e: &FileEntry) -> bool {
+        self.cf.matches(e, &self.root_prefix)
+    }
+
+    fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
+        self.filter.include_dirs
+            && (!e.hidden || self.filter.include_hidden)
+            && (!e.system || self.filter.include_system)
+    }
+}
+
+fn compile_remote_filter(filter: Option<(FilterDef, String)>) -> Option<RemoteFilterCtx> {
+    filter.map(|(filter, root_prefix)| RemoteFilterCtx::new(filter, root_prefix))
+}
+
+fn remote_ext_of(name: &str, is_dir: bool) -> String {
+    if is_dir {
+        return String::new();
+    }
+    match name.rfind('.') {
+        Some(i) if i + 1 < name.len() && i > 0 => name[i + 1..].to_lowercase(),
+        _ => String::new(),
+    }
+}
+
+fn remote_parent(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_default()
+}
+
+fn remote_file_entry(
+    path: &str,
+    parent: &str,
+    meta: &crate::vfs::VfsMeta,
+    depth: u32,
+) -> FileEntry {
+    FileEntry {
+        path: Arc::from(path),
+        parent: Arc::from(parent),
+        name: Arc::from(meta.name.as_str()),
+        ext: Arc::from(remote_ext_of(&meta.name, meta.is_dir).as_str()),
+        size: meta.size,
+        mtime_ms: meta.mtime_ms,
+        btime_ms: meta.btime_ms,
+        is_dir: meta.is_dir,
+        is_symlink: meta.is_symlink,
+        hidden: meta.hidden,
+        system: meta.system,
+        depth,
+        id: meta.id.as_deref().map(Arc::from),
+    }
+}
+
 fn send_transfer_progress(
     tx: &crossbeam_channel::Sender<TransferMsg>,
     progress: &TransferProgress,
@@ -552,6 +638,8 @@ fn collect_remote_entries(
     be: &dyn crate::vfs::Backend,
     src: &str,
     rel: String,
+    filter: Option<&RemoteFilterCtx>,
+    selected_root: bool,
     files: &mut Vec<RemoteFileEntry>,
     dirs: &mut Vec<String>,
     errors: &mut Vec<String>,
@@ -564,7 +652,16 @@ fn collect_remote_entries(
         }
     };
     if meta.is_dir {
-        dirs.push(rel.clone());
+        if filter.is_none() {
+            dirs.push(rel.clone());
+        }
+        if let Some(ctx) = filter {
+            let parent = remote_parent(src);
+            let entry = remote_file_entry(src, &parent, &meta, ctx.depth_for(src));
+            if !selected_root && !ctx.allows_dir_descendants(&entry) {
+                return;
+            }
+        }
         let entries = match be.list_dir(src) {
             Ok(entries) => entries,
             Err(e) => {
@@ -579,9 +676,19 @@ fn collect_remote_entries(
             } else {
                 format!("{}/{}", rel, entry.name)
             };
-            collect_remote_entries(be, &child_src, child_rel, files, dirs, errors);
+            collect_remote_entries(
+                be, &child_src, child_rel, filter, false, files, dirs, errors,
+            );
         }
-    } else {
+    } else if selected_root
+        || filter
+            .map(|ctx| {
+                let parent = remote_parent(src);
+                let entry = remote_file_entry(src, &parent, &meta, ctx.depth_for(src));
+                ctx.matches(&entry)
+            })
+            .unwrap_or(true)
+    {
         files.push(RemoteFileEntry {
             src: src.to_string(),
             rel,
@@ -659,10 +766,11 @@ fn download_remote_dir_for_clipboard(
     be: &dyn crate::vfs::Backend,
     src: &str,
     local_dir: &Path,
+    filter: Option<&RemoteFilterCtx>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(local_dir);
     std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
-    if be.supports_bulk_tree() {
+    if filter.is_none() && be.supports_bulk_tree() {
         match be.get_tree(src, local_dir) {
             Ok(_) => return Ok(()),
             Err(_) => {
@@ -675,7 +783,19 @@ fn download_remote_dir_for_clipboard(
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     let mut errors = Vec::new();
-    collect_remote_entries(be, src, String::new(), &mut files, &mut dirs, &mut errors);
+    collect_remote_entries(
+        be,
+        src,
+        String::new(),
+        filter,
+        true,
+        &mut files,
+        &mut dirs,
+        &mut errors,
+    );
+    if filter.is_some() && files.is_empty() {
+        return Err("Keine passenden Dateien".to_string());
+    }
     dirs.sort();
     dirs.dedup();
     for dir in dirs {
@@ -699,18 +819,58 @@ fn download_remote_dir_for_clipboard(
 pub(in crate::app) fn download_remote_clipboard_items(
     be: &dyn crate::vfs::Backend,
     items: &[(String, String, bool)],
+    filter: Option<(FilterDef, String)>,
 ) -> Vec<String> {
+    let filter = compile_remote_filter(filter);
     let mut local = Vec::new();
     for (path, name, is_dir) in items {
         if *is_dir {
             let local_dir = open_temp_path(name);
-            if download_remote_dir_for_clipboard(be, path, &local_dir).is_ok() {
+            if download_remote_dir_for_clipboard(be, path, &local_dir, filter.as_ref()).is_ok() {
                 local.push(local_dir.to_string_lossy().to_string());
             } else {
                 let _ = std::fs::remove_dir_all(&local_dir);
             }
         } else {
             let local_name = be.download_name(path, name);
+            if let Ok(p) = download_to_temp(be, path, &local_name) {
+                local.push(p);
+            }
+        }
+    }
+    local
+}
+
+pub(in crate::app) fn download_remote_paths_for_clipboard(
+    be: &dyn crate::vfs::Backend,
+    paths: &[String],
+    filter: Option<(FilterDef, String)>,
+) -> Vec<String> {
+    let filter = compile_remote_filter(filter);
+    let mut local = Vec::new();
+    for path in paths {
+        let meta = match be.stat(path) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        let name = if meta.name.is_empty() {
+            path.trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("datei")
+                .to_string()
+        } else {
+            meta.name.clone()
+        };
+        if meta.is_dir {
+            let local_dir = open_temp_path(&name);
+            if download_remote_dir_for_clipboard(be, path, &local_dir, filter.as_ref()).is_ok() {
+                local.push(local_dir.to_string_lossy().to_string());
+            } else {
+                let _ = std::fs::remove_dir_all(&local_dir);
+            }
+        } else {
+            let local_name = be.download_name(path, &name);
             if let Ok(p) = download_to_temp(be, path, &local_name) {
                 local.push(p);
             }
@@ -743,6 +903,12 @@ mod clipboard_tests {
         path.to_string_lossy().replace('\\', "/")
     }
 
+    fn txt_filter() -> FilterDef {
+        let mut filter = FilterDef::new();
+        filter.extensions = vec!["txt".to_string()];
+        filter
+    }
+
     #[test]
     fn remote_clipboard_downloads_folder_tree() {
         let remote = temp_dir("remote");
@@ -752,7 +918,7 @@ mod clipboard_tests {
         let be = crate::vfs::LocalBackend::new(&fwd(&remote));
         let item = (format!("{}/Gate", fwd(&remote)), "Gate".to_string(), true);
 
-        let local = download_remote_clipboard_items(&be, &[item]);
+        let local = download_remote_clipboard_items(&be, &[item], None);
 
         assert_eq!(local.len(), 1);
         let local_dir = PathBuf::from(&local[0]);
@@ -763,14 +929,75 @@ mod clipboard_tests {
         let _ = std::fs::remove_dir_all(&remote);
         let _ = std::fs::remove_dir_all(local_dir);
     }
+
+    #[test]
+    fn remote_clipboard_filters_folder_tree() {
+        let remote = temp_dir("remote_filter_clip");
+        std::fs::create_dir_all(remote.join("Gate/sub")).unwrap();
+        std::fs::write(remote.join("Gate/a.txt"), b"alpha").unwrap();
+        std::fs::write(remote.join("Gate/drop.bin"), b"drop").unwrap();
+        std::fs::write(remote.join("Gate/sub/b.txt"), b"beta").unwrap();
+        std::fs::write(remote.join("Gate/sub/drop.md"), b"drop").unwrap();
+        let root = fwd(&remote);
+        let be = crate::vfs::LocalBackend::new(&root);
+        let item = (format!("{root}/Gate"), "Gate".to_string(), true);
+
+        let local = download_remote_clipboard_items(&be, &[item], Some((txt_filter(), root)));
+
+        assert_eq!(local.len(), 1);
+        let local_dir = PathBuf::from(&local[0]);
+        assert_eq!(std::fs::read(local_dir.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(local_dir.join("sub/b.txt")).unwrap(), b"beta");
+        assert!(!local_dir.join("drop.bin").exists());
+        assert!(!local_dir.join("sub/drop.md").exists());
+
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(local_dir);
+    }
+
+    #[test]
+    fn remote_download_filters_selected_folder() {
+        let remote = temp_dir("remote_filter_download");
+        let dest = temp_dir("remote_filter_dest");
+        std::fs::create_dir_all(remote.join("Gate/sub")).unwrap();
+        std::fs::write(remote.join("Gate/a.txt"), b"alpha").unwrap();
+        std::fs::write(remote.join("Gate/drop.bin"), b"drop").unwrap();
+        std::fs::write(remote.join("Gate/sub/b.txt"), b"beta").unwrap();
+        std::fs::write(remote.join("Gate/sub/drop.md"), b"drop").unwrap();
+        let root = fwd(&remote);
+        let be = crate::vfs::LocalBackend::new(&root);
+        let src = format!("{root}/Gate");
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        download_paths_progress(&be, &[src], &fwd(&dest), Some((txt_filter(), root)), &tx);
+
+        let mut done = None;
+        while let Ok(msg) = rx.try_recv() {
+            if let TransferMsg::Done { progress, errors } = msg {
+                done = Some((progress, errors));
+            }
+        }
+        let (progress, errors) = done.expect("download should send Done");
+        assert_eq!(progress.files_total, 2);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(std::fs::read(dest.join("Gate/a.txt")).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(dest.join("Gate/sub/b.txt")).unwrap(), b"beta");
+        assert!(!dest.join("Gate/drop.bin").exists());
+        assert!(!dest.join("Gate/sub/drop.md").exists());
+
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(&dest);
+    }
 }
 
 pub(in crate::app) fn download_paths_progress(
     be: &dyn crate::vfs::Backend,
     paths: &[String],
     dest_local: &str,
+    filter: Option<(FilterDef, String)>,
     tx: &crossbeam_channel::Sender<TransferMsg>,
 ) {
+    let filter = compile_remote_filter(filter);
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     let mut errors = Vec::new();
@@ -785,6 +1012,8 @@ pub(in crate::app) fn download_paths_progress(
             be,
             src,
             name.to_string(),
+            filter.as_ref(),
+            true,
             &mut files,
             &mut dirs,
             &mut errors,
@@ -852,8 +1081,10 @@ pub(in crate::app) fn copy_remote_paths_progress(
     tgt: &dyn crate::vfs::Backend,
     dest_root: &str,
     same_server: bool,
+    filter: Option<(FilterDef, String)>,
     tx: &crossbeam_channel::Sender<TransferMsg>,
 ) {
+    let filter = compile_remote_filter(filter);
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     let mut errors = Vec::new();
@@ -867,6 +1098,8 @@ pub(in crate::app) fn copy_remote_paths_progress(
             src,
             src_path,
             name.to_string(),
+            filter.as_ref(),
+            true,
             &mut files,
             &mut dirs,
             &mut errors,

@@ -397,7 +397,7 @@ impl App {
                     PickerPurpose::CopyDest => self.copy_dest = native,
                     PickerPurpose::DownloadTo { src } => {
                         if let Some(backend) = self.remote.as_ref().map(|rs| rs.backend.clone()) {
-                            self.start_remote_download(backend, vec![src], native);
+                            self.start_remote_download(backend, vec![src], native, None);
                         }
                     }
                 }
