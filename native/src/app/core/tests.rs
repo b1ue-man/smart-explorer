@@ -9,6 +9,7 @@ pub(in crate::app) mod omni_tests {
     fn classify_modes() {
         assert_eq!(omni_mode("report"), OmniMode::Filter);
         assert_eq!(omni_mode(""), OmniMode::Filter);
+        assert_eq!(omni_mode("123"), OmniMode::Filter);
         assert_eq!(omni_mode(">new"), OmniMode::Command);
         assert_eq!(omni_mode("  > refresh"), OmniMode::Command);
         assert_eq!(omni_mode(".."), OmniMode::Path);
