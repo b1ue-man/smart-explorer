@@ -111,7 +111,7 @@ impl App {
 
     pub(in crate::app) fn filter_is_active(&self) -> bool {
         let f = &self.filter;
-        !f.text.is_empty()
+        !f.text.trim().is_empty()
             || !f.extensions.is_empty()
             || f.size.min.is_some()
             || f.size.max.is_some()
