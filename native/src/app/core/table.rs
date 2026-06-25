@@ -242,9 +242,18 @@ impl App {
                     files.retain(|p| is_local_style(p));
                 }
                 if !files.is_empty() {
+                    let has_dir = if self.selection.contains(&dragged) {
+                        self.entries
+                            .iter()
+                            .any(|e| e.is_dir && self.selection.contains(&e.key()))
+                    } else {
+                        self.entries[idx].is_dir
+                    };
                     self.drag_files = files;
                     self.drag_active = true;
                     self.drag_src = self.remote.as_ref().map(|rs| rs.backend.clone());
+                    self.drag_filter = (has_dir && self.filter_is_active())
+                        .then(|| (self.filter.clone(), self.root_prefix()));
                     self.drag_source_tab = self.current_render_tab;
                     self.drag_out_started = false;
                 }

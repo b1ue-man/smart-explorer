@@ -143,6 +143,7 @@ impl App {
             drag_files: Vec::new(),
             drag_active: false,
             drag_src: None,
+            drag_filter: None,
             drag_source_tab: 0,
             drag_out_started: false,
             tab_header_rects: Vec::new(),

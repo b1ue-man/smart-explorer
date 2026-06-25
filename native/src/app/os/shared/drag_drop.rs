@@ -94,6 +94,7 @@ impl App {
             .filter(|p| p.rsplit_once('/').map(|(par, _)| par) != Some(dest_fwd.as_str()))
             .collect();
         let src_backend = self.drag_src.take();
+        let src_filter = self.drag_filter.take();
         if files.is_empty() {
             self.notice = Some((
                 "Dateien sind bereits im Ziel-Ordner.".to_string(),
@@ -126,12 +127,12 @@ impl App {
                     self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
                     return;
                 }
-                self.start_remote_download(be, files, dest_fwd);
+                self.start_remote_download(be, files, dest_fwd, src_filter);
             }
             // remote → remote
             // remote → remote (cross-backend: download to temp, then upload)
             (Some(src), Some(tgt)) => {
-                self.start_remote_to_remote(src, files, tgt, dest_fwd);
+                self.start_remote_to_remote(src, files, tgt, dest_fwd, src_filter);
             }
         }
     }
@@ -147,6 +148,7 @@ impl App {
         files: Vec<String>,
         tgt: crate::vfs::BackendHandle,
         dest_root: String,
+        filter: Option<(FilterDef, String)>,
     ) {
         if self.upload_rx.is_some() {
             self.notice = Some((
@@ -161,7 +163,15 @@ impl App {
         std::thread::Builder::new()
             .name("remote-to-remote".into())
             .spawn(move || {
-                copy_remote_paths_progress(&*src, &files, &*tgt, &dest_root, same_server, &tx);
+                copy_remote_paths_progress(
+                    &*src,
+                    &files,
+                    &*tgt,
+                    &dest_root,
+                    same_server,
+                    filter,
+                    &tx,
+                );
             })
             .ok();
         self.upload_rx = Some(rx);
@@ -193,6 +203,7 @@ impl App {
         backend: crate::vfs::BackendHandle,
         files: Vec<String>,
         dest_local: String,
+        filter: Option<(FilterDef, String)>,
     ) {
         if self.upload_rx.is_some() {
             self.notice = Some((
@@ -206,7 +217,7 @@ impl App {
         std::thread::Builder::new()
             .name("remote-download-multi".into())
             .spawn(move || {
-                download_paths_progress(&*backend, &files, &dest_local, &tx);
+                download_paths_progress(&*backend, &files, &dest_local, filter, &tx);
             })
             .ok();
         self.upload_rx = Some(rx);
@@ -253,18 +264,9 @@ impl App {
                     // needs real local paths). May briefly block on the download.
                     let files = if let Some(be) = self.drag_src.take() {
                         cleanup_after_drag = true;
-                        files
-                            .iter()
-                            .filter_map(|p| {
-                                let name = p
-                                    .trim_end_matches('/')
-                                    .rsplit('/')
-                                    .next()
-                                    .unwrap_or("datei");
-                                download_to(&*be, p, &open_temp_path(name)).ok()
-                            })
-                            .collect()
+                        download_remote_paths_for_clipboard(&*be, &files, self.drag_filter.take())
                     } else {
+                        self.drag_filter = None;
                         files
                     };
                     crate::dragout::drag_out(&files);
@@ -314,6 +316,7 @@ impl App {
             self.drag_active = false;
             self.drag_files.clear();
             self.drag_src = None;
+            self.drag_filter = None;
         }
     }
 
