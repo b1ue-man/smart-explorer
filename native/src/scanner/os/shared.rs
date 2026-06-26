@@ -311,7 +311,7 @@ fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PathBuf>, depth: u32) {
 
             if is_dir && (!is_symlink || scanner.opts.follow_symlinks) {
                 let within_depth = match scanner.opts.max_depth {
-                    Some(max) => depth + 1 <= max,
+                    Some(max) => depth < max,
                     None => true,
                 };
                 if within_depth {

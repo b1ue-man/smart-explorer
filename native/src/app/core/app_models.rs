@@ -5,7 +5,6 @@ pub(in crate::app) const DOWNLOAD_SPACE_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
 pub(in crate::app) const TEMP_SESSION_PID_FILE: &str = "session.pid";
 
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────
-#[cfg(windows)]
 pub(in crate::app) mod menu_ids {
     pub const COPY: u32 = 0x8000;
     pub const CUT: u32 = 0x8001;

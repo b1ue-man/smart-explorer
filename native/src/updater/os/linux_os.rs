@@ -1,34 +1,52 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::archive::{archive_binary, exe_stem, new_old_binary_path, resume_auto_update, set_pin};
+use super::archive::{archive_binary, resume_auto_update, set_pin};
 use super::config::{last_applied_path, updater_error_path};
-use super::feed::Feed;
+use super::core::{replace_file_with_staged, staged_sha256_from_path, verify_sha256};
+use super::feed::{Feed, PayloadSpec};
 
 const INSTALLED_UPDATER: &str = "smart_explorer_updater";
+
+pub(super) fn binary_suffix() -> &'static str {
+    ""
+}
+
+pub(super) fn is_archived_binary(path: &Path) -> bool {
+    path.is_file()
+}
+
+pub(super) fn archived_name_without_binary_suffix(path: &Path) -> Option<&str> {
+    path.file_name().and_then(|s| s.to_str())
+}
+
+pub(super) fn app_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer", "Smart Explorer"],
+        http_names: &["smart_explorer", "Smart%20Explorer"],
+        hash_name: "smart_explorer.sha256",
+    }
+}
+
+pub(super) fn updater_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer_updater", "Smart Explorer Updater"],
+        http_names: &["smart_explorer_updater", "Smart%20Explorer%20Updater"],
+        hash_name: "smart_explorer_updater.sha256",
+    }
+}
 
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
 fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
     let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    let stem = exe_stem(&cur_exe);
-    let pending = cur_exe.with_file_name(format!("{}_update_pending", stem));
-    let old = new_old_binary_path(&cur_exe);
-
-    std::fs::copy(new_exe, &pending).map_err(|e| format!("Kopieren fehlgeschlagen: {}", e))?;
-    std::fs::rename(&cur_exe, &old).map_err(|e| {
-        let _ = std::fs::remove_file(&pending);
-        format!(
-            "Programmdatei kann nicht ersetzt werden ({}): {}",
-            cur_exe.display(),
-            e
-        )
-    })?;
-    if let Err(e) = std::fs::rename(&pending, &cur_exe) {
-        let _ = std::fs::rename(&old, &cur_exe);
-        let _ = std::fs::remove_file(&pending);
-        return Err(format!("Einsetzen fehlgeschlagen: {}", e));
-    }
+    let expected_sha256 = staged_sha256_from_path(new_exe);
+    replace_file_with_staged(
+        new_exe,
+        &cur_exe,
+        "Programmdatei",
+        expected_sha256.as_deref(),
+    )?;
     Ok(cur_exe)
 }
 
@@ -46,10 +64,15 @@ fn installed_updater_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_UPDATER))
 }
 
-fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), String> {
+fn copy_with_retries(
+    src: &Path,
+    dest: &Path,
+    label: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(), String> {
     let mut last = None;
     for _ in 0..10 {
-        match std::fs::copy(src, dest) {
+        match replace_file_with_staged(src, dest, label, expected_sha256) {
             Ok(_) => return Ok(()),
             Err(e) => {
                 last = Some(e);
@@ -62,8 +85,7 @@ fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), String>
         label,
         src.display(),
         dest.display(),
-        last.map(|e| e.to_string())
-            .unwrap_or_else(|| "unbekannter Fehler".to_string())
+        last.unwrap_or_else(|| "unbekannter Fehler".to_string())
     ))
 }
 
@@ -79,7 +101,9 @@ pub(super) fn ensure_installed_updater(
 
     match feed.fetch_updater_exe(version) {
         Ok(staged) => {
-            let result = copy_with_retries(&staged, &dest, "Updater-Helfer");
+            let expected_sha256 = staged_sha256_from_path(&staged);
+            let result =
+                copy_with_retries(&staged, &dest, "Updater-Helfer", expected_sha256.as_deref());
             let _ = std::fs::remove_file(&staged);
             result?;
             Ok(dest)
@@ -103,25 +127,37 @@ pub(super) fn apply_via_installed_updater(
     let parent_pid = std::process::id().to_string();
     let last_applied = last_applied_path().to_string_lossy().into_owned();
     let error_file = updater_error_path().to_string_lossy().into_owned();
-    spawn_detached(
-        helper,
-        &[
-            "--apply",
-            "--target",
-            &target,
-            "--staged",
-            &staged,
-            "--parent-pid",
-            &parent_pid,
-            "--version",
-            version,
-            "--last-applied",
-            &last_applied,
-            "--error-file",
-            &error_file,
-        ],
-    )
-    .map_err(|e| format!("Updater-Helfer starten: {}", e))?;
+    if let Some(hash) = staged_sha256_from_path(staged_exe) {
+        verify_sha256(staged_exe, &hash)?;
+    }
+    if let Some(hash) = staged_sha256_from_path(helper) {
+        verify_sha256(helper, &hash)?;
+    }
+    let mut argv = vec![
+        "--apply".to_string(),
+        "--target".to_string(),
+        target,
+        "--staged".to_string(),
+        staged,
+        "--parent-pid".to_string(),
+        parent_pid,
+        "--version".to_string(),
+        version.to_string(),
+        "--last-applied".to_string(),
+        last_applied,
+        "--error-file".to_string(),
+        error_file,
+    ];
+    if let Some(hash) = staged_sha256_from_path(staged_exe) {
+        argv.push("--staged-sha256".to_string());
+        argv.push(hash);
+    }
+    if let Some(hash) = staged_sha256_from_path(helper) {
+        argv.push("--helper-sha256".to_string());
+        argv.push(hash);
+    }
+    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    spawn_detached(helper, &argv_refs).map_err(|e| format!("Updater-Helfer starten: {}", e))?;
     Ok(())
 }
 
@@ -145,7 +181,10 @@ pub fn run_apply_worker(args: &[String]) {
 
     let mut replaced = false;
     for _ in 0..60 {
-        if std::fs::copy(&src, &target).is_ok() {
+        let expected_sha256 = staged_sha256_from_path(&src);
+        if replace_file_with_staged(&src, &target, "Apply-Worker", expected_sha256.as_deref())
+            .is_ok()
+        {
             replaced = true;
             break;
         }

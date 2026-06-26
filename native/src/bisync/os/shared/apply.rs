@@ -1,6 +1,6 @@
 use crate::vfs::Backend;
 use std::io;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,6 +8,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::paths::{join, parent_of};
 use super::persistence::versions_dir;
 use super::types::{Action, BisyncOptions, BisyncStats, Direction, Sig, Throttle};
+
+#[derive(Default, Clone, Debug)]
+pub(super) struct ApplyReport {
+    pub(super) stats: BisyncStats,
+    pub(super) completed: Vec<Action>,
+}
+
+#[derive(Default)]
+struct ApplyMerge {
+    stats: BisyncStats,
+    errors: Vec<(String, String)>,
+    completed: Vec<Action>,
+}
 
 /// Insert a "(Konflikt <timestamp>)" tag before the extension of a relative path.
 fn conflict_name(rel: &str) -> String {
@@ -24,10 +37,12 @@ fn conflict_name(rel: &str) -> String {
 /// Delete a file, optionally to the OS Recycle Bin (local paths only). For a
 /// remote path (or if trashing fails) it falls back to the backend's hard delete.
 fn delete_file(be: &dyn Backend, path: &str, use_recycle: bool) -> io::Result<()> {
-    if use_recycle && !path.contains("://") && std::path::Path::new(path).exists() {
-        if trash::delete(path).is_ok() {
-            return Ok(());
-        }
+    if use_recycle
+        && !path.contains("://")
+        && std::path::Path::new(path).exists()
+        && trash::delete(path).is_ok()
+    {
+        return Ok(());
     }
     be.remove_file(path)
 }
@@ -96,15 +111,14 @@ fn copy_between(
     drop(w);
     if atomic {
         dst.rename(&write_path, dp)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(total)
 }
 
 /// Reversible backup: copy `path` (on `be`) into the local versions store before
-/// it is overwritten/deleted. Best-effort; failure doesn't abort the sync but is
-/// reported by the caller via the returned error.
-fn back_up(be: &dyn Backend, path: &str, rel: &str, versions_dir: &PathBuf) -> io::Result<()> {
+/// it is overwritten/deleted.
+fn back_up(be: &dyn Backend, path: &str, rel: &str, versions_dir: &Path) -> io::Result<()> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -126,14 +140,15 @@ fn back_up(be: &dyn Backend, path: &str, rel: &str, versions_dir: &PathBuf) -> i
 fn verify_copy(dst: &dyn Backend, dp: &str, expected: u64) -> io::Result<()> {
     let got = dst.stat(dp).map(|m| m.size).unwrap_or(u64::MAX);
     if got != expected {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Überprüfung fehlgeschlagen: {} ≠ {} Bytes", got, expected),
-        ));
+        return Err(io::Error::other(format!(
+            "Überprüfung fehlgeschlagen: {} ≠ {} Bytes",
+            got, expected
+        )));
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_one(
     act: &Action,
     a: &dyn Backend,
@@ -141,7 +156,7 @@ fn run_one(
     b: &dyn Backend,
     root_b: &str,
     opts: BisyncOptions,
-    versions_dir: &PathBuf,
+    versions_dir: &Path,
     throttle: &Throttle,
     cancel: &AtomicBool,
 ) -> io::Result<BisyncStats> {
@@ -150,7 +165,7 @@ fn run_one(
         Action::CopyAtoB(rel) => {
             let dp = join(root_b, rel);
             if opts.reversible && b.exists(&dp) {
-                let _ = back_up(b, &dp, rel, versions_dir);
+                back_up(b, &dp, rel, versions_dir)?;
             }
             let n = copy_between(a, &join(root_a, rel), b, &dp, opts.atomic, throttle, cancel)?;
             if opts.verify {
@@ -162,17 +177,16 @@ fn run_one(
             if opts.move_files && opts.direction != Direction::Both {
                 let sp = join(root_a, rel);
                 if opts.reversible {
-                    let _ = back_up(a, &sp, rel, versions_dir);
+                    back_up(a, &sp, rel, versions_dir)?;
                 }
-                if a.remove_file(&sp).is_ok() {
-                    st.deleted += 1;
-                }
+                a.remove_file(&sp)?;
+                st.deleted += 1;
             }
         }
         Action::CopyBtoA(rel) => {
             let dp = join(root_a, rel);
             if opts.reversible && a.exists(&dp) {
-                let _ = back_up(a, &dp, rel, versions_dir);
+                back_up(a, &dp, rel, versions_dir)?;
             }
             let n = copy_between(b, &join(root_b, rel), a, &dp, opts.atomic, throttle, cancel)?;
             if opts.verify {
@@ -183,17 +197,16 @@ fn run_one(
             if opts.move_files && opts.direction != Direction::Both {
                 let sp = join(root_b, rel);
                 if opts.reversible {
-                    let _ = back_up(b, &sp, rel, versions_dir);
+                    back_up(b, &sp, rel, versions_dir)?;
                 }
-                if b.remove_file(&sp).is_ok() {
-                    st.deleted += 1;
-                }
+                b.remove_file(&sp)?;
+                st.deleted += 1;
             }
         }
         Action::DeleteB(rel) => {
             let p = join(root_b, rel);
             if opts.reversible {
-                let _ = back_up(b, &p, rel, versions_dir);
+                back_up(b, &p, rel, versions_dir)?;
             }
             delete_file(b, &p, opts.use_recycle)?;
             st.deleted += 1;
@@ -201,7 +214,7 @@ fn run_one(
         Action::DeleteA(rel) => {
             let p = join(root_a, rel);
             if opts.reversible {
-                let _ = back_up(a, &p, rel, versions_dir);
+                back_up(a, &p, rel, versions_dir)?;
             }
             delete_file(a, &p, opts.use_recycle)?;
             st.deleted += 1;
@@ -211,7 +224,10 @@ fn run_one(
             // Preserve B's losing version as a conflict copy that will sync back.
             if b.exists(&bp) {
                 let cp = join(root_b, &conflict_name(rel));
-                let _ = copy_between(b, &bp, b, &cp, opts.atomic, throttle, cancel);
+                let copied = copy_between(b, &bp, b, &cp, opts.atomic, throttle, cancel)?;
+                if opts.verify {
+                    verify_copy(b, &cp, copied)?;
+                }
             }
             st.bytes += copy_between(a, &join(root_a, rel), b, &bp, opts.atomic, throttle, cancel)?;
             st.a_to_b += 1;
@@ -220,7 +236,10 @@ fn run_one(
             let ap = join(root_a, rel);
             if a.exists(&ap) {
                 let cp = join(root_a, &conflict_name(rel));
-                let _ = copy_between(a, &ap, a, &cp, opts.atomic, throttle, cancel);
+                let copied = copy_between(a, &ap, a, &cp, opts.atomic, throttle, cancel)?;
+                if opts.verify {
+                    verify_copy(a, &cp, copied)?;
+                }
             }
             st.bytes += copy_between(b, &join(root_b, rel), a, &ap, opts.atomic, throttle, cancel)?;
             st.b_to_a += 1;
@@ -238,6 +257,7 @@ fn run_one(
 /// at 0.1 Mbit/s" case: those transfers are latency-bound, not bandwidth-bound.
 /// Destination folders are created lazily by `copy_between`; the backends'
 /// `mkdir_all` is concurrency-safe (Drive serializes folder creation).
+#[allow(clippy::too_many_arguments)]
 pub fn apply(
     actions: &[Action],
     a: &dyn Backend,
@@ -245,10 +265,36 @@ pub fn apply(
     b: &dyn Backend,
     root_b: &str,
     opts: BisyncOptions,
-    versions_dir: &PathBuf,
+    versions_dir: &Path,
     errors: &mut Vec<(String, String)>,
     cancel: &AtomicBool,
 ) -> BisyncStats {
+    apply_with_results(
+        actions,
+        a,
+        root_a,
+        b,
+        root_b,
+        opts,
+        versions_dir,
+        errors,
+        cancel,
+    )
+    .stats
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_with_results(
+    actions: &[Action],
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    versions_dir: &Path,
+    errors: &mut Vec<(String, String)>,
+    cancel: &AtomicBool,
+) -> ApplyReport {
     if opts.dry_run {
         let mut st = BisyncStats::default();
         for act in actions {
@@ -258,7 +304,10 @@ pub fn apply(
                 Action::DeleteA(_) | Action::DeleteB(_) => st.deleted += 1,
             }
         }
-        return st;
+        return ApplyReport {
+            stats: st,
+            completed: Vec::new(),
+        };
     }
 
     let mut par = a
@@ -271,8 +320,7 @@ pub fn apply(
     }
 
     let throttle = Throttle::new(opts.bwlimit_bps);
-    let merged: Mutex<(BisyncStats, Vec<(String, String)>)> =
-        Mutex::new((BisyncStats::default(), Vec::new()));
+    let merged = Mutex::new(ApplyMerge::default());
     let idx = AtomicUsize::new(0);
 
     std::thread::scope(|scope| {
@@ -280,6 +328,7 @@ pub fn apply(
             scope.spawn(|| {
                 let mut local = BisyncStats::default();
                 let mut local_errs: Vec<(String, String)> = Vec::new();
+                let mut local_done: Vec<Action> = Vec::new();
                 loop {
                     if cancel.load(Ordering::Relaxed) {
                         break;
@@ -321,6 +370,7 @@ pub fn apply(
                             local.b_to_a += s.b_to_a;
                             local.deleted += s.deleted;
                             local.bytes += s.bytes;
+                            local_done.push(act.clone());
                         }
                         Err(e) => {
                             local.errors += 1;
@@ -328,20 +378,28 @@ pub fn apply(
                         }
                     }
                 }
-                let mut m = merged.lock().unwrap();
-                m.0.a_to_b += local.a_to_b;
-                m.0.b_to_a += local.b_to_a;
-                m.0.deleted += local.deleted;
-                m.0.bytes += local.bytes;
-                m.0.errors += local.errors;
-                m.1.extend(local_errs);
+                let mut m = merged
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                m.stats.a_to_b += local.a_to_b;
+                m.stats.b_to_a += local.b_to_a;
+                m.stats.deleted += local.deleted;
+                m.stats.bytes += local.bytes;
+                m.stats.errors += local.errors;
+                m.errors.extend(local_errs);
+                m.completed.extend(local_done);
             });
         }
     });
 
-    let (st, errs) = merged.into_inner().unwrap();
-    errors.extend(errs);
-    st
+    let merged = merged
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    errors.extend(merged.errors);
+    ApplyReport {
+        stats: merged.stats,
+        completed: merged.completed,
+    }
 }
 
 fn sig_of(be: &dyn Backend, path: &str) -> Option<Sig> {
@@ -371,12 +429,12 @@ pub fn resolve(
     let no_cancel = AtomicBool::new(false);
     if keep_a {
         if b.exists(&pb) {
-            let _ = back_up(b, &pb, rel, &vdir);
+            back_up(b, &pb, rel, &vdir)?;
         }
         copy_between(a, &pa, b, &pb, true, &throttle, &no_cancel)?;
     } else {
         if a.exists(&pa) {
-            let _ = back_up(a, &pa, rel, &vdir);
+            back_up(a, &pa, rel, &vdir)?;
         }
         copy_between(b, &pb, a, &pa, true, &throttle, &no_cancel)?;
     }

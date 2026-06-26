@@ -12,7 +12,36 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
-pub fn worker(
+pub struct IconWorker {
+    req_tx: crossbeam_channel::Sender<(String, IconKind)>,
+    res_rx: crossbeam_channel::Receiver<IconResult>,
+}
+
+impl IconWorker {
+    pub fn new() -> Self {
+        let (req_tx, req_rx) = crossbeam_channel::unbounded::<(String, IconKind)>();
+        let (res_tx, res_rx) = crossbeam_channel::unbounded::<IconResult>();
+        std::thread::Builder::new()
+            .name("icon-extract".into())
+            .spawn(move || worker(req_rx, res_tx))
+            .ok();
+        Self { req_tx, res_rx }
+    }
+
+    pub fn request(&self, key: String, kind: IconKind) {
+        let _ = self.req_tx.send((key, kind));
+    }
+
+    pub fn drain(&self) -> Vec<IconResult> {
+        let mut results = Vec::new();
+        while let Ok(r) = self.res_rx.try_recv() {
+            results.push(r);
+        }
+        results
+    }
+}
+
+fn worker(
     req_rx: crossbeam_channel::Receiver<(String, IconKind)>,
     res_tx: crossbeam_channel::Sender<IconResult>,
 ) {
@@ -156,4 +185,37 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<(usize, usize, Vec<u8>)> {
 
     cleanup();
     Some((w, h, buf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{worker, IconKind, IconResult};
+
+    /// Exercises the real SHGetFileInfo + GDI extraction path end-to-end on
+    /// Windows and asserts we get visible pixels from the worker plumbing.
+    #[test]
+    fn extracts_real_icons() {
+        let (req_tx, req_rx) = crossbeam_channel::unbounded::<(String, IconKind)>();
+        let (res_tx, res_rx) = crossbeam_channel::unbounded::<IconResult>();
+        std::thread::spawn(move || worker(req_rx, res_tx));
+
+        req_tx.send(("<dir>".into(), IconKind::Dir)).unwrap();
+        req_tx
+            .send(("txt".into(), IconKind::Ext("txt".into())))
+            .unwrap();
+
+        let mut visible = 0;
+        for _ in 0..2 {
+            let r = res_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("icon result");
+            assert!(r.w >= 1 && r.h >= 1);
+            assert_eq!(r.rgba.len(), r.w * r.h * 4);
+            if r.rgba.chunks_exact(4).any(|p| p[3] != 0) {
+                visible += 1;
+            }
+        }
+        assert!(visible >= 1, "no visible icon pixels were extracted");
+        drop(req_tx);
+    }
 }

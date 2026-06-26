@@ -1,6 +1,18 @@
 use super::prelude::*;
 use super::*;
 
+type FolderSearchRx = Receiver<(u64, Vec<(String, i32)>)>;
+type MergeLoadRx = Receiver<Result<(String, Vec<crate::linemerge::Row>), String>>;
+type MergeApplyRx = Receiver<Result<(String, crate::bisync::Sig, crate::bisync::Sig), String>>;
+type JobConnectEndpoints = (
+    (crate::vfs::BackendHandle, String),
+    (crate::vfs::BackendHandle, String),
+);
+type JobConnectRx = Receiver<Result<JobConnectEndpoints, String>>;
+type FileOpenTask = (Receiver<Result<(String, i64), String>>, OpenMode, PathBuf);
+type ShareOpenRx =
+    Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>;
+
 pub struct App {
     pub(in crate::app) root_path: String,
     pub(in crate::app) scan_running: bool,
@@ -207,7 +219,7 @@ pub struct App {
     pub(in crate::app) folder_search_results: Vec<(String, i32)>,
     pub(in crate::app) folder_search_pending_at: Option<std::time::Instant>,
     /// Background mtime-ranking of search results: (sequence, ranked).
-    pub(in crate::app) folder_search_rx: Option<Receiver<(u64, Vec<(String, i32)>)>>,
+    pub(in crate::app) folder_search_rx: Option<FolderSearchRx>,
     pub(in crate::app) folder_search_seq: u64,
 
     // Background trash result
@@ -232,8 +244,8 @@ pub struct App {
     pub(in crate::app) rollback_forward: bool,
     /// Newest released version that is strictly newer than the running one, once
     /// the release list has been fetched. Drives the "⬆ Update verfügbar" banner
-    /// + a one-shot notice, so a newer release is offered automatically (no need
-    /// to press "Jetzt prüfen", and independent of the main-branch feed).
+    /// and a one-shot notice, so a newer release is offered automatically
+    /// without pressing "Jetzt prüfen", independent of the main-branch feed.
     pub(in crate::app) update_release_available: Option<String>,
     /// Set once we've shown the discovery notice, so it fires only once.
     pub(in crate::app) update_release_notified: bool,
@@ -245,16 +257,11 @@ pub struct App {
     pub(in crate::app) integration_ctx_menu: bool,
 
     // Filter-aware clipboard (virtual files)
-    #[cfg(windows)]
-    pub(in crate::app) clip_prepare_rx:
-        Option<Receiver<Vec<crate::virtual_clipboard::VirtualFile>>>,
-    #[cfg(windows)]
+    pub(in crate::app) clip_prepare_rx: Option<Receiver<Vec<ClipboardVirtualFile>>>,
     pub(in crate::app) virtual_clip: Option<(u32, Vec<(String, String)>)>, // (clipboard seq, (abs, rel))
 
     // Filesystem watcher state
-    #[cfg(windows)]
     pub(in crate::app) watcher: Option<notify::RecommendedWatcher>,
-    #[cfg(windows)]
     pub(in crate::app) watcher_rx:
         Option<crossbeam_channel::Receiver<notify::Result<notify::Event>>>,
     pub(in crate::app) index_dirty: bool,
@@ -295,10 +302,8 @@ pub struct App {
     pub(in crate::app) show_bisync_conflicts: bool,
     /// Line-merge editor for one conflict (None = closed) + its async channels.
     pub(in crate::app) merge: Option<MergeUi>,
-    pub(in crate::app) merge_load_rx:
-        Option<Receiver<Result<(String, Vec<crate::linemerge::Row>), String>>>,
-    pub(in crate::app) merge_apply_rx:
-        Option<Receiver<Result<(String, crate::bisync::Sig, crate::bisync::Sig), String>>>,
+    pub(in crate::app) merge_load_rx: Option<MergeLoadRx>,
+    pub(in crate::app) merge_apply_rx: Option<MergeApplyRx>,
     /// Compare ("ls-diff") view: a running preview + its result window.
     pub(in crate::app) preview_rx: Option<Receiver<crate::bisync::Preview>>,
     pub(in crate::app) preview_running: bool,
@@ -328,23 +333,12 @@ pub struct App {
     // ─── In-app folder picker (local + saved remote connections) ─────────
     pub(in crate::app) picker: Option<PickerState>,
     /// Resolving a remote job's endpoints off the UI thread before a run.
-    pub(in crate::app) job_connect_rx: Option<
-        Receiver<
-            Result<
-                (
-                    (crate::vfs::BackendHandle, String),
-                    (crate::vfs::BackendHandle, String),
-                ),
-                String,
-            >,
-        >,
-    >,
+    pub(in crate::app) job_connect_rx: Option<JobConnectRx>,
     pub(in crate::app) job_connect_pending: Option<crate::syncjobs::SyncJob>,
     /// In-flight "download a remote file to temp, then open it" jobs (one per
     /// double-clicked remote file). Result is the local temp path to launch;
     /// `OpenMode` selects the default app vs. the native "Open with…" dialog.
-    pub(in crate::app) file_open_rx:
-        Vec<(Receiver<Result<(String, i64), String>>, OpenMode, PathBuf)>,
+    pub(in crate::app) file_open_rx: Vec<FileOpenTask>,
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     pub(in crate::app) remote_edits: Vec<RemoteEdit>,
@@ -404,9 +398,7 @@ pub struct App {
         Option<Receiver<Result<crate::daemon::ShareWorkerSnapshot, String>>>,
     pub(in crate::app) share_next_poll_at: Instant,
     pub(in crate::app) share_last_op_log_at: Instant,
-    pub(in crate::app) share_open_rx: Option<
-        Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>,
-    >,
+    pub(in crate::app) share_open_rx: Option<ShareOpenRx>,
     pub(in crate::app) share_opening: Option<crate::share::PeerOpenTarget>,
     pub(in crate::app) share_opening_origin: Option<String>,
     pub(in crate::app) share_status: String,

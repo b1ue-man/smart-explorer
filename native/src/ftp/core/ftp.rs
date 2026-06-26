@@ -18,7 +18,7 @@ use suppaftp::types::FileType;
 use suppaftp::{RustlsConnector, RustlsFtpStream};
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 fn systime_ms(t: SystemTime) -> i64 {

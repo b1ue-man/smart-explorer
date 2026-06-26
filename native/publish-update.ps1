@@ -6,9 +6,11 @@
 #   3. Fertig — alle installierten Instanzen updaten sich beim naechsten Start.
 #
 # Optional: -Feed <Pfad> fuer einen anderen Feed-Ordner (z.B. Netzlaufwerk).
+#           -AllowPartialFeed erlaubt bewusst einen Windows-only Feed.
 
 param(
-    [string]$Feed = "C:\Users\Silas\Desktop\fun-projects\smartExplorer\release-native\update-feed"
+    [string]$Feed = "C:\Users\Silas\Desktop\fun-projects\smartExplorer\release-native\update-feed",
+    [switch]$AllowPartialFeed
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,12 +20,27 @@ Set-Location $PSScriptRoot
 $version = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 Write-Host "Baue Version $version ..."
 
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$defaultFeed = Join-Path $repoRoot "release-native\update-feed"
+$resolvedFeed = if (Test-Path $Feed) { (Resolve-Path $Feed).Path } else { [System.IO.Path]::GetFullPath($Feed) }
+$resolvedDefaultFeed = if (Test-Path $defaultFeed) { (Resolve-Path $defaultFeed).Path } else { [System.IO.Path]::GetFullPath($defaultFeed) }
+if (-not $AllowPartialFeed -and $resolvedFeed -eq $resolvedDefaultFeed) {
+    $linuxPayloads = @(
+        "smart_explorer",
+        "smart_explorer.sha256",
+        "smart_explorer_updater",
+        "smart_explorer_updater.sha256"
+    ) | ForEach-Object { Join-Path $Feed $_ } | Where-Object { Test-Path $_ }
+    if ($linuxPayloads) {
+        throw "Der Standard-Update-Feed enthaelt Linux-Payloads. Dieses Windows-Skript wuerde nur Windows-Payloads aktualisieren; nutze native/publish-feed.sh auf Linux/WSL fuer einen vollstaendigen Feed oder -AllowPartialFeed fuer einen expliziten Windows-only Feed."
+    }
+}
+
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
 cargo build --release --bin smart_explorer --bin smart_explorer_updater
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $shareSrc = Join-Path $repoRoot "share-server"
 $shareOut = Join-Path $repoRoot "release-native\share-server"
 if (Test-Path $shareSrc) {

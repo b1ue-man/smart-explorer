@@ -1,4 +1,18 @@
-use super::prelude::*;
+use super::super::prelude::*;
+
+#[derive(Clone, Debug)]
+pub(in crate::app) struct ClipboardVirtualFile {
+    pub(in crate::app) abs: String,
+    pub(in crate::app) rel: String,
+    pub(in crate::app) size: u64,
+    pub(in crate::app) mtime_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum ClipboardEffect {
+    Copy,
+    Move,
+}
 
 pub(in crate::app) fn drain_scan_channel(
     rx: &Receiver<ScanMessage>,
@@ -37,8 +51,8 @@ pub(in crate::app) fn drain_scan_channel(
 }
 
 /// Single-layout text painting with ellipsis truncation. The previous
-/// implementation re-laid-out the string once per removed character —
-/// O(len²) galley builds per overflowing cell per frame.
+/// implementation re-laid-out the string once per removed character, which was
+/// quadratic in overflowing table cells.
 pub(in crate::app) fn paint_cell_text(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -83,51 +97,6 @@ pub(in crate::app) fn date_to_ms_end(d: chrono::NaiveDate) -> i64 {
     date_to_ms_start(d) + 24 * 3600 * 1000 - 1
 }
 
-/// Native Yes/No confirmation via MessageBoxW. Deliberately NOT rfd's
-/// MessageDialog, which uses comctl32 v6 TaskDialogIndirect — that import is
-/// unresolved without an embedded v6 manifest and crashes the process at load
-/// (STATUS_ENTRYPOINT_NOT_FOUND). MessageBoxW is in user32 on every Windows.
-#[cfg(windows)]
-pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO};
-    let t: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
-    let m: Vec<u16> = msg.encode_utf16().chain(Some(0)).collect();
-    let r = unsafe {
-        MessageBoxW(
-            None,
-            PCWSTR(m.as_ptr()),
-            PCWSTR(t.as_ptr()),
-            MB_YESNO | MB_ICONWARNING,
-        )
-    };
-    r == IDYES
-}
-
-#[cfg(not(windows))]
-pub(in crate::app) fn confirm_yes_no(_title: &str, _msg: &str) -> bool {
-    true
-}
-
-/// True if our process owns the current foreground window. Used to gate the
-/// global clipboard-key poll so Ctrl+V in another app never pastes into ours.
-#[cfg(windows)]
-pub(in crate::app) fn app_is_foreground() -> bool {
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
-    };
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_null() {
-            return false;
-        }
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        pid != 0 && pid == GetCurrentProcessId()
-    }
-}
-
 pub(in crate::app) fn dirs_home() -> PathBuf {
     if let Some(h) = std::env::var_os("USERPROFILE") {
         return PathBuf::from(h);
@@ -136,44 +105,6 @@ pub(in crate::app) fn dirs_home() -> PathBuf {
         return PathBuf::from(h);
     }
     PathBuf::from(".")
-}
-
-#[cfg(windows)]
-pub(in crate::app) fn list_drives() -> Vec<String> {
-    use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
-    let bits = unsafe { GetLogicalDrives() };
-    (0u32..26)
-        .filter(|i| bits & (1 << i) != 0)
-        .map(|i| format!("{}:\\", char::from(b'A' + i as u8)))
-        .collect()
-}
-
-#[cfg(not(windows))]
-pub(in crate::app) fn list_drives() -> Vec<String> {
-    vec!["/".to_string()]
-}
-
-#[cfg(windows)]
-pub(in crate::app) fn drive_info_list(drives: &[String]) -> Vec<(String, u64, u64)> {
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    drives
-        .iter()
-        .map(|d| {
-            let wide: Vec<u16> = d.encode_utf16().chain(Some(0)).collect();
-            let mut free = 0u64;
-            let mut total = 0u64;
-            let mut total_free = 0u64;
-            unsafe {
-                GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut total_free);
-            }
-            (d.clone(), free, total)
-        })
-        .collect()
-}
-
-#[cfg(not(windows))]
-pub(in crate::app) fn drive_info_list(_drives: &[String]) -> Vec<(String, u64, u64)> {
-    Vec::new()
 }
 
 pub(in crate::app) fn settings_path() -> PathBuf {

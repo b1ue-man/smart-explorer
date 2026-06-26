@@ -100,7 +100,7 @@ fn agent_backend_over_socket() {
         assert_eq!(files.len(), 2);
         assert!(files
             .iter()
-            .all(|h| h.md5.as_ref().map_or(false, |m| m.len() == 32)));
+            .all(|h| h.md5.as_ref().is_some_and(|m| m.len() == 32)));
         let bbin = files.iter().find(|h| h.rel == "sub/b.bin").unwrap();
         assert_eq!(bbin.size, 400);
         let expect = format!("{:x}", md5::compute(vec![0u8; 400]));

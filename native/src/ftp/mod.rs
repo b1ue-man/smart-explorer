@@ -1,4 +1,4 @@
 #[path = "core/ftp.rs"]
-mod ftp;
+mod core_impl;
 
-pub use ftp::backend_from_url;
+pub use core_impl::backend_from_url;

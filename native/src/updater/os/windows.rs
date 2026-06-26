@@ -1,35 +1,61 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::archive::{archive_binary, exe_stem, new_old_binary_path, resume_auto_update, set_pin};
+use super::archive::{archive_binary, resume_auto_update, set_pin};
 use super::config::{last_applied_path, updater_error_path};
-use super::feed::Feed;
+use super::core::{replace_file_with_staged, staged_sha256_from_path, verify_sha256};
+use super::feed::{Feed, PayloadSpec};
+
+#[path = "windows/processes.rs"]
+mod processes;
+
+use processes::{stop_target_processes_for_update, wait_for_pid_exit};
 
 const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
+
+pub(super) fn binary_suffix() -> &'static str {
+    ".exe"
+}
+
+pub(super) fn is_archived_binary(path: &Path) -> bool {
+    path.extension().and_then(|x| x.to_str()) == Some("exe")
+}
+
+pub(super) fn archived_name_without_binary_suffix(path: &Path) -> Option<&str> {
+    path.file_stem().and_then(|s| s.to_str())
+}
+
+pub(super) fn app_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer.exe", "Smart Explorer.exe"],
+        http_names: &["smart_explorer.exe", "Smart%20Explorer.exe"],
+        hash_name: "smart_explorer.exe.sha256",
+    }
+}
+
+pub(super) fn updater_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["smart_explorer_updater.exe", "Smart Explorer Updater.exe"],
+        http_names: &[
+            "smart_explorer_updater.exe",
+            "Smart%20Explorer%20Updater.exe",
+        ],
+        hash_name: "smart_explorer_updater.exe.sha256",
+    }
+}
 
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
 fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
     let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    let stem = exe_stem(&cur_exe);
-    let pending = cur_exe.with_file_name(format!("{}_update_pending.exe", stem));
-    let old = new_old_binary_path(&cur_exe);
-
-    std::fs::copy(new_exe, &pending).map_err(|e| format!("Kopieren fehlgeschlagen: {}", e))?;
-    std::fs::rename(&cur_exe, &old).map_err(|e| {
-        let _ = std::fs::remove_file(&pending);
-        format!(
-            "Programmdatei kann nicht ersetzt werden ({}): {}",
-            cur_exe.display(),
-            e
-        )
-    })?;
-    if let Err(e) = std::fs::rename(&pending, &cur_exe) {
-        let _ = std::fs::rename(&old, &cur_exe);
-        let _ = std::fs::remove_file(&pending);
-        return Err(format!("Einsetzen fehlgeschlagen: {}", e));
-    }
+    let expected_sha256 = staged_sha256_from_path(new_exe);
+    replace_file_with_staged(
+        new_exe,
+        &cur_exe,
+        "Programmdatei",
+        expected_sha256.as_deref(),
+    )?;
     Ok(cur_exe)
 }
 
@@ -150,16 +176,24 @@ fn installed_updater_path() -> Result<PathBuf, String> {
 struct CopyRetryError {
     msg: String,
     needs_elevation: bool,
+    integrity_error: bool,
 }
 
-fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), CopyRetryError> {
+fn copy_with_retries(
+    src: &Path,
+    dest: &Path,
+    label: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(), CopyRetryError> {
     let mut last = None;
     let mut needs_elevation = false;
+    let mut integrity_error = false;
     for _ in 0..10 {
-        match std::fs::copy(src, dest) {
+        match replace_file_with_staged(src, dest, label, expected_sha256) {
             Ok(_) => return Ok(()),
             Err(e) => {
-                needs_elevation |= should_elevate_for_spawn(&e);
+                needs_elevation |= looks_like_elevation_error(&e);
+                integrity_error |= looks_like_integrity_error(&e);
                 last = Some(e);
                 std::thread::sleep(Duration::from_millis(350));
             }
@@ -171,10 +205,10 @@ fn copy_with_retries(src: &Path, dest: &Path, label: &str) -> Result<(), CopyRet
             label,
             src.display(),
             dest.display(),
-            last.map(|e| e.to_string())
-                .unwrap_or_else(|| "unbekannter Fehler".to_string())
+            last.unwrap_or_else(|| "unbekannter Fehler".to_string())
         ),
         needs_elevation,
+        integrity_error,
     })
 }
 
@@ -189,17 +223,20 @@ pub(super) fn ensure_installed_updater(
     }
 
     match feed.fetch_updater_exe(version) {
-        Ok(staged) => match copy_with_retries(&staged, &dest, "Updater-Helfer") {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&staged);
-                Ok(dest)
+        Ok(staged) => {
+            let expected_sha256 = staged_sha256_from_path(&staged);
+            match copy_with_retries(&staged, &dest, "Updater-Helfer", expected_sha256.as_deref()) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&staged);
+                    Ok(dest)
+                }
+                Err(e) if !e.integrity_error && (e.needs_elevation || dest.exists()) => Ok(staged),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&staged);
+                    Err(e.msg)
+                }
             }
-            Err(e) if e.needs_elevation || dest.exists() => Ok(staged),
-            Err(e) => {
-                let _ = std::fs::remove_file(&staged);
-                Err(e.msg)
-            }
-        },
+        }
         Err(_e) if dest.exists() => Ok(dest),
         Err(e) => Err(format!(
             "Updater-Helfer fehlt und konnte nicht aus dem Feed geladen werden: {}",
@@ -219,25 +256,37 @@ pub(super) fn apply_via_installed_updater(
     let parent_pid = std::process::id().to_string();
     let last_applied = last_applied_path().to_string_lossy().into_owned();
     let error_file = updater_error_path().to_string_lossy().into_owned();
-    spawn_detached(
-        helper,
-        &[
-            "--apply",
-            "--target",
-            &target,
-            "--staged",
-            &staged,
-            "--parent-pid",
-            &parent_pid,
-            "--version",
-            version,
-            "--last-applied",
-            &last_applied,
-            "--error-file",
-            &error_file,
-        ],
-    )
-    .map_err(|e| format!("Updater-Helfer starten: {}", e))?;
+    if let Some(hash) = staged_sha256_from_path(staged_exe) {
+        verify_sha256(staged_exe, &hash)?;
+    }
+    if let Some(hash) = staged_sha256_from_path(helper) {
+        verify_sha256(helper, &hash)?;
+    }
+    let mut argv = vec![
+        "--apply".to_string(),
+        "--target".to_string(),
+        target,
+        "--staged".to_string(),
+        staged,
+        "--parent-pid".to_string(),
+        parent_pid,
+        "--version".to_string(),
+        version.to_string(),
+        "--last-applied".to_string(),
+        last_applied,
+        "--error-file".to_string(),
+        error_file,
+    ];
+    if let Some(hash) = staged_sha256_from_path(staged_exe) {
+        argv.push("--staged-sha256".to_string());
+        argv.push(hash);
+    }
+    if let Some(hash) = staged_sha256_from_path(helper) {
+        argv.push("--helper-sha256".to_string());
+        argv.push(hash);
+    }
+    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    spawn_detached(helper, &argv_refs).map_err(|e| format!("Updater-Helfer starten: {}", e))?;
     Ok(())
 }
 
@@ -263,7 +312,10 @@ pub fn run_apply_worker(args: &[String]) {
 
     let mut replaced = false;
     for _ in 0..60 {
-        if std::fs::copy(&src, &target).is_ok() {
+        let expected_sha256 = staged_sha256_from_path(&src);
+        if replace_file_with_staged(&src, &target, "Apply-Worker", expected_sha256.as_deref())
+            .is_ok()
+        {
             replaced = true;
             break;
         }
@@ -273,6 +325,18 @@ pub fn run_apply_worker(args: &[String]) {
         let _ = ensure_share_firewall_rule_for(&target);
         let _ = spawn_detached(&target, &["--updated"]);
     }
+}
+
+fn looks_like_elevation_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("access is denied")
+        || lower.contains("zugriff")
+        || lower.contains("permission")
+        || lower.contains("os error 5")
+}
+
+fn looks_like_integrity_error(msg: &str) -> bool {
+    msg.contains("Pruefsumme") || msg.contains("SHA-256") || msg.contains("Hash-Datei")
 }
 
 fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {
@@ -320,178 +384,6 @@ fn request_daemon_stop_for_update() {
     let _ = std::fs::write(sync.join("daemon.stop"), "stop");
 }
 
-fn clear_daemon_runtime_markers() {
-    let sync = crate::support_dirs::sync_data_dir();
-    let _ = std::fs::remove_file(sync.join("daemon.heartbeat"));
-    let _ = std::fs::remove_file(sync.join("daemon.ipc"));
-}
-
-fn stop_target_processes_for_update(target: &Path) -> Result<(), String> {
-    std::thread::sleep(Duration::from_millis(500));
-    let natural_deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let running = find_target_processes(target)?;
-        if running.is_empty() || Instant::now() >= natural_deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-
-    for proc in find_target_processes(target)? {
-        terminate_target_process(proc.pid, &proc.image)?;
-    }
-    clear_daemon_runtime_markers();
-    Ok(())
-}
-
-#[derive(Debug)]
-struct TargetProcess {
-    pid: u32,
-    image: PathBuf,
-}
-
-fn find_target_processes(target: &Path) -> Result<Vec<TargetProcess>, String> {
-    use std::mem::size_of;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-
-    let target_name = target
-        .file_name()
-        .map(|n| n.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let target_norm = normalize_path_for_compare(target);
-    let mut out = Vec::new();
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return Err(format!(
-                "Prozessliste lesen: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-        let mut ok = Process32FirstW(snapshot, &mut entry) != 0;
-        while ok {
-            let pid = entry.th32ProcessID;
-            if pid != std::process::id() {
-                let exe_name = wide_process_name(&entry.szExeFile).to_ascii_lowercase();
-                if exe_name == target_name {
-                    if let Some(image) = process_image_path(pid)? {
-                        if normalize_path_for_compare(&image) == target_norm {
-                            out.push(TargetProcess { pid, image });
-                        }
-                    }
-                }
-            }
-            ok = Process32NextW(snapshot, &mut entry) != 0;
-        }
-        CloseHandle(snapshot);
-    }
-    Ok(out)
-}
-
-fn process_image_path(pid: u32) -> Result<Option<PathBuf>, String> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h.is_null() {
-            return Ok(None);
-        }
-        let mut buf = vec![0u16; 32768];
-        let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0;
-        CloseHandle(h);
-        if !ok {
-            return Ok(None);
-        }
-        buf.truncate(len as usize);
-        Ok(Some(PathBuf::from(OsString::from_wide(&buf))))
-    }
-}
-
-fn terminate_target_process(pid: u32, image: &Path) -> Result<(), String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    };
-
-    unsafe {
-        let h = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
-        if h.is_null() {
-            return Err(format!(
-                "Smart Explorer Prozess {pid} ({}) konnte nicht beendet werden: {}",
-                image.display(),
-                std::io::Error::last_os_error()
-            ));
-        }
-        if TerminateProcess(h, 0) == 0 {
-            let err = std::io::Error::last_os_error();
-            CloseHandle(h);
-            return Err(format!(
-                "Smart Explorer Prozess {pid} ({}) konnte nicht beendet werden: {err}",
-                image.display()
-            ));
-        }
-        let rc = WaitForSingleObject(h, 5000);
-        CloseHandle(h);
-        if rc == WAIT_OBJECT_0 {
-            Ok(())
-        } else {
-            Err(format!(
-                "Smart Explorer Prozess {pid} ({}) reagiert nach Terminate nicht",
-                image.display()
-            ))
-        }
-    }
-}
-
-fn wide_process_name(buf: &[u16]) -> String {
-    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    String::from_utf16_lossy(&buf[..len])
-}
-
-fn normalize_path_for_compare(path: &Path) -> String {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    normalize_path_string(&path.to_string_lossy())
-}
-
-fn normalize_path_string(path: &str) -> String {
-    let mut s = path.replace('/', "\\");
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
-        s = stripped.to_string();
-    }
-    s.trim_end_matches('\\').to_lowercase()
-}
-
-fn wait_for_pid_exit(pid: u32, timeout: Duration) {
-    if pid == 0 {
-        return;
-    }
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-    };
-    unsafe {
-        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-        if !h.is_null() {
-            WaitForSingleObject(h, timeout.as_millis() as u32);
-            CloseHandle(h);
-            return;
-        }
-    }
-    std::thread::sleep(Duration::from_millis(300));
-}
-
 /// Revert to an archived binary.
 pub fn revert_to(archived: &Path, version: &str) -> Result<PathBuf, String> {
     if !archived.exists() {
@@ -521,21 +413,4 @@ pub fn install_version(downloaded: &Path, version: &str) -> Result<PathBuf, Stri
     let _ = ensure_share_firewall_rule_for(&cur_exe);
     resume_auto_update();
     Ok(cur_exe)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_path_string_matches_windows_variants() {
-        assert_eq!(
-            normalize_path_string(r"\\?\C:\Program Files\Smart Explorer\smart_explorer.exe\"),
-            r"c:\program files\smart explorer\smart_explorer.exe"
-        );
-        assert_eq!(
-            normalize_path_string("C:/Program Files/Smart Explorer/smart_explorer.exe"),
-            r"c:\program files\smart explorer\smart_explorer.exe"
-        );
-    }
 }

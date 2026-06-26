@@ -227,8 +227,7 @@ impl App {
                     let mut first_err: Option<String> = None;
                     for (p, id, is_dir) in &items {
                         let r = if *is_dir {
-                            remove_tree(&*backend, p)
-                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                            remove_tree(&*backend, p).map_err(std::io::Error::other)
                         } else {
                             backend.remove_file_id(p, id.as_deref())
                         };
@@ -266,93 +265,27 @@ impl App {
     }
 
     pub(in crate::app) fn open_in_explorer(&self, path: &str) {
-        let p = path.replace('/', "\\");
-        let _ = std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", p))
-            .spawn();
-    }
-
-    /// Launch a local path via the shell. `verb` None = the default action
-    /// (open with the associated app); `Some("openas")` = the native Windows
-    /// "Open with…" chooser. Uses ShellExecuteW — `cmd /C start` flashed a
-    /// console window.
-    #[cfg(windows)]
-    pub(in crate::app) fn shell_verb(&self, path: &str, verb: Option<&str>) {
-        let p = path.replace('/', "\\");
-        let wide: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
-        let verb_w: Option<Vec<u16>> = verb.map(|v| v.encode_utf16().chain(Some(0)).collect());
-        unsafe {
-            windows_sys::Win32::UI::Shell::ShellExecuteW(
-                std::ptr::null_mut(),
-                verb_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
-                wide.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                1, // SW_SHOWNORMAL
-            );
-        }
+        reveal_path_in_file_manager(path);
     }
 
     /// Open a file with its associated application.
-    #[cfg(windows)]
     pub(in crate::app) fn open_path(&self, path: &str) {
-        self.shell_verb(path, None);
+        open_local_path(path, OpenMode::Default);
     }
 
     /// Show the native Windows "Open with…" chooser for a file (the `openas`
     /// shell verb). Remote files are downloaded to a temp copy first (see
     /// `open_file`), so this always runs on a real local path.
-    #[cfg(windows)]
     pub(in crate::app) fn open_with_path(&self, path: &str) {
-        self.shell_verb(path, Some("openas"));
+        open_local_path(path, OpenMode::With);
     }
 
-    #[cfg(not(windows))]
-    pub(in crate::app) fn open_path(&self, path: &str) {
-        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
-    }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn open_with_path(&self, path: &str) {
-        // No portable "open with" chooser; fall back to the default opener.
-        self.open_path(path);
-    }
-
-    #[cfg(windows)]
     pub(in crate::app) fn launch_for_edit(
         &self,
         path: &str,
         mode: OpenMode,
     ) -> Option<EditProcess> {
-        use windows_sys::Win32::UI::Shell::{
-            ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-        };
-        let p = path.replace('/', "\\");
-        let file: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
-        let verb: Option<Vec<u16>> = match mode {
-            OpenMode::Default => None,
-            OpenMode::With => Some("openas".encode_utf16().chain(Some(0)).collect()),
-        };
-        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        info.fMask = SEE_MASK_NOCLOSEPROCESS;
-        info.lpVerb = verb.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
-        info.lpFile = file.as_ptr();
-        info.nShow = 1; // SW_SHOWNORMAL
-        let ok = unsafe { ShellExecuteExW(&mut info) };
-        if ok == 0 {
-            None
-        } else {
-            EditProcess::new(info.hProcess)
-        }
-    }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn launch_for_edit(&self, path: &str, mode: OpenMode) {
-        match mode {
-            OpenMode::Default => self.open_path(path),
-            OpenMode::With => self.open_with_path(path),
-        }
+        launch_local_for_edit(path, mode)
     }
 
     pub(in crate::app) fn open_selection(&mut self) {

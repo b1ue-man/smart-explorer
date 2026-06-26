@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend_server::serve_backend;
+use super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
 use super::state::{clear_heartbeat, clear_stop, log, request_stop, stop_requested};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
@@ -38,6 +39,7 @@ struct ShareHostState {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 enum IpcRequest {
     Ping {
         token: String,
@@ -129,10 +131,7 @@ fn prepare_ipc_client_stream(stream: &TcpStream) -> io::Result<()> {
 
 fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Result<()> {
     let mut line = String::new();
-    {
-        let mut reader = io::BufReader::new(stream.try_clone()?);
-        reader.read_line(&mut line)?;
-    }
+    read_line_limited_from_stream(&mut stream, &mut line, MAX_IPC_LINE)?;
     let req: IpcRequest = serde_json::from_str(line.trim()).map_err(eio)?;
     match req {
         IpcRequest::Ping { token: t } => {
@@ -737,7 +736,7 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
 pub fn ensure_worker_ready() {
     let _ = crate::autostart::enable();
     match probe_worker(Duration::from_millis(700)) {
-        WorkerProbe::Ready => return,
+        WorkerProbe::Ready => (),
         WorkerProbe::Stale => restart_worker_for_client(true),
         WorkerProbe::Missing => restart_worker_for_client(false),
     }
@@ -827,27 +826,8 @@ fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
 
 fn read_response(stream: &mut TcpStream) -> io::Result<IpcResponse> {
     let mut line = String::new();
-    read_line_no_buffer(stream, &mut line)?;
+    read_line_limited_from_stream(stream, &mut line, MAX_IPC_LINE)?;
     serde_json::from_str(line.trim()).map_err(eio)
-}
-
-fn read_line_no_buffer(stream: &mut TcpStream, line: &mut String) -> io::Result<usize> {
-    let mut total = 0usize;
-    let mut byte = [0u8; 1];
-    loop {
-        match stream.read(&mut byte) {
-            Ok(0) => return Ok(total),
-            Ok(1) => {
-                total += 1;
-                if byte[0] == b'\n' {
-                    return Ok(total);
-                }
-                line.push(byte[0] as char);
-            }
-            Ok(_) => unreachable!(),
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 fn load_share_server() -> String {

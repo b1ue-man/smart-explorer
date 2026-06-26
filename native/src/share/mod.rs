@@ -12,11 +12,19 @@ mod core;
 mod fs;
 #[path = "core/identity.rs"]
 mod identity;
+#[path = "core/line.rs"]
+mod line;
 #[path = "core/profiles.rs"]
 mod profiles;
 #[path = "core/service.rs"]
 mod service;
 #[path = "os/shared/system.rs"]
+mod shared_system;
+#[cfg(windows)]
+#[path = "os/windows/system.rs"]
+mod system;
+#[cfg(not(windows))]
+#[path = "os/linux_os/system.rs"]
 mod system;
 #[path = "core/types.rs"]
 mod types;

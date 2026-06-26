@@ -199,9 +199,9 @@ pub fn plan(
     (actions, conflicts, converged)
 }
 
-/// Build the new baseline after a run: applied actions + converged rels are now
-/// in sync (record both sides' current sig); conflicts and skipped rels keep
-/// their previous baseline so they're re-detected next time.
+/// Build the new baseline after a run: successful actions + converged rels are
+/// now in sync (record both sides' current sig); conflicts, failed actions, and
+/// skipped rels keep their previous baseline so they're re-detected next time.
 pub fn update_baseline(
     base: &Baseline,
     a: &Tree,

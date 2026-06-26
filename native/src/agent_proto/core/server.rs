@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::fs::{list_local, stat_local, walk_dir_counted, WalkCounter};
 use super::hash::handle_walk_hashed;
@@ -11,6 +11,12 @@ use super::search::handle_search;
 use super::session::{emit, Sink};
 use super::transfer::{handle_get_tree, handle_put_tree, handle_read, handle_write, remove_path};
 use super::{read_frame, Frame, PROTO_VERSION};
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn handle_walk_tree(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io::Result<()> {
     let p = Path::new(root);
@@ -51,27 +57,27 @@ pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()>
     while let Some((id, frame)) = read_frame(&mut r)? {
         match frame {
             Frame::Data(_) | Frame::TreeEntry { .. } | Frame::End => {
-                let tx = inbound.lock().unwrap().get(&id).cloned();
+                let tx = lock_or_recover(&inbound).get(&id).cloned();
                 if let Some(tx) = tx {
                     let is_end = matches!(frame, Frame::End);
                     let _ = tx.send(frame);
                     if is_end {
-                        inbound.lock().unwrap().remove(&id);
+                        lock_or_recover(&inbound).remove(&id);
                     }
                 }
             }
             Frame::Cancel => {
-                if let Some(f) = cancels.lock().unwrap().get(&id) {
+                if let Some(f) = lock_or_recover(&cancels).get(&id) {
                     f.store(true, Ordering::Relaxed);
                 }
             }
             req => {
                 let cancel = Arc::new(AtomicBool::new(false));
-                cancels.lock().unwrap().insert(id, cancel.clone());
+                lock_or_recover(&cancels).insert(id, cancel.clone());
                 let rx = match &req {
                     Frame::Write(_) | Frame::PutTree(_) => {
                         let (tx, rx) = channel();
-                        inbound.lock().unwrap().insert(id, tx);
+                        lock_or_recover(&inbound).insert(id, tx);
                         Some(rx)
                     }
                     _ => None,
@@ -84,8 +90,8 @@ pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()>
                     if let Err(e) = res {
                         let _ = emit(&sink2, id, &Frame::Err(e.to_string()));
                     }
-                    cancels2.lock().unwrap().remove(&id);
-                    inbound2.lock().unwrap().remove(&id);
+                    lock_or_recover(&cancels2).remove(&id);
+                    lock_or_recover(&inbound2).remove(&id);
                 });
             }
         }

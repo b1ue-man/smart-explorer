@@ -1,15 +1,11 @@
-#[cfg(windows)]
-const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-#[cfg(windows)]
-const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
-
 /// Folder names that should never end up in the index. Covers:
 ///   - Windows system-reserved directories
 ///   - User-profile noise (AppData, Downloads - mostly cached/installer junk)
 ///   - Program/system roots (Program Files variants, ProgramData, Windows*)
 ///   - Dev caches (node_modules)
-/// These get skipped whether they appear as a leaf folder or as any segment
-/// in a longer path.
+///
+/// These get skipped whether they appear as a leaf folder or as any segment in
+/// a longer path.
 const SKIP_NAMES: &[&str] = &[
     // Pure system / recycle
     "$Recycle.Bin",
@@ -118,19 +114,6 @@ pub fn should_skip(name: &str) -> bool {
         return true;
     }
     false
-}
-
-#[cfg(windows)]
-pub fn should_skip_meta(name: &str, attrs: u32) -> bool {
-    if attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0 {
-        return true;
-    }
-    should_skip(name)
-}
-
-#[cfg(not(windows))]
-pub fn should_skip_meta(name: &str, _attrs: u32) -> bool {
-    should_skip(name)
 }
 
 /// True if any segment of `path` (separated by `/`) would be filtered out.
