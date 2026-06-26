@@ -6,6 +6,21 @@
 - For release work, always build the release artifacts before calling the release done, then commit and push the release changes and artifacts to the configured remote unless the user explicitly says not to or pushing is technically blocked.
 - If a remote is missing, credentials fail, or the work is not safe to commit yet, state that clearly and explain what remains.
 
+## native Rust architecture
+
+These rules apply to `native/src` unless a task explicitly says otherwise.
+
+- Keep files narrowly scoped to one feature responsibility. New or substantially edited Rust source files must stay under 500 lines and under 50 KiB. Existing oversized files are technical debt: do not add meaningful new code to them without extracting a cohesive submodule first, or state the exception clearly.
+- Split by behavior, not by convenience. Prefer separate files for domain types, parsing/formatting, persistence, protocol/wire code, UI rendering, background orchestration, and platform adapters instead of a single feature catch-all file.
+- Keep `core/` truly platform-independent. `core/` code must not import `std::os::windows`, `std::os::unix`, `windows`, `windows-sys`, `winreg`, shell/registry/clipboard APIs, platform path encoders, or target-specific process extensions. Avoid `#[cfg(windows)]`, `#[cfg(target_os = ...)]`, and `cfg!(windows)` in `core/` except for tests that assert portable behavior.
+- Put platform behavior behind `os/`. Use `os/windows.rs`, `os/linux_os.rs`, and `os/shared/*` adapters selected from `mod.rs` with `#[cfg(...)]`/`#[path = ...]`, rather than scattering inline platform branches through `core/`. `os/shared` is for host-facing code that is genuinely portable across supported OSes; if it needs one OS crate or FFI call, move that part into the OS-specific adapter.
+- Design the `core`/`os` boundary as a small typed API. `core` should own pure data models, planning, validation, parsing, and deterministic decisions. `os` should own filesystem quirks, shell integration, process launching, dialogs, credentials, registry/autostart, clipboard, platform metadata, and network mounts. Pass OS facts into `core` as typed values or traits instead of letting `core` discover the OS itself.
+- Keep module public surfaces small. Re-export only the intended feature API from `mod.rs`; keep helpers private or `pub(crate)`. Prefer newtypes/enums/builders over raw strings, booleans, or loosely coupled tuples when they encode domain meaning.
+- Treat recoverable failures as `Result`. Avoid `unwrap`, `expect`, and `panic!` in production paths unless they document a real invariant with a specific message. They are acceptable in tests and in one-time startup invariants where recovery is impossible.
+- Keep dependencies platform-conscious. Put OS-specific crates under target-specific Cargo sections, keep default features off when they pull native TLS/crypto/toolchain dependencies, and document any native dependency or cross-compile risk in `Cargo.toml` or `docs/GOTCHAS.md`.
+- Before finishing native source changes, run `cargo fmt` and the narrowest meaningful `cargo check`/`cargo test` from `native/`. For changes that touch shared APIs, run broader host checks as well. If checks are skipped, report why.
+- After modifying native source code, keep the graph current using the graphify commands in the `graphify` section below.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. The initial graph is AST-only, built from `native/src` into the repository root.
