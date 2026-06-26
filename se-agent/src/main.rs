@@ -2,7 +2,7 @@
 //! shared, dependency-free `agent_proto` module — included here so the app and
 //! this minimal crate use one definition.
 
-#[path = "../../native/src/agent_proto.rs"]
+#[path = "../../native/src/agent_proto/mod.rs"]
 mod agent_proto;
 
 use std::io::Write;
@@ -11,7 +11,11 @@ fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--version" | "-V" => {
-            println!("proto={} ver={}", agent_proto::PROTO_VERSION, env!("CARGO_PKG_VERSION"));
+            println!(
+                "proto={} ver={}",
+                agent_proto::PROTO_VERSION,
+                env!("CARGO_PKG_VERSION")
+            );
         }
         "--serve" | "" => {
             // The serve loop dispatches requests on worker threads that all

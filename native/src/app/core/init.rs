@@ -200,19 +200,12 @@ impl App {
             rollback_rx: None,
             update_feed_draft: crate::updater::update_source_str().unwrap_or_default(),
             pending_initial_path: initial_path,
-            #[cfg(windows)]
-            integration_ctx_menu: crate::shell_register::context_menu_enabled(),
-            #[cfg(not(windows))]
-            integration_ctx_menu: false,
+            integration_ctx_menu: Self::initial_context_menu_enabled(),
 
-            #[cfg(windows)]
             clip_prepare_rx: None,
-            #[cfg(windows)]
             virtual_clip: None,
 
-            #[cfg(windows)]
             watcher: None,
-            #[cfg(windows)]
             watcher_rx: None,
             index_dirty: false,
             index_last_saved: std::time::Instant::now(),

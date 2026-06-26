@@ -173,8 +173,18 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
 pub(crate) fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
     for entry in be.list_dir(path)? {
         let child = format!("{}/{}", path.trim_end_matches('/'), entry.name);
-        if entry.is_dir {
-            remove_dir_recursive(be, &child)?;
+        if entry.is_symlink && !entry.is_dir {
+            be.remove_file_id(&child, entry.id.as_deref())?;
+        } else if entry.is_dir {
+            let meta = be.stat(&child)?;
+            if meta.is_symlink {
+                return Err(eio("Symlink/Reparse-Point wird nicht rekursiv geloescht"));
+            }
+            if meta.is_dir {
+                remove_dir_recursive(be, &child)?;
+            } else {
+                be.remove_file_id(&child, entry.id.as_deref())?;
+            }
         } else {
             be.remove_file_id(&child, entry.id.as_deref())?;
         }

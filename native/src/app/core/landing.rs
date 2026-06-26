@@ -200,31 +200,32 @@ impl App {
     }
 
     fn landing_action_tiles(&self) -> Vec<LandingTile> {
-        let mut tiles = Vec::new();
-        tiles.push(LandingTile::action(
-            "Ordner waehlen",
-            "Lokalen Ordner oeffnen",
-            "Browse",
-            LandingAction::ChooseFolder,
-        ));
-        tiles.push(LandingTile::action(
-            "Neue Verbindung",
-            "SFTP, FTP, WebDAV oder Share",
-            "Remote",
-            LandingAction::NewConnection,
-        ));
-        tiles.push(LandingTile::action(
-            "Sync-Jobs",
-            "Jobs verwalten, starten, vergleichen",
-            "Sync",
-            LandingAction::ShowSyncJobs,
-        ));
-        tiles.push(LandingTile::action(
-            "Teilen",
-            "Peer-Share und Quick Share",
-            "Share",
-            LandingAction::ShowShare,
-        ));
+        let mut tiles = vec![
+            LandingTile::action(
+                "Ordner waehlen",
+                "Lokalen Ordner oeffnen",
+                "Browse",
+                LandingAction::ChooseFolder,
+            ),
+            LandingTile::action(
+                "Neue Verbindung",
+                "SFTP, FTP, WebDAV oder Share",
+                "Remote",
+                LandingAction::NewConnection,
+            ),
+            LandingTile::action(
+                "Sync-Jobs",
+                "Jobs verwalten, starten, vergleichen",
+                "Sync",
+                LandingAction::ShowSyncJobs,
+            ),
+            LandingTile::action(
+                "Teilen",
+                "Peer-Share und Quick Share",
+                "Share",
+                LandingAction::ShowShare,
+            ),
+        ];
         if self.index_building {
             tiles.push(LandingTile::status(
                 "Index laeuft",

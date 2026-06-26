@@ -3,9 +3,10 @@
 # (release-native/update-feed/), which installs can pull from over HTTPS via
 # raw.githubusercontent.com — i.e. "the git is the update location".
 #
-# Cross-compiles with the gnu toolchain, so it runs on Linux/macOS/WSL too
-# (needs: rustup target add x86_64-pc-windows-gnu + mingw-w64; makensis for the
-# installer). Builds the feed, the portable exe AND the NSIS installer.
+# Cross-compiles with the gnu toolchain (needs: rustup target add
+# x86_64-pc-windows-gnu + mingw-w64; makensis for the installer). Run on
+# Linux/WSL for the complete Windows+Linux feed; non-Linux hosts must opt into a
+# Windows-only feed with SMART_EXPLORER_ALLOW_PARTIAL_FEED=1.
 #
 # Usage:  native/publish-feed.sh
 set -euo pipefail
@@ -14,14 +15,21 @@ repo_root="$(cd .. && pwd)"
 rel="$repo_root/release-native"
 feed="$rel/update-feed"
 target="x86_64-pc-windows-gnu"
+host_os="$(uname -s 2>/dev/null || echo unknown)"
+allow_partial_feed="${SMART_EXPLORER_ALLOW_PARTIAL_FEED:-0}"
 
 version="$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
 echo "Building Smart Explorer $version for $target ..."
 
+if [ "$host_os" != "Linux" ] && [ "$allow_partial_feed" != "1" ]; then
+  echo "Refusing to update the shared feed from $host_os: Linux payloads require a Linux/WSL host." >&2
+  echo "Run this on Linux/WSL for a complete feed, or set SMART_EXPLORER_ALLOW_PARTIAL_FEED=1 for a Windows-only feed." >&2
+  exit 1
+fi
+
 cargo build --release --target "$target" --bin smart_explorer --bin smart_explorer_updater
 exe="target/$target/release/smart_explorer.exe"
 updater="target/$target/release/smart_explorer_updater.exe"
-host_os="$(uname -s 2>/dev/null || echo unknown)"
 linux_exe=""
 linux_updater=""
 if [ "$host_os" = "Linux" ]; then
@@ -30,7 +38,7 @@ if [ "$host_os" = "Linux" ]; then
   linux_exe="target/release/smart_explorer"
   linux_updater="target/release/smart_explorer_updater"
 else
-  echo "Linux desktop feed payloads skipped (requires a Linux host; CI builds them on ubuntu)."
+  echo "Linux desktop feed payloads skipped by explicit partial-feed opt-in."
 fi
 
 mkdir -p "$feed"
@@ -41,6 +49,9 @@ cp "$updater" "$feed/smart_explorer_updater.exe"
 if [ -n "$linux_exe" ]; then
   cp "$linux_exe" "$feed/smart_explorer"
   cp "$linux_updater" "$feed/smart_explorer_updater"
+else
+  rm -f "$feed/smart_explorer" "$feed/smart_explorer.sha256"
+  rm -f "$feed/smart_explorer_updater" "$feed/smart_explorer_updater.sha256"
 fi
 ( cd "$feed"
   sha256sum smart_explorer.exe > smart_explorer.exe.sha256

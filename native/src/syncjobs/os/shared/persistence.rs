@@ -131,10 +131,8 @@ pub(super) fn parse_kv(body: &str) -> Option<SyncJob> {
             "retain_days" => j.retain_days = v.parse().unwrap_or(30),
             "interval_min" => j.interval_min = v.parse().unwrap_or(0),
             "include_hidden" => j.include_hidden = v != "0",
-            "ignore" => {
-                if !v.is_empty() {
-                    j.ignore.push(v.to_string())
-                }
+            "ignore" if !v.is_empty() => {
+                j.ignore.push(v.to_string());
             }
             "last_run" => j.last_run = v.parse().unwrap_or(0),
             "enabled" => j.enabled = v != "0",
@@ -371,7 +369,7 @@ mod tests {
         assert_eq!(l2.iter().find(|j| j.id == a.id).unwrap().name, "A2");
         assert_eq!(l2.len(), 2);
 
-        save_dir(&dir, &[b.clone()]).unwrap();
+        save_dir(&dir, std::slice::from_ref(&b)).unwrap();
         let l3 = load_dir(&dir);
         assert_eq!(l3.len(), 1);
         assert_eq!(l3[0].id, b.id);

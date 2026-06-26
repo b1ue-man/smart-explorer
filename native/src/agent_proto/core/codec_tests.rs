@@ -1,4 +1,5 @@
 use super::{Frame, SearchSpec, WireMeta, WireNode};
+use std::io::{Cursor, ErrorKind};
 
 #[test]
 fn frame_roundtrip() {
@@ -104,4 +105,12 @@ fn frame_roundtrip() {
         assert_eq!(id, 42);
         assert_eq!(got, f);
     }
+}
+
+#[test]
+fn oversized_frame_is_rejected_before_body_read() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(64 * 1024 * 1024 + 1u32).to_le_bytes());
+    let err = super::read_frame(&mut Cursor::new(bytes)).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidData);
 }

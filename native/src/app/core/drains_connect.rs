@@ -145,7 +145,6 @@ impl App {
         }
     }
 
-    #[cfg(windows)]
     pub(in crate::app) fn drain_clip_prepare(&mut self) {
         let mut files = None;
         if let Some(rx) = self.clip_prepare_rx.as_ref() {
@@ -170,7 +169,7 @@ impl App {
             .map(|f| (f.abs.clone(), f.rel.clone()))
             .collect();
         let n = files.len();
-        match crate::virtual_clipboard::set_clipboard(files) {
+        match set_virtual_clipboard(files) {
             Ok(seq) => {
                 self.virtual_clip = Some((seq, pairs));
                 self.notice = Some((
@@ -186,9 +185,6 @@ impl App {
             }
         }
     }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn drain_clip_prepare(&mut self) {}
 
     pub(in crate::app) fn drain_update(&mut self) {
         use crate::updater::UpdateMsg;

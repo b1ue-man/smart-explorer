@@ -17,7 +17,7 @@ impl FolderIndex {
             .par_iter()
             .filter_map(|p| fuzzy_score(&q_lower, p.as_bytes()).map(|s| (p.clone(), s)))
             .collect();
-        scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
         scored.truncate(n);
         scored
     }

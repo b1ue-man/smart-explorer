@@ -24,7 +24,7 @@ mod platform;
 mod search;
 
 #[allow(unused_imports)]
-pub use filters::{is_generic_id, path_has_skipped_segment, should_skip, should_skip_meta};
+pub use filters::{is_generic_id, path_has_skipped_segment, should_skip};
 pub use model::{FolderIndex, IndexMsg};
 pub use os::stat_and_rank;
 

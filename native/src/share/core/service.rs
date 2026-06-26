@@ -1,5 +1,5 @@
 use crossbeam_channel::{unbounded, Receiver};
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +12,7 @@ use super::backend::PeerBackend;
 use super::backend::ShareIrohNode;
 use super::core::{eio, hmac_proof, now_secs, presence_payload, random_token, verify_hmac};
 use super::identity::ShareIdentity;
+use super::line::{read_line_limited, MAX_SIGNAL_LINE};
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::system::lan_ips;
 use super::types::{
@@ -575,7 +576,7 @@ enum SignalConnection {
     },
     WebSocket {
         label: String,
-        socket: WebSocket<MaybeTlsStream<TcpStream>>,
+        socket: Box<WebSocket<MaybeTlsStream<TcpStream>>>,
     },
 }
 
@@ -629,7 +630,7 @@ impl SignalConnection {
         set_ws_timeout(socket.get_mut(), Duration::from_millis(500));
         Ok(Self::WebSocket {
             label: url.to_string(),
-            socket,
+            socket: Box::new(socket),
         })
     }
 
@@ -659,7 +660,7 @@ impl SignalConnection {
         match self {
             Self::Tcp { reader, .. } => {
                 let mut line = String::new();
-                match reader.read_line(&mut line) {
+                match read_line_limited(reader, &mut line, MAX_SIGNAL_LINE) {
                     Ok(0) => Ok(None),
                     Ok(_) => Ok(Some(line)),
                     Err(e) => Err(e),

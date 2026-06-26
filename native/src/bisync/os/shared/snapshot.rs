@@ -198,7 +198,7 @@ fn walk_hashed_via_agent(
                 .rel
                 .rsplit('/')
                 .next()
-                .map_or(false, |n| n.starts_with('.'));
+                .is_some_and(|n| n.starts_with('.'));
             if !filter.include_hidden && hidden {
                 continue;
             }
@@ -265,7 +265,12 @@ pub fn walk_files(
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 scope.spawn(|| loop {
-                    if cancel.load(Ordering::Relaxed) || first_err.lock().unwrap().is_some() {
+                    if cancel.load(Ordering::Relaxed)
+                        || first_err
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .is_some()
+                    {
                         break;
                     }
                     let i = idx.fetch_add(1, Ordering::Relaxed);
@@ -339,7 +344,8 @@ pub fn walk_files(
                                 }
                             }
                             if !files.is_empty() {
-                                let mut o = out.lock().unwrap();
+                                let mut o =
+                                    out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                                 // A backend may report two files with the same
                                 // name in one folder (e.g. Google Drive keys by
                                 // id, not name). Keep the newest deterministically
@@ -354,11 +360,15 @@ pub fn walk_files(
                                 }
                             }
                             if !dirs.is_empty() {
-                                next.lock().unwrap().extend(dirs);
+                                next.lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .extend(dirs);
                             }
                         }
                         Err(e) => {
-                            let mut slot = first_err.lock().unwrap();
+                            let mut slot = first_err
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             if slot.is_none() {
                                 *slot = Some(e);
                             }
@@ -369,10 +379,17 @@ pub fn walk_files(
             }
         });
 
-        if let Some(e) = first_err.into_inner().unwrap() {
+        if let Some(e) = first_err
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
             return Err(e);
         }
-        level = next.into_inner().unwrap();
+        level = next
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
-    Ok(out.into_inner().unwrap())
+    Ok(out
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()))
 }

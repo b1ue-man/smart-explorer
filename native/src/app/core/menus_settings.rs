@@ -165,11 +165,7 @@ impl App {
             Color32::from_gray(140),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
-        let update_payload = if cfg!(windows) {
-            "smart_explorer.exe"
-        } else {
-            "smart_explorer"
-        };
+        let update_payload = update_payload_name();
         ui.add(
             egui::TextEdit::singleline(&mut self.update_feed_draft)
                 .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
@@ -354,8 +350,7 @@ impl App {
         }
 
         // ─── Shell integration (Windows) ───────────────────────────────
-        #[cfg(windows)]
-        {
+        if shell_integration_available() {
             ui.add_space(12.0);
             ui.label(
                 RichText::new("INTEGRATION")
@@ -373,7 +368,7 @@ impl App {
                 );
             if resp.changed() {
                 let on = self.integration_ctx_menu;
-                match crate::shell_register::set_context_menu(on) {
+                match set_context_menu_enabled(on) {
                     Ok(()) => {
                         self.notice = Some((
                             if on {
