@@ -18,6 +18,11 @@ These rules apply to `native/src` unless a task explicitly says otherwise.
 - Keep module public surfaces small. Re-export only the intended feature API from `mod.rs`; keep helpers private or `pub(crate)`. Prefer newtypes/enums/builders over raw strings, booleans, or loosely coupled tuples when they encode domain meaning.
 - Treat recoverable failures as `Result`. Avoid `unwrap`, `expect`, and `panic!` in production paths unless they document a real invariant with a specific message. They are acceptable in tests and in one-time startup invariants where recovery is impossible.
 - Keep dependencies platform-conscious. Put OS-specific crates under target-specific Cargo sections, keep default features off when they pull native TLS/crypto/toolchain dependencies, and document any native dependency or cross-compile risk in `Cargo.toml` or `docs/GOTCHAS.md`.
+- For staged updates or elevated helper flows, bind every staged executable to an expected SHA-256 and revalidate it immediately before replacement or relaunch. Length checks alone are not sufficient.
+- For sync/delete/overwrite flows, preserve retryability and reversibility as hard invariants. Failed apply steps must not be written into a new baseline as successful, and destructive changes must not proceed when the backup/conflict-copy step fails.
+- Recursive delete code must never follow symlink, junction, or reparse-point children out of the authorized root. Validate every effective child target or treat link-like directories as non-recursive boundaries.
+- `os/shared` must stay free of direct Windows/Unix imports, shell/process FFI, registry, reparse-point, platform metadata, and platform-specific `CommandExt` behavior. Put those behind per-OS adapter functions, even when the caller is already under `os/`.
+- Any new CI/release guard added during a fix must be reflected in docs and scripts together, so local release, CI release, and auto-update feed behavior do not drift.
 - Before finishing native source changes, run `cargo fmt` and the narrowest meaningful `cargo check`/`cargo test` from `native/`. For changes that touch shared APIs, run broader host checks as well. If checks are skipped, report why.
 - After modifying native source code, keep the graph current using the graphify commands in the `graphify` section below.
 

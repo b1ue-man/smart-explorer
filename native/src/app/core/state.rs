@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::*;
+use crate::app::shared_platform_helpers::ClipboardVirtualFile;
 
 type FolderSearchRx = Receiver<(u64, Vec<(String, i32)>)>;
 type MergeLoadRx = Receiver<Result<(String, Vec<crate::linemerge::Row>), String>>;

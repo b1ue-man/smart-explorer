@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::*;
+use crate::app::shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
 
 impl App {
     pub(in crate::app) fn clipboard_copy_files(&mut self, cut: bool) {
