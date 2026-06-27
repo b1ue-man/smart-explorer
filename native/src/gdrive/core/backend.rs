@@ -1,4 +1,4 @@
-use super::api::{export_ext, export_format, open_stream, send_retry, API};
+use super::api::{drive_request, export_ext, export_format, open_stream, send_retry, API};
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::transfer::open_writer;
 use super::GDriveBackend;
@@ -37,7 +37,9 @@ impl Backend for GDriveBackend {
             if let Some(files) = v["files"].as_array() {
                 let base = norm(path);
                 for f in files {
-                    let m = Self::meta_from_json(f);
+                    let Some(m) = Self::meta_from_json(f, None) else {
+                        continue;
+                    };
                     if let Some(fid) = f["id"].as_str() {
                         let child_path = if base.is_empty() {
                             m.name.clone()
@@ -45,12 +47,10 @@ impl Backend for GDriveBackend {
                             format!("{}/{}", base, m.name)
                         };
                         if let Some(mime) = f["mimeType"].as_str() {
-                            self.mimes
-                                .lock()
-                                .unwrap()
+                            self.mimes_guard()?
                                 .insert(child_path.clone(), mime.to_string());
                         }
-                        self.ids.lock().unwrap().insert(child_path, fid.to_string());
+                        self.ids_guard()?.insert(child_path, fid.to_string());
                     }
                     out.push(m);
                 }
@@ -62,7 +62,7 @@ impl Backend for GDriveBackend {
         }
         // This directory's children are now fully enumerated -> future creates
         // here can skip the existence probe (see `upload`/`ensure_dir`).
-        self.listed.lock().unwrap().insert(norm(path));
+        self.listed_guard()?.insert(norm(path));
         Ok(out)
     }
 
@@ -88,7 +88,13 @@ impl Backend for GDriveBackend {
             API, id
         );
         let v = self.get_json(&url)?;
-        Ok(Self::meta_from_json(&v))
+        let fallback = key.rsplit('/').next().filter(|s| !s.is_empty());
+        Self::meta_from_json(&v, fallback).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Drive-Metadaten ohne Namen",
+            )
+        })
     }
 
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
@@ -106,7 +112,8 @@ impl Backend for GDriveBackend {
             format!("{}/files/{}?alt=media", API, id)
         };
         let bearer = format!("Bearer {}", auth);
-        let resp = open_stream(|| ureq::get(&url).set("Authorization", &bearer).call())?;
+        let resp =
+            open_stream(|| drive_request(ureq::get(&url).set("Authorization", &bearer).call()))?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -123,7 +130,8 @@ impl Backend for GDriveBackend {
             format!("{}/files/{}?alt=media", API, id)
         };
         let bearer = format!("Bearer {}", auth);
-        let resp = open_stream(|| ureq::get(&url).set("Authorization", &bearer).call())?;
+        let resp =
+            open_stream(|| drive_request(ureq::get(&url).set("Authorization", &bearer).call()))?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -163,12 +171,14 @@ impl Backend for GDriveBackend {
         }
         let payload = serde_json::json!({ "name": dst_name }).to_string();
         send_retry(|| {
-            ureq::request("PATCH", &url)
-                .set("Authorization", &bearer)
-                .set("Content-Type", "application/json")
-                .send_string(&payload)
+            drive_request(
+                ureq::request("PATCH", &url)
+                    .set("Authorization", &bearer)
+                    .set("Content-Type", "application/json")
+                    .send_string(&payload),
+            )
         })?;
-        let mut ids = self.ids.lock().unwrap();
+        let mut ids = self.ids_guard()?;
         ids.remove(&norm(src));
         ids.insert(norm(dst), id);
         Ok(())
@@ -223,7 +233,7 @@ impl Backend for GDriveBackend {
                 };
                 // Newest first; if the name belongs in the mirror, keep it and
                 // trash the older copies; if it's an orphaned dup, trash them all.
-                group.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+                group.sort_by_key(|m| std::cmp::Reverse(m.mtime_ms));
                 let start = if keep(&rel) { 1 } else { 0 };
                 for extra in &group[start..] {
                     if let Some(id) = &extra.id {

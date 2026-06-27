@@ -375,7 +375,6 @@ impl App {
 
         // Drain the background clipboard-key poller (Windows). This is what
         // actually makes Ctrl+V work for a file clipboard — see clip_key_rx.
-        #[cfg(windows)]
         if !typing && !renaming {
             if let Some(rx) = self.clip_key_rx.as_ref() {
                 while let Ok(k) = rx.try_recv() {

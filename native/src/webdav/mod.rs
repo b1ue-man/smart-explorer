@@ -1,4 +1,4 @@
 #[path = "core/webdav.rs"]
-mod webdav;
+mod core_impl;
 
-pub use webdav::{WebdavBackend, WebdavConfig};
+pub use core_impl::{WebdavBackend, WebdavConfig};

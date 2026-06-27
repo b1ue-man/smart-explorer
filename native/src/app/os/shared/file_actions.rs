@@ -13,31 +13,13 @@ impl App {
         })
     }
 
-    /// Open the native file Properties sheet for the focused item.
-    #[cfg(windows)]
     pub(in crate::app) fn show_properties(&mut self) {
         let p = match self.focus_path() {
-            Some(p) => p.replace('/', "\\"),
+            Some(p) => p,
             None => return,
         };
-        use windows_sys::Win32::UI::Shell::{
-            ShellExecuteExW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW,
-        };
-        let verb: Vec<u16> = "properties".encode_utf16().chain(Some(0)).collect();
-        let file: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
-        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        info.fMask = SEE_MASK_INVOKEIDLIST;
-        info.lpVerb = verb.as_ptr();
-        info.lpFile = file.as_ptr();
-        info.nShow = 1; // SW_SHOWNORMAL
-        unsafe {
-            ShellExecuteExW(&mut info);
-        }
+        show_properties_for_path(&p);
     }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn show_properties(&mut self) {}
 
     /// Invert the selection within the current view.
     pub(in crate::app) fn invert_selection(&mut self) {
@@ -117,7 +99,10 @@ impl App {
             ));
             return;
         }
-        let p = sel_key_path(self.selection.iter().next().unwrap()).to_string();
+        let Some(selected) = self.selection.iter().next() else {
+            return;
+        };
+        let p = sel_key_path(selected).to_string();
         let name = p.rsplit('/').next().unwrap_or("").to_string();
         self.rename_open = Some((p, name));
         self.rename_focus = true;

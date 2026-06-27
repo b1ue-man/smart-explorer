@@ -139,10 +139,11 @@ impl CompiledFilter {
             return false;
         }
 
-        if !self.ext_set.is_empty() && !e.is_dir {
-            if !self.ext_set.iter().any(|x| x == e.ext.as_ref()) {
-                return false;
-            }
+        if !self.ext_set.is_empty()
+            && !e.is_dir
+            && !self.ext_set.iter().any(|x| x == e.ext.as_ref())
+        {
+            return false;
         }
 
         if !self.in_range_u64(e.size, &f.size) {

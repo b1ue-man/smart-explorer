@@ -1,6 +1,7 @@
 use crate::syncjobs::SyncJob;
 use std::sync::atomic::AtomicBool;
 
+use super::platform;
 use super::state::{log, now_secs};
 
 /// Run one job to completion (synchronously). Endpoints are resolved the same
@@ -77,11 +78,7 @@ pub(crate) fn run_one(job: &SyncJob) {
 /// Run a user-specified shell command (run-before/after a job), waiting for it.
 /// Best-effort: failures are logged, not fatal.
 fn run_cmd(cmd: &str) {
-    #[cfg(windows)]
-    let result = std::process::Command::new("cmd").args(["/C", cmd]).status();
-    #[cfg(not(windows))]
-    let result = std::process::Command::new("sh").args(["-c", cmd]).status();
-    match result {
+    match platform::run_shell_command(cmd) {
         Ok(s) => log(&format!("ran command ({}): {}", s, cmd)),
         Err(e) => log(&format!("command failed ({}): {}", e, cmd)),
     }

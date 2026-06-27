@@ -249,11 +249,8 @@ impl App {
             )
         });
 
-        // Drag OUT to Explorer (Windows): once the pointer leaves the window
-        // while still dragging, hand the files to the OS drag loop (blocks until
-        // the drop completes), then refresh in case it was a move.
-        #[cfg(windows)]
-        if down && !self.drag_out_started {
+        // Drag OUT to the platform file manager when the adapter supports it.
+        if os_drag_out_supported() && down && !self.drag_out_started {
             if let Some(p) = pos {
                 if !ctx.screen_rect().contains(p) {
                     self.drag_out_started = true;
@@ -269,7 +266,7 @@ impl App {
                         self.drag_filter = None;
                         files
                     };
-                    crate::dragout::drag_out(&files);
+                    drag_out_files(&files);
                     if cleanup_after_drag {
                         for f in &files {
                             cleanup_temp_copy(Path::new(f));

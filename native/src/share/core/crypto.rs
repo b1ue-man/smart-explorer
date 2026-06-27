@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 type HmacSha256 = Hmac<Sha256>;
 
 pub(crate) fn eio<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 pub(crate) fn now_secs() -> i64 {
@@ -19,18 +19,34 @@ pub(crate) fn now_secs() -> i64 {
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];
-    let _ = getrandom::getrandom(&mut out);
+    fill_random(&mut out);
     out
 }
 
 pub(crate) fn random_token(bytes: usize) -> String {
     let mut raw = vec![0u8; bytes];
-    let _ = getrandom::getrandom(&mut raw);
+    fill_random(&mut raw);
     b64(&raw)
 }
 
 pub(crate) fn random_hex_token<const N: usize>() -> String {
     hex(&random_bytes::<N>())
+}
+
+fn fill_random(out: &mut [u8]) {
+    let mut last_err = None;
+    for _ in 0..3 {
+        match getrandom::getrandom(out) {
+            Ok(()) => return,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    panic!(
+        "secure random source unavailable after retries: {}",
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    );
 }
 
 pub(crate) fn random_uuid_v4() -> String {
@@ -78,7 +94,7 @@ pub(crate) fn hex(raw: &[u8]) -> String {
 
 pub(crate) fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("hex length must be even".into());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -105,6 +121,7 @@ pub(crate) fn public_fingerprint(public_key: &[u8]) -> String {
     hex(&digest[..16])
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn presence_payload(
     kind: &str,
     relation_id: &str,

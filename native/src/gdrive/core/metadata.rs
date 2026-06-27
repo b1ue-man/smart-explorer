@@ -1,4 +1,4 @@
-use super::api::{err, not_found, parse_json, send_retry, API, FOLDER_MIME};
+use super::api::{drive_request, err, not_found, parse_json, send_retry, API, FOLDER_MIME};
 use super::core::{cloud_urlenc, norm, parse_rfc3339_ms, split_parent};
 use super::GDriveBackend;
 use crate::vfs::{VfsMeta, VfsResult};
@@ -7,21 +7,21 @@ impl GDriveBackend {
     /// The Drive mimeType for `path` (cached from list_dir, else a stat call).
     pub(super) fn mime_of(&self, path: &str) -> Option<String> {
         let key = norm(path);
-        if let Some(m) = self.mimes.lock().unwrap().get(&key).cloned() {
+        if let Some(m) = self.mimes_guard().ok()?.get(&key).cloned() {
             return Some(m);
         }
         let id = self.resolve(&key).ok()?;
         let url = format!("{}/files/{}?fields=mimeType", API, id);
         let v = self.get_json(&url).ok()?;
         let m = v["mimeType"].as_str()?.to_string();
-        self.mimes.lock().unwrap().insert(key, m.clone());
+        self.mimes_guard().ok()?.insert(key, m.clone());
         Some(m)
     }
 
     /// Resolve a forward-slash path to a Drive fileId (walking + caching).
     pub(super) fn resolve(&self, path: &str) -> VfsResult<String> {
         let key = norm(path);
-        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
             return Ok(id);
         }
         // Walk segment by segment from the deepest cached ancestor.
@@ -34,7 +34,7 @@ impl GDriveBackend {
             } else {
                 format!("{}/{}", cur_path, seg)
             };
-            if let Some(id) = self.ids.lock().unwrap().get(&next_path).cloned() {
+            if let Some(id) = self.ids_guard()?.get(&next_path).cloned() {
                 cur_id = id;
                 cur_path = next_path;
                 continue;
@@ -42,10 +42,7 @@ impl GDriveBackend {
             let child = self
                 .find_child(&cur_id, seg)?
                 .ok_or_else(|| not_found(&next_path))?;
-            self.ids
-                .lock()
-                .unwrap()
-                .insert(next_path.clone(), child.clone());
+            self.ids_guard()?.insert(next_path.clone(), child.clone());
             cur_id = child;
             cur_path = next_path;
         }
@@ -71,10 +68,17 @@ impl GDriveBackend {
             .map(|s| s.to_string()))
     }
 
-    pub(super) fn meta_from_json(f: &serde_json::Value) -> VfsMeta {
+    pub(super) fn meta_from_json(
+        f: &serde_json::Value,
+        fallback_name: Option<&str>,
+    ) -> Option<VfsMeta> {
         let is_dir = f["mimeType"].as_str() == Some(FOLDER_MIME);
-        VfsMeta {
-            name: f["name"].as_str().unwrap_or_default().to_string(),
+        let name = f["name"]
+            .as_str()
+            .or(fallback_name)
+            .filter(|name| !name.is_empty())?;
+        Some(VfsMeta {
+            name: name.to_string(),
             is_dir,
             is_symlink: false,
             size: f["size"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
@@ -90,7 +94,7 @@ impl GDriveBackend {
             system: false,
             id: f["id"].as_str().map(|s| s.to_string()),
             content_md5: f["md5Checksum"].as_str().map(|s| s.to_string()),
-        }
+        })
     }
 
     /// MIME type of a file by its id (for export detection when opening by id).
@@ -110,27 +114,27 @@ impl GDriveBackend {
         if key.is_empty() {
             return Ok("root".to_string());
         }
-        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
             return Ok(id);
         }
         let (parent, name) = split_parent(&key);
         let parent_id = self.ensure_dir(&parent)?;
 
-        let _g = self.create_lock.lock().unwrap();
+        let _g = self.create_guard()?;
         // Re-check under the lock - another thread may have just created it.
-        if let Some(id) = self.ids.lock().unwrap().get(&key).cloned() {
+        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
             return Ok(id);
         }
         // If the parent's children are fully known and this folder isn't among
         // them, it's known-absent -> skip the existence query.
-        let known_absent = self.listed.lock().unwrap().contains(&parent);
+        let known_absent = self.listed_guard()?.contains(&parent);
         let existing = if known_absent {
             None
         } else {
             self.find_child(&parent_id, name)?
         };
         if let Some(id) = existing {
-            self.ids.lock().unwrap().insert(key, id.clone());
+            self.ids_guard()?.insert(key, id.clone());
             return Ok(id);
         }
         // Create the folder.
@@ -143,18 +147,35 @@ impl GDriveBackend {
         let bearer = format!("Bearer {}", auth);
         let payload = body.to_string();
         let v = parse_json(send_retry(|| {
-            ureq::post(&format!("{}/files?fields=id", API))
-                .set("Authorization", &bearer)
-                .set("Content-Type", "application/json")
-                .send_string(&payload)
+            drive_request(
+                ureq::post(&format!("{}/files?fields=id", API))
+                    .set("Authorization", &bearer)
+                    .set("Content-Type", "application/json")
+                    .send_string(&payload),
+            )
         })?)?;
         let id = v["id"]
             .as_str()
             .ok_or_else(|| err("kein id nach mkdir"))?
             .to_string();
-        self.ids.lock().unwrap().insert(key.clone(), id.clone());
+        self.ids_guard()?.insert(key.clone(), id.clone());
         // A brand-new folder has no children -> its contents are fully known.
-        self.listed.lock().unwrap().insert(key);
+        self.listed_guard()?.insert(key);
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn meta_from_json_requires_a_usable_name() {
+        let f = json!({"id": "1", "mimeType": "text/plain"});
+        assert!(GDriveBackend::meta_from_json(&f, None).is_none());
+
+        let m = GDriveBackend::meta_from_json(&f, Some("fallback.txt")).unwrap();
+        assert_eq!(m.name, "fallback.txt");
     }
 }

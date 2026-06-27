@@ -35,10 +35,12 @@ impl App {
                 }
                 if top.len() < 10 {
                     top.push(e);
-                    top.sort_by(|a, b| b.size.cmp(&a.size));
-                } else if e.size > top.last().unwrap().size {
-                    *top.last_mut().unwrap() = e;
-                    top.sort_by(|a, b| b.size.cmp(&a.size));
+                    top.sort_by_key(|entry| std::cmp::Reverse(entry.size));
+                } else if top.last().map(|last| e.size > last.size).unwrap_or(false) {
+                    if let Some(last) = top.last_mut() {
+                        *last = e;
+                    }
+                    top.sort_by_key(|entry| std::cmp::Reverse(entry.size));
                 }
             }
         }
@@ -47,7 +49,7 @@ impl App {
             .into_iter()
             .map(|(k, (c, b))| (k.to_string(), c, b))
             .collect();
-        by_ext_v.sort_by(|a, b| b.2.cmp(&a.2));
+        by_ext_v.sort_by_key(|entry| std::cmp::Reverse(entry.2));
         by_ext_v.truncate(15);
 
         SummaryData {
@@ -242,7 +244,9 @@ impl App {
         if self.summary_cache.is_none() {
             self.summary_cache = Some(self.build_summary());
         }
-        let s = self.summary_cache.as_ref().unwrap();
+        let Some(s) = self.summary_cache.as_ref() else {
+            return;
+        };
 
         ui.heading("Zusammenfassung");
         ui.add_space(4.0);

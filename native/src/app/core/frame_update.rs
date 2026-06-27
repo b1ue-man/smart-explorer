@@ -28,11 +28,8 @@ impl eframe::App for App {
         if self.index_dirty {
             let _ = self.folder_index.save(&folder_index_path());
         }
-        #[cfg(windows)]
-        {
-            self.watcher = None;
-            self.watcher_rx = None;
-        }
+        self.watcher = None;
+        self.watcher_rx = None;
 
         self.entries = Vec::new();
         self.view = Vec::new();
@@ -148,16 +145,13 @@ impl App {
             }
         }
 
-        // Lazy-start the filesystem watcher once we have an index.
-        #[cfg(windows)]
-        if self.watcher.is_none() && !self.folder_index.is_empty() {
+        // Lazy-start the filesystem watcher once the platform adapter can use it.
+        if self.should_start_watcher() {
             self.start_watcher();
         }
 
-        // Lazy-start the background clipboard-key poller (needs the egui ctx
-        // so it can wake the UI on detection).
-        #[cfg(windows)]
-        if self.clip_key_rx.is_none() {
+        // Lazy-start the background clipboard-key poller when the platform has one.
+        if self.should_start_clip_key_poller() {
             self.start_clip_key_poller(ctx);
         }
 

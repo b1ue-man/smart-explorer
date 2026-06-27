@@ -103,7 +103,7 @@ unsafe fn remove_shell_verbs(
     let mut remove_ids: Vec<u32> = Vec::new();
     for pos in 0..count {
         let id = GetMenuItemID(hmenu, pos);
-        if id == u32::MAX || id < ID_CMD_FIRST || id > ID_CMD_LAST {
+        if id == u32::MAX || !(ID_CMD_FIRST..=ID_CMD_LAST).contains(&id) {
             continue;
         }
         let mut buf = [0u8; 128];
@@ -187,13 +187,15 @@ unsafe fn track_and_invoke(
         MenuResult::Own(chosen.0 as u32)
     } else {
         let verb_id = (chosen.0 as u32).wrapping_sub(ID_CMD_FIRST);
-        let mut info = CMINVOKECOMMANDINFOEX::default();
-        info.cbSize = std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32;
-        info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
-        info.hwnd = hwnd;
-        info.lpVerb = PCSTR(verb_id as usize as *const u8);
-        info.nShow = SW_SHOWNORMAL.0;
-        info.ptInvoke = POINT { x, y };
+        let info = CMINVOKECOMMANDINFOEX {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+            fMask: CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE,
+            hwnd,
+            lpVerb: PCSTR(verb_id as usize as *const u8),
+            nShow: SW_SHOWNORMAL.0,
+            ptInvoke: POINT { x, y },
+            ..Default::default()
+        };
         let _ = cmenu.InvokeCommand(&info as *const _ as *const _);
         MenuResult::Shell
     };

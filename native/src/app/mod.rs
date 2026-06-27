@@ -48,7 +48,11 @@ mod omni_accel;
 mod picker_impl;
 #[path = "core/picker_types.rs"]
 mod picker_types;
-#[path = "os/shared/platform_helpers.rs"]
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod platform_helpers;
+#[cfg(not(windows))]
+#[path = "os/linux_os.rs"]
 mod platform_helpers;
 #[path = "core/prefs_tabs.rs"]
 mod prefs_tabs;

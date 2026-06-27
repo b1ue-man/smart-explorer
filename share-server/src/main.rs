@@ -8,12 +8,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{self, BufReader, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tungstenite::{accept, Error as WsError, Message, WebSocket};
+
+mod line;
+use line::{read_line_limited, read_line_limited_from_stream, MAX_JSON_LINE};
 
 const MAX_ROOM: usize = 64;
 const MAX_WATCHES: usize = 256;
@@ -148,6 +151,12 @@ fn send(w: &Writer, msg: &Out) {
     let _ = w.send(msg.clone());
 }
 
+fn lock_state(state: &Arc<Mutex<State>>) -> MutexGuard<'_, State> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn main() {
     let bind = std::env::args()
         .nth(1)
@@ -258,7 +267,7 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
 fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let mut line = String::new();
-    if read_tcp_line_raw(&mut stream, &mut line)? == 0 {
+    if read_line_limited_from_stream(&mut stream, &mut line, MAX_JSON_LINE)? == 0 {
         return Ok(());
     }
     let hello: In = match serde_json::from_str(line.trim()) {
@@ -298,7 +307,7 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
     }
 
     let id = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(&state);
         st.next_id += 1;
         let id = st.next_id;
         st.clients.insert(
@@ -317,7 +326,7 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
 
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
+        match read_line_limited(&mut reader, &mut line, MAX_JSON_LINE) {
             Ok(0) => break,
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
                 break;
@@ -333,25 +342,6 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
     }
     cleanup(id, &state);
     Ok(())
-}
-
-fn read_tcp_line_raw(stream: &mut TcpStream, line: &mut String) -> io::Result<usize> {
-    let mut total = 0usize;
-    let mut byte = [0u8; 1];
-    loop {
-        match stream.read(&mut byte) {
-            Ok(0) => return Ok(total),
-            Ok(1) => {
-                total += 1;
-                if byte[0] == b'\n' {
-                    return Ok(total);
-                }
-                line.push(byte[0] as char);
-            }
-            Ok(_) => unreachable!(),
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
@@ -415,7 +405,7 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
 }
 
 fn register_client(state: &Arc<Mutex<State>>, writer: Writer, device_id: String) -> u64 {
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(state);
     st.next_id += 1;
     let id = st.next_id;
     st.clients.insert(
@@ -520,7 +510,7 @@ fn ws_to_io(err: WsError) -> io::Error {
 }
 
 fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err.to_string())
+    io::Error::other(err.to_string())
 }
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
@@ -547,7 +537,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             state,
         ),
         In::UnwatchDirect { lookup_id } => {
-            let mut st = state.lock().unwrap();
+            let mut st = lock_state(state);
             if let Some(c) = st.clients.get_mut(&id) {
                 c.watched_lookup_ids.remove(&lookup_id);
             }
@@ -569,7 +559,7 @@ fn request_direct(
     state: &Arc<Mutex<State>>,
 ) {
     let target = {
-        let st = state.lock().unwrap();
+        let st = lock_state(state);
         st.direct
             .get(lookup_id)
             .and_then(|(owner_id, _)| st.clients.get(owner_id).map(|c| c.writer.clone()))
@@ -619,7 +609,7 @@ fn direct_access_accepted(
 fn publish_direct(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>) {
     let lookup_id = presence.relation_id.clone();
     let watchers = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         st.direct.insert(lookup_id.clone(), (id, presence.clone()));
         if let Some(c) = st.clients.get_mut(&id) {
             c.direct_lookup_ids.insert(lookup_id.clone());
@@ -631,7 +621,7 @@ fn publish_direct(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>) {
 
 fn unpublish_direct(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
     let watchers = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         if st.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id) {
             st.direct.remove(lookup_id);
         }
@@ -645,7 +635,7 @@ fn unpublish_direct(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
 
 fn watch_direct(id: u64, writer: &Writer, lookup_id: &str, state: &Arc<Mutex<State>>) {
     let current = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         if st
             .clients
             .get(&id)
@@ -689,7 +679,7 @@ fn join_room(
     state: &Arc<Mutex<State>>,
 ) {
     let (roster, joined_targets) = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         let members = st.rooms.entry(room_id.to_string()).or_default();
         if members.len() >= MAX_ROOM && !members.contains_key(&presence.device_id) {
             send(
@@ -733,7 +723,7 @@ fn join_room(
 
 fn leave_room(id: u64, room_id: &str, state: &Arc<Mutex<State>>) {
     let (device_id, targets) = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         let device_id = st
             .clients
             .get(&id)
@@ -771,7 +761,7 @@ fn leave_room(id: u64, room_id: &str, state: &Arc<Mutex<State>>) {
 
 fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
     let (directs, watched, rooms) = {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         let client = match st.clients.remove(&id) {
             Some(c) => c,
             None => return,
@@ -791,7 +781,7 @@ fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         unpublish_direct(id, &lookup, state);
     }
     for lookup in watched {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(state);
         if let Some(w) = st.watchers.get_mut(&lookup) {
             w.remove(&id);
         }
@@ -832,14 +822,14 @@ fn notify_direct_offline(lookup_id: &str, watchers: HashSet<u64>, state: &Arc<Mu
 }
 
 fn writers_for(ids: HashSet<u64>, state: &Arc<Mutex<State>>) -> Vec<Writer> {
-    let st = state.lock().unwrap();
+    let st = lock_state(state);
     ids.into_iter()
         .filter_map(|id| st.clients.get(&id).map(|c| c.writer.clone()))
         .collect()
 }
 
 fn writers_by_device(device_id: &str, state: &Arc<Mutex<State>>) -> Vec<Writer> {
-    let st = state.lock().unwrap();
+    let st = lock_state(state);
     st.clients
         .values()
         .filter(|c| c.device_id == device_id)

@@ -212,8 +212,7 @@ impl App {
                         if let Some(node) = focus_node {
                             nested_treemap(tm_rect, node, &focus_path, 0, None, &mut v);
                         }
-                        recomputed = Some((v, tm_rect));
-                        &recomputed.as_ref().unwrap().0
+                        &recomputed.insert((v, tm_rect)).0
                     } else {
                         cached_cells
                     };

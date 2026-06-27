@@ -81,7 +81,7 @@ impl App {
             // Empty exe = the worker path: it relaunches after we exit, so just
             // close. Otherwise the new binary is already in place — relaunch it.
             if !exe.as_os_str().is_empty() {
-                let _ = std::process::Command::new(&exe).arg("--updated").spawn();
+                spawn_updated_app(&exe);
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else if later {
@@ -504,12 +504,10 @@ impl App {
 
         if close || done {
             self.copy_open = false;
-            if done {
-                if self.copy_mode_pending == CopyMode::Move {
-                    let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-                    self.entries.retain(|e| !removed.contains(&e.key()));
-                    self.recompute_view();
-                }
+            if done && self.copy_mode_pending == CopyMode::Move {
+                let removed: HashSet<Arc<str>> = self.selection.drain().collect();
+                self.entries.retain(|e| !removed.contains(&e.key()));
+                self.recompute_view();
             }
         }
     }

@@ -31,11 +31,33 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
+          targets: x86_64-pc-windows-gnu,x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native
+          workspaces: |
+            native
+            native/explorer-command
+            share-server
+            se-agent
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Format check
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path explorer-command/Cargo.toml --all -- --check
+          cargo fmt --manifest-path ../share-server/Cargo.toml --all -- --check
+          cargo fmt --manifest-path ../se-agent/Cargo.toml --all -- --check
+
+      - name: Dependency audit
+        run: |
+          cargo audit --file Cargo.lock
+          cargo audit --file explorer-command/Cargo.lock
+          cargo audit --file ../share-server/Cargo.lock
+          cargo audit --file ../se-agent/Cargo.lock
 
       - name: Check (windows target)
         run: cargo check --target x86_64-pc-windows-gnu
@@ -47,6 +69,30 @@ jobs:
 
       - name: Compile test harness (windows target)
         run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
+
+      - name: Clippy
+        run: |
+          cargo clippy --target x86_64-pc-windows-gnu --bins -- -D warnings
+          cargo clippy --manifest-path explorer-command/Cargo.toml --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+          cargo clippy --manifest-path ../share-server/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path ../se-agent/Cargo.toml --all-targets -- -D warnings
+
+      - name: Check SSH agent (static musl)
+        working-directory: se-agent
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Check context-menu COM DLL
+        working-directory: native/explorer-command
+        run: cargo check --target x86_64-pc-windows-gnu
+
+      - name: Check share rendezvous server
+        working-directory: share-server
+        run: |
+          cargo check
+          cargo check --target x86_64-pc-windows-gnu
+          cargo test --no-run
 
       - name: Release build
         run: |

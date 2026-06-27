@@ -52,7 +52,6 @@ impl App {
             remote_known_mtime: 0, // captured after download (below)
             dirty: false,
             uploading: false,
-            #[cfg(windows)]
             process: None,
         });
         let (tx, rx) = unbounded();
@@ -175,19 +174,13 @@ impl App {
             // the remote's mtime so save-back can detect a concurrent change.
             let pb = PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR));
             let m = file_mtime_ms(&pb);
-            #[cfg(windows)]
             let process = self.launch_for_edit(&p, mode);
-            #[cfg(not(windows))]
-            self.launch_for_edit(&p, mode);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
                 e.remote_known_mtime = remote_mtime;
                 e.dirty = false;
-                #[cfg(windows)]
-                {
-                    e.process = process;
-                }
+                e.process = process;
             }
         }
     }
@@ -207,7 +200,6 @@ impl App {
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
             if m == 0 {
-                #[cfg(windows)]
                 if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
                     cleanup_done.push(e.temp.clone());
                 }
@@ -223,7 +215,6 @@ impl App {
                 continue;
             }
             if m == e.baseline_mtime {
-                #[cfg(windows)]
                 if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
                     cleanup_done.push(e.temp.clone());
                 }
@@ -386,8 +377,7 @@ impl App {
             self.error_msg = Some("Zwischenablage: Download fehlgeschlagen".to_string());
             return;
         }
-        #[cfg(windows)]
-        match crate::shell_clipboard::write_files(&local, crate::shell_clipboard::DROPEFFECT_COPY) {
+        match write_clipboard_files(&local, ClipboardEffect::Copy) {
             Ok(_) => {
                 self.virtual_clip = None;
                 self.notice = Some((
@@ -400,8 +390,6 @@ impl App {
             }
             Err(e) => self.error_msg = Some(format!("Zwischenablage: {}", e)),
         }
-        #[cfg(not(windows))]
-        let _ = local;
     }
 
     // ─── Peer file sharing (#21) ─────────────────────────────────────────

@@ -1,7 +1,7 @@
 use crate::vfs::Backend;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::apply::apply;
+use super::apply::apply_with_results;
 use super::core::{plan, update_baseline};
 use super::persistence::{
     baseline_path, load_baseline, pair_id, prune_versions, save_baseline, versions_dir,
@@ -153,7 +153,7 @@ pub fn run(
     }
 
     let mut errors = Vec::new();
-    let mut st = apply(
+    let report = apply_with_results(
         &actions,
         a,
         root_a,
@@ -164,6 +164,7 @@ pub fn run(
         &mut errors,
         cancel,
     );
+    let mut st = report.stats;
     // Stop pressed: `apply` broke out between files. Don't dedupe or re-walk (a
     // cancelled walk returns a PARTIAL tree, which would corrupt the baseline) —
     // return what completed, leaving the old baseline untouched so the next run
@@ -216,7 +217,7 @@ pub fn run(
         };
         (at2, bt2)
     };
-    let nb = update_baseline(&base, &at2, &bt2, &actions, &converged, &conflicts);
+    let nb = update_baseline(&base, &at2, &bt2, &report.completed, &converged, &conflicts);
     if !opts.dry_run {
         let _ = save_baseline(&bpath, &nb);
         prune_versions(&vdir, &opts.versioning);

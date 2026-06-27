@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.102.exe`](release-native/Smart%20Explorer%20Setup%200.5.102.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.104.exe`](release-native/Smart%20Explorer%20Setup%200.5.104.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
@@ -107,7 +107,7 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/publish-feed.sh` | Cross-Compile-Build + Git-Feed aktualisieren (Linux/macOS/WSL) |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
-| `release-native/update-feed/` | Update-Feed: `version.txt` + `Smart Explorer.exe` |
+| `release-native/update-feed/` | Update-Feed: `version.txt` + `smart_explorer.exe` / `smart_explorer` |
 | `LICENSE` | MIT-Lizenz (frei, AS-IS, ohne Gewähr/Haftung) |
 | `DISCLAIMER.txt` | Kurzhinweis (KI-Bau + Lizenzverweis), im Installer/ersten Start |
 | `archive/electron-v1-quellcode.zip` | Quellcode der alten Electron-Version (v1) |
@@ -126,10 +126,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 **[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
 1. `version` in `native/Cargo.toml` erhöhen, committen.
-2. Bauen + Artefakte stagen: `native/publish-feed.sh` (Linux/WSL/macOS) bzw.
+2. Bauen + Artefakte stagen: `native/publish-feed.sh` (Linux/WSL) bzw.
    `cd native; .\publish-update.ps1` (Windows) — erzeugt die Windows-Artefakte.
-   Für einen vollständigen Windows+Linux-Feed `native/publish-feed.sh` auf einem
-   Linux/WSL-Host ausführen.
+   Der Standard-Feed wird nur vollständig aktualisiert; Windows-only Feeds
+   müssen explizit als partiell freigeschaltet werden.
 3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
 4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released

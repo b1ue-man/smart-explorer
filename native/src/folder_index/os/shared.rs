@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::filters::{path_has_skipped_segment, should_skip_meta};
+use super::filters::path_has_skipped_segment;
 use super::model::{FolderIndex, IndexMsg};
-use super::platform::file_attributes;
+use super::platform::should_skip_meta;
 
 impl FolderIndex {
     /// Build an index by walking the given roots in parallel, collecting only
@@ -70,10 +70,12 @@ fn walk_folders(
     last_emit: &Arc<Mutex<std::time::Instant>>,
 ) {
     // First add the root itself
-    if let Ok(_) = std::fs::metadata(&root) {
+    if std::fs::metadata(&root).is_ok() {
         let rs = root.to_string_lossy().replace('\\', "/");
-        paths.lock().unwrap().push(rs);
-        counter.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut g) = paths.lock() {
+            g.push(rs);
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
     }
     walk_parallel(vec![root], paths, counter, cancel, tx, last_emit);
 }
@@ -116,7 +118,7 @@ fn walk_parallel(
             }
             let name = entry.file_name().to_string_lossy().to_string();
             // Filter out hidden / system / dotfolders / generic IDs.
-            if should_skip_meta(&name, file_attributes(&meta)) {
+            if should_skip_meta(&name, &meta) {
                 continue;
             }
             let path = entry.path();
@@ -125,19 +127,20 @@ fn walk_parallel(
             subdirs.push(path);
         }
         if !local_dirs.is_empty() {
-            let mut g = paths.lock().unwrap();
-            let new_count = g.len() + local_dirs.len();
-            g.extend(local_dirs);
-            drop(g);
-            counter.store(new_count as u64, Ordering::Relaxed);
+            if let Ok(mut g) = paths.lock() {
+                let new_count = g.len() + local_dirs.len();
+                g.extend(local_dirs);
+                counter.store(new_count as u64, Ordering::Relaxed);
+            }
             // Throttled progress emission
-            let mut le = last_emit.lock().unwrap();
-            if le.elapsed().as_millis() > 200 {
-                *le = std::time::Instant::now();
-                let _ = tx.send(IndexMsg::Progress {
-                    count: counter.load(Ordering::Relaxed),
-                    current: dir.to_string_lossy().to_string(),
-                });
+            if let Ok(mut le) = last_emit.lock() {
+                if le.elapsed().as_millis() > 200 {
+                    *le = std::time::Instant::now();
+                    let _ = tx.send(IndexMsg::Progress {
+                        count: counter.load(Ordering::Relaxed),
+                        current: dir.to_string_lossy().to_string(),
+                    });
+                }
             }
         }
         if !subdirs.is_empty() {

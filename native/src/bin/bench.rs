@@ -15,10 +15,10 @@ mod types;
 use scanner::ScanMessage;
 
 fn main() {
-    let mut args = env::args().skip(1);
+    let args = env::args().skip(1);
     let mut target: Option<PathBuf> = None;
     let mut depth: Option<u32> = None;
-    while let Some(a) = args.next() {
+    for a in args {
         if let Some(d) = a.strip_prefix("--depth=") {
             depth = d.parse().ok();
         } else {

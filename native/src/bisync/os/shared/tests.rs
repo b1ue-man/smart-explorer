@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "tests/extra.rs"]
 mod extra;
+#[path = "tests/safety.rs"]
+mod safety;
 
 fn tmp(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -30,7 +32,7 @@ fn run(
     rb: &str,
     base: &Baseline,
     opts: BisyncOptions,
-    vdir: &PathBuf,
+    vdir: &Path,
 ) -> (BisyncStats, Vec<Conflict>, Baseline) {
     let cancel = AtomicBool::new(false);
     let gs = empty_globset();
@@ -41,11 +43,13 @@ fn run(
     let bt = walk_files(b, rb, &cancel, &f, mb, Some(&pb)).unwrap();
     let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
     let mut errs = Vec::new();
-    let st = apply(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
+    let report =
+        super::apply::apply_with_results(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
+    let st = report.stats;
     // re-walk for an accurate baseline after writes
     let at2 = walk_files(a, ra, &cancel, &f, ma, Some(&pa)).unwrap();
     let bt2 = walk_files(b, rb, &cancel, &f, mb, Some(&pb)).unwrap();
-    let nb = update_baseline(base, &at2, &bt2, &actions, &converged, &conflicts);
+    let nb = update_baseline(base, &at2, &bt2, &report.completed, &converged, &conflicts);
     (st, conflicts, nb)
 }
 
@@ -329,8 +333,8 @@ fn size_only_ignores_mtime_differences() {
     assert!(actions.is_empty(), "same size ⇒ no work under size-only");
     assert!(conflicts.is_empty());
     // Under the default mtime+size compare, the mtime gap is a real diff.
-    let (actions2, _c2, _v2) = plan(&a, &b, &base, BisyncOptions::default());
-    assert!(!actions2.is_empty() || true, "mtime differs under default");
+    let (_actions2, c2, _v2) = plan(&a, &b, &base, BisyncOptions::default());
+    assert_eq!(c2.len(), 1, "mtime differs under default");
 }
 
 #[test]

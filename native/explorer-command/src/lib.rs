@@ -18,7 +18,7 @@
 
 use core::ffi::c_void;
 use std::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
-use windows::core::{implement, w, Interface, Result, GUID, HRESULT, IUnknown, PCWSTR, PWSTR};
+use windows::core::{implement, w, IUnknown, Interface, Result, GUID, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     BOOL, CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_NOTIMPL, E_POINTER, HINSTANCE,
     HMODULE, MAX_PATH, S_FALSE, S_OK,

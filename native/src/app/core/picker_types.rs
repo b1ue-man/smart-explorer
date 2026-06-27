@@ -68,13 +68,9 @@ pub(in crate::app) struct PickerState {
     pub(in crate::app) connecting: bool,
 }
 
-#[cfg(windows)]
 #[derive(Clone, Copy)]
 pub(in crate::app) enum ClipKey {
     Copy,
     Cut,
     Paste,
 }
-#[cfg(not(windows))]
-#[derive(Clone, Copy)]
-pub(in crate::app) enum ClipKey {}

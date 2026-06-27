@@ -13,8 +13,28 @@ use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+fn archive_key(path: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for part in path
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+    {
+        if part == "." || part == ".." || part.contains('\\') {
+            return None;
+        }
+        parts.push(part);
+    }
+    Some(parts.join("/"))
+}
+
+fn invalid_archive_path() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "ungueltiger Archivpfad")
+}
+
 fn zip_err<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 fn native(path: &str) -> PathBuf {
@@ -105,7 +125,12 @@ impl ZipBackend {
         dirs.entry(String::new()).or_default(); // root always exists
         for i in 0..ar.len() {
             let e = ar.by_index(i).map_err(zip_err)?;
-            let raw = e.name().trim_end_matches('/').to_string();
+            let Some(enclosed) = e.enclosed_name() else {
+                continue;
+            };
+            let Some(raw) = archive_key(&enclosed.to_string_lossy().replace('\\', "/")) else {
+                continue;
+            };
             if raw.is_empty() {
                 continue;
             }
@@ -127,10 +152,8 @@ impl ZipBackend {
         })
     }
 
-    fn key(path: &str) -> String {
-        path.trim_start_matches('/')
-            .trim_end_matches('/')
-            .to_string()
+    fn key(path: &str) -> VfsResult<String> {
+        archive_key(path).ok_or_else(invalid_archive_path)
     }
 }
 
@@ -143,7 +166,7 @@ impl Backend for ZipBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self.dirs.get(&Self::key(path)) {
+        match self.dirs.get(&Self::key(path)?) {
             Some(v) => Ok(v.clone()),
             None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -153,7 +176,7 @@ impl Backend for ZipBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let key = Self::key(path);
+        let key = Self::key(path)?;
         if key.is_empty() || self.dirs.contains_key(&key) {
             return Ok(VfsMeta {
                 name: key.rsplit('/').next().unwrap_or("").to_string(),
@@ -170,10 +193,16 @@ impl Backend for ZipBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let name = path.trim_start_matches('/');
+        let name = Self::key(path)?;
+        if self.stat(path)?.is_dir {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Ordner kann nicht als Datei geoeffnet werden",
+            ));
+        }
         let f = std::fs::File::open(native(&self.zip_path))?;
         let mut ar = zip::ZipArchive::new(f).map_err(zip_err)?;
-        let mut zf = ar.by_name(name).map_err(zip_err)?;
+        let mut zf = ar.by_name(&name).map_err(zip_err)?;
         let mut buf = Vec::with_capacity(zf.size() as usize);
         zf.read_to_end(&mut buf)?;
         Ok(Box::new(Cursor::new(buf)))
@@ -252,6 +281,17 @@ mod tests {
         w.finish().unwrap();
     }
 
+    fn make_traversal_zip(path: &Path) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opt = zip::write::SimpleFileOptions::default();
+        w.start_file("../evil.txt", opt).unwrap();
+        w.write_all(b"nope").unwrap();
+        w.start_file("safe.txt", opt).unwrap();
+        w.write_all(b"ok").unwrap();
+        w.finish().unwrap();
+    }
+
     #[test]
     fn browse_and_extract() {
         let base = std::env::temp_dir().join(format!("se_zip_{}", std::process::id()));
@@ -286,6 +326,35 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(std::fs::read(out.join("a.txt")).unwrap(), b"hello");
         assert_eq!(std::fs::read(out.join("sub/b.bin")).unwrap().len(), 250);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unsafe_paths_are_not_browsable_or_extracted() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base =
+            std::env::temp_dir().join(format!("se_zip_traversal_{}_{}", std::process::id(), nanos));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("arc.zip");
+        make_traversal_zip(&zip_path);
+        let zp = zip_path.to_string_lossy().replace('\\', "/");
+
+        let be = ZipBackend::open(&zp).unwrap();
+        let root = be.list_dir("/").unwrap();
+        assert!(root.iter().any(|m| m.name == "safe.txt"));
+        assert!(!root.iter().any(|m| m.name == ".."));
+        assert!(be.open_read("/../evil.txt").is_err());
+
+        let out = base.join("out");
+        let n = extract_all(&zp, &out).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(std::fs::read(out.join("safe.txt")).unwrap(), b"ok");
+        assert!(!base.join("evil.txt").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }

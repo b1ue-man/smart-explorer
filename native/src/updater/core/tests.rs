@@ -97,6 +97,17 @@ fn classify_distinguishes_transports() {
 }
 
 #[test]
+fn staged_payload_path_binds_sha256_in_name() {
+    let hash = "a".repeat(64);
+    let path = core::staged_payload_path("update_download", "1.2.3", &hash);
+
+    assert_eq!(
+        core::staged_sha256_from_path(&path).as_deref(),
+        Some(hash.as_str())
+    );
+}
+
+#[test]
 fn pin_roundtrip() {
     let had = pinned_version();
     archive::set_pin("0.3.6");

@@ -2,8 +2,10 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    #[cfg(windows)]
     pub(in crate::app) fn clipboard_copy_files(&mut self, cut: bool) {
+        if !clipboard_file_ops_supported() {
+            return;
+        }
         if self.selection.is_empty() {
             self.notice = Some((
                 "Nichts ausgewählt — bitte erst Dateien markieren".to_string(),
@@ -73,7 +75,7 @@ impl App {
                 .name("clip-prepare".into())
                 .spawn(move || {
                     let cf = CompiledFilter::compile(&filter);
-                    let mut out: Vec<crate::virtual_clipboard::VirtualFile> = Vec::new();
+                    let mut out: Vec<ClipboardVirtualFile> = Vec::new();
                     for e in &seeds {
                         if e.is_dir {
                             let parent_norm = e.parent.trim_end_matches('/');
@@ -90,7 +92,7 @@ impl App {
                                         .strip_prefix(base.as_str())
                                         .unwrap_or(s.name.as_ref())
                                         .to_string();
-                                    out.push(crate::virtual_clipboard::VirtualFile {
+                                    out.push(ClipboardVirtualFile {
                                         abs: s.path.replace('/', "\\"),
                                         rel,
                                         size: s.size,
@@ -100,7 +102,7 @@ impl App {
                             }
                         } else {
                             // Explicitly selected files always go along.
-                            out.push(crate::virtual_clipboard::VirtualFile {
+                            out.push(ClipboardVirtualFile {
                                 abs: e.path.replace('/', "\\"),
                                 rel: e.name.to_string(),
                                 size: e.size,
@@ -121,11 +123,11 @@ impl App {
             .map(|k| sel_key_path(k).replace('/', "\\"))
             .collect();
         let effect = if cut {
-            crate::shell_clipboard::DROPEFFECT_MOVE
+            ClipboardEffect::Move
         } else {
-            crate::shell_clipboard::DROPEFFECT_COPY
+            ClipboardEffect::Copy
         };
-        match crate::shell_clipboard::write_files(&paths, effect) {
+        match write_clipboard_files(&paths, effect) {
             Ok(_) => {
                 self.virtual_clip = None;
                 let hint = if cut && has_dir && self.filter_is_active() {
@@ -149,8 +151,10 @@ impl App {
         }
     }
 
-    #[cfg(windows)]
     pub(in crate::app) fn clipboard_paste_files(&mut self) {
+        if !clipboard_file_ops_supported() {
+            return;
+        }
         if self.root_path.is_empty() {
             self.notice = Some((
                 "Ctrl+V: kein Zielordner geöffnet".to_string(),
@@ -161,7 +165,7 @@ impl App {
         // Remote view → upload the clipboard's files into the current remote
         // folder via the backend (instead of a local std::fs copy).
         if let Some(rs) = &self.remote {
-            let paths = match crate::shell_clipboard::read_files() {
+            let paths = match read_clipboard_files() {
                 Some((p, _)) if !p.is_empty() => p,
                 _ => {
                     self.notice = Some((
@@ -180,7 +184,7 @@ impl App {
         // Fast path: the clipboard still holds OUR filtered virtual files —
         // copy them directly without the COM stream round-trip.
         if let Some((seq, pairs)) = self.virtual_clip.clone() {
-            if crate::virtual_clipboard::clipboard_sequence() == seq {
+            if virtual_clipboard_sequence() == Some(seq) {
                 self.notice = Some((
                     format!("📥 Einfügen (gefiltert): {} Datei(en)", pairs.len()),
                     std::time::Instant::now(),
@@ -205,7 +209,7 @@ impl App {
             }
         }
 
-        let (paths, is_cut) = match crate::shell_clipboard::read_files() {
+        let (paths, is_cut) = match read_clipboard_files() {
             Some(v) => v,
             None => {
                 self.notice = Some((
@@ -264,11 +268,6 @@ impl App {
         });
         self.copy_refresh_after = true;
     }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn clipboard_copy_files(&mut self, _cut: bool) {}
-    #[cfg(not(windows))]
-    pub(in crate::app) fn clipboard_paste_files(&mut self) {}
 
     // ─── Drag-and-drop into the app ─────────────────────────────────────
 

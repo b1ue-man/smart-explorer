@@ -3,9 +3,9 @@ use std::path::PathBuf;
 fn data_home() -> PathBuf {
     #[cfg(windows)]
     {
-        return std::env::var_os("APPDATA")
+        std::env::var_os("APPDATA")
             .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+            .unwrap_or_else(std::env::temp_dir)
     }
 
     #[cfg(target_os = "linux")]

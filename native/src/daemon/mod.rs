@@ -16,6 +16,10 @@ mod backend_server;
 mod ipc;
 #[path = "os/shared/job.rs"]
 mod job;
+#[path = "os/shared/line.rs"]
+mod line;
+#[path = "os/shared/locks.rs"]
+mod locks;
 #[cfg(windows)]
 #[path = "os/windows/platform.rs"]
 mod platform;

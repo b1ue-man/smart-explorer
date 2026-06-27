@@ -10,17 +10,15 @@ impl App {
                     .small()
                     .color(Color32::from_gray(140)),
             );
-            if self.remote.is_some() || self.net_conn.is_some() {
-                if ui
+            if (self.remote.is_some() || self.net_conn.is_some())
+                && ui
                     .small_button("⏏")
                     .on_hover_text("Verbindung trennen")
                     .clicked()
-                {
-                    self.remote = None;
-                    self.net_conn = None;
-                    self.notice =
-                        Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
-                }
+            {
+                self.remote = None;
+                self.net_conn = None;
+                self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
             }
         });
         if let Some(rs) = &self.remote {

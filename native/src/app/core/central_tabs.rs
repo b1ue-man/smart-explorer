@@ -321,14 +321,14 @@ impl App {
                 if resp.middle_clicked() {
                     action = Some(TabAction::Close(i));
                 }
-                if selected && self.tabs.len() > 1 {
-                    if ui
+                if selected
+                    && self.tabs.len() > 1
+                    && ui
                         .small_button("✕")
                         .on_hover_text("Tab schließen (Ctrl+W)")
                         .clicked()
-                    {
-                        action = Some(TabAction::Close(i));
-                    }
+                {
+                    action = Some(TabAction::Close(i));
                 }
             }
             let r = ui.button("＋").on_hover_text("Neuer Tab (Ctrl+T)");
