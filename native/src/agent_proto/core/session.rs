@@ -7,8 +7,6 @@ use super::{write_frame, Frame};
 pub(crate) type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub(crate) fn emit(sink: &Sink, id: u64, frame: &Frame) -> io::Result<()> {
-    let mut w = sink
-        .lock()
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "sink poisoned"))?;
+    let mut w = sink.lock().map_err(|_| io::Error::other("sink poisoned"))?;
     write_frame(&mut *w, id, frame)
 }

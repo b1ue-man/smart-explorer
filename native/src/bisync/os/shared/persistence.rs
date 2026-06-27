@@ -95,7 +95,7 @@ pub fn prune_versions(versions: &Path, v: &Versioning) {
             }
         }
     }
-    snaps.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    snaps.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts)); // newest first
 
     match v.scheme {
         VersioningScheme::Days => {

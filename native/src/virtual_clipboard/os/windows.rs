@@ -84,17 +84,19 @@ impl VirtualFilesDataObject {
             for (i, f) in self.files.iter().enumerate() {
                 // FILEGROUPDESCRIPTORW is a packed struct — build the
                 // descriptor in an aligned local and write it unaligned.
-                let mut fd = FILEDESCRIPTORW::default();
-                fd.dwFlags = (FD_FILESIZE.0 | FD_WRITESTIME.0 | FD_PROGRESSUI.0) as u32;
-                fd.nFileSizeLow = (f.size & 0xFFFF_FFFF) as u32;
-                fd.nFileSizeHigh = (f.size >> 32) as u32;
-                fd.ftLastWriteTime = filetime_from_ms(f.mtime_ms);
                 let rel = f.rel.replace('/', "\\");
                 let mut name_buf = [0u16; 260];
                 for (j, c) in rel.encode_utf16().take(259).enumerate() {
                     name_buf[j] = c;
                 }
-                fd.cFileName = name_buf;
+                let fd = FILEDESCRIPTORW {
+                    dwFlags: (FD_FILESIZE.0 | FD_WRITESTIME.0 | FD_PROGRESSUI.0) as u32,
+                    nFileSizeLow: (f.size & 0xFFFF_FFFF) as u32,
+                    nFileSizeHigh: (f.size >> 32) as u32,
+                    ftLastWriteTime: filetime_from_ms(f.mtime_ms),
+                    cFileName: name_buf,
+                    ..Default::default()
+                };
                 std::ptr::write_unaligned(fds.add(i), fd);
             }
             let _ = GlobalUnlock(h);
@@ -130,7 +132,7 @@ impl IDataObject_Impl for VirtualFilesDataObject_Impl {
                 let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
                 let stream = SHCreateStreamOnFileEx(
                     PCWSTR(wide.as_ptr()),
-                    (STGM_READ.0 | STGM_SHARE_DENY_NONE.0) as u32,
+                    STGM_READ.0 | STGM_SHARE_DENY_NONE.0,
                     0x80, // FILE_ATTRIBUTE_NORMAL
                     false,
                     None,
@@ -215,21 +217,21 @@ impl IDataObject_Impl for VirtualFilesDataObject_Impl {
                 FORMATETC {
                     cfFormat: self.cf_descriptor,
                     ptd: std::ptr::null_mut(),
-                    dwAspect: DVASPECT_CONTENT.0 as u32,
+                    dwAspect: DVASPECT_CONTENT.0,
                     lindex: -1,
                     tymed: TYMED_HGLOBAL.0 as u32,
                 },
                 FORMATETC {
                     cfFormat: self.cf_contents,
                     ptd: std::ptr::null_mut(),
-                    dwAspect: DVASPECT_CONTENT.0 as u32,
+                    dwAspect: DVASPECT_CONTENT.0,
                     lindex: -1,
                     tymed: TYMED_ISTREAM.0 as u32,
                 },
                 FORMATETC {
                     cfFormat: self.cf_dropeffect,
                     ptd: std::ptr::null_mut(),
-                    dwAspect: DVASPECT_CONTENT.0 as u32,
+                    dwAspect: DVASPECT_CONTENT.0,
                     lindex: -1,
                     tymed: TYMED_HGLOBAL.0 as u32,
                 },

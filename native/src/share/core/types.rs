@@ -11,8 +11,9 @@ pub enum ShareScope {
     Room { room_id: String },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShareStatus {
+    #[default]
     Offline,
     Waiting,
     WaitingForAccess,
@@ -23,12 +24,6 @@ pub enum ShareStatus {
     ConnectedRelay,
     Failed(String),
     IdentityConflict,
-}
-
-impl Default for ShareStatus {
-    fn default() -> Self {
-        ShareStatus::Offline
-    }
 }
 
 impl ShareStatus {

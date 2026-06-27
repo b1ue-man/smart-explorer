@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use crate::agent_proto::{self, Frame, SearchSpec, WireMeta, WireNode, CHUNK, PROTO_VERSION};
 use crate::vfs::{BackendHandle, VfsMeta};
 
+use super::locks::lock_or_recover;
+
 type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
 
 fn emit(sink: &Sink, id: u64, frame: &Frame) -> io::Result<()> {
@@ -28,27 +30,27 @@ pub(crate) fn serve_backend(
     while let Some((id, frame)) = agent_proto::read_frame(&mut r)? {
         match frame {
             Frame::Data(_) | Frame::TreeEntry { .. } | Frame::End => {
-                let tx = inbound.lock().unwrap().get(&id).cloned();
+                let tx = lock_or_recover(&inbound).get(&id).cloned();
                 if let Some(tx) = tx {
                     let is_end = matches!(frame, Frame::End);
                     let _ = tx.send(frame);
                     if is_end {
-                        inbound.lock().unwrap().remove(&id);
+                        lock_or_recover(&inbound).remove(&id);
                     }
                 }
             }
             Frame::Cancel => {
-                if let Some(f) = cancels.lock().unwrap().get(&id) {
+                if let Some(f) = lock_or_recover(&cancels).get(&id) {
                     f.store(true, Ordering::Relaxed);
                 }
             }
             req => {
                 let cancel = Arc::new(AtomicBool::new(false));
-                cancels.lock().unwrap().insert(id, cancel.clone());
+                lock_or_recover(&cancels).insert(id, cancel.clone());
                 let rx = match &req {
                     Frame::Write(_) | Frame::PutTree(_) => {
                         let (tx, rx) = channel();
-                        inbound.lock().unwrap().insert(id, tx);
+                        lock_or_recover(&inbound).insert(id, tx);
                         Some(rx)
                     }
                     _ => None,
@@ -62,8 +64,8 @@ pub(crate) fn serve_backend(
                     if let Err(e) = res {
                         let _ = emit(&sink2, id, &Frame::Err(e.to_string()));
                     }
-                    cancels2.lock().unwrap().remove(&id);
-                    inbound2.lock().unwrap().remove(&id);
+                    lock_or_recover(&cancels2).remove(&id);
+                    lock_or_recover(&inbound2).remove(&id);
                 });
             }
         }

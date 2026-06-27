@@ -1,5 +1,5 @@
 #[path = "core/cloud.rs"]
-mod cloud;
+mod core_impl;
 
 mod os {
     #[cfg(target_os = "linux")]
@@ -13,4 +13,4 @@ mod os {
     pub use platform::open_url;
 }
 
-pub use cloud::*;
+pub use core_impl::*;

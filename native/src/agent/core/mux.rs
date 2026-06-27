@@ -5,6 +5,9 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+type RoutedFrame = (u64, Frame);
+type PendingMap = Arc<Mutex<HashMap<u64, Sender<Frame>>>>;
+
 /// Bound on un-sent outgoing frames. Provides backpressure for uploads while
 /// still pipelining roughly 8 MiB of 256 KiB chunks ahead of the wire.
 pub(super) const OUT_BACKLOG: usize = 32;
@@ -12,17 +15,14 @@ pub(super) const OUT_BACKLOG: usize = 32;
 /// Shared multiplexer over one agent channel.
 pub(super) struct Mux {
     /// Outgoing frames to the writer thread. FIFO preserves per-op ordering.
-    pub(super) out: Sender<(u64, Frame)>,
+    pub(super) out: Sender<RoutedFrame>,
     /// req_id to the op waiting for its reply/stream frames.
-    pub(super) pending: Arc<Mutex<HashMap<u64, Sender<Frame>>>>,
+    pub(super) pending: PendingMap,
     pub(super) next_id: AtomicU64,
 }
 
 impl Mux {
-    pub(super) fn new(
-        out: Sender<(u64, Frame)>,
-        pending: Arc<Mutex<HashMap<u64, Sender<Frame>>>>,
-    ) -> Self {
+    pub(super) fn new(out: Sender<RoutedFrame>, pending: PendingMap) -> Self {
         Self {
             out,
             pending,
@@ -66,14 +66,11 @@ impl Mux {
     }
 }
 
-pub(super) fn make_out_channel() -> (Sender<(u64, Frame)>, Receiver<(u64, Frame)>) {
-    bounded::<(u64, Frame)>(OUT_BACKLOG)
+pub(super) fn make_out_channel() -> (Sender<RoutedFrame>, Receiver<RoutedFrame>) {
+    bounded::<RoutedFrame>(OUT_BACKLOG)
 }
 
-pub(super) fn route_frame(
-    pending: &Arc<Mutex<HashMap<u64, Sender<Frame>>>>,
-    read: io::Result<Option<(u64, Frame)>>,
-) -> bool {
+pub(super) fn route_frame(pending: &PendingMap, read: io::Result<Option<(u64, Frame)>>) -> bool {
     match read {
         Ok(Some((id, frame))) => {
             let tx = pending.lock().ok().and_then(|p| p.get(&id).cloned());

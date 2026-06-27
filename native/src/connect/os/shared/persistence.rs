@@ -46,10 +46,12 @@ mod tests {
 
     #[test]
     fn build_saved_password_and_key() {
-        let mut f = ConnectForm::default();
-        f.host = "h".into();
-        f.user = "u".into();
-        f.root = "data".into();
+        let mut f = ConnectForm {
+            host: "h".into(),
+            user: "u".into(),
+            root: "data".into(),
+            ..Default::default()
+        };
         let s = build_saved(&f, 22);
         assert_eq!(s.protocol, Protocol::Sftp);
         assert_eq!(s.root, "/data");

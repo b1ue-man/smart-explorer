@@ -241,7 +241,7 @@ fn run(
                 break;
             }
             let path = join(&dir, &m.name);
-            let recurse = m.is_dir && !m.is_symlink && max_depth.map_or(true, |max| depth < max);
+            let recurse = m.is_dir && !m.is_symlink && max_depth.is_none_or(|max| depth < max);
             let fe = FileEntry {
                 path: Arc::from(path.as_str()),
                 parent: parent_arc.clone(),

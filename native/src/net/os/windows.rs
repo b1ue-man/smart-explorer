@@ -14,10 +14,7 @@ fn wnet_error(code: u32, share: &str) -> io::Error {
         1326 => "Anmeldung fehlgeschlagen (Benutzer/Passwort)",
         _ => "Verbindung fehlgeschlagen",
     };
-    io::Error::new(
-        io::ErrorKind::Other,
-        format!("Netzlaufwerk {share}: {what} (WNet {code})"),
-    )
+    io::Error::other(format!("Netzlaufwerk {share}: {what} (WNet {code})"))
 }
 
 pub(super) fn connect_impl(

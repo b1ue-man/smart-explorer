@@ -191,7 +191,9 @@ impl App {
         let mut open_local: Option<String> = None;
         let mut open_conn: Option<crate::creds::SavedConnection> = None;
 
-        let st = self.picker.as_ref().unwrap();
+        let Some(st) = self.picker.as_ref() else {
+            return;
+        };
         let title = st.purpose.title();
         let local_only = st.purpose.local_only();
         let home = self.home.to_string_lossy().replace('\\', "/");

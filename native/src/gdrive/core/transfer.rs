@@ -1,4 +1,4 @@
-use super::api::{parse_json, send_retry, API, UPLOAD};
+use super::api::{drive_request, parse_json, send_retry, API, UPLOAD};
 use super::core::{norm, split_parent};
 use super::GDriveBackend;
 use crate::vfs::VfsResult;
@@ -14,10 +14,10 @@ impl GDriveBackend {
         // children are fully known (first sync into a fresh/empty folder), a
         // missing cache entry means it's a new file -> create without the extra
         // existence probe (one fewer round-trip per file across 27k files).
-        let existing = match self.ids.lock().unwrap().get(&key).cloned() {
+        let existing = match self.ids_guard()?.get(&key).cloned() {
             Some(id) => Some(id),
             None => {
-                if self.listed.lock().unwrap().contains(&parent) {
+                if self.listed_guard()?.contains(&parent) {
                     None
                 } else {
                     self.find_child(&parent_id, name)?
@@ -47,32 +47,37 @@ impl GDriveBackend {
             Some(id) => {
                 let url = format!("{}/{}?uploadType=multipart&fields=id", UPLOAD, id);
                 parse_json(send_retry(|| {
-                    ureq::request("PATCH", &url)
-                        .set("Authorization", &bearer)
-                        .set("Content-Type", &ct)
-                        .send_bytes(&body)
+                    drive_request(
+                        ureq::request("PATCH", &url)
+                            .set("Authorization", &bearer)
+                            .set("Content-Type", &ct)
+                            .send_bytes(&body),
+                    )
                 })?)?
             }
             None => {
                 let url = format!("{}?uploadType=multipart&fields=id", UPLOAD);
                 parse_json(send_retry(|| {
-                    ureq::post(&url)
-                        .set("Authorization", &bearer)
-                        .set("Content-Type", &ct)
-                        .send_bytes(&body)
+                    drive_request(
+                        ureq::post(&url)
+                            .set("Authorization", &bearer)
+                            .set("Content-Type", &ct)
+                            .send_bytes(&body),
+                    )
                 })?)?
             }
         };
-        if let Some(id) = v["id"].as_str() {
-            self.ids.lock().unwrap().insert(key, id.to_string());
-        }
+        let id = v["id"]
+            .as_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Drive-Upload ohne id"))?;
+        self.ids_guard()?.insert(key, id.to_string());
         Ok(())
     }
 
     pub(super) fn trash(&self, path: &str) -> VfsResult<()> {
         let id = self.resolve(path)?;
         self.trash_id(&id)?;
-        self.ids.lock().unwrap().remove(&norm(path));
+        self.ids_guard()?.remove(&norm(path));
         Ok(())
     }
 
@@ -83,10 +88,12 @@ impl GDriveBackend {
         let url = format!("{}/files/{}", API, id);
         let payload = serde_json::json!({ "trashed": true }).to_string();
         send_retry(|| {
-            ureq::request("PATCH", &url)
-                .set("Authorization", &bearer)
-                .set("Content-Type", "application/json")
-                .send_string(&payload)
+            drive_request(
+                ureq::request("PATCH", &url)
+                    .set("Authorization", &bearer)
+                    .set("Content-Type", "application/json")
+                    .send_string(&payload),
+            )
         })?;
         Ok(())
     }
@@ -94,7 +101,7 @@ impl GDriveBackend {
 
 pub(super) fn open_writer(backend: &GDriveBackend, path: &str) -> Box<dyn Write + Send> {
     Box::new(DriveWriter {
-        backend: backend as *const _,
+        backend: backend.clone(),
         path: norm(path),
         buf: Vec::new(),
         done: false,
@@ -105,23 +112,18 @@ pub(super) fn open_writer(backend: &GDriveBackend, path: &str) -> Box<dyn Write 
 /// `copy_between`, which flushes, surfaces upload errors) - and as a safety net
 /// on drop if flush was never called.
 struct DriveWriter {
-    backend: *const GDriveBackend,
+    backend: GDriveBackend,
     path: String,
     buf: Vec<u8>,
     done: bool,
 }
-
-// The pointer is only used synchronously while the owning backend is alive
-// (the writer never outlives the copy call); Send is needed for Box<dyn Write+Send>.
-unsafe impl Send for DriveWriter {}
 
 impl DriveWriter {
     fn flush_upload(&mut self) -> io::Result<()> {
         if self.done {
             return Ok(());
         }
-        let be = unsafe { &*self.backend };
-        be.upload(&self.path, &self.buf)?;
+        self.backend.upload(&self.path, &self.buf)?;
         self.done = true;
         Ok(())
     }

@@ -335,7 +335,10 @@ impl Throttle {
         if self.limit_bps == 0 {
             return;
         }
-        let mut g = self.state.lock().unwrap();
+        let mut g = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (mut start, mut used) = *g;
         if start.elapsed() >= std::time::Duration::from_secs(1) {
             start = std::time::Instant::now();

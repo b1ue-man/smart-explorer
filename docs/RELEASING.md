@@ -34,13 +34,16 @@ user can pull updates.
 
 1. **Bump** `version` in `native/Cargo.toml`. Commit.
 2. **Build + stage** the release artifacts:
-   - Linux / WSL / macOS (cross): `native/publish-feed.sh`
-     — builds Windows via `x86_64-pc-windows-gnu`; on Linux hosts it also builds
-       `smart_explorer` + `smart_explorer_updater` for the Linux feed; and if
+   - Linux / WSL (cross): `native/publish-feed.sh`
+     — builds Windows via `x86_64-pc-windows-gnu`, also builds
+       `smart_explorer` + `smart_explorer_updater` for the Linux feed, and if
        `makensis` is installed it builds the Windows installer.
    - Windows (native): `cd native; .\publish-update.ps1` — builds the Windows
      feed payloads and NSIS installer. For a complete Windows+Linux release feed,
-     also run `native/publish-feed.sh` on Linux/WSL before committing.
+     run `native/publish-feed.sh` on Linux/WSL before committing. The Windows
+     script refuses to update the shared repo feed when Linux payloads are
+     present unless `-AllowPartialFeed` is passed for an explicit Windows-only
+     feed.
 3. **Commit** `release-native/` (`update-feed/{version.txt, smart_explorer.exe,
    smart_explorer_updater.exe, smart_explorer, smart_explorer_updater, *.sha256}`,
    `Smart Explorer.exe`, `Smart Explorer Updater.exe`,
@@ -64,11 +67,13 @@ user can pull updates.
      Delete the branch after the release is published; it's only a trigger.
 
 `build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
-`x86_64-pc-windows-gnu`, the verified cross-compile): Windows-target check →
-host tests → Windows + Linux release builds → COM DLL → build installer (NSIS) →
-upload artifact → publish the Release. Before publishing it **fails the release
-if the committed feed `version.txt` ≠ `Cargo.toml`** — so a release can never
-ship while the auto-update feed version is stale (forces step 2–3 above).
+`x86_64-pc-windows-gnu`, the verified cross-compile): format check, dependency
+audit, Windows-target check, host tests, Windows test-harness compile, clippy,
+static-musl `se-agent` builds, COM DLL check/build, share-server checks/builds,
+Windows + Linux release builds, installer build (NSIS), artifact upload, and
+Release publication. Before publishing it **fails the release if the committed
+feed `version.txt` ≠ `Cargo.toml`** — so a release can never ship while the
+auto-update feed version is stale (forces step 2–3 above).
 
 ## The update feed (what the app reads)
 

@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use super::types::{Frame, SearchSpec, WireMeta, WireNode};
 
 /// Reject absurd frame lengths from a corrupt/hostile stream before allocating.
-const MAX_FRAME: usize = 1 << 31; // 2 GiB
+const MAX_FRAME: usize = 64 * 1024 * 1024;
 
 fn put_u32(b: &mut Vec<u8>, v: u32) {
     b.extend_from_slice(&v.to_le_bytes());

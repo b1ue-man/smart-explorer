@@ -26,13 +26,13 @@ impl App {
     /// Enter pressed in the active tab's name filter — the heart of cursorless
     /// navigation. Flush the filter so the view is current, then branch on the
     /// number of matches:
-    ///  - 0  → stay in the filter (nothing to do);
-    ///  - 1  → open it. A folder is entered, the filter cleared, and focus kept
-    ///         on the filter so the next segment can be typed straight away; a
-    ///         file is simply opened;
-    ///  - >1 → hand keyboard focus to the result list (cursor on the first row)
-    ///         so arrow keys navigate and Enter there opens — and, for a folder,
-    ///         bounces back here (see the `Open` handler).
+    ///  - 0 → stay in the filter (nothing to do);
+    ///  - 1 → open it. A folder is entered, the filter cleared, and focus kept
+    ///    on the filter so the next segment can be typed straight away; a file
+    ///    is simply opened;
+    ///  - multiple matches → hand keyboard focus to the result list (cursor on
+    ///    the first row) so arrow keys navigate and Enter there opens — and,
+    ///    for a folder, bounces back here (see the `Open` handler).
     pub(in crate::app) fn handle_filter_enter(&mut self) {
         self.flush_text_filter();
         let n = self.view.len();
@@ -319,33 +319,8 @@ impl App {
     }
 
     /// Open a system terminal in the current folder.
-    #[cfg(windows)]
     pub(in crate::app) fn open_terminal_here(&self) {
-        let dir = self.root_path.replace('/', "\\");
-        if dir.is_empty() {
-            return;
-        }
-        let dir_w: Vec<u16> = dir.encode_utf16().chain(Some(0)).collect();
-        let file_w: Vec<u16> = "cmd.exe".encode_utf16().chain(Some(0)).collect();
-        unsafe {
-            windows_sys::Win32::UI::Shell::ShellExecuteW(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                file_w.as_ptr(),
-                std::ptr::null(),
-                dir_w.as_ptr(), // working directory
-                1,              // SW_SHOWNORMAL
-            );
-        }
-    }
-
-    #[cfg(not(windows))]
-    pub(in crate::app) fn open_terminal_here(&self) {
-        if !self.root_path.is_empty() {
-            let _ = std::process::Command::new("x-terminal-emulator")
-                .current_dir(&self.root_path)
-                .spawn();
-        }
+        open_terminal_at(&self.root_path);
     }
 
     /// Open one entry by index: navigate into a folder, or open a file.

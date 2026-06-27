@@ -1,5 +1,6 @@
 use crate::types::{Conflict, CopyMode, CopyOptions, CopyProgress, FileEntry};
 use crossbeam_channel::Sender;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -41,8 +42,16 @@ fn unique_path(target: &Path) -> PathBuf {
 }
 
 fn rel_from_root(path_fwd: &str, root_fwd: &str) -> String {
-    if path_fwd.starts_with(root_fwd) {
-        let rel = path_fwd[root_fwd.len()..].trim_start_matches('/');
+    let rel = if root_fwd.is_empty() {
+        Some(path_fwd.trim_start_matches('/'))
+    } else if path_fwd == root_fwd {
+        Some("")
+    } else {
+        path_fwd
+            .strip_prefix(root_fwd)
+            .and_then(|rest| rest.strip_prefix('/'))
+    };
+    if let Some(rel) = rel {
         if rel.is_empty() {
             // path equals root → use basename
             return path_fwd.rsplit('/').next().unwrap_or(path_fwd).to_string();
@@ -51,6 +60,37 @@ fn rel_from_root(path_fwd: &str, root_fwd: &str) -> String {
     } else {
         path_fwd.rsplit('/').next().unwrap_or(path_fwd).to_string()
     }
+}
+
+fn safe_rel_path(rel: &str) -> Option<PathBuf> {
+    if Path::new(rel).components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Prefix(_)
+                | std::path::Component::RootDir
+                | std::path::Component::ParentDir
+        )
+    }) {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in rel.split(['/', '\\']).filter(|part| !part.is_empty()) {
+        if part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        let probe = Path::new(part);
+        if !probe
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        out.push(OsString::from(part));
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
 }
 
 /// Copy selected entries. Directory expansion (recursive walk of selected
@@ -196,7 +236,13 @@ pub fn start_copy_pairs(
                 if cancel_clone.load(Ordering::Relaxed) {
                     break;
                 }
-                let mut target = dest.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let Some(rel_path) = safe_rel_path(rel) else {
+                    errors_count += 1;
+                    errors.push((abs.clone(), "ungueltiger relativer Zielpfad".to_string()));
+                    files_done += 1;
+                    continue;
+                };
+                let mut target = dest.join(rel_path);
                 if let Some(parent) = target.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -300,9 +346,16 @@ fn run_copy(
         } else {
             f.name.to_string()
         };
-        let mut target = opts
-            .dest
-            .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let Some(rel_path) = safe_rel_path(&rel) else {
+            errors.push((
+                src_str.to_string(),
+                "ungueltiger relativer Zielpfad".to_string(),
+            ));
+            errors_count += 1;
+            files_done += 1;
+            continue;
+        };
+        let mut target = opts.dest.join(rel_path);
 
         if let Some(parent) = target.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
@@ -399,5 +452,24 @@ fn prune_empty_dirs(root: &Path, files: &[&FileEntry], root_fwd: &str) {
     sorted.sort_by_key(|p| std::cmp::Reverse(p.as_os_str().len()));
     for d in sorted {
         let _ = std::fs::remove_dir(d);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_targets_reject_traversal() {
+        assert!(safe_rel_path("sub/file.txt").is_some());
+        assert!(safe_rel_path("../file.txt").is_none());
+        assert!(safe_rel_path("sub/../../file.txt").is_none());
+        assert!(safe_rel_path("/absolute.txt").is_none());
+    }
+
+    #[test]
+    fn rel_from_root_respects_component_boundary() {
+        assert_eq!(rel_from_root("C:/root/a.txt", "C:/root"), "a.txt");
+        assert_eq!(rel_from_root("C:/rooted/a.txt", "C:/root"), "a.txt");
     }
 }

@@ -15,7 +15,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -156,9 +156,8 @@ fn parse_multistatus(xml: &str, request_path: &str) -> Vec<VfsMeta> {
 /// "SHA1:… MD5:<hex> ADLER32:…".
 fn extract_md5(s: &str) -> Option<String> {
     s.split_whitespace().find_map(|tok| {
-        let mut it = tok.splitn(2, ':');
-        let k = it.next()?;
-        let v = it.next()?;
+        let (k, v) = tok.split_once(':')?;
+
         if k.eq_ignore_ascii_case("MD5")
             && v.len() == 32
             && v.bytes().all(|b| b.is_ascii_hexdigit())

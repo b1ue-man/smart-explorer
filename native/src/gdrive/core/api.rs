@@ -6,8 +6,14 @@ pub(super) const API: &str = "https://www.googleapis.com/drive/v3";
 pub(super) const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
 pub(super) const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 
+pub(super) type DriveRequestResult = Result<ureq::Response, Box<ureq::Error>>;
+
+pub(super) fn drive_request(result: Result<ureq::Response, ureq::Error>) -> DriveRequestResult {
+    result.map_err(Box::new)
+}
+
 pub(super) fn err<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 /// Export MIME type for a Google-Docs editors file (None = a normal binary file
@@ -63,7 +69,7 @@ fn drive_err(code: u16, body: String) -> io::Error {
             })
         })
         .unwrap_or(body);
-    io::Error::new(io::ErrorKind::Other, format!("HTTP {}: {}", code, msg))
+    io::Error::other(format!("HTTP {}: {}", code, msg))
 }
 
 /// Drive returns 429 / 5xx on transient overload and 403 with a
@@ -81,32 +87,34 @@ fn is_rate_limited(code: u16, body: &str) -> bool {
 /// closure rebuilds the request each attempt (ureq requests aren't reusable).
 pub(super) fn open_stream<F>(f: F) -> VfsResult<ureq::Response>
 where
-    F: Fn() -> Result<ureq::Response, ureq::Error>,
+    F: Fn() -> DriveRequestResult,
 {
     let mut delay = Duration::from_millis(400);
     let mut last: Option<io::Error> = None;
     for attempt in 0..6 {
         match f() {
             Ok(resp) => return Ok(resp),
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                if attempt < 5 && is_rate_limited(code, &body) {
-                    std::thread::sleep(delay);
-                    delay = (delay * 2).min(Duration::from_secs(16));
-                    last = Some(drive_err(code, body));
-                    continue;
+            Err(e) => match *e {
+                ureq::Error::Status(code, resp) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    if attempt < 5 && is_rate_limited(code, &body) {
+                        std::thread::sleep(delay);
+                        delay = (delay * 2).min(Duration::from_secs(16));
+                        last = Some(drive_err(code, body));
+                        continue;
+                    }
+                    return Err(drive_err(code, body));
                 }
-                return Err(drive_err(code, body));
-            }
-            Err(e) => {
-                if attempt < 5 {
-                    std::thread::sleep(delay);
-                    delay = (delay * 2).min(Duration::from_secs(16));
-                    last = Some(err(e));
-                    continue;
+                e => {
+                    if attempt < 5 {
+                        std::thread::sleep(delay);
+                        delay = (delay * 2).min(Duration::from_secs(16));
+                        last = Some(err(e));
+                        continue;
+                    }
+                    return Err(err(e));
                 }
-                return Err(err(e));
-            }
+            },
         }
     }
     Err(last.unwrap_or_else(|| err("retry exhausted")))
@@ -115,7 +123,7 @@ where
 /// `open_stream` + read the whole body to a string (for JSON endpoints).
 pub(super) fn send_retry<F>(f: F) -> VfsResult<String>
 where
-    F: Fn() -> Result<ureq::Response, ureq::Error>,
+    F: Fn() -> DriveRequestResult,
 {
     open_stream(f)?.into_string().map_err(err)
 }

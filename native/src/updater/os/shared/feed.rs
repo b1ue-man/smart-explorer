@@ -1,70 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::config::{appdata_dir, update_source_str};
+use super::config::update_source_str;
 use super::core::{parse_sha256_file, parse_ver, staged_payload_path, verify_sha256};
+use super::os;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 
-struct PayloadSpec {
-    local_names: &'static [&'static str],
-    http_names: &'static [&'static str],
-    hash_name: &'static str,
-}
-
-#[cfg(windows)]
-fn app_payload_spec() -> PayloadSpec {
-    PayloadSpec {
-        local_names: &["smart_explorer.exe", "Smart Explorer.exe"],
-        http_names: &["smart_explorer.exe", "Smart%20Explorer.exe"],
-        hash_name: "smart_explorer.exe.sha256",
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn app_payload_spec() -> PayloadSpec {
-    PayloadSpec {
-        local_names: &["smart_explorer", "Smart Explorer"],
-        http_names: &["smart_explorer", "Smart%20Explorer"],
-        hash_name: "smart_explorer.sha256",
-    }
-}
-
-#[cfg(windows)]
-fn updater_payload_spec() -> PayloadSpec {
-    PayloadSpec {
-        local_names: &["smart_explorer_updater.exe", "Smart Explorer Updater.exe"],
-        http_names: &[
-            "smart_explorer_updater.exe",
-            "Smart%20Explorer%20Updater.exe",
-        ],
-        hash_name: "smart_explorer_updater.exe.sha256",
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn updater_payload_spec() -> PayloadSpec {
-    PayloadSpec {
-        local_names: &["smart_explorer_updater", "Smart Explorer Updater"],
-        http_names: &["smart_explorer_updater", "Smart%20Explorer%20Updater"],
-        hash_name: "smart_explorer_updater.sha256",
-    }
+pub(super) struct PayloadSpec {
+    pub(super) local_names: &'static [&'static str],
+    pub(super) http_names: &'static [&'static str],
+    pub(super) hash_name: &'static str,
 }
 
 fn app_release_asset_name() -> &'static str {
-    app_payload_spec().local_names[0]
-}
-
-fn staged_download_name(prefix: &str) -> String {
-    #[cfg(windows)]
-    {
-        format!("{prefix}.exe")
-    }
-    #[cfg(target_os = "linux")]
-    {
-        prefix.to_string()
-    }
+    os::app_payload_spec().local_names[0]
 }
 
 pub(super) enum Feed {
@@ -93,7 +44,7 @@ impl Feed {
     /// Stage the new app binary as a local file. Local feeds are copied too, so
     /// a detached helper can delete the staging file without touching the feed.
     pub(super) fn fetch_exe(&self, version: &str) -> Result<PathBuf, String> {
-        let spec = app_payload_spec();
+        let spec = os::app_payload_spec();
         self.fetch_payload(
             spec.local_names,
             spec.http_names,
@@ -104,7 +55,7 @@ impl Feed {
     }
 
     pub(super) fn fetch_updater_exe(&self, version: &str) -> Result<PathBuf, String> {
-        let spec = updater_payload_spec();
+        let spec = os::updater_payload_spec();
         self.fetch_payload(
             spec.local_names,
             spec.http_names,
@@ -122,7 +73,8 @@ impl Feed {
         temp_prefix: &str,
         version: &str,
     ) -> Result<PathBuf, String> {
-        let dest = staged_payload_path(temp_prefix, version);
+        let hash = self.read_sha256_required(hash_name)?;
+        let dest = staged_payload_path(temp_prefix, version, &hash);
         let _ = std::fs::remove_file(&dest);
         match self {
             Feed::Local(dir) => {
@@ -141,9 +93,7 @@ impl Feed {
                         e
                     )
                 })?;
-                if let Some(hash) = self.read_sha256(hash_name)? {
-                    verify_sha256(&dest, &hash)?;
-                }
+                verify_sha256(&dest, &hash)?;
                 Ok(dest)
             }
             Feed::Http(base) => {
@@ -151,9 +101,7 @@ impl Feed {
                 for name in http_names {
                     match http_download(&format!("{base}/{name}"), &dest) {
                         Ok(()) => {
-                            if let Some(hash) = self.read_sha256(hash_name)? {
-                                verify_sha256(&dest, &hash)?;
-                            }
+                            verify_sha256(&dest, &hash)?;
                             return Ok(dest);
                         }
                         Err(e) => last_err = e,
@@ -180,6 +128,16 @@ impl Feed {
             Feed::Http(base) => http_get_string_optional_404(&format!("{base}/{hash_name}"))?,
         };
         raw.map(|s| parse_sha256_file(&s, hash_name)).transpose()
+    }
+
+    fn read_sha256_required(&self, hash_name: &str) -> Result<String, String> {
+        self.read_sha256(hash_name)?.ok_or_else(|| {
+            format!(
+                "Update-Feed {} enthaelt keine erforderliche Pruefsumme {}",
+                self.display(),
+                hash_name
+            )
+        })
     }
 }
 
@@ -245,6 +203,14 @@ fn http_get_string_optional_404(url: &str) -> Result<Option<String>, String> {
 }
 
 fn http_download(url: &str, dest: &Path) -> Result<(), String> {
+    let tmp = dest.with_extension(format!(
+        "{}download",
+        dest.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| format!("{s}."))
+            .unwrap_or_default()
+    ));
+    let _ = std::fs::remove_file(&tmp);
     let resp = ureq::get(url)
         .set("User-Agent", UPDATE_USER_AGENT)
         .timeout(HTTP_TIMEOUT)
@@ -252,8 +218,20 @@ fn http_download(url: &str, dest: &Path) -> Result<(), String> {
         .map_err(|e| format_http_error(url, e))?;
     let mut reader = resp.into_reader();
     let mut file =
-        std::fs::File::create(dest).map_err(|e| format!("Temp-Datei {}: {}", dest.display(), e))?;
-    std::io::copy(&mut reader, &mut file).map_err(|e| format!("Download {}: {}", url, e))?;
+        std::fs::File::create(&tmp).map_err(|e| format!("Temp-Datei {}: {}", tmp.display(), e))?;
+    if let Err(e) = std::io::copy(&mut reader, &mut file) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Download {}: {}", url, e));
+    }
+    if let Err(e) = file.sync_all() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Download sync {}: {}", url, e));
+    }
+    drop(file);
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Download bereitstellen {}: {}", dest.display(), e));
+    }
     Ok(())
 }
 
@@ -353,7 +331,7 @@ pub fn list_remote_versions() -> Vec<String> {
         }
     }
     versions.retain(|v| v != cur);
-    versions.sort_by(|a, b| parse_ver(b).cmp(&parse_ver(a)));
+    versions.sort_by_key(|version| std::cmp::Reverse(parse_ver(version)));
     versions.dedup();
     versions
 }
@@ -375,22 +353,65 @@ pub fn download_version(version: &str) -> Result<PathBuf, String> {
     let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
     let (owner, repo) =
         github_repo(&raw).ok_or("Frühere Versionen sind nur über einen GitHub-Feed abrufbar")?;
+    let spec = os::app_payload_spec();
     let url = format!(
         "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
         app_release_asset_name()
     );
-    let dest = appdata_dir().join(staged_download_name("rollback_download"));
-    let _ = std::fs::remove_file(&dest);
-    if let Err(release_err) = http_download(&url, &dest) {
-        let branch_url = format!(
+    let hash_url = format!(
+        "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
+        spec.hash_name
+    );
+    match download_with_required_sha256(
+        &url,
+        &hash_url,
+        spec.hash_name,
+        "rollback_download",
+        version,
+    ) {
+        Ok(dest) => Ok(dest),
+        Err(release_err) => {
+            let branch_url = format!(
             "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/{}", app_release_asset_name()
         );
-        http_download(&branch_url, &dest).map_err(|branch_err| {
-            format!(
-                "Release-Download fehlgeschlagen: {}; Branch-Fallback fehlgeschlagen: {}",
-                release_err, branch_err
+            let branch_hash_url = format!(
+            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/{}",
+            spec.hash_name
+        );
+            download_with_required_sha256(
+                &branch_url,
+                &branch_hash_url,
+                spec.hash_name,
+                "rollback_download",
+                version,
             )
-        })?;
+            .map_err(|branch_err| {
+                format!(
+                    "Release-Download fehlgeschlagen: {}; Branch-Fallback fehlgeschlagen: {}",
+                    release_err, branch_err
+                )
+            })
+        }
     }
+}
+
+fn download_with_required_sha256(
+    url: &str,
+    hash_url: &str,
+    hash_name: &str,
+    temp_prefix: &str,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let raw = match http_get_string(hash_url) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return Err(format!("Pruefsumme laden: {}", e));
+        }
+    };
+    let hash = parse_sha256_file(&raw, hash_name)?;
+    let dest = staged_payload_path(temp_prefix, version, &hash);
+    let _ = std::fs::remove_file(&dest);
+    http_download(url, &dest)?;
+    verify_sha256(&dest, &hash)?;
     Ok(dest)
 }

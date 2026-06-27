@@ -3,16 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::config::appdata_dir;
 
-#[cfg(windows)]
-fn payload_suffix() -> &'static str {
-    ".exe"
-}
-#[cfg(target_os = "linux")]
-fn payload_suffix() -> &'static str {
-    ""
-}
+const STAGED_SHA_MARKER: &str = ".sha256-";
 
-pub(super) fn staged_payload_path(prefix: &str, version: &str) -> PathBuf {
+pub(super) fn staged_payload_path(prefix: &str, version: &str, sha256: &str) -> PathBuf {
     let safe_version: String = version
         .chars()
         .map(|c| {
@@ -27,15 +20,28 @@ pub(super) fn staged_payload_path(prefix: &str, version: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let suffix = payload_suffix();
+    let suffix = std::env::consts::EXE_SUFFIX;
     appdata_dir().join(format!(
-        "{}_{}_{}_{}{}",
+        "{}_{}_{}_{}{}{}{}",
         prefix,
         safe_version,
         std::process::id(),
         nanos,
+        STAGED_SHA_MARKER,
+        sha256.to_ascii_lowercase(),
         suffix
     ))
+}
+
+pub(super) fn staged_sha256_from_path(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let start = name.find(STAGED_SHA_MARKER)? + STAGED_SHA_MARKER.len();
+    let token = name.get(start..start + 64)?.to_ascii_lowercase();
+    if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(token)
+    } else {
+        None
+    }
 }
 
 pub(super) fn parse_sha256_file(raw: &str, name: &str) -> Result<String, String> {
@@ -84,6 +90,104 @@ pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
             actual
         ))
     }
+}
+
+pub(super) fn copy_file_checked(
+    src: &Path,
+    dest: &Path,
+    label: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(), String> {
+    let expected = std::fs::metadata(src)
+        .map_err(|e| format!("{} Quelle lesen {}: {}", label, src.display(), e))?
+        .len();
+    let copied = match std::fs::copy(src, dest) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_file(dest);
+            return Err(format!(
+                "{} kopieren ({} -> {}): {}",
+                label,
+                src.display(),
+                dest.display(),
+                e
+            ));
+        }
+    };
+    let actual = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+    if copied != expected || actual != expected {
+        let _ = std::fs::remove_file(dest);
+        return Err(format!(
+            "{} unvollstaendig kopiert: {} von {} Bytes",
+            label,
+            actual.min(copied),
+            expected
+        ));
+    }
+
+    if let Some(expected_hash) = expected_sha256 {
+        verify_sha256(dest, expected_hash)?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn replace_file_with_staged(
+    staged: &Path,
+    target: &Path,
+    label: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(), String> {
+    let pending = unique_sibling(target, "update-pending");
+    let old = unique_sibling(target, "update-old");
+    let _ = std::fs::remove_file(&pending);
+    copy_file_checked(staged, &pending, label, expected_sha256)?;
+
+    match std::fs::rename(target, &old) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::rename(&pending, target).map_err(|e| {
+                let _ = std::fs::remove_file(&pending);
+                format!("{} einsetzen ({}): {}", label, target.display(), e)
+            })?;
+            return Ok(());
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&pending);
+            return Err(format!(
+                "{} Ziel sichern ({}): {}",
+                label,
+                target.display(),
+                e
+            ));
+        }
+    }
+
+    if let Err(e) = std::fs::rename(&pending, target) {
+        let restore = std::fs::rename(&old, target);
+        let _ = std::fs::remove_file(&pending);
+        return match restore {
+            Ok(()) => Err(format!("{} einsetzen fehlgeschlagen: {}", label, e)),
+            Err(restore_err) => Err(format!(
+                "{} einsetzen fehlgeschlagen: {}; Rollback fehlgeschlagen: {}",
+                label, e, restore_err
+            )),
+        };
+    }
+    let _ = std::fs::remove_file(&old);
+    Ok(())
+}
+
+fn unique_sibling(target: &Path, role: &str) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "smart_explorer".to_string());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    target.with_file_name(format!("{name}.{role}.{}.{}", std::process::id(), nanos))
 }
 
 pub(super) fn parse_ver(s: &str) -> (u64, u64, u64) {

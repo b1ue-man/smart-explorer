@@ -283,8 +283,8 @@ impl ShareIrohNode {
         identity: &ShareIdentity,
     ) -> io::Result<(SendStream, RecvStream)> {
         let key = session_key(endpoint);
-        let conn = if let Some(conn) = self.sessions.lock().ok().and_then(|s| s.get(&key).cloned())
-        {
+        let cached = self.sessions.lock().ok().and_then(|s| s.get(&key).cloned());
+        let conn = if let Some(conn) = cached {
             conn
         } else {
             let conn = self.connect_session(endpoint, identity)?;
@@ -860,7 +860,7 @@ fn resolve_incoming_session(
             if !verify_hmac(&state.direct_secret, &payload, &hello.session_proof) {
                 return Err(eio("Session-Proof ungueltig"));
             }
-            return Ok(state.default_direct_exports);
+            Ok(state.default_direct_exports)
         }
         "room" => {
             let room = state
@@ -891,9 +891,9 @@ fn resolve_incoming_session(
             if !verify_hmac(&secret, &payload, &hello.session_proof) {
                 return Err(eio("Session-Proof ungueltig"));
             }
-            return Ok(room.exports);
+            Ok(room.exports)
         }
-        _ => return Err(eio("Unbekannte oder nicht autorisierte Relation")),
+        _ => Err(eio("Unbekannte oder nicht autorisierte Relation")),
     }
 }
 

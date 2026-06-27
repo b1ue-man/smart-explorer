@@ -56,8 +56,9 @@ pub enum SortDir {
     Desc,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextMode {
+    #[default]
     Substring,
     Regex,
     Glob,
@@ -105,12 +106,6 @@ impl FilterDef {
             include_system: true,
             ..Default::default()
         }
-    }
-}
-
-impl Default for TextMode {
-    fn default() -> Self {
-        TextMode::Substring
     }
 }
 

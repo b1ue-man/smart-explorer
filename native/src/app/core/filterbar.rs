@@ -35,7 +35,7 @@ impl App {
             let show_server_search = self
                 .remote
                 .as_ref()
-                .map_or(false, |rs| rs.backend.supports_search());
+                .is_some_and(|rs| rs.backend.supports_search());
             if show_server_search {
                 let q = self.text_draft.trim().to_string();
                 let enabled = !q.is_empty() && self.filter.text_mode != TextMode::Regex;

@@ -23,10 +23,8 @@ pub fn share_root(path: &str) -> Option<String> {
     if !is_unc(path) {
         return None;
     }
-    let body = path.trim().trim_start_matches(|c| c == '\\' || c == '/');
-    let mut parts = body
-        .split(|c| c == '\\' || c == '/')
-        .filter(|s| !s.is_empty());
+    let body = path.trim().trim_start_matches(['\\', '/']);
+    let mut parts = body.split(['\\', '/']).filter(|s| !s.is_empty());
     let server = parts.next()?;
     let share = parts.next()?;
     if server.is_empty() || share.is_empty() {

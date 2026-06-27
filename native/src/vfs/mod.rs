@@ -24,6 +24,12 @@ mod core;
 mod dispatch;
 #[path = "os/shared/local.rs"]
 mod local;
+#[cfg(windows)]
+#[path = "os/windows/local_platform.rs"]
+mod local_platform;
+#[cfg(not(windows))]
+#[path = "os/linux_os/local_platform.rs"]
+mod local_platform;
 
 pub use self::cache::CachingBackend;
 pub use self::core::{Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsMeta, VfsResult};
