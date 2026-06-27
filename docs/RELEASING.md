@@ -34,16 +34,20 @@ user can pull updates.
 
 1. **Bump** `version` in `native/Cargo.toml`. Commit.
 2. **Build + stage** the release artifacts:
-   - Linux / WSL (cross): `native/publish-feed.sh`
-     — builds Windows via `x86_64-pc-windows-gnu`, also builds
-       `smart_explorer` + `smart_explorer_updater` for the Linux feed, and if
-       `makensis` is installed it builds the Windows installer.
-   - Windows (native): `cd native; .\publish-update.ps1` — builds the Windows
-     feed payloads and NSIS installer. For a complete Windows+Linux release feed,
-     run `native/publish-feed.sh` on Linux/WSL before committing. The Windows
-     script refuses to update the shared repo feed when Linux payloads are
-     present unless `-AllowPartialFeed` is passed for an explicit Windows-only
-     feed.
+   - Windows workstation default: `.\native\publish-release-local.ps1`
+     builds the Windows app/updater/installer with `publish-update.ps1`, then
+     calls WSL to build the Linux musl app/updater/share-server payloads and
+     verifies all update-feed SHA-256 files. This is the preferred local release
+     path.
+   - Linux/WSL Linux payload repair only:
+     `native/publish-linux-feed-wsl.sh --write-version`. This script prepares
+     temporary Zig/LLD wrappers automatically and can bootstrap Zig into
+     `~/.local/zig` when missing.
+   - Windows-only partial feed: `cd native; .\publish-update.ps1 -AllowPartialFeed`.
+     Use this only when you intentionally do not want a complete Windows+Linux
+     update feed.
+   - Older all-in-one Linux/WSL cross path: `native/publish-feed.sh`, when that
+     host already has the Windows GNU and NSIS dependencies installed.
 3. **Commit** `release-native/` (`update-feed/{version.txt, smart_explorer.exe,
    smart_explorer_updater.exe, smart_explorer, smart_explorer_updater, *.sha256}`,
    `Smart Explorer.exe`, `Smart Explorer Updater.exe`,
@@ -65,6 +69,17 @@ user can pull updates.
      git push origin <branch>:release/v0.5.3
      ```
      Delete the branch after the release is published; it's only a trigger.
+
+The local Windows release wrapper expects WSL with Rust installed. It ensures
+the Linux musl target is present, uses Zig for C dependencies where WSL lacks a
+system compiler, filters the musl-only `-ldl` linker mismatch, and writes
+`version.txt` only after the Linux payloads are staged.
+
+Before cutting a release on a workstation, the fast environment check is:
+
+```powershell
+.\native\publish-release-local.ps1 -CheckEnvOnly
+```
 
 `build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
 `x86_64-pc-windows-gnu`, the verified cross-compile): format check, dependency
@@ -147,6 +162,7 @@ outbound HTTPS to `raw.githubusercontent.com`.
 grep '^version' native/Cargo.toml
 cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
+cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256
 git show origin/main:release-native/update-feed/version.txt   # must match, on main
 ```
 

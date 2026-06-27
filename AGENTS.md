@@ -4,6 +4,9 @@
 - Do not leave completed work only in local commits; report the branch, commit, and push result.
 - For native app changes, always bump the patch version, build the Windows release artifacts, commit the version/artifact changes on `main`, push `main`, create the matching `vX.Y.Z` tag, and push the tag unless the user explicitly says not to or this is technically blocked.
 - For release work, always build the release artifacts before calling the release done, then commit and push the release changes and artifacts to the configured remote unless the user explicitly says not to or pushing is technically blocked.
+- For a local Windows release, use `native\publish-release-local.ps1` as the default release command. It builds the Windows artifacts, refreshes the WSL/Linux feed payloads, writes the feed version last, and verifies all feed hashes. Do not treat `native\publish-update.ps1 -AllowPartialFeed` as a complete release unless the user explicitly asks for a Windows-only/partial feed.
+- If the local release script fails because WSL, Rust targets, `rustfmt`/`clippy`, Zig, NSIS, or MinGW tooling is missing, fix the local setup or the script and rerun the release command. Do not hand-copy release payloads or recreate ad hoc linker wrappers as the final process.
+- Before pushing a release tag, verify `native/Cargo.toml`, `release-native/update-feed/version.txt`, all four update-feed payloads, and their `.sha256` files agree for the same version.
 - If a remote is missing, credentials fail, or the work is not safe to commit yet, state that clearly and explain what remains.
 
 ## native Rust architecture
