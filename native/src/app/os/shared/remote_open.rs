@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::*;
+use crate::app::shared_platform_helpers::ClipboardEffect;
 
 impl App {
     /// Open a file in its associated app (`OpenMode::Default`) or via the native
