@@ -60,6 +60,12 @@ pub struct App {
     pub(in crate::app) analytics_cells_rect: egui::Rect,
     /// (files, dirs) under the current focus, cached.
     pub(in crate::app) analytics_counts: Option<(u64, u64)>,
+    pub(in crate::app) analytics_panel: AnalyticsPanel,
+    pub(in crate::app) reclaim_scan: Option<ReclaimScan>,
+    pub(in crate::app) reclaim_report: Option<crate::analytics::ReclaimReport>,
+    pub(in crate::app) reclaim_selected: HashSet<String>,
+    pub(in crate::app) reclaim_large_min_gb: f64,
+    pub(in crate::app) reclaim_stale_days: u64,
 
     pub(in crate::app) recursive: bool,
     pub(in crate::app) history: Vec<String>,

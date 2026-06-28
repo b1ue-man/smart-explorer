@@ -394,6 +394,7 @@ impl App {
                             self.start_analytics_scan(value);
                         }
                     }
+                    PickerPurpose::ReclaimFolder => self.start_reclaim_scan(value),
                     PickerPurpose::MirrorDest => self.start_mirror(value),
                     PickerPurpose::BisyncDest => self.start_bisync(value),
                     PickerPurpose::CopyDest => self.copy_dest = native,
