@@ -103,8 +103,9 @@ A toggle in the toolbar (and a sidebar section) opens a panel:
 
 ## Build / release
 
-- `share-server` built for Linux (native) + Windows (gnu) by `publish-feed.sh`,
-  staged in `release-native/share-server/` and attached by CI.
+- `share-server` is built for Linux (native) + Windows (gnu) by the release flow
+  (`publish-release-local.ps1` locally, CI for tags), staged in
+  `release-native/share-server/` and attached by CI.
 - Client `share` module gated behind the view; dormant until a server address is
   set, so it can't affect existing users.
 

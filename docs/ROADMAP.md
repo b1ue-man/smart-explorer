@@ -1,9 +1,11 @@
 # Smart Explorer — Roadmap & Status
 
-Native Windows file explorer (Rust + eframe/egui), GNU toolchain. Current
-release: **0.5.1**. Distribution: per-user NSIS installer + self-update from a
+Native Windows/Linux file explorer (Rust + eframe/egui), GNU toolchain. This
+file is the historical roadmap/status log; the live version is the
+single value in `native/Cargo.toml` and `release-native/update-feed/version.txt`.
+Distribution: per-user NSIS installer + portable binaries + self-update from a
 feed — a local/UNC folder **or an http(s)/git URL** (see
-[`native/README.md`](../native/README.md)).
+[`RELEASING.md`](RELEASING.md)).
 
 ## Done (shipped)
 
@@ -28,7 +30,7 @@ feed — a local/UNC folder **or an http(s)/git URL** (see
 - Shell integration (`shell_register.rs`): per-user, reversible
   "Open in Smart Explorer" context-menu verb + launch-path argument.
 
-## Next up — Remote layer (in progress, design done, not yet implemented)
+## Remote layer — completed
 
 The big one. Full implementation plan: **[REMOTE_LAYER_PLAN.md](REMOTE_LAYER_PLAN.md)**.
 
@@ -96,7 +98,7 @@ To-do, in order:
 
 The remote layer (roadmap points 1–5) is COMPLETE.
 
-## Later (not planned in detail) — in progress
+## Later roadmap — completed or externally blocked
 
 - ✅ **Cloud backends — WebDAV (0.5.0)** `webdav.rs`: full `vfs::Backend` over the
   verified ring-rustls `ureq` (no opendal/reqwest → avoids the aws-lc/native-tls
@@ -130,9 +132,8 @@ item shipped, or done to its documented external blocker).**
 
 ## Build & release
 
-See [`native/README.md`](../native/README.md). TL;DR:
-`export PATH="$USERPROFILE/.cargo/bin:/c/Strawberry/c/bin:$PATH"` then
-`cargo build --release` in `native/`. Publish: bump `version` in
-`native/Cargo.toml`, copy the exe into `release-native/update-feed/` (exe first,
-then `version.txt`), rebuild the installer with `makensis`. Installed apps
-self-update on next launch.
+See [`RELEASING.md`](RELEASING.md). TL;DR: bump `version` in
+`native/Cargo.toml`, run the release script instead of hand-copying artifacts
+(`.\native\publish-release-local.ps1` on a Windows workstation), commit the
+complete `release-native/` feed to `main`, then publish the matching `vX.Y.Z`
+tag. Installed apps self-update on next launch.

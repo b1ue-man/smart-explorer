@@ -1,5 +1,11 @@
 # Editing remote files in place — strategy decision (#23)
 
+> **Status note:** the strategy discussion below is historical. The current
+> source tree ships remote open/save-back through temp-copy + mtime watch. There
+> is no active native Cloud Files provider (`cfprovider.rs`/`cfsync.rs`) in
+> `native/src`; the CfAPI work is retained as research and would need to be
+> revived as a new feature with the safety fixes in `docs/CFAPI_REVIEW.md`.
+
 Question: when you open a remote file, edit and save in its normal app, the save
 should land back on the remote — ideally with the path *being* the remote, no
 temp juggling. What's the right mechanism? (Researched, then decided.)
@@ -52,7 +58,7 @@ subsumes "browse the remote as if local." The VS Code agent model is kept as a
 separate future feature for *fast remote browse/search* (the peer-agent idea),
 not for opening files in local apps.
 
-### Shape of the CfAPI implementation (`native/src/cfsync.rs`, Windows-only)
+### Original CfAPI shape considered (`native/src/cfsync.rs`, Windows-only)
 - `CfRegisterSyncRoot` for a per-connection root under e.g.
   `%USERPROFILE%\Smart Explorer\<label>`; `CfCreatePlaceholders` for the listing
   (lazy — directories first, files as placeholders with size/mtime).
@@ -71,29 +77,25 @@ This is a substantial native effort and **cannot be tested in this environment**
 the placeholder/hydration/callback lifecycle needs a real Windows smoke-test.
 Gated/opt-in so existing users are unaffected.
 
-### Interim?
+### Original interim note
 If a working "edit & save back" is wanted *before* CfAPI lands, the temp-watch
 (option 1) is the only thing shippable today — but it carries the UX downsides
-above. Recommendation: go straight to CfAPI rather than ship-then-replace.
+above. Historical recommendation at the time: go straight to CfAPI rather than
+ship-then-replace. Current shipped behavior is the temp-watch path described
+below.
 
 ---
 
-## SHIPPED STATUS (0.5.25)
+## SHIPPED STATUS (current)
 
-Both open modes exist and are **user-toggleable** (Einstellungen → REMOTE-DATEIEN
-ÖFFNEN); save-back works in both:
+Remote open/save-back is implemented through **Temp-Kopie**:
+`open_temp_path` in `%TEMP%`, watched by `RemoteEdit` / `poll_remote_edits`, and
+re-uploaded via `upload_file` on save (1.5 s debounce). This is universal across
+SFTP/FTP/WebDAV/Drive/peer backends and remains the active code path.
 
-- **Temp-Kopie** — `open_temp_path` in `%TEMP%`, watched by `RemoteEdit` /
-  `poll_remote_edits`, re-uploaded via `upload_file` on save (1.5 s debounce).
-  Ephemeral, universal.
-- **CfAPI / Platzhalter** — `cfsync::local_path`: a **persistent per-connection
-  sync folder** `%USERPROFILE%\Smart Explorer\<conn>\<remote layout>`, hydrated
-  eagerly and watched by the same save-back mechanism. The path is stable and
-  mirrors the remote.
-
-**Still to land (needs a real Windows test):** the *native* Cloud Files API layer
-on top of that folder — `CfRegisterSyncRoot` + `CfConnectSyncRoot` FETCH_DATA
-hydration (`CfExecute` TRANSFER_DATA) + OS save notifications — so files become
-true on-demand **placeholders** (download lazily, show the OneDrive-style status)
-instead of eager copies. The `cfsync` folder is exactly the sync-root location
-that layer will register; it's gated behind the toggle and Windows-only.
+The native Cloud Files API provider is **not currently shipped**. The old
+provider/mirror notes below and in `docs/CFAPI_REVIEW.md` are historical
+research; reviving true on-demand placeholders would require a new Windows-only
+feature with real `CfRegisterSyncRoot`/`CfConnectSyncRoot` lifecycle handling,
+safe FETCH_DATA chunking, rename/delete callback coverage, startup reconnect,
+and a real Windows smoke test.

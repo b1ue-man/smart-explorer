@@ -41,6 +41,17 @@ server-routed) already provides working cross-device transfer today**; Quick
 Share interop is the "talk to stock Android Quick Share without our app" bonus.
 
 ## AirDrop
-Not feasible from a third-party Windows app — it runs over Apple's proprietary
-**AWDL**, which Windows exposes no API for (and Google's 2025 Quick Share↔AirDrop
-bridge is Google's own closed Android implementation). See `docs/SHARING_EVAL.md`.
+Smart Explorer still cannot implement native AirDrop from Windows: AirDrop's
+direct radio path uses Apple's proprietary **AWDL**, and Windows exposes no
+AWDL API to third-party apps. What changed externally is Android/Google Quick
+Share itself: compatible Android devices can now exchange files with Apple
+AirDrop devices when the Apple side is set to "Everyone for 10 minutes".
+
+That does **not** make this Smart Explorer prototype AirDrop-compatible. Our
+code only does LAN Quick Share discovery today; it does not inherit Google's
+closed Android-side AirDrop bridge. For iPhone/iPad/macOS interop, users should
+use the platform Quick Share/AirDrop path where supported; Smart Explorer's own
+remaining work is still the UKEY2 + OfflineFrame Quick Share transfer layer.
+
+Refs checked 2026-06-28: <https://blog.google/products-and-platforms/platforms/android/quick-share-airdrop/>,
+<https://support.google.com/pixelphone/answer/9286773>.
