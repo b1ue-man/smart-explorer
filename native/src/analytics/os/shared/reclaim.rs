@@ -14,6 +14,7 @@ pub struct ReclaimOptions {
     pub large_min_bytes: u64,
     pub stale_days: u64,
     pub max_items: usize,
+    pub duplicate_min_bytes: u64,
 }
 
 impl Default for ReclaimOptions {
@@ -22,6 +23,7 @@ impl Default for ReclaimOptions {
             large_min_bytes: 1024 * 1024 * 1024,
             stale_days: 365,
             max_items: 200,
+            duplicate_min_bytes: 1024 * 1024,
         }
     }
 }
@@ -124,7 +126,19 @@ pub fn scan_reclaim(
     let root_abs = root.to_path_buf();
     let acc = Arc::new(Mutex::new(Acc::default()));
     let cutoff = now_ms().saturating_sub((opts.stale_days as i64) * 86_400_000);
-    let bytes = scan_dir(&root_abs, &root_abs, progress, opts, cutoff, &acc);
+    let bytes = if local_scan_threads() <= 1 {
+        scan_dir(&root_abs, &root_abs, progress, opts, cutoff, false, &acc)
+    } else {
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(local_scan_threads())
+            .build()
+        {
+            Ok(pool) => {
+                pool.install(|| scan_dir(&root_abs, &root_abs, progress, opts, cutoff, false, &acc))
+            }
+            Err(_) => scan_dir(&root_abs, &root_abs, progress, opts, cutoff, false, &acc),
+        }
+    };
     let mut acc = match Arc::try_unwrap(acc) {
         Ok(m) => m.into_inner().unwrap_or_default(),
         Err(a) => {
@@ -163,12 +177,21 @@ pub fn scan_reclaim(
     }
 }
 
+fn local_scan_threads() -> usize {
+    std::env::var("SMART_EXPLORER_ANALYTICS_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(2)
+        .clamp(1, 4)
+}
+
 fn scan_dir(
     dir: &Path,
     root: &Path,
     p: &ReclaimProgress,
     opts: &ReclaimOptions,
     stale_cutoff_ms: i64,
+    inside_cleanup: bool,
     acc: &Arc<Mutex<Acc>>,
 ) -> u64 {
     if p.cancel.load(Ordering::Relaxed) || crate::agent_proto::is_pseudo_dir(&dir.to_string_lossy())
@@ -176,6 +199,14 @@ fn scan_dir(
         return 0;
     }
     p.dirs.fetch_add(1, Ordering::Relaxed);
+    let own_cleanup = !inside_cleanup
+        && dir != root
+        && dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| cleanup_reason(n, true))
+            .is_some();
+    let skip_detail = inside_cleanup || own_cleanup;
     let mut subdirs = Vec::new();
     let mut own_size = 0u64;
     let mut child_count = 0usize;
@@ -215,6 +246,12 @@ fn scan_dir(
         } else if ft.is_file() {
             let md = ent.metadata().ok();
             let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
+            p.files.fetch_add(1, Ordering::Relaxed);
+            p.bytes.fetch_add(size, Ordering::Relaxed);
+            own_size = own_size.saturating_add(size);
+            if skip_detail {
+                continue;
+            }
             let mtime_ms = md
                 .and_then(|m| m.modified().ok())
                 .map(systemtime_ms)
@@ -228,26 +265,27 @@ fn scan_dir(
                 is_dir: false,
                 reason: String::new(),
             };
-            p.files.fetch_add(1, Ordering::Relaxed);
-            p.bytes.fetch_add(size, Ordering::Relaxed);
-            own_size = own_size.saturating_add(size);
             record_file(item, path, opts, stale_cutoff_ms, acc);
         }
     }
 
-    let sub_size = if subdirs.len() > 1 {
+    let sub_size = if p.cancel.load(Ordering::Relaxed) {
+        0
+    } else if subdirs.len() > 1 {
         subdirs
             .par_iter()
-            .map(|d| scan_dir(d, root, p, opts, stale_cutoff_ms, acc))
+            .map(|d| scan_dir(d, root, p, opts, stale_cutoff_ms, skip_detail, acc))
             .sum()
     } else {
         subdirs
             .iter()
-            .map(|d| scan_dir(d, root, p, opts, stale_cutoff_ms, acc))
+            .map(|d| scan_dir(d, root, p, opts, stale_cutoff_ms, skip_detail, acc))
             .sum()
     };
     let total = own_size.saturating_add(sub_size);
-    record_dir(dir, root, total, child_count, acc);
+    if !inside_cleanup {
+        record_dir(dir, root, total, child_count, acc);
+    }
     total
 }
 
@@ -308,11 +346,14 @@ fn record_dir(dir: &Path, root: &Path, size: u64, child_count: usize, acc: &Arc<
 fn duplicate_groups(
     files: Vec<FileCandidate>,
     p: &ReclaimProgress,
-    _opts: &ReclaimOptions,
+    opts: &ReclaimOptions,
     errors: &mut Vec<String>,
 ) -> Vec<DuplicateGroup> {
     let mut by_size: HashMap<u64, Vec<FileCandidate>> = HashMap::new();
-    for f in files.into_iter().filter(|f| f.item.size > 0) {
+    for f in files
+        .into_iter()
+        .filter(|f| f.item.size >= opts.duplicate_min_bytes)
+    {
         by_size.entry(f.item.size).or_default().push(f);
     }
 
@@ -326,11 +367,12 @@ fn duplicate_groups(
             if p.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            match md5_file(&f.path) {
-                Ok(h) => {
+            match md5_file(&f.path, p) {
+                Ok(Some(h)) => {
                     p.hashed.fetch_add(1, Ordering::Relaxed);
                     by_hash.entry(h).or_default().push(f.item);
                 }
+                Ok(None) => break,
                 Err(e) => errors.push(format!("Hash {}: {}", to_fwd(&f.path), e)),
             }
         }
@@ -370,18 +412,21 @@ fn cleanup_reason(name: &str, is_dir: bool) -> Option<&'static str> {
     }
 }
 
-fn md5_file(path: &Path) -> std::io::Result<String> {
+fn md5_file(path: &Path, p: &ReclaimProgress) -> std::io::Result<Option<String>> {
     let mut f = std::fs::File::open(path)?;
     let mut ctx = md5::Context::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 1024 * 1024];
     loop {
+        if p.cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
         }
         ctx.consume(&buf[..n]);
     }
-    Ok(format!("{:x}", ctx.compute()))
+    Ok(Some(format!("{:x}", ctx.compute())))
 }
 
 fn truncate<T>(v: &mut Vec<T>, max: usize) {
@@ -430,6 +475,7 @@ mod tests {
             large_min_bytes: 1,
             stale_days: 0,
             max_items: 50,
+            duplicate_min_bytes: 1,
         };
         let p = ReclaimProgress::default();
         let r = scan_reclaim(&base, &p, &opts);

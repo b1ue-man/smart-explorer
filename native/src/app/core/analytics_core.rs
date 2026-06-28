@@ -154,6 +154,7 @@ impl App {
             progress: p,
             root: norm.clone(),
             started: Instant::now(),
+            cancel_requested: false,
         });
         self.analytics_root_path = norm;
         self.analytics_backend = None;
@@ -217,6 +218,7 @@ impl App {
                 format!("{} · {}", label, norm)
             },
             started: Instant::now(),
+            cancel_requested: false,
         });
         self.analytics_root_path = norm;
         self.analytics_backend = Some(backend);
@@ -228,15 +230,28 @@ impl App {
     /// Drain a finished analytics scan into the tree (called each frame).
     pub(in crate::app) fn poll_analytics_scan(&mut self) {
         let mut got = None;
+        let mut canceled = false;
         if let Some(scan) = &self.analytics_scan {
+            canceled = scan.cancel_requested;
             if let Ok(node) = scan.rx.try_recv() {
                 got = Some(node);
             }
         }
         if let Some(node) = got {
-            self.analytics_tree = Some(node);
+            if !canceled {
+                self.analytics_tree = Some(node);
+            }
             self.analytics_scan = None;
             self.analytics_invalidate();
+        }
+    }
+
+    pub(in crate::app) fn cancel_analytics_scan(&mut self) {
+        if let Some(scan) = &mut self.analytics_scan {
+            scan.cancel_requested = true;
+            scan.progress
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

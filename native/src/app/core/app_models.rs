@@ -220,6 +220,7 @@ pub(in crate::app) struct AnalyticsScan {
     /// Root being scanned (`/`-normalised), for the progress label.
     pub(in crate::app) root: String,
     pub(in crate::app) started: Instant,
+    pub(in crate::app) cancel_requested: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +234,7 @@ pub(in crate::app) struct ReclaimScan {
     pub(in crate::app) progress: crate::analytics::ReclaimProgress,
     pub(in crate::app) root: String,
     pub(in crate::app) started: Instant,
+    pub(in crate::app) cancel_requested: bool,
 }
 
 /// Keyboard actions are collected inside the input closure and executed

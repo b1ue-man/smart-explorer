@@ -338,7 +338,7 @@ impl App {
         // Apply deferred actions (outside the borrow of self.picker).
         if let Some(name) = enter {
             if let Some(p) = self.picker.as_mut() {
-                p.cwd = format!("{}/{}", p.cwd.trim_end_matches('/'), name);
+                p.cwd = picker_child_path(&p.cwd, &name);
             }
             self.picker_list();
         }
@@ -408,5 +408,26 @@ impl App {
         } else if close || !open {
             self.picker = None;
         }
+    }
+}
+
+fn picker_child_path(cwd: &str, name: &str) -> String {
+    let trimmed = cwd.trim_end_matches('/');
+    if trimmed.is_empty() {
+        format!("/{}", name)
+    } else {
+        format!("{}/{}", trimmed, name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::picker_child_path;
+
+    #[test]
+    fn picker_child_path_keeps_absolute_roots() {
+        assert_eq!(picker_child_path("C:/", "Users"), "C:/Users");
+        assert_eq!(picker_child_path("C:/Users", "Silas"), "C:/Users/Silas");
+        assert_eq!(picker_child_path("/", "tmp"), "/tmp");
     }
 }
