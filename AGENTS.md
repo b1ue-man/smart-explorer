@@ -9,6 +9,17 @@
 - Before pushing a release tag, verify `native/Cargo.toml`, `release-native/update-feed/version.txt`, all four update-feed payloads, and their `.sha256` files agree for the same version.
 - If a remote is missing, credentials fail, or the work is not safe to commit yet, state that clearly and explain what remains.
 
+## mandatory workflow
+
+For every requested change or investigation in this repository, follow this flow by default without waiting for the user to ask for planning or research. Do not narrate the full checklist unless it helps the work; execute it as the normal operating loop.
+
+1. Set the goal explicitly. Write the concrete objective in working notes or the task plan before editing, and do not change it unless the user changes the request or evidence shows the current goal is unsafe or wrong.
+2. Analyze the codebase. Inspect the current source, docs, artifacts, graph, tests, and existing patterns needed to decide where and how the goal can be implemented. From that analysis, create an initial implementation plan.
+3. Research the approach. Check whether the goal has established implementation paths, protocols, standards, libraries, or domain conventions. For every implementation-plan item that creates something new, verify whether it is sensible and whether a closer established protocol, library, or pattern exists. Evaluate the chosen path for security, efficiency, and reliability before committing to it.
+4. Write a detailed milestone plan. Break the work into small, testable, verifiable intermediate results. Where it can be known safely, state which file or module each milestone affects and what belongs there functionally; do not prewrite the exact content unless needed. Each milestone must include its validation signal.
+5. Research gaps a second time. Resolve open plan questions, choose any libraries or protocols to use, define the relevant APIs, commands, or calls, and update the milestone plan before implementation.
+6. Implement by milestones. Treat each intermediate result as a milestone that must be completed and verified before later work builds on it. After each milestone, evaluate whether the implementation plan must be adjusted and revalidated. Any new change introduced by that adjustment goes through the same analysis, research, planning, and verification loop at the smallest practical scope.
+
 ## documentation hygiene
 
 These rules apply to first-party documentation (`README.md`, `native/README.md`, `DISCLAIMER.txt`, `AGENTS.md`, and `docs/**/*.md`) unless a task explicitly says otherwise.
