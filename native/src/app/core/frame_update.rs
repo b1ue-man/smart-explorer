@@ -72,6 +72,8 @@ impl App {
         self.drain_sync();
         self.drain_bisync();
         self.drain_preview();
+        self.poll_analytics_scan();
+        self.poll_reclaim_scan();
         self.drain_apply_one();
         self.drain_merge();
         self.drain_job_connect();

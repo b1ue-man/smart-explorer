@@ -22,6 +22,7 @@ impl App {
                 s.progress.hashed.load(Relaxed),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
+                s.cancel_requested,
             )
         });
         let report = self.reclaim_report.clone();
@@ -97,7 +98,7 @@ impl App {
                     );
                 }
 
-                if let Some((files, dirs, bytes, hashed, root, secs)) = &scan_info {
+                if let Some((files, dirs, bytes, hashed, root, secs, canceling)) = &scan_info {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         let rate = if *secs > 0.0 {
@@ -106,7 +107,8 @@ impl App {
                             0.0
                         };
                         ui.label(format!(
-                            "{} - {} Dateien - {} Ordner - {} - {} Hashes ({:.0}/s)",
+                            "{} {} - {} Dateien - {} Ordner - {} - {} Hashes ({:.0}/s)",
+                            if *canceling { "Breche ab" } else { "Scanne" },
                             root,
                             files,
                             dirs,
@@ -114,7 +116,10 @@ impl App {
                             hashed,
                             rate
                         ));
-                        if ui.button("Abbrechen").clicked() {
+                        if ui
+                            .add_enabled(!*canceling, egui::Button::new("Abbrechen"))
+                            .clicked()
+                        {
                             cancel = true;
                         }
                     });

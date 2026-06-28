@@ -62,11 +62,11 @@ impl Backend for LocalBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
+        for entry in std::fs::read_dir(&dir)?.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let meta = std::fs::symlink_metadata(entry.path())?;
-            out.push(meta_to_vfs(name, &meta));
+            if let Ok(meta) = std::fs::symlink_metadata(entry.path()) {
+                out.push(meta_to_vfs(name, &meta));
+            }
         }
         Ok(out)
     }

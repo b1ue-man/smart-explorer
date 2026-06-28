@@ -8,6 +8,7 @@ impl App {
                 as u64,
             stale_days: self.reclaim_stale_days.max(1),
             max_items: 200,
+            duplicate_min_bytes: 1024 * 1024,
         }
     }
 
@@ -43,6 +44,7 @@ impl App {
             progress,
             root: norm,
             started: Instant::now(),
+            cancel_requested: false,
         });
         self.reclaim_report = None;
         self.reclaim_selected.clear();
@@ -50,25 +52,29 @@ impl App {
 
     pub(in crate::app) fn poll_reclaim_scan(&mut self) {
         let mut got = None;
+        let mut canceled = false;
         if let Some(scan) = &self.reclaim_scan {
+            canceled = scan.cancel_requested;
             if let Ok(report) = scan.rx.try_recv() {
                 got = Some(report);
             }
         }
         if let Some(report) = got {
-            self.reclaim_report = Some(report);
+            if !canceled {
+                self.reclaim_report = Some(report);
+            }
             self.reclaim_scan = None;
             self.reclaim_selected.clear();
         }
     }
 
     pub(in crate::app) fn cancel_reclaim_scan(&mut self) {
-        if let Some(s) = &self.reclaim_scan {
-            s.progress
+        if let Some(scan) = &mut self.reclaim_scan {
+            scan.cancel_requested = true;
+            scan.progress
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.reclaim_scan = None;
     }
 
     pub(in crate::app) fn select_reclaim_duplicate_copies(&mut self) {

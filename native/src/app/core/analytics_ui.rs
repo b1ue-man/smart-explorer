@@ -59,6 +59,7 @@ impl App {
                 s.progress.bytes.load(Relaxed),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
+                s.cancel_requested,
             )
         });
 
@@ -177,19 +178,23 @@ impl App {
                         );
                     }
 
-                    if let Some((f, d, b, root, secs)) = &scan_info {
+                    if let Some((f, d, b, root, secs, canceling)) = &scan_info {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             let rate = if *secs > 0.0 { *f as f32 / *secs } else { 0.0 };
                             ui.label(format!(
-                                "Scanne {} … {} Dateien · {} Ordner · {}  ({:.0}/s)",
+                                "{} {} … {} Dateien · {} Ordner · {}  ({:.0}/s)",
+                                if *canceling { "Breche ab" } else { "Scanne" },
                                 root,
                                 f,
                                 d,
                                 format_bytes(*b),
                                 rate
                             ));
-                            if ui.button("Abbrechen").clicked() {
+                            if ui
+                                .add_enabled(!*canceling, egui::Button::new("Abbrechen"))
+                                .clicked()
+                            {
                                 cancel = true;
                             }
                         });
@@ -328,10 +333,7 @@ impl App {
             self.analytics_cells_rect = rect;
         }
         if cancel {
-            if let Some(s) = &self.analytics_scan {
-                s.progress.cancel.store(true, Relaxed);
-            }
-            self.analytics_scan = None;
+            self.cancel_analytics_scan();
         }
         if let Some((be, root, label)) = rescan_remote {
             self.start_analytics_scan_remote(be, root, label);
@@ -351,9 +353,7 @@ impl App {
             self.analytics_invalidate();
         }
         if !open {
-            if let Some(s) = &self.analytics_scan {
-                s.progress.cancel.store(true, Relaxed);
-            }
+            self.cancel_analytics_scan();
             self.show_analytics = false;
         }
         self.analytics_panel = panel;

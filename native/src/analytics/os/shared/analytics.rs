@@ -41,7 +41,23 @@ pub fn scan(root: &Path, p: &Progress) -> SizeNode {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.to_string_lossy().into_owned());
-    scan_dir(root, name.into_boxed_str(), p)
+    let threads = local_scan_threads();
+    if threads <= 1 {
+        scan_dir(root, name.into_boxed_str(), p)
+    } else {
+        match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
+            Ok(pool) => pool.install(|| scan_dir(root, name.into_boxed_str(), p)),
+            Err(_) => scan_dir(root, name.into_boxed_str(), p),
+        }
+    }
+}
+
+fn local_scan_threads() -> usize {
+    std::env::var("SMART_EXPLORER_ANALYTICS_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(2)
+        .clamp(1, 4)
 }
 
 fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
@@ -60,6 +76,9 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
 
     if let Ok(rd) = std::fs::read_dir(dir) {
         for ent in rd.flatten() {
+            if p.cancel.load(Ordering::Relaxed) {
+                break;
+            }
             let ft = match ent.file_type() {
                 Ok(t) => t,
                 Err(_) => continue,
@@ -100,7 +119,9 @@ fn scan_dir(dir: &Path, name: Box<str>, p: &Progress) -> SizeNode {
 
     // Recurse in parallel. A serial fallback for tiny lists avoids rayon
     // overhead on leaf-heavy trees.
-    let mut dir_nodes: Vec<SizeNode> = if subdirs.len() > 1 {
+    let mut dir_nodes: Vec<SizeNode> = if p.cancel.load(Ordering::Relaxed) {
+        Vec::new()
+    } else if subdirs.len() > 1 {
         subdirs
             .into_par_iter()
             .map(|(path, nm)| scan_dir(&path, nm, p))
