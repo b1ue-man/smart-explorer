@@ -9,6 +9,21 @@
 - Before pushing a release tag, verify `native/Cargo.toml`, `release-native/update-feed/version.txt`, all four update-feed payloads, and their `.sha256` files agree for the same version.
 - If a remote is missing, credentials fail, or the work is not safe to commit yet, state that clearly and explain what remains.
 
+## documentation hygiene
+
+These rules apply to first-party documentation (`README.md`, `native/README.md`, `DISCLAIMER.txt`, `AGENTS.md`, and `docs/**/*.md`) unless a task explicitly says otherwise.
+
+- Treat `docs/TODO.md` as the only live board for open work. An item is open only when current code, artifacts, tests, or a real external blocker prove it is still open.
+- Treat `docs/ROADMAP.md` as historical roadmap/status narrative, not as the current release source. Live version truth is `native/Cargo.toml` plus `release-native/update-feed/version.txt`.
+- Treat `README.md` and `docs/RELEASING.md` as the canonical install/release documentation. When release scripts, feed layout, installer names, tags, update behavior, or supported artifacts change, update those docs in the same change.
+- Treat `docs/SESSION_STATE.md`, `docs/*_research/**`, `docs/cfapi_review/**`, `docs/sync_research/**`, and `docs/vfs_research/**` as historical handoff/evidence unless explicitly refreshed. Do not use them as live state without checking current code and artifacts.
+- Before editing docs, run a documentation context gate: `git status --short`, `git log -1 --oneline`, targeted `rg` for the topic, and any relevant code/artifact checks.
+- For release/version claims, verify `native/Cargo.toml`, `release-native/update-feed/version.txt`, the matching installer, the matching `vX.Y.Z` tag, and all update-feed `.sha256` files.
+- For code-behavior claims, verify current source with `rg` and, when useful, graphify before marking work shipped or open. Historical prototypes must be labeled historical/superseded when their source files no longer exist.
+- For volatile external claims, check current primary sources and record the check date in the doc when the claim materially affects status or guidance.
+- After documentation changes, run stale searches for old versions, `Current release`, `WIP`, `needs release`, `prefetch next`, contradictory status words, and old release commands.
+- Documentation-only changes do not require a native patch bump, release build, release tag, or graphify rebuild. Native source changes still follow the native and graphify rules below.
+
 ## native Rust architecture
 
 These rules apply to `native/src` unless a task explicitly says otherwise.
