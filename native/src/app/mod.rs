@@ -60,6 +60,10 @@ mod prefs_tabs;
 mod prelude;
 #[path = "core/preview_core.rs"]
 mod preview_core;
+#[path = "core/reclaim_core.rs"]
+mod reclaim_core;
+#[path = "core/reclaim_ui.rs"]
+mod reclaim_ui;
 #[path = "os/shared/remote_helpers.rs"]
 mod remote_helpers;
 #[path = "os/shared/remote_open.rs"]

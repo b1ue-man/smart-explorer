@@ -8,6 +8,10 @@ impl App {
     pub(in crate::app) fn ui_analytics(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         self.poll_analytics_scan();
+        if self.analytics_panel == AnalyticsPanel::Reclaim {
+            self.ui_reclaim(ctx);
+            return;
+        }
         // First open with nothing scanned yet → scan the current remote folder if
         // browsing a remote, otherwise the whole local drive.
         if self.analytics_tree.is_none() && self.analytics_scan.is_none() {
@@ -61,6 +65,7 @@ impl App {
         let focus_node = self.analytics_focus_node();
         let cached_cells = &self.analytics_cells;
         let cached_rect = self.analytics_cells_rect;
+        let mut panel = self.analytics_panel;
 
         let mut open = true;
         let mut nav: Option<String> = None; // open folder in main explorer
@@ -84,6 +89,11 @@ impl App {
                 .min_width(440.0)
                 .constrain(true)
                 .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut panel, AnalyticsPanel::Treemap, "Treemap");
+                        ui.selectable_value(&mut panel, AnalyticsPanel::Reclaim, "Find & Reclaim");
+                    });
+                    ui.separator();
                     // ── Row 1: scan targets ──
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
@@ -346,6 +356,7 @@ impl App {
             }
             self.show_analytics = false;
         }
+        self.analytics_panel = panel;
         if let Some(p) = nav {
             self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)));
         } else if let Some(p) = reveal {

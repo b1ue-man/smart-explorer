@@ -222,6 +222,19 @@ pub(in crate::app) struct AnalyticsScan {
     pub(in crate::app) started: Instant,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum AnalyticsPanel {
+    Treemap,
+    Reclaim,
+}
+
+pub(in crate::app) struct ReclaimScan {
+    pub(in crate::app) rx: Receiver<crate::analytics::ReclaimReport>,
+    pub(in crate::app) progress: crate::analytics::ReclaimProgress,
+    pub(in crate::app) root: String,
+    pub(in crate::app) started: Instant,
+}
+
 /// Keyboard actions are collected inside the input closure and executed
 /// afterwards — calling back into egui (clipboard, repaint) from within
 /// `input_mut` can deadlock the context lock.

@@ -10,6 +10,8 @@ pub(in crate::app) enum PickerPurpose {
     ScanFolder,
     /// Pick a folder to run storage-analytics on (local).
     AnalyticsFolder,
+    /// Pick a local folder for find-and-reclaim.
+    ReclaimFolder,
     /// One-way mirror the current folder into a local destination.
     MirrorDest,
     /// Two-way sync the current folder with a local destination.
@@ -29,6 +31,7 @@ impl PickerPurpose {
             PickerPurpose::SyncTarget => "📂 Ziel wählen",
             PickerPurpose::ScanFolder => "📂 Ordner öffnen",
             PickerPurpose::AnalyticsFolder => "📂 Ordner für Analyse",
+            PickerPurpose::ReclaimFolder => "Ordner fuer Aufraeumen",
             PickerPurpose::MirrorDest => "📂 Ziel zum Spiegeln",
             PickerPurpose::BisyncDest => "📂 Ziel für 2-Wege-Sync",
             PickerPurpose::CopyDest => "📂 Zielordner wählen",
