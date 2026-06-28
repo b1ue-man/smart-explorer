@@ -1,4 +1,11 @@
-# SESSION STATE — full handoff (no context gaps)
+# SESSION STATE — historical handoff snapshot (not current)
+
+> **Historical snapshot:** this file was written during the pre-0.5.24 remote
+> file-operations push and is retained only to explain that old handoff. Do not
+> use it as live repo state, release flow, branch guidance, or open-item truth.
+> Current status lives in `docs/TODO.md`; current release flow lives in
+> `docs/RELEASING.md`; current version truth lives in `native/Cargo.toml` plus
+> `release-native/update-feed/version.txt`.
 
 Snapshot written because of server issues. This file lets a fresh context resume
 with zero gaps: the rules to follow, the exact current state, what's done/

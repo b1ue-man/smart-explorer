@@ -70,5 +70,5 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 
 | Strategy | Mechanism | Path seen by app | Save-back | Notes |
 |---|---|---|---|---|
-| Temp copy + watch | `download_to_temp` -> launch -> watch mtime -> `open_write` on save | `%TEMP%\...` | ✅ on save (re-upload) | universal, all backends/apps; client-side tracking |
-| CfAPI placeholder (Win-only goal) | `CfRegisterSyncRoot` + placeholders; `FETCH_DATA` -> `open_read`; `ReadDirectoryChangesW` -> `open_write` | real local path under a sync root | ✅ native, transparent | larger feature; see `docs/REMOTE_EDIT.md` |
+| Temp copy + watch | `download_to_temp` -> launch -> watch mtime -> `open_write` on save | `%TEMP%\...` | ✅ on save (re-upload) | current implementation; universal, all backends/apps; client-side tracking |
+| CfAPI placeholder (historical/revive-only goal) | would require `CfRegisterSyncRoot` + placeholders; `FETCH_DATA` -> `open_read`; OS notifications -> `open_write` | real local path under a sync root | not active | no current `cfprovider.rs`/`cfsync.rs`; see `docs/REMOTE_EDIT.md` and `docs/CFAPI_REVIEW.md` before reviving |

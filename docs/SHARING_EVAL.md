@@ -6,7 +6,8 @@ server available for "own DNS routing" / rendezvous)? What dangers must be
 mitigated? This is an evaluation, not an implementation.
 
 TL;DR:
-- **AirDrop: not feasible on Windows.** ❌ (hard hardware/driver blocker)
+- **Native AirDrop/AWDL from Smart Explorer: not feasible on Windows.** ❌
+  (hard hardware/driver blocker)
 - **Quick Share: feasible**, same-Wi-Fi, with real Android interop. ✅ (a Rust
   implementation already exists to reference)
 - **Own paired E2E share via your server: feasible and the best fit** — it's the
@@ -31,10 +32,10 @@ shipping Windows tool. **Recommend dropping AirDrop.**
 
 ### Update — the 2025 "Quick Share ↔ AirDrop" interop (researched)
 
-Late 2025: Google added AirDrop interop to **Quick Share** (Pixel 10 first, then
-Samsung/OPPO/OnePlus/Xiaomi/…). Android can now send to / receive from Apple's
-**AirDrop "Everyone for 10 minutes"** mode, direct P2P, no server. **This does
-not change our verdict**, because:
+Late 2025: Google added AirDrop interop to **Quick Share** on compatible Android
+devices. Android can now send to / receive from Apple's **AirDrop "Everyone for
+10 minutes"** mode, direct P2P, no server. **This does not change our verdict
+for Smart Explorer's own implementation**, because:
 
 - It's **Google's own closed reverse-engineering of AirDrop, built into Android's
   Quick Share client** (no Apple partnership, spec still unpublished). Nothing was
@@ -43,13 +44,14 @@ not change our verdict**, because:
 - The transport is still **AWDL** (proprietary Apple peer-to-peer Wi-Fi). Android
   reaches it via OS-level radio support; **Windows exposes no AWDL / Wi-Fi-Aware
   API to apps**, and the owl/OpenDrop monitor-mode route isn't viable on Windows.
-- The realistic "AirDrop on Windows" answer is **Google's official Quick Share
-  *for Windows* app** (which is gaining AirDrop bridging) — i.e. a separate app,
-  not something we implement. Our own Quick Share implementation (below) talks to
-  **Android**, and would **not** inherit the AirDrop bridge.
+- The realistic iPhone/iPad/macOS route is the platform Quick Share/AirDrop
+  path where Google/Android supports it, not Smart Explorer's prototype. Our own
+  Quick Share implementation (below) talks to **Android/Quick Share** and would
+  **not** inherit Google's closed AirDrop bridge.
 
 So: still ❌ for us to implement. If "reach iPhones from Windows" matters, the
-pragmatic route is to point users at Google's Quick Share for Windows, not build it.
+pragmatic route is to point users at the supported platform sharing path, not
+build AWDL in Smart Explorer.
 
 ## 2. Quick Share / Nearby Share (real protocol) — ✅ feasible (same Wi-Fi)
 
@@ -164,5 +166,8 @@ plan like `docs/CLOUD_OAUTH_PLAN.md` and start the `share` module.
 - AWDL/OpenDrop, Windows monitor-mode blocker: <https://owlink.org/>,
   <https://github.com/seemoo-lab/opendrop>, <https://github.com/seemoo-lab/owl>,
   <https://bakedbean.org.uk/posts/2021-05-airdrop-anywhere-part-1/>
+- Google Quick Share/AirDrop update checked 2026-06-28:
+  <https://blog.google/products-and-platforms/platforms/android/quick-share-airdrop/>,
+  <https://support.google.com/pixelphone/answer/9286773>
 - Quick Share in Rust: <https://github.com/Martichou/rquickshare>,
   <https://github.com/oop7/rquickshare-x>

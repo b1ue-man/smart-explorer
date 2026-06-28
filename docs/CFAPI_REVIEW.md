@@ -1,6 +1,14 @@
 # CfAPI Implementation — Full Doc-Grounded Review
 
-Scope: every Cloud Files API (CfAPI) call our code makes, traced to the letter
+> **Historical review:** this document audits a CfAPI provider implementation
+> that existed during the 2026-06-16 investigation. Current `native/src` no
+> longer contains `cfprovider.rs` or `cfsync.rs`; the active remote-open path is
+> temp-copy + mtime watch + `Backend::open_write` save-back. Treat the issue
+> register below as the evidence for why reviving a native Cloud Files provider
+> must be a new, safety-fixed feature, not as current shipped behavior.
+
+Historical scope: every Cloud Files API (CfAPI) call that provider code made,
+traced to the letter
 (inputs, provenance, data types, byte destinations, outputs), each cross-checked
 against the **`cloud-filter` v0.0.6** crate source
 (`/root/.cargo/registry/.../cloud-filter-0.0.6/src`) and **Microsoft CfAPI /
@@ -8,7 +16,7 @@ StorageProvider docs** (learn.microsoft.com). Produced by eight parallel agent
 investigations (raw notes in `docs/cfapi_review/w1_*.md`, `w2_*.md`) plus direct
 source verification. Date: 2026-06-16.
 
-Our CfAPI surface lives in:
+At the time of this review, the CfAPI surface lived in:
 - `native/src/cfprovider.rs` — the `SyncFilter` provider + `ensure_mounted` + `populate_to` (Windows-only).
 - `native/src/cfsync.rs` — local↔remote path mapping (`local_path`, `local_path_named`, `conn_root_dir`, `san`).
 - `native/src/app.rs` — the open flow (`open_file` CfApi branch ~3096), `RemoteEdit` save-back watch, mode toggle.
@@ -174,10 +182,10 @@ Every defect above is **absent** in the persistent-mirror/Temp approach:
 | Uninstall cleanliness | orphans roots (I9) | ✓ (just files) |
 | Implementation/maintenance | deep, untestable here | simple, debuggable |
 
-**Recommendation:** make mirror/Temp the default; keep CfAPI as an explicitly
-experimental toggle with the safety fixes (I1–I4, I7–I9) applied so it can never
-crash the app, and accept that its editing story is limited until rename/delete
-callbacks (I6) and startup reconnect are implemented. Whole-tree on-demand
+**Historical recommendation:** make mirror/Temp the default; keep any revived
+CfAPI path explicitly experimental and only after the safety fixes (I1–I4,
+I7–I9) are applied so it can never crash the app. The current tree follows the
+mirror/temp direction and has no active CfAPI toggle. Whole-tree on-demand
 placeholders (CfAPI's one genuine advantage) only matter for browsing huge
 remote trees of large files — not the edit-a-file workflow driving this.
 

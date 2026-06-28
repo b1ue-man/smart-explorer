@@ -4,7 +4,7 @@ How a new version goes from a commit to an installed app updating itself.
 One version number drives everything: `native/Cargo.toml`.
 
 ```
- bump Cargo.toml ─▶ build (CI or publish-feed.sh)
+ bump Cargo.toml ─▶ build (CI or publish-release-local.ps1)
                      ├─▶ update feed   release-native/update-feed/{version.txt, OS payloads}   (committed → served over raw.githubusercontent)
                      ├─▶ installer     Windows NSIS + Linux install-linux.sh
                      └─▶ GitHub Release vX.Y.Z  (Windows + Linux binaries, installer, script, dll, version.txt)

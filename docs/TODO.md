@@ -14,7 +14,7 @@ remaining work, roughly by value:
 | A1 | Analytics **charts + export** — click a category/type bar → filter, size + age histograms, CSV export | ⬜ | builds on A0/A0b |
 | A3 | Analytics **scale** — all-drives dashboard, snapshots / growth-over-time (persist aggregation + diff) | ⬜ | |
 | 23 | **Faster remote browsing** — (1) listing cache ✅ 0.5.59; **prefetch dropped** (the SSH agent makes `list_dir` one fast server-side round-trip + the cache makes re-visits instant, so speculative pre-listing adds complexity for no win). Remaining only for *non-agent* backends (Drive): (3) parallel deep-path listing, (4) persist Drive path→id cache, (5) lazy-stat. | 🚧 | agent path fully covered |
-| 24 | **SSH agent** — phases 1–5 ✅ & functional (Linux x86_64/aarch64); **0.5.65** activate on a live session; **0.5.73** live progress during the server-side analytics walk + "✖ remove agent" action. Only a **real-server smoke test** remains (covered locally by a socket bridge + a child-process test that drives the real bundled musl binary). | ✅ | needs a real SSH box only |
+| 24 | **SSH agent real-server smoke test** — implementation is complete for Linux x86_64/aarch64 and locally covered by socket + real bundled-musl child-process tests; only a live SSH-server exercise remains. | 🚧 | code shipped through 0.5.73; needs a real SSH box only |
 | 24d | **Agent as the FAST PATH** ✅ **DONE** — the agent handles *everything* now (read/write transfers, server-local copy/move/rm/mkdir, bulk folder transfer, search, sync+MD5 hashing); SFTP is the per-op fallback. Shipped P0 proto v2 (0.5.69) → P1 read (0.5.69) → P2 write + P3 server-local (0.5.70) → P4 bulk folders (0.5.71) → P5 search (0.5.72) → P6 sync/hashing (0.5.73). See [`docs/SSH_AGENT_PLAN.md`](SSH_AGENT_PLAN.md). | ✅ | one musl binary covers all phases |
 | 21 | **Peer file sharing** — a real two-machine NAT/handshake test (code shipped 0.5.23) | 🚧 | |
 | A4 | **NTFS MFT** instant local drive scan | ⬜ | deferred by you; plan in SSH_AGENT-style doc note |
@@ -23,8 +23,9 @@ remaining work, roughly by value:
 | 21b | Peer-agent over the **P2P share** transport | later | #24 is the practical SSH variant |
 | Q2 | **Quick Share** transfer (UKEY2 + OfflineFrames) | later | needs real-device iteration |
 
-**Input still needed from you:** a Google OAuth *Client ID* (Desktop type) for
-end-to-end Drive auth — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
+**Per-user setup input, not an implementation blocker:** Google Drive auth needs
+a Google OAuth *Client ID* (Desktop type) from the user/publisher — see
+[`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
 
 ---
 
@@ -57,28 +58,31 @@ end-to-end Drive auth — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
 | 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via keyring creds). | ✅ | 0.5.14 |
 | 18 | Trackpad **inertia scroll stuttered**; now repaints while egui animates the smooth-scroll so it glides to a smooth stop. | ✅ | 0.5.14 |
 
-## Shipped — remote files, cloud (Drive), CfAPI, sharing, Quick Share
+## Shipped — remote files, cloud (Drive), CfAPI history, sharing, Quick Share
 
-(All ✅ below; only **Q2** Quick-Share transfer is still `later`. Note: item
+(Most rows below are historical shipped slices; **Q2** Quick-Share transfer is
+still `later`, and CfAPI rows are explicitly superseded/historical. Note: item
 numbers 24/25/26 here are the *older* remote-file series — the newer 24/25/26 in
-the lists above are the SSH agent / sort / ZIP items. Legacy numbering kept.)
+the lists above are the SSH agent / sort / ZIP items. Legacy numbering kept.
+CfAPI entries document superseded experiments/research; the active remote-open
+path is temp-watch.)
 
 | # | Item | State | Notes |
 |---|---|---|---|
 | 24 | **Remote file-op parity** + bug fixes — C: drive loads in picker; delete/new-folder/rename via backend; right-click menu for remotes. | ✅ | 0.5.24 |
-| 25 | **Remote edit + save-back, toggleable** — open a remote file, edit, save → uploaded back. Two modes (Einstellungen → REMOTE-DATEIEN ÖFFNEN): **Temp-Kopie** (ephemeral) and **CfAPI/Platzhalter** (persistent per-connection sync folder mirroring the remote). Native on-demand CfAPI placeholders = documented next Windows-tested layer. File-ops matrix: [`docs/FILE_OPS_MATRIX.md`](FILE_OPS_MATRIX.md). | ✅ | 0.5.25 |
+| 25 | **Remote edit + save-back** — open a remote file, edit, save → uploaded back. Current code path downloads a temp copy, launches the associated app, watches mtime, and re-uploads via `Backend::open_write` on save. The older CfAPI/persistent-placeholder direction is documented as historical research, not the active implementation. File-ops matrix: [`docs/FILE_OPS_MATRIX.md`](FILE_OPS_MATRIX.md). | ✅ | 0.5.25+ current path = temp-watch |
 
 | 26 | **Remote drag-drop** — drag rows between tabs/panes: local→local copy, **local→remote upload**, **remote→local download**, and **drag remote files OUT to Explorer** (materialize via temp + OLE). Remote→remote deferred. | ✅ | 0.5.26 |
 
-| 27 | **Native CfAPI** — CfRegisterSyncRoot (folder = OS-managed sync root) + CfConvertToPlaceholder/CfSetInSyncState (mark hydrated files in-sync), best-effort, in CfAPI mode. | ✅ (eager) | 0.5.27; on-demand FETCH_DATA hydration still TODO (#30) |
+| 27 | **CfAPI registration experiment** — earlier builds tried Cloud Files registration/placeholders; this is superseded and not the current remote-open path. | superseded | removed from the active source path by the later remote-open fixes |
 | 29 | **"Neu" dropdown** — New button is now a menu: Ordner + editable files (.txt/.md/.csv/.json/.html/.rs), created locally (opened to edit) or via the backend on remotes. | ✅ | 0.5.27 |
 
 | 28 | **Remote→remote drag** — cross-backend copy by streaming each file through a temp (download from source backend → upload to target). | ✅ | 0.5.29 |
-| 31 | **Fix:** CfAPI mode broke file-open ("invalid name request", os -2145452027) — registering a sync root without a connected provider made Windows' cloud filter reject file creation. Removed the `CfRegisterSyncRoot`/placeholder calls; the mode is now a plain **persistent sync folder** (relabeled in Settings, "Platzhalter" wording dropped). | ✅ | 0.5.29 |
+| 31 | **Fix:** Cloud Files registration broke file-open ("invalid name request", os -2145452027). The active code no longer registers a sync root; remote open/save-back uses a plain temp file watched by Smart Explorer. | ✅ | 0.5.29+ |
 
-| 30 | **Native CfAPI on-demand provider** — `cfprovider.rs` on the `cloud-filter` crate (real sync-engine wrapper, windows 0.58): CfApi mode mounts the connection as a Cloud-Files sync root; dirs populate on demand (fetch_placeholders→list_dir), files hydrate on open (fetch_data→open_read), placeholder blob = remote path; save-back via the edit-watch. API follows the crate's behavior test verbatim. | ✅ | 0.5.30 — Windows-only, needs a real Windows run |
+| 30 | **Native CfAPI on-demand provider research/prototype** — `docs/CFAPI_REVIEW.md` records the review of the old provider approach and why it is risky. There is no active `cfprovider.rs`/`cfsync.rs` provider in current `native/src`; revive only as a new feature after the documented safety fixes. | historical | not an active shipped code path |
 | Q1 | **Quick Share LAN discovery** — browse/advertise the `_FC9F5ED42C8A._tcp` mDNS service; nearby Android/Windows Quick Share devices show in 📡 Teilen. | ✅ | 0.5.28 (quickshare.rs) |
-| Q2 | **Quick Share transfer** — Nearby Connections UKEY2 + protobuf OfflineFrames (+ BLE wake). Needs real-device iteration; own paired share already covers transfer. | later | docs/QUICKSHARE.md; AirDrop infeasible on Windows |
+| Q2 | **Quick Share transfer** — Nearby Connections UKEY2 + protobuf OfflineFrames (+ BLE wake). Needs real-device iteration; own paired share already covers transfer. | later | docs/QUICKSHARE.md |
 | 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
 | 19.2 | **Google Drive `Backend`** (`gdrive.rs`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, multipart upload. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16 |
 | 19.4 | **Self-setup instructions** — the app is not a hosted service: each user creates their own Google OAuth client. In-app collapsible guide + console link in Settings, full walkthrough in [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md), README note. Covers the Desktop-app loopback (no redirect URI) and the Testing-mode 7-day-token caveat. | ✅ | 0.5.17 |
@@ -94,14 +98,15 @@ the lists above are the SSH agent / sort / ZIP items. Legacy numbering kept.)
 | 19.3 | Generalize to **Dropbox / OneDrive** (same `cloud.rs` OAuth, new `Backend` impls). | later | after Drive proves out on a real account |
 | 22 | **Connected Google Drive pinned to the sidebar** — stays under VERBINDUNGEN whenever Drive is connected, even with no tab open (click to browse, × to disconnect). | ✅ | 0.5.22 |
 | 21 | **Peer file sharing** — plan in [`docs/SHARE_PLAN.md`](SHARE_PLAN.md); eval in [`docs/SHARING_EVAL.md`](SHARING_EVAL.md). Server routes discovery only; bytes go **direct P2P, E2E-encrypted** (Noise NNpsk0 keyed by the code). **Shipped 0.5.23:** standalone `se-share-server` (Linux+Windows, in the release); client `share.rs` (signaling, candidate dial, Noise channel, transfer to quarantine); **Geräte/Räume view** with direct pair-by-code + rooms (share to all). | 🚧 | 0.5.23 — needs a real two-machine test (NAT/handshake) |
-| 21b | **Peer-agent Backend** (far Smart Explorer runs scans/filters/search, streams results) + AirDrop ❌ (Windows can't do AWDL) / optional Quick Share interop. | later | builds on the share transport |
+| 21b | **Peer-agent Backend** (far Smart Explorer runs scans/filters/search, streams results) + native AirDrop/AWDL ❌ (Windows can't implement AWDL) / optional Quick Share interop. | later | builds on the share transport |
 | 24 | **SSH Remote-Agent** — deploy a headless `se-agent` over the existing SSH connection so listing / storage-analysis / search / transfers / sync run *locally on the server* and only results stream back. Opt-in, SSH-only, plain-SFTP fallback. Full plan + status in [`docs/SSH_AGENT_PLAN.md`](SSH_AGENT_PLAN.md). The SSH-deploy variant of 21b. | ✅ | **fully implemented** for Linux x86_64/aarch64: proto v2 (multiplexed/streaming) + `AgentBackend` mux, read/write/copy/rename/remove/mkdir/get-tree/put-tree/search/walk-hashed, analytics `walk_tree` w/ live progress, SSH transport+deploy, opt-in + live activate + remove-agent, static-musl binaries bundled. Build-verified host+win; tested via socket + real-binary child-process. Remaining: **real-server smoke test** only |
-| 23 | **Faster remote browsing** — transfer sync's efficiency ideas to interactive browsing. Connections already reused. **(1) directory-listing cache** ✅ 0.5.59: `vfs::CachingBackend` wraps the interactive remote backend (wired at `drain_connect` + `drain_picker_connect`, local backends pass through) — 20 s TTL, mutating ops invalidate the dir + parent, F5/`rescan` clears it; sync's `resolve_endpoint` stays uncached. Still open: **(2) prefetch immediate sub-folders** after a listing, **(3) parallel listing for deep paths** on `parallelism()>1` backends (Drive), **(4)** persist Drive path→ID cache, **(5)** lazy-stat reuse from the last listing. | 🚧 | (1) done; prefetch next |
+| 23 | **Faster remote browsing** — transfer sync's efficiency ideas to interactive browsing. Connections already reused. **(1) directory-listing cache** ✅ 0.5.59: `vfs::CachingBackend` wraps the interactive remote backend (wired at `drain_connect` + `drain_picker_connect`, local backends pass through) — 20 s TTL, mutating ops invalidate the dir + parent, F5/`rescan` clears it; sync's `resolve_endpoint` stays uncached. **Prefetch was dropped** because the SSH agent makes `list_dir` a fast server-side op and the cache makes revisits instant. Still open only for non-agent/high-latency backends: **(3)** parallel deep-path listing, **(4)** persist Drive path→ID cache, **(5)** lazy-stat reuse from the last listing. | 🚧 | agent path fully covered |
 
-**One input still needed from you:** a Google OAuth *Client ID* (Desktop type)
-from your own Google Cloud project — see [`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).
-A desktop app can't ship a usable shared secret or pass Drive verification, so
-each publisher uses their own client. With it, slice 1 authorizes end-to-end.
+**Per-user Drive setup:** each user/publisher supplies a Google OAuth *Client ID*
+(Desktop type) from their own Google Cloud project — see
+[`docs/CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md). A desktop app can't ship a
+usable shared secret or pass Drive verification as a generic public service, so
+each publisher uses their own client.
 
 ## Storage analytics — roadmap
 
