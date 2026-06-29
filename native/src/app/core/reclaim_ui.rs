@@ -5,20 +5,28 @@ impl App {
     pub(in crate::app) fn ui_reclaim(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         self.poll_reclaim_scan();
-        if self.reclaim_report.is_none() && self.reclaim_scan.is_none() && self.remote.is_none() {
-            let root = self.analytics_default_root();
-            if !root.is_empty() {
-                self.start_reclaim_scan(root);
+        if self.reclaim_report.is_none() && self.reclaim_scan.is_none() {
+            if let Some((backend, root, label)) = self
+                .remote
+                .as_ref()
+                .map(|r| (r.backend.clone(), self.root_path.clone(), r.label.clone()))
+            {
+                self.start_reclaim_scan_remote(backend, root, label);
+            } else {
+                let root = self.analytics_default_root();
+                if !root.is_empty() {
+                    self.start_reclaim_scan(root);
+                }
             }
         }
 
         let drives = self.drive_info.clone();
-        let is_remote = self.remote.is_some();
         let scan_info = self.reclaim_scan.as_ref().map(|s| {
             (
                 s.progress.files.load(Relaxed),
                 s.progress.dirs.load(Relaxed),
                 s.progress.bytes.load(Relaxed),
+                s.progress.fingerprinted.load(Relaxed),
                 s.progress.hashed.load(Relaxed),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
@@ -38,6 +46,8 @@ impl App {
         let mut trash_selected = false;
         let mut large_gb = self.reclaim_large_min_gb;
         let mut stale_days = self.reclaim_stale_days;
+        let report_is_remote = report.as_ref().is_some_and(|r| r.is_remote);
+        let is_remote = report_is_remote || self.remote.is_some();
 
         egui::Window::new("📊 Speicher-Analyse")
             .id(egui::Id::new("analyse_reclaim"))
@@ -94,11 +104,13 @@ impl App {
                 if is_remote {
                     ui.colored_label(
                         Color32::from_rgb(255, 190, 90),
-                        "Remote-Reclaim ist vorbereitet, Loeschen bleibt hier lokal.",
+                        "Remote-Reclaim ist read-only: Free-/Agent-Hashes werden nur zur Review angezeigt.",
                     );
                 }
 
-                if let Some((files, dirs, bytes, hashed, root, secs, canceling)) = &scan_info {
+                if let Some((files, dirs, bytes, fingerprinted, hashed, root, secs, canceling)) =
+                    &scan_info
+                {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         let rate = if *secs > 0.0 {
@@ -107,12 +119,13 @@ impl App {
                             0.0
                         };
                         ui.label(format!(
-                            "{} {} - {} Dateien - {} Ordner - {} - {} Hashes ({:.0}/s)",
+                            "{} {} - {} Dateien - {} Ordner - {} - {} Fingerprints - {} Hashes ({:.0}/s)",
                             if *canceling { "Breche ab" } else { "Scanne" },
                             root,
                             files,
                             dirs,
                             format_bytes(*bytes),
+                            fingerprinted,
                             hashed,
                             rate
                         ));
@@ -155,7 +168,7 @@ impl App {
                         let selected_bytes = selected_bytes(r, &selected);
                         if ui
                             .add_enabled(
-                                !selected.is_empty(),
+                                !selected.is_empty() && !r.is_remote,
                                 egui::Button::new(format!(
                                     "Papierkorb ({}, {})",
                                     selected.len(),
@@ -191,7 +204,17 @@ impl App {
                                             group.items.len(),
                                             format_bytes(group.reclaimable)
                                         ));
-                                        ui.label(RichText::new(&group.md5[..8]).monospace());
+                                        let hash_short =
+                                            &group.hash.hex[..group.hash.hex.len().min(8)];
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} {} · {}",
+                                                group.hash.algorithm.label(),
+                                                hash_short,
+                                                group.evidence.label()
+                                            ))
+                                            .monospace(),
+                                        );
                                     });
                                     for (idx, item) in group.items.iter().enumerate() {
                                         ui_item(ui, item, &mut selected, &mut reveal, idx == 0);
@@ -327,7 +350,13 @@ fn ui_item(
             .on_hover_text(&item.path);
         if !item.reason.is_empty() {
             ui.label(
-                RichText::new(&item.reason)
+                RichText::new(format!("{} · {}", item.reason, item.confidence.label()))
+                    .small()
+                    .color(Color32::from_gray(150)),
+            );
+        } else {
+            ui.label(
+                RichText::new(item.confidence.label())
                     .small()
                     .color(Color32::from_gray(150)),
             );
@@ -346,7 +375,9 @@ fn ui_empty(ui: &mut egui::Ui) {
 
 fn select_items(selected: &mut HashSet<String>, items: &[crate::analytics::ReclaimItem]) {
     for item in items {
-        selected.insert(item.path.clone());
+        if item.confidence.quick_selectable() {
+            selected.insert(item.path.clone());
+        }
     }
 }
 

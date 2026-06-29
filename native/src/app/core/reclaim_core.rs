@@ -9,6 +9,7 @@ impl App {
             stale_days: self.reclaim_stale_days.max(1),
             max_items: 200,
             duplicate_min_bytes: 1024 * 1024,
+            partial_fingerprint_bytes: 64 * 1024,
         }
     }
 
@@ -43,6 +44,51 @@ impl App {
             rx,
             progress,
             root: norm,
+            started: Instant::now(),
+            cancel_requested: false,
+        });
+        self.reclaim_report = None;
+        self.reclaim_selected.clear();
+    }
+
+    pub(in crate::app) fn start_reclaim_scan_remote(
+        &mut self,
+        backend: crate::vfs::BackendHandle,
+        root: String,
+        label: String,
+    ) {
+        let t = root.trim_end_matches('/');
+        let norm = if t.is_empty() {
+            "/".to_string()
+        } else {
+            t.to_string()
+        };
+        if let Some(s) = &self.reclaim_scan {
+            s.progress
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let progress = crate::analytics::ReclaimProgress::default();
+        let opts = self.reclaim_options();
+        let (tx, rx) = unbounded();
+        let p2 = progress.clone();
+        let be = backend.clone();
+        let scan_root = norm.clone();
+        std::thread::Builder::new()
+            .name("reclaim-remote-scan".into())
+            .spawn(move || {
+                let report = crate::analytics::scan_reclaim_backend(be, &scan_root, &p2, &opts);
+                let _ = tx.send(report);
+            })
+            .ok();
+        self.reclaim_scan = Some(ReclaimScan {
+            rx,
+            progress,
+            root: if label.is_empty() {
+                norm
+            } else {
+                format!("{} · {}", label, norm)
+            },
             started: Instant::now(),
             cancel_requested: false,
         });
@@ -88,56 +134,78 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn reclaim_selected_bytes(&self) -> u64 {
-        let Some(report) = &self.reclaim_report else {
-            return 0;
-        };
-        let mut seen = std::collections::HashSet::new();
-        let mut total = 0u64;
-        for item in reclaim_items(report) {
-            if self.reclaim_selected.contains(&item.path) && seen.insert(item.path.as_str()) {
-                total = total.saturating_add(item.size);
-            }
-        }
-        total
-    }
-
     pub(in crate::app) fn trash_reclaim_selected(&mut self) {
         if self.reclaim_selected.is_empty() {
+            return;
+        }
+        let Some(report_snapshot) = self.reclaim_report.clone() else {
+            return;
+        };
+        if report_snapshot.is_remote {
+            self.error_msg = Some("Remote-Reclaim ist in diesem Release read-only.".to_string());
             return;
         }
         let paths = self.reclaim_selected_paths_expanded();
         if paths.is_empty() {
             return;
         }
-        let bytes = self.reclaim_selected_bytes();
-        if !confirm_yes_no(
-            "In Papierkorb verschieben",
-            &format!(
-                "{} Eintrag/Eintraege ({}) in den Papierkorb verschieben?",
-                paths.len(),
-                format_bytes(bytes)
-            ),
-        ) {
+        let plan = crate::analytics::prepare_reclaim_trash_plan(&report_snapshot, &paths);
+        if plan.delete_paths.is_empty() {
+            self.error_msg = Some(format!(
+                "Keine sicher verschiebbaren Eintraege. {} uebersprungen.",
+                plan.skipped_paths.len()
+            ));
             return;
         }
-        let delete_paths = dedupe_nested_paths(&paths);
+        let bytes = plan.estimated_bytes;
+        let mut detail = format!(
+            "{} Eintrag/Eintraege ({}) in den Papierkorb verschieben?",
+            plan.delete_paths.len(),
+            format_bytes(bytes)
+        );
+        if !plan.verified_duplicate_paths.is_empty() {
+            detail.push_str(&format!(
+                "\n{} Duplikatkopie(n) byteweise verifiziert.",
+                plan.verified_duplicate_paths.len()
+            ));
+        }
+        if !plan.skipped_paths.is_empty() {
+            detail.push_str(&format!(
+                "\n{} Eintrag/Eintraege wegen Aenderung oder fehlender Verifikation uebersprungen.",
+                plan.skipped_paths.len()
+            ));
+        }
+        if !plan.risky_paths.is_empty() {
+            detail.push_str(&format!(
+                "\n{} riskante Review-Auswahl(en) enthalten.",
+                plan.risky_paths.len()
+            ));
+        }
+        if !confirm_yes_no("In Papierkorb verschieben", &detail) {
+            return;
+        }
+        let delete_paths = plan.delete_paths.clone();
         let native_paths: Vec<PathBuf> = delete_paths
             .iter()
             .map(|p| PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
             .collect();
         if let Some(report) = &mut self.reclaim_report {
-            report.prune_paths(&paths);
+            report.prune_paths(&delete_paths);
         }
         self.reclaim_selected.clear();
 
         let (tx, rx) = unbounded();
         self.trash_rx = Some(rx);
+        let root = report_snapshot.root;
+        let selected = paths;
+        let journal_plan = plan.clone();
         std::thread::Builder::new()
             .name("reclaim-trash".into())
             .spawn(move || {
                 let res = trash::delete_all(&native_paths);
-                let _ = tx.send(res.err().map(|e| e.to_string()));
+                let err = res.err().map(|e| e.to_string());
+                append_reclaim_journal(root, selected, journal_plan, err.as_deref());
+                let _ = tx.send(err);
             })
             .ok();
     }
@@ -179,17 +247,35 @@ fn reclaim_items(report: &crate::analytics::ReclaimReport) -> Vec<&crate::analyt
     out
 }
 
-fn dedupe_nested_paths(paths: &[String]) -> Vec<String> {
-    let mut sorted = paths.to_vec();
-    sorted.sort_by_key(|p| p.matches('/').count());
-    let mut out: Vec<String> = Vec::new();
-    'next: for p in sorted {
-        for kept in &out {
-            if p == *kept || p.starts_with(&format!("{}/", kept.trim_end_matches('/'))) {
-                continue 'next;
-            }
-        }
-        out.push(p);
+fn append_reclaim_journal(
+    root: String,
+    selected: Vec<String>,
+    plan: crate::analytics::ReclaimTrashPlan,
+    error: Option<&str>,
+) {
+    let dir = crate::support_dirs::app_data_dir().join("reclaim");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
     }
-    out
+    let path = dir.join("actions.jsonl");
+    let ts = chrono::Local::now().to_rfc3339();
+    let value = serde_json::json!({
+        "ts": ts,
+        "root": root,
+        "selected": selected,
+        "delete_paths": plan.delete_paths,
+        "verified_duplicate_paths": plan.verified_duplicate_paths,
+        "skipped_paths": plan.skipped_paths,
+        "risky_paths": plan.risky_paths,
+        "estimated_bytes": plan.estimated_bytes,
+        "result": error.unwrap_or("ok"),
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{}", value);
+    }
 }
