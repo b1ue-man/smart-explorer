@@ -32,7 +32,10 @@ mod local_platform;
 mod local_platform;
 
 pub use self::cache::CachingBackend;
-pub use self::core::{Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsMeta, VfsResult};
+pub use self::core::{
+    Backend, BackendHandle, ChangeKind, HashHit, Scheme, SearchHit, VfsChange, VfsChangeBatch,
+    VfsMeta, VfsResult,
+};
 #[allow(unused_imports)]
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;

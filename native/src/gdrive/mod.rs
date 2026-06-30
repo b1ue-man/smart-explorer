@@ -17,6 +17,8 @@ mod api;
 mod auth;
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/changes.rs"]
+mod changes;
 #[path = "core/core.rs"]
 mod core;
 #[path = "core/metadata.rs"]

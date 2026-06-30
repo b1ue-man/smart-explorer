@@ -1,3 +1,4 @@
+use crate::bisync::{DeletePolicy, Direction};
 use crate::syncjobs::{SyncJob, Trigger};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -66,6 +67,27 @@ fn local_root(endpoint: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Lightweight remote-change signal for realtime mirror jobs. It is only a
+/// wakeup hint; the sync engine still validates the persisted cursor/state.
+fn remote_change_token(job: &SyncJob) -> Option<String> {
+    if job.delete_policy != DeletePolicy::Mirror {
+        return None;
+    }
+    let endpoint = match job.direction {
+        Direction::AtoB => &job.source,
+        Direction::BtoA => &job.target,
+        Direction::Both => return None,
+    };
+    if local_root(endpoint).is_some() {
+        return None;
+    }
+    let (backend, root) = crate::connect::resolve_endpoint(endpoint).ok()?;
+    if !backend.supports_changes() {
+        return None;
+    }
+    backend.current_change_cursor(&root).ok().flatten()
+}
+
 /// Set of currently-present removable-drive descriptors ("LETTER|LABEL|SERIAL").
 fn current_drives() -> HashSet<String> {
     platform::removable_drives()
@@ -131,7 +153,7 @@ pub fn run_daemon() {
     }
 
     // Per-job real-time state and the last-seen drive set.
-    let mut rt_sig: HashMap<String, (u64, i64, u64)> = HashMap::new();
+    let mut rt_sig: HashMap<String, String> = HashMap::new();
     let mut rt_dirty_since: HashMap<String, i64> = HashMap::new();
     let mut seen_drives = current_drives();
 
@@ -165,15 +187,23 @@ pub fn run_daemon() {
                     .iter()
                     .filter_map(|e| local_root(e))
                     .collect();
-                if roots.is_empty() {
-                    continue; // nothing local to watch
+                let remote_token = remote_change_token(job);
+                if roots.is_empty() && remote_token.is_none() {
+                    continue; // nothing watchable
                 }
                 let sig = roots.iter().fold((0u64, 0i64, 0u64), |a, r| {
                     let s = tree_sig(r);
                     (a.0 + s.0, a.1.max(s.1), a.2 + s.2)
                 });
+                let sig = format!(
+                    "{}:{}:{}:{}",
+                    sig.0,
+                    sig.1,
+                    sig.2,
+                    remote_token.as_deref().unwrap_or("")
+                );
                 match rt_sig.get(&job.id) {
-                    Some(&prev) if prev == sig => {
+                    Some(prev) if prev == &sig => {
                         // Unchanged since last tick - run if a pending change has settled.
                         if let Some(&since) = rt_dirty_since.get(&job.id) {
                             if now - since >= job.rt_debounce_secs as i64 {

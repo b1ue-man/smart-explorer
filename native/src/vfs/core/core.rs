@@ -38,6 +38,32 @@ pub struct VfsMeta {
     pub content_md5: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChangeKind {
+    Upsert,
+    Remove,
+}
+
+/// One backend-reported change. `rel` is optional because ID-addressed remotes
+/// such as Drive may report a stable file id and parent id; the sync index can
+/// resolve that into a relative path from previous state.
+#[derive(Clone, Debug)]
+pub struct VfsChange {
+    pub kind: ChangeKind,
+    pub rel: Option<String>,
+    pub id: Option<String>,
+    pub parent_id: Option<String>,
+    pub name: Option<String>,
+    pub meta: Option<VfsMeta>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct VfsChangeBatch {
+    pub changes: Vec<VfsChange>,
+    pub new_cursor: Option<String>,
+    pub reset: bool,
+}
+
 pub type VfsResult<T> = io::Result<T>;
 
 /// The storage interface. One implementation per protocol. `Send + Sync` so a
@@ -52,6 +78,13 @@ pub trait Backend: Send + Sync {
     fn stat(&self, path: &str) -> VfsResult<VfsMeta>;
     fn exists(&self, path: &str) -> bool {
         self.stat(path).is_ok()
+    }
+
+    /// Stable backend identity for `path`, when the provider has one. Local
+    /// filesystems normally return None; Drive returns the file id.
+    fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
+        let _ = path;
+        Ok(None)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>>;
@@ -136,6 +169,36 @@ pub trait Backend: Send + Sync {
     /// sync can compare by content WITHOUT downloading this side.
     fn provides_content_hash(&self) -> bool {
         false
+    }
+
+    /// Does this backend support an incremental change feed for the subtree?
+    fn supports_changes(&self) -> bool {
+        false
+    }
+
+    /// Stable identity of a sync root, used to detect that a saved cursor belongs
+    /// to the same backend folder before an incremental run is trusted.
+    fn change_root_id(&self, root: &str) -> VfsResult<Option<String>> {
+        let _ = root;
+        Ok(None)
+    }
+
+    /// Return the cursor for future changes. Providers with snapshot semantics
+    /// should return a token before a bootstrap walk, so changes during that
+    /// bootstrap are replayed on the next incremental run.
+    fn current_change_cursor(&self, root: &str) -> VfsResult<Option<String>> {
+        let _ = root;
+        Ok(None)
+    }
+
+    /// Return changes since `cursor`. `reset = true` means the cursor is invalid
+    /// and the caller must rebuild from a full snapshot.
+    fn changes_since(&self, root: &str, cursor: &str) -> VfsResult<VfsChangeBatch> {
+        let _ = (root, cursor);
+        Ok(VfsChangeBatch {
+            reset: true,
+            ..Default::default()
+        })
     }
 
     /// Drop any internal directory-listing cache (no-op unless the backend is

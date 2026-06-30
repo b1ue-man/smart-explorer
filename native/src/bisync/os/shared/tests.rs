@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "tests/extra.rs"]
 mod extra;
+#[path = "tests/incremental.rs"]
+mod incremental;
 #[path = "tests/safety.rs"]
 mod safety;
 

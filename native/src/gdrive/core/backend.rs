@@ -97,6 +97,10 @@ impl Backend for GDriveBackend {
         })
     }
 
+    fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
+        self.resolve(path).map(Some)
+    }
+
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
         // Target a specific file by id (disambiguates duplicate names); fall back
         // to the path-based open when no id is supplied.
@@ -270,5 +274,21 @@ impl Backend for GDriveBackend {
         // not re-transferred. (Google-native Docs have no md5 -> content_md5 None
         // -> those gracefully fall back to size+mtime.)
         true
+    }
+
+    fn supports_changes(&self) -> bool {
+        true
+    }
+
+    fn change_root_id(&self, root: &str) -> VfsResult<Option<String>> {
+        self.resolve(root).map(Some)
+    }
+
+    fn current_change_cursor(&self, _root: &str) -> VfsResult<Option<String>> {
+        self.start_page_token().map(Some)
+    }
+
+    fn changes_since(&self, _root: &str, cursor: &str) -> VfsResult<crate::vfs::VfsChangeBatch> {
+        self.drive_changes_since(cursor)
     }
 }

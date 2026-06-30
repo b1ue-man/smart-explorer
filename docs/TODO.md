@@ -38,6 +38,7 @@ a Google OAuth *Client ID* (Desktop type) from the user/publisher — see
 | 27 | **Version rollback from the GitHub releases** — the rollback list now reads the repo's `release/v*` branches (every released version, not just what's archived locally), downloads the chosen one's binary + swaps it; both lists scroll (capped). Local archives kept as offline fallback. | ✅ | 0.5.66 |
 | 28 | **Agent fully wired into analytics** — `CachingBackend` now forwards `supports_walk_tree`/`walk_tree`, so the treemap/storage-analysis uses the agent's one-shot server-side walk (was falling back to per-dir listing through the cache wrapper). | ✅ | 0.5.66 |
 | 29 | **Find & Reclaim (local)** — the storage-analysis window now has a `Find & Reclaim` mode: local large/stale/empty/cleanup scans, size-grouped MD5 duplicate groups, quick selection of duplicate copies/empty/cleanup targets, Explorer reveal, and recycle-bin deletion with confirmation. | ✅ | 0.5.106 |
+| 30 | **Incremental managed mirror sync (V1)** — one-way Mirror jobs bootstrap once, then keep a SQLite sync index and use Google Drive Changes/local dirty walks to touch only changed paths. Unsafe states (cursor loss, root drift, target drift, two-way/non-Drive remotes) fall back to the existing full safe sync. | ✅ | 0.5.109 |
 | 1 | Legal disclaimer → standard **MIT License** (installer accept-page + first-run notice + README) | ✅ | 0.5.4 / 0.5.6 |
 | 2 | Remote connection **per-tab**; remote/share tabs show a name | ✅ | 0.5.5 |
 | 5 | **Per-tab + per-split-pane** filter/search | ✅ | 0.5.6 |

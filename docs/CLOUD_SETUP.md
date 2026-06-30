@@ -61,7 +61,11 @@ Manager).
 - **Sync mit Drive:** Lege ein Sync-Setup an (⇄ Sync → Sync-Setups), wähle als
   Quelle/Ziel über **📂 → ☁ Google Drive** einen Drive-Ordner. Cloud-Sync-Jobs
   laufen auch im Hintergrund-Dienst, weil der Refresh-Token aus dem Credential
-  Manager wiederverwendet wird.
+  Manager wiederverwendet wird. Einseitige Mirror-Jobs gegen Drive nutzen nach
+  dem ersten Vollabgleich den lokalen Sync-Index
+  `%APPDATA%\smart_explorer\sync\sync_state.sqlite` und die Drive Changes API;
+  wenn der Cursor oder die Root-Identitaet nicht sicher passt, laeuft wieder der
+  vollstaendige sichere Sync.
 
 ---
 
