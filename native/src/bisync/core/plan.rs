@@ -13,7 +13,7 @@ fn sig_size(s: Option<Sig>) -> u64 {
 }
 
 /// Comparison-mode-aware equality of two optional signatures.
-fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
+pub(super) fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
     match (x, y) {
         (None, None) => true,
         (Some(a), Some(b)) => {

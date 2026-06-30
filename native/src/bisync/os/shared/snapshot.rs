@@ -71,7 +71,7 @@ pub(super) fn md5_to_u64(d: &[u8; 16]) -> u64 {
 }
 
 /// Parse a hex MD5 string (e.g. Google Drive `md5Checksum`) into the Sig key.
-pub(super) fn md5_hex_to_u64(hex: &str) -> u64 {
+pub(crate) fn md5_hex_to_u64(hex: &str) -> u64 {
     let hex = hex.trim();
     if hex.len() < 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return 0;

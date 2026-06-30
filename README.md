@@ -15,6 +15,10 @@ den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 `Backend`-Mechanismus. Smart Explorer ist **kein Cloud-Dienst** — du hinterlegst
 einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
 [`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)); Einstellungen → **CLOUD (GOOGLE DRIVE)**.
+Einseitige Drive-Mirror-Jobs nutzen nach dem ersten Vollabgleich einen lokalen
+Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
+prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
+zurück.
 
 **Teilen / P2P (ab 0.5.23):** Dateien direkt an gekoppelte Geräte oder in **Räume**
 senden — **Ende-zu-Ende-verschlüsselt, direkt zwischen den Geräten**. Der
@@ -51,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.108.exe`](release-native/Smart%20Explorer%20Setup%200.5.108.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.109.exe`](release-native/Smart%20Explorer%20Setup%200.5.109.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
@@ -151,7 +155,7 @@ sich automatisch (EXE-Tausch + Neustart).
 
 ## Daten der App
 
-- Windows-Daten: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt)
+- Windows-Daten: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt, sync/sync_state.sqlite)
 - Linux-Daten: `$XDG_DATA_HOME/smart_explorer/` bzw. `~/.local/share/smart_explorer/`
 - Windows-Installation: `%LOCALAPPDATA%\Programs\Smart Explorer\`
 - Linux-Installation: `~/.local/opt/smart-explorer/`

@@ -20,6 +20,8 @@
 mod apply;
 #[path = "core/plan.rs"]
 mod core;
+#[path = "os/shared/incremental.rs"]
+mod incremental;
 #[path = "os/shared/orchestration.rs"]
 mod orchestration;
 #[path = "core/paths.rs"]
@@ -28,6 +30,8 @@ mod paths;
 mod persistence;
 #[path = "os/shared/snapshot.rs"]
 mod snapshot;
+#[path = "os/shared/state_store.rs"]
+mod state_store;
 #[path = "core/types.rs"]
 mod types;
 

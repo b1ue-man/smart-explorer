@@ -23,6 +23,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   report failure on exit 0. Run cargo via the Bash tool (`2>/dev/null`); do
   file/version/makensis steps as separate simple PS calls. Quote makensis args:
   `& $makensis "/DVERSION=x.y.z" "installer.nsi"`.
+- **Bundled SQLite for sync state.** `rusqlite` is built with `bundled` so
+  incremental mirror state does not depend on a system SQLite DLL. Keep the GNU C
+  toolchain available for release builds, and do not drop `bundled` unless the
+  Windows and WSL feed build both prove the replacement path.
 
 ## egui / UI
 

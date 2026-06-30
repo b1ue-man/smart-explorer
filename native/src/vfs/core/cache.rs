@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 
-use super::{Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsMeta, VfsResult};
+use super::{
+    Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta, VfsResult,
+};
 
 /// Wraps any backend with a short-TTL **directory-listing cache** so interactive
 /// browsing (back/forward, re-visiting a folder, rapid drilling) doesn't re-list
@@ -89,6 +91,9 @@ impl Backend for CachingBackend {
     fn exists(&self, path: &str) -> bool {
         self.inner.exists(path)
     }
+    fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
+        self.inner.item_id(path)
+    }
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         self.inner.open_read(path)
     }
@@ -150,6 +155,18 @@ impl Backend for CachingBackend {
     }
     fn provides_content_hash(&self) -> bool {
         self.inner.provides_content_hash()
+    }
+    fn supports_changes(&self) -> bool {
+        self.inner.supports_changes()
+    }
+    fn change_root_id(&self, root: &str) -> VfsResult<Option<String>> {
+        self.inner.change_root_id(root)
+    }
+    fn current_change_cursor(&self, root: &str) -> VfsResult<Option<String>> {
+        self.inner.current_change_cursor(root)
+    }
+    fn changes_since(&self, root: &str, cursor: &str) -> VfsResult<VfsChangeBatch> {
+        self.inner.changes_since(root, cursor)
     }
     fn invalidate_cache(&self) {
         if let Ok(mut c) = self.cache.lock() {

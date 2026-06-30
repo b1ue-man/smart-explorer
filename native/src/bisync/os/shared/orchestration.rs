@@ -1,8 +1,10 @@
 use crate::vfs::Backend;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::apply::apply_with_results;
 use super::core::{plan, update_baseline};
+use super::incremental::{bootstrap_incremental_state, mirror_source, try_incremental_mirror};
 use super::persistence::{
     baseline_path, load_baseline, pair_id, prune_versions, save_baseline, versions_dir,
 };
@@ -78,6 +80,70 @@ pub struct Outcome {
 /// new baseline + prune versions. Conflicts are returned (not applied); the
 /// updated baseline keeps them flagged until resolved.
 pub fn run(
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+) -> Outcome {
+    run_inner(a, root_a, b, root_b, opts, cancel, filter, None)
+}
+
+#[cfg(test)]
+pub(super) fn run_with_store_path(
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    store_path: &Path,
+) -> Outcome {
+    run_inner(a, root_a, b, root_b, opts, cancel, filter, Some(store_path))
+}
+
+fn run_inner(
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    store_path: Option<&Path>,
+) -> Outcome {
+    if let Some(out) =
+        try_incremental_mirror(a, root_a, b, root_b, opts, cancel, filter, store_path)
+    {
+        return out;
+    }
+
+    let pre_cursor = mirror_source(a, root_a, b, root_b, opts)
+        .and_then(|(source, root, _)| source.current_change_cursor(root).ok().flatten());
+    let out = run_full(a, root_a, b, root_b, opts, cancel, filter);
+    if !opts.dry_run
+        && out.errors.is_empty()
+        && out.conflicts.is_empty()
+        && !cancel.load(Ordering::Relaxed)
+    {
+        let _ = bootstrap_incremental_state(
+            a,
+            root_a,
+            b,
+            root_b,
+            opts,
+            &out.baseline,
+            pre_cursor,
+            store_path,
+        );
+    }
+    out
+}
+
+fn run_full(
     a: &dyn Backend,
     root_a: &str,
     b: &dyn Backend,

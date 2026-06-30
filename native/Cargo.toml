@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.108"
+version = "0.5.109"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -56,6 +56,9 @@ getrandom = "0.2"
 # expose natively (Google Drive md5Checksum, Nextcloud/ownCloud oc:checksums) —
 # so checksum-mode sync compares hashes WITHOUT downloading remote files.
 md5 = "0.7"
+# Persistent sync state for incremental managed mirror jobs. `bundled` keeps the
+# Windows release independent from a system SQLite installation.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 # Peer file sharing (share.rs, #21): Iroh 1.0 provides authenticated P2P QUIC
 # connections by endpoint public key, with relay fallback over HTTP(S) relay
 # servers. Keep the default ring-backed TLS stack; do not enable aws-lc.
