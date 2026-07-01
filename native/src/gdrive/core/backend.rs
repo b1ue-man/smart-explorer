@@ -22,6 +22,8 @@ impl Backend for GDriveBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let id = self.resolve(path)?;
         let mut out = Vec::new();
+        let mut pending_ids: Vec<(String, String, String, Option<String>)> = Vec::new();
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
         let mut page_token: Option<String> = None;
         loop {
             let q = format!("'{}' in parents and trashed = false", id);
@@ -40,17 +42,19 @@ impl Backend for GDriveBackend {
                     let Some(m) = Self::meta_from_json(f, None) else {
                         continue;
                     };
+                    *name_counts.entry(m.name.clone()).or_default() += 1;
                     if let Some(fid) = f["id"].as_str() {
                         let child_path = if base.is_empty() {
                             m.name.clone()
                         } else {
                             format!("{}/{}", base, m.name)
                         };
-                        if let Some(mime) = f["mimeType"].as_str() {
-                            self.mimes_guard()?
-                                .insert(child_path.clone(), mime.to_string());
-                        }
-                        self.ids_guard()?.insert(child_path, fid.to_string());
+                        pending_ids.push((
+                            child_path,
+                            m.name.clone(),
+                            fid.to_string(),
+                            f["mimeType"].as_str().map(str::to_string),
+                        ));
                     }
                     out.push(m);
                 }
@@ -60,9 +64,17 @@ impl Backend for GDriveBackend {
                 break;
             }
         }
+        for (child_path, name, fid, mime) in pending_ids {
+            if name_counts.get(&name).copied() == Some(1) {
+                self.remember_path(&child_path, &fid, mime.as_deref())?;
+            } else {
+                self.forget_path_prefix(&child_path);
+            }
+        }
         // This directory's children are now fully enumerated -> future creates
         // here can skip the existence probe (see `upload`/`ensure_dir`).
         self.listed_guard()?.insert(norm(path));
+        self.persist_path_cache();
         Ok(out)
     }
 
@@ -182,9 +194,9 @@ impl Backend for GDriveBackend {
                     .send_string(&payload),
             )
         })?;
-        let mut ids = self.ids_guard()?;
-        ids.remove(&norm(src));
-        ids.insert(norm(dst), id);
+        self.forget_path_prefix(&norm(src));
+        self.remember_path(&norm(dst), &id, None)?;
+        self.persist_path_cache();
         Ok(())
     }
 
@@ -194,7 +206,11 @@ impl Backend for GDriveBackend {
 
     fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
         match id {
-            Some(i) if !i.is_empty() => self.trash_id(i),
+            Some(i) if !i.is_empty() => {
+                self.trash_id(i)?;
+                self.forget_path_prefix(path);
+                Ok(())
+            }
             _ => self.trash(path),
         }
     }

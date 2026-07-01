@@ -8,6 +8,9 @@ pub struct GDriveBackend {
     pub(super) tokens: Arc<Mutex<cloud::Tokens>>,
     /// path (forward-slash, no trailing slash; "" == root) -> fileId
     pub(super) ids: Arc<Mutex<HashMap<String, String>>>,
+    /// Paths loaded from disk must be validated once before they can short-cut
+    /// `resolve`; ids learned in this session are not included here.
+    pub(super) untrusted_ids: Arc<Mutex<HashSet<String>>>,
     /// path -> mimeType (so we know which files are Google-Docs editors that
     /// must be exported instead of downloaded).
     pub(super) mimes: Arc<Mutex<HashMap<String, String>>>,
@@ -27,12 +30,15 @@ impl GDriveBackend {
     /// `cloud::authorize`). `root` is the forward-slash start folder.
     pub fn connect(root: &str) -> Result<Self, String> {
         let tokens = cloud::refresh_access(Provider::GDrive)?;
-        let mut ids = HashMap::new();
+        let loaded = super::cache::load();
+        let mut ids = loaded.ids;
         ids.insert(String::new(), "root".to_string());
+        let untrusted_ids = super::cache::loaded_untrusted(&ids);
         Ok(GDriveBackend {
             tokens: Arc::new(Mutex::new(tokens)),
             ids: Arc::new(Mutex::new(ids)),
-            mimes: Arc::new(Mutex::new(HashMap::new())),
+            untrusted_ids: Arc::new(Mutex::new(untrusted_ids)),
+            mimes: Arc::new(Mutex::new(loaded.mimes)),
             listed: Arc::new(Mutex::new(HashSet::new())),
             create_lock: Arc::new(Mutex::new(())),
             root: super::core::norm(root),
@@ -49,6 +55,12 @@ impl GDriveBackend {
         self.ids
             .lock()
             .map_err(|_| io::Error::other("Drive-ID-Cache vergiftet"))
+    }
+
+    pub(super) fn untrusted_guard(&self) -> io::Result<MutexGuard<'_, HashSet<String>>> {
+        self.untrusted_ids
+            .lock()
+            .map_err(|_| io::Error::other("Drive-ID-Trust-Cache vergiftet"))
     }
 
     pub(super) fn mimes_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {

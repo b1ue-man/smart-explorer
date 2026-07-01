@@ -14,7 +14,7 @@ impl GDriveBackend {
         // children are fully known (first sync into a fresh/empty folder), a
         // missing cache entry means it's a new file -> create without the extra
         // existence probe (one fewer round-trip per file across 27k files).
-        let existing = match self.ids_guard()?.get(&key).cloned() {
+        let existing = match self.valid_cached_id(&key)? {
             Some(id) => Some(id),
             None => {
                 if self.listed_guard()?.contains(&parent) {
@@ -70,14 +70,15 @@ impl GDriveBackend {
         let id = v["id"]
             .as_str()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Drive-Upload ohne id"))?;
-        self.ids_guard()?.insert(key, id.to_string());
+        self.remember_path(&key, id, None)?;
+        self.persist_path_cache();
         Ok(())
     }
 
     pub(super) fn trash(&self, path: &str) -> VfsResult<()> {
         let id = self.resolve(path)?;
         self.trash_id(&id)?;
-        self.ids_guard()?.remove(&norm(path));
+        self.forget_path_prefix(&norm(path));
         Ok(())
     }
 
