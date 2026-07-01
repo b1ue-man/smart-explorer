@@ -44,6 +44,36 @@ impl CachingBackend {
         })
     }
 
+    fn parent_and_name(key: &str) -> Option<(String, &str)> {
+        if key.is_empty() || key == "/" {
+            return None;
+        }
+        match key.rsplit_once('/') {
+            Some((parent, name)) if !name.is_empty() => Some((
+                if parent.is_empty() {
+                    "/".to_string()
+                } else {
+                    parent.to_string()
+                },
+                name,
+            )),
+            None => Some(("/".to_string(), key)),
+            _ => None,
+        }
+    }
+
+    fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
+        let (parent, name) = Self::parent_and_name(key)?;
+        let c = self.cache.lock().ok()?;
+        let (at, entries) = c.get(&parent)?;
+        if at.elapsed() >= self.ttl {
+            return None;
+        }
+        let mut matches = entries.iter().filter(|m| m.name == name);
+        let first = matches.next()?.clone();
+        matches.next().is_none().then_some(first)
+    }
+
     fn invalidate(&self, path: &str) {
         if let Ok(mut c) = self.cache.lock() {
             let key = Self::norm(path);
@@ -86,6 +116,10 @@ impl Backend for CachingBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        let key = Self::norm(path);
+        if let Some(meta) = self.cached_child_meta(&key) {
+            return Ok(meta);
+        }
         self.inner.stat(path)
     }
     fn exists(&self, path: &str) -> bool {

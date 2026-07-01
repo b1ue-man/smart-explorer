@@ -8,6 +8,17 @@ impl GDriveBackend {
     pub(super) fn mime_of(&self, path: &str) -> Option<String> {
         let key = norm(path);
         if let Some(m) = self.mimes_guard().ok()?.get(&key).cloned() {
+            let trusted_id = self
+                .cached_id(&key)
+                .ok()
+                .flatten()
+                .is_some_and(|_| self.cached_id_is_trusted(&key).unwrap_or(false));
+            if trusted_id {
+                return Some(m);
+            }
+        }
+        let _ = self.resolve(&key).ok()?;
+        if let Some(m) = self.mimes_guard().ok()?.get(&key).cloned() {
             return Some(m);
         }
         let id = self.resolve(&key).ok()?;
@@ -21,7 +32,7 @@ impl GDriveBackend {
     /// Resolve a forward-slash path to a Drive fileId (walking + caching).
     pub(super) fn resolve(&self, path: &str) -> VfsResult<String> {
         let key = norm(path);
-        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
+        if let Some(id) = self.valid_cached_id(&key)? {
             return Ok(id);
         }
         // Walk segment by segment from the deepest cached ancestor.
@@ -34,7 +45,7 @@ impl GDriveBackend {
             } else {
                 format!("{}/{}", cur_path, seg)
             };
-            if let Some(id) = self.ids_guard()?.get(&next_path).cloned() {
+            if let Some(id) = self.valid_cached_id(&next_path)? {
                 cur_id = id;
                 cur_path = next_path;
                 continue;
@@ -42,11 +53,59 @@ impl GDriveBackend {
             let child = self
                 .find_child(&cur_id, seg)?
                 .ok_or_else(|| not_found(&next_path))?;
-            self.ids_guard()?.insert(next_path.clone(), child.clone());
+            self.remember_path(&next_path, &child, None)?;
+            self.persist_path_cache();
             cur_id = child;
             cur_path = next_path;
         }
         Ok(cur_id)
+    }
+
+    pub(super) fn valid_cached_id(&self, key: &str) -> VfsResult<Option<String>> {
+        let Some(id) = self.cached_id(key)? else {
+            return Ok(None);
+        };
+        if self.cached_id_is_trusted(key)? {
+            return Ok(Some(id));
+        }
+        if self.validate_cached_id(key, &id)? {
+            self.trust_cached_id(key)?;
+            self.persist_path_cache();
+            return Ok(Some(id));
+        }
+        self.forget_path_prefix(key);
+        Ok(None)
+    }
+
+    fn validate_cached_id(&self, key: &str, id: &str) -> VfsResult<bool> {
+        if key.is_empty() {
+            return Ok(true);
+        }
+        let (parent, name) = split_parent(key);
+        let parent_id = if parent.is_empty() {
+            "root".to_string()
+        } else {
+            match self.resolve(&parent) {
+                Ok(id) => id,
+                Err(_) => return Ok(false),
+            }
+        };
+        let url = format!(
+            "{}/files/{}?fields=id,name,parents,mimeType,trashed",
+            API, id
+        );
+        let v = match self.get_json(&url) {
+            Ok(v) => v,
+            Err(_) => return Ok(false),
+        };
+        if !super::cache::validation_matches(&v, name, &parent_id) {
+            return Ok(false);
+        }
+        if let Some(mime) = v["mimeType"].as_str() {
+            self.mimes_guard()?
+                .insert(key.to_string(), mime.to_string());
+        }
+        Ok(true)
     }
 
     pub(super) fn find_child(&self, parent_id: &str, name: &str) -> VfsResult<Option<String>> {
@@ -114,7 +173,7 @@ impl GDriveBackend {
         if key.is_empty() {
             return Ok("root".to_string());
         }
-        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
+        if let Some(id) = self.valid_cached_id(&key)? {
             return Ok(id);
         }
         let (parent, name) = split_parent(&key);
@@ -122,7 +181,7 @@ impl GDriveBackend {
 
         let _g = self.create_guard()?;
         // Re-check under the lock - another thread may have just created it.
-        if let Some(id) = self.ids_guard()?.get(&key).cloned() {
+        if let Some(id) = self.valid_cached_id(&key)? {
             return Ok(id);
         }
         // If the parent's children are fully known and this folder isn't among
@@ -134,7 +193,8 @@ impl GDriveBackend {
             self.find_child(&parent_id, name)?
         };
         if let Some(id) = existing {
-            self.ids_guard()?.insert(key, id.clone());
+            self.remember_path(&key, &id, None)?;
+            self.persist_path_cache();
             return Ok(id);
         }
         // Create the folder.
@@ -158,9 +218,10 @@ impl GDriveBackend {
             .as_str()
             .ok_or_else(|| err("kein id nach mkdir"))?
             .to_string();
-        self.ids_guard()?.insert(key.clone(), id.clone());
+        self.remember_path(&key, &id, Some(FOLDER_MIME))?;
         // A brand-new folder has no children -> its contents are fully known.
         self.listed_guard()?.insert(key);
+        self.persist_path_cache();
         Ok(id)
     }
 }

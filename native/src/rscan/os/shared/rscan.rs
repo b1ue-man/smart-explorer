@@ -5,10 +5,12 @@
 //! walk in `scanner.rs` is left completely untouched (isolation): local roots
 //! still take the fast path; only remote roots come here.
 //!
-//! Sequential by design: remote backends report `parallelism() == 1` (one SSH
-//! session / one FTP control connection), so a single work queue is correct and
-//! avoids hammering the server.
+//! One-level browsing stays serial; recursive scans can list a breadth level in
+//! parallel when the backend advertises safe width (Drive/WebDAV).
 #![allow(dead_code)] // staged: wired into navigation by the connect-UI step.
+
+#[path = "parallel.rs"]
+mod parallel;
 
 use crate::scanner::{ScanHandle, ScanMessage};
 use crate::types::{FileEntry, ScanProgress};
@@ -216,6 +218,11 @@ fn run(
         }
     }
 
+    if max_depth.is_none() && backend.parallelism() > 1 {
+        parallel::run(backend, root, tx, cancel, start);
+        return;
+    }
+
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     queue.push_back((root.clone(), 1));
     let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH);
@@ -366,5 +373,94 @@ mod tests {
         assert!(!names.contains("b.dat"), "depth 1 must not recurse");
         assert_eq!(scanned, 2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recursive_scan_uses_parallel_backend_width() {
+        use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+        use std::io::{self, Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ParallelBackend {
+            active: AtomicUsize,
+            max_active: AtomicUsize,
+        }
+        impl ParallelBackend {
+            fn enter(&self) {
+                let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_active.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                self.active.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        impl Backend for ParallelBackend {
+            fn scheme(&self) -> Scheme {
+                Scheme::GDrive
+            }
+            fn root_display(&self) -> String {
+                "/root".into()
+            }
+            fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+                self.enter();
+                if path == "/root" {
+                    return Ok((0..4)
+                        .map(|i| VfsMeta {
+                            name: format!("d{i}"),
+                            is_dir: true,
+                            ..Default::default()
+                        })
+                        .collect());
+                }
+                let name = path.rsplit('/').next().unwrap_or("x");
+                Ok(vec![VfsMeta {
+                    name: format!("{name}.txt"),
+                    size: 1,
+                    ..Default::default()
+                }])
+            }
+            fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                Ok(VfsMeta {
+                    name: "root".into(),
+                    is_dir: true,
+                    ..Default::default()
+                })
+            }
+            fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            }
+            fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            }
+            fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                Ok(())
+            }
+            fn parallelism(&self) -> usize {
+                4
+            }
+        }
+
+        let typed = Arc::new(ParallelBackend {
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        });
+        let be: BackendHandle = typed.clone();
+        let (tx, rx) = unbounded();
+        start_scan_backend(be, "/root".into(), None, tx);
+        let (names, scanned) = drain(&rx);
+        assert_eq!(scanned, 8);
+        assert!(names.contains("d0.txt") && names.contains("d3.txt"));
+        assert!(
+            typed.max_active.load(Ordering::SeqCst) > 1,
+            "recursive scan did not list sibling folders concurrently"
+        );
     }
 }
