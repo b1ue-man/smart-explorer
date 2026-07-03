@@ -2,6 +2,27 @@ use super::prelude::*;
 use super::*;
 use crate::app::shared_platform_helpers::ClipboardEffect;
 
+fn should_cleanup_missing_temp(mtime_ms: i64, process_finished: bool, dirty: bool) -> bool {
+    mtime_ms == 0 && process_finished && !dirty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_cleanup_missing_temp;
+
+    #[test]
+    fn finished_launcher_does_not_cleanup_existing_clean_temp() {
+        assert!(!should_cleanup_missing_temp(123, true, false));
+    }
+
+    #[test]
+    fn missing_clean_temp_can_be_untracked_after_launcher_finishes() {
+        assert!(should_cleanup_missing_temp(0, true, false));
+        assert!(!should_cleanup_missing_temp(0, false, false));
+        assert!(!should_cleanup_missing_temp(0, true, true));
+    }
+}
+
 impl App {
     /// Open a file in its associated app (`OpenMode::Default`) or via the native
     /// Windows "Open with…" chooser (`OpenMode::With`). Local files launch
@@ -201,7 +222,8 @@ impl App {
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
             if m == 0 {
-                if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
+                let process_finished = e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false);
+                if should_cleanup_missing_temp(m, process_finished, e.dirty) {
                     cleanup_done.push(e.temp.clone());
                 }
                 continue;
@@ -216,9 +238,6 @@ impl App {
                 continue;
             }
             if m == e.baseline_mtime {
-                if e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false) && !e.dirty {
-                    cleanup_done.push(e.temp.clone());
-                }
                 continue;
             }
             e.dirty = true;
