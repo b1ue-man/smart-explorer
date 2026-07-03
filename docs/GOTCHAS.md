@@ -27,6 +27,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   incremental mirror state does not depend on a system SQLite DLL. Keep the GNU C
   toolchain available for release builds, and do not drop `bundled` unless the
   Windows and WSL feed build both prove the replacement path.
+- **cargo-audit quick-xml advisories via plist.** `quick-xml 0.39.2` is currently
+  pinned by `plist 1.9.0` through `netdev`/`iroh` and by Wayland build tooling.
+  CI explicitly ignores only `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` on the
+  main native lockfile after attempting the available `iroh`/`netdev` updates.
+  Remove those ignores as soon as the transitive path can move to
+  `quick-xml >=0.41.0`; do not broaden the audit suppression.
 
 ## egui / UI
 
