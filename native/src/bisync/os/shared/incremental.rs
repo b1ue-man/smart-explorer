@@ -23,13 +23,40 @@ struct ResolvedChange {
     source_sig: Option<Sig>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SyncEndpoints<'a> {
+    pub(super) a: &'a dyn Backend,
+    pub(super) root_a: &'a str,
+    pub(super) b: &'a dyn Backend,
+    pub(super) root_b: &'a str,
+}
+
+impl<'a> SyncEndpoints<'a> {
+    pub(super) fn new(
+        a: &'a dyn Backend,
+        root_a: &'a str,
+        b: &'a dyn Backend,
+        root_b: &'a str,
+    ) -> Self {
+        Self {
+            a,
+            root_a,
+            b,
+            root_b,
+        }
+    }
+}
+
 pub(super) fn mirror_source<'a>(
-    a: &'a dyn Backend,
-    root_a: &'a str,
-    b: &'a dyn Backend,
-    root_b: &'a str,
+    endpoints: SyncEndpoints<'a>,
     opts: BisyncOptions,
 ) -> Option<(&'a dyn Backend, &'a str, Side)> {
+    let SyncEndpoints {
+        a,
+        root_a,
+        b,
+        root_b,
+    } = endpoints;
     if opts.delete != DeletePolicy::Mirror {
         return None;
     }
@@ -41,10 +68,7 @@ pub(super) fn mirror_source<'a>(
 }
 
 pub(super) fn try_incremental_mirror(
-    a: &dyn Backend,
-    root_a: &str,
-    b: &dyn Backend,
-    root_b: &str,
+    endpoints: SyncEndpoints<'_>,
     opts: BisyncOptions,
     cancel: &AtomicBool,
     filter: &WalkFilter,
@@ -53,7 +77,13 @@ pub(super) fn try_incremental_mirror(
     if opts.dry_run {
         return None;
     }
-    let (source, source_root, source_side) = mirror_source(a, root_a, b, root_b, opts)?;
+    let (source, source_root, source_side) = mirror_source(endpoints, opts)?;
+    let SyncEndpoints {
+        a,
+        root_a,
+        b,
+        root_b,
+    } = endpoints;
     let (target, target_root, target_side) = if source_side == Side::A {
         (b, root_b, Side::B)
     } else {
@@ -148,18 +178,21 @@ pub(super) fn try_incremental_mirror(
 }
 
 pub(super) fn bootstrap_incremental_state(
-    a: &dyn Backend,
-    root_a: &str,
-    b: &dyn Backend,
-    root_b: &str,
+    endpoints: SyncEndpoints<'_>,
     opts: BisyncOptions,
     baseline: &Baseline,
     source_cursor: Option<String>,
     store_path: Option<&Path>,
 ) -> rusqlite::Result<()> {
-    let Some((_, _, source_side)) = mirror_source(a, root_a, b, root_b, opts) else {
+    let Some((_, _, source_side)) = mirror_source(endpoints, opts) else {
         return Ok(());
     };
+    let SyncEndpoints {
+        a,
+        root_a,
+        b,
+        root_b,
+    } = endpoints;
     let pair = pair_id(root_a, root_b);
     let mut store = open_store(store_path)?;
     let rec = PairRecord {
@@ -194,9 +227,10 @@ fn record_matches(rec: &PairRecord, root_a: &str, root_b: &str, source_side: Sid
 }
 
 fn root_id_matches(be: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
-    saved.map_or(true, |id| {
-        be.change_root_id(root).ok().flatten().as_deref() == Some(id)
-    })
+    match saved {
+        Some(id) => be.change_root_id(root).ok().flatten().as_deref() == Some(id),
+        None => true,
+    }
 }
 
 fn changes_from_backend(

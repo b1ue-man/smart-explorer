@@ -1,3 +1,5 @@
+use super::super::incremental::SyncEndpoints;
+use super::super::orchestration::run_with_store_path;
 use super::super::*;
 use super::{fwd, tmp};
 use crate::vfs::{
@@ -190,9 +192,8 @@ fn incremental_mirror_skips_target_tree_listing() {
         ..Default::default()
     };
 
-    let first = super::super::orchestration::run_with_store_path(
-        &ca, &ra, &cb, &rb, opts, &cancel, &filter, &db,
-    );
+    let endpoints = SyncEndpoints::new(&ca, &ra, &cb, &rb);
+    let first = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(first.errors.is_empty());
     assert!(b.join("f.txt").exists());
 
@@ -203,9 +204,7 @@ fn incremental_mirror_skips_target_tree_listing() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(a.join("f.txt"), b"v2-longer").unwrap();
 
-    let second = super::super::orchestration::run_with_store_path(
-        &ca, &ra, &cb, &rb, opts, &cancel, &filter, &db,
-    );
+    let second = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(second.errors.is_empty());
     assert_eq!(second.stats.a_to_b, 1);
     assert_eq!(std::fs::read(b.join("f.txt")).unwrap(), b"v2-longer");
@@ -270,9 +269,8 @@ fn incremental_drive_like_rename_deletes_old_target_path() {
         ..Default::default()
     };
 
-    let first = super::super::orchestration::run_with_store_path(
-        &source, &ra, &target, &rb, opts, &cancel, &filter, &db,
-    );
+    let endpoints = SyncEndpoints::new(&source, &ra, &target, &rb);
+    let first = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(first.errors.is_empty());
     assert!(b.join("old.txt").exists());
 
@@ -293,9 +291,7 @@ fn incremental_drive_like_rename_deletes_old_target_path() {
     }];
     b_lists.store(0, Ordering::Relaxed);
 
-    let second = super::super::orchestration::run_with_store_path(
-        &source, &ra, &target, &rb, opts, &cancel, &filter, &db,
-    );
+    let second = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(second.errors.is_empty());
     assert_eq!(second.stats.a_to_b, 1);
     assert_eq!(second.stats.deleted, 1);
