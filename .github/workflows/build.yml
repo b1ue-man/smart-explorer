@@ -82,6 +82,8 @@ jobs:
 
       - name: Check SSH agent (static musl)
         working-directory: se-agent
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
         run: |
           cargo build --release --target x86_64-unknown-linux-musl
           cargo build --release --target aarch64-unknown-linux-musl
