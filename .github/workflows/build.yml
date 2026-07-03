@@ -54,7 +54,10 @@ jobs:
 
       - name: Dependency audit
         run: |
-          cargo audit --file Cargo.lock
+          # quick-xml 0.39.2 is currently pulled through plist -> netdev -> iroh
+          # and via Wayland build tooling. plist 1.9.0 pins quick-xml ^0.39.2;
+          # remove these two ignores as soon as that path can move to >=0.41.0.
+          cargo audit --file Cargo.lock --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
           cargo audit --file explorer-command/Cargo.lock
           cargo audit --file ../share-server/Cargo.lock
           cargo audit --file ../se-agent/Cargo.lock
