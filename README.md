@@ -27,13 +27,19 @@ mitgelieferte **`se-share-server`** (Linux + Windows, in
 Verbindung (Discovery), nie die Dateien. Toolbar → **📡 Teilen**; Server in
 Einstellungen → **TEILEN**. Plan: [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
-**Terminal (ab 0.5.116):** der mitinstallierte Companion **`se`** nutzt dieselben
+**Terminal (ab 0.5.117):** der mitinstallierte Companion **`se`** nutzt dieselben
 gespeicherten Verbindungen, App-Daten, Keyring-Secrets, Share-Profile und den
 Daemon wie die GUI. Beispiele: `se connections list`, `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
 Execution ist in v1 nur fuer Smart-Explorer-Share-Peers verfuegbar und auf der
 empfangenden Seite standardmaessig aus: `se exec share://... -- program args`.
+Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
+example.com --user alice --root /srv --label prod --password-stdin`,
+`se connections add share --root \\server\share --label NAS --password-stdin`
+speichert eine UNC-Verbindung, `se connections add-peer --code SE-D3-... --name
+Laptop` sendet die normale Freigabeanfrage, und `se connections add-room --code
+SE-R3-... --name Team` tritt einem Raum bei.
 
 ---
 
@@ -63,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.116.exe`](release-native/Smart%20Explorer%20Setup%200.5.116.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.117.exe`](release-native/Smart%20Explorer%20Setup%200.5.117.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
