@@ -5,6 +5,7 @@
 ; Override the exe source when building natively on Windows:
 ;   makensis -DVERSION=x.y.z "-DEXE_SRC=target\release\smart_explorer.exe" installer.nsi
 ;   makensis -DVERSION=x.y.z "-DUPDATER_SRC=target\release\smart_explorer_updater.exe" installer.nsi
+;   makensis -DVERSION=x.y.z "-DCLI_SRC=target\release\se.exe" installer.nsi
 ; Silent install:  "Smart Explorer Setup x.y.z.exe" /S
 ;
 ; What it sets up so the app "just works":
@@ -24,10 +25,15 @@
   ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
   !define UPDATER_SRC "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe"
 !endif
+!ifndef CLI_SRC
+  ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
+  !define CLI_SRC "target/x86_64-pc-windows-gnu/release/se.exe"
+!endif
 
 !define APP_NAME "Smart Explorer"
 !define EXE_NAME "Smart Explorer.exe"
 !define UPDATER_EXE_NAME "Smart Explorer Updater.exe"
+!define CLI_EXE_NAME "se.exe"
 !define VERB "OpenInSmartExplorer"
 !define VERB_LABEL "In Smart Explorer öffnen"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartExplorer"
@@ -63,6 +69,7 @@ Section "Install"
   ; folder looks empty. The IMAGENAME wildcard catches every variant.
   nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
   nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
+  nsExec::Exec 'taskkill /F /T /IM "se.exe"'
   Sleep 1200
 
   ; Clear leftovers from a previous/interrupted auto-update so the fresh exe lands.
@@ -93,6 +100,9 @@ Section "Install"
 
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"
   File "/oname=${UPDATER_EXE_NAME}" "${UPDATER_SRC}"
+
+  Delete "$INSTDIR\${CLI_EXE_NAME}"
+  File "/oname=${CLI_EXE_NAME}" "${CLI_SRC}"
 
   File "${__FILEDIR__}\..\LICENSE"
 
@@ -152,6 +162,7 @@ Section "Uninstall"
   ; Kill every variant (see the install section) so the exe isn't left locked.
   nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
   nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
+  nsExec::Exec 'taskkill /F /T /IM "se.exe"'
   Sleep 1000
 
   ; Undo shell integration via the app's own (reversible) restore BEFORE the
@@ -167,6 +178,7 @@ Section "Uninstall"
 
   Delete "$INSTDIR\${EXE_NAME}"
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"
+  Delete "$INSTDIR\${CLI_EXE_NAME}"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"

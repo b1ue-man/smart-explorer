@@ -14,7 +14,8 @@ use super::fs::{self, ShareExportConfig};
 use super::identity::ShareIdentity;
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::types::{
-    DirectGrantState, PeerEndpoint, ShareAuthState, ShareEvent, ShareScope, ShareStatus,
+    DirectGrantState, ExecRequest, ExecResult, PeerEndpoint, ShareAuthState, ShareEvent,
+    ShareScope, ShareStatus,
 };
 use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse, PeerHello};
 
@@ -69,6 +70,26 @@ impl PeerBackend {
             "Share-Op {op}: {} ms, {}",
             started.elapsed().as_millis(),
             fs_response_summary(&resp)
+        )));
+        Ok(resp)
+    }
+
+    pub(crate) fn exec(&self, req: ExecRequest) -> io::Result<ExecResult> {
+        let started = Instant::now();
+        let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
+        let resp = self.node.block_on(async {
+            send_ctrl(&mut send, &Ctrl::Exec { req }).await?;
+            match recv_ctrl(&mut recv).await? {
+                Ctrl::ExecResp { result } => Ok(result),
+                Ctrl::ExecErr { msg } => Err(eio(msg)),
+                _ => Err(eio("Peer sendet falsche Exec-Antwort")),
+            }
+        })?;
+        let _ = self.node.ev.send(ShareEvent::Status(format!(
+            "Share-Exec: {} ms, code={:?}, timeout={}",
+            started.elapsed().as_millis(),
+            resp.exit_code,
+            resp.timed_out
         )));
         Ok(resp)
     }
@@ -467,7 +488,7 @@ impl ShareIrohNode {
             let exports = exports.clone();
             let ev = self.ev.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_fs_stream(send, recv, exports).await {
+                if let Err(e) = handle_peer_stream(send, recv, exports).await {
                     let _ = ev.send(ShareEvent::Error(format!("Iroh-FS: {e}")));
                 }
             });
@@ -582,14 +603,16 @@ impl Drop for PeerWriter {
     }
 }
 
-async fn handle_fs_stream(
+async fn handle_peer_stream(
     mut send: SendStream,
     mut recv: RecvStream,
     exports: Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<()> {
     let ctrl = recv_ctrl(&mut recv).await?;
-    let Ctrl::Fs { req } = ctrl else {
-        return Err(eio("Dateioperation erwartet"));
+    let req = match ctrl {
+        Ctrl::Fs { req } => req,
+        Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, &exports).await,
+        _ => return Err(eio("Dateioperation erwartet")),
     };
     match req {
         FsRequest::ListDir { path } => match fs::list_dir(&path, &exports) {
@@ -654,6 +677,18 @@ async fn handle_fs_stream(
             .await
         }
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
+    }
+}
+
+async fn handle_exec_stream(
+    send: &mut SendStream,
+    req: ExecRequest,
+    exports: &Arc<Mutex<ShareExportConfig>>,
+) -> io::Result<()> {
+    let cfg = exports.lock().map(|g| g.clone()).unwrap_or_default();
+    match super::exec::run(req, &cfg) {
+        Ok(result) => send_ctrl(send, &Ctrl::ExecResp { result }).await,
+        Err(e) => send_ctrl(send, &Ctrl::ExecErr { msg: e.to_string() }).await,
     }
 }
 
@@ -1093,6 +1128,7 @@ mod tests {
                     path: root.to_string_lossy().replace('\\', "/"),
                 }],
                 include_connections: false,
+                ..Default::default()
             },
             direct_contacts: Vec::new(),
             direct_grants: vec![crate::share::types::DirectGrant {

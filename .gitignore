@@ -25,11 +25,14 @@ Thumbs.db
 !release-native/update-feed/smart_explorer.exe.sha256
 !release-native/update-feed/smart_explorer_updater.exe
 !release-native/update-feed/smart_explorer_updater.exe.sha256
+!release-native/update-feed/se.exe
+!release-native/update-feed/se.exe.sha256
 # EXCEPTION: ship the installer + portable exe so they're downloadable from the
 # repo (and referenced by the README). The Release attaches them too.
 !release-native/Smart Explorer Setup *.exe
 !release-native/Smart Explorer.exe
 !release-native/Smart Explorer Updater.exe
+!release-native/se.exe
 !release-native/share-server/
 !release-native/share-server/se-share-server.exe
 

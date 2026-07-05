@@ -12,6 +12,7 @@ mod processes;
 use processes::{stop_target_processes_for_update, wait_for_pid_exit};
 
 const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
+const INSTALLED_CLI_EXE: &str = "se.exe";
 const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
 pub(super) fn binary_suffix() -> &'static str {
@@ -42,6 +43,14 @@ pub(super) fn updater_payload_spec() -> PayloadSpec {
             "Smart%20Explorer%20Updater.exe",
         ],
         hash_name: "smart_explorer_updater.exe.sha256",
+    }
+}
+
+pub(super) fn cli_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["se.exe"],
+        http_names: &["se.exe"],
+        hash_name: "se.exe.sha256",
     }
 }
 
@@ -173,6 +182,14 @@ fn installed_updater_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_UPDATER_EXE))
 }
 
+fn installed_cli_path() -> Result<PathBuf, String> {
+    let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    let dir = cur
+        .parent()
+        .ok_or_else(|| format!("Installationsordner unbekannt: {}", cur.display()))?;
+    Ok(dir.join(INSTALLED_CLI_EXE))
+}
+
 struct CopyRetryError {
     msg: String,
     needs_elevation: bool,
@@ -242,6 +259,35 @@ pub(super) fn ensure_installed_updater(
             "Updater-Helfer fehlt und konnte nicht aus dem Feed geladen werden: {}",
             e
         )),
+    }
+}
+
+pub(super) fn ensure_installed_cli(
+    feed: &Feed,
+    version: &str,
+    refresh: bool,
+) -> Result<PathBuf, String> {
+    let dest = installed_cli_path()?;
+    if !refresh && dest.exists() {
+        return Ok(dest);
+    }
+
+    let staged = feed.fetch_cli_exe(version)?;
+    let expected_sha256 = staged_sha256_from_path(&staged);
+    match copy_with_retries(
+        &staged,
+        &dest,
+        "Terminal-Begleiter",
+        expected_sha256.as_deref(),
+    ) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&staged);
+            Ok(dest)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&staged);
+            Err(e.msg)
+        }
     }
 }
 

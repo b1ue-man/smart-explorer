@@ -50,7 +50,26 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 | Drag out to Explorer (OLE) | `dragout.rs` CF_HDROP | ✅ local | ✅ remote -> temp -> OLE | ✅ peer -> temp -> OLE |
 | Drop OS files into folder | `handle_os_drop` | ✅ copy | ✅ upload into remote | ✅ upload into peer |
 
-## C. Current caveats
+## C. Terminal `se` command -> backend method -> status
+
+The terminal companion uses the same app-data directory, saved connections,
+keyring entries, Share profiles, and daemon worker as the GUI. Targets can be
+full endpoints, local paths, or saved-connection shorthand:
+`@label-or-account:/path`.
+
+| CLI command | Routed to | Local | Remote (SFTP/FTP/WebDAV/Drive) | Peer via Share-Server |
+|---|---|---|---|---|
+| `se connections list` | `creds::list()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
+| `se ls` / `se stat` | `list_dir` / `stat` | ✅ | ✅ | ✅ |
+| `se cat` / `se get` | `open_read` | ✅ | ✅ | ✅ |
+| `se put` / `se mkdir` | `open_write` / `mkdir_all` | ✅ | ✅ | ✅ |
+| `se cp` | read -> write, recursive with `--recursive` | ✅ | ✅ cross-backend | ✅ cross-backend |
+| `se mv` | rename when possible, else copy+delete | ✅ | ✅ | ✅ |
+| `se rm` | `remove_file` / recursive child walk + `remove_dir` | ✅ guarded by `--force` | ✅ guarded by `--force` | ✅ guarded by `--force` |
+| `se search` | backend search, fallback traversal | ✅ | ✅ | ✅ |
+| `se exec` | Share daemon IPC -> peer exec request | n/a | ❌ SFTP-agent execution out of scope | ✅ opt-in per export |
+
+## D. Current caveats
 
 1. **Peer identities are durable; channels are not.** Direct contacts, rooms,
    room members, trust pins, secrets, auto-connect flags, and export scopes are
@@ -62,11 +81,14 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
    exporting device's saved SFTP/FTP/WebDAV/UNC connections when explicitly
    enabled, but peer-share connections are not persisted and therefore cannot
    recurse back into Share-Server sessions.
-4. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
+4. **Peer remote execution is default-deny.** `se exec share://... -- argv` works
+   only for Smart Explorer Share peers whose receiving export enables
+   `allow_exec`; `--shell` also requires `allow_shell_exec`.
+5. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
    are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
    large folders therefore need enough local temp space before the drop/paste.
 
-## D. Remote file opening
+## E. Remote file opening
 
 | Strategy | Mechanism | Path seen by app | Save-back | Notes |
 |---|---|---|---|---|

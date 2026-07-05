@@ -10,6 +10,7 @@ APP_DIR="$DATA_HOME/applications"
 ICON_DIR="$DATA_HOME/icons/hicolor/256x256/apps"
 APP_BIN="$INSTALL_DIR/smart_explorer"
 UPDATER_BIN="$INSTALL_DIR/smart_explorer_updater"
+CLI_BIN="$INSTALL_DIR/se"
 BASE_URL="https://github.com/$REPO/releases/latest/download"
 RAW_BASE_URL="https://raw.githubusercontent.com/$REPO/$REF"
 SRC_ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
@@ -214,7 +215,9 @@ release_assets_available() {
   fetch_optional "$BASE_URL/smart_explorer" "$TMP_DIR/smart_explorer" && \
   fetch_optional "$BASE_URL/smart_explorer.sha256" "$TMP_DIR/smart_explorer.sha256" && \
   fetch_optional "$BASE_URL/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater" && \
-  fetch_optional "$BASE_URL/smart_explorer_updater.sha256" "$TMP_DIR/smart_explorer_updater.sha256"
+  fetch_optional "$BASE_URL/smart_explorer_updater.sha256" "$TMP_DIR/smart_explorer_updater.sha256" && \
+  fetch_optional "$BASE_URL/se" "$TMP_DIR/se" && \
+  fetch_optional "$BASE_URL/se.sha256" "$TMP_DIR/se.sha256"
 }
 
 use_release_assets() {
@@ -222,6 +225,7 @@ use_release_assets() {
     cd "$TMP_DIR"
     sha256sum -c smart_explorer.sha256
     sha256sum -c smart_explorer_updater.sha256
+    sha256sum -c se.sha256
   )
 }
 
@@ -251,9 +255,9 @@ prepare_source_build() {
   fi
 
   if [ "$DRY_RUN" = 1 ]; then
-    log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater (in $src/native)"
+    log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se (in $src/native)"
   else
-    (cd "$src/native" && cargo build --release --bin smart_explorer --bin smart_explorer_updater)
+    (cd "$src/native" && cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se)
   fi
   printf '%s\n' "$src/native/target/release"
 }
@@ -263,12 +267,14 @@ install_files() {
   run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
   run install -m 755 "$src_dir/smart_explorer" "$APP_BIN"
   run install -m 755 "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
+  run install -m 755 "$src_dir/se" "$CLI_BIN"
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: write $INSTALL_DIR/update_source.txt"
   else
     printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
   fi
   run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
+  run ln -sf "$CLI_BIN" "$BIN_DIR/se"
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: fetch icon $RAW_BASE_URL/native/assets/smart-explorer-logo-256.png -> $ICON_DIR/smart-explorer.png"
   else
@@ -311,4 +317,5 @@ if [ "$DRY_RUN" = 1 ]; then
 else
   log "Smart Explorer installed: $APP_BIN"
   log "Run it from your app launcher or with: $BIN_DIR/smart_explorer"
+  log "Terminal companion installed: $BIN_DIR/se"
 fi

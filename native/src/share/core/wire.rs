@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::types::PeerPresence;
+use super::types::{ExecRequest, ExecResult, PeerPresence};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -152,4 +152,7 @@ pub(crate) enum Ctrl {
     Pong { nonce: String },
     Fs { req: FsRequest },
     FsResp { resp: FsResponse },
+    Exec { req: ExecRequest },
+    ExecResp { result: ExecResult },
+    ExecErr { msg: String },
 }

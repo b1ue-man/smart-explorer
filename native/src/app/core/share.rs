@@ -1274,6 +1274,25 @@ impl App {
         {
             changed = true;
         }
+        if ui
+            .checkbox(&mut cfg.allow_exec, "Terminal-Ausfuehrung erlauben")
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .add_enabled(
+                cfg.allow_exec,
+                egui::Checkbox::new(&mut cfg.allow_shell_exec, "Shell-Ausfuehrung erlauben"),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if !cfg.allow_exec && cfg.allow_shell_exec {
+            cfg.allow_shell_exec = false;
+            changed = true;
+        }
         ui.checkbox(
             &mut self.share_block_symlink_escape,
             "Symlinks ausserhalb der Freigabe blockieren",
@@ -1537,6 +1556,13 @@ fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
     }
     if cfg.include_connections {
         parts.push("gespeicherte Verbindungen".to_string());
+    }
+    if cfg.allow_exec {
+        parts.push(if cfg.allow_shell_exec {
+            "Exec+Shell".to_string()
+        } else {
+            "Exec".to_string()
+        });
     }
     parts.join(", ")
 }

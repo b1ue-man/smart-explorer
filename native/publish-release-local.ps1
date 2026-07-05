@@ -137,10 +137,14 @@ $requiredFeedFiles = @(
     "smart_explorer.exe.sha256",
     "smart_explorer_updater.exe",
     "smart_explorer_updater.exe.sha256",
+    "se.exe",
+    "se.exe.sha256",
     "smart_explorer",
     "smart_explorer.sha256",
     "smart_explorer_updater",
-    "smart_explorer_updater.sha256"
+    "smart_explorer_updater.sha256",
+    "se",
+    "se.sha256"
 )
 foreach ($name in $requiredFeedFiles) {
     $path = Join-Path $feed $name
@@ -153,7 +157,7 @@ if (-not $SkipLinuxFeed) {
     $repoRootForWsl = ($repoRoot.Path -replace '\\', '/')
     $repoRootWsl = (& wsl.exe wslpath -a $repoRootForWsl).Trim()
     Invoke-Checked -ErrorMessage "Feed SHA256 verification failed." -Command {
-        & wsl.exe bash -lc "cd '$repoRootWsl/release-native/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256"
+        & wsl.exe bash -lc "cd '$repoRootWsl/release-native/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256"
     }
 }
 

@@ -8,6 +8,8 @@
 mod backend;
 #[path = "core/crypto.rs"]
 mod core;
+#[path = "core/exec.rs"]
+mod exec;
 #[path = "core/fs.rs"]
 mod fs;
 #[path = "core/identity.rs"]
@@ -36,8 +38,8 @@ pub use self::identity::ShareIdentity;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;
 pub use self::types::{
-    DirectAccessState, DirectGrantState, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile,
-    ShareCmd, ShareEvent, ShareStatus,
+    DirectAccessState, DirectGrantState, ExecRequest, ExecResult, PeerOpenTarget, PeerPresence,
+    RoomMember, RoomProfile, ShareCmd, ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {

@@ -5,7 +5,7 @@ One version number drives everything: `native/Cargo.toml`.
 
 ```
  bump Cargo.toml ─▶ build (CI or publish-release-local.ps1)
-                     ├─▶ update feed   release-native/update-feed/{version.txt, OS payloads}   (committed → served over raw.githubusercontent)
+                     ├─▶ update feed   release-native/update-feed/{version.txt, OS payloads, se sidecar}   (committed → served over raw.githubusercontent)
                      ├─▶ installer     Windows NSIS + Linux install-linux.sh
                      └─▶ GitHub Release vX.Y.Z  (Windows + Linux binaries, installer, script, dll, version.txt)
                                          │
@@ -35,8 +35,8 @@ user can pull updates.
 1. **Bump** `version` in `native/Cargo.toml`. Commit.
 2. **Build + stage** the release artifacts:
    - Windows workstation default: `.\native\publish-release-local.ps1`
-     builds the Windows app/updater/installer with `publish-update.ps1`, then
-     calls WSL to build the Linux musl app/updater/share-server payloads and
+     builds the Windows app/updater/`se`/installer with `publish-update.ps1`, then
+     calls WSL to build the Linux musl app/updater/`se`/share-server payloads and
      verifies all update-feed SHA-256 files. This is the preferred local release
      path.
    - Linux/WSL Linux payload repair only:
@@ -49,8 +49,8 @@ user can pull updates.
    - Older all-in-one Linux/WSL cross path: `native/publish-feed.sh`, when that
      host already has the Windows GNU and NSIS dependencies installed.
 3. **Commit** `release-native/` (`update-feed/{version.txt, smart_explorer.exe,
-   smart_explorer_updater.exe, smart_explorer, smart_explorer_updater, *.sha256}`,
-   `Smart Explorer.exe`, `Smart Explorer Updater.exe`,
+   smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
+   se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
    `Smart Explorer Setup X.Y.Z.exe`).
 4. **Merge to `main`** — the feed is served from `main`, so updates only go live
    once `main` has the new feed:
@@ -60,13 +60,13 @@ user can pull updates.
 5. **Publish the GitHub Release** (attaches OS payloads + installer + dll + script + version.txt):
    - Normally: push a tag — CI's `build.yml` releases on `v*`:
      ```
-     git tag v0.5.3 && git push origin v0.5.3
+     git tag vX.Y.Z && git push origin vX.Y.Z
      ```
    - Where the git host rejects tag pushes (e.g. some sandboxes), push a release
      branch instead — CI releases on `release/**`, creating the tag from
      `Cargo.toml`'s version:
      ```
-     git push origin <branch>:release/v0.5.3
+     git push origin <branch>:release/vX.Y.Z
      ```
      Delete the branch after the release is published; it's only a trigger.
 
@@ -97,22 +97,30 @@ http(s)/Git URL — only the transport differs (`updater.rs`'s `Feed` enum):
 
 ```
 release-native/update-feed/
-  version.txt          first line = "0.5.3"
+  version.txt          first line = "X.Y.Z"
   smart_explorer.exe   Windows app payload
   smart_explorer.exe.sha256
   smart_explorer_updater.exe   Windows updater helper
   smart_explorer_updater.exe.sha256
+  se.exe               Windows terminal companion
+  se.exe.sha256
   smart_explorer       Linux app payload
   smart_explorer.sha256
   smart_explorer_updater       Linux updater helper
   smart_explorer_updater.sha256
+  se                   Linux terminal companion
+  se.sha256
 ```
 
 Since v0.5.77, the normal update path uses a separate
 updater helper installed next to the app binary (`Smart Explorer Updater.exe`
-on Windows, `smart_explorer_updater` on Linux). The app stages the OS-specific
-payload, refreshes the helper from the same feed, then exits while the helper
-performs the replacement and relaunches the app.
+on Windows, `smart_explorer_updater` on Linux). Since v0.5.116, the feed also
+ships the terminal companion (`se.exe` on Windows, `se` on Linux). The app
+stages the OS-specific GUI payload, refreshes the `se` sidecar and helper from
+the same feed, then exits while the helper performs the GUI replacement and
+relaunches the app. When an existing install first lands on v0.5.116 via the
+older updater, the next equal-version update check silently installs the missing
+`se` sidecar.
 The one unavoidable migration exception is v0.5.76 -> v0.5.77: v0.5.76 does
 not know how to fetch the helper yet, so it can only update the main exe. On
 the first v0.5.77 launch, the app silently ensures the helper is present for
@@ -162,7 +170,7 @@ outbound HTTPS to `raw.githubusercontent.com`.
 grep '^version' native/Cargo.toml
 cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
-cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256
+cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256
 git show origin/main:release-native/update-feed/version.txt   # must match, on main
 ```
 
@@ -174,6 +182,7 @@ add explicit `.exe` exceptions. Add both installed executables if needed:
 
 - `%LOCALAPPDATA%\Programs\Smart Explorer\Smart Explorer.exe`
 - `%LOCALAPPDATA%\Programs\Smart Explorer\Smart Explorer Updater.exe`
+- `%LOCALAPPDATA%\Programs\Smart Explorer\se.exe`
 
 The updater helper itself does not need outbound network access; it only applies
 an already-downloaded staged update. Long-term, the accepted Windows pattern is
