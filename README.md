@@ -27,7 +27,7 @@ mitgelieferte **`se-share-server`** (Linux + Windows, in
 Verbindung (Discovery), nie die Dateien. Toolbar → **📡 Teilen**; Server in
 Einstellungen → **TEILEN**. Plan: [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
-**Terminal (ab 0.5.117):** der mitinstallierte Companion **`se`** nutzt dieselben
+**Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** nutzt dieselben
 gespeicherten Verbindungen, App-Daten, Keyring-Secrets, Share-Profile und den
 Daemon wie die GUI. Beispiele: `se connections list`, `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.117.exe`](release-native/Smart%20Explorer%20Setup%200.5.117.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.118.exe`](release-native/Smart%20Explorer%20Setup%200.5.118.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
