@@ -101,8 +101,8 @@ jobs:
 
       - name: Release build
         run: |
-          cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater
-          cargo build --release --bin smart_explorer --bin smart_explorer_updater
+          cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater --bin se
+          cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se
 
       - name: Build context-menu COM DLL
         working-directory: native/explorer-command
@@ -120,8 +120,10 @@ jobs:
           mkdir -p out
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
+          cp "target/x86_64-pc-windows-gnu/release/se.exe" "out/se.exe"
           cp "target/release/smart_explorer" "out/smart_explorer"
           cp "target/release/smart_explorer_updater" "out/smart_explorer_updater"
+          cp "target/release/se" "out/se"
           cp "../install-linux.sh" "out/install-linux.sh"
           cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
           cp "../share-server/target/x86_64-pc-windows-gnu/release/se-share-server.exe" "out/se-share-server.exe"
@@ -130,15 +132,17 @@ jobs:
           ( cd out
             sha256sum smart_explorer.exe > smart_explorer.exe.sha256
             sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
+            sha256sum se.exe > se.exe.sha256
             sha256sum smart_explorer > smart_explorer.sha256
             sha256sum smart_explorer_updater > smart_explorer_updater.sha256
+            sha256sum se > se.sha256
           )
           printf '%s\n' "$ver" > out/version.txt
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           # NSIS installer (per-user; sets the Git update source + context menu).
-          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" installer.nsi
+          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" -DCLI_SRC="target/x86_64-pc-windows-gnu/release/se.exe" installer.nsi
           cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
-          echo "Built version $ver (Windows exe/updater + Linux desktop binaries + dll + installer)"
+          echo "Built version $ver (Windows exe/updater/se + Linux desktop binaries/se + dll + installer)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -162,12 +166,16 @@ jobs:
           fi
           test -s ../release-native/update-feed/smart_explorer.exe
           test -s ../release-native/update-feed/smart_explorer_updater.exe
+          test -s ../release-native/update-feed/se.exe
           test -s ../release-native/update-feed/smart_explorer.exe.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.exe.sha256
+          test -s ../release-native/update-feed/se.exe.sha256
           test -s ../release-native/update-feed/smart_explorer
           test -s ../release-native/update-feed/smart_explorer_updater
+          test -s ../release-native/update-feed/se
           test -s ../release-native/update-feed/smart_explorer.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.sha256
+          test -s ../release-native/update-feed/se.sha256
           echo "Feed matches Cargo.toml ($ver)."
 
       - name: Publish GitHub Release
@@ -198,6 +206,8 @@ jobs:
             - **smart_explorer.exe** — portable app (also the self-update
               payload). For auto-update, set the update source to this repo's URL
               in the app (Sidebar → UPDATE), or use the installer.
+            - **se.exe** / **se** — terminal companion for saved remote and
+              Smart Explorer peer operations.
             - **smart_explorer_command.dll** — Win11 modern context-menu
               IExplorerCommand handler (needs signing to register; see
               `docs/WIN11_CONTEXT_MENU.md`).
@@ -212,12 +222,16 @@ jobs:
             native/out/Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe
             native/out/smart_explorer.exe
             native/out/smart_explorer_updater.exe
+            native/out/se.exe
             native/out/smart_explorer.exe.sha256
             native/out/smart_explorer_updater.exe.sha256
+            native/out/se.exe.sha256
             native/out/smart_explorer
             native/out/smart_explorer_updater
+            native/out/se
             native/out/smart_explorer.sha256
             native/out/smart_explorer_updater.sha256
+            native/out/se.sha256
             native/out/install-linux.sh
             native/out/smart_explorer_command.dll
             native/out/se-share-server.exe

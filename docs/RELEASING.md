@@ -85,8 +85,9 @@ Before cutting a release on a workstation, the fast environment check is:
 `x86_64-pc-windows-gnu`, the verified cross-compile): format check, dependency
 audit, Windows-target check, host tests, Windows test-harness compile, clippy,
 static-musl `se-agent` builds, COM DLL check/build, share-server checks/builds,
-Windows + Linux release builds, installer build (NSIS), artifact upload, and
-Release publication. Before publishing it **fails the release if the committed
+Windows + Linux release builds including the `se` terminal companion, installer
+build (NSIS), artifact upload, and Release publication. Before publishing it
+**fails the release if the committed
 feed `version.txt` ≠ `Cargo.toml`** — so a release can never ship while the
 auto-update feed version is stale (forces step 2–3 above).
 
@@ -114,11 +115,11 @@ release-native/update-feed/
 
 Since v0.5.77, the normal update path uses a separate
 updater helper installed next to the app binary (`Smart Explorer Updater.exe`
-on Windows, `smart_explorer_updater` on Linux). Since v0.5.117, the feed also
+on Windows, `smart_explorer_updater` on Linux). Since v0.5.118, the feed also
 ships the terminal companion (`se.exe` on Windows, `se` on Linux). The app
 stages the OS-specific GUI payload, refreshes the `se` sidecar and helper from
 the same feed, then exits while the helper performs the GUI replacement and
-relaunches the app. When an existing install first lands on v0.5.117 via the
+relaunches the app. When an existing install first lands on v0.5.118 via the
 older updater, the next equal-version update check silently installs the missing
 `se` sidecar.
 The one unavoidable migration exception is v0.5.76 -> v0.5.77: v0.5.76 does
