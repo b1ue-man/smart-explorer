@@ -1,7 +1,10 @@
 use super::*;
 use crate::app::app_models::TransferMsg;
 use crate::types::FilterDef;
+use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -27,6 +30,118 @@ fn txt_filter() -> FilterDef {
     let mut filter = FilterDef::new();
     filter.extensions = vec!["txt".to_string()];
     filter
+}
+
+fn done_from(
+    rx: &crossbeam_channel::Receiver<TransferMsg>,
+) -> (crate::app::app_models::TransferProgress, Vec<String>) {
+    let mut done = None;
+    while let Ok(msg) = rx.try_recv() {
+        if let TransferMsg::Done { progress, errors } = msg {
+            done = Some((progress, errors));
+        }
+    }
+    done.expect("transfer should send Done")
+}
+
+fn copy_tree_contents(src: &Path, dst: &Path) -> io::Result<u64> {
+    std::fs::create_dir_all(dst)?;
+    let mut files = 0;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        let child_src = entry.path();
+        let child_dst = dst.join(entry.file_name());
+        if ft.is_dir() {
+            files += copy_tree_contents(&child_src, &child_dst)?;
+        } else if ft.is_file() {
+            if let Some(parent) = child_dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&child_src, &child_dst)?;
+            files += 1;
+        }
+    }
+    Ok(files)
+}
+
+struct BulkLocalBackend {
+    inner: crate::vfs::LocalBackend,
+    get_calls: AtomicUsize,
+    put_calls: AtomicUsize,
+}
+
+impl BulkLocalBackend {
+    fn new(root: &str) -> Self {
+        Self {
+            inner: crate::vfs::LocalBackend::new(root),
+            get_calls: AtomicUsize::new(0),
+            put_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Backend for BulkLocalBackend {
+    fn scheme(&self) -> Scheme {
+        self.inner.scheme()
+    }
+
+    fn root_display(&self) -> String {
+        self.inner.root_display()
+    }
+
+    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.inner.list_dir(path)
+    }
+
+    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.inner.stat(path)
+    }
+
+    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        self.inner.open_read(path)
+    }
+
+    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write(path)
+    }
+
+    fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
+        self.inner.copy_file(src, dst)
+    }
+
+    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
+        self.inner.rename(src, dst)
+    }
+
+    fn remove_file(&self, path: &str) -> VfsResult<()> {
+        self.inner.remove_file(path)
+    }
+
+    fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        self.inner.remove_dir(path)
+    }
+
+    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        self.inner.mkdir_all(path)
+    }
+
+    fn supports_bulk_tree(&self) -> bool {
+        true
+    }
+
+    fn get_tree(&self, root: &str, dst: &Path) -> VfsResult<u64> {
+        self.get_calls.fetch_add(1, Ordering::Relaxed);
+        copy_tree_contents(Path::new(root), dst)
+    }
+
+    fn put_tree(&self, src: &Path, root: &str) -> VfsResult<u64> {
+        self.put_calls.fetch_add(1, Ordering::Relaxed);
+        copy_tree_contents(src, Path::new(root))
+    }
 }
 
 #[test]
@@ -76,6 +191,83 @@ fn remote_clipboard_filters_folder_tree() {
 }
 
 #[test]
+fn remote_upload_copies_folder_tree_without_bulk() {
+    let local = temp_dir("upload_plain_local");
+    let remote = temp_dir("upload_plain_remote");
+    std::fs::create_dir_all(local.join("Gate/sub")).unwrap();
+    std::fs::write(local.join("Gate/a.txt"), b"alpha").unwrap();
+    std::fs::write(local.join("Gate/sub/b.txt"), b"beta").unwrap();
+    let be = crate::vfs::LocalBackend::new(&fwd(&remote));
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    upload_paths_progress(&be, &[fwd(&local.join("Gate"))], &fwd(&remote), &tx);
+
+    let (progress, errors) = done_from(&rx);
+    assert_eq!(progress.files_total, 2);
+    assert_eq!(progress.files_done, 2);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(std::fs::read(remote.join("Gate/a.txt")).unwrap(), b"alpha");
+    assert_eq!(
+        std::fs::read(remote.join("Gate/sub/b.txt")).unwrap(),
+        b"beta"
+    );
+
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_dir_all(&remote);
+}
+
+#[test]
+fn remote_upload_uses_bulk_tree_for_folder_backend() {
+    let local = temp_dir("upload_bulk_local");
+    let remote = temp_dir("upload_bulk_remote");
+    std::fs::create_dir_all(local.join("Gate/sub")).unwrap();
+    std::fs::write(local.join("Gate/a.txt"), b"alpha").unwrap();
+    std::fs::write(local.join("Gate/sub/b.txt"), b"beta").unwrap();
+    let be = BulkLocalBackend::new(&fwd(&remote));
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    upload_paths_progress(&be, &[fwd(&local.join("Gate"))], &fwd(&remote), &tx);
+
+    let (progress, errors) = done_from(&rx);
+    assert_eq!(be.put_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(progress.files_total, 2);
+    assert_eq!(progress.files_done, 2);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(std::fs::read(remote.join("Gate/a.txt")).unwrap(), b"alpha");
+    assert_eq!(
+        std::fs::read(remote.join("Gate/sub/b.txt")).unwrap(),
+        b"beta"
+    );
+
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_dir_all(&remote);
+}
+
+#[test]
+fn remote_download_uses_bulk_tree_for_folder_backend() {
+    let remote = temp_dir("download_bulk_remote");
+    let dest = temp_dir("download_bulk_dest");
+    std::fs::create_dir_all(remote.join("Gate/sub")).unwrap();
+    std::fs::write(remote.join("Gate/a.txt"), b"alpha").unwrap();
+    std::fs::write(remote.join("Gate/sub/b.txt"), b"beta").unwrap();
+    let be = BulkLocalBackend::new(&fwd(&remote));
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    download_paths_progress(&be, &[fwd(&remote.join("Gate"))], &fwd(&dest), None, &tx);
+
+    let (progress, errors) = done_from(&rx);
+    assert_eq!(be.get_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(progress.files_total, 2);
+    assert_eq!(progress.files_done, 2);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(std::fs::read(dest.join("Gate/a.txt")).unwrap(), b"alpha");
+    assert_eq!(std::fs::read(dest.join("Gate/sub/b.txt")).unwrap(), b"beta");
+
+    let _ = std::fs::remove_dir_all(&remote);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
 fn remote_download_filters_selected_folder() {
     let remote = temp_dir("remote_filter_download");
     let dest = temp_dir("remote_filter_dest");
@@ -91,13 +283,7 @@ fn remote_download_filters_selected_folder() {
 
     download_paths_progress(&be, &[src], &fwd(&dest), Some((txt_filter(), root)), &tx);
 
-    let mut done = None;
-    while let Ok(msg) = rx.try_recv() {
-        if let TransferMsg::Done { progress, errors } = msg {
-            done = Some((progress, errors));
-        }
-    }
-    let (progress, errors) = done.expect("download should send Done");
+    let (progress, errors) = done_from(&rx);
     assert_eq!(progress.files_total, 2);
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(std::fs::read(dest.join("Gate/a.txt")).unwrap(), b"alpha");

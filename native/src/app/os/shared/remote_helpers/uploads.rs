@@ -9,6 +9,14 @@ struct UploadEntry {
     size: u64,
 }
 
+struct UploadRoot {
+    src: PathBuf,
+    rel: String,
+    is_dir: bool,
+    files: Vec<UploadEntry>,
+    dirs: Vec<String>,
+}
+
 fn collect_upload_entries(
     path: &Path,
     rel: String,
@@ -53,6 +61,27 @@ fn collect_upload_entries(
             size: meta.len(),
         });
     }
+}
+
+fn collect_upload_root(src: PathBuf, rel: String, errors: &mut Vec<String>) -> Option<UploadRoot> {
+    let meta = match std::fs::symlink_metadata(&src) {
+        Ok(meta) => meta,
+        Err(e) => {
+            errors.push(format!("{}: {}", src.display(), e));
+            return None;
+        }
+    };
+    let is_dir = meta.is_dir();
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    collect_upload_entries(&src, rel.clone(), &mut files, &mut dirs, errors);
+    Some(UploadRoot {
+        src,
+        rel,
+        is_dir,
+        files,
+        dirs,
+    })
 }
 
 pub(in crate::app) fn upload_file_direct(
@@ -148,61 +177,88 @@ pub(in crate::app) fn upload_paths_progress(
     dest_root: &str,
     tx: &crossbeam_channel::Sender<TransferMsg>,
 ) {
-    let mut files = Vec::new();
-    let mut dirs = Vec::new();
     let mut errors = Vec::new();
+    let mut roots = Vec::new();
     for p in paths {
         let src = PathBuf::from(p);
         let base = match src.file_name().map(|n| n.to_string_lossy().to_string()) {
             Some(base) if !base.is_empty() => base,
             _ => continue,
         };
-        collect_upload_entries(&src, base, &mut files, &mut dirs, &mut errors);
+        if let Some(root) = collect_upload_root(src, base, &mut errors) {
+            roots.push(root);
+        }
     }
 
-    dirs.sort();
-    dirs.dedup();
-    let bytes_total = files.iter().map(|f| f.size).sum();
+    let bytes_total = roots
+        .iter()
+        .flat_map(|root| root.files.iter())
+        .map(|f| f.size)
+        .sum();
     let mut progress = TransferProgress::new(
         TransferKind::Upload,
         "Lade hoch",
-        files.len() as u64,
+        roots
+            .iter()
+            .map(|root| root.files.len() as u64)
+            .sum::<u64>(),
         bytes_total,
     );
     progress.errors = errors.len() as u64;
     let mut last = std::time::Instant::now();
     send_transfer_progress(tx, &progress, &mut last, true);
 
-    for dir in dirs {
-        if dir.is_empty() {
-            continue;
-        }
-        let dest = rjoin(dest_root, &dir);
-        if let Err(e) = be.mkdir_all(&dest) {
-            errors.push(format!("{}: {}", dest, e));
-            progress.errors = errors.len() as u64;
-        }
-    }
-
     let start = std::time::Instant::now();
-    for file in files {
-        let dest = rjoin(dest_root, &file.rel);
-        progress.current = file.rel.clone();
-        progress.elapsed_ms = start.elapsed().as_millis() as u64;
-        send_transfer_progress(tx, &progress, &mut last, true);
-        match upload_file_progress(be, &file.src, &dest, tx, &mut progress, &mut last) {
-            Ok(()) => {
-                progress.files_done = progress.files_done.saturating_add(1);
-            }
-            Err(e) => {
-                errors.push(format!("{}: {}", file.rel, e));
-                progress.errors = errors.len() as u64;
-                progress.files_done = progress.files_done.saturating_add(1);
-                progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+    for root in roots {
+        if root.is_dir && be.supports_bulk_tree() {
+            let dest = rjoin(dest_root, &root.rel);
+            progress.current = root.rel.clone();
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+            if be.put_tree(&root.src, &dest).is_ok() {
+                progress.files_done = progress.files_done.saturating_add(root.files.len() as u64);
+                progress.bytes_done = progress
+                    .bytes_done
+                    .saturating_add(root.files.iter().map(|f| f.size).sum::<u64>());
+                progress.elapsed_ms = start.elapsed().as_millis() as u64;
+                send_transfer_progress(tx, &progress, &mut last, true);
+                continue;
             }
         }
-        progress.elapsed_ms = start.elapsed().as_millis() as u64;
-        send_transfer_progress(tx, &progress, &mut last, true);
+
+        let mut dirs = root.dirs;
+        dirs.sort();
+        dirs.dedup();
+        for dir in dirs {
+            if dir.is_empty() {
+                continue;
+            }
+            let dest = rjoin(dest_root, &dir);
+            if let Err(e) = be.mkdir_all(&dest) {
+                errors.push(format!("{}: {}", dest, e));
+                progress.errors = errors.len() as u64;
+            }
+        }
+
+        for file in root.files {
+            let dest = rjoin(dest_root, &file.rel);
+            progress.current = file.rel.clone();
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+            match upload_file_progress(be, &file.src, &dest, tx, &mut progress, &mut last) {
+                Ok(()) => {
+                    progress.files_done = progress.files_done.saturating_add(1);
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", file.rel, e));
+                    progress.errors = errors.len() as u64;
+                    progress.files_done = progress.files_done.saturating_add(1);
+                    progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+                }
+            }
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+        }
     }
 
     progress.done = true;

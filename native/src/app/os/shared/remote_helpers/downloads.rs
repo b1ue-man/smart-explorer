@@ -10,6 +10,14 @@ use crate::app::transfer_helpers::{
 use crate::types::FilterDef;
 use std::path::{Path, PathBuf};
 
+struct RemoteDownloadRoot {
+    src: String,
+    rel: String,
+    is_dir: bool,
+    files: Vec<super::entries::RemoteFileEntry>,
+    dirs: Vec<String>,
+}
+
 pub(super) fn download_file_progress(
     be: &dyn crate::vfs::Backend,
     src: &str,
@@ -73,6 +81,47 @@ pub(super) fn download_file_progress(
         return Err(e.to_string());
     }
     Ok(dest.to_string_lossy().to_string())
+}
+
+fn collect_download_root(
+    be: &dyn crate::vfs::Backend,
+    filter: Option<&RemoteFilterCtx>,
+    src: &str,
+    errors: &mut Vec<String>,
+) -> Option<RemoteDownloadRoot> {
+    let meta = match be.stat(src) {
+        Ok(meta) => meta,
+        Err(e) => {
+            errors.push(format!("{}: {}", src, e));
+            return None;
+        }
+    };
+    let rel = if meta.name.is_empty() {
+        src.trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("datei")
+            .to_string()
+    } else {
+        meta.name.clone()
+    };
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    RemoteEntryCollector {
+        be,
+        filter,
+        files: &mut files,
+        dirs: &mut dirs,
+        errors,
+    }
+    .collect(src, rel.clone(), true);
+    Some(RemoteDownloadRoot {
+        src: src.to_string(),
+        rel,
+        is_dir: meta.is_dir,
+        files,
+        dirs,
+    })
 }
 
 fn download_remote_dir_for_clipboard(
@@ -198,73 +247,88 @@ pub(in crate::app) fn download_paths_progress(
     tx: &crossbeam_channel::Sender<TransferMsg>,
 ) {
     let filter = compile_remote_filter(filter);
-    let mut files = Vec::new();
-    let mut dirs = Vec::new();
     let mut errors = Vec::new();
+    let mut roots = Vec::new();
     let dest_root = PathBuf::from(dest_local.replace('/', std::path::MAIN_SEPARATOR_STR));
     for src in paths {
-        let name = src
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("datei");
-        RemoteEntryCollector {
-            be,
-            filter: filter.as_ref(),
-            files: &mut files,
-            dirs: &mut dirs,
-            errors: &mut errors,
+        if let Some(root) = collect_download_root(be, filter.as_ref(), src, &mut errors) {
+            roots.push(root);
         }
-        .collect(src, name.to_string(), true);
     }
-    dirs.sort();
-    dirs.dedup();
-    let bytes_total = files.iter().map(|f| f.size).sum();
+    let bytes_total = roots
+        .iter()
+        .flat_map(|root| root.files.iter())
+        .map(|f| f.size)
+        .sum();
     let mut progress = TransferProgress::new(
         TransferKind::Download,
         "Lade herunter",
-        files.len() as u64,
+        roots
+            .iter()
+            .map(|root| root.files.len() as u64)
+            .sum::<u64>(),
         bytes_total,
     );
     progress.errors = errors.len() as u64;
     let mut last = std::time::Instant::now();
     send_transfer_progress(tx, &progress, &mut last, true);
 
-    for dir in dirs {
-        let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
-        if let Err(e) = std::fs::create_dir_all(&local) {
-            errors.push(format!("{}: {}", local.display(), e));
-            progress.errors = errors.len() as u64;
-        }
-    }
-
     let start = std::time::Instant::now();
-    for file in files {
-        let dest = dest_root.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-        progress.current = file.rel.clone();
-        progress.elapsed_ms = start.elapsed().as_millis() as u64;
-        send_transfer_progress(tx, &progress, &mut last, true);
-        match download_file_progress(
-            be,
-            &file.src,
-            &dest,
-            file.size,
-            tx,
-            &mut progress,
-            &mut last,
-        ) {
-            Ok(_) => {
-                progress.files_done = progress.files_done.saturating_add(1);
-            }
-            Err(e) => {
-                errors.push(format!("{}: {}", file.rel, e));
-                progress.errors = errors.len() as u64;
-                progress.files_done = progress.files_done.saturating_add(1);
-                progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+    for root in roots {
+        if root.is_dir && filter.is_none() && be.supports_bulk_tree() {
+            let dest = dest_root.join(root.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+            progress.current = root.rel.clone();
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+            if be.get_tree(&root.src, &dest).is_ok() {
+                progress.files_done = progress.files_done.saturating_add(root.files.len() as u64);
+                progress.bytes_done = progress
+                    .bytes_done
+                    .saturating_add(root.files.iter().map(|f| f.size).sum::<u64>());
+                progress.elapsed_ms = start.elapsed().as_millis() as u64;
+                send_transfer_progress(tx, &progress, &mut last, true);
+                continue;
             }
         }
-        progress.elapsed_ms = start.elapsed().as_millis() as u64;
-        send_transfer_progress(tx, &progress, &mut last, true);
+
+        let mut dirs = root.dirs;
+        dirs.sort();
+        dirs.dedup();
+        for dir in dirs {
+            let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if let Err(e) = std::fs::create_dir_all(&local) {
+                errors.push(format!("{}: {}", local.display(), e));
+                progress.errors = errors.len() as u64;
+            }
+        }
+
+        for file in root.files {
+            let dest = dest_root.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+            progress.current = file.rel.clone();
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+            match download_file_progress(
+                be,
+                &file.src,
+                &dest,
+                file.size,
+                tx,
+                &mut progress,
+                &mut last,
+            ) {
+                Ok(_) => {
+                    progress.files_done = progress.files_done.saturating_add(1);
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", file.rel, e));
+                    progress.errors = errors.len() as u64;
+                    progress.files_done = progress.files_done.saturating_add(1);
+                    progress.bytes_done = progress.bytes_done.saturating_add(file.size);
+                }
+            }
+            progress.elapsed_ms = start.elapsed().as_millis() as u64;
+            send_transfer_progress(tx, &progress, &mut last, true);
+        }
     }
 
     progress.done = true;
