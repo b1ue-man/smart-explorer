@@ -44,7 +44,7 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 | Rename (F2) | `confirm_rename` -> `rename` | ✅ | ✅ | ✅ within same peer mount |
 | Right-click menu | shell menu / egui menu | ✅ shell | ✅ egui | ✅ egui |
 | Copy -> paste into folder | clipboard / upload | ✅ | ✅ paste into remote = `open_write` | ✅ paste into peer = `open_write` |
-| Copy file -> Explorer | CF_HDROP / temp+CF_HDROP | ✅ | ✅ remote files -> temp -> CF_HDROP | ✅ peer files -> temp -> CF_HDROP |
+| Copy files/folders -> Explorer | CF_HDROP / temp+CF_HDROP | ✅ | ✅ remote selections -> temp -> CF_HDROP | ✅ peer selections -> temp -> CF_HDROP |
 | Mirror / two-way sync | `sync`/`bisync` over `Backend` | ✅ | ✅ | ⚠️ works while peer is reachable; peer TCP channel is reopened on demand |
 | Drag rows between tabs/panes | internal drag -> copy/upload/download/cross-copy | ✅ local<->local | ✅ local<->remote, remote<->local, remote<->remote | ✅ via peer `Backend` |
 | Drag out to Explorer (OLE) | `dragout.rs` CF_HDROP | ✅ local | ✅ remote -> temp -> OLE | ✅ peer -> temp -> OLE |
@@ -62,9 +62,9 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
    exporting device's saved SFTP/FTP/WebDAV/UNC connections when explicitly
    enabled, but peer-share connections are not persisted and therefore cannot
    recurse back into Share-Server sessions.
-4. **Remote clipboard to Explorer is file-only.** Remote folders can still be
-   dragged/copied inside Smart Explorer and downloaded via normal actions; the
-   CF_HDROP clipboard path materializes files.
+4. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
+   are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
+   large folders therefore need enough local temp space before the drop/paste.
 
 ## D. Remote file opening
 

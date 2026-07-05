@@ -311,6 +311,14 @@ impl App {
                             act = Some(A::CopyClip);
                         }
                     }
+                    if is_dir {
+                        if ui.button("Herunterladen nach...").clicked() {
+                            act = Some(A::DownloadTo);
+                        }
+                        if ui.button("In Zwischenablage kopieren").clicked() {
+                            act = Some(A::CopyClip);
+                        }
+                    }
                     ui.separator();
                     if ui.button("✎ Umbenennen").clicked() {
                         act = Some(A::Rename);
