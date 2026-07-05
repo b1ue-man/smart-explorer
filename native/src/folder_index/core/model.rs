@@ -42,3 +42,9 @@ impl FolderIndex {
         self.paths.iter()
     }
 }
+
+impl Default for FolderIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}

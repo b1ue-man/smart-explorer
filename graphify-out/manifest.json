@@ -450,14 +450,14 @@
     "semantic_hash": "14a0c41cef313ce996a48a0e48bb7454"
   },
   "autostart/os/linux_os.rs": {
-    "mtime": 1781981257.2446952,
-    "ast_hash": "9c7c1e632704e2d5cff7d3eb0dc665ca",
-    "semantic_hash": "9c7c1e632704e2d5cff7d3eb0dc665ca"
+    "mtime": 1783278327.6501079,
+    "ast_hash": "1bc8a6fecfdbe81326acb02657b79c94",
+    "semantic_hash": "1bc8a6fecfdbe81326acb02657b79c94"
   },
   "autostart/os/windows.rs": {
-    "mtime": 1781861908.877184,
-    "ast_hash": "4a5f3b5fca98e26fa344257d685809ab",
-    "semantic_hash": "4a5f3b5fca98e26fa344257d685809ab"
+    "mtime": 1783278311.801029,
+    "ast_hash": "ff54c07444835513937f03a6a90855ad",
+    "semantic_hash": "ff54c07444835513937f03a6a90855ad"
   },
   "bin/bench.rs": {
     "mtime": 1782577650.1962602,
@@ -574,15 +574,25 @@
     "ast_hash": "9a4847facf1ea06ec7e8138ac95ab9f7",
     "semantic_hash": "9a4847facf1ea06ec7e8138ac95ab9f7"
   },
+  "cli/connections.rs": {
+    "mtime": 1783279120.5155907,
+    "ast_hash": "0f190f07926bab53a71f9f4579616e83",
+    "semantic_hash": "0f190f07926bab53a71f9f4579616e83"
+  },
   "cli/mod.rs": {
-    "mtime": 1783271829.9589863,
-    "ast_hash": "f59684413d87cc119087bf90ad5e5d04",
-    "semantic_hash": "f59684413d87cc119087bf90ad5e5d04"
+    "mtime": 1783279122.5392418,
+    "ast_hash": "6c6f2148aa5a2eae482631feff8d8f42",
+    "semantic_hash": "6c6f2148aa5a2eae482631feff8d8f42"
   },
   "cli/ops.rs": {
     "mtime": 1783271821.6192782,
     "ast_hash": "3dfe69bab7eddb8935989b17ce50fd6e",
     "semantic_hash": "3dfe69bab7eddb8935989b17ce50fd6e"
+  },
+  "cli/setup.rs": {
+    "mtime": 1783278864.3308997,
+    "ast_hash": "b289f5269beefb4e54129ee5f8796f35",
+    "semantic_hash": "b289f5269beefb4e54129ee5f8796f35"
   },
   "cli/target.rs": {
     "mtime": 1783271871.1160207,
@@ -745,9 +755,9 @@
     "semantic_hash": "b919c27ef82d0a848f6698fc49fdae94"
   },
   "folder_index/core/model.rs": {
-    "mtime": 1781873301.43867,
-    "ast_hash": "07fbba5b0e129fbc6aff663e20b4afb0",
-    "semantic_hash": "07fbba5b0e129fbc6aff663e20b4afb0"
+    "mtime": 1783278063.28442,
+    "ast_hash": "c2f91317d08b6f60df39d41a295eaade",
+    "semantic_hash": "c2f91317d08b6f60df39d41a295eaade"
   },
   "folder_index/core/search.rs": {
     "mtime": 1782577650.2262814,

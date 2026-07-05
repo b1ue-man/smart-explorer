@@ -23,12 +23,26 @@ fn quote_exec_arg(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
+fn daemon_exe_for(exe: PathBuf) -> PathBuf {
+    let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+        return exe;
+    };
+    if name != "se" {
+        return exe;
+    }
+    exe.with_file_name("smart_explorer")
+}
+
+fn daemon_exe() -> io::Result<PathBuf> {
+    std::env::current_exe().map(daemon_exe_for)
+}
+
 pub fn is_enabled() -> bool {
     desktop_file_path().exists()
 }
 
 pub fn enable() -> io::Result<()> {
-    let exe = std::env::current_exe()?;
+    let exe = daemon_exe()?;
     let dir = autostart_dir();
     std::fs::create_dir_all(&dir)?;
     let exec = format!("{} --sync-daemon", quote_exec_arg(&exe.to_string_lossy()));
@@ -47,7 +61,7 @@ pub fn disable() -> io::Result<()> {
 }
 
 pub fn spawn_daemon_now() {
-    if let Ok(exe) = std::env::current_exe() {
+    if let Ok(exe) = daemon_exe() {
         let _ = std::process::Command::new(exe).arg("--sync-daemon").spawn();
     }
 }

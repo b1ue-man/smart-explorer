@@ -114,11 +114,11 @@ release-native/update-feed/
 
 Since v0.5.77, the normal update path uses a separate
 updater helper installed next to the app binary (`Smart Explorer Updater.exe`
-on Windows, `smart_explorer_updater` on Linux). Since v0.5.116, the feed also
+on Windows, `smart_explorer_updater` on Linux). Since v0.5.117, the feed also
 ships the terminal companion (`se.exe` on Windows, `se` on Linux). The app
 stages the OS-specific GUI payload, refreshes the `se` sidecar and helper from
 the same feed, then exits while the helper performs the GUI replacement and
-relaunches the app. When an existing install first lands on v0.5.116 via the
+relaunches the app. When an existing install first lands on v0.5.117 via the
 older updater, the next equal-version update check silently installs the missing
 `se` sidecar.
 The one unavoidable migration exception is v0.5.76 -> v0.5.77: v0.5.76 does

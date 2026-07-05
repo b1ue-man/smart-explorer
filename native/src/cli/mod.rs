@@ -1,4 +1,6 @@
+mod connections;
 mod ops;
+mod setup;
 mod target;
 
 use clap::{Args, Parser, Subcommand};
@@ -18,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Connections(ConnectionsArgs),
+    Connections(connections::ConnectionsArgs),
     Ls(PathArg),
     Stat(PathArg),
     Cat(PathArg),
@@ -30,20 +32,6 @@ enum Command {
     Mkdir(PathArg),
     Search(SearchArgs),
     Exec(ExecArgs),
-}
-
-#[derive(Args)]
-struct ConnectionsArgs {
-    #[command(subcommand)]
-    command: ConnectionsCommand,
-}
-
-#[derive(Subcommand)]
-enum ConnectionsCommand {
-    List {
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Args)]
@@ -119,12 +107,7 @@ pub fn run() -> i32 {
 
 fn run_inner(cli: Cli) -> Result<i32, String> {
     match cli.command {
-        Command::Connections(args) => match args.command {
-            ConnectionsCommand::List { json } => {
-                print_connections(json)?;
-                Ok(0)
-            }
-        },
+        Command::Connections(args) => connections::run(args),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
             ops::list(&t)?;
@@ -171,42 +154,6 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     }
 }
 
-fn print_connections(json: bool) -> Result<(), String> {
-    let conns = crate::creds::load_connections();
-    if json {
-        let rows: Vec<_> = conns
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "label": c.display(),
-                    "account": c.account(),
-                    "protocol": c.protocol.as_str(),
-                    "host": c.host,
-                    "port": c.port,
-                    "user": c.user,
-                    "root": c.root,
-                    "use_agent": c.use_agent,
-                })
-            })
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
-        );
-        return Ok(());
-    }
-    for c in conns {
-        println!(
-            "{}\t{}\t{}\t{}",
-            c.display(),
-            c.protocol.as_str(),
-            c.to_target(),
-            if c.use_agent { "agent" } else { "" }
-        );
-    }
-    Ok(())
-}
-
 fn exec(args: ExecArgs) -> Result<i32, String> {
     let (target, _) = crate::share::PeerOpenTarget::from_endpoint(&args.target)
         .ok_or_else(|| "exec target must be a share:// endpoint".to_string())?;
@@ -250,17 +197,6 @@ mod tests {
                 assert_eq!(args.target, "share://direct/c");
                 assert_eq!(args.argv, ["echo", "-n", "hi"]);
             }
-            _ => panic!("wrong command"),
-        }
-    }
-
-    #[test]
-    fn parses_connections_list_json() {
-        let cli = Cli::parse_from(["se", "connections", "list", "--json"]);
-        match cli.command {
-            super::Command::Connections(args) => match args.command {
-                super::ConnectionsCommand::List { json } => assert!(json),
-            },
             _ => panic!("wrong command"),
         }
     }
