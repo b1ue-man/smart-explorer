@@ -68,6 +68,16 @@ impl ShareService {
         Ok((label, Arc::new(be), status))
     }
 
+    pub fn exec_for_target(
+        &self,
+        target: &PeerOpenTarget,
+        req: super::types::ExecRequest,
+    ) -> Result<super::types::ExecResult, String> {
+        let endpoint = self.endpoint_for_target(target)?;
+        let be = PeerBackend::new(endpoint, self.identity.clone(), self.iroh.clone());
+        be.exec(req).map_err(|e| e.to_string())
+    }
+
     pub fn relay_url(&self) -> String {
         self.iroh.relay_url().to_string()
     }

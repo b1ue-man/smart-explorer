@@ -27,6 +27,14 @@ mitgelieferte **`se-share-server`** (Linux + Windows, in
 Verbindung (Discovery), nie die Dateien. Toolbar → **📡 Teilen**; Server in
 Einstellungen → **TEILEN**. Plan: [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
+**Terminal (ab 0.5.116):** der mitinstallierte Companion **`se`** nutzt dieselben
+gespeicherten Verbindungen, App-Daten, Keyring-Secrets, Share-Profile und den
+Daemon wie die GUI. Beispiele: `se connections list`, `se ls @label:/pfad`,
+`se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
+`se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
+Execution ist in v1 nur fuer Smart-Explorer-Share-Peers verfuegbar und auf der
+empfangenden Seite standardmaessig aus: `se exec share://... -- program args`.
+
 ---
 
 ## ⚠️ Lizenz & Hinweis
@@ -55,15 +63,16 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.115.exe`](release-native/Smart%20Explorer%20Setup%200.5.115.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.116.exe`](release-native/Smart%20Explorer%20Setup%200.5.116.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
-   öffnen" — **und stellt Auto-Update auf den Git-Feed ein. Danach musst du nichts
+   öffnen", installiert `se.exe` fuer Terminal-Operationen — **und stellt Auto-Update auf den Git-Feed ein. Danach musst du nichts
    konfigurieren, Updates kommen automatisch.**
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
-   die Update-Quelle setzen (siehe unten).
+   die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
+   [`se.exe`](release-native/se.exe) daneben.
 
 ## 🔄 Updates bekommen — *das hier eintragen*
 
@@ -82,7 +91,7 @@ portablen EXE trägst du sie einmal selbst ein:
 > zieht die App die neueste Version aus dem Git.
 
 Das ist alles. (Technisch lädt die App `version.txt` + den OS-passenden Payload
-(`smart_explorer.exe` auf Windows, `smart_explorer` auf Linux) aus
+(`smart_explorer.exe`/`se.exe` auf Windows, `smart_explorer`/`se` auf Linux) aus
 [`release-native/update-feed/`](release-native/update-feed) über
 `raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
 Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
@@ -112,7 +121,8 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen und Feed-Version zuletzt schreiben |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
-| `release-native/update-feed/` | Update-Feed: `version.txt` + `smart_explorer.exe` / `smart_explorer` |
+| `release-native/se.exe` | Portable Terminal-Companion |
+| `release-native/update-feed/` | Update-Feed: `version.txt` + `smart_explorer.exe` / `smart_explorer` + `se.exe` / `se` |
 | `LICENSE` | MIT-Lizenz (frei, AS-IS, ohne Gewähr/Haftung) |
 | `DISCLAIMER.txt` | Kurzhinweis (KI-Bau + Lizenzverweis), im Installer/ersten Start |
 | `archive/electron-v1-quellcode.zip` | Quellcode der alten Electron-Version (v1) |
@@ -132,15 +142,15 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 
 1. `version` in `native/Cargo.toml` erhöhen, committen.
 2. Bauen + Artefakte stagen: auf Windows standardmäßig
-   `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/Installer,
+   `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/`se`/Installer,
    aktualisiert die Linux/WSL-Payloads, schreibt `version.txt` zuletzt und prüft
    alle Feed-Hashes. `cd native; .\publish-update.ps1 -AllowPartialFeed` ist nur
    für bewusst partielle Windows-only-Feeds gedacht.
 3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
 4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released
-   auf `v*`). Hängt Windows- und Linux-Binaries, Installer, Script, DLL und
-   `version.txt` an.
+   auf `v*`). Hängt Windows- und Linux-Binaries inklusive `se`, Installer,
+   Script, DLL und `version.txt` an.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe

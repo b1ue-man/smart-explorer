@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.115"
+version = "0.5.116"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -14,6 +14,7 @@ notify = "6"
 regex = "1"
 globset = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
 trash = "5"
 # Blocking HTTP client for the git/HTTPS update feed (updater.rs). `tls` pulls
 # rustls backed by **ring** (verified: no aws-lc-sys in the tree) + bundled

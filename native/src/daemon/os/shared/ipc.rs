@@ -58,6 +58,11 @@ enum IpcRequest {
         token: String,
         target: crate::share::PeerOpenTarget,
     },
+    ExecShare {
+        token: String,
+        target: crate::share::PeerOpenTarget,
+        req: crate::share::ExecRequest,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +79,9 @@ enum IpcResponse {
     },
     ShareEvents {
         snapshot: ShareWorkerSnapshot,
+    },
+    ExecResult {
+        result: crate::share::ExecResult,
     },
     Err {
         msg: String,
@@ -166,6 +174,17 @@ fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Res
                     let read = stream.try_clone()?;
                     serve_backend(read, stream, backend)
                 }
+                Err(e) => write_response(&mut stream, &IpcResponse::Err { msg: e }),
+            }
+        }
+        IpcRequest::ExecShare {
+            token: t,
+            target,
+            req,
+        } => {
+            require_token(token, &t)?;
+            match host.exec_share(target, req) {
+                Ok(result) => write_response(&mut stream, &IpcResponse::ExecResult { result }),
                 Err(e) => write_response(&mut stream, &IpcResponse::Err { msg: e }),
             }
         }
@@ -568,6 +587,38 @@ impl ShareHost {
             }
         }
     }
+
+    pub(crate) fn exec_share(
+        &self,
+        target: crate::share::PeerOpenTarget,
+        req: crate::share::ExecRequest,
+    ) -> Result<crate::share::ExecResult, String> {
+        let deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            self.reload_now();
+            self.drain_events();
+            let service = {
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "Share-Worker gesperrt".to_string())?;
+                state.service.clone()
+            };
+            let Some(service) = service else {
+                return Err("Share-Server ist nicht konfiguriert oder Auto-Connect ist aus".into());
+            };
+            service.cmd(crate::share::ShareCmd::Refresh);
+            match service.exec_for_target(&target, req.clone()) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    if Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    std::thread::sleep(Duration::from_millis(750));
+                }
+            }
+        }
+    }
 }
 
 fn configure_or_restart_locked(state: &mut ShareHostState) {
@@ -688,6 +739,26 @@ pub fn open_share_backend(
         }
     }
     Err(last)
+}
+
+pub fn exec_share(
+    target: crate::share::PeerOpenTarget,
+    req: crate::share::ExecRequest,
+) -> Result<crate::share::ExecResult, String> {
+    ensure_worker_ready();
+    let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
+    let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    let socket_timeout = Duration::from_millis(req.timeout_ms.saturating_add(60_000).max(60_000));
+    set_stream_timeout(&stream, Some(socket_timeout));
+    write_request(&mut stream, &IpcRequest::ExecShare { token, target, req })
+        .map_err(|e| e.to_string())?;
+    match read_response(&mut stream).map_err(|e| e.to_string())? {
+        IpcResponse::ExecResult { result } => Ok(result),
+        IpcResponse::Err { msg } => Err(msg),
+        _ => Err("Unerwartete Worker-Antwort".into()),
+    }
 }
 
 pub fn refresh_share_worker() {
@@ -1047,6 +1118,61 @@ mod tests {
     fn old_unit_pong_deserializes_as_stale_version() {
         match serde_json::from_str::<IpcResponse>(r#"{"t":"pong"}"#).unwrap() {
             IpcResponse::Pong { version } => assert!(version.is_empty()),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exec_share_ipc_roundtrips_request_and_response() {
+        let (target, _) =
+            crate::share::PeerOpenTarget::from_endpoint("share://direct/contact-a/bin").unwrap();
+        let req = crate::share::ExecRequest {
+            argv: vec!["echo".into(), "hi".into()],
+            cwd: Some("/tmp".into()),
+            timeout_ms: 5_000,
+            max_output_bytes: 128,
+            shell: false,
+        };
+        let json = serde_json::to_string(&IpcRequest::ExecShare {
+            token: "token".into(),
+            target: target.clone(),
+            req: req.clone(),
+        })
+        .unwrap();
+        match serde_json::from_str::<IpcRequest>(&json).unwrap() {
+            IpcRequest::ExecShare {
+                token,
+                target: got_target,
+                req: got_req,
+            } => {
+                assert_eq!(token, "token");
+                assert_eq!(got_target, target);
+                assert_eq!(got_req.argv, req.argv);
+                assert_eq!(got_req.cwd, req.cwd);
+                assert_eq!(got_req.timeout_ms, req.timeout_ms);
+                assert_eq!(got_req.max_output_bytes, req.max_output_bytes);
+                assert_eq!(got_req.shell, req.shell);
+            }
+            _ => panic!("wrong request"),
+        }
+
+        let response = IpcResponse::ExecResult {
+            result: crate::share::ExecResult {
+                stdout: b"hi\n".to_vec(),
+                stderr: Vec::new(),
+                exit_code: Some(0),
+                timed_out: false,
+                stdout_truncated: false,
+                stderr_truncated: false,
+            },
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        match serde_json::from_str::<IpcResponse>(&json).unwrap() {
+            IpcResponse::ExecResult { result } => {
+                assert_eq!(result.stdout, b"hi\n");
+                assert_eq!(result.exit_code, Some(0));
+                assert!(!result.timed_out);
+            }
             other => panic!("unexpected response: {other:?}"),
         }
     }

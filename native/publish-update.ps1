@@ -38,7 +38,7 @@ if (-not $AllowPartialFeed -and $resolvedFeed -eq $resolvedDefaultFeed) {
 
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
-cargo build --release --bin smart_explorer --bin smart_explorer_updater
+cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 $shareSrc = Join-Path $repoRoot "share-server"
@@ -67,6 +67,7 @@ if (Test-Path $shareSrc) {
 New-Item -ItemType Directory -Force $Feed | Out-Null
 Copy-Item "target\release\smart_explorer.exe" "$Feed\smart_explorer.exe" -Force
 Copy-Item "target\release\smart_explorer_updater.exe" "$Feed\smart_explorer_updater.exe" -Force
+Copy-Item "target\release\se.exe" "$Feed\se.exe" -Force
 function Write-Sha256File([string]$Path) {
     $hash = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
     $name = [System.IO.Path]::GetFileName($Path)
@@ -74,6 +75,7 @@ function Write-Sha256File([string]$Path) {
 }
 Write-Sha256File "$Feed\smart_explorer.exe"
 Write-Sha256File "$Feed\smart_explorer_updater.exe"
+Write-Sha256File "$Feed\se.exe"
 Set-Content "$Feed\version.txt" $version -Encoding ascii
 Write-Host "Feed aktualisiert: $Feed (v$version)"
 
@@ -92,7 +94,7 @@ if ($makensisCmd) {
     $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if ($makensis) {
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "installer.nsi" | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "/DCLI_SRC=target\release\se.exe" "installer.nsi" | Out-Null
     Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
 } else {
     Write-Warning "makensis nicht gefunden - Installer uebersprungen"
@@ -101,4 +103,5 @@ if ($makensis) {
 # Portable Kopie
 Copy-Item "target\release\smart_explorer.exe" "..\release-native\Smart Explorer.exe" -Force
 Copy-Item "target\release\smart_explorer_updater.exe" "..\release-native\Smart Explorer Updater.exe" -Force
+Copy-Item "target\release\se.exe" "..\release-native\se.exe" -Force
 Write-Host "Fertig."

@@ -7,6 +7,7 @@ use super::core::{replace_file_with_staged, staged_sha256_from_path, verify_sha2
 use super::feed::{Feed, PayloadSpec};
 
 const INSTALLED_UPDATER: &str = "smart_explorer_updater";
+const INSTALLED_CLI: &str = "se";
 
 pub(super) fn binary_suffix() -> &'static str {
     ""
@@ -36,6 +37,14 @@ pub(super) fn updater_payload_spec() -> PayloadSpec {
     }
 }
 
+pub(super) fn cli_payload_spec() -> PayloadSpec {
+    PayloadSpec {
+        local_names: &["se"],
+        http_names: &["se"],
+        hash_name: "se.sha256",
+    }
+}
+
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
 fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
@@ -62,6 +71,14 @@ fn installed_updater_path() -> Result<PathBuf, String> {
         .parent()
         .ok_or_else(|| format!("Installationsordner unbekannt: {}", cur.display()))?;
     Ok(dir.join(INSTALLED_UPDATER))
+}
+
+fn installed_cli_path() -> Result<PathBuf, String> {
+    let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    let dir = cur
+        .parent()
+        .ok_or_else(|| format!("Installationsordner unbekannt: {}", cur.display()))?;
+    Ok(dir.join(INSTALLED_CLI))
 }
 
 fn copy_with_retries(
@@ -114,6 +131,29 @@ pub(super) fn ensure_installed_updater(
             e
         )),
     }
+}
+
+pub(super) fn ensure_installed_cli(
+    feed: &Feed,
+    version: &str,
+    refresh: bool,
+) -> Result<PathBuf, String> {
+    let dest = installed_cli_path()?;
+    if !refresh && dest.exists() {
+        return Ok(dest);
+    }
+
+    let staged = feed.fetch_cli_exe(version)?;
+    let expected_sha256 = staged_sha256_from_path(&staged);
+    let result = copy_with_retries(
+        &staged,
+        &dest,
+        "Terminal-Begleiter",
+        expected_sha256.as_deref(),
+    );
+    let _ = std::fs::remove_file(&staged);
+    result?;
+    Ok(dest)
 }
 
 pub(super) fn apply_via_installed_updater(

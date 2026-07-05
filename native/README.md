@@ -9,7 +9,7 @@ per-user NSIS-Installer mit Selbst-Update ausgeliefert.
 | Metrik | Electron-Version | Native-Version |
 |---|---|---|
 | Distribution | 79 MB Installer | **~7.7 MB Installer / ~22 MB EXE** |
-| Entpackt | ~280 MB | **Single native EXE + Updater-Helfer** |
+| Entpackt | ~280 MB | **Native EXE + Updater-Helfer + `se` Companion** |
 | Prozesse beim Start | 4 (main+renderer+gpu+util) | **1** |
 | Scan `node_modules` (~12k Dateien) | 8.6k/s | **76k/s** |
 | Scan `Program Files` (~514k Dateien, 89 GB) | 61.7s | **1.85s (33×)** |
@@ -29,14 +29,14 @@ Voraussetzungen:
 
 ```bash
 cargo build --release
-# → target/release/smart_explorer.exe
+# → target/release/smart_explorer.exe und target/release/se.exe
 ```
 
 Release-Artefakte werden nicht per Hand kopiert. Der aktuelle lokale
 Release-Flow steht in [`../docs/RELEASING.md`](../docs/RELEASING.md); auf einem
 Windows-Rechner ist `..\native\publish-release-local.ps1` der Standard, weil der
-Wrapper Windows- und Linux-Feed-Payloads zusammen aktualisiert und die SHA-256
-Dateien prüft.
+Wrapper Windows- und Linux-Feed-Payloads inklusive `se` zusammen aktualisiert
+und die SHA-256 Dateien prüft.
 
 Bench-Mode:
 ```bash

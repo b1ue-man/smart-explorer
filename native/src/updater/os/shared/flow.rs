@@ -4,7 +4,7 @@ use super::archive::{archive_binary, is_auto_update_paused, resume_auto_update};
 use super::config::{last_applied_path, update_source_str};
 use super::core::parse_ver;
 use super::feed::classify_feed;
-use super::os::{apply_via_installed_updater, ensure_installed_updater};
+use super::os::{apply_via_installed_updater, ensure_installed_cli, ensure_installed_updater};
 use super::types::UpdateMsg;
 
 /// Force a forward update to the feed's latest, clearing any rollback pin.
@@ -75,6 +75,7 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
     if parse_ver(&feed_version) <= parse_ver(current) {
         if parse_ver(&feed_version) == parse_ver(current) {
             let _ = ensure_installed_updater(&feed, &feed_version, false);
+            let _ = ensure_installed_cli(&feed, &feed_version, false);
         }
         return Ok(if manual {
             Some(UpdateMsg::UpToDate { feed_version })
@@ -93,6 +94,7 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
     }
 
     let new_exe = feed.fetch_exe(&feed_version)?;
+    ensure_installed_cli(&feed, &feed_version, true)?;
     archive_binary(current);
     let helper = ensure_installed_updater(&feed, &feed_version, true)?;
     apply_via_installed_updater(&helper, &new_exe, &feed_version)?;

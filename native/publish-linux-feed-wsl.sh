@@ -199,11 +199,12 @@ if [ "$check_env" = "1" ]; then
 fi
 
 echo "Building native Linux payloads for $linux_target ..."
-cargo build --release --target "$linux_target" --bin smart_explorer --bin smart_explorer_updater
+cargo build --release --target "$linux_target" --bin smart_explorer --bin smart_explorer_updater --bin se
 
 mkdir -p "$feed"
 cp "target/$linux_target/release/smart_explorer" "$feed/smart_explorer"
 cp "target/$linux_target/release/smart_explorer_updater" "$feed/smart_explorer_updater"
+cp "target/$linux_target/release/se" "$feed/se"
 
 if [ "$build_share_server" = "1" ] && [ -d "$repo_root/share-server" ]; then
   echo "Building Linux share server for $linux_target ..."
@@ -219,6 +220,7 @@ fi
   cd "$feed"
   sha256sum smart_explorer > smart_explorer.sha256
   sha256sum smart_explorer_updater > smart_explorer_updater.sha256
+  sha256sum se > se.sha256
 )
 
 if [ "$write_version" = "1" ]; then

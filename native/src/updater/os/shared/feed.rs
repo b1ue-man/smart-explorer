@@ -65,6 +65,17 @@ impl Feed {
         )
     }
 
+    pub(super) fn fetch_cli_exe(&self, version: &str) -> Result<PathBuf, String> {
+        let spec = os::cli_payload_spec();
+        self.fetch_payload(
+            spec.local_names,
+            spec.http_names,
+            spec.hash_name,
+            "cli_download",
+            version,
+        )
+    }
+
     fn fetch_payload(
         &self,
         local_names: &[&str],

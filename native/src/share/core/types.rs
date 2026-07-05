@@ -11,6 +11,25 @@ pub enum ShareScope {
     Room { room_id: String },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecRequest {
+    pub argv: Vec<String>,
+    pub cwd: Option<String>,
+    pub timeout_ms: u64,
+    pub max_output_bytes: u64,
+    pub shell: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecResult {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShareStatus {
     #[default]
