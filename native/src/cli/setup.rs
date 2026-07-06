@@ -38,27 +38,39 @@ pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String>
 
 pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, String> {
     let mut profiles = crate::share::ShareProfiles::load(Some(default_home()));
-    let contact_id = profiles.add_direct_from_code(code, name)?;
+    let existing = profiles.direct_contact_id_from_code(code)?;
+    let (contact_id, created, request_needed) = match existing {
+        Some(id) => {
+            let request_needed = prepare_direct_request(&mut profiles, &id)?;
+            (id, false, request_needed)
+        }
+        None => {
+            let id = profiles.add_direct_from_code(code, name)?;
+            let request_needed = prepare_direct_request(&mut profiles, &id)?;
+            (id, true, request_needed)
+        }
+    };
     profiles
         .save()
         .map_err(|e| format!("share profile speichern: {e}"))?;
-    let mut suffix = String::new();
-    let refresh_result = crate::daemon::send_share_command(crate::share::ShareCmd::Refresh);
     if request {
-        match crate::daemon::send_share_command(crate::share::ShareCmd::RequestDirect {
-            contact_id: contact_id.clone(),
-        }) {
-            Ok(()) => suffix.push_str("; access request sent"),
-            Err(e) => suffix.push_str(&format!(
-                "; saved, but the access request could not be sent now: {e}"
-            )),
+        ensure_share_worker_running().map_err(|e| {
+            format!("saved peer contact {contact_id}, but access request was not queued: {e}")
+        })?;
+        let action = if created { "Saved" } else { "Updated" };
+        if !request_needed {
+            return Ok(format!(
+                "{action} peer contact {contact_id}; already accepted, share worker configured"
+            ));
         }
-    } else if let Err(e) = refresh_result {
-        suffix.push_str(&format!(
-            "; saved, but the share worker could not refresh now: {e}"
+        return Ok(format!(
+            "{action} peer contact {contact_id}; access request queued through the share worker"
         ));
     }
-    Ok(format!("Saved peer contact {contact_id}{suffix}"))
+    let action = if created { "Saved" } else { "Updated" };
+    Ok(format!(
+        "{action} peer contact {contact_id}; request not queued (--no-request)"
+    ))
 }
 
 pub(crate) fn add_room(code: &str, name: &str) -> Result<String, String> {
@@ -67,11 +79,9 @@ pub(crate) fn add_room(code: &str, name: &str) -> Result<String, String> {
     profiles
         .save()
         .map_err(|e| format!("share profile speichern: {e}"))?;
-    let suffix = match crate::daemon::send_share_command(crate::share::ShareCmd::Refresh) {
-        Ok(()) => "; share worker refreshed".to_string(),
-        Err(e) => format!("; saved, but the share worker could not refresh now: {e}"),
-    };
-    Ok(format!("Saved room {room_id}{suffix}"))
+    ensure_share_worker_running()
+        .map_err(|e| format!("saved room {room_id}, but share worker was not configured: {e}"))?;
+    Ok(format!("Saved room {room_id}; share worker configured"))
 }
 
 #[derive(Debug)]
@@ -153,6 +163,35 @@ fn normalize_share_root(root: &str) -> Result<String, String> {
         return Err("share root must be a UNC path like \\\\server\\share".into());
     }
     Ok(root)
+}
+
+fn prepare_direct_request(
+    profiles: &mut crate::share::ShareProfiles,
+    contact_id: &str,
+) -> Result<bool, String> {
+    let contact = profiles
+        .direct_contacts
+        .iter_mut()
+        .find(|c| c.id == contact_id)
+        .ok_or_else(|| format!("peer contact not found: {contact_id}"))?;
+    contact.auto_connect = true;
+    contact.auto_open = false;
+    if contact.access_state == crate::share::DirectAccessState::Accepted {
+        return Ok(false);
+    }
+    contact.status = crate::share::ShareStatus::WaitingForAccess;
+    contact.access_state = crate::share::DirectAccessState::Pending;
+    contact.request_sent_at = Some(crate::share::core_now_secs());
+    Ok(true)
+}
+
+fn ensure_share_worker_running() -> Result<(), String> {
+    let running = crate::daemon::refresh_share_worker_checked()?;
+    if running {
+        Ok(())
+    } else {
+        Err("Share server is not configured or Auto-Connect is off".into())
+    }
 }
 
 fn unc_server(root: &str) -> Option<String> {

@@ -73,6 +73,9 @@ enum IpcResponse {
         version: String,
     },
     Ok,
+    RefreshOk {
+        running: bool,
+    },
     OpenOk {
         label: String,
         status: crate::share::ShareStatus,
@@ -153,8 +156,8 @@ fn handle_client(mut stream: TcpStream, host: ShareHost, token: &str) -> io::Res
         }
         IpcRequest::RefreshShare { token: t } => {
             require_token(token, &t)?;
-            host.reload_now();
-            write_response(&mut stream, &IpcResponse::Ok)
+            let running = host.reload_now();
+            write_response(&mut stream, &IpcResponse::RefreshOk { running })
         }
         IpcRequest::ShareCommand { token: t, cmd } => {
             require_token(token, &t)?;
@@ -248,16 +251,17 @@ impl ShareHost {
         }
     }
 
-    pub(crate) fn reload_now(&self) {
+    pub(crate) fn reload_now(&self) -> bool {
         let mut state = match self.state.lock() {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => return false,
         };
         state.last_reload = Instant::now();
         state.server = load_share_server();
         state.identity = crate::share::ShareIdentity::load_or_create(default_device_name());
         state.profiles = crate::share::ShareProfiles::load(Some(default_home()));
         configure_or_restart_locked(&mut state);
+        state.service.is_some()
     }
 
     fn send_command(&self, cmd: crate::share::ShareCmd) {
@@ -762,13 +766,22 @@ pub fn exec_share(
 }
 
 pub fn refresh_share_worker() {
+    let _ = refresh_share_worker_checked();
+}
+
+pub fn refresh_share_worker_checked() -> Result<bool, String> {
     ensure_worker_ready();
-    if let (Ok(token), Some(addr)) = (read_token(), read_ipc_addr()) {
-        if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-            set_stream_timeout(&stream, Some(Duration::from_secs(1)));
-            let _ = write_request(&mut stream, &IpcRequest::RefreshShare { token });
-            let _ = read_response(&mut stream);
-        }
+    let token = read_token().map_err(|e| format!("Background-Worker Token: {e}"))?;
+    let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        .map_err(|e| format!("Background-Worker IPC: {e}"))?;
+    set_stream_timeout(&stream, Some(Duration::from_secs(2)));
+    write_request(&mut stream, &IpcRequest::RefreshShare { token }).map_err(|e| e.to_string())?;
+    match read_response(&mut stream).map_err(|e| e.to_string())? {
+        IpcResponse::RefreshOk { running } => Ok(running),
+        IpcResponse::Ok => Ok(true),
+        IpcResponse::Err { msg } => Err(msg),
+        _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }
 

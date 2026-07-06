@@ -33,7 +33,7 @@ mod state;
 
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker, send_share_command, ShareWorkerSnapshot,
+    refresh_share_worker, refresh_share_worker_checked, send_share_command, ShareWorkerSnapshot,
 };
 #[allow(unused_imports)]
 pub use platform::DriveInfo;

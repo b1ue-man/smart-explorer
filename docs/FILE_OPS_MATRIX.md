@@ -61,7 +61,7 @@ full endpoints, local paths, or saved-connection shorthand:
 |---|---|---|---|---|
 | `se connections list` | `creds::load_connections()` + `ShareProfiles::load()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
 | `se connections add` | `creds::save_connection()` + keyring secret | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup | n/a |
-| `se connections add-peer` / `add-room` | `ShareProfiles::{add_direct_from_code, add_room_from_code}` + daemon refresh/request | n/a | n/a | ✅ one-sided setup; other peer confirms direct access as usual |
+| `se connections add-peer` / `add-room` | `ShareProfiles::{add_direct_from_code, add_room_from_code}` + checked daemon profile reload | n/a | n/a | ✅ one-sided setup; other peer confirms direct access as usual |
 | `se ls` / `se stat` | `list_dir` / `stat` | ✅ | ✅ | ✅ |
 | `se cat` / `se get` | `open_read` | ✅ | ✅ | ✅ |
 | `se put` / `se mkdir` | `open_write` / `mkdir_all` | ✅ | ✅ | ✅ |

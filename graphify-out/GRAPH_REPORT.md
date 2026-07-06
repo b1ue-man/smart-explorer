@@ -1,15 +1,15 @@
-# Graph Report - .  (2026-07-05)
+# Graph Report - .  (2026-07-06)
 
 ## Corpus Check
 - cluster-only mode — file stats not available
 
 ## Summary
-- 4294 nodes · 8671 edges · 268 communities (252 shown, 16 thin omitted)
+- 4304 nodes · 8698 edges · 269 communities (253 shown, 16 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 418 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `6dcba188`
+- Built from commit: `12c1c9af`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -196,18 +196,19 @@
 - [[_COMMUNITY_Community 179|Community 179]]
 - [[_COMMUNITY_Community 180|Community 180]]
 - [[_COMMUNITY_Community 181|Community 181]]
-- [[_COMMUNITY_Community 183|Community 183]]
+- [[_COMMUNITY_Community 182|Community 182]]
 - [[_COMMUNITY_Community 184|Community 184]]
 - [[_COMMUNITY_Community 185|Community 185]]
-- [[_COMMUNITY_Community 187|Community 187]]
+- [[_COMMUNITY_Community 186|Community 186]]
 - [[_COMMUNITY_Community 188|Community 188]]
 - [[_COMMUNITY_Community 189|Community 189]]
 - [[_COMMUNITY_Community 190|Community 190]]
 - [[_COMMUNITY_Community 191|Community 191]]
 - [[_COMMUNITY_Community 192|Community 192]]
 - [[_COMMUNITY_Community 193|Community 193]]
-- [[_COMMUNITY_Community 196|Community 196]]
+- [[_COMMUNITY_Community 194|Community 194]]
 - [[_COMMUNITY_Community 197|Community 197]]
+- [[_COMMUNITY_Community 198|Community 198]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `App` - 81 edges
@@ -255,127 +256,127 @@
 - 1-file cycle: `native/src/app/core/state.rs -> native/src/app/core/state.rs`
 - 1-file cycle: `native/src/app/os/linux_os.rs -> native/src/app/os/linux_os.rs`
 
-## Communities (268 total, 16 thin omitted)
+## Communities (269 total, 16 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.06
 Nodes (76): endpoint_addr(), fs_request_label(), fs_response_summary(), handle_exec_stream(), handle_peer_stream(), iroh_direct_session_transfers_files(), normalize_tcp_addr(), PeerBackend (+68 more)
 
 ### Community 1 - "Community 1"
+Cohesion: 0.05
+Nodes (73): apply_update(), main(), Option, PathBuf, Result, Self, String, Vec (+65 more)
+
+### Community 2 - "Community 2"
 Cohesion: 0.03
 Nodes (80): AnalyticsPanel, AnalyticsScan, AppErrorEntry, BisyncCtx, ClipKey, CopyHandle, CopyMode, CopyMsg (+72 more)
 
-### Community 2 - "Community 2"
-Cohesion: 0.06
-Nodes (51): App, App, picker_child_path(), Context, String, Context, Option, PickerState (+43 more)
-
 ### Community 3 - "Community 3"
-Cohesion: 0.05
-Nodes (28): CachingBackend, AtomicBool, Backend, BackendHandle, Box, Duration, Fn, HashHit (+20 more)
+Cohesion: 0.06
+Nodes (64): Option, Path, DuplicateGroup, FileCandidate, Option, Path, PathBuf, ReclaimOptions (+56 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.05
-Nodes (60): dispatch(), handle_walk_tree(), lock_or_recover(), serve(), AtomicBool, Frame, Mutex, MutexGuard (+52 more)
+Nodes (28): CachingBackend, AtomicBool, Backend, BackendHandle, Box, Duration, Fn, HashHit (+20 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.06
-Nodes (60): apply_update(), main(), Option, PathBuf, Result, Self, String, Vec (+52 more)
+Cohesion: 0.05
+Nodes (60): dispatch(), handle_walk_tree(), lock_or_recover(), serve(), AtomicBool, Frame, Mutex, MutexGuard (+52 more)
 
 ### Community 6 - "Community 6"
+Cohesion: 0.06
+Nodes (45): CopyOptions, sel_key_path(), Context, PathBuf, String, Vec, Option, String (+37 more)
+
+### Community 7 - "Community 7"
 Cohesion: 0.07
 Nodes (45): DuplicateEvidence, BackendHandle, DuplicateGroup, Option, ReclaimItem, ReclaimOptions, ReclaimProgress, ReclaimReport (+37 more)
 
-### Community 7 - "Community 7"
+### Community 8 - "Community 8"
 Cohesion: 0.06
 Nodes (38): Client, SftpBackend, basename(), to_vfs(), Client, connect_async(), FileAttributes, Handler (+30 more)
 
-### Community 8 - "Community 8"
+### Community 9 - "Community 9"
 Cohesion: 0.08
 Nodes (29): Agent, basename(), decode_path(), encode_path(), extract_md5(), href_path(), io_err(), parse_http_date_ms() (+21 more)
 
-### Community 9 - "Community 9"
+### Community 10 - "Community 10"
+Cohesion: 0.09
+Nodes (38): cat(), copy(), copy_entry(), copy_file_requires_force_for_overwrite(), destination_path(), fallback_search(), glob_match(), join() (+30 more)
+
+### Community 11 - "Community 11"
 Cohesion: 0.08
 Nodes (35): backend_from_url(), basename(), dir_meta(), FtpBackend, FtpUrl, FtpWriter, io_err(), parent_dir() (+27 more)
 
-### Community 10 - "Community 10"
+### Community 12 - "Community 12"
 Cohesion: 0.08
 Nodes (22): Arc, AtomicUsize, Backend, Box, HashMap, LocalBackend, Mutex, Option (+14 more)
 
-### Community 11 - "Community 11"
+### Community 13 - "Community 13"
 Cohesion: 0.09
 Nodes (40): accept_with_deadline(), auth_url_has_required_params(), authorize(), build_auth_url(), ClientConfig, now_secs(), parse_redirect(), parse_redirect_extracts_code_and_state() (+32 more)
 
-### Community 12 - "Community 12"
+### Community 14 - "Community 14"
 Cohesion: 0.09
 Nodes (34): DateTime, Backend, Box, E, Error, HashMap, Option, Path (+26 more)
 
-### Community 13 - "Community 13"
-Cohesion: 0.09
-Nodes (32): AtomicUsize, Backend, Box, FilterDef, LocalBackend, Path, PathBuf, Read (+24 more)
-
-### Community 14 - "Community 14"
+### Community 15 - "Community 15"
 Cohesion: 0.14
 Nodes (45): ChangeKind, ItemRecord, Action, AtomicBool, Backend, Baseline, BisyncOptions, BTreeMap (+37 more)
 
-### Community 15 - "Community 15"
+### Community 16 - "Community 16"
 Cohesion: 0.11
 Nodes (22): App, export_summary(), selected_direct_label(), selected_room_label(), share_diag_log_is_bounded_on_line_boundary(), share_input_width(), share_open_result_is_current(), share_value_field() (+14 more)
 
-### Community 16 - "Community 16"
+### Community 17 - "Community 17"
 Cohesion: 0.12
 Nodes (42): clean_mount_label(), connection_mounts(), dir_meta(), ensure_under_root(), from_os_path(), FsMeta, join_under(), list_dir() (+34 more)
 
-### Community 17 - "Community 17"
+### Community 18 - "Community 18"
 Cohesion: 0.07
 Nodes (33): DROPEFFECT, HGLOBAL, IDropSource_Impl, MODIFIERKEYS_FLAGS, BOOL, FORMATETC, HRESULT, IAdviseSink (+25 more)
 
-### Community 18 - "Community 18"
+### Community 19 - "Community 19"
 Cohesion: 0.07
 Nodes (31): ClipboardEffect, ClipboardVirtualFile, Drop, HANDLE, OpenMode, Option, Path, Result (+23 more)
 
-### Community 19 - "Community 19"
+### Community 20 - "Community 20"
 Cohesion: 0.13
 Nodes (31): bad(), Frame, get_meta(), get_node(), put_bool(), put_bytes(), put_i64(), put_meta() (+23 more)
 
-### Community 20 - "Community 20"
+### Community 21 - "Community 21"
 Cohesion: 0.12
 Nodes (39): enc(), ep_prefix(), gdrive_endpoint(), is_remote_url(), norm_root(), parse_remote_url(), remote_endpoint(), remote_url_detection_and_parse() (+31 more)
-
-### Community 21 - "Community 21"
-Cohesion: 0.14
-Nodes (34): cat(), copy(), copy_entry(), copy_file_requires_force_for_overwrite(), destination_path(), fallback_search(), glob_match(), join() (+26 more)
 
 ### Community 22 - "Community 22"
 Cohesion: 0.09
 Nodes (24): presence_hmac_covers_iroh_discovery_fields(), RecordingBackend, recursive_delete_does_not_follow_local_symlink_child_when_supported(), recursive_delete_rejects_symlink_like_directory_child(), recursive_delete_removes_normal_local_tree(), temp_path(), test_meta(), IntoIterator (+16 more)
 
 ### Community 23 - "Community 23"
-Cohesion: 0.15
-Nodes (36): Duration, Option, PathBuf, PeerOpenTarget, Result, SocketAddr, TcpStream, accepted_ipc_stream_is_forced_back_to_blocking() (+28 more)
+Cohesion: 0.08
+Nodes (31): Arc, BackendHandle, ExecRequest, ExecResult, Instant, Mutex, PeerOpenTarget, PeerPresence (+23 more)
 
 ### Community 24 - "Community 24"
+Cohesion: 0.16
+Nodes (36): Duration, Option, PathBuf, Result, SocketAddr, TcpStream, accepted_ipc_stream_is_forced_back_to_blocking(), clear_ipc_addr() (+28 more)
+
+### Community 25 - "Community 25"
+Cohesion: 0.14
+Nodes (24): App, landing_basename(), landing_sync_meta(), landing_tile(), landing_tile_grid(), landing_time_secs(), LandingAction, LandingTile (+16 more)
+
+### Community 26 - "Community 26"
 Cohesion: 0.13
 Nodes (36): Option, Path, PathBuf, Result, app_data_dir(), String, SyncJob, Vec (+28 more)
 
-### Community 25 - "Community 25"
+### Community 27 - "Community 27"
 Cohesion: 0.08
 Nodes (18): Action, BisyncOptions, BisyncStats, CompareMode, ConflictMode, DeletePolicy, Direction, Sig (+10 more)
 
-### Community 26 - "Community 26"
+### Community 28 - "Community 28"
 Cohesion: 0.17
 Nodes (37): AtomicBool, AtomicU64, BackendHandle, Frame, Option, Read, Receiver, Result (+29 more)
 
-### Community 27 - "Community 27"
-Cohesion: 0.11
-Nodes (28): Clone, CmdTx, build_presence(), configure_updates_auth_state_synchronously(), direct_accept_or_reject_requires_signed_owner_presence(), dropping_probe_clone_does_not_stop_owner_service(), local_direct_request_requires_own_direct_secret(), normalize_signal_endpoint() (+20 more)
-
-### Community 28 - "Community 28"
-Cohesion: 0.10
-Nodes (17): export_ext(), export_format(), GDriveBackend, Option, Backend, Box, Fn, Option (+9 more)
-
 ### Community 29 - "Community 29"
 Cohesion: 0.12
-Nodes (21): direct_code_parses_lookup_ids_with_dashes(), direct_contact_secret_account(), direct_grant_upsert_persists_state_by_device(), DirectCode, fingerprint_matches(), room_code_parses_room_ids_with_dashes(), room_secret_account(), RoomCode (+13 more)
+Nodes (20): direct_code_parses_lookup_ids_with_dashes(), direct_contact_secret_account(), direct_grant_upsert_persists_state_by_device(), DirectCode, room_code_parses_room_ids_with_dashes(), room_secret_account(), RoomCode, ShareProfiles (+12 more)
 
 ### Community 30 - "Community 30"
 Cohesion: 0.14
@@ -410,140 +411,140 @@ Cohesion: 0.15
 Nodes (27): default_direct_access_state(), direct_endpoint_round_trips_with_path(), DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecRequest, ExecResult (+19 more)
 
 ### Community 38 - "Community 38"
-Cohesion: 0.14
-Nodes (28): Path, PathBuf, Duration, Into, Option, Path, PathBuf, Result (+20 more)
-
-### Community 39 - "Community 39"
 Cohesion: 0.16
 Nodes (31): Arc, AtomicBool, Backend, BackendHandle, Option, Path, PathBuf, Receiver (+23 more)
 
-### Community 40 - "Community 40"
+### Community 39 - "Community 39"
 Cohesion: 0.11
 Nodes (19): FILETIME, BOOL, FORMATETC, HRESULT, IAdviseSink, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA (+11 more)
 
-### Community 41 - "Community 41"
+### Community 40 - "Community 40"
 Cohesion: 0.11
 Nodes (20): Arc, AtomicBool, AtomicU64, Default, Into, Option, PathBuf, Self (+12 more)
 
-### Community 42 - "Community 42"
-Cohesion: 0.15
-Nodes (30): Option, PathBuf, String, restart_worker_for_client(), autopause_flags(), autopause_path(), cadence_path(), cadence_secs() (+22 more)
-
-### Community 43 - "Community 43"
+### Community 41 - "Community 41"
 Cohesion: 0.20
 Nodes (22): Error, Option, Path, PathBuf, Result, String, Vec, app_release_asset_name() (+14 more)
 
-### Community 44 - "Community 44"
+### Community 42 - "Community 42"
 Cohesion: 0.11
 Nodes (16): Backend, Box, Metadata, Read, Scheme, Self, Send, String (+8 more)
 
+### Community 43 - "Community 43"
+Cohesion: 0.15
+Nodes (29): Option, PathBuf, String, autopause_flags(), autopause_path(), cadence_path(), cadence_secs(), clear_heartbeat() (+21 more)
+
+### Community 44 - "Community 44"
+Cohesion: 0.15
+Nodes (17): App, Context, String, Backend, Result, Sig, String, Vec (+9 more)
+
 ### Community 45 - "Community 45"
-Cohesion: 0.23
-Nodes (27): presence_payload(), verify_hmac(), handle_server_msg(), nonce_cache_detects_replay(), publish_all(), remember_nonce(), send_direct_answer(), send_direct_request() (+19 more)
-
-### Community 46 - "Community 46"
-Cohesion: 0.10
-Nodes (11): App, now_secs_i64(), App, Action, String, SyncJob, BackendHandle, BisyncOptions (+3 more)
-
-### Community 47 - "Community 47"
 Cohesion: 0.18
 Nodes (26): Arc, AtomicBool, AtomicU64, Backend, Box, HashMap, Path, String (+18 more)
 
-### Community 48 - "Community 48"
+### Community 46 - "Community 46"
+Cohesion: 0.12
+Nodes (14): AtomicUsize, Backend, Box, LocalBackend, Path, Read, Result, Scheme (+6 more)
+
+### Community 47 - "Community 47"
 Cohesion: 0.18
 Nodes (26): Baseline, BisyncOptions, BisyncStats, Conflict, LocalBackend, Path, PathBuf, String (+18 more)
 
-### Community 49 - "Community 49"
+### Community 48 - "Community 48"
 Cohesion: 0.21
 Nodes (25): Duration, Feed, Option, Path, PathBuf, PayloadSpec, Result, String (+17 more)
 
+### Community 49 - "Community 49"
+Cohesion: 0.11
+Nodes (19): Command, ConnectionAddArgs, ConnectionProtocolArg, ConnectionsArgs, PeerAddArgs, print_connections(), RoomAddArgs, run() (+11 more)
+
 ### Community 50 - "Community 50"
+Cohesion: 0.21
+Nodes (24): add_peer(), add_remote(), add_room(), build_saved_connection(), default_home(), ensure_share_worker_running(), normalize_root(), normalize_share_root() (+16 more)
+
+### Community 51 - "Community 51"
+Cohesion: 0.13
+Nodes (10): GDriveBackend, Backend, Fn, Option, Scheme, String, Vec, VfsChangeBatch (+2 more)
+
+### Community 52 - "Community 52"
 Cohesion: 0.15
 Nodes (16): BlockingRead, BlockingRead<R>, BlockingWrite, BlockingWrite<W>, SftpReader, SftpWriter, File, Arc (+8 more)
 
-### Community 51 - "Community 51"
-Cohesion: 0.12
-Nodes (19): Command, ConnectionAddArgs, ConnectionProtocolArg, ConnectionsArgs, PeerAddArgs, print_connections(), RoomAddArgs, run() (+11 more)
-
-### Community 52 - "Community 52"
-Cohesion: 0.20
-Nodes (22): CopyOptions, Arc, AtomicBool, Conflict, FileEntry, FilterDef, Option, Path (+14 more)
-
 ### Community 53 - "Community 53"
+Cohesion: 0.11
+Nodes (11): App, now_secs_i64(), App, Action, String, SyncJob, BackendHandle, BisyncOptions (+3 more)
+
+### Community 54 - "Community 54"
 Cohesion: 0.17
 Nodes (20): is_generic_id(), path_has_skipped_segment(), should_skip(), Arc, AtomicBool, AtomicU64, IndexMsg, Instant (+12 more)
 
-### Community 54 - "Community 54"
+### Community 55 - "Community 55"
+Cohesion: 0.10
+Nodes (11): BackendHandle, OpenMode, Option, String, Vec, Context, file_mtime_ms(), is_zip_name() (+3 more)
+
+### Community 56 - "Community 56"
 Cohesion: 0.25
 Nodes (24): Action, AtomicBool, Backend, BisyncOptions, BisyncStats, Option, Path, Result (+16 more)
 
-### Community 55 - "Community 55"
+### Community 57 - "Community 57"
 Cohesion: 0.15
 Nodes (23): Baseline, Fn, Option, Path, PathBuf, Result, app_data_dir(), Sig (+15 more)
 
-### Community 56 - "Community 56"
+### Community 58 - "Community 58"
 Cohesion: 0.18
 Nodes (23): Error, HashMap, exe_path(), PathBuf, Result, String, backup_path(), capture_backup() (+15 more)
 
-### Community 57 - "Community 57"
-Cohesion: 0.14
-Nodes (16): ClientMsg, send_hello(), send_line(), set_ws_timeout(), SignalConnection, ws_to_io(), MaybeTlsStream, Duration (+8 more)
+### Community 59 - "Community 59"
+Cohesion: 0.12
+Nodes (18): Clone, CmdTx, normalize_signal_endpoint(), normalize_tcp_addr(), ShareService, signal_endpoints(), AtomicBool, BackendHandle (+10 more)
 
-### Community 58 - "Community 58"
+### Community 60 - "Community 60"
+Cohesion: 0.20
+Nodes (20): build_presence(), configure_updates_auth_state_synchronously(), direct_accept_or_reject_requires_signed_owner_presence(), dropping_probe_clone_does_not_stop_owner_service(), local_direct_request_requires_own_direct_secret(), nonce_cache_detects_replay(), presence_binds_node_id_and_relay_url(), publish_all() (+12 more)
+
+### Community 61 - "Community 61"
 Cohesion: 0.15
 Nodes (15): AgentBackend, AgentReadStream, AgentWriteStream, Arc, Box, Drop, Frame, Mux (+7 more)
 
-### Community 59 - "Community 59"
+### Community 62 - "Community 62"
 Cohesion: 0.20
 Nodes (23): download_to_temp(), Backend, Result, Backend, FilterDef, Instant, Option, Path (+15 more)
 
-### Community 60 - "Community 60"
+### Community 63 - "Community 63"
 Cohesion: 0.12
 Nodes (20): CopyMode, CopyOptions, CopyProgress, FileEntry, FilterDef, Range, Range<T>, ScanProgress (+12 more)
 
-### Community 61 - "Community 61"
+### Community 64 - "Community 64"
 Cohesion: 0.17
 Nodes (21): AtomicBool, Backend, Baseline, CompareMode, GlobSet, Option, Result, Self (+13 more)
 
-### Community 62 - "Community 62"
+### Community 65 - "Community 65"
 Cohesion: 0.23
 Nodes (23): Arc, AtomicBool, BackendHandle, HashSet, Option, PathBuf, Receiver, ScanHandle (+15 more)
 
-### Community 63 - "Community 63"
-Cohesion: 0.23
-Nodes (21): add_peer(), add_remote(), add_room(), build_saved_connection(), default_home(), normalize_root(), normalize_share_root(), optional_trim() (+13 more)
+### Community 66 - "Community 66"
+Cohesion: 0.19
+Nodes (14): ClientMsg, send_hello(), send_line(), SignalConnection, worker(), ws_to_io(), Error, Result (+6 more)
 
-### Community 64 - "Community 64"
-Cohesion: 0.17
-Nodes (16): App, copy_fraction(), rate_text(), transfer_detail(), ui_copy_chip(), ui_progress_chip(), ui_sync_chip(), ui_transfer_chip() (+8 more)
-
-### Community 65 - "Community 65"
+### Community 67 - "Community 67"
 Cohesion: 0.11
 Nodes (15): gen_id(), glob_set_matches_ignores(), SyncJob, Trigger, BisyncOptions, CompareMode, ConflictMode, DeletePolicy (+7 more)
 
-### Community 66 - "Community 66"
+### Community 68 - "Community 68"
 Cohesion: 0.19
 Nodes (22): BackendHandle, EditProcess, Option, Path, PathBuf, Result, String, cleanup_session_temp() (+14 more)
 
-### Community 67 - "Community 67"
-Cohesion: 0.17
-Nodes (21): SyncJob, HashSet, Option, Path, PathBuf, Receiver, Sender, String (+13 more)
-
-### Community 68 - "Community 68"
+### Community 69 - "Community 69"
 Cohesion: 0.23
 Nodes (22): Arc, AtomicBool, AtomicU64, FileEntry, Instant, Mutex, Option, walk_parallel() (+14 more)
 
-### Community 69 - "Community 69"
+### Community 70 - "Community 70"
 Cohesion: 0.24
 Nodes (20): account_shorthand_can_disambiguate_duplicate_labels(), conn(), duplicate_saved_labels_fail_with_candidates(), is_drive_root(), join_under(), non_empty(), norm_root(), normalize_local() (+12 more)
 
-### Community 70 - "Community 70"
+### Community 71 - "Community 71"
 Cohesion: 0.19
 Nodes (16): CompiledFilter, Backend, FileEntry, FilterDef, Option, Self, String, Vec (+8 more)
-
-### Community 71 - "Community 71"
-Cohesion: 0.25
-Nodes (9): App, landing_basename(), LandingTile, BTreeMap, Into, SavedConnection, Self, String (+1 more)
 
 ### Community 72 - "Community 72"
 Cohesion: 0.17
@@ -551,311 +552,311 @@ Nodes (8): App, AccelAct, Context, OmniAction, Rect, Vec, OmniItem, fuzzy_contai
 
 ### Community 73 - "Community 73"
 Cohesion: 0.23
-Nodes (21): Arc, FileCandidate, FnOnce, Mutex, Path, PathBuf, ReclaimItem, ReclaimOptions (+13 more)
+Nodes (21): Option, Path, PathBuf, Result, SavedConnection, String, Vec, app_data_dir() (+13 more)
 
 ### Community 74 - "Community 74"
-Cohesion: 0.23
-Nodes (21): Option, Path, PathBuf, Result, SavedConnection, String, Vec, app_data_dir() (+13 more)
+Cohesion: 0.15
+Nodes (16): Cli, Command, CopyArgs, exec(), ExecArgs, MoveArgs, PathArg, RemoveArgs (+8 more)
 
 ### Community 75 - "Community 75"
 Cohesion: 0.19
 Nodes (19): b64(), b64_decode(), eio(), fill_random(), hex(), hex_decode(), hex_val(), hmac_proof() (+11 more)
 
 ### Community 76 - "Community 76"
-Cohesion: 0.10
-Nodes (12): App, ConnectForm, Option, SavedConnection, String, FileEntry, Option, Receiver (+4 more)
-
-### Community 77 - "Community 77"
 Cohesion: 0.14
 Nodes (15): icon_key(), IconCache, IconKind, IconResult, key_to_kind(), IconWorker, Context, Default (+7 more)
 
-### Community 78 - "Community 78"
-Cohesion: 0.12
-Nodes (16): App, Context, Ui, Color32, HashMap, NaiveDate, Rect, String (+8 more)
-
-### Community 79 - "Community 79"
+### Community 77 - "Community 77"
 Cohesion: 0.22
 Nodes (19): HMENU, HWND, IContextMenu, Drop, Option, to_wide(), Result, String (+11 more)
 
+### Community 78 - "Community 78"
+Cohesion: 0.22
+Nodes (18): FilterDef, PathBuf, Receiver, Self, String, TransferMsg, TransferProgress, Vec (+10 more)
+
+### Community 79 - "Community 79"
+Cohesion: 0.28
+Nodes (20): Backend, Instant, Option, Path, PathBuf, Result, Sender, String (+12 more)
+
 ### Community 80 - "Community 80"
-Cohesion: 0.16
-Nodes (13): Arc, BackendHandle, ExecRequest, ExecResult, Mutex, ShareCmd, ShareStatus, String (+5 more)
+Cohesion: 0.18
+Nodes (11): Backend, Box, Read, Scheme, Self, Send, VfsMeta, VfsResult (+3 more)
 
 ### Community 81 - "Community 81"
-Cohesion: 0.16
-Nodes (16): Cli, Command, CopyArgs, exec(), ExecArgs, MoveArgs, PathArg, RemoveArgs (+8 more)
-
-### Community 82 - "Community 82"
 Cohesion: 0.15
 Nodes (11): App, append_reclaim_journal(), reclaim_items(), BackendHandle, Option, ReclaimItem, ReclaimOptions, ReclaimReport (+3 more)
 
-### Community 83 - "Community 83"
+### Community 82 - "Community 82"
 Cohesion: 0.22
 Nodes (12): account_and_target_formats(), AuthKind, parse(), Protocol, sample_pw(), sanitize(), SavedConnection, serialize() (+4 more)
 
-### Community 84 - "Community 84"
-Cohesion: 0.22
-Nodes (19): DuplicateGroup, FileCandidate, Option, Path, PathBuf, ReclaimOptions, ReclaimProgress, Result (+11 more)
-
-### Community 85 - "Community 85"
-Cohesion: 0.13
-Nodes (8): BackendHandle, OpenMode, Option, String, Vec, file_mtime_ms(), App, should_cleanup_missing_temp()
-
-### Community 86 - "Community 86"
+### Community 83 - "Community 83"
 Cohesion: 0.25
 Nodes (19): Action, AtomicBool, Backend, Baseline, BisyncOptions, BisyncStats, Conflict, Option (+11 more)
 
-### Community 87 - "Community 87"
-Cohesion: 0.19
-Nodes (10): Backend, Box, Read, Scheme, Self, Send, VfsMeta, VfsResult (+2 more)
-
-### Community 88 - "Community 88"
+### Community 84 - "Community 84"
 Cohesion: 0.19
 Nodes (17): drive_err(), drive_request(), err(), is_rate_limited(), not_found(), open_stream(), parse_json(), send_retry() (+9 more)
 
-### Community 89 - "Community 89"
-Cohesion: 0.14
-Nodes (13): App, Option, PathBuf, Self, FolderIndex, PathBuf, Self, appdata_file() (+5 more)
-
-### Community 90 - "Community 90"
+### Community 85 - "Community 85"
 Cohesion: 0.22
 Nodes (18): argv_execution_returns_status_and_stdout(), command_for(), exec_is_denied_by_default(), output_is_truncated_but_command_completes(), read_limited(), req(), run(), shell_command() (+10 more)
 
-### Community 91 - "Community 91"
+### Community 86 - "Community 86"
 Cohesion: 0.22
 Nodes (11): direct_secret_account(), IdentityDisk, load_iroh_secret(), ShareIdentity, store_new_iroh_secret(), Option, Result, Self (+3 more)
 
-### Community 92 - "Community 92"
+### Community 87 - "Community 87"
 Cohesion: 0.13
 Nodes (15): hm_to_min(), JobEditor, min_to_hm(), App, CompareMode, ConflictMode, DeletePolicy, Direction (+7 more)
 
-### Community 93 - "Community 93"
+### Community 88 - "Community 88"
 Cohesion: 0.23
 Nodes (18): assemble(), assemble_rows(), Choice, choices_assemble_correctly(), diff(), Hunk, identical_is_one_equal_hunk(), middle_change_splits_into_three() (+10 more)
 
-### Community 94 - "Community 94"
+### Community 89 - "Community 89"
+Cohesion: 0.17
+Nodes (9): App, picker_child_path(), Context, Option, PickerState, SavedConnection, String, PickerPurpose (+1 more)
+
+### Community 90 - "Community 90"
 Cohesion: 0.17
 Nodes (11): DriveWriter, GDriveBackend, open_writer(), Box, Drop, Result, Send, String (+3 more)
 
-### Community 95 - "Community 95"
+### Community 91 - "Community 91"
 Cohesion: 0.20
 Nodes (15): FILE_FLAGS_AND_ATTRIBUTES, HICON, IconKind, IconResult, Option, Receiver, Self, Sender (+7 more)
 
-### Community 96 - "Community 96"
+### Community 92 - "Community 92"
 Cohesion: 0.17
 Nodes (15): Drop, Duration, ExitStatus, Option, Result, String, Vec, acquire_daemon_instance_guard() (+7 more)
 
-### Community 97 - "Community 97"
+### Community 93 - "Community 93"
 Cohesion: 0.23
 Nodes (17): Duration, Option, Path, PathBuf, Result, String, Vec, clear_daemon_runtime_markers() (+9 more)
 
-### Community 98 - "Community 98"
-Cohesion: 0.15
-Nodes (14): compare_entries(), format_bytes(), format_date(), natural_compare(), landing_time_secs(), App, SummaryData, Ui (+6 more)
-
-### Community 99 - "Community 99"
+### Community 94 - "Community 94"
 Cohesion: 0.24
 Nodes (12): make_out_channel(), Mux, route_frame(), AtomicU64, Frame, Option, Receiver, Result (+4 more)
 
-### Community 100 - "Community 100"
+### Community 95 - "Community 95"
 Cohesion: 0.25
 Nodes (10): GDriveBackend, Arc, HashMap, HashSet, Mutex, MutexGuard, Result, Self (+2 more)
 
-### Community 101 - "Community 101"
+### Community 96 - "Community 96"
 Cohesion: 0.17
 Nodes (17): AccelAct, app_data_file(), BisyncCtx, default_device_name(), load_share_server(), omni_is_path(), omni_mode(), OmniAction (+9 more)
 
-### Community 102 - "Community 102"
-Cohesion: 0.16
-Nodes (4): sel_key_path(), Option, String, App
+### Community 97 - "Community 97"
+Cohesion: 0.27
+Nodes (15): Error, Into, Option, Path, PathBuf, Result, Self, String (+7 more)
 
-### Community 103 - "Community 103"
+### Community 98 - "Community 98"
+Cohesion: 0.22
+Nodes (17): HashSet, Option, Path, PathBuf, Receiver, Sender, String, SyncJob (+9 more)
+
+### Community 99 - "Community 99"
 Cohesion: 0.13
 Nodes (5): AgentBackend, Arc, Backend, Scheme, String
 
-### Community 104 - "Community 104"
+### Community 100 - "Community 100"
+Cohesion: 0.36
+Nodes (17): presence_payload(), verify_hmac(), fingerprint_matches(), handle_server_msg(), remember_nonce(), send_direct_answer(), verify_direct_access_accepted(), verify_direct_access_accepted_using() (+9 more)
+
+### Community 101 - "Community 101"
 Cohesion: 0.18
 Nodes (13): AgentArtifact, artifact_for(), deploy_over_sftp(), remove_from_sftp(), sh_quote(), sha256_hex(), artifact_selection_and_quoting(), AgentBackend (+5 more)
 
-### Community 105 - "Community 105"
+### Community 102 - "Community 102"
 Cohesion: 0.21
 Nodes (16): plan(), sig_eq(), sig_mtime(), sig_size(), update_baseline(), Action, Baseline, BisyncOptions (+8 more)
 
-### Community 106 - "Community 106"
+### Community 103 - "Community 103"
 Cohesion: 0.26
 Nodes (15): App, select_items(), selected_bytes(), ui_empty(), ui_item(), ui_items(), ui_section(), Context (+7 more)
 
-### Community 107 - "Community 107"
+### Community 104 - "Community 104"
 Cohesion: 0.17
 Nodes (14): Connected, ConnectForm, ConnectResult, RemoteState, Arc, BackendHandle, Default, NetConnection (+6 more)
 
-### Community 108 - "Community 108"
+### Community 105 - "Community 105"
 Cohesion: 0.17
 Nodes (4): App, cache_remote(), Context, String
 
-### Community 109 - "Community 109"
+### Community 106 - "Community 106"
 Cohesion: 0.19
 Nodes (6): App, BackendHandle, Option, SizeNode, String, Vec
 
-### Community 110 - "Community 110"
+### Community 107 - "Community 107"
 Cohesion: 0.32
 Nodes (15): copy_file_checked(), is_newer(), parse_sha256_file(), parse_ver(), replace_file_with_staged(), sha256_file(), staged_payload_path(), staged_sha256_from_path() (+7 more)
 
-### Community 111 - "Community 111"
-Cohesion: 0.23
-Nodes (14): landing_sync_meta(), landing_tile(), landing_tile_grid(), LandingAction, paint_landing_text(), ui_landing_section(), FontId, JobResult (+6 more)
-
-### Community 112 - "Community 112"
+### Community 108 - "Community 108"
 Cohesion: 0.29
 Nodes (7): GDriveBackend, meta_from_json_requires_a_usable_name(), Option, String, Value, VfsMeta, VfsResult
 
-### Community 113 - "Community 113"
+### Community 109 - "Community 109"
 Cohesion: 0.17
 Nodes (8): FolderIndex, IndexMsg, Default, HashSet, Item, Iterator, Self, String
 
-### Community 114 - "Community 114"
-Cohesion: 0.17
-Nodes (4): App, SavedConnection, String, settings_path()
-
-### Community 115 - "Community 115"
-Cohesion: 0.16
-Nodes (13): Duration, Path, String, SystemTime, T, Vec, hex_lower(), join_path() (+5 more)
-
-### Community 116 - "Community 116"
+### Community 110 - "Community 110"
 Cohesion: 0.24
 Nodes (14): HashMap, PathBuf, ReclaimItem, ReclaimReport, String, Vec, changed_duplicate_is_skipped_before_trash(), dedupe_nested_paths() (+6 more)
 
-### Community 117 - "Community 117"
+### Community 111 - "Community 111"
 Cohesion: 0.25
 Nodes (9): BackendHandle, Context, FilterDef, Option, Pos2, String, Vec, App (+1 more)
 
-### Community 118 - "Community 118"
+### Community 112 - "Community 112"
+Cohesion: 0.17
+Nodes (13): Color32, HashMap, NaiveDate, Rect, String, Ui, ClipboardEffect, ClipboardVirtualFile (+5 more)
+
+### Community 113 - "Community 113"
 Cohesion: 0.19
 Nodes (9): connect_rejects_non_unc(), connect_unsupported_off_windows(), is_unc(), NetConnection, share_root(), Drop, Option, Result (+1 more)
 
-### Community 119 - "Community 119"
-Cohesion: 0.14
-Nodes (5): App, Context, EditProcess, OpenMode, Option
+### Community 114 - "Community 114"
+Cohesion: 0.29
+Nodes (13): copy_fraction(), rate_text(), transfer_detail(), ui_copy_chip(), ui_progress_chip(), ui_sync_chip(), ui_transfer_chip(), CopyProgress (+5 more)
 
-### Community 120 - "Community 120"
-Cohesion: 0.34
-Nodes (14): Arc, AtomicBool, BackendHandle, FileEntry, Instant, ScanMessage, Sender, String (+6 more)
+### Community 115 - "Community 115"
+Cohesion: 0.28
+Nodes (14): PathBuf, Result, String, autostart_dir(), daemon_exe(), daemon_exe_for(), desktop_file_path(), disable() (+6 more)
 
-### Community 121 - "Community 121"
+### Community 116 - "Community 116"
 Cohesion: 0.14
 Nodes (14): TabState, Arc, Default, FileEntry, FilterDef, HashSet, NaiveDate, NetConnection (+6 more)
 
-### Community 122 - "Community 122"
+### Community 117 - "Community 117"
 Cohesion: 0.19
 Nodes (4): Path, Vec, VfsMeta, VfsResult
 
-### Community 123 - "Community 123"
+### Community 118 - "Community 118"
 Cohesion: 0.25
 Nodes (13): Backend, ChangeKind, HashHit, Scheme, SearchHit, VfsChange, VfsChangeBatch, VfsMeta (+5 more)
 
-### Community 125 - "Community 125"
+### Community 120 - "Community 120"
 Cohesion: 0.22
 Nodes (8): copy_file_default_impl_streams(), fwd(), local_list_and_stat(), local_read_write_copy_rename_remove(), temp_dir(), Path, PathBuf, String
 
-### Community 126 - "Community 126"
+### Community 121 - "Community 121"
 Cohesion: 0.16
 Nodes (11): acquire_daemon_instance_guard(), DaemonInstanceGuard, DriveInfo, removable_drives(), run_shell_command(), Duration, ExitStatus, Option (+3 more)
 
-### Community 127 - "Community 127"
-Cohesion: 0.31
-Nodes (11): Option, Path, CleanupDecision, dir_cleanup_by_name(), dir_cleanup_reason(), file_cleanup_reason(), git_is_never_auto(), has_build_context() (+3 more)
+### Community 122 - "Community 122"
+Cohesion: 0.15
+Nodes (12): Instant, Sender, TransferMsg, TransferProgress, Backend, FilterDef, Option, Sender (+4 more)
 
-### Community 128 - "Community 128"
+### Community 123 - "Community 123"
 Cohesion: 0.22
 Nodes (11): Option, Receiver, Result, String, Vec, ServiceDaemon, hostname_local(), pretty_name() (+3 more)
 
-### Community 129 - "Community 129"
+### Community 124 - "Community 124"
 Cohesion: 0.15
 Nodes (11): App, count_subtree(), nested_treemap(), Context, SizeNode, Color32, Option, Rect (+3 more)
 
-### Community 130 - "Community 130"
+### Community 125 - "Community 125"
+Cohesion: 0.17
+Nodes (5): App, ConnectForm, Option, SavedConnection, String
+
+### Community 126 - "Community 126"
+Cohesion: 0.18
+Nodes (8): App, Option, PathBuf, Self, PathBuf, dirs_home(), favorites_path(), settings_path()
+
+### Community 127 - "Community 127"
+Cohesion: 0.22
+Nodes (3): App, SavedConnection, String
+
+### Community 128 - "Community 128"
 Cohesion: 0.21
 Nodes (4): local_min_of_day(), SyncJob, within_window(), Option
 
-### Community 131 - "Community 131"
+### Community 129 - "Community 129"
 Cohesion: 0.23
 Nodes (10): backend_from_url(), parse_sftp_url(), SftpUrl, url_defaults(), url_full(), url_without_password_needs_dialog(), Option, Result (+2 more)
 
-### Community 132 - "Community 132"
-Cohesion: 0.32
-Nodes (12): PathBuf, Result, String, autostart_dir(), daemon_exe(), daemon_exe_for(), desktop_file_path(), disable() (+4 more)
+### Community 130 - "Community 130"
+Cohesion: 0.24
+Nodes (11): exe_path(), PathBuf, Result, String, daemon_exe(), daemon_exe_for(), disable(), enable() (+3 more)
 
-### Community 133 - "Community 133"
-Cohesion: 0.21
-Nodes (13): Instant, PeerPresence, RoomProfile, ShareEvent, ShareIdentity, ShareProfiles, ShareService, Vec (+5 more)
-
-### Community 134 - "Community 134"
+### Community 131 - "Community 131"
 Cohesion: 0.21
 Nodes (7): empty_progress(), TransferKind, TransferProgress, Into, ScanProgress, Self, String
 
-### Community 135 - "Community 135"
+### Community 132 - "Community 132"
 Cohesion: 0.18
 Nodes (9): ClipKey, PickerPurpose, PickerState, BackendHandle, ConnectResult, Option, Receiver, String (+1 more)
 
-### Community 136 - "Community 136"
+### Community 133 - "Community 133"
 Cohesion: 0.36
 Nodes (11): Backend, Option, Path, PathBuf, Result, String, cleanup_partial(), download_part_path() (+3 more)
 
-### Community 137 - "Community 137"
-Cohesion: 0.26
-Nodes (10): exe_path(), PathBuf, Result, String, daemon_exe(), daemon_exe_for(), disable(), enable() (+2 more)
-
-### Community 138 - "Community 138"
+### Community 134 - "Community 134"
 Cohesion: 0.33
 Nodes (11): Option, PathBuf, Result, String, appdata_dir(), last_applied_path(), override_path(), set_update_source() (+3 more)
 
-### Community 139 - "Community 139"
+### Community 135 - "Community 135"
+Cohesion: 0.27
+Nodes (7): export_ext(), export_format(), Option, Box, Read, Send, Write
+
+### Community 136 - "Community 136"
 Cohesion: 0.22
 Nodes (10): AnalyticsPanel, AppErrorEntry, KbdAct, SummaryData, TmCell, TransferMsg, Color32, Rect (+2 more)
 
-### Community 140 - "Community 140"
+### Community 137 - "Community 137"
 Cohesion: 0.31
 Nodes (7): BackendHandle, Box, Read, Result, Self, Send, Write
 
-### Community 141 - "Community 141"
+### Community 138 - "Community 138"
 Cohesion: 0.25
 Nodes (8): GDriveBackend, parse_changes_value(), parses_upsert_and_removed_changes(), trashed_file_is_a_remove(), String, Value, VfsChangeBatch, VfsResult
 
-### Community 142 - "Community 142"
+### Community 139 - "Community 139"
 Cohesion: 0.20
 Nodes (7): FolderIndex, fuzzy_score(), basic(), s(), Option, String, Vec
 
-### Community 143 - "Community 143"
+### Community 140 - "Community 140"
 Cohesion: 0.18
 Nodes (6): expand_omni_path(), download_part_is_sibling_not_final(), path_expansion(), remote_temp_path_stays_sibling(), treemap_areas_proportional(), Path
 
-### Community 144 - "Community 144"
+### Community 141 - "Community 141"
 Cohesion: 0.20
 Nodes (10): ClientMsg, Ctrl, FsMeta, FsRequest, FsResponse, PeerHello, SrvMsg, Option (+2 more)
 
-### Community 145 - "Community 145"
+### Community 142 - "Community 142"
+Cohesion: 0.24
+Nodes (7): format_bytes(), format_date(), App, SummaryData, Ui, Ui, String
+
+### Community 143 - "Community 143"
 Cohesion: 0.33
 Nodes (4): App, Context, String, Ui
 
-### Community 146 - "Community 146"
+### Community 144 - "Community 144"
 Cohesion: 0.27
 Nodes (7): cloud_urlenc(), norm(), norm_and_split(), parse_rfc3339_ms(), split_parent(), Option, String
 
-### Community 147 - "Community 147"
+### Community 145 - "Community 145"
 Cohesion: 0.36
 Nodes (6): AgentBackend, send_subtree(), Frame, Mux, Path, Result
 
-### Community 149 - "Community 149"
+### Community 147 - "Community 147"
 Cohesion: 0.22
 Nodes (6): IconKind, IconResult, Self, String, Vec, IconWorker
 
-### Community 150 - "Community 150"
+### Community 148 - "Community 148"
+Cohesion: 0.25
+Nodes (6): FolderIndex, Self, appdata_file(), folder_index_path(), load_folder_index_or_empty(), UiState
+
+### Community 149 - "Community 149"
 Cohesion: 0.31
 Nodes (8): Error, Option, to_wide(), Result, Vec, connect_impl(), disconnect_impl(), wnet_error()
 
-### Community 151 - "Community 151"
+### Community 150 - "Community 150"
 Cohesion: 0.29
 Nodes (8): AnalyticsScan, ReclaimScan, Instant, Receiver, ReclaimProgress, ReclaimReport, SizeNode, Progress
+
+### Community 152 - "Community 152"
+Cohesion: 0.25
+Nodes (7): FileEntry, Option, Receiver, ScanMessage, ScanProgress, Vec, drain_scan_channel()
 
 ### Community 153 - "Community 153"
 Cohesion: 0.43
@@ -866,8 +867,8 @@ Cohesion: 0.32
 Nodes (4): App, fmt_ms(), Context, Ui
 
 ### Community 155 - "Community 155"
-Cohesion: 0.29
-Nodes (7): Backend, FilterDef, Option, Sender, String, TransferMsg, copy_remote_paths_progress()
+Cohesion: 0.32
+Nodes (3): App, Context, Into
 
 ### Community 156 - "Community 156"
 Cohesion: 0.29
@@ -886,20 +887,20 @@ Cohesion: 0.29
 Nodes (5): Fn, Mux, Option, Sync, WireNode
 
 ### Community 160 - "Community 160"
+Cohesion: 0.43
+Nodes (6): compare_entries(), natural_compare(), FileEntry, SortDir, SortKey, Ordering
+
+### Community 161 - "Community 161"
 Cohesion: 0.29
 Nodes (6): App, accel_key(), omni_up_levels(), Key, Context, Option
 
-### Community 161 - "Community 161"
+### Community 162 - "Community 162"
 Cohesion: 0.38
 Nodes (7): draw_accel_badge(), squarify_sorted(), squarify_worst(), treemap_layout(), Rect, Vec, Painter
 
-### Community 162 - "Community 162"
+### Community 163 - "Community 163"
 Cohesion: 0.38
 Nodes (6): Frame, SearchSpec, WireMeta, WireNode, String, Vec
-
-### Community 163 - "Community 163"
-Cohesion: 0.29
-Nodes (4): PathBuf, String, Vec, App
 
 ### Community 164 - "Community 164"
 Cohesion: 0.43
@@ -939,7 +940,7 @@ Nodes (4): ext_of(), ms_since_unix(), String, SystemTime
 
 ### Community 173 - "Community 173"
 Cohesion: 0.40
-Nodes (3): Context, is_zip_name(), App
+Nodes (3): App, Context, Ui
 
 ### Community 174 - "Community 174"
 Cohesion: 0.40
@@ -965,29 +966,33 @@ Nodes (3): wire_to_vfs(), VfsMeta, WireMeta
 Cohesion: 0.50
 Nodes (3): ensure_firewall_rule(), Result, String
 
-### Community 188 - "Community 188"
+### Community 181 - "Community 181"
+Cohesion: 0.50
+Nodes (3): String, Vec, lan_ips()
+
+### Community 189 - "Community 189"
 Cohesion: 0.67
 Nodes (3): E, Error, eio()
 
 ## Knowledge Gaps
-- **789 isolated node(s):** `Arc`, `Result`, `Self`, `Backend`, `Scheme` (+784 more)
+- **790 isolated node(s):** `Arc`, `Result`, `Self`, `Backend`, `Scheme` (+785 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **16 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Ordering` connect `Community 98` to `Community 73`, `Community 84`, `Community 6`, `Community 159`?**
+- **Why does `Ordering` connect `Community 160` to `Community 3`, `Community 7`, `Community 159`?**
   _High betweenness centrality (0.026) - this node is a cross-community bridge._
-- **Why does `sel_key_path()` connect `Community 102` to `Community 98`, `Community 163`, `Community 173`, `Community 119`, `Community 60`?**
-  _High betweenness centrality (0.025) - this node is a cross-community bridge._
-- **Why does `download_remote_clipboard_items()` connect `Community 59` to `Community 66`, `Community 163`, `Community 13`, `Community 70`?**
-  _High betweenness centrality (0.019) - this node is a cross-community bridge._
+- **Why does `sel_key_path()` connect `Community 6` to `Community 10`, `Community 55`, `Community 142`, `Community 63`?**
+  _High betweenness centrality (0.020) - this node is a cross-community bridge._
 - **Are the 5 inferred relationships involving `try_incremental_mirror()` (e.g. with `apply_with_results()` and `baseline_path()`) actually correct?**
   _`try_incremental_mirror()` has 5 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Arc`, `Result`, `Self` to the rest of the system?**
-  _789 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _790 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.056731984829329965 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
+  _Cohesion score 0.050286058416139714 - nodes in this community are weakly interconnected._
+- **Should `Community 2` be split into smaller, more focused modules?**
   _Cohesion score 0.025 - nodes in this community are weakly interconnected._
