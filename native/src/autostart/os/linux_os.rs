@@ -30,7 +30,12 @@ fn daemon_exe_for(exe: PathBuf) -> PathBuf {
     if name != "se" {
         return exe;
     }
-    exe.with_file_name("smart_explorer")
+    let sibling = exe.with_file_name("smart_explorer");
+    if sibling.exists() {
+        sibling
+    } else {
+        exe
+    }
 }
 
 fn daemon_exe() -> io::Result<PathBuf> {
@@ -63,5 +68,47 @@ pub fn disable() -> io::Result<()> {
 pub fn spawn_daemon_now() {
     if let Ok(exe) = daemon_exe() {
         let _ = std::process::Command::new(exe).arg("--sync-daemon").spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn se_uses_sibling_gui_executable_for_daemon() {
+        let dir = std::env::temp_dir().join(format!(
+            "smart_explorer_autostart_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let gui = dir.join("smart_explorer");
+        std::fs::write(&gui, b"").unwrap();
+
+        let resolved = super::daemon_exe_for(dir.join("se"));
+        assert_eq!(resolved, gui);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn se_falls_back_to_itself_when_gui_executable_is_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "smart_explorer_autostart_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let se = dir.join("se");
+
+        let resolved = super::daemon_exe_for(se.clone());
+        assert_eq!(resolved, se);
+
+        std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -38,7 +38,7 @@ Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
 example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
 speichert eine UNC-Verbindung, `se connections add-peer --code SE-D3-... --name
-Laptop` sendet die normale Freigabeanfrage, und `se connections add-room --code
+Laptop` reiht die normale Freigabeanfrage ueber den Share-Worker ein, und `se connections add-room --code
 SE-R3-... --name Team` tritt einem Raum bei.
 
 ---
@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.118.exe`](release-native/Smart%20Explorer%20Setup%200.5.118.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.119.exe`](release-native/Smart%20Explorer%20Setup%200.5.119.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer

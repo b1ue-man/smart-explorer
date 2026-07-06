@@ -6,11 +6,31 @@ mod target;
 use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 
+const CLI_HELP: &str = "\
+Smart Explorer terminal access to the same saved remotes, Share peers, keyring
+secrets, and background worker used by the GUI.
+
+Targets:
+  @label:/path               saved connection shorthand
+  sftp://host/path           full endpoint
+  webdav://host/path         full endpoint
+  share://direct/id/path     Smart Explorer peer endpoint
+  C:\\local\\path or ./path   local filesystem path
+
+Examples:
+  se connections list
+  se connections add-peer --code SE-D3-... --name Laptop
+  se ls @prod:/srv
+  se get @prod:/srv/report.txt .\\report.txt
+  se cp -r @prod:/exports share://direct/peer-id/Drop
+  se exec share://direct/peer-id -- powershell -NoProfile -Command hostname";
+
 #[derive(Parser)]
 #[command(
     name = "se",
     version,
-    about = "Smart Explorer terminal remote operations"
+    about = "Smart Explorer terminal remote operations",
+    long_about = CLI_HELP
 )]
 #[command(propagate_version = true)]
 struct Cli {
@@ -20,78 +40,110 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "Manage saved remotes and Share contacts")]
     Connections(connections::ConnectionsArgs),
+    #[command(about = "List a directory")]
     Ls(PathArg),
+    #[command(about = "Show file or directory metadata")]
     Stat(PathArg),
+    #[command(about = "Print a remote or local file")]
     Cat(PathArg),
+    #[command(about = "Download from remote to local")]
     Get(CopyArgs),
+    #[command(about = "Upload from local to remote")]
     Put(CopyArgs),
+    #[command(about = "Copy between local, saved, endpoint, or Share targets")]
     Cp(CopyArgs),
+    #[command(about = "Move or rename between targets")]
     Mv(MoveArgs),
+    #[command(about = "Remove a file or directory")]
     Rm(RemoveArgs),
+    #[command(about = "Create a directory")]
     Mkdir(PathArg),
+    #[command(about = "Search names below a target")]
     Search(SearchArgs),
+    #[command(about = "Run a command on an allowed Smart Explorer Share peer")]
     Exec(ExecArgs),
 }
 
 #[derive(Args)]
 struct PathArg {
+    #[arg(help = "Target path, endpoint, or @label:/path shorthand")]
     target: String,
 }
 
 #[derive(Args)]
 struct CopyArgs {
+    #[arg(help = "Source target")]
     src: String,
+    #[arg(help = "Destination target")]
     dst: String,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Allow directory copy")]
     recursive: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
 }
 
 #[derive(Args)]
 struct MoveArgs {
+    #[arg(help = "Source target")]
     src: String,
+    #[arg(help = "Destination target")]
     dst: String,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Allow moving directories recursively")]
     recursive: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
 }
 
 #[derive(Args)]
 struct RemoveArgs {
+    #[arg(help = "Target to remove")]
     target: String,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Allow directory delete")]
     recursive: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Required for destructive delete")]
     force: bool,
 }
 
 #[derive(Args)]
 struct SearchArgs {
+    #[arg(help = "Directory target to search below")]
     target: String,
+    #[arg(help = "Search text or glob pattern")]
     query: String,
-    #[arg(long)]
+    #[arg(long, help = "Treat query as a glob pattern")]
     glob: bool,
-    #[arg(long, default_value_t = 0)]
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Maximum result count; 0 means unlimited"
+    )]
     max_results: u64,
-    #[arg(long)]
+    #[arg(long, help = "Return matching directories instead of files")]
     dirs: bool,
 }
 
 #[derive(Args)]
 struct ExecArgs {
+    #[arg(help = "Share peer endpoint, such as share://direct/id")]
     target: String,
-    #[arg(long)]
+    #[arg(long, help = "Remote working directory")]
     cwd: Option<String>,
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = 30, help = "Remote timeout in seconds")]
     timeout: u64,
-    #[arg(long, default_value_t = 1024 * 1024)]
+    #[arg(long, default_value_t = 1024 * 1024, help = "Maximum stdout/stderr bytes returned")]
     max_output: u64,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Run a shell command; remote peer must allow shell execution"
+    )]
     shell: Option<String>,
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Program and arguments after --"
+    )]
     argv: Vec<String>,
 }
 
@@ -185,7 +237,7 @@ fn exec(args: ExecArgs) -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::Cli;
 
@@ -235,5 +287,13 @@ mod tests {
             }
             _ => panic!("wrong command"),
         }
+    }
+
+    #[test]
+    fn top_level_help_shows_targets_and_setup_examples() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("@label:/path"));
+        assert!(help.contains("se connections add-peer"));
+        assert!(help.contains("share://direct/id/path"));
     }
 }

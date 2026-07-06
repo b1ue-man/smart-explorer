@@ -14,7 +14,7 @@ fn daemon_exe_for(exe: std::path::PathBuf) -> std::path::PathBuf {
             return sibling;
         }
     }
-    exe.with_file_name("smart_explorer.exe")
+    exe
 }
 
 fn daemon_exe() -> std::io::Result<std::path::PathBuf> {
@@ -91,6 +91,25 @@ mod tests {
 
         let resolved = super::daemon_exe_for(dir.join("se.exe"));
         assert_eq!(resolved, gui);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn se_falls_back_to_itself_when_gui_executable_is_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "smart_explorer_autostart_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let se = dir.join("se.exe");
+
+        let resolved = super::daemon_exe_for(se.clone());
+        assert_eq!(resolved, se);
 
         std::fs::remove_dir_all(dir).ok();
     }

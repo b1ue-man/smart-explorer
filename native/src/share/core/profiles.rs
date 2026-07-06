@@ -122,6 +122,15 @@ impl ShareProfiles {
         Ok(id)
     }
 
+    pub fn direct_contact_id_from_code(&self, code: &str) -> Result<Option<String>, String> {
+        let parsed = DirectCode::parse(code)?;
+        Ok(self
+            .direct_contacts
+            .iter()
+            .find(|c| c.lookup_id == parsed.lookup_id)
+            .map(|c| c.id.clone()))
+    }
+
     pub fn grant_for(&self, device_id: &str) -> Option<&DirectGrant> {
         self.direct_grants.iter().find(|g| g.device_id == device_id)
     }

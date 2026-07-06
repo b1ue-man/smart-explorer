@@ -2,7 +2,41 @@ use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
 use super::setup;
 
+const CONNECTIONS_HELP: &str = "\
+Manage the same saved remotes and Smart Explorer Share contacts used by the GUI.
+
+Examples:
+  se connections list
+  se connections add sftp --host example.com --user alice --root /srv --label prod --password-stdin
+  se connections add webdav --host cloud.example.com --user alice --root /remote.php/dav/files/alice --label cloud --password-stdin
+  se connections add share --root \"\\\\server\\share\" --label nas
+  se connections add-peer --code SE-D3-... --name Laptop
+  se connections add-room --code SE-R1-... --name Team
+
+Peer and room setup saves to Smart Explorer's normal profile store, then wakes the
+same background share worker the GUI uses. The other client still confirms the
+request in its normal Smart Explorer UI.";
+
+const ADD_HELP: &str = "\
+Save a configured remote connection in Smart Explorer's normal connection store.
+
+Targets can then use @label:/path shorthand, for example:
+  se ls @prod:/var/log
+  se get @cloud:/Documents/report.pdf .\\report.pdf";
+
+const ADD_PEER_HELP: &str = "\
+Save a Smart Explorer direct peer from the other client's direct code.
+
+The command is one-sided: paste the code here, and the other Smart Explorer
+client receives the normal confirmation request. Re-running the same command with
+an already-saved code requeues the access request for that existing contact.";
+
+const ADD_ROOM_HELP: &str = "\
+Save a Smart Explorer room from a room invite code and configure the share worker
+to join it using the existing Smart Explorer share profile store.";
+
 #[derive(Args)]
+#[command(about = "Manage saved remotes and Share contacts", long_about = CONNECTIONS_HELP)]
 pub(super) struct ConnectionsArgs {
     #[command(subcommand)]
     command: Command,
@@ -10,12 +44,19 @@ pub(super) struct ConnectionsArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "List saved GUI remotes and Share endpoints")]
     List {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Print machine-readable JSON instead of tab-separated rows"
+        )]
         json: bool,
     },
+    #[command(about = "Save an SFTP/FTP/FTPS/WebDAV/UNC remote", long_about = ADD_HELP)]
     Add(ConnectionAddArgs),
+    #[command(about = "Add or requeue a direct Smart Explorer peer", long_about = ADD_PEER_HELP)]
     AddPeer(PeerAddArgs),
+    #[command(about = "Add a Smart Explorer share room", long_about = ADD_ROOM_HELP)]
     AddRoom(RoomAddArgs),
 }
 
@@ -42,43 +83,70 @@ impl ConnectionProtocolArg {
 
 #[derive(Args)]
 struct ConnectionAddArgs {
-    #[arg(value_enum)]
+    #[arg(value_enum, help = "Remote kind: sftp, ftp, ftps, webdav, or share")]
     protocol: ConnectionProtocolArg,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Remote host; optional for share when --root is a UNC path"
+    )]
     host: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Remote port; defaults to the protocol's standard port")]
     port: Option<u16>,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Login user or DOMAIN\\user for UNC shares"
+    )]
     user: String,
-    #[arg(long, default_value = "/")]
+    #[arg(
+        long,
+        default_value = "/",
+        help = "Remote start path, WebDAV path, or UNC path for share"
+    )]
     root: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Saved connection label used by @label:/path"
+    )]
     label: String,
-    #[arg(long)]
+    #[arg(long, help = "SFTP private key path")]
     key: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Use the local SSH agent for SFTP")]
     agent: bool,
-    #[arg(long, conflicts_with = "password_stdin")]
+    #[arg(
+        long,
+        conflicts_with = "password_stdin",
+        help = "Password or token to store in the existing Smart Explorer keyring entry"
+    )]
     password: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Read the password or token from stdin")]
     password_stdin: bool,
 }
 
 #[derive(Args)]
 struct PeerAddArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Direct peer code copied from the other Smart Explorer client"
+    )]
     code: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Local display name for this peer")]
     name: String,
-    #[arg(long = "no-request", action = ArgAction::SetFalse, default_value_t = true)]
+    #[arg(
+        long = "no-request",
+        action = ArgAction::SetFalse,
+        default_value_t = true,
+        help = "Only save the peer locally; do not wake the share worker now"
+    )]
     request: bool,
 }
 
 #[derive(Args)]
 struct RoomAddArgs {
-    #[arg(long)]
+    #[arg(long, help = "Room invite code copied from Smart Explorer")]
     code: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Local display name for this room")]
     name: String,
 }
 
@@ -251,7 +319,7 @@ fn share_connection_rows_text() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::super::{Cli, Command as RootCommand};
 
@@ -362,5 +430,17 @@ mod tests {
             },
             _ => panic!("wrong command"),
         }
+    }
+
+    #[test]
+    fn connections_help_explains_one_sided_peer_setup() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("connections")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("one-sided"));
+        assert!(help.contains("requeues the access request"));
     }
 }
