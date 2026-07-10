@@ -69,31 +69,32 @@ pub(crate) fn handle_search(
     let mut stack = vec![base.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
-            break;
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "agent search canceled",
+            ));
         }
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for ent in rd.flatten() {
-            let ft = match ent.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+        for ent in std::fs::read_dir(&dir)? {
+            let ent = ent?;
+            let ft = ent.file_type()?;
             if ft.is_symlink() {
                 continue;
             }
             let p = ent.path();
-            let nm = ent.file_name().to_string_lossy().into_owned();
-            let md = ent.metadata().ok();
-            let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
-            let mtime = md
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .map(systemtime_ms)
-                .unwrap_or(0);
+            let nm = ent.file_name().into_string().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "search entry name is not valid UTF-8",
+                )
+            })?;
+            let md = ent.metadata()?;
+            let size = md.len();
+            let mtime = md.modified().ok().map(systemtime_ms).unwrap_or(0);
             if ft.is_dir() {
-                if is_pseudo_dir(&p.to_string_lossy()) {
+                let path = p.to_str().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "search path is not valid UTF-8")
+                })?;
+                if is_pseudo_dir(path) {
                     continue;
                 }
                 stack.push(p.clone());
@@ -101,8 +102,14 @@ pub(crate) fn handle_search(
             if matches_spec(&nm, ft.is_dir(), size, spec) {
                 let rel = p
                     .strip_prefix(base)
-                    .unwrap_or(&p)
-                    .to_string_lossy()
+                    .map_err(|_| io::Error::other("search result escaped its root"))?
+                    .to_str()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "search relative path is not valid UTF-8",
+                        )
+                    })?
                     .replace('\\', "/");
                 emit(
                     sink,

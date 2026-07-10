@@ -20,20 +20,25 @@ Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
 prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
 zurück.
 
-**Teilen / P2P (ab 0.5.23):** Dateien direkt an gekoppelte Geräte oder in **Räume**
-senden — **Ende-zu-Ende-verschlüsselt, direkt zwischen den Geräten**. Der
-mitgelieferte **`se-share-server`** (Linux + Windows, in
-[`release-native/share-server/`](release-native/share-server)) vermittelt nur die
-Verbindung (Discovery), nie die Dateien. Toolbar → **📡 Teilen**; Server in
-Einstellungen → **TEILEN**. Plan: [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
+**Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
+senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und
+versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
+der mitgelieferte **`se-share-server`** (Linux + Windows, in
+[`release-native/share-server/`](release-native/share-server)) verschlüsselte
+Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
+Dateisystemdaten im Klartext. Toolbar → **📡 Teilen**; Server in Einstellungen →
+**TEILEN**. Der frühere Noise/TCP-Entwurf steht historisch in
+[`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 **Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** nutzt dieselben
 gespeicherten Verbindungen, App-Daten, Keyring-Secrets, Share-Profile und den
 Daemon wie die GUI. Beispiele: `se connections list`, `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
-Execution ist in v1 nur fuer Smart-Explorer-Share-Peers verfuegbar und auf der
-empfangenden Seite standardmaessig aus: `se exec share://... -- program args`.
+Execution ist bis zu einer plattformuebergreifend sicheren Prozessbaum-Kapselung
+deaktiviert; `se exec share://... -- program args` bricht deshalb sicher ab.
+Programm- und Shell-Ausfuehrung teilen sich bewusst eine einzige Berechtigung
+fuer vollstaendige Remote-Codeausfuehrung.
 Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
 example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
@@ -69,12 +74,13 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.119.exe`](release-native/Smart%20Explorer%20Setup%200.5.119.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.120.exe`](release-native/Smart%20Explorer%20Setup%200.5.120.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
-   öffnen", installiert `se.exe` fuer Terminal-Operationen — **und stellt Auto-Update auf den Git-Feed ein. Danach musst du nichts
-   konfigurieren, Updates kommen automatisch.**
+   öffnen", installiert `se.exe` fuer Terminal-Operationen — **und stellt die
+   Update-Prüfung auf den Git-Feed ein. Neue Versionen werden automatisch geprüft
+   und sicher bereitgestellt; installiert werden sie erst nach deiner Bestätigung.**
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
@@ -82,10 +88,12 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 ## 🔄 Updates bekommen — *das hier eintragen*
 
-Die App prüft bei **jedem Start** automatisch auf eine neuere Version und
-aktualisiert sich selbst (EXE-Tausch + Neustart). Damit das geht, muss **eine
-Update-Quelle** gesetzt sein. Der **Installer macht das schon** — bei der
-portablen EXE trägst du sie einmal selbst ein:
+Die App prüft bei **jedem Start** automatisch auf eine neuere Version. Sie lädt
+und prüft ein gefundenes Update, ändert aber noch keine installierte Datei. Erst
+„Jetzt neu starten" startet die Installation; „Später" bewahrt das geprüfte
+Staging und fragt beim nächsten Start wieder. Dafür muss **eine Update-Quelle**
+gesetzt sein. Der **Installer macht das schon** — bei der portablen EXE trägst
+du sie einmal selbst ein:
 
 > **App → linke Sidebar → Abschnitt `UPDATE` → in das Textfeld genau das eintragen:**
 >
@@ -94,10 +102,11 @@ portablen EXE trägst du sie einmal selbst ein:
 > ```
 >
 > **→ „Speichern" klicken. Fertig.** Beim nächsten Start (oder „Jetzt prüfen")
-> zieht die App die neueste Version aus dem Git.
+> stellt die App die neueste Version aus dem Git geprüft bereit und fragt vor
+> Installation/Neustart nach.
 
-Das ist alles. (Technisch lädt die App `version.txt` + den OS-passenden Payload
-(`smart_explorer.exe`/`se.exe` auf Windows, `smart_explorer`/`se` auf Linux) aus
+Das ist alles. (Technisch lädt die App `version.txt` plus das OS-passende Trio
+aus App, Update-Helfer und `se` samt SHA-256-Dateien aus
 [`release-native/update-feed/`](release-native/update-feed) über
 `raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
 Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
@@ -108,7 +117,8 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 
 | Doc | Inhalt |
 |---|---|
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Status — **Roadmap vollständig** (Remote-Layer, Cloud/WebDAV, Sync, Win11-Menü) |
+| [`docs/TODO.md`](docs/TODO.md) | Einzige aktuelle Liste für offene bzw. noch real zu validierende Arbeit |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Historische Roadmap-/Status-Erzählung; nicht die aktuelle Release- oder TODO-Quelle |
 | [`docs/REMOTE_LAYER_PLAN.md`](docs/REMOTE_LAYER_PLAN.md) | Verifizierter Implementierungsplan für den Netzwerk-Layer (umgesetzt: `vfs.rs` + `sftp.rs`/`ftp.rs`/`webdav.rs`/`net.rs`/`rscan.rs`/`connect.rs`/`creds.rs`/`sync.rs`) |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | **Release- & Update-Flow von A bis Z** (bauen → Feed → GitHub-Release → Selbst-Update); inkl. „Repo muss public sein" |
 | [`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md) | **Google Drive einrichten** mit deinem eigenen Google-Projekt (OAuth Client-ID) — die App ist kein Dienst |
@@ -122,9 +132,9 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/` | Rust-Quellcode (das aktuelle Programm) |
 | `native/explorer-command/` | Separate COM-DLL (`IExplorerCommand`) für das Win11-Modern-Kontextmenü |
 | `native/installer.nsi` | NSIS-Installer-Skript |
-| `native/publish-release-local.ps1` | Standard-Release auf Windows: Windows-Artefakte bauen, Linux/WSL-Feed aktualisieren, Hashes prüfen |
-| `native/publish-update.ps1` | Windows-Artefakte bauen; nur mit `-AllowPartialFeed` als bewusst partieller Feed |
-| `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen und Feed-Version zuletzt schreiben |
+| `native/publish-release-local.ps1` | Standard-Release auf Windows: Windows + Linux isoliert bauen, vollständig prüfen, Feed atomar promoten |
+| `native/publish-update.ps1` | Windows-only-Bundle; verlangt `-AllowPartialFeed` sowie getrennte, explizite `-Feed`- und `-ReleaseOutput`-Pfade |
+| `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen; Versions-Commit nur mit passendem Windows-Build-Manifest |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
 | `release-native/se.exe` | Portable Terminal-Companion |
@@ -149,14 +159,16 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 1. `version` in `native/Cargo.toml` erhöhen, committen.
 2. Bauen + Artefakte stagen: auf Windows standardmäßig
    `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/`se`/Installer,
-   aktualisiert die Linux/WSL-Payloads, schreibt `version.txt` zuletzt und prüft
-   alle Feed-Hashes. `cd native; .\publish-update.ps1 -AllowPartialFeed` ist nur
-   für bewusst partielle Windows-only-Feeds gedacht.
+   baut die Linux/WSL-Payloads im selben isolierten Staging-Baum, prüft alle
+   Artefakte und schreibt `version.txt` erst nach der rollback-geschützten
+   Gesamt-Promotion. `-SkipLinuxFeed` erzeugt nur ein ausdrücklich nicht
+   publizierbares Windows-Prüfbundle; der gemeinsame Feed bleibt unverändert.
 3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
 4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released
-   auf `v*`). Hängt Windows- und Linux-Binaries inklusive `se`, Installer,
-   Script, DLL und `version.txt` an.
+   auf `v*`). Hängt die verifizierten Windows-/Linux-App-, Updater- und
+   `se`-Payloads samt Hashes, Installer, Linux-Installskript, Kontextmenü-DLL,
+   beide Share-Server und `version.txt` an.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
@@ -166,8 +178,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 `%APPDATA%\smart_explorer\update_source.txt`. Erlaubt: ein **Ordner**
 (lokal/`\\server\share`), eine **https-URL** oder ein **GitHub-Repo-Link**
 (`https://github.com/b1ue-man/smart-explorer` → wird auf den `main`-Feed
-übersetzt). Installierte Instanzen prüfen den Feed bei jedem Start und updaten
-sich automatisch (EXE-Tausch + Neustart).
+übersetzt). Installierte Instanzen prüfen den Feed bei jedem Start und stagen
+ein neues, hash-verifiziertes App/Updater/`se`-Bundle. Die transaktionale
+Installation und der Neustart erfolgen erst nach ausdrücklicher Bestätigung.
 
 ## Daten der App
 

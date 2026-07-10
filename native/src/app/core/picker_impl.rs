@@ -13,6 +13,9 @@ impl App {
             conn_label: String::new(),
             cwd: String::new(),
             entries: Vec::new(),
+            selected: None,
+            list_rx: None,
+            listing: false,
             error: None,
             connect_rx: None,
             connecting: false,
@@ -39,36 +42,6 @@ impl App {
         }
     }
 
-    /// (Re)list the current picker folder via its backend (folders only).
-    pub(in crate::app) fn picker_list(&mut self) {
-        let (backend, cwd) = match &self.picker {
-            Some(p) => match &p.backend {
-                Some(b) => (b.clone(), ensure_dir_root(&p.cwd)),
-                None => return,
-            },
-            None => return,
-        };
-        let res = backend.list_dir(&cwd);
-        if let Some(p) = self.picker.as_mut() {
-            match res {
-                Ok(metas) => {
-                    let mut dirs: Vec<String> = metas
-                        .into_iter()
-                        .filter(|m| m.is_dir)
-                        .map(|m| m.name)
-                        .collect();
-                    dirs.sort_by_key(|n| n.to_lowercase());
-                    p.entries = dirs;
-                    p.error = None;
-                }
-                Err(e) => {
-                    p.entries.clear();
-                    p.error = Some(e.to_string());
-                }
-            }
-        }
-    }
-
     /// Open a local drive / folder root in the picker.
     pub(in crate::app) fn picker_open_local(&mut self, root: &str) {
         if let Some(p) = self.picker.as_mut() {
@@ -87,64 +60,6 @@ impl App {
             p.connect_rx = None;
         }
         self.picker_list();
-    }
-
-    /// Open a saved connection in the picker (async connect; keeps creds).
-    pub(in crate::app) fn picker_open_connection(&mut self, c: &crate::creds::SavedConnection) {
-        let form = crate::connect::ConnectForm::from_saved(c);
-        let secret = crate::creds::get_secret(&c.account());
-        let rx = crate::connect::spawn_connect(form, secret);
-        if let Some(p) = self.picker.as_mut() {
-            p.connect_rx = Some(rx);
-            p.connecting = true;
-            p.error = None;
-            p.conn_label = c.display();
-            p.is_remote = c.protocol.is_url();
-            p.endpoint_prefix = if c.protocol.is_url() {
-                format!("{}://{}@{}:{}", c.protocol.as_str(), c.user, c.host, c.port)
-            } else {
-                String::new()
-            };
-        }
-    }
-
-    pub(in crate::app) fn drain_picker_connect(&mut self) {
-        let msg = match self
-            .picker
-            .as_ref()
-            .and_then(|p| p.connect_rx.as_ref())
-            .and_then(|rx| rx.try_recv().ok())
-        {
-            Some(m) => m,
-            None => return,
-        };
-        let mut do_list = false;
-        if let Some(p) = self.picker.as_mut() {
-            p.connect_rx = None;
-            p.connecting = false;
-            match msg {
-                crate::connect::ConnectResult::Ok(c) => {
-                    // SFTP/FTP/WebDAV → remote backend; share → browse the UNC
-                    // locally once authenticated.
-                    if let Some(rs) = c.remote {
-                        p.backend = Some(cache_remote(rs.backend));
-                        p.is_remote = true;
-                    } else {
-                        p.backend = Some(Arc::new(crate::vfs::LocalBackend::new(&c.target)));
-                        p.is_remote = false;
-                        p.endpoint_prefix = String::new();
-                    }
-                    p.cwd = c.target;
-                    do_list = true;
-                }
-                crate::connect::ConnectResult::Err(e) => {
-                    p.error = Some(format!("Verbindung fehlgeschlagen: {}", e));
-                }
-            }
-        }
-        if do_list {
-            self.picker_list();
-        }
     }
 
     /// Parent of a picker directory (None at a drive/remote root).
@@ -200,9 +115,11 @@ impl App {
         let drives = self.drive_info.clone();
         let conns = self.saved_connections.clone();
         let connecting = st.connecting;
+        let listing = st.listing;
         let error = st.error.clone();
         let cwd = st.cwd.clone();
         let entries = st.entries.clone();
+        let mut selected = st.selected.filter(|index| *index < entries.len());
         let conn_label = st.conn_label.clone();
         let value_preview = Self::picker_value(st);
         let has_loc = st.backend.is_some();
@@ -215,6 +132,10 @@ impl App {
             .resizable(true)
             .default_size([760.0, 560.0])
             .show(ctx, |ui| {
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
                 ui.horizontal(|ui| {
                     // ── Left: places ──
                     ui.vertical(|ui| {
@@ -281,10 +202,14 @@ impl App {
                             .color(Color32::from_gray(180)),
                         );
                         ui.separator();
-                        if connecting {
+                        if connecting || listing {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label("Verbinde…");
+                                ui.label(if connecting {
+                                    "Verbinde…"
+                                } else {
+                                    "Lade Ordner…"
+                                });
                             });
                         } else if let Some(e) = &error {
                             ui.colored_label(Color32::from_rgb(255, 140, 120), e);
@@ -299,11 +224,22 @@ impl App {
                             .max_height(460.0)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                for name in &entries {
-                                    if ui
-                                        .selectable_label(false, format!("📁 {}", name))
-                                        .double_clicked()
-                                    {
+                                for (index, name) in entries.iter().enumerate() {
+                                    let response = ui.selectable_label(
+                                        selected == Some(index),
+                                        format!("📁 {}", name),
+                                    );
+                                    if response.clicked() {
+                                        selected = Some(index);
+                                    }
+                                    let keyboard_open = response.has_focus()
+                                        && ui.input_mut(|input| {
+                                            input.consume_key(
+                                                egui::Modifiers::NONE,
+                                                egui::Key::Enter,
+                                            )
+                                        });
+                                    if response.double_clicked() || keyboard_open {
                                         enter = Some(name.clone());
                                     }
                                 }
@@ -319,7 +255,7 @@ impl App {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    let can_choose = has_loc && !connecting && !cwd.is_empty();
+                    let can_choose = has_loc && !connecting && !listing && !cwd.is_empty();
                     if ui
                         .add_enabled(can_choose, egui::Button::new("✔ Diesen Ordner wählen"))
                         .clicked()
@@ -334,6 +270,10 @@ impl App {
                     }
                 });
             });
+
+        if let Some(picker) = self.picker.as_mut() {
+            picker.selected = selected;
+        }
 
         // Apply deferred actions (outside the borrow of self.picker).
         if let Some(name) = enter {
@@ -394,7 +334,19 @@ impl App {
                             self.start_analytics_scan(value);
                         }
                     }
-                    PickerPurpose::ReclaimFolder => self.start_reclaim_scan(value),
+                    PickerPurpose::ReclaimFolder => {
+                        if p.is_remote {
+                            if let Some(be) = p.backend.clone() {
+                                self.start_reclaim_scan_remote(
+                                    be,
+                                    p.cwd.clone(),
+                                    p.conn_label.clone(),
+                                );
+                            }
+                        } else {
+                            self.start_reclaim_scan(value);
+                        }
+                    }
                     PickerPurpose::MirrorDest => self.start_mirror(value),
                     PickerPurpose::BisyncDest => self.start_bisync(value),
                     PickerPurpose::CopyDest => self.copy_dest = native,

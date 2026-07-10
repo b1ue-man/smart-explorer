@@ -1,35 +1,60 @@
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
+use super::retention::{compare_group, retain_best};
 use super::types::{
     ContentHash, DuplicateEvidence, DuplicateGroup, FileCandidate, HashAlgorithm,
     ReclaimConfidence, ReclaimItem, ReclaimOptions, ReclaimProgress,
 };
-use super::util::{hex_lower, to_fwd};
+use super::util::{hex_lower, push_bounded_error, to_fwd};
+
+pub(crate) struct DuplicateAnalysis {
+    pub(crate) groups: Vec<DuplicateGroup>,
+    pub(crate) total_groups: u64,
+}
 
 pub(crate) fn duplicate_groups(
     files: Vec<FileCandidate>,
     p: &ReclaimProgress,
     opts: &ReclaimOptions,
     errors: &mut Vec<String>,
-) -> Vec<DuplicateGroup> {
-    let mut by_size: HashMap<u64, Vec<FileCandidate>> = HashMap::new();
-    for f in files
+    suppressed_errors: &mut u64,
+) -> DuplicateAnalysis {
+    let mut retained = Vec::with_capacity(opts.max_items.min(files.len()));
+    for file in files
         .into_iter()
-        .filter(|f| f.item.size >= opts.duplicate_min_bytes)
+        .filter(|file| file.item.size >= opts.duplicate_min_bytes)
     {
+        retain_best(&mut retained, file, opts.max_items, |left, right| {
+            right
+                .item
+                .size
+                .cmp(&left.item.size)
+                .then_with(|| left.item.path.cmp(&right.item.path))
+        });
+    }
+    retained.sort_by(|left, right| {
+        right
+            .item
+            .size
+            .cmp(&left.item.size)
+            .then_with(|| left.item.path.cmp(&right.item.path))
+    });
+    let mut by_size: BTreeMap<u64, Vec<FileCandidate>> = BTreeMap::new();
+    for f in retained {
         by_size.entry(f.item.size).or_default().push(f);
     }
 
     let mut groups = Vec::new();
-    for (size, same_size) in by_size.into_iter().filter(|(_, v)| v.len() > 1) {
+    let mut total_groups = 0u64;
+    for (size, same_size) in by_size.into_iter().rev().filter(|(_, v)| v.len() > 1) {
         if p.cancel.load(Ordering::Relaxed) {
             break;
         }
-        let mut by_fp: HashMap<String, Vec<FileCandidate>> = HashMap::new();
+        let mut by_fp: BTreeMap<String, Vec<FileCandidate>> = BTreeMap::new();
         for f in same_size {
             if p.cancel.load(Ordering::Relaxed) {
                 break;
@@ -40,7 +65,11 @@ pub(crate) fn duplicate_groups(
                     by_fp.entry(fp).or_default().push(f);
                 }
                 Ok(None) => break,
-                Err(e) => errors.push(format!("Fingerprint {}: {}", to_fwd(&f.path), e)),
+                Err(e) => push_bounded_error(
+                    errors,
+                    suppressed_errors,
+                    format!("Fingerprint {}: {}", to_fwd(&f.path), e),
+                ),
             }
         }
 
@@ -48,7 +77,7 @@ pub(crate) fn duplicate_groups(
             if p.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let mut by_hash: HashMap<String, Vec<ReclaimItem>> = HashMap::new();
+            let mut by_hash: BTreeMap<String, Vec<ReclaimItem>> = BTreeMap::new();
             for f in same_fp {
                 if p.cancel.load(Ordering::Relaxed) {
                     break;
@@ -59,11 +88,20 @@ pub(crate) fn duplicate_groups(
                         by_hash.entry(h).or_default().push(f.item);
                     }
                     Ok(None) => break,
-                    Err(e) => errors.push(format!("Hash {}: {}", to_fwd(&f.path), e)),
+                    Err(e) => push_bounded_error(
+                        errors,
+                        suppressed_errors,
+                        format!("Hash {}: {}", to_fwd(&f.path), e),
+                    ),
                 }
             }
             for (sha256, mut items) in by_hash.into_iter().filter(|(_, v)| v.len() > 1) {
-                items.sort_by_key(|i| std::cmp::Reverse(i.mtime_ms));
+                items.sort_by(|left, right| {
+                    right
+                        .mtime_ms
+                        .cmp(&left.mtime_ms)
+                        .then_with(|| left.path.cmp(&right.path))
+                });
                 for item in &mut items {
                     item.confidence = ReclaimConfidence::HashMatch;
                     item.reason = "Duplikat".to_string();
@@ -71,20 +109,30 @@ pub(crate) fn duplicate_groups(
                 let reclaimable = size.saturating_mul(items.len().saturating_sub(1) as u64);
                 p.candidates
                     .fetch_add(items.len() as u64, Ordering::Relaxed);
-                groups.push(DuplicateGroup {
-                    hash: ContentHash {
-                        algorithm: HashAlgorithm::Sha256,
-                        hex: sha256,
+                total_groups = total_groups.saturating_add(1);
+                retain_best(
+                    &mut groups,
+                    DuplicateGroup {
+                        hash: ContentHash {
+                            algorithm: HashAlgorithm::Sha256,
+                            hex: sha256,
+                        },
+                        evidence: DuplicateEvidence::LocalSha256,
+                        size,
+                        reclaimable,
+                        items,
                     },
-                    evidence: DuplicateEvidence::LocalSha256,
-                    size,
-                    reclaimable,
-                    items,
-                });
+                    opts.max_items,
+                    compare_group,
+                );
             }
         }
     }
-    groups
+    groups.sort_by(compare_group);
+    DuplicateAnalysis {
+        groups,
+        total_groups,
+    }
 }
 
 fn partial_fingerprint(
@@ -190,6 +238,7 @@ mod tests {
             ..ReclaimOptions::default()
         };
         let mut errors = Vec::new();
+        let mut suppressed_errors = 0;
         let groups = duplicate_groups(
             vec![
                 FileCandidate {
@@ -204,7 +253,9 @@ mod tests {
             &p,
             &opts,
             &mut errors,
-        );
+            &mut suppressed_errors,
+        )
+        .groups;
         assert!(groups.is_empty());
         assert!(errors.is_empty());
         let _ = std::fs::remove_dir_all(&base);
@@ -224,6 +275,7 @@ mod tests {
             ..ReclaimOptions::default()
         };
         let mut errors = Vec::new();
+        let mut suppressed_errors = 0;
         let groups = duplicate_groups(
             vec![
                 FileCandidate {
@@ -238,7 +290,9 @@ mod tests {
             &p,
             &opts,
             &mut errors,
-        );
+            &mut suppressed_errors,
+        )
+        .groups;
         assert!(groups.is_empty());
         assert_eq!(p.hashed.load(Ordering::Relaxed), 2);
         let _ = std::fs::remove_dir_all(&base);
@@ -258,6 +312,7 @@ mod tests {
             ..ReclaimOptions::default()
         };
         let mut errors = Vec::new();
+        let mut suppressed_errors = 0;
         let groups = duplicate_groups(
             vec![
                 FileCandidate {
@@ -272,7 +327,9 @@ mod tests {
             &p,
             &opts,
             &mut errors,
-        );
+            &mut suppressed_errors,
+        )
+        .groups;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].items[0].name, "a.bin");
         assert_eq!(groups[0].hash.algorithm, HashAlgorithm::Sha256);
@@ -293,6 +350,7 @@ mod tests {
             ..ReclaimOptions::default()
         };
         let mut errors = Vec::new();
+        let mut suppressed_errors = 0;
         let groups = duplicate_groups(
             vec![
                 FileCandidate {
@@ -307,9 +365,55 @@ mod tests {
             &p,
             &opts,
             &mut errors,
-        );
+            &mut suppressed_errors,
+        )
+        .groups;
         assert!(groups.is_empty());
         assert_eq!(p.hashed.load(Ordering::Relaxed), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn duplicate_reducer_caps_inputs_before_building_hash_maps() {
+        let base = temp_base("se_dupe_bounded");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let specs: [(&str, &[u8]); 4] = [
+            ("small-a.bin", b"same"),
+            ("small-b.bin", b"same"),
+            ("large-a.bin", b"largest!"),
+            ("large-b.bin", b"largest!"),
+        ];
+        let mut files = Vec::new();
+        for (name, content) in specs {
+            let path = base.join(name);
+            std::fs::write(&path, content).unwrap();
+            files.push(FileCandidate {
+                path,
+                item: ReclaimItem::new(name.into(), name.into(), content.len() as u64, 1, false),
+            });
+        }
+        let opts = ReclaimOptions {
+            max_items: 2,
+            duplicate_min_bytes: 1,
+            partial_fingerprint_bytes: 2,
+            ..ReclaimOptions::default()
+        };
+        let mut errors = Vec::new();
+        let mut suppressed = 0;
+        let analysis = duplicate_groups(
+            files,
+            &ReclaimProgress::default(),
+            &opts,
+            &mut errors,
+            &mut suppressed,
+        );
+
+        assert_eq!(analysis.total_groups, 1);
+        assert_eq!(analysis.groups.len(), 1);
+        assert_eq!(analysis.groups[0].size, 8);
+        assert_eq!(analysis.groups[0].items.len(), 2);
+        assert!(errors.is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

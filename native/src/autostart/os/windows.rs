@@ -48,8 +48,8 @@ pub fn enable() -> std::io::Result<()> {
     run.set_value(RUN_VALUE, &cmd)
 }
 
-/// Remove the autostart entry (a running daemon keeps going until logoff; the
-/// caller signals it to stop via `daemon::request_stop`).
+/// Remove the autostart entry. A running Share session worker may remain alive,
+/// but the daemon observes this setting and cancels scheduled sync work.
 pub fn disable() -> std::io::Result<()> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;

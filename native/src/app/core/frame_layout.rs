@@ -3,6 +3,14 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn update_layout(&mut self, ctx: &egui::Context) {
+        // The first-run notice is a true modal gate: do not build any of the
+        // underlying interactive UI until it has been acknowledged. Rendering
+        // a dim layer after the panels is not sufficient because those widgets
+        // may already have consumed the current frame's pointer event.
+        if self.show_disclaimer {
+            self.ui_disclaimer(ctx);
+            return;
+        }
         // ─── Layout ────────────────────────────────────────────────────
         // Rebuild the Alt-overlay target list fresh each frame: clear before any
         // panel registers (tabbar renders first), repopulate during rendering.
@@ -73,7 +81,7 @@ impl App {
         if self.show_analytics {
             self.ui_analytics(ctx);
         }
-        if self.update_ready.is_some() {
+        if self.show_update_dialog && self.update_ready.is_some() {
             self.ui_update_dialog(ctx);
         }
         if self.show_connect {
@@ -104,9 +112,6 @@ impl App {
         if self.remote_ctx.is_some() {
             self.ui_remote_ctx(ctx);
         }
-        // Liability notice on top of everything, on first run.
-        self.ui_disclaimer(ctx);
-
         // Alt key-overlay badges, drawn last so they sit above the toolbar/tabs.
         if self.accel_mode {
             self.draw_accel_overlay(ctx);

@@ -87,12 +87,31 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 ## Updater
 
 - Per-user install under `%LOCALAPPDATA%\Programs\Smart Explorer\`; app data in
-  `%APPDATA%\smart_explorer\`. Self-update = "rename dance" (works on a running
-  exe without admin). Feed = a folder with `version.txt` + `Smart Explorer.exe`;
-  publish exe FIRST, then version.txt.
-- **Rollback** archives the outgoing binary to `<install>/versions/` and also
-  archives the running version on startup. It only accumulates **going forward** —
-  jumping from a pre-rollback version straight to latest leaves nothing to roll
-  back to (no copies of old binaries exist to seed it). The pin file
-  (`update_pinned.txt`) pauses auto-update after a manual rollback; "update to
-  latest" clears it.
+  `%APPDATA%\smart_explorer\`. A normal check downloads the OS-specific
+  app/updater/`se` trio to app data, verifies every SHA-256, and atomically
+  persists a staging manifest. It does **not** replace an installed file or stop
+  a process. The update dialog requires explicit consent; **Later** retains the
+  same verified staging across restart, while **Discard** removes it.
+- Applying is a hash-bound transaction run by the separate updater helper. The
+  helper revalidates itself and all staged payloads, waits for the exact parent
+  PID to exit, requests a graceful daemon stop, and refuses to continue while a
+  matching Smart Explorer binary is still running. Do not reintroduce force-kill
+  behavior to make an update appear successful.
+- Before replacement, the helper verifies and durably archives the outgoing app
+  with a SHA-256 sidecar. It prepares checked sibling files, then replaces the
+  updater, `se`, and app as one rollback-capable transaction. A failed replace or
+  failed launch restores the previous targets and attempts to relaunch the
+  verified old app. Length checks alone are not an acceptable replacement for
+  the immediate SHA-256 revalidation at each process/replacement boundary.
+- Release publication is also transactional: build into isolated staging,
+  verify all six Windows/Linux feed payloads and hashes plus the Windows build
+  manifest, promote with rollback backups, and move `version.txt` last. A
+  Windows-only partial build must never mutate the shared feed or ancillary
+  release files; direct runs require explicit, separate `-Feed` and
+  `-ReleaseOutput` paths.
+- **Rollback** archives the running version on startup and again as a mandatory
+  precondition to replacement, but archives still accumulate only **going
+  forward**. Remote rollback discovery uses GitHub Releases first and a legacy
+  `release/vX.Y.Z` branch fallback. The atomic `update_pinned.txt` file pauses
+  automatic forward checks after manual rollback; applying a newer staged update
+  clears the pin only after the new app has launched successfully.

@@ -148,5 +148,6 @@ pub struct CopyProgress {
     pub bytes_total: u64,
     pub elapsed_ms: u64,
     pub errors: u64,
+    pub canceled: bool,
     pub done: bool,
 }

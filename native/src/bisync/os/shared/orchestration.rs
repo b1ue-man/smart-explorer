@@ -2,15 +2,17 @@ use crate::vfs::Backend;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::apply::apply_with_results;
+use super::apply::apply_planned_with_results;
 use super::core::{plan, update_baseline};
 use super::incremental::{
     bootstrap_incremental_state, mirror_source, try_incremental_mirror, SyncEndpoints,
 };
 use super::persistence::{
-    baseline_path, load_baseline, pair_id, prune_versions, save_baseline, versions_dir,
+    baseline_path, load_baseline, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
-use super::snapshot::{hash_mode, prev_side, walk_files, WalkFilter};
+use super::snapshot::{
+    hash_mode, prev_side, walk_files, walk_files_with_duplicate_files, WalkFilter,
+};
 use super::types::{
     Action, Baseline, BisyncOptions, BisyncStats, Conflict, DeletePolicy, Direction,
 };
@@ -36,10 +38,25 @@ pub fn preview(
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Preview {
-    let base = load_baseline(&baseline_path(&pair_id(root_a, root_b)));
+    let base = match load_baseline(&baseline_path(&pair_id_for(a, root_a, b, root_b))) {
+        Ok(base) => base,
+        Err(error) => {
+            return Preview {
+                error: Some(format!(
+                    "Synchronisierungsstand kann nicht gelesen werden: {error}"
+                )),
+                ..Default::default()
+            }
+        }
+    };
     let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
     let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
-    let at = match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
+    let walk_a = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::BtoA {
+        walk_files_with_duplicate_files
+    } else {
+        walk_files
+    };
+    let at = match walk_a(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
         Ok(t) => t,
         Err(e) => {
             return Preview {
@@ -48,7 +65,12 @@ pub fn preview(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
+    let walk_b = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::AtoB {
+        walk_files_with_duplicate_files
+    } else {
+        walk_files
+    };
+    let bt = match walk_b(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
         Ok(t) => t,
         Err(e) => {
             return Preview {
@@ -144,17 +166,33 @@ fn run_full(
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Outcome {
-    let pair = pair_id(root_a, root_b);
+    let pair = pair_id_for(a, root_a, b, root_b);
     let bpath = baseline_path(&pair);
     let vdir = versions_dir(&pair);
-    let base = load_baseline(&bpath);
+    let base = match load_baseline(&bpath) {
+        Ok(base) => base,
+        Err(error) => {
+            return Outcome {
+                errors: vec![(
+                    bpath.to_string_lossy().into_owned(),
+                    format!("Synchronisierungsstand kann nicht gelesen werden: {error}"),
+                )],
+                ..Default::default()
+            }
+        }
+    };
     // Per-side hashing: each side uses a content hash when it's free (native) or
     // cheap (a local read to match the other side's free native hash), so any
     // compare mode skips files whose mtime differs but content matches — without
     // ever downloading a hash-less remote. `prev_*` reuses last run's hashes.
     let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
     let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
-    let at = match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
+    let walk_a = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::BtoA {
+        walk_files_with_duplicate_files
+    } else {
+        walk_files
+    };
+    let at = match walk_a(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -163,7 +201,12 @@ fn run_full(
             }
         }
     };
-    let bt = match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
+    let walk_b = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::AtoB {
+        walk_files_with_duplicate_files
+    } else {
+        walk_files
+    };
+    let bt = match walk_b(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
         Ok(t) => t,
         Err(e) => {
             return Outcome {
@@ -177,13 +220,62 @@ fn run_full(
     }
     let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
 
+    // Duplicate-name providers need an exact, read-only cleanup plan before
+    // the first mutation. Its ID-addressed entries participate in the same
+    // all-or-nothing deletion guard as explicit and move-source deletions.
+    let (dedupe_backend, dedupe_plan) = if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
+        let planned = match opts.direction {
+            Direction::AtoB => b
+                .plan_dedupe_recursive(root_b, &|rel| at.contains_key(rel))
+                .map(|plan| (Some(b), plan)),
+            Direction::BtoA => a
+                .plan_dedupe_recursive(root_a, &|rel| bt.contains_key(rel))
+                .map(|plan| (Some(a), plan)),
+            Direction::Both => Ok((None, Vec::new())),
+        };
+        match planned {
+            Ok(result) => result,
+            Err(error) => {
+                return Outcome {
+                    errors: vec![(
+                        "Duplikatprüfung".into(),
+                        format!("Duplikate konnten nicht sicher vorgeprüft werden: {error}"),
+                    )],
+                    baseline: base,
+                    ..Default::default()
+                }
+            }
+        }
+    } else {
+        (None, Vec::new())
+    };
+
     // Delete-safety guard: refuse to apply if the plan would remove more files
     // than the configured limit (protects against a vanished/remounted side
     // looking like a mass deletion). Aborts the whole run — nothing is touched.
-    let deletes = actions
+    let explicit_deletes = actions
         .iter()
-        .filter(|a| matches!(a, Action::DeleteA(_) | Action::DeleteB(_)))
+        .filter(|action| {
+            matches!(
+                action,
+                Action::DeleteA(_)
+                    | Action::DeleteB(_)
+                    | Action::FinalizeMoveAtoB(_)
+                    | Action::FinalizeMoveBtoA(_)
+            )
+        })
         .count() as u64;
+    let move_deletes = if opts.move_files && opts.direction != Direction::Both {
+        actions
+            .iter()
+            .filter(|action| matches!(action, Action::CopyAtoB(_) | Action::CopyBtoA(_)))
+            .count() as u64
+    } else {
+        0
+    };
+    let deletes = explicit_deletes
+        .saturating_add(move_deletes)
+        .saturating_add(dedupe_plan.len() as u64);
     let total = at.len().max(bt.len()) as u64;
     let pct_limit = if opts.max_delete_pct > 0 {
         total * opts.max_delete_pct as u64 / 100
@@ -211,8 +303,39 @@ fn run_full(
     }
 
     let mut errors = Vec::new();
-    let report = apply_with_results(
+    let deduped = if let Some(backend) = dedupe_backend {
+        match backend.apply_dedupe_plan(&dedupe_plan) {
+            Ok(count) => count as u64,
+            Err(error) => {
+                errors.push((
+                    "dedupe".into(),
+                    format!("Vorgeprüfte Duplikatbereinigung fehlgeschlagen: {error}"),
+                ));
+                return Outcome {
+                    errors,
+                    baseline: base,
+                    ..Default::default()
+                };
+            }
+        }
+    } else {
+        0
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return Outcome {
+            stats: BisyncStats {
+                deleted: deduped,
+                ..Default::default()
+            },
+            errors,
+            baseline: base,
+            ..Default::default()
+        };
+    }
+    let report = apply_planned_with_results(
         &actions,
+        &at,
+        &bt,
         a,
         root_a,
         b,
@@ -223,6 +346,7 @@ fn run_full(
         cancel,
     );
     let mut st = report.stats;
+    st.deleted = st.deleted.saturating_add(deduped);
     // Stop pressed: `apply` broke out between files. Don't dedupe or re-walk (a
     // cancelled walk returns a PARTIAL tree, which would corrupt the baseline) —
     // return what completed, leaving the old baseline untouched so the next run
@@ -235,18 +359,15 @@ fn run_full(
             baseline: base,
         };
     }
-    // Mirror = exact replica: remove duplicate same-name files the destination
-    // backend may hold (e.g. Google Drive) so only the correct one remains. This
-    // runs before the re-walk so the baseline reflects the deduped state.
-    if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
-        let dedup = match opts.direction {
-            // Keep only names present on the source side (the mirror's truth);
-            // an orphaned duplicate name is removed entirely.
-            Direction::AtoB => b.dedupe_recursive(root_b, &|rel| at.contains_key(rel)).ok(),
-            Direction::BtoA => a.dedupe_recursive(root_a, &|rel| bt.contains_key(rel)).ok(),
-            Direction::Both => None,
+    // A failed copy/source action can leave a retryable partial transition.
+    // Do not perform any additional destructive mirror cleanup in that state.
+    if !errors.is_empty() {
+        return Outcome {
+            stats: st,
+            conflicts,
+            errors,
+            baseline: base,
         };
-        st.deleted += dedup.unwrap_or(0) as u64;
     }
     // Re-walk to capture real post-write signatures (e.g. the destination's new
     // mtime), so the baseline doesn't re-detect just-synced files. Skipped on a
@@ -264,12 +385,40 @@ fn run_full(
         let a_touched = opts.direction != Direction::AtoB || opts.move_files;
         let b_touched = opts.direction != Direction::BtoA || opts.move_files;
         let at2 = if a_touched {
-            walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)).unwrap_or(at)
+            match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
+                Ok(tree) => tree,
+                Err(error) => {
+                    errors.push((
+                        root_a.into(),
+                        format!("Kontrollscan nach Änderungen fehlgeschlagen: {error}"),
+                    ));
+                    return Outcome {
+                        stats: st,
+                        conflicts,
+                        errors,
+                        baseline: base,
+                    };
+                }
+            }
         } else {
             at
         };
         let bt2 = if b_touched {
-            walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)).unwrap_or(bt)
+            match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
+                Ok(tree) => tree,
+                Err(error) => {
+                    errors.push((
+                        root_b.into(),
+                        format!("Kontrollscan nach Änderungen fehlgeschlagen: {error}"),
+                    ));
+                    return Outcome {
+                        stats: st,
+                        conflicts,
+                        errors,
+                        baseline: base,
+                    };
+                }
+            }
         } else {
             bt
         };
@@ -277,8 +426,26 @@ fn run_full(
     };
     let nb = update_baseline(&base, &at2, &bt2, &report.completed, &converged, &conflicts);
     if !opts.dry_run {
-        let _ = save_baseline(&bpath, &nb);
-        prune_versions(&vdir, &opts.versioning);
+        if let Err(error) = save_baseline(&bpath, &nb) {
+            errors.push((
+                bpath.to_string_lossy().into_owned(),
+                format!("Synchronisierungsstand konnte nicht gespeichert werden: {error}"),
+            ));
+            return Outcome {
+                stats: st,
+                conflicts,
+                errors,
+                baseline: base,
+            };
+        }
+        if let Err(error) = prune_versions(&vdir, &opts.versioning) {
+            errors.push((
+                vdir.to_string_lossy().into_owned(),
+                format!(
+                    "Wiederherstellungsversionen konnten nicht sicher bereinigt werden: {error}"
+                ),
+            ));
+        }
     }
     Outcome {
         stats: st,

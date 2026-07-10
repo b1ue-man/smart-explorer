@@ -1,18 +1,23 @@
 use super::metadata::wire_to_vfs;
-use super::mux::{make_out_channel, route_frame, Mux};
+use super::mux::{close_transport, make_out_channel, route_frame, Mux};
 use crate::agent_proto::{self, Frame};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use crossbeam_channel::Sender;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub struct AgentBackend {
     pub(super) inner: BackendHandle,
     pub(super) mux: Arc<Mux>,
     version: String,
+}
+
+fn operation_canceled(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, message)
 }
 
 impl AgentBackend {
@@ -24,24 +29,38 @@ impl AgentBackend {
     ) -> io::Result<Self> {
         let (out_tx, out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let mux = Arc::new(Mux::new(out_tx, pending.clone(), closed.clone()));
 
         // Writer thread: drain outgoing frames; closing the write half on exit
         // signals EOF to the agent.
+        let pending_w = pending.clone();
+        let closed_w = closed.clone();
         std::thread::Builder::new()
             .name("agent-writer".into())
             .spawn(move || {
                 let mut w = w;
-                while let Ok((id, frame)) = out_rx.recv() {
-                    if agent_proto::write_frame(&mut w, id, &frame).is_err() {
+                loop {
+                    if closed_w.load(Ordering::Acquire) {
                         break;
                     }
+                    match out_rx.recv_timeout(Duration::from_millis(100)) {
+                        Ok((id, frame)) => {
+                            if agent_proto::write_frame(&mut w, id, &frame).is_err() {
+                                break;
+                            }
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                    }
                 }
-            })
-            .ok();
+                close_transport(&closed_w, &pending_w);
+            })?;
 
         // Reader thread: route inbound frames to the waiting op by req_id.
         let pending_r = pending.clone();
-        std::thread::Builder::new()
+        let closed_r = closed.clone();
+        if let Err(error) = std::thread::Builder::new()
             .name("agent-reader".into())
             .spawn(move || {
                 let mut r = r;
@@ -50,14 +69,12 @@ impl AgentBackend {
                         break;
                     }
                 }
-                // Drop all waiters so blocked recv() errors out and ops fall back.
-                if let Ok(mut p) = pending_r.lock() {
-                    p.clear();
-                }
+                close_transport(&closed_r, &pending_r);
             })
-            .ok();
-
-        let mux = Arc::new(Mux::new(out_tx, pending));
+        {
+            close_transport(&closed, &pending);
+            return Err(error);
+        }
 
         // Handshake before publishing the backend.
         let version = match mux.call(Frame::Hello {
@@ -98,19 +115,40 @@ impl Backend for AgentBackend {
         self.inner.root_display()
     }
 
+    fn state_identity(&self) -> String {
+        self.inner.state_identity()
+    }
+
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self.mux.call(Frame::ListDir(path.to_string())) {
-            Ok(Frame::Dir(v)) => Ok(v.into_iter().map(wire_to_vfs).collect()),
-            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
-            _ => self.inner.list_dir(path),
+        match self.mux.call(Frame::ListDir(path.to_string()))? {
+            Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
+            Frame::Err(e) => Err(io::Error::other(e)),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected agent directory reply: {other:?}"),
+            )),
         }
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        match self.mux.call(Frame::Stat(path.to_string())) {
-            Ok(Frame::Meta(m)) => Ok(wire_to_vfs(m)),
-            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
-            _ => self.inner.stat(path),
+        match self.mux.call(Frame::Stat(path.to_string()))? {
+            Frame::Meta(m) => Ok(wire_to_vfs(m)),
+            Frame::Err(e) => Err(io::Error::other(e)),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected agent metadata reply: {other:?}"),
+            )),
+        }
+    }
+
+    fn try_exists(&self, path: &str) -> VfsResult<bool> {
+        match self.mux.call(Frame::TryExists(path.to_string()))? {
+            Frame::Exists(exists) => Ok(exists),
+            Frame::Err(error) => Err(io::Error::other(error)),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected agent existence reply: {other:?}"),
+            )),
         }
     }
 
@@ -122,38 +160,49 @@ impl Backend for AgentBackend {
         &self,
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-    ) -> Option<crate::agent_proto::WireNode> {
+    ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
         let (id, rx) = self.mux.register();
-        if self
-            .mux
-            .send(id, Frame::WalkTree(root.to_string()))
-            .is_err()
-        {
-            self.mux.unregister(id);
-            return None;
-        }
-        let mut last = (0u64, 0u64);
-        let result = loop {
-            match rx.recv_timeout(std::time::Duration::from_millis(250)) {
-                Ok(Frame::Progress { done, total }) => {
-                    last = (done, total);
-                    if !on_progress(done, total) {
-                        let _ = self.mux.send(id, Frame::Cancel);
-                        break None;
+        let result = (|| {
+            self.mux.send(id, Frame::WalkTree(root.to_string()))?;
+            let mut last = (0u64, 0u64);
+            loop {
+                match rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(Frame::Progress { done, total }) => {
+                        last = (done, total);
+                        if !on_progress(done, total) {
+                            let _ = self.mux.send(id, Frame::Cancel);
+                            return Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "agent tree walk canceled",
+                            ));
+                        }
+                    }
+                    Ok(Frame::Tree(node)) => return Ok(Some(node)),
+                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(other) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("unexpected agent tree-walk reply: {other:?}"),
+                        ));
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        if !on_progress(last.0, last.1) {
+                            let _ = self.mux.send(id, Frame::Cancel);
+                            return Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "agent tree walk canceled",
+                            ));
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "agent tree walk stream closed",
+                        ));
                     }
                 }
-                Ok(Frame::Tree(n)) => break Some(n),
-                Ok(Frame::Err(_)) => break None,
-                Ok(_) => {}
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if !on_progress(last.0, last.1) {
-                        let _ = self.mux.send(id, Frame::Cancel);
-                        break None;
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break None,
             }
-        };
+        })();
         self.mux.unregister(id);
         result
     }
@@ -180,56 +229,68 @@ impl Backend for AgentBackend {
         spec: &crate::agent_proto::SearchSpec,
         tx: Sender<crate::vfs::SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         let (id, rx) = self.mux.register();
-        if self
-            .mux
-            .send(
+        let result = (|| {
+            self.mux.send(
                 id,
                 Frame::Search {
                     root: root.to_string(),
                     spec: spec.clone(),
                 },
-            )
-            .is_err()
-        {
-            self.mux.unregister(id);
-            return false;
-        }
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                let _ = self.mux.send(id, Frame::Cancel);
-                break;
-            }
-            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                Ok(Frame::Match {
-                    rel,
-                    is_dir,
-                    size,
-                    mtime_ms,
-                }) => {
-                    if tx
+            )?;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = self.mux.send(id, Frame::Cancel);
+                    return Err(operation_canceled("agent search canceled"));
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(Frame::Match {
+                        rel,
+                        is_dir,
+                        size,
+                        mtime_ms,
+                    }) => tx
                         .send(crate::vfs::SearchHit {
                             rel,
                             is_dir,
                             size,
                             mtime_ms,
                         })
-                        .is_err()
-                    {
+                        .map_err(|_| {
+                            if cancel.load(Ordering::Relaxed) {
+                                operation_canceled("agent search canceled")
+                            } else {
+                                io::Error::new(
+                                    io::ErrorKind::BrokenPipe,
+                                    "agent search result receiver closed",
+                                )
+                            }
+                        })?,
+                    Ok(Frame::End) => return Ok(true),
+                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(other) => {
                         let _ = self.mux.send(id, Frame::Cancel);
-                        break;
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("unexpected agent search reply: {other:?}"),
+                        ));
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "agent search stream closed",
+                        ));
                     }
                 }
-                Ok(Frame::End) => break,
-                Ok(Frame::Err(_)) => break,
-                Ok(_) => {}
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
+        })();
+        if result.is_err() {
+            let _ = self.mux.send(id, Frame::Cancel);
         }
         self.mux.unregister(id);
-        true
+        result
     }
 
     fn supports_walk_hashed(&self) -> bool {
@@ -242,36 +303,29 @@ impl Backend for AgentBackend {
         want_hash: bool,
         tx: Sender<crate::vfs::HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         let (id, rx) = self.mux.register();
-        if self
-            .mux
-            .send(
+        let result = (|| {
+            self.mux.send(
                 id,
                 Frame::WalkHashed {
                     root: root.to_string(),
                     want_hash,
                 },
-            )
-            .is_err()
-        {
-            self.mux.unregister(id);
-            return false;
-        }
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                let _ = self.mux.send(id, Frame::Cancel);
-                break;
-            }
-            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                Ok(Frame::HashEntry {
-                    rel,
-                    is_dir,
-                    size,
-                    mtime_ms,
-                    md5,
-                }) => {
-                    if tx
+            )?;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = self.mux.send(id, Frame::Cancel);
+                    return Err(operation_canceled("agent hash walk canceled"));
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(Frame::HashEntry {
+                        rel,
+                        is_dir,
+                        size,
+                        mtime_ms,
+                        md5,
+                    }) => tx
                         .send(crate::vfs::HashHit {
                             rel,
                             is_dir,
@@ -279,28 +333,44 @@ impl Backend for AgentBackend {
                             mtime_ms,
                             md5,
                         })
-                        .is_err()
-                    {
+                        .map_err(|_| {
+                            if cancel.load(Ordering::Relaxed) {
+                                operation_canceled("agent hash walk canceled")
+                            } else {
+                                io::Error::new(
+                                    io::ErrorKind::BrokenPipe,
+                                    "agent hash-walk result receiver closed",
+                                )
+                            }
+                        })?,
+                    Ok(Frame::End) => return Ok(true),
+                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(other) => {
                         let _ = self.mux.send(id, Frame::Cancel);
-                        break;
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("unexpected agent hash-walk reply: {other:?}"),
+                        ));
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "agent hash-walk stream closed",
+                        ));
                     }
                 }
-                Ok(Frame::End) => break,
-                Ok(Frame::Err(_)) => break,
-                Ok(_) => {}
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
+        })();
+        if result.is_err() {
+            let _ = self.mux.send(id, Frame::Cancel);
         }
         self.mux.unregister(id);
-        true
+        result
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        match self.agent_open_read(path) {
-            Some(r) => Ok(r),
-            None => self.inner.open_read(path),
-        }
+        self.agent_open_read(path)
     }
 
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
@@ -309,10 +379,7 @@ impl Backend for AgentBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        match self.agent_open_write(path) {
-            Some(w) => Ok(w),
-            None => self.inner.open_write(path),
-        }
+        self.agent_open_write(path)
     }
 
     fn download_name(&self, path: &str, name: &str) -> String {
@@ -320,36 +387,39 @@ impl Backend for AgentBackend {
     }
 
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
-        match self.agent_unit_op(Frame::Copy {
+        self.agent_unit_op(Frame::Copy {
             src: src.to_string(),
             dst: dst.to_string(),
-        }) {
-            Ok(true) => Ok(self.stat(dst).map(|m| m.size).unwrap_or(0)),
-            Ok(false) => self.inner.copy_file(src, dst),
-            Err(e) => Err(e),
-        }
+        })?;
+        self.stat(dst).map(|meta| meta.size)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        match self.agent_unit_op(Frame::Rename {
+        self.agent_unit_op(Frame::Rename {
             src: src.to_string(),
             dst: dst.to_string(),
-        }) {
-            Ok(true) => Ok(()),
-            Ok(false) => self.inner.rename(src, dst),
-            Err(e) => Err(e),
+        })
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        match self.mux.call(Frame::RenameNoReplace {
+            src: src.to_string(),
+            dst: dst.to_string(),
+        })? {
+            Frame::Ok => Ok(()),
+            Frame::Err(error) => Err(io::Error::other(error)),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected agent no-replace reply: {other:?}"),
+            )),
         }
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        match self.agent_unit_op(Frame::Remove {
+        self.agent_unit_op(Frame::Remove {
             path: path.to_string(),
             recursive: false,
-        }) {
-            Ok(true) => Ok(()),
-            Ok(false) => self.inner.remove_file(path),
-            Err(e) => Err(e),
-        }
+        })
     }
 
     fn remove_file_id(&self, path: &str, _id: Option<&str>) -> VfsResult<()> {
@@ -357,22 +427,14 @@ impl Backend for AgentBackend {
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        match self.agent_unit_op(Frame::Remove {
+        self.agent_unit_op(Frame::Remove {
             path: path.to_string(),
             recursive: false,
-        }) {
-            Ok(true) => Ok(()),
-            Ok(false) => self.inner.remove_dir(path),
-            Err(e) => Err(e),
-        }
+        })
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        match self.agent_unit_op(Frame::Mkdir(path.to_string())) {
-            Ok(true) => Ok(()),
-            Ok(false) => self.inner.mkdir_all(path),
-            Err(e) => Err(e),
-        }
+        self.agent_unit_op(Frame::Mkdir(path.to_string()))
     }
 
     fn parallelism(&self) -> usize {

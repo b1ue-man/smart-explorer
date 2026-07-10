@@ -1,16 +1,14 @@
-# Publish a new Smart Explorer version to the local update feed + rebuild the installer.
-#
-# Workflow:
-#   1. Version in Cargo.toml erhoehen (z.B. 0.2.1)
-#   2. .\publish-update.ps1 ausfuehren
-#   3. Fertig — alle installierten Instanzen updaten sich beim naechsten Start.
-#
-# Optional: -Feed <Pfad> fuer einen anderen Feed-Ordner (z.B. Netzlaufwerk).
-#           -AllowPartialFeed erlaubt bewusst einen Windows-only Feed.
+# Build an explicitly isolated Windows-only Smart Explorer bundle and feed.
+# A complete release must use publish-release-local.ps1, which supplies staged
+# paths here and adds the Linux payloads before publishing version.txt.
+# Direct calls must provide -AllowPartialFeed plus separate -Feed and
+# -ReleaseOutput paths; they do not create a complete cross-platform release.
 
 param(
-    [string]$Feed = "C:\Users\Silas\Desktop\fun-projects\smartExplorer\release-native\update-feed",
-    [switch]$AllowPartialFeed
+    [string]$Feed = "",
+    [switch]$AllowPartialFeed,
+    [switch]$DeferFeedVersion,
+    [string]$ReleaseOutput = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,17 +20,118 @@ Write-Host "Baue Version $version ..."
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $defaultFeed = Join-Path $repoRoot "release-native\update-feed"
+$defaultReleaseOutput = Join-Path $repoRoot "release-native"
+if ([string]::IsNullOrWhiteSpace($Feed)) {
+    $Feed = $defaultFeed
+}
 $resolvedFeed = if (Test-Path $Feed) { (Resolve-Path $Feed).Path } else { [System.IO.Path]::GetFullPath($Feed) }
 $resolvedDefaultFeed = if (Test-Path $defaultFeed) { (Resolve-Path $defaultFeed).Path } else { [System.IO.Path]::GetFullPath($defaultFeed) }
-if (-not $AllowPartialFeed -and $resolvedFeed -eq $resolvedDefaultFeed) {
-    $linuxPayloads = @(
-        "smart_explorer",
-        "smart_explorer.sha256",
-        "smart_explorer_updater",
-        "smart_explorer_updater.sha256"
-    ) | ForEach-Object { Join-Path $Feed $_ } | Where-Object { Test-Path $_ }
-    if ($linuxPayloads) {
-        throw "Der Standard-Update-Feed enthaelt Linux-Payloads. Dieses Windows-Skript wuerde nur Windows-Payloads aktualisieren; nutze native/publish-feed.sh auf Linux/WSL fuer einen vollstaendigen Feed oder -AllowPartialFeed fuer einen expliziten Windows-only Feed."
+if (-not $AllowPartialFeed) {
+    throw "publish-update.ps1 baut immer nur Windows-Payloads. Bestaetige den Teil-Build explizit mit -AllowPartialFeed; fuer einen vollstaendigen Release nutze publish-release-local.ps1."
+}
+if ($resolvedFeed -eq $resolvedDefaultFeed) {
+    throw "Ein Windows-only Lauf darf den gemeinsamen Standard-Feed nicht veraendern. Nutze einen separaten -Feed Pfad oder publish-release-local.ps1 fuer den vollstaendigen Feed."
+}
+if ([string]::IsNullOrWhiteSpace($ReleaseOutput)) {
+    throw "Ein Windows-only Lauf braucht einen expliziten separaten -ReleaseOutput Pfad."
+}
+$resolvedReleaseOutput = if (Test-Path $ReleaseOutput) { (Resolve-Path $ReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($ReleaseOutput) }
+$resolvedDefaultReleaseOutput = if (Test-Path $defaultReleaseOutput) { (Resolve-Path $defaultReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($defaultReleaseOutput) }
+if ($resolvedReleaseOutput -eq $resolvedDefaultReleaseOutput) {
+    throw "Ein Windows-only Lauf darf die gemeinsamen release-native Artefakte nicht veraendern. Nutze einen separaten -ReleaseOutput Pfad."
+}
+$feedPrefix = $resolvedFeed.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if ($resolvedReleaseOutput -eq $resolvedFeed -or
+    $resolvedReleaseOutput.StartsWith($feedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "-ReleaseOutput darf nicht dem -Feed entsprechen oder innerhalb des Feed-Pfads liegen."
+}
+$ReleaseOutput = $resolvedReleaseOutput
+
+function Assert-NonEmptyFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Erforderliche Release-Datei fehlt: $Path"
+    }
+    if ((Get-Item -LiteralPath $Path).Length -le 0) {
+        throw "Erforderliche Release-Datei ist leer: $Path"
+    }
+}
+
+function Write-AsciiLf([string]$Path, [string[]]$Lines) {
+    $content = ($Lines -join "`n") + "`n"
+    [System.IO.File]::WriteAllText($Path, $content, [System.Text.ASCIIEncoding]::new($false))
+}
+
+function Write-Sha256File([string]$Path) {
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $name = [System.IO.Path]::GetFileName($Path)
+    Write-AsciiLf "$Path.sha256" @("$hash  $name")
+}
+
+function Publish-FileAtomic([string]$Source, [string]$Destination) {
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Force $parent | Out-Null
+    $temporary = Join-Path $parent (".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($Destination)), $PID)
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    try {
+        Copy-Item -LiteralPath $Source -Destination $temporary -Force
+        Assert-NonEmptyFile $temporary
+        if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $Destination, $null)
+        } else {
+            [System.IO.File]::Move($temporary, $Destination)
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Publish-FeedDirectoryTransaction(
+    [string]$Candidate,
+    [string]$Destination,
+    [string]$VersionSource,
+    [string]$ExpectedVersion
+) {
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Force $parent | Out-Null
+    $backup = Join-Path $parent (".{0}.release-backup.{1}.{2}" -f ([System.IO.Path]::GetFileName($Destination)), $PID, [guid]::NewGuid().ToString("N"))
+    $hadDestination = Test-Path -LiteralPath $Destination
+    $installed = $false
+    try {
+        if ($hadDestination) {
+            Move-Item -LiteralPath $Destination -Destination $backup
+        }
+        $installed = $true
+        Move-Item -LiteralPath $Candidate -Destination $Destination
+        if (-not [string]::IsNullOrWhiteSpace($VersionSource)) {
+            Publish-FileAtomic $VersionSource (Join-Path $Destination "version.txt")
+        }
+        foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
+            Assert-NonEmptyFile (Join-Path $Destination $name)
+            Assert-NonEmptyFile (Join-Path $Destination "$name.sha256")
+        }
+        Assert-NonEmptyFile (Join-Path $Destination "windows-build.manifest")
+        if (-not [string]::IsNullOrWhiteSpace($VersionSource)) {
+            $publishedVersion = (Get-Content -LiteralPath (Join-Path $Destination "version.txt") -TotalCount 1).Trim()
+            if ($publishedVersion -ne $ExpectedVersion) {
+                throw "Windows-only Feed-Version '$publishedVersion' stimmt nicht mit '$ExpectedVersion' ueberein."
+            }
+        }
+        if ($hadDestination) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    } catch {
+        $primary = $_
+        try {
+            if ($installed -and (Test-Path -LiteralPath $Destination)) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force
+            }
+            if ($hadDestination -and (Test-Path -LiteralPath $backup)) {
+                Move-Item -LiteralPath $backup -Destination $Destination
+            }
+        } catch {
+            throw "Feed-Publikation fehlgeschlagen ($primary); Rollback fehlgeschlagen: $_"
+        }
+        throw $primary
     }
 }
 
@@ -42,7 +141,7 @@ cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 $shareSrc = Join-Path $repoRoot "share-server"
-$shareOut = Join-Path $repoRoot "release-native\share-server"
+$shareOut = Join-Path $ReleaseOutput "share-server"
 if (Test-Path $shareSrc) {
     Push-Location $shareSrc
     try {
@@ -53,31 +152,20 @@ if (Test-Path $shareSrc) {
     }
     New-Item -ItemType Directory -Force $shareOut | Out-Null
     Copy-Item (Join-Path $shareSrc "target\release\se-share-server.exe") (Join-Path $shareOut "se-share-server.exe") -Force
-    $linuxShare = Join-Path $shareSrc "target\release\se-share-server"
-    if (Test-Path $linuxShare) {
-        Copy-Item $linuxShare (Join-Path $shareOut "se-share-server-linux") -Force
-    }
+} else {
+    throw "Share-Server-Quellverzeichnis fehlt: $shareSrc"
 }
 
-# Feed aktualisieren (EXE zuerst, version.txt zuletzt — Clients sehen die neue
-# Version erst, wenn die EXE schon vollstaendig da ist). Dateiname
-# smart_explorer.exe (ohne Leerzeichen) ist identisch zum Git/HTTPS-Feed unter
-# release-native\update-feed, der ins Repo committet und ueber
-# raw.githubusercontent.com ausgeliefert wird ("Git als Update-Quelle").
-New-Item -ItemType Directory -Force $Feed | Out-Null
-Copy-Item "target\release\smart_explorer.exe" "$Feed\smart_explorer.exe" -Force
-Copy-Item "target\release\smart_explorer_updater.exe" "$Feed\smart_explorer_updater.exe" -Force
-Copy-Item "target\release\se.exe" "$Feed\se.exe" -Force
-function Write-Sha256File([string]$Path) {
-    $hash = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
-    $name = [System.IO.Path]::GetFileName($Path)
-    Set-Content "$Path.sha256" "$hash  $name" -Encoding ascii
+$commandProject = Join-Path $PSScriptRoot "explorer-command"
+Push-Location $commandProject
+try {
+    cargo build --release
+    if ($LASTEXITCODE -ne 0) { throw "Context-Menü-DLL-Build fehlgeschlagen" }
+} finally {
+    Pop-Location
 }
-Write-Sha256File "$Feed\smart_explorer.exe"
-Write-Sha256File "$Feed\smart_explorer_updater.exe"
-Write-Sha256File "$Feed\se.exe"
-Set-Content "$Feed\version.txt" $version -Encoding ascii
-Write-Host "Feed aktualisiert: $Feed (v$version)"
+$commandDll = Join-Path $commandProject "target\release\smart_explorer_command.dll"
+Assert-NonEmptyFile $commandDll
 
 # Installer neu bauen (fuer Neuinstallationen). EXE_SRC zeigt auf den nativen
 # Windows-Build (installer.nsi defaultet auf den gnu-Cross-Pfad).
@@ -94,14 +182,67 @@ if ($makensisCmd) {
     $makensis = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if ($makensis) {
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "/DCLI_SRC=target\release\se.exe" "installer.nsi" | Out-Null
-    Write-Host "Installer: ..\release-native\Smart Explorer Setup $version.exe"
+    New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
+    $installer = Join-Path $ReleaseOutput "Smart Explorer Setup $version.exe"
+    Remove-Item $installer -Force -ErrorAction SilentlyContinue
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "/DCLI_SRC=target\release\se.exe" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installer-Build fehlgeschlagen: $installer"
+    }
+    Assert-NonEmptyFile $installer
+    Write-Host "Installer: $installer"
 } else {
-    Write-Warning "makensis nicht gefunden - Installer uebersprungen"
+    throw "makensis nicht gefunden - ein Release ohne Installer ist unvollstaendig"
 }
 
 # Portable Kopie
-Copy-Item "target\release\smart_explorer.exe" "..\release-native\Smart Explorer.exe" -Force
-Copy-Item "target\release\smart_explorer_updater.exe" "..\release-native\Smart Explorer Updater.exe" -Force
-Copy-Item "target\release\se.exe" "..\release-native\se.exe" -Force
+New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
+Copy-Item "target\release\smart_explorer.exe" (Join-Path $ReleaseOutput "Smart Explorer.exe") -Force
+Copy-Item "target\release\smart_explorer_updater.exe" (Join-Path $ReleaseOutput "Smart Explorer Updater.exe") -Force
+Copy-Item "target\release\se.exe" (Join-Path $ReleaseOutput "se.exe") -Force
+Copy-Item -LiteralPath $commandDll -Destination (Join-Path $ReleaseOutput "smart_explorer_command.dll") -Force
+
+# Publish the Windows-only candidate only after every Windows artifact exists.
+# The whole directory replaces the prior custom feed, so stale Linux payloads
+# cannot survive under the new partial version.
+$feedParent = Split-Path -Parent $resolvedFeed
+New-Item -ItemType Directory -Force $feedParent | Out-Null
+$feedStage = Join-Path $feedParent (".windows-feed-candidate.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N"))
+$versionStage = Join-Path $feedParent (".windows-version.{0}.{1}.tmp" -f $PID, [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force $feedStage | Out-Null
+try {
+    $payloads = @(
+        [pscustomobject]@{ Name = "smart_explorer.exe"; Source = "target\release\smart_explorer.exe" },
+        [pscustomobject]@{ Name = "smart_explorer_updater.exe"; Source = "target\release\smart_explorer_updater.exe" },
+        [pscustomobject]@{ Name = "se.exe"; Source = "target\release\se.exe" }
+    )
+    $manifest = @("version=$version")
+    foreach ($payload in $payloads) {
+        $name = $payload.Name
+        $source = $payload.Source
+        Assert-NonEmptyFile $source
+        $staged = Join-Path $feedStage $name
+        Copy-Item -LiteralPath $source -Destination $staged -Force
+        Write-Sha256File $staged
+        $expected = ((Get-Content -LiteralPath "$staged.sha256" -TotalCount 1) -split '\s+')[0]
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            throw "SHA256-Prüfung fehlgeschlagen: $staged"
+        }
+        $manifest += "$name=$actual"
+    }
+    Write-AsciiLf (Join-Path $feedStage "windows-build.manifest") $manifest
+    Assert-NonEmptyFile (Join-Path $feedStage "windows-build.manifest")
+    if (-not $DeferFeedVersion) {
+        Write-AsciiLf $versionStage @($version)
+        Publish-FeedDirectoryTransaction $feedStage $resolvedFeed $versionStage $version
+        Write-Host "Expliziter Windows-only Feed atomar aktualisiert: $resolvedFeed (v$version)"
+    } else {
+        Publish-FeedDirectoryTransaction $feedStage $resolvedFeed "" $version
+        Write-Host "Windows-Payload-Stage erstellt; version.txt bleibt fuer den Gesamt-Commit unverändert."
+    }
+} finally {
+    Remove-Item -LiteralPath $feedStage -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $versionStage -Force -ErrorAction SilentlyContinue
+}
 Write-Host "Fertig."

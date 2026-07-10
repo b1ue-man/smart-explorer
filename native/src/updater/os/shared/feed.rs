@@ -4,6 +4,9 @@ use std::time::Duration;
 use super::config::update_source_str;
 use super::core::{parse_sha256_file, parse_ver, staged_payload_path, verify_sha256};
 use super::os;
+use super::staging::stage_from_feed;
+use super::types::StagedUpdate;
+use super::types::VerifiedPayload;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
@@ -43,7 +46,7 @@ impl Feed {
 
     /// Stage the new app binary as a local file. Local feeds are copied too, so
     /// a detached helper can delete the staging file without touching the feed.
-    pub(super) fn fetch_exe(&self, version: &str) -> Result<PathBuf, String> {
+    pub(super) fn fetch_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
         let spec = os::app_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -54,7 +57,7 @@ impl Feed {
         )
     }
 
-    pub(super) fn fetch_updater_exe(&self, version: &str) -> Result<PathBuf, String> {
+    pub(super) fn fetch_updater_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
         let spec = os::updater_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -65,7 +68,7 @@ impl Feed {
         )
     }
 
-    pub(super) fn fetch_cli_exe(&self, version: &str) -> Result<PathBuf, String> {
+    pub(super) fn fetch_cli_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
         let spec = os::cli_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -83,7 +86,7 @@ impl Feed {
         hash_name: &str,
         temp_prefix: &str,
         version: &str,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<VerifiedPayload, String> {
         let hash = self.read_sha256_required(hash_name)?;
         let dest = staged_payload_path(temp_prefix, version, &hash);
         let _ = std::fs::remove_file(&dest);
@@ -105,7 +108,7 @@ impl Feed {
                     )
                 })?;
                 verify_sha256(&dest, &hash)?;
-                Ok(dest)
+                VerifiedPayload::new(dest, hash)
             }
             Feed::Http(base) => {
                 let mut last_err = String::new();
@@ -113,7 +116,7 @@ impl Feed {
                     match http_download(&format!("{base}/{name}"), &dest) {
                         Ok(()) => {
                             verify_sha256(&dest, &hash)?;
-                            return Ok(dest);
+                            return VerifiedPayload::new(dest, hash);
                         }
                         Err(e) => last_err = e,
                     }
@@ -400,6 +403,30 @@ pub fn download_version(version: &str) -> Result<PathBuf, String> {
                 format!(
                     "Release-Download fehlgeschlagen: {}; Branch-Fallback fehlgeschlagen: {}",
                     release_err, branch_err
+                )
+            })
+        }
+    }
+}
+
+/// Download and durably stage all payloads for a specific GitHub release.
+/// This function never changes installed files or launches the updater.
+pub fn download_update(version: &str) -> Result<StagedUpdate, String> {
+    let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
+    let (owner, repo) =
+        github_repo(&raw).ok_or("Versionen sind nur ueber einen GitHub-Feed abrufbar")?;
+    let release = Feed::Http(format!(
+        "https://github.com/{owner}/{repo}/releases/download/v{version}"
+    ));
+    match stage_from_feed(&release, version) {
+        Ok(bundle) => Ok(bundle),
+        Err(release_error) => {
+            let branch = Feed::Http(format!(
+                "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed"
+            ));
+            stage_from_feed(&branch, version).map_err(|branch_error| {
+                format!(
+                    "Release-Payloads fehlgeschlagen: {release_error}; Branch-Fallback fehlgeschlagen: {branch_error}"
                 )
             })
         }

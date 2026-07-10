@@ -27,17 +27,12 @@ pub fn build_saved(form: &ConnectForm, port: u16) -> SavedConnection {
     }
 }
 
-pub(super) fn persist(form: &ConnectForm, port: u16, secret: Option<&str>) {
+pub(super) fn persist(form: &ConnectForm, port: u16, secret: Option<&str>) -> Result<(), String> {
     if !form.save {
-        return;
+        return Ok(());
     }
     let saved = build_saved(form, port);
-    let _ = crate::creds::save_connection(&saved);
-    if let Some(s) = secret {
-        if !s.is_empty() {
-            let _ = crate::creds::set_secret(&saved.account(), s);
-        }
-    }
+    crate::creds::save_connection_with_secret(&saved, secret)
 }
 
 #[cfg(test)]
@@ -66,5 +61,14 @@ mod tests {
                 path: "C:/k".into()
             }
         );
+    }
+
+    #[test]
+    fn persistence_is_a_noop_when_save_is_disabled() {
+        let form = ConnectForm {
+            save: false,
+            ..Default::default()
+        };
+        assert!(persist(&form, 22, Some("not-written")).is_ok());
     }
 }

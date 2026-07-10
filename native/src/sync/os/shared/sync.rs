@@ -16,6 +16,7 @@
 // the engine's stable API for a richer sync UI later.
 #![allow(dead_code)]
 
+use super::sync_copy::copy_stream;
 use crate::vfs::{Backend, BackendHandle};
 use crossbeam_channel::Sender;
 use std::collections::VecDeque;
@@ -23,6 +24,34 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+const MAX_REPORTED_ERRORS: usize = 100;
+const MAX_WALK_NODES: u64 = 1_000_000;
+const MAX_WALK_TEXT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_WALK_DEPTH: usize = 512;
+
+#[derive(Default)]
+pub(super) struct WalkBudget {
+    nodes: u64,
+    text_bytes: u64,
+}
+
+impl WalkBudget {
+    pub(super) fn record(&mut self, path: &str, depth: usize) -> Result<(), String> {
+        if depth > MAX_WALK_DEPTH {
+            return Err(format!("sync tree exceeds {MAX_WALK_DEPTH} levels"));
+        }
+        self.nodes = self.nodes.saturating_add(1);
+        self.text_bytes = self.text_bytes.saturating_add(path.len() as u64);
+        if self.nodes > MAX_WALK_NODES {
+            return Err(format!("sync tree exceeds {MAX_WALK_NODES} entries"));
+        }
+        if self.text_bytes > MAX_WALK_TEXT_BYTES {
+            return Err("sync path data exceeds 128 MiB".to_string());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Default, Clone, Debug)]
 pub struct SyncStats {
@@ -61,7 +90,7 @@ pub struct SyncOptions {
     pub dry_run: bool,
 }
 
-fn join(root: &str, rel: &str) -> String {
+pub(super) fn join(root: &str, rel: &str) -> String {
     if rel.is_empty() {
         root.to_string()
     } else {
@@ -69,7 +98,7 @@ fn join(root: &str, rel: &str) -> String {
     }
 }
 
-fn rel_of(path: &str, root: &str) -> String {
+pub(super) fn rel_of(path: &str, root: &str) -> String {
     let r = root.trim_end_matches('/');
     if let Some(rest) = path.strip_prefix(r) {
         rest.trim_start_matches('/').to_string()
@@ -89,15 +118,27 @@ fn parent_of(path: &str) -> Option<String> {
     })
 }
 
-fn copy_stream(src: &dyn Backend, sp: &str, dst: &dyn Backend, dp: &str) -> io::Result<u64> {
-    if let Some(parent) = parent_of(dp) {
-        let _ = dst.mkdir_all(&parent);
+pub(super) fn record_error(
+    stats: &mut SyncStats,
+    errors: &mut Vec<(String, String)>,
+    path: impl Into<String>,
+    message: impl Into<String>,
+) {
+    stats.errors = stats.errors.saturating_add(1);
+    if errors.len() < MAX_REPORTED_ERRORS {
+        errors.push((path.into(), message.into()));
+        return;
     }
-    let mut r = src.open_read(sp)?;
-    let mut w = dst.open_write(dp)?;
-    let n = io::copy(&mut r, &mut w)?;
-    w.flush()?; // force remote commit so upload errors surface here
-    Ok(n)
+    let suppressed = stats.errors.saturating_sub(MAX_REPORTED_ERRORS as u64);
+    let summary = (
+        String::new(),
+        format!("{suppressed} weitere Synchronisierungsfehler unterdrückt"),
+    );
+    if errors.len() == MAX_REPORTED_ERRORS {
+        errors.push(summary);
+    } else {
+        errors[MAX_REPORTED_ERRORS] = summary;
+    }
 }
 
 pub fn start_sync(
@@ -110,10 +151,23 @@ pub fn start_sync(
 ) -> SyncHandle {
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
-    std::thread::Builder::new()
+    let spawn_errors = tx.clone();
+    if let Err(error) = std::thread::Builder::new()
         .name("sync-driver".into())
         .spawn(move || run(src, src_root, dst, dst_root, opts, tx, c))
-        .expect("spawn sync thread");
+    {
+        let _ = spawn_errors.send(SyncMsg::Done(SyncResult {
+            stats: SyncStats {
+                errors: 1,
+                ..Default::default()
+            },
+            errors: vec![(
+                "sync-driver".into(),
+                format!("worker start failed: {error}"),
+            )],
+            elapsed_ms: 0,
+        }));
+    }
     SyncHandle { cancel }
 }
 
@@ -131,42 +185,136 @@ fn run(
     let mut errors: Vec<(String, String)> = Vec::new();
     let mut last_progress = Instant::now();
 
-    if !opts.dry_run {
-        let _ = dst.mkdir_all(&dst_root);
+    if let Err(error) = require_plain_directory(&*src, &src_root, false) {
+        record_error(
+            &mut stats,
+            &mut errors,
+            src_root.clone(),
+            format!("invalid sync source root: {error}"),
+        );
+        let _ = tx.send(SyncMsg::Done(SyncResult {
+            stats,
+            errors,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        }));
+        return;
+    }
+
+    if !opts.dry_run || dst.try_exists(&dst_root).unwrap_or(true) {
+        if let Err(error) = require_plain_directory(&*dst, &dst_root, !opts.dry_run) {
+            record_error(
+                &mut stats,
+                &mut errors,
+                dst_root.clone(),
+                format!("invalid sync destination root: {error}"),
+            );
+            let _ = tx.send(SyncMsg::Done(SyncResult {
+                stats,
+                errors,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            }));
+            return;
+        }
     }
 
     // ── copy/update pass (BFS over src) ──
-    let mut queue: VecDeque<String> = VecDeque::new();
-    queue.push_back(src_root.clone());
-    while let Some(dir) = queue.pop_front() {
+    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+    let mut source_budget = WalkBudget::default();
+    if let Err(error) = source_budget.record(&src_root, 0) {
+        record_error(&mut stats, &mut errors, src_root.clone(), error);
+    } else {
+        queue.push_back((src_root.clone(), 0));
+    }
+    'copy_walk: while let Some((dir, depth)) = queue.pop_front() {
         if cancel.load(Ordering::Relaxed) {
             break;
+        }
+        if let Err(error) = require_plain_directory(&*src, &dir, false) {
+            record_error(
+                &mut stats,
+                &mut errors,
+                dir.clone(),
+                format!("source directory changed before traversal: {error}"),
+            );
+            continue;
         }
         let entries = match src.list_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
-                stats.errors += 1;
-                errors.push((dir, e.to_string()));
+                record_error(&mut stats, &mut errors, dir, e.to_string());
                 continue;
             }
         };
+        let mut child_names = std::collections::HashSet::new();
         for m in entries {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
+            if let Err(error) = crate::vfs::validate_child_name(&m.name) {
+                record_error(&mut stats, &mut errors, dir.clone(), error.to_string());
+                continue;
+            }
+            if !child_names.insert(m.name.clone()) {
+                record_error(
+                    &mut stats,
+                    &mut errors,
+                    dir.clone(),
+                    format!("backend returned duplicate child name: {:?}", m.name),
+                );
+                continue;
+            }
+            if m.is_symlink {
+                record_error(
+                    &mut stats,
+                    &mut errors,
+                    dir.clone(),
+                    format!("link-like source entry is not synchronized: {:?}", m.name),
+                );
+                continue;
+            }
             let sp = join(&dir, &m.name);
+            if let Err(error) = source_budget.record(&sp, depth + 1) {
+                record_error(&mut stats, &mut errors, sp, error);
+                break 'copy_walk;
+            }
             let rel = rel_of(&sp, &src_root);
             let dp = join(&dst_root, &rel);
             if m.is_dir {
                 if !opts.dry_run {
-                    let _ = dst.mkdir_all(&dp);
+                    if let Err(error) = require_plain_directory(&*dst, &dp, true) {
+                        record_error(
+                            &mut stats,
+                            &mut errors,
+                            dp,
+                            format!("create destination directory: {error}"),
+                        );
+                        continue;
+                    }
                 }
-                queue.push_back(sp);
+                queue.push_back((sp, depth + 1));
                 continue;
             }
-            let need = match dst.stat(&dp) {
-                Err(_) => true,
-                Ok(dm) => dm.size != m.size || m.mtime_ms > dm.mtime_ms,
+            let (need, destination_expected) = match dst.stat(&dp) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (true, None),
+                Err(error) => {
+                    record_error(
+                        &mut stats,
+                        &mut errors,
+                        dp.clone(),
+                        format!("inspect destination: {error}"),
+                    );
+                    continue;
+                }
+                Ok(dm) if dm.is_dir || dm.is_symlink => {
+                    record_error(
+                        &mut stats,
+                        &mut errors,
+                        dp.clone(),
+                        "destination is a directory or link-like entry",
+                    );
+                    continue;
+                }
+                Ok(dm) => (dm.size != m.size || m.mtime_ms > dm.mtime_ms, Some(dm)),
             };
             if !need {
                 stats.skipped += 1;
@@ -175,14 +323,21 @@ fn run(
             if opts.dry_run {
                 stats.copied += 1;
             } else {
-                match copy_stream(&*src, &sp, &*dst, &dp) {
+                match copy_stream(
+                    &*src,
+                    &sp,
+                    &m,
+                    &*dst,
+                    &dp,
+                    destination_expected.as_ref(),
+                    &cancel,
+                ) {
                     Ok(n) => {
                         stats.copied += 1;
                         stats.bytes += n;
                     }
                     Err(e) => {
-                        stats.errors += 1;
-                        errors.push((sp.clone(), e.to_string()));
+                        record_error(&mut stats, &mut errors, sp.clone(), e.to_string());
                     }
                 }
             }
@@ -198,47 +353,24 @@ fn run(
     }
 
     // ── delete pass (mirror): remove dst entries with no src counterpart ──
-    if opts.delete_extra && !cancel.load(Ordering::Relaxed) {
-        let mut files: Vec<String> = Vec::new();
-        let mut dirs: Vec<String> = Vec::new();
-        let mut dq: VecDeque<String> = VecDeque::new();
-        dq.push_back(dst_root.clone());
-        while let Some(dir) = dq.pop_front() {
-            let entries = match dst.list_dir(&dir) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            for m in entries {
-                let dp = join(&dir, &m.name);
-                let rel = rel_of(&dp, &dst_root);
-                let sp = join(&src_root, &rel);
-                let in_src = src.stat(&sp).is_ok();
-                if m.is_dir {
-                    dq.push_back(dp.clone());
-                    if !in_src {
-                        dirs.push(dp);
-                    }
-                } else if !in_src {
-                    files.push(dp);
-                }
-            }
-        }
-        if !opts.dry_run {
-            for f in &files {
-                if dst.remove_file(f).is_ok() {
-                    stats.deleted += 1;
-                }
-            }
-            // deepest dirs first so they're empty when removed
-            dirs.sort_by_key(|d| std::cmp::Reverse(d.len()));
-            for d in &dirs {
-                if dst.remove_dir(d).is_ok() {
-                    stats.deleted += 1;
-                }
-            }
-        } else {
-            stats.deleted += (files.len() + dirs.len()) as u64;
-        }
+    if opts.delete_extra && !cancel.load(Ordering::Relaxed) && stats.errors > 0 {
+        record_error(
+            &mut stats,
+            &mut errors,
+            dst_root.clone(),
+            "mirror deletion skipped because the copy/source pass reported errors",
+        );
+    } else if opts.delete_extra && !cancel.load(Ordering::Relaxed) {
+        super::sync_delete::delete_extras(
+            &*src,
+            &src_root,
+            &*dst,
+            &dst_root,
+            opts.dry_run,
+            &cancel,
+            &mut stats,
+            &mut errors,
+        );
     }
 
     let _ = tx.send(SyncMsg::Done(SyncResult {
@@ -248,154 +380,31 @@ fn run(
     }));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::vfs::LocalBackend;
-    use crossbeam_channel::unbounded;
-    use std::path::PathBuf;
-
-    fn tmp(tag: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("sync_{}_{}_{}", tag, std::process::id(), nanos));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-    fn fwd(p: &std::path::Path) -> String {
-        p.to_string_lossy().replace('\\', "/")
-    }
-    fn wait(rx: &crossbeam_channel::Receiver<SyncMsg>) -> SyncResult {
-        loop {
-            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                Ok(SyncMsg::Done(r)) => return r,
-                Ok(_) => {}
-                Err(_) => panic!("sync timed out"),
-            }
+pub(super) fn require_plain_directory(
+    backend: &dyn Backend,
+    path: &str,
+    create: bool,
+) -> io::Result<()> {
+    let metadata = match backend.stat(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
+            backend.mkdir_all(path)?;
+            backend.stat(path)?
         }
+        Err(error) => return Err(error),
+    };
+    if metadata.is_symlink || !metadata.is_dir {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("directory root is link-like or not a directory: {path}"),
+        ));
     }
-    fn handles(src: &std::path::Path, dst: &std::path::Path) -> (BackendHandle, BackendHandle) {
-        (
-            Arc::new(LocalBackend::new(&fwd(src))),
-            Arc::new(LocalBackend::new(&fwd(dst))),
-        )
-    }
-
-    #[test]
-    fn mirrors_tree_and_updates_changed() {
-        let src = tmp("src");
-        let dst = tmp("dst");
-        std::fs::create_dir_all(src.join("sub")).unwrap();
-        std::fs::write(src.join("a.txt"), b"hello").unwrap();
-        std::fs::write(src.join("sub/b.txt"), b"world!!").unwrap();
-
-        let (sb, db) = handles(&src, &dst);
-        let (tx, rx) = unbounded();
-        start_sync(
-            sb,
-            fwd(&src),
-            db,
-            fwd(&dst),
-            SyncOptions {
-                delete_extra: false,
-                dry_run: false,
-            },
-            tx,
-        );
-        let r = wait(&rx);
-        assert_eq!(r.stats.errors, 0);
-        assert_eq!(r.stats.copied, 2);
-        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"hello");
-        assert_eq!(std::fs::read(dst.join("sub/b.txt")).unwrap(), b"world!!");
-
-        // change a source file (different size) → only it is re-copied
-        std::fs::write(src.join("a.txt"), b"hello world").unwrap();
-        let (sb, db) = handles(&src, &dst);
-        let (tx, rx) = unbounded();
-        start_sync(
-            sb,
-            fwd(&src),
-            db,
-            fwd(&dst),
-            SyncOptions {
-                delete_extra: false,
-                dry_run: false,
-            },
-            tx,
-        );
-        let r = wait(&rx);
-        assert_eq!(r.stats.copied, 1);
-        assert_eq!(r.stats.skipped, 1);
-        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"hello world");
-
-        std::fs::remove_dir_all(&src).ok();
-        std::fs::remove_dir_all(&dst).ok();
-    }
-
-    #[test]
-    fn delete_extra_removes_orphans() {
-        let src = tmp("src2");
-        let dst = tmp("dst2");
-        std::fs::write(src.join("keep.txt"), b"x").unwrap();
-        std::fs::write(dst.join("keep.txt"), b"x").unwrap();
-        std::fs::write(dst.join("orphan.txt"), b"y").unwrap();
-        std::fs::create_dir_all(dst.join("gone")).unwrap();
-        std::fs::write(dst.join("gone/z.txt"), b"z").unwrap();
-
-        let (sb, db) = handles(&src, &dst);
-        let (tx, rx) = unbounded();
-        start_sync(
-            sb,
-            fwd(&src),
-            db,
-            fwd(&dst),
-            SyncOptions {
-                delete_extra: true,
-                dry_run: false,
-            },
-            tx,
-        );
-        let r = wait(&rx);
-        assert!(dst.join("keep.txt").exists());
-        assert!(
-            !dst.join("orphan.txt").exists(),
-            "orphan file must be deleted"
-        );
-        assert!(
-            !dst.join("gone/z.txt").exists(),
-            "orphan dir contents deleted"
-        );
-        assert!(r.stats.deleted >= 2);
-
-        std::fs::remove_dir_all(&src).ok();
-        std::fs::remove_dir_all(&dst).ok();
-    }
-
-    #[test]
-    fn dry_run_writes_nothing() {
-        let src = tmp("src3");
-        let dst = tmp("dst3");
-        std::fs::write(src.join("a.txt"), b"data").unwrap();
-        let (sb, db) = handles(&src, &dst);
-        let (tx, rx) = unbounded();
-        start_sync(
-            sb,
-            fwd(&src),
-            db,
-            fwd(&dst),
-            SyncOptions {
-                delete_extra: false,
-                dry_run: true,
-            },
-            tx,
-        );
-        let r = wait(&rx);
-        assert_eq!(r.stats.copied, 1);
-        assert!(!dst.join("a.txt").exists(), "dry-run must not write");
-        std::fs::remove_dir_all(&src).ok();
-        std::fs::remove_dir_all(&dst).ok();
-    }
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "sync_queue_tests.rs"]
+mod queue_tests;
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

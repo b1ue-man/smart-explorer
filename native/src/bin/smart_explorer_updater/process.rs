@@ -1,4 +1,4 @@
-use super::logging::{appdata_dir, append_log};
+use super::logging::appdata_dir;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,27 +17,64 @@ impl StopTargetError {
     }
 }
 
-pub(crate) fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
+pub(crate) fn wait_for_pid_exit(pid: u32, timeout: Duration) -> Result<(), String> {
     if pid == 0 {
-        return true;
+        return Ok(());
     }
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{
             OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
         };
         unsafe {
             let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-            if !h.is_null() {
-                let rc = WaitForSingleObject(h, timeout.as_millis().min(u32::MAX as u128) as u32);
-                CloseHandle(h);
-                return rc == WAIT_OBJECT_0;
+            if h.is_null() {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(87) {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "Elternprozess {pid} konnte nicht ueberwacht werden: {error}"
+                ));
+            }
+            let rc = WaitForSingleObject(h, timeout.as_millis().min(u32::MAX as u128) as u32);
+            CloseHandle(h);
+            match rc {
+                WAIT_OBJECT_0 => Ok(()),
+                WAIT_TIMEOUT => Err(format!(
+                    "Elternprozess {pid} lief nach {} Sekunden noch; Update wurde nicht angewendet",
+                    timeout.as_secs()
+                )),
+                _ => Err(format!("Warten auf Elternprozess {pid} fehlgeschlagen")),
             }
         }
     }
-    std::thread::sleep(Duration::from_millis(300));
-    true
+    #[cfg(target_os = "linux")]
+    {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let rc = unsafe { libc::kill(pid as i32, 0) };
+            if rc != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(());
+                }
+                if error.raw_os_error() != Some(libc::EPERM) {
+                    return Err(format!("Elternprozess {pid} pruefen: {error}"));
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Elternprozess {pid} lief nach {} Sekunden noch; Update wurde nicht angewendet",
+                    timeout.as_secs()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    return Err("PID-Warten wird auf diesem Betriebssystem nicht unterstuetzt".to_string());
 }
 
 fn request_daemon_stop_marker() {
@@ -52,11 +89,73 @@ fn clear_daemon_runtime_markers() {
     let _ = std::fs::remove_file(sync.join("daemon.ipc"));
 }
 
-#[cfg(not(windows))]
-pub(crate) fn stop_target_processes_for_update(_target: &Path) -> Result<(), StopTargetError> {
+#[cfg(target_os = "linux")]
+pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), StopTargetError> {
     request_daemon_stop_marker();
-    clear_daemon_runtime_markers();
-    Ok(())
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let running = linux_target_pids(target)?;
+        if running.is_empty() {
+            clear_daemon_runtime_markers();
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(StopTargetError::new(
+                format!(
+                    "Smart Explorer laeuft noch und blockiert das Update (PIDs: {})",
+                    running
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                false,
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_target_pids(target: &Path) -> Result<Vec<u32>, StopTargetError> {
+    let expected = std::fs::canonicalize(target).map_err(|error| {
+        StopTargetError::new(
+            format!("Programmdatei {} aufloesen: {error}", target.display()),
+            false,
+        )
+    })?;
+    let mut matches = Vec::new();
+    let entries = std::fs::read_dir("/proc").map_err(|error| {
+        StopTargetError::new(format!("Linux-Prozessliste lesen: {error}"), false)
+    })?;
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        if std::fs::read_link(entry.path().join("exe"))
+            .ok()
+            .and_then(|path| std::fs::canonicalize(path).ok())
+            .is_some_and(|path| path == expected)
+        {
+            matches.push(pid);
+        }
+    }
+    Ok(matches)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn stop_target_processes_for_update(_target: &Path) -> Result<(), StopTargetError> {
+    Err(StopTargetError::new(
+        "Prozesspruefung wird auf diesem Betriebssystem nicht unterstuetzt",
+        false,
+    ))
 }
 
 #[cfg(windows)]
@@ -64,7 +163,7 @@ pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), Stop
     request_daemon_stop_marker();
     std::thread::sleep(Duration::from_millis(500));
 
-    let natural_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let natural_deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let running = find_target_processes(target)?;
         if running.is_empty() || std::time::Instant::now() >= natural_deadline {
@@ -73,37 +172,20 @@ pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), Stop
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    let running = find_target_processes(target)?;
-    if !running.is_empty() {
-        append_log(&format!(
-            "terminating {} target process(es) before update",
-            running.len()
-        ));
+    let remaining = find_target_processes(target)?;
+    if remaining.is_empty() {
+        clear_daemon_runtime_markers();
+        return Ok(());
     }
-    for proc in running {
-        terminate_process_for_update(proc.pid, &proc.image)?;
-    }
-
-    let forced_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let remaining = find_target_processes(target)?;
-        if remaining.is_empty() {
-            clear_daemon_runtime_markers();
-            return Ok(());
-        }
-        if std::time::Instant::now() >= forced_deadline {
-            let list = remaining
-                .iter()
-                .map(|p| format!("{} ({})", p.pid, p.image.display()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(StopTargetError::new(
-                format!("Smart Explorer laeuft noch und blockiert das Update: {list}"),
-                false,
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    let list = remaining
+        .iter()
+        .map(|process| format!("{} ({})", process.pid, process.image.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(StopTargetError::new(
+        format!("Smart Explorer laeuft noch und blockiert das Update: {list}"),
+        false,
+    ))
 }
 
 #[cfg(windows)]
@@ -205,54 +287,6 @@ fn process_image_path(pid: u32) -> Result<Option<std::path::PathBuf>, StopTarget
         }
         buf.truncate(len as usize);
         Ok(Some(std::path::PathBuf::from(OsString::from_wide(&buf))))
-    }
-}
-
-#[cfg(windows)]
-fn terminate_process_for_update(pid: u32, image: &Path) -> Result<(), StopTargetError> {
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    };
-
-    unsafe {
-        let h = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
-        if h.is_null() {
-            return Err(StopTargetError::new(
-                format!(
-                    "Prozess {pid} ({}) konnte nicht beendet werden: {}",
-                    image.display(),
-                    std::io::Error::last_os_error()
-                ),
-                is_last_error_elevation_related(),
-            ));
-        }
-        let ok = TerminateProcess(h, 0) != 0;
-        if !ok {
-            let err = std::io::Error::last_os_error();
-            CloseHandle(h);
-            return Err(StopTargetError::new(
-                format!(
-                    "Prozess {pid} ({}) konnte nicht beendet werden: {err}",
-                    image.display()
-                ),
-                is_last_error_elevation_related(),
-            ));
-        }
-        let rc = WaitForSingleObject(h, 5000);
-        CloseHandle(h);
-        if rc == WAIT_OBJECT_0 {
-            append_log(&format!("terminated process {pid} ({})", image.display()));
-            Ok(())
-        } else {
-            Err(StopTargetError::new(
-                format!(
-                    "Prozess {pid} ({}) reagiert nach Terminate nicht",
-                    image.display()
-                ),
-                false,
-            ))
-        }
     }
 }
 

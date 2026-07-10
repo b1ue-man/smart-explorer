@@ -1,0 +1,155 @@
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+
+const IPC_ADDR_FILE: &str = "daemon.ipc";
+const IPC_TOKEN_FILE: &str = "daemon.token";
+const MAX_TOKEN_BYTES: u64 = 4 * 1024;
+
+fn ipc_addr_path() -> io::Result<PathBuf> {
+    Ok(sync_data_directory()?.join(IPC_ADDR_FILE))
+}
+
+pub(super) fn clear_ipc_addr() {
+    if let Ok(path) = ipc_addr_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+pub(super) fn write_ipc_addr(addr: SocketAddr) -> io::Result<()> {
+    std::fs::write(ipc_addr_path()?, addr.to_string())
+}
+
+pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
+    std::fs::read_to_string(ipc_addr_path().ok()?)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+}
+
+pub(super) fn load_or_create_token() -> io::Result<String> {
+    let path = sync_data_directory()?.join(IPC_TOKEN_FILE);
+    match read_token_path(&path) {
+        Ok(token) => Ok(token),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => create_token(&path),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn read_token() -> io::Result<String> {
+    read_token_path(&sync_data_directory()?.join(IPC_TOKEN_FILE))
+}
+
+fn sync_data_directory() -> io::Result<PathBuf> {
+    let app = crate::support_dirs::app_data_dir();
+    validate_directory(&app)?;
+    let sync = app.join("sync");
+    std::fs::create_dir_all(&sync)?;
+    validate_directory(&sync)?;
+    Ok(sync)
+}
+
+fn validate_directory(path: &Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "daemon IPC data path must be a directory, not a link",
+        ));
+    }
+    Ok(())
+}
+
+fn create_token(path: &Path) -> io::Result<String> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return read_token_path(path);
+        }
+        Err(error) => return Err(error),
+    };
+    let result = (|| {
+        let token = generate_token()?;
+        file.write_all(token.as_bytes())?;
+        file.sync_all()?;
+        read_token_path(path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+fn read_token_path(path: &Path) -> io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata_is_link_like(&metadata) || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "daemon IPC token must be a regular file, not a link",
+        ));
+    }
+    if metadata.len() > MAX_TOKEN_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "daemon IPC token file too large",
+        ));
+    }
+    let mut file = open_token_without_following_links(path)?;
+    validate_token_handle(&file)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    let token = text.trim();
+    if token.len() < 32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "daemon IPC token too short",
+        ));
+    }
+    Ok(token.to_string())
+}
+
+fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn open_token_without_following_links(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+fn validate_token_handle(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if information.nNumberOfLinks != 1
+        || information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+            != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "daemon IPC token must be a single-link regular file",
+        ));
+    }
+    Ok(())
+}
+
+fn generate_token() -> io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}

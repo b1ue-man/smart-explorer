@@ -1,7 +1,10 @@
 # Cloud integrations via OAuth (#19) — implementation plan
 
-Status: **designed, ready to implement.** One external prerequisite is needed
-from the maintainer before the live flow can work (see "What I need from you").
+> **Historical implementation plan.** Google Drive OAuth and the Drive backend
+> are shipped. Current setup instructions live in [`CLOUD_SETUP.md`](CLOUD_SETUP.md)
+> and live open-work status lives in [`TODO.md`](TODO.md). The remaining external
+> prerequisite for each user/publisher is still their own Desktop OAuth client
+> ID; the design narrative below is retained for context.
 
 Goal: browse and **sync** cloud storage (starting with **Google Drive**) through
 the same `vfs::Backend` trait the remote layer already uses — so Drive shows up
@@ -77,7 +80,7 @@ Drive is **ID-addressed, not path-addressed**, so the backend keeps a small
 | `list_dir(path)` | resolve dir→id, `files.list?q='<id>' in parents and trashed=false`, page via `nextPageToken` |
 | `stat(path)` | `files.get?fileId=…&fields=id,name,mimeType,size,modifiedTime` |
 | `open_read(path)` | `files.get?alt=media` (folders are `application/vnd.google-apps.folder`) |
-| `open_write(path)` | resumable/multipart upload (`uploads` endpoint); create vs update by existing id |
+| `open_write(path)` | disk-spooled resumable upload (`uploads` endpoint), with bounded chunks, retry/status recovery, and final size+MD5 verification; create vs update by existing id |
 | `mkdir_all` | create folders with the folder mime type, parent = resolved id |
 | `rename` | `files.update` (name and/or `addParents`/`removeParents`) |
 | `remove_file`/`remove_dir` | `files.update` trashed=true (safer) or `files.delete` |

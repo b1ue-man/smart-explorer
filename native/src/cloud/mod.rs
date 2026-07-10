@@ -1,5 +1,7 @@
 #[path = "core/cloud.rs"]
 mod core_impl;
+#[path = "core/token_persistence.rs"]
+mod token_persistence;
 
 mod os {
     #[cfg(target_os = "linux")]

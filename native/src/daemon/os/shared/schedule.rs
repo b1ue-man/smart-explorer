@@ -1,16 +1,17 @@
 use crate::bisync::{DeletePolicy, Direction};
 use crate::syncjobs::{SyncJob, Trigger};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 
 use super::ipc::{start_listener, ShareHost};
-use super::job::run_one;
+use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::platform;
 use super::state::{
-    cadence_secs, clear_heartbeat, clear_stop, log, now_secs, paused, stop_requested,
+    cadence_secs, clear_heartbeat, clear_stop, log, now_secs, paused, stop_requested_checked,
     write_heartbeat,
 };
+
+const FALLBACK_TICK_SECS: u64 = 15;
 
 /// A cheap signature of a local subtree: (file count, newest mtime ms, total
 /// size). Any add/modify/delete changes at least one component.
@@ -19,7 +20,7 @@ fn tree_sig(root: &std::path::Path) -> (u64, i64, u64) {
     let mut newest = 0i64;
     let mut bytes = 0u64;
     let mut stack = vec![root.to_path_buf()];
-    let mut budget = 200_000u32; // guard against pathological trees
+    let mut budget = 1_000_000u32; // bounded hint; the sync engine does a full checked walk
     while let Some(d) = stack.pop() {
         let rd = match std::fs::read_dir(&d) {
             Ok(r) => r,
@@ -30,18 +31,21 @@ fn tree_sig(root: &std::path::Path) -> (u64, i64, u64) {
                 return (count, newest, bytes);
             }
             budget -= 1;
-            let md = match e.metadata() {
+            let md = match std::fs::symlink_metadata(e.path()) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
+            if platform::metadata_is_link_like(&md) {
+                continue;
+            }
             if md.is_dir() {
                 stack.push(e.path());
             } else {
-                count += 1;
-                bytes += md.len();
+                count = count.saturating_add(1);
+                bytes = bytes.saturating_add(md.len());
                 if let Ok(t) = md.modified() {
                     if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
-                        let ms = d.as_millis() as i64;
+                        let ms = i64::try_from(d.as_millis()).unwrap_or(i64::MAX);
                         if ms > newest {
                             newest = ms;
                         }
@@ -129,27 +133,26 @@ pub fn run_daemon() {
     else {
         return;
     };
-    clear_stop();
+    if let Err(error) = clear_stop() {
+        log(&format!(
+            "daemon refused to start: stop control could not be cleared: {error}"
+        ));
+        return;
+    }
     log("daemon started");
     write_heartbeat();
     let share_host = ShareHost::new();
     if let Err(e) = start_listener(share_host.clone()) {
         log(&format!("background worker IPC failed: {e}"));
     }
-    let (job_done_tx, job_done_rx) = channel::<String>();
-    let mut active_jobs: HashSet<String> = HashSet::new();
+    let mut job_supervisor = JobSupervisor::new();
+    let mut sync_enabled = crate::autostart::is_enabled();
 
-    // On-startup jobs run once now (subject to pause).
-    if !paused() {
-        for job in crate::syncjobs::load()
-            .into_iter()
-            .filter(|j| j.enabled && j.trigger == Trigger::OnStartup)
-        {
-            if stop_requested() {
-                break;
-            }
-            spawn_job(&job, &mut active_jobs, &job_done_tx);
-        }
+    // A daemon may have been started only for a Share session. Scheduled sync
+    // work is permitted exclusively after the user enabled background sync.
+    let startup_controls = scheduling_controls();
+    if sync_enabled && startup_controls.permit_mutation {
+        enqueue_startup_jobs(&mut job_supervisor);
     }
 
     // Per-job real-time state and the last-seen drive set.
@@ -158,28 +161,55 @@ pub fn run_daemon() {
     let mut seen_drives = current_drives();
 
     loop {
-        drain_finished_jobs(&mut active_jobs, &job_done_rx);
+        let controls = scheduling_controls();
+        if stop_requested() {
+            stop_daemon(&mut job_supervisor);
+            return;
+        }
+        let enabled_now = crate::autostart::is_enabled();
+        if enabled_now != sync_enabled {
+            sync_enabled = enabled_now;
+            rt_sig.clear();
+            rt_dirty_since.clear();
+            seen_drives = current_drives();
+            if sync_enabled {
+                log("background sync enabled");
+                if controls.permit_mutation {
+                    enqueue_startup_jobs(&mut job_supervisor);
+                }
+            } else {
+                log("background sync disabled; canceling scheduled work");
+                for error in job_supervisor.cancel_and_join() {
+                    log(&error);
+                }
+            }
+        }
+        if sync_enabled && controls.permit_mutation {
+            poll_jobs(&mut job_supervisor);
+        } else if sync_enabled {
+            for error in job_supervisor.cancel_and_join() {
+                log(&error);
+            }
+        }
         share_host.tick();
         if stop_requested() {
-            clear_stop();
-            log("daemon stopping (stop requested)");
-            clear_heartbeat();
+            stop_daemon(&mut job_supervisor);
             return;
         }
         let now = now_secs();
-        let jobs = crate::syncjobs::load();
+        let configured_jobs = load_configured_jobs();
 
-        if !paused() {
+        if sync_enabled && controls.permit_mutation {
             // 1) Timer jobs (interval + calendar), gated by active-hours in due().
-            for job in jobs.iter().filter(|j| j.due(now)) {
-                spawn_job(job, &mut active_jobs, &job_done_tx);
+            for job in configured_jobs.iter().filter(|j| j.due(now)) {
+                enqueue_job(&mut job_supervisor, job);
                 if stop_requested() {
                     break;
                 }
             }
 
             // 2) Real-time jobs: watch local endpoints, run after the change settles.
-            for job in jobs
+            for job in configured_jobs
                 .iter()
                 .filter(|j| j.enabled && j.trigger == Trigger::RealTime && j.active_now(now))
             {
@@ -207,7 +237,7 @@ pub fn run_daemon() {
                         // Unchanged since last tick - run if a pending change has settled.
                         if let Some(&since) = rt_dirty_since.get(&job.id) {
                             if now - since >= job.rt_debounce_secs as i64 {
-                                spawn_job(job, &mut active_jobs, &job_done_tx);
+                                enqueue_job(&mut job_supervisor, job);
                                 rt_dirty_since.remove(&job.id);
                             }
                         }
@@ -228,12 +258,12 @@ pub fn run_daemon() {
             let drives = current_drives();
             if drives != seen_drives {
                 for d in drives.difference(&seen_drives) {
-                    for job in jobs.iter().filter(|j| {
+                    for job in configured_jobs.iter().filter(|j| {
                         j.enabled && j.trigger == Trigger::OnConnect && j.active_now(now)
                     }) {
                         if drive_matches(&job.connect_match, d) {
                             log(&format!("device connected → '{}'", job.name));
-                            spawn_job(job, &mut active_jobs, &job_done_tx);
+                            enqueue_job(&mut job_supervisor, job);
                         }
                     }
                 }
@@ -243,14 +273,34 @@ pub fn run_daemon() {
 
         write_heartbeat();
         // Sleep one tick in 2 s slices so a stop request is honoured promptly.
-        let tick = cadence_secs();
+        let tick = controls.tick_secs;
         let mut slept = 0;
         while slept < tick {
             if stop_requested() {
                 break;
             }
+            if crate::autostart::is_enabled() != sync_enabled {
+                break;
+            }
             std::thread::sleep(Duration::from_secs(2));
-            drain_finished_jobs(&mut active_jobs, &job_done_rx);
+            if stop_requested() {
+                break;
+            }
+            let live_controls = scheduling_controls();
+            if sync_enabled && !live_controls.permit_mutation {
+                for error in job_supervisor.cancel_and_join() {
+                    log(&error);
+                }
+                break;
+            }
+            if live_controls.tick_secs != tick
+                || live_controls.permit_mutation != controls.permit_mutation
+            {
+                break;
+            }
+            if sync_enabled && live_controls.permit_mutation {
+                poll_jobs(&mut job_supervisor);
+            }
             share_host.tick();
             write_heartbeat();
             slept += 2;
@@ -258,26 +308,103 @@ pub fn run_daemon() {
     }
 }
 
-fn spawn_job(job: &SyncJob, active: &mut HashSet<String>, done: &Sender<String>) {
-    if active.contains(&job.id) {
-        return;
+fn enqueue_startup_jobs(supervisor: &mut JobSupervisor) {
+    for job in load_configured_jobs()
+        .into_iter()
+        .filter(|job| job.enabled && job.trigger == Trigger::OnStartup)
+    {
+        if stop_requested() || !crate::autostart::is_enabled() {
+            break;
+        }
+        enqueue_job(supervisor, &job);
     }
-    active.insert(job.id.clone());
-    let job = job.clone();
-    let done = done.clone();
-    log(&format!("job queued '{}'", job.name));
-    std::thread::Builder::new()
-        .name(format!("daemon-job-{}", job.id))
-        .spawn(move || {
-            run_one(&job);
-            let _ = done.send(job.id);
-        })
-        .ok();
 }
 
-fn drain_finished_jobs(active: &mut HashSet<String>, done: &Receiver<String>) {
-    while let Ok(id) = done.try_recv() {
-        active.remove(&id);
-        write_heartbeat();
+struct SchedulingControls {
+    permit_mutation: bool,
+    tick_secs: u64,
+}
+
+fn scheduling_controls() -> SchedulingControls {
+    let tick_secs = match cadence_secs() {
+        Ok(value) => value,
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: cadence control could not be read: {error}"
+            ));
+            return SchedulingControls {
+                permit_mutation: false,
+                tick_secs: FALLBACK_TICK_SECS,
+            };
+        }
+    };
+    match paused() {
+        Ok(is_paused) => SchedulingControls {
+            permit_mutation: !is_paused,
+            tick_secs,
+        },
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: pause control could not be read: {error}"
+            ));
+            SchedulingControls {
+                permit_mutation: false,
+                tick_secs,
+            }
+        }
+    }
+}
+
+fn stop_requested() -> bool {
+    match stop_requested_checked() {
+        Ok(requested) => requested,
+        Err(error) => {
+            log(&format!(
+                "daemon stopping: stop control could not be read safely: {error}"
+            ));
+            true
+        }
+    }
+}
+
+fn load_configured_jobs() -> Vec<SyncJob> {
+    match crate::syncjobs::load() {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: saved jobs could not be loaded: {error}"
+            ));
+            Vec::new()
+        }
+    }
+}
+
+fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob) {
+    if stop_requested() {
+        return;
+    }
+    match supervisor.enqueue(job) {
+        Ok(EnqueueStatus::Started | EnqueueStatus::Queued) => {
+            log(&format!("job queued '{}'", job.name));
+        }
+        Ok(EnqueueStatus::AlreadyScheduled | EnqueueStatus::RecentlyAttempted) => {}
+        Err(error) => log(&error),
+    }
+}
+
+fn stop_daemon(supervisor: &mut JobSupervisor) {
+    log("daemon stopping (stop requested or unreadable stop control)");
+    for error in supervisor.cancel_and_join() {
+        log(&error);
+    }
+    if let Err(error) = clear_stop() {
+        log(&format!("stop control could not be cleared: {error}"));
+    }
+    clear_heartbeat();
+}
+
+fn poll_jobs(supervisor: &mut JobSupervisor) {
+    for error in supervisor.poll() {
+        log(&error);
     }
 }

@@ -5,10 +5,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "tests/dedupe.rs"]
+mod dedupe;
 #[path = "tests/extra.rs"]
 mod extra;
+#[path = "tests/hash_walk.rs"]
+mod hash_walk;
 #[path = "tests/incremental.rs"]
 mod incremental;
+#[path = "tests/move_retry.rs"]
+mod move_retry;
 #[path = "tests/safety.rs"]
 mod safety;
 
@@ -45,8 +51,9 @@ fn run(
     let bt = walk_files(b, rb, &cancel, &f, mb, Some(&pb)).unwrap();
     let (actions, conflicts, converged) = plan(&at, &bt, base, opts);
     let mut errs = Vec::new();
-    let report =
-        super::apply::apply_with_results(&actions, a, ra, b, rb, opts, vdir, &mut errs, &cancel);
+    let report = super::apply::apply_planned_with_results(
+        &actions, &at, &bt, a, ra, b, rb, opts, vdir, &mut errs, &cancel,
+    );
     let st = report.stats;
     // re-walk for an accurate baseline after writes
     let at2 = walk_files(a, ra, &cancel, &f, ma, Some(&pa)).unwrap();
@@ -402,228 +409,6 @@ fn content_hash_skips_mtime_only_difference() {
         1,
         "no hash on one side ⇒ mtime gap is a diff"
     );
-}
-
-#[test]
-fn hash_mode_picks_cheapest_source() {
-    use crate::vfs::{Scheme, VfsMeta, VfsResult};
-    use std::io::{Read, Write};
-    // A backend that advertises a free native hash (like Drive/Nextcloud).
-    struct Native(LocalBackend);
-    impl Backend for Native {
-        fn scheme(&self) -> Scheme {
-            self.0.scheme()
-        }
-        fn root_display(&self) -> String {
-            self.0.root_display()
-        }
-        fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> {
-            self.0.list_dir(p)
-        }
-        fn stat(&self, p: &str) -> VfsResult<VfsMeta> {
-            self.0.stat(p)
-        }
-        fn open_read(&self, p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            self.0.open_read(p)
-        }
-        fn open_write(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            self.0.open_write(p)
-        }
-        fn rename(&self, s: &str, d: &str) -> VfsResult<()> {
-            self.0.rename(s, d)
-        }
-        fn remove_file(&self, p: &str) -> VfsResult<()> {
-            self.0.remove_file(p)
-        }
-        fn remove_dir(&self, p: &str) -> VfsResult<()> {
-            self.0.remove_dir(p)
-        }
-        fn mkdir_all(&self, p: &str) -> VfsResult<()> {
-            self.0.mkdir_all(p)
-        }
-        fn provides_content_hash(&self) -> bool {
-            true
-        }
-    }
-    let local = LocalBackend::new("/tmp");
-    let native = Native(LocalBackend::new("/tmp"));
-    // Default size+mtime: the native side is free (NativeOnly); the local
-    // side reads cheaply to match it (Full); a hash-less↔hash-less pair stays
-    // unhashed (None). SizeOnly never hashes; Checksum always does.
-    assert_eq!(
-        hash_mode(&native, &local, CompareMode::MtimeSize),
-        HashMode::NativeOnly
-    );
-    assert_eq!(
-        hash_mode(&local, &native, CompareMode::MtimeSize),
-        HashMode::Full
-    );
-    assert_eq!(
-        hash_mode(&local, &local, CompareMode::MtimeSize),
-        HashMode::None
-    );
-    assert_eq!(
-        hash_mode(&local, &native, CompareMode::SizeOnly),
-        HashMode::None
-    );
-    assert_eq!(
-        hash_mode(&local, &local, CompareMode::Checksum),
-        HashMode::Full
-    );
-}
-
-#[test]
-fn walk_reuses_prev_hash_when_unchanged() {
-    // A file whose size+mtime match the previous run reuses its stored hash
-    // instead of re-reading — the "don't re-hash a big local tree" path.
-    let dir = tmp("reuse");
-    std::fs::write(dir.join("f.txt"), b"hello world").unwrap();
-    let be = LocalBackend::new(&fwd(&dir));
-    let cancel = AtomicBool::new(false);
-    let gs = empty_globset();
-    let f = WalkFilter::basic(true, &gs);
-    // First walk (Full) computes the real hash.
-    let t1 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, None).unwrap();
-    let real = t1.get("f.txt").unwrap().hash;
-    assert_ne!(real, 0);
-    // A prev tree claiming a bogus hash at the SAME size+mtime is reused
-    // verbatim (proves we didn't re-read the file).
-    let m = be.stat(&format!("{}/f.txt", fwd(&dir))).unwrap();
-    let mut prev = Tree::new();
-    prev.insert(
-        "f.txt".to_string(),
-        Sig {
-            size: m.size,
-            mtime_ms: m.mtime_ms,
-            hash: 0x5151,
-        },
-    );
-    let t2 = walk_files(&be, &fwd(&dir), &cancel, &f, HashMode::Full, Some(&prev)).unwrap();
-    assert_eq!(t2.get("f.txt").unwrap().hash, 0x5151, "reused prev hash");
-    // A size change invalidates the reuse → real hash recomputed.
-    let mut prev_bad = Tree::new();
-    prev_bad.insert(
-        "f.txt".to_string(),
-        Sig {
-            size: m.size + 1,
-            mtime_ms: m.mtime_ms,
-            hash: 0x5151,
-        },
-    );
-    let t3 = walk_files(
-        &be,
-        &fwd(&dir),
-        &cancel,
-        &f,
-        HashMode::Full,
-        Some(&prev_bad),
-    )
-    .unwrap();
-    assert_eq!(
-        t3.get("f.txt").unwrap().hash,
-        real,
-        "stale size ⇒ recomputed"
-    );
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn no_op_run_skips_rewalk() {
-    // Once converged, a no-op sync must NOT re-walk — a second full metadata
-    // pass is wasted round-trips (decisive for a remote). Counting list_dir
-    // calls: a no-op run lists each flat side exactly once (initial walk only).
-    use crate::vfs::{Scheme, VfsMeta, VfsResult};
-    use std::io::{Read, Write};
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
-    struct Counting {
-        inner: LocalBackend,
-        lists: Arc<AtomicUsize>,
-    }
-    impl Backend for Counting {
-        fn scheme(&self) -> Scheme {
-            self.inner.scheme()
-        }
-        fn root_display(&self) -> String {
-            self.inner.root_display()
-        }
-        fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> {
-            self.lists.fetch_add(1, Ordering::Relaxed);
-            self.inner.list_dir(p)
-        }
-        fn stat(&self, p: &str) -> VfsResult<VfsMeta> {
-            self.inner.stat(p)
-        }
-        fn open_read(&self, p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            self.inner.open_read(p)
-        }
-        fn open_write(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            self.inner.open_write(p)
-        }
-        fn rename(&self, s: &str, d: &str) -> VfsResult<()> {
-            self.inner.rename(s, d)
-        }
-        fn rename_overwrites(&self) -> bool {
-            true
-        }
-        fn is_local(&self) -> bool {
-            true
-        }
-        fn remove_file(&self, p: &str) -> VfsResult<()> {
-            self.inner.remove_file(p)
-        }
-        fn remove_dir(&self, p: &str) -> VfsResult<()> {
-            self.inner.remove_dir(p)
-        }
-        fn mkdir_all(&self, p: &str) -> VfsResult<()> {
-            self.inner.mkdir_all(p)
-        }
-    }
-    let a = tmp("nora");
-    let b = tmp("norb");
-    std::fs::write(a.join("f.txt"), b"hello").unwrap();
-    let (ra, rb) = (fwd(&a), fwd(&b));
-    let la = Arc::new(AtomicUsize::new(0));
-    let lb = Arc::new(AtomicUsize::new(0));
-    let ca = Counting {
-        inner: LocalBackend::new(&ra),
-        lists: la.clone(),
-    };
-    let cb = Counting {
-        inner: LocalBackend::new(&rb),
-        lists: lb.clone(),
-    };
-    let cancel = AtomicBool::new(false);
-    let gs = empty_globset();
-    let f = WalkFilter::basic(true, &gs);
-    let opts = BisyncOptions::default();
-    // Run 1 copies f.txt A→B; both sides changed → both re-walked (2 lists each).
-    let o1 = super::run(&ca, &ra, &cb, &rb, opts, &cancel, &f);
-    assert_eq!(o1.errors.len(), 0);
-    assert!(b.join("f.txt").exists());
-    assert_eq!(
-        la.load(Ordering::Relaxed),
-        2,
-        "run 1: initial walk + re-walk"
-    );
-    assert_eq!(lb.load(Ordering::Relaxed), 2);
-    // Run 2 is a no-op (already in sync) → NO re-walk → exactly one list each.
-    la.store(0, Ordering::Relaxed);
-    lb.store(0, Ordering::Relaxed);
-    let o2 = super::run(&ca, &ra, &cb, &rb, opts, &cancel, &f);
-    assert_eq!(
-        o2.stats.a_to_b + o2.stats.b_to_a + o2.stats.deleted,
-        0,
-        "no-op"
-    );
-    assert_eq!(la.load(Ordering::Relaxed), 1, "no-op skips A re-walk");
-    assert_eq!(lb.load(Ordering::Relaxed), 1, "no-op skips B re-walk");
-    let pair = pair_id(&ra, &rb);
-    let _ = std::fs::remove_file(baseline_path(&pair));
-    let _ = std::fs::remove_dir_all(versions_dir(&pair));
-    for d in [&a, &b] {
-        std::fs::remove_dir_all(d).ok();
-    }
 }
 
 #[test]

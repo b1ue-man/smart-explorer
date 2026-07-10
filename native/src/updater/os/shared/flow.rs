@@ -1,57 +1,62 @@
 use crossbeam_channel::Sender;
 
-use super::archive::{archive_binary, is_auto_update_paused, resume_auto_update};
-use super::config::{last_applied_path, update_source_str};
+use super::archive::pinned_version_checked;
+use super::config::update_source_str;
 use super::core::parse_ver;
 use super::feed::classify_feed;
-use super::os::{apply_via_installed_updater, ensure_installed_cli, ensure_installed_updater};
+use super::staging::stage_from_feed;
 use super::types::UpdateMsg;
 
-/// Force a forward update to the feed's latest, clearing any rollback pin.
+/// Force a forward check to the feed's latest even while rollback-pinned.
+/// The worker only stages verified payloads; the pin remains untouched until
+/// the user explicitly applies the staged bundle.
 /// Runs on its own thread; result via `tx`.
-pub fn update_to_latest_async(tx: Sender<UpdateMsg>) {
+pub fn update_to_latest_async(tx: Sender<UpdateMsg>) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("update-latest".into())
-        .spawn(move || {
-            resume_auto_update();
-            match check_and_apply(true) {
-                Ok(Some(msg)) => {
-                    let _ = tx.send(msg);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let _ = tx.send(UpdateMsg::Error(e));
-                }
+        .spawn(move || match check_and_stage(true) {
+            Ok(Some(msg)) => {
+                let _ = tx.send(msg);
+            }
+            Ok(None) => {
+                let _ = tx.send(UpdateMsg::Finished);
+            }
+            Err(e) => {
+                let _ = tx.send(UpdateMsg::Error(e));
             }
         })
-        .ok();
+        .map(|_| ())
 }
 
-/// Check the feed and, if it carries a newer version, swap the binary in
-/// place. Runs on its own thread; result arrives via `tx`.
+/// Check the feed and, if it carries a newer version, download and verify all
+/// release payloads. Installed files and processes are never touched here.
 /// `manual` = user clicked "check now" (gets feedback even for no-op results).
-pub fn check_async(tx: Sender<UpdateMsg>, manual: bool) {
+pub fn check_async(tx: Sender<UpdateMsg>, manual: bool) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("updater".into())
         .spawn(move || {
-            let result = check_and_apply(manual);
+            let result = check_and_stage(manual);
             match result {
                 Ok(Some(msg)) => {
                     let _ = tx.send(msg);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    let _ = tx.send(UpdateMsg::Finished);
+                }
                 Err(e) => {
                     if manual {
                         let _ = tx.send(UpdateMsg::Error(e));
+                    } else {
+                        let _ = tx.send(UpdateMsg::BackgroundError(e));
                     }
                 }
             }
         })
-        .ok();
+        .map(|_| ())
 }
 
-fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
-    if !manual && is_auto_update_paused() {
+fn check_and_stage(manual: bool) -> Result<Option<UpdateMsg>, String> {
+    if !manual && pinned_version_checked()?.is_some() {
         return Ok(None);
     }
     let raw = match update_source_str() {
@@ -73,10 +78,6 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
 
     let current = env!("CARGO_PKG_VERSION");
     if parse_ver(&feed_version) <= parse_ver(current) {
-        if parse_ver(&feed_version) == parse_ver(current) {
-            let _ = ensure_installed_updater(&feed, &feed_version, false);
-            let _ = ensure_installed_cli(&feed, &feed_version, false);
-        }
         return Ok(if manual {
             Some(UpdateMsg::UpToDate { feed_version })
         } else {
@@ -84,22 +85,6 @@ fn check_and_apply(manual: bool) -> Result<Option<UpdateMsg>, String> {
         });
     }
 
-    if let Ok(last) = std::fs::read_to_string(last_applied_path()) {
-        if last.trim() == feed_version {
-            return Err(format!(
-                "Update {} wurde bereits angewendet, aber die Programmversion ist weiterhin {} — version.txt im Feed passt nicht zur EXE",
-                feed_version, current
-            ));
-        }
-    }
-
-    let new_exe = feed.fetch_exe(&feed_version)?;
-    ensure_installed_cli(&feed, &feed_version, true)?;
-    archive_binary(current);
-    let helper = ensure_installed_updater(&feed, &feed_version, true)?;
-    apply_via_installed_updater(&helper, &new_exe, &feed_version)?;
-    resume_auto_update();
-    Ok(Some(UpdateMsg::AppliedViaWorker {
-        version: feed_version.clone(),
-    }))
+    let bundle = stage_from_feed(&feed, &feed_version)?;
+    Ok(Some(UpdateMsg::Staged(bundle)))
 }

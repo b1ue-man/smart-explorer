@@ -285,8 +285,10 @@ pub struct BisyncOptions {
     pub atomic: bool,
     /// After copying, re-stat the destination and check its size matches.
     pub verify: bool,
-    /// Retry a failed file operation this many times (with `retry_delay_secs`).
+    /// Retry only clearly transient failures that occur before any commit is
+    /// attempted. Promotion/delete outcomes and drift/type errors never retry.
     pub retries: u32,
+    /// Delay between safe retries; cancellation polls during the delay.
     pub retry_delay_secs: u64,
 }
 
@@ -361,6 +363,11 @@ impl Throttle {
 pub enum Action {
     CopyAtoB(String),
     CopyBtoA(String),
+    /// A prior A→B move published the destination but did not remove A. Verify
+    /// both complete contents again, then finish only the source deletion.
+    FinalizeMoveAtoB(String),
+    /// A prior B→A move published the destination but did not remove B.
+    FinalizeMoveBtoA(String),
     DeleteA(String),
     DeleteB(String),
     /// Keep-both, A wins: preserve B's current file as a "(Konflikt …)" copy,

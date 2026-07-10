@@ -1,9 +1,13 @@
 use super::args::ApplyArgs;
-#[cfg(any(windows, test))]
 use super::hash::verify_sha256;
 use std::path::Path;
 
-pub(crate) fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
+pub(crate) fn spawn_verified_detached(
+    exe: &Path,
+    expected_sha256: &str,
+    args: &[&str],
+) -> std::io::Result<()> {
+    validate_before_spawn(exe, expected_sha256)?;
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args);
     #[cfg(windows)]
@@ -16,6 +20,7 @@ pub(crate) fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
         if cmd.spawn().is_ok() {
             return Ok(());
         }
+        validate_before_spawn(exe, expected_sha256)?;
         let mut retry = std::process::Command::new(exe);
         retry
             .args(args)
@@ -28,22 +33,47 @@ pub(crate) fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
     }
 }
 
+fn validate_before_spawn(exe: &Path, expected_sha256: &str) -> std::io::Result<()> {
+    verify_sha256(exe, expected_sha256).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Programmdatei vor Start revalidieren: {error}"),
+        )
+    })
+}
+
 #[cfg(windows)]
 pub(crate) fn relaunch_elevated(args: &ApplyArgs) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
-    validate_helper_for_elevation(&exe, args.helper_sha256.as_deref())?;
+    validate_helper_for_elevation(&exe, &args.helper_sha256)?;
     let argv = elevated_argv(args);
     spawn_elevated_detached(&exe, &argv)
 }
 
 #[cfg(any(windows, test))]
 pub(crate) fn elevated_argv(args: &ApplyArgs) -> Vec<String> {
-    let mut argv = vec![
+    let argv = vec![
         "--apply".to_string(),
         "--target".to_string(),
         args.target.to_string_lossy().into_owned(),
+        "--target-sha256".to_string(),
+        args.target_sha256.clone(),
         "--staged".to_string(),
         args.staged.to_string_lossy().into_owned(),
+        "--staged-sha256".to_string(),
+        args.staged_sha256.clone(),
+        "--helper-target".to_string(),
+        args.helper_target.to_string_lossy().into_owned(),
+        "--helper-sha256".to_string(),
+        args.helper_sha256.clone(),
+        "--cli-staged".to_string(),
+        args.cli_staged.to_string_lossy().into_owned(),
+        "--cli-target".to_string(),
+        args.cli_target.to_string_lossy().into_owned(),
+        "--cli-sha256".to_string(),
+        args.cli_sha256.clone(),
+        "--archive".to_string(),
+        args.archive.to_string_lossy().into_owned(),
         "--parent-pid".to_string(),
         args.parent_pid.to_string(),
         "--version".to_string(),
@@ -52,33 +82,26 @@ pub(crate) fn elevated_argv(args: &ApplyArgs) -> Vec<String> {
         args.last_applied.to_string_lossy().into_owned(),
         "--error-file".to_string(),
         args.error_file.to_string_lossy().into_owned(),
+        "--manifest".to_string(),
+        args.manifest.to_string_lossy().into_owned(),
+        "--pin-file".to_string(),
+        args.pin_file.to_string_lossy().into_owned(),
         "--elevated".to_string(),
     ];
-    if let Some(hash) = &args.staged_sha256 {
-        argv.push("--staged-sha256".to_string());
-        argv.push(hash.clone());
-    }
-    if let Some(hash) = &args.helper_sha256 {
-        argv.push("--helper-sha256".to_string());
-        argv.push(hash.clone());
-    }
     argv
 }
 
 #[cfg(any(windows, test))]
 pub(crate) fn validate_helper_for_elevation(
     exe: &Path,
-    expected_sha256: Option<&str>,
+    expected_sha256: &str,
 ) -> std::io::Result<()> {
-    if let Some(expected) = expected_sha256 {
-        verify_sha256(exe, expected).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Updater-Helfer vor UAC revalidieren: {e}"),
-            )
-        })?;
-    }
-    Ok(())
+    verify_sha256(exe, expected_sha256).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Updater-Helfer vor UAC revalidieren: {e}"),
+        )
+    })
 }
 
 #[cfg(not(windows))]
@@ -184,13 +207,21 @@ mod tests {
     fn args_with_hashes(hash: &str) -> ApplyArgs {
         ApplyArgs {
             target: "target.exe".into(),
+            target_sha256: hash.to_string(),
             staged: "staged.exe".into(),
-            staged_sha256: Some(hash.to_string()),
-            helper_sha256: Some(hash.to_string()),
+            staged_sha256: hash.to_string(),
+            helper_target: "helper-target.exe".into(),
+            helper_sha256: hash.to_string(),
+            cli_staged: "cli-staged.exe".into(),
+            cli_target: "cli-target.exe".into(),
+            cli_sha256: hash.to_string(),
+            archive: "archive.exe".into(),
             parent_pid: 42,
             version: "1.2.3".into(),
             last_applied: "last.txt".into(),
             error_file: "error.txt".into(),
+            manifest: "manifest.json".into(),
+            pin_file: "pin.txt".into(),
             elevated: false,
         }
     }
@@ -215,7 +246,7 @@ mod tests {
         let expected = super::super::hash::sha256_file(&path).unwrap();
         std::fs::write(&path, b"evil").unwrap();
 
-        assert!(validate_helper_for_elevation(&path, Some(&expected)).is_err());
+        assert!(validate_helper_for_elevation(&path, &expected).is_err());
 
         let _ = std::fs::remove_file(path);
     }

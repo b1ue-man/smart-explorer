@@ -41,18 +41,28 @@ fn keyring_account(p: Provider) -> String {
 }
 
 /// Persist the long-lived refresh token (keyring).
-pub fn store_refresh_token(p: Provider, token: &str) {
-    let _ = crate::creds::set_secret(&keyring_account(p), token);
+pub fn store_refresh_token(p: Provider, token: &str) -> Result<(), String> {
+    if token.trim().is_empty() {
+        return Err("Leeres OAuth-Aktualisierungstoken wird nicht gespeichert".to_string());
+    }
+    crate::creds::set_secret(&keyring_account(p), token)
+        .map_err(|error| format!("OAuth-Aktualisierungstoken speichern: {error}"))
+}
+
+pub fn refresh_token_checked(p: Provider) -> Result<Option<String>, String> {
+    crate::creds::get_secret_checked(&keyring_account(p))
+        .map_err(|error| format!("OAuth-Aktualisierungstoken lesen: {error}"))
 }
 
 pub fn refresh_token(p: Provider) -> Option<String> {
-    crate::creds::get_secret(&keyring_account(p))
+    refresh_token_checked(p).ok().flatten()
 }
 
 pub fn is_connected(p: Provider) -> bool {
     refresh_token(p).map(|t| !t.is_empty()).unwrap_or(false)
 }
 
-pub fn disconnect(p: Provider) {
-    crate::creds::delete_secret(&keyring_account(p));
+pub fn disconnect(p: Provider) -> Result<(), String> {
+    crate::creds::delete_secret_checked(&keyring_account(p))
+        .map_err(|error| format!("OAuth-Aktualisierungstoken löschen: {error}"))
 }

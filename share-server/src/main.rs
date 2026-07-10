@@ -1,10 +1,11 @@
-//! Smart Explorer share rendezvous/signaling server.
+//! Smart Explorer share signaling and Iroh relay server.
 //!
 //! The server is intentionally untrusted: it stores and routes signed presence
-//! blobs for persistent direct contacts and rooms. It never sees relation
-//! secrets, private keys, file names, file bytes, or export configuration.
-//! Clients validate HMAC proofs, pinned SmartExplorer identities, and Iroh
-//! NodeIds before opening a peer session.
+//! blobs for persistent direct contacts and rooms and, by default, forwards
+//! end-to-end encrypted Iroh transport traffic on the adjacent port. It cannot
+//! decrypt relation secrets, private keys, file names, file contents, or export
+//! configuration. Clients validate HMAC proofs, pinned SmartExplorer identities,
+//! and Iroh NodeIds before opening a peer session.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -170,7 +171,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("se-share-server listening on {bind} (raw TCP + ws upgrade, rendezvous only)");
+    eprintln!("se-share-server signaling on {bind} (raw TCP + WebSocket upgrade)");
     let state = Arc::new(Mutex::new(State::default()));
     for conn in listener.incoming() {
         let stream = match conn {

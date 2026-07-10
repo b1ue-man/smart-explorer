@@ -84,70 +84,151 @@ impl App {
 
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
         let sel_bytes = self.selection_bytes();
-        ui.horizontal(|ui| {
-            if self.scan_running {
-                ui.label("⟳ Scan läuft…");
-            } else if !self.entries.is_empty() {
-                ui.label("✓ Bereit");
-            }
-            let p = &self.progress;
-            let rate = if p.elapsed_ms > 0 {
-                (p.scanned as f64 / p.elapsed_ms as f64) * 1000.0
-            } else {
-                0.0
-            };
-            let rate_s = if rate >= 1000.0 {
-                format!("{:.1}k/s", rate / 1000.0)
-            } else {
-                format!("{:.0}/s", rate)
-            };
-            ui.colored_label(
-                Color32::from_gray(140),
-                format!(
-                    "{} gescannt · {} · {:.1}s · {}{}",
-                    p.scanned,
-                    format_bytes(p.bytes),
-                    p.elapsed_ms as f64 / 1000.0,
-                    rate_s,
-                    if p.errors > 0 {
-                        format!(" · {} Fehler", p.errors)
+        let progress = self.progress.clone();
+        let transfer = self
+            .transfer_progress
+            .as_ref()
+            .filter(|progress| !progress.done)
+            .cloned();
+        let transfer_canceling = self
+            .transfer_cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        let copy = self
+            .copy_progress
+            .as_ref()
+            .filter(|progress| !progress.done)
+            .cloned();
+        let sync_progress = self.sync_progress.clone();
+        let delete_progress = self.trash_progress.clone();
+        let delete_canceling = self
+            .trash_cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        let notice = self.notice.clone();
+        ui.vertical(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                if self.scan_running {
+                    if self.scan_handle.is_some() {
+                        ui.label("⟳ Scan läuft…");
                     } else {
-                        String::new()
-                    },
-                ),
-            );
-            if !p.current_path.is_empty() && self.scan_running {
-                ui.colored_label(
-                    Color32::from_gray(110),
-                    egui::RichText::new(&p.current_path).monospace().small(),
-                );
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.colored_label(
+                            Color32::from_rgb(230, 190, 90),
+                            "⏹ Scan wird abgebrochen…",
+                        );
+                    }
+                } else if self.scan_was_canceled {
+                    ui.colored_label(
+                        Color32::from_rgb(230, 190, 90),
+                        "⚠ Scan abgebrochen · Teilergebnis",
+                    );
+                } else if progress.errors > 0 {
+                    ui.colored_label(
+                        Color32::from_rgb(230, 190, 90),
+                        "⚠ Scan teilweise abgeschlossen",
+                    );
+                } else if !self.entries.is_empty() {
+                    ui.label("✓ Bereit");
+                }
+                let p = &progress;
+                let rate = if p.elapsed_ms > 0 {
+                    (p.scanned as f64 / p.elapsed_ms as f64) * 1000.0
+                } else {
+                    0.0
+                };
+                let rate_s = if rate >= 1000.0 {
+                    format!("{:.1}k/s", rate / 1000.0)
+                } else {
+                    format!("{:.0}/s", rate)
+                };
                 ui.colored_label(
                     Color32::from_gray(140),
-                    format!("v{}", env!("CARGO_PKG_VERSION")),
+                    format!(
+                        "{} gescannt · {} · {:.1}s · {}{}",
+                        p.scanned,
+                        format_bytes(p.bytes),
+                        p.elapsed_ms as f64 / 1000.0,
+                        rate_s,
+                        if p.errors > 0 {
+                            format!(" · {} Fehler", p.errors)
+                        } else {
+                            String::new()
+                        },
+                    ),
                 );
-                if let Some(p) = self.transfer_progress.as_ref().filter(|p| !p.done) {
-                    ui_transfer_chip(ui, p);
+                if !p.current_path.is_empty() && self.scan_running {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&p.current_path).monospace().small())
+                            .truncate(),
+                    )
+                    .on_hover_text(&p.current_path);
                 }
-                if let Some(p) = self.copy_progress.as_ref().filter(|p| !p.done) {
+            });
+            ui.horizontal_wrapped(|ui| {
+                if let Some(p) = &transfer {
+                    ui_transfer_chip(ui, p);
+                    if transfer_canceling {
+                        ui.colored_label(
+                            Color32::from_rgb(230, 190, 90),
+                            "Übertragung wird abgebrochen…",
+                        );
+                    } else if ui
+                        .add(egui::Button::new("Übertragung abbrechen").small())
+                        .on_hover_text("Nach dem laufenden Backend-Aufruf sicher abbrechen")
+                        .clicked()
+                    {
+                        if let Some(cancel) = &self.transfer_cancel {
+                            cancel.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                    }
+                }
+                if let Some(p) = &copy {
                     ui_copy_chip(ui, p);
+                    if ui
+                        .add(egui::Button::new("Kopie abbrechen").small())
+                        .on_hover_text("Laufenden Kopier- oder Verschiebevorgang abbrechen")
+                        .clicked()
+                    {
+                        self.cancel_copy_job();
+                    }
                 }
                 if self.sync_running {
-                    ui_sync_chip(ui, self.sync_progress.as_ref());
+                    ui_sync_chip(ui, sync_progress.as_ref());
+                    if ui
+                        .add(egui::Button::new("Sync abbrechen").small())
+                        .clicked()
+                    {
+                        if let Some(cancel) = &self.sync_cancel {
+                            cancel.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                    }
                 }
                 if self.bisync_running {
-                    ui.colored_label(Color32::from_rgb(160, 190, 230), "2-Wege-Sync laeuft...");
+                    ui.colored_label(Color32::from_rgb(160, 190, 230), "2-Wege-Sync läuft…");
+                    if ui
+                        .add(egui::Button::new("2-Wege-Sync abbrechen").small())
+                        .clicked()
+                    {
+                        if let Some(cancel) = &self.bisync_cancel {
+                            cancel.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                    }
                 }
-                if let Some((ref msg, ts)) = self.notice {
+                if let Some(progress) = &delete_progress {
+                    if crate::app::delete_status::ui_delete_progress(ui, progress, delete_canceling)
+                    {
+                        self.cancel_delete_job();
+                    }
+                }
+                if let Some((ref msg, ts)) = notice {
                     if ts.elapsed().as_secs() < 6 {
-                        ui.colored_label(Color32::from_rgb(120, 200, 130), msg.clone());
+                        ui.colored_label(notice_color(msg), msg.as_str());
                     }
                 }
                 if let Some(ref e) = self.error_msg {
                     ui.colored_label(Color32::from_rgb(220, 100, 80), format!("⚠ {}", e));
                 }
-                let scan_errors = p.errors.max(self.failed_paths.len() as u64) as usize;
+                let scan_errors = progress.errors.max(self.failed_paths.len() as u64) as usize;
                 let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
                     1
                 } else {
@@ -181,6 +262,10 @@ impl App {
                         ),
                     );
                 }
+                ui.colored_label(
+                    Color32::from_gray(140),
+                    format!("v{}", env!("CARGO_PKG_VERSION")),
+                );
             });
         });
     }
@@ -254,7 +339,13 @@ fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress) {
         p.elapsed_ms,
         p.errors,
     );
-    ui_progress_chip(ui, &format!("{title}: {detail}"), Some(p.fraction()));
+    let current = short_current(&p.current);
+    let text = if current.is_empty() {
+        format!("{title}: {detail}")
+    } else {
+        format!("{title}: {detail} · {current}")
+    };
+    ui_progress_chip(ui, &text, Some(p.fraction()));
 }
 
 fn ui_copy_chip(ui: &mut egui::Ui, p: &CopyProgress) {
@@ -279,15 +370,22 @@ fn ui_sync_chip(ui: &mut egui::Ui, progress: Option<&crate::sync::SyncProgress>)
             format_bytes(p.stats.bytes),
             rate
         );
-        ui_progress_chip(ui, &format!("Sync: {detail}"), None);
+        let current = short_current(&p.current);
+        let text = if current.is_empty() {
+            format!("Sync: {detail}")
+        } else {
+            format!("Sync: {detail} · {current}")
+        };
+        ui_progress_chip(ui, &text, None);
     } else {
         ui_progress_chip(ui, "Sync laeuft...", None);
     }
 }
 
 fn ui_progress_chip(ui: &mut egui::Ui, text: &str, fraction: Option<f32>) {
+    let width = ui.available_width().clamp(180.0, 360.0);
     ui.allocate_ui_with_layout(
-        egui::vec2(280.0, 18.0),
+        egui::vec2(width, 18.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             let bar = match fraction {
@@ -295,9 +393,32 @@ fn ui_progress_chip(ui: &mut egui::Ui, text: &str, fraction: Option<f32>) {
                 None => egui::ProgressBar::new(0.35).animate(true),
             };
             ui.add(bar.desired_width(76.0).desired_height(6.0));
-            ui.colored_label(Color32::from_gray(160), RichText::new(text).small());
+            ui.add(
+                egui::Label::new(RichText::new(text).small().color(Color32::from_gray(160)))
+                    .truncate(),
+            )
+            .on_hover_text(text);
         },
     );
+}
+
+fn short_current(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+fn notice_color(message: &str) -> Color32 {
+    let lower = message.to_lowercase();
+    if message.starts_with('⚠')
+        || lower.contains("konflikt")
+        || lower.contains("teilweise")
+        || lower.contains("abgebrochen")
+    {
+        Color32::from_rgb(230, 190, 90)
+    } else if lower.contains("fehler") || lower.contains("fehlgeschlagen") {
+        Color32::from_rgb(220, 100, 80)
+    } else {
+        Color32::from_rgb(120, 200, 130)
+    }
 }
 
 fn transfer_detail(

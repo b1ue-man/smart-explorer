@@ -76,7 +76,7 @@ fn drive_err(code: u16, body: String) -> io::Error {
 /// `rateLimitExceeded`/`userRateLimitExceeded`/`quotaExceeded` reason when a
 /// user runs many requests at once. Those are safe to retry with backoff;
 /// everything else is a hard error.
-fn is_rate_limited(code: u16, body: &str) -> bool {
+pub(super) fn is_rate_limited(code: u16, body: &str) -> bool {
     matches!(code, 429 | 500 | 502 | 503 | 504)
         || (code == 403 && (body.contains("ateLimitExceeded") || body.contains("uotaExceeded")))
 }

@@ -8,8 +8,14 @@ use super::support_paths::OpenMode;
 use super::*;
 use shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
 
-pub(in crate::app) fn confirm_yes_no(_title: &str, _msg: &str) -> bool {
-    true
+pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title(title)
+        .set_description(msg)
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 pub(in crate::app) fn list_drives() -> Vec<String> {
@@ -54,8 +60,11 @@ pub(in crate::app) fn open_terminal_at(path: &str) {
         .spawn();
 }
 
-pub(in crate::app) fn spawn_updated_app(exe: &Path) {
-    let _ = std::process::Command::new(exe).arg("--updated").spawn();
+pub(in crate::app) fn spawn_updated_app(exe: &Path) -> std::io::Result<()> {
+    std::process::Command::new(exe)
+        .arg("--updated")
+        .spawn()
+        .map(|_| ())
 }
 
 pub(in crate::app) fn update_payload_name() -> &'static str {
@@ -97,7 +106,11 @@ pub(in crate::app) fn clipboard_file_ops_supported() -> bool {
     false
 }
 
-pub(in crate::app) fn drag_out_files(_files: &[String]) {}
+pub(in crate::app) fn drag_out_files(
+    _files: &[String],
+) -> Result<crate::dragout::DragOutOutcome, String> {
+    Err("OS drag-and-drop is not available on this platform".to_string())
+}
 
 pub(in crate::app) fn os_drag_out_supported() -> bool {
     false
@@ -111,11 +124,19 @@ pub(in crate::app) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::R
     std::fs::rename(src, dest)
 }
 
+pub(in crate::app) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
 pub(in crate::app) fn process_running(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    Path::new("/proc").join(pid.to_string()).exists()
+    match std::fs::metadata(Path::new("/proc").join(pid.to_string())) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 impl App {

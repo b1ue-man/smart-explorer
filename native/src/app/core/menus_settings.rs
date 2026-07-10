@@ -25,11 +25,17 @@ impl App {
                     self.open_gdrive_browse();
                 }
                 if ui.small_button("Trennen").clicked() {
-                    crate::cloud::disconnect(p);
-                    self.notice = Some((
-                        "Google Drive getrennt".to_string(),
-                        std::time::Instant::now(),
-                    ));
+                    match crate::cloud::disconnect(p) {
+                        Ok(()) => {
+                            self.notice = Some((
+                                "Google Drive getrennt".to_string(),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        Err(error) => {
+                            self.error_msg = Some(format!("Google Drive trennen: {error}"));
+                        }
+                    }
                 }
             });
         }
@@ -64,20 +70,37 @@ impl App {
                 if cfg.client_id.is_empty() {
                     self.error_msg = Some("Bitte zuerst die Client-ID eintragen.".to_string());
                 } else {
-                    let _ = crate::cloud::save_config(p, &cfg);
-                    let (tx, rx) = unbounded();
-                    self.cloud_auth_rx = Some(rx);
-                    self.cloud_authing = true;
-                    std::thread::Builder::new()
-                        .name("cloud-auth".into())
-                        .spawn(move || {
-                            let _ = tx.send(crate::cloud::authorize(p).map(|_| ()));
-                        })
-                        .ok();
-                    self.notice = Some((
-                        "Browser zur Google-Anmeldung geöffnet…".to_string(),
-                        std::time::Instant::now(),
-                    ));
+                    match crate::cloud::save_config(p, &cfg) {
+                        Err(error) => {
+                            self.error_msg =
+                                Some(format!("Cloud-Konfiguration speichern: {error}"));
+                        }
+                        Ok(()) => {
+                            let (tx, rx) = unbounded();
+                            let spawn = std::thread::Builder::new()
+                                .name("cloud-auth".into())
+                                .spawn(move || {
+                                    let _ = tx.send(crate::cloud::authorize(p).map(|_| ()));
+                                });
+                            match spawn {
+                                Ok(_) => {
+                                    self.cloud_auth_rx = Some(rx);
+                                    self.cloud_authing = true;
+                                    self.notice = Some((
+                                        "Browser zur Google-Anmeldung geöffnet…".to_string(),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                                Err(error) => {
+                                    self.cloud_auth_rx = None;
+                                    self.cloud_authing = false;
+                                    self.error_msg = Some(format!(
+                                        "Cloud-Anmeldung konnte nicht gestartet werden: {error}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -117,6 +140,7 @@ impl App {
 
     pub(in crate::app) fn ui_menu_settings(&mut self, ui: &mut egui::Ui) {
         self.ui_menu_cloud(ui);
+        self.ui_temp_recovery(ui);
 
         // ─── Share-Server remote connections ─────────────────────────
         ui.add_space(12.0);
@@ -142,16 +166,39 @@ impl App {
                 .desired_width(f32::INFINITY),
         );
         if ui.small_button("Speichern").clicked() {
-            self.share_server = self.share_server_draft.trim().to_string();
-            let _ = std::fs::write(share_server_path(), &self.share_server);
-            if let Some(svc) = self.share.take() {
-                svc.cmd(crate::share::ShareCmd::Stop);
+            let server = self.share_server_draft.trim().to_string();
+            match std::fs::write(share_server_path(), &server) {
+                Ok(()) => {
+                    self.share_server = server;
+                    if let Some(svc) = self.share.take() {
+                        if let Err(error) = svc.cmd(crate::share::ShareCmd::Stop) {
+                            self.error_msg = Some(format!("Lokalen Share-Dienst stoppen: {error}"));
+                            return;
+                        }
+                    }
+                    match crate::daemon::refresh_share_worker_checked() {
+                        Ok(true) => {
+                            self.notice = Some((
+                                "✓ Share-Server-Einstellungen gespeichert".to_string(),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        Ok(false) => {
+                            self.error_msg = Some(
+                                "Share-Server gespeichert, aber Worker ist nicht aktiv".into(),
+                            );
+                        }
+                        Err(error) => {
+                            self.error_msg = Some(format!(
+                                "Share-Server gespeichert, aber Worker-Konfiguration fehlgeschlagen: {error}"
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.error_msg = Some(format!("Share-Server-Einstellungen speichern: {error}"));
+                }
             }
-            crate::daemon::refresh_share_worker();
-            self.notice = Some((
-                "✓ Share-Server-Einstellungen gespeichert".to_string(),
-                std::time::Instant::now(),
-            ));
         }
 
         // ─── Update ───────────────────────────────────────────────────
@@ -165,6 +212,17 @@ impl App {
             Color32::from_gray(140),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
+        if !self.show_update_dialog {
+            if let Some(ReadyUpdate::Staged(bundle)) = self.update_ready.as_ref() {
+                let version = bundle.version().to_string();
+                if ui
+                    .small_button(format!("Gestagtes Update v{version} anzeigen"))
+                    .clicked()
+                {
+                    self.show_update_dialog = true;
+                }
+            }
+        }
         let update_payload = update_payload_name();
         ui.add(
             egui::TextEdit::singleline(&mut self.update_feed_draft)
@@ -202,12 +260,20 @@ impl App {
             );
             if ui.small_button("Auf neueste aktualisieren").clicked() {
                 let (tx, rx) = unbounded();
-                self.update_rx = Some(rx);
-                crate::updater::update_to_latest_async(tx);
-                self.notice = Some((
-                    "Suche neueste Version…".to_string(),
-                    std::time::Instant::now(),
-                ));
+                match crate::updater::update_to_latest_async(tx) {
+                    Ok(()) => {
+                        self.update_rx = Some(rx);
+                        self.notice = Some((
+                            "Suche neueste Version…".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.update_rx = None;
+                        self.error_msg =
+                            Some(format!("Update konnte nicht gestartet werden: {error}"));
+                    }
+                }
             }
         }
         // Rollback section. Primary source = the actual RELEASES on the GitHub
@@ -344,7 +410,13 @@ impl App {
         }
         if let Some((ver, path)) = revert_local {
             match crate::updater::revert_to(&path, &ver) {
-                Ok(exe) => self.update_ready = Some((ver, exe)),
+                Ok(executable) => {
+                    self.update_ready = Some(ReadyUpdate::InstalledRollback {
+                        version: ver,
+                        executable,
+                    });
+                    self.show_update_dialog = true;
+                }
                 Err(e) => self.error_msg = Some(format!("Zurückrollen: {}", e)),
             }
         }

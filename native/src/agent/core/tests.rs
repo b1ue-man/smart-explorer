@@ -4,6 +4,74 @@ use crossbeam_channel::unbounded;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+fn agent_with_walk_reply(
+    reply: Option<crate::agent_proto::Frame>,
+) -> (AgentBackend, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut read = socket.try_clone().unwrap();
+        let (hello_id, hello) = crate::agent_proto::read_frame(&mut read)
+            .unwrap()
+            .expect("hello frame");
+        assert!(matches!(hello, crate::agent_proto::Frame::Hello { .. }));
+        crate::agent_proto::write_frame(
+            &mut socket,
+            hello_id,
+            &crate::agent_proto::Frame::HelloOk {
+                proto: crate::agent_proto::PROTO_VERSION,
+                version: "test".into(),
+            },
+        )
+        .unwrap();
+        let (walk_id, walk) = crate::agent_proto::read_frame(&mut read)
+            .unwrap()
+            .expect("walk frame");
+        assert!(matches!(walk, crate::agent_proto::Frame::WalkTree(_)));
+        if let Some(reply) = reply {
+            crate::agent_proto::write_frame(&mut socket, walk_id, &reply).unwrap();
+        }
+    });
+
+    let client = TcpStream::connect(addr).unwrap();
+    let read: Box<dyn Read + Send> = Box::new(client.try_clone().unwrap());
+    let write: Box<dyn Write + Send> = Box::new(client);
+    let inner: crate::vfs::BackendHandle = std::sync::Arc::new(crate::vfs::LocalBackend::new("/"));
+    (
+        AgentBackend::from_streams(read, write, inner).unwrap(),
+        server,
+    )
+}
+
+#[test]
+fn walk_tree_surfaces_remote_and_disconnected_transport_errors() {
+    let (remote_error, server) =
+        agent_with_walk_reply(Some(crate::agent_proto::Frame::Err("walk denied".into())));
+    let error = remote_error.walk_tree("/", &|_, _| true).unwrap_err();
+    assert!(error.to_string().contains("walk denied"));
+    drop(remote_error);
+    server.join().unwrap();
+
+    let (disconnected, server) = agent_with_walk_reply(None);
+    let error = disconnected.walk_tree("/", &|_, _| true).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
+    ));
+    drop(disconnected);
+    server.join().unwrap();
+
+    let (canceled, server) = agent_with_walk_reply(Some(crate::agent_proto::Frame::Progress {
+        done: 1,
+        total: 2,
+    }));
+    let error = canceled.walk_tree("/", &|_, _| false).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    drop(canceled);
+    server.join().unwrap();
+}
+
 #[test]
 fn artifact_selection_and_quoting() {
     let a = artifact_for("Linux x86_64").expect("x86_64 bundled");
@@ -53,7 +121,11 @@ fn agent_backend_over_socket() {
     assert!(entries.iter().find(|e| e.name == "sub").unwrap().is_dir);
 
     assert!(be.supports_walk_tree());
-    let tree = crate::analytics::from_wire(be.walk_tree(&root, &|_, _| true).unwrap());
+    let tree = crate::analytics::from_wire(
+        be.walk_tree(&root, &|_, _| true)
+            .unwrap()
+            .expect("agent tree"),
+    );
     assert_eq!(tree.size, 500);
     assert_eq!(
         tree.children
@@ -63,6 +135,9 @@ fn agent_backend_over_socket() {
             .size,
         400
     );
+    assert!(be
+        .walk_tree(&format!("{root}/missing"), &|_, _| true)
+        .is_err());
 
     let m = be.stat(&format!("{}/a.txt", root)).unwrap();
     assert_eq!(m.size, 100);
@@ -86,7 +161,7 @@ fn agent_backend_over_socket() {
             max_results: 0,
             want_dirs: false,
         };
-        assert!(be.search(&root, &spec, stx, &cancel));
+        assert!(be.search(&root, &spec, stx, &cancel).unwrap());
         let hits: Vec<String> = srx.iter().map(|h| h.rel).collect();
         assert_eq!(hits, vec!["sub/b.bin".to_string()]);
     }
@@ -94,7 +169,7 @@ fn agent_backend_over_socket() {
     {
         let (htx, hrx) = unbounded();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        assert!(be.walk_hashed(&root, true, htx, &cancel));
+        assert!(be.walk_hashed(&root, true, htx, &cancel).unwrap());
         let hits: Vec<crate::vfs::HashHit> = hrx.iter().collect();
         let files: Vec<&crate::vfs::HashHit> = hits.iter().filter(|h| !h.is_dir).collect();
         assert_eq!(files.len(), 2);
@@ -116,6 +191,32 @@ fn agent_backend_over_socket() {
         std::fs::read(base.join("written.dat")).unwrap(),
         b"hello agent write"
     );
+
+    std::fs::write(base.join("aborted.dat"), b"keep existing").unwrap();
+    {
+        let mut writer = be.open_write(&format!("{}/aborted.dat", root)).unwrap();
+        writer.write_all(b"partial replacement").unwrap();
+        // No flush: dropping must cancel and preserve the old destination.
+    }
+    let staged_exists = || {
+        std::fs::read_dir(&base).unwrap().flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("aborted.dat.se-agent-")
+        })
+    };
+    for _ in 0..50 {
+        if !staged_exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read(base.join("aborted.dat")).unwrap(),
+        b"keep existing"
+    );
+    assert!(!staged_exists());
 
     be.mkdir_all(&format!("{}/newdir/inner", root)).unwrap();
     assert!(base.join("newdir/inner").is_dir());
@@ -145,6 +246,8 @@ fn agent_backend_over_socket() {
     std::fs::write(upsrc.join("f1.txt"), b"one").unwrap();
     std::fs::write(upsrc.join("sub/f2.txt"), b"two longer").unwrap();
     let remote_dst = format!("{}/uploaded", root);
+    std::fs::create_dir_all(base.join("uploaded")).unwrap();
+    std::fs::write(base.join("uploaded/f1.txt"), b"old destination").unwrap();
     assert_eq!(be.put_tree(&upsrc, &remote_dst).unwrap(), 2);
     assert_eq!(std::fs::read(base.join("uploaded/f1.txt")).unwrap(), b"one");
     assert_eq!(
@@ -152,6 +255,8 @@ fn agent_backend_over_socket() {
         b"two longer"
     );
     let getdst = base.join("downloaded");
+    std::fs::create_dir_all(&getdst).unwrap();
+    std::fs::write(getdst.join("f1.txt"), b"old destination").unwrap();
     assert_eq!(be.get_tree(&remote_dst, &getdst).unwrap(), 2);
     assert_eq!(std::fs::read(getdst.join("f1.txt")).unwrap(), b"one");
     assert_eq!(
@@ -163,6 +268,139 @@ fn agent_backend_over_socket() {
     let _ = shut.shutdown(std::net::Shutdown::Both);
     let _ = server.join();
     let _ = std::fs::remove_dir_all(&base);
+}
+
+struct UnavailableInner;
+
+impl crate::vfs::Backend for UnavailableInner {
+    fn scheme(&self) -> crate::vfs::Scheme {
+        crate::vfs::Scheme::Peer
+    }
+
+    fn root_display(&self) -> String {
+        "unavailable".into()
+    }
+
+    fn list_dir(&self, _path: &str) -> crate::vfs::VfsResult<Vec<crate::vfs::VfsMeta>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn stat(&self, _path: &str) -> crate::vfs::VfsResult<crate::vfs::VfsMeta> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn open_read(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn Read + Send>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn open_write(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn Write + Send>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn rename(&self, _src: &str, _dst: &str) -> crate::vfs::VfsResult<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn remove_file(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn remove_dir(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+
+    fn mkdir_all(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "inner unavailable",
+        ))
+    }
+}
+
+#[test]
+fn probes_and_no_replace_do_not_delegate_to_unavailable_inner() {
+    let base = std::env::temp_dir().join(format!(
+        "se_agent_atomic_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("present.txt"), b"present").unwrap();
+    std::fs::write(base.join("source.txt"), b"source").unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let read = socket.try_clone().unwrap();
+        crate::agent_proto::serve(read, socket).unwrap();
+    });
+    let client = TcpStream::connect(addr).unwrap();
+    let shutdown = client.try_clone().unwrap();
+    let backend = AgentBackend::from_streams(
+        Box::new(client.try_clone().unwrap()),
+        Box::new(client),
+        std::sync::Arc::new(UnavailableInner),
+    )
+    .unwrap();
+
+    assert!(backend
+        .try_exists(base.join("present.txt").to_str().unwrap())
+        .unwrap());
+    assert!(!backend
+        .try_exists(base.join("missing.txt").to_str().unwrap())
+        .unwrap());
+    backend
+        .rename_no_replace(
+            base.join("source.txt").to_str().unwrap(),
+            base.join("moved.txt").to_str().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(base.join("moved.txt")).unwrap(), b"source");
+
+    std::fs::write(base.join("second.txt"), b"second").unwrap();
+    std::fs::write(base.join("occupied.txt"), b"occupied").unwrap();
+    assert!(backend
+        .rename_no_replace(
+            base.join("second.txt").to_str().unwrap(),
+            base.join("occupied.txt").to_str().unwrap(),
+        )
+        .is_err());
+    assert_eq!(std::fs::read(base.join("second.txt")).unwrap(), b"second");
+    assert_eq!(
+        std::fs::read(base.join("occupied.txt")).unwrap(),
+        b"occupied"
+    );
+
+    drop(backend);
+    let _ = shutdown.shutdown(std::net::Shutdown::Both);
+    let _ = server.join();
+    let _ = std::fs::remove_dir_all(base);
 }
 
 #[test]
@@ -200,7 +438,11 @@ fn real_agent_binary_child_process() {
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     assert_eq!(entries.len(), 2);
 
-    let tree = crate::analytics::from_wire(be.walk_tree(&root, &|_, _| true).unwrap());
+    let tree = crate::analytics::from_wire(
+        be.walk_tree(&root, &|_, _| true)
+            .unwrap()
+            .expect("agent tree"),
+    );
     assert_eq!(tree.size, 311);
 
     let mut buf = String::new();
@@ -224,7 +466,7 @@ fn real_agent_binary_child_process() {
     {
         let (htx, hrx) = unbounded();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        assert!(be.walk_hashed(&root, true, htx, &cancel));
+        assert!(be.walk_hashed(&root, true, htx, &cancel).unwrap());
         let hits: Vec<crate::vfs::HashHit> = hrx.iter().collect();
         let hello = hits.iter().find(|h| h.rel == "hello.txt").unwrap();
         assert_eq!(

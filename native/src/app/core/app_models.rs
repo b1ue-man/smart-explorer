@@ -5,6 +5,7 @@ pub(in crate::app) const DOWNLOAD_SPACE_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
 pub(in crate::app) const TEMP_SESSION_PID_FILE: &str = "session.pid";
 
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────
+#[cfg(windows)]
 pub(in crate::app) mod menu_ids {
     pub const COPY: u32 = 0x8000;
     pub const CUT: u32 = 0x8001;
@@ -35,6 +36,7 @@ pub(in crate::app) struct TabState {
     pub(in crate::app) scan_handle: Option<ScanHandle>,
     pub(in crate::app) progress: ScanProgress,
     pub(in crate::app) scan_running: bool,
+    pub(in crate::app) scan_was_canceled: bool,
     pub(in crate::app) history: Vec<String>,
     pub(in crate::app) forward: Vec<String>,
     pub(in crate::app) failed_paths: Vec<(String, String)>,
@@ -140,6 +142,7 @@ pub(in crate::app) enum TransferMsg {
     Done {
         progress: TransferProgress,
         errors: Vec<String>,
+        canceled: bool,
     },
 }
 
@@ -156,6 +159,7 @@ impl Default for TabState {
             scan_handle: None,
             progress: empty_progress(),
             scan_running: false,
+            scan_was_canceled: false,
             history: Vec::new(),
             forward: Vec::new(),
             failed_paths: Vec::new(),
@@ -215,12 +219,98 @@ pub(in crate::app) struct TmCell {
 
 /// A running background analytics scan (dedicated low-memory size walk).
 pub(in crate::app) struct AnalyticsScan {
-    pub(in crate::app) rx: Receiver<crate::analytics::SizeNode>,
+    pub(in crate::app) rx: Receiver<crate::analytics::ScanOutcome>,
     pub(in crate::app) progress: crate::analytics::Progress,
     /// Root being scanned (`/`-normalised), for the progress label.
     pub(in crate::app) root: String,
     pub(in crate::app) started: Instant,
-    pub(in crate::app) cancel_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) enum StorageRunState {
+    #[default]
+    Idle,
+    Running,
+    Canceled,
+    Complete,
+    Partial,
+    Failed,
+}
+
+impl From<crate::analytics::ScanStatus> for StorageRunState {
+    fn from(status: crate::analytics::ScanStatus) -> Self {
+        match status {
+            crate::analytics::ScanStatus::Complete => Self::Complete,
+            crate::analytics::ScanStatus::Partial => Self::Partial,
+            crate::analytics::ScanStatus::Failed => Self::Failed,
+            crate::analytics::ScanStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::app) enum StorageScanSource {
+    Local {
+        root: String,
+    },
+    Remote {
+        backend: crate::vfs::BackendHandle,
+        root: String,
+        label: String,
+    },
+}
+
+impl StorageScanSource {
+    pub(in crate::app) fn local(root: impl Into<String>) -> Self {
+        Self::Local {
+            root: normalize_storage_root(root.into()),
+        }
+    }
+
+    pub(in crate::app) fn remote(
+        backend: crate::vfs::BackendHandle,
+        root: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
+        Self::Remote {
+            backend,
+            root: normalize_storage_root(root.into()),
+            label: label.into(),
+        }
+    }
+
+    pub(in crate::app) fn root(&self) -> &str {
+        match self {
+            Self::Local { root } | Self::Remote { root, .. } => root,
+        }
+    }
+
+    pub(in crate::app) fn display(&self) -> String {
+        match self {
+            Self::Local { root } => root.clone(),
+            Self::Remote { root, label, .. } if label.is_empty() => root.clone(),
+            Self::Remote { root, label, .. } => format!("{} · {}", label, root),
+        }
+    }
+
+    pub(in crate::app) fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
+}
+
+fn normalize_storage_root(root: String) -> String {
+    let normalized = root.replace('\\', "/");
+    if normalized.trim().is_empty() {
+        return String::new();
+    }
+    let trimmed = normalized.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else if trimmed.len() == 2 && trimmed.as_bytes()[1] == b':' {
+        format!("{trimmed}/")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,11 +320,17 @@ pub(in crate::app) enum AnalyticsPanel {
 }
 
 pub(in crate::app) struct ReclaimScan {
-    pub(in crate::app) rx: Receiver<crate::analytics::ReclaimReport>,
+    pub(in crate::app) rx: Receiver<ReclaimScanOutcome>,
     pub(in crate::app) progress: crate::analytics::ReclaimProgress,
     pub(in crate::app) root: String,
     pub(in crate::app) started: Instant,
-    pub(in crate::app) cancel_requested: bool,
+}
+
+pub(in crate::app) struct ReclaimScanOutcome {
+    pub(in crate::app) report: Option<crate::analytics::ReclaimReport>,
+    pub(in crate::app) status: StorageRunState,
+    pub(in crate::app) issues: Vec<String>,
+    pub(in crate::app) suppressed_issues: u64,
 }
 
 /// Keyboard actions are collected inside the input closure and executed
@@ -271,4 +367,29 @@ pub(in crate::app) enum KbdAct {
     StarCurrent,
     /// Alt+1..9: jump to tab N (Alt+9 = last tab).
     SelectTab(usize),
+}
+
+#[cfg(test)]
+mod storage_scan_tests {
+    use super::*;
+
+    #[test]
+    fn storage_roots_preserve_real_roots_without_path_inference() {
+        assert_eq!(StorageScanSource::local("/").root(), "/");
+        assert_eq!(StorageScanSource::local("").root(), "");
+        assert_eq!(StorageScanSource::local("C:").root(), "C:/");
+        assert_eq!(StorageScanSource::local("/tmp/data/").root(), "/tmp/data");
+    }
+
+    #[test]
+    fn scan_status_maps_to_explicit_terminal_state() {
+        assert_eq!(
+            StorageRunState::from(crate::analytics::ScanStatus::Canceled),
+            StorageRunState::Canceled
+        );
+        assert_eq!(
+            StorageRunState::from(crate::analytics::ScanStatus::Partial),
+            StorageRunState::Partial
+        );
+    }
 }

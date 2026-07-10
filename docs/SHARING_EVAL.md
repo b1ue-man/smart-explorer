@@ -1,5 +1,11 @@
 # Device-to-device sharing — feasibility evaluation (#21)
 
+> **Historical evaluation.** Its direct-only/no-relay transport recommendation
+> predates the shipped Iroh/QUIC implementation. Current code prefers direct
+> paths but supports an end-to-end encrypted relay fallback through
+> `se-share-server`; consult [`FILE_OPS_MATRIX.md`](FILE_OPS_MATRIX.md) for live
+> behavior.
+
 Question: can Smart Explorer share content using the **real** Quick Share and
 AirDrop protocols, and/or via **direct device pairing** (with the maintainer's
 server available for "own DNS routing" / rendezvous)? What dangers must be

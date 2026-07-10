@@ -3,6 +3,21 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn update_keyboard(&mut self, ctx: &egui::Context) {
+        if self.show_help {
+            let close = ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F1)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            });
+            if close {
+                self.show_help = false;
+            }
+            self.accel_mode = false;
+            return;
+        }
+        if self.blocks_explorer_shortcuts() {
+            self.accel_mode = false;
+            return;
+        }
         // ─── Alt key-overlay (accelerators) ────────────────────────────
         // While the overlay is up, a bare letter/digit fires its control (using
         // last frame's rects — controls don't move) and closes the overlay; Esc
@@ -376,14 +391,27 @@ impl App {
         // Drain the background clipboard-key poller (Windows). This is what
         // actually makes Ctrl+V work for a file clipboard — see clip_key_rx.
         if !typing && !renaming {
+            let mut clip_disconnected = false;
             if let Some(rx) = self.clip_key_rx.as_ref() {
-                while let Ok(k) = rx.try_recv() {
-                    match k {
-                        ClipKey::Copy => do_copy = true,
-                        ClipKey::Cut => do_cut = true,
-                        ClipKey::Paste => do_paste = true,
+                loop {
+                    match rx.try_recv() {
+                        Ok(ClipKey::Copy) => do_copy = true,
+                        Ok(ClipKey::Cut) => do_cut = true,
+                        Ok(ClipKey::Paste) => do_paste = true,
+                        Err(crossbeam_channel::TryRecvError::Empty) => break,
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            clip_disconnected = true;
+                            break;
+                        }
                     }
                 }
+            }
+            if clip_disconnected {
+                self.clip_key_rx = None;
+                self.clip_key_cancel = None;
+                self.error_msg = Some(
+                    "Zwischenablage-Tastaturüberwachung wurde unerwartet beendet.".to_string(),
+                );
             }
         }
 
@@ -398,5 +426,25 @@ impl App {
         if do_paste {
             self.clipboard_paste_files();
         }
+    }
+
+    fn blocks_explorer_shortcuts(&self) -> bool {
+        self.show_analytics
+            || self.copy_open
+            || self.show_help
+            || self.show_disclaimer
+            || self.show_errors_dialog
+            || self.show_connect
+            || self.show_bisync_conflicts
+            || self.show_preview
+            || self.show_sync_jobs
+            || self.show_daemon_log
+            || self.show_share
+            || self.job_editor.is_some()
+            || self.merge.is_some()
+            || self.remote_ctx.is_some()
+            || self.picker.is_some()
+            || self.rename_open.is_some()
+            || (self.show_update_dialog && self.update_ready.is_some())
     }
 }

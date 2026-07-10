@@ -54,7 +54,8 @@ pub struct ClientConfig {
 }
 
 pub use super::os::shared::{
-    disconnect, is_connected, load_config, refresh_token, save_config, store_refresh_token,
+    disconnect, is_connected, load_config, refresh_token, refresh_token_checked, save_config,
+    store_refresh_token,
 };
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────
@@ -277,12 +278,6 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
     let first = req.lines().next().unwrap_or("");
     let (code, got_state) =
         parse_redirect(first).ok_or_else(|| "Keine Autorisierung erhalten".to_string())?;
-    let _ = stream.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
-          <html><body style='font-family:sans-serif'><h3>Smart Explorer</h3>\
-          <p>Anmeldung abgeschlossen. Sie koennen dieses Fenster schliessen.</p>\
-          </body></html>",
-    );
     if got_state != state {
         return Err("Sicherheitsfehler (state stimmt nicht)".into());
     }
@@ -299,17 +294,23 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
             ("code_verifier", &verifier),
         ],
     )?;
-    if !tokens.refresh_token.is_empty() {
-        store_refresh_token(p, &tokens.refresh_token);
-    }
+    let tokens = super::token_persistence::finish_authorize(p, tokens, store_refresh_token)?;
+    let _ = stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
+          <html><body style='font-family:sans-serif'><h3>Smart Explorer</h3>\
+          <p>Anmeldung abgeschlossen. Sie koennen dieses Fenster schliessen.</p>\
+          </body></html>",
+    );
     Ok(tokens)
 }
 
 /// Exchange the stored refresh token for a fresh access token. Blocking.
 pub fn refresh_access(p: Provider) -> Result<Tokens, String> {
     let cfg = load_config(p);
-    let refresh = refresh_token(p).ok_or_else(|| "Nicht verbunden".to_string())?;
-    let mut t = post_token(
+    let refresh = refresh_token_checked(p)?
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "Nicht verbunden".to_string())?;
+    let tokens = post_token(
         p.token_url(),
         &[
             ("grant_type", "refresh_token"),
@@ -318,13 +319,9 @@ pub fn refresh_access(p: Provider) -> Result<Tokens, String> {
             ("client_secret", &cfg.client_secret),
         ],
     )?;
-    // Google omits refresh_token on refresh — keep the stored one.
-    if t.refresh_token.is_empty() {
-        t.refresh_token = refresh;
-    } else {
-        store_refresh_token(p, &t.refresh_token);
-    }
-    Ok(t)
+    // Google usually omits refresh_token on refresh; a rotated token must be
+    // durable before callers can start using the refreshed access token.
+    super::token_persistence::finish_refresh(p, tokens, refresh, store_refresh_token)
 }
 
 fn accept_with_deadline(

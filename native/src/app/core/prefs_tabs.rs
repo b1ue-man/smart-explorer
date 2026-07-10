@@ -2,21 +2,26 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    pub(in crate::app) fn save_recent(&self) {
-        let txt = self.recent.join("\n");
-        let _ = std::fs::write(settings_path(), txt);
+    fn save_recent(recent: &[String]) -> std::io::Result<()> {
+        std::fs::write(settings_path(), recent.join("\n"))
     }
 
     pub(in crate::app) fn add_recent(&mut self, p: &str) {
-        self.recent.retain(|x| x != p);
-        self.recent.insert(0, p.to_string());
-        self.recent.truncate(10);
-        self.save_recent();
+        let mut next = self.recent.clone();
+        next.retain(|x| x != p);
+        next.insert(0, p.to_string());
+        next.truncate(10);
+        match Self::save_recent(&next) {
+            Ok(()) => self.recent = next,
+            Err(error) => {
+                self.error_msg = Some(format!("Zuletzt verwendet speichern: {error}"));
+            }
+        }
     }
 
     // ─── Favorites (starred folders) ────────────────────────────────────
-    pub(in crate::app) fn save_favorites(&self) {
-        let _ = std::fs::write(favorites_path(), self.favorites.join("\n"));
+    fn save_favorites(favorites: &[String]) -> std::io::Result<()> {
+        std::fs::write(favorites_path(), favorites.join("\n"))
     }
 
     pub(in crate::app) fn is_favorite(&self, p: &str) -> bool {
@@ -26,28 +31,34 @@ impl App {
     /// Toggle a folder's starred state. Saves immediately — never deferred to
     /// on_exit (which clears state before any save could run).
     pub(in crate::app) fn toggle_favorite(&mut self, p: &str) {
-        if let Some(i) = self.favorites.iter().position(|x| x == p) {
-            self.favorites.remove(i);
-            self.notice = Some((
-                "☆ Aus Favoriten entfernt".to_string(),
-                std::time::Instant::now(),
-            ));
+        let mut next = self.favorites.clone();
+        let notice = if let Some(i) = next.iter().position(|x| x == p) {
+            next.remove(i);
+            "☆ Aus Favoriten entfernt"
         } else {
-            self.favorites.insert(0, p.to_string());
-            self.notice = Some((
-                "★ Zu Favoriten hinzugefügt".to_string(),
-                std::time::Instant::now(),
-            ));
+            next.insert(0, p.to_string());
+            "★ Zu Favoriten hinzugefügt"
+        };
+        match Self::save_favorites(&next) {
+            Ok(()) => {
+                self.favorites = next;
+                self.notice = Some((notice.to_string(), std::time::Instant::now()));
+            }
+            Err(error) => {
+                self.error_msg = Some(format!("Favoriten speichern: {error}"));
+            }
         }
-        self.save_favorites();
     }
 
-    pub(in crate::app) fn save_ui_state(&self) {
-        UiState {
+    pub(in crate::app) fn save_ui_state(&mut self) {
+        if let Err(error) = (UiState {
             show_filters: self.show_filters,
             show_summary: self.show_summary,
+        })
+        .save()
+        {
+            self.error_msg = Some(format!("Oberflächenzustand speichern: {error}"));
         }
-        .save();
     }
 
     pub(in crate::app) fn root_prefix(&self) -> String {
@@ -84,9 +95,17 @@ impl App {
             form.root = path.to_string();
         }
         let secret = crate::creds::get_secret(&c.account());
-        crate::creds::touch_connection(&c.account());
+        let touch_error = crate::creds::touch_connection(&c.account())
+            .err()
+            .map(|error| format!("Verbindungsliste konnte nicht aktualisiert werden: {error}"));
         self.saved_connections = crate::creds::load_connections();
         self.begin_connect(form, secret);
+        if let Some(detail) = touch_error {
+            self.push_app_error("Gespeicherte Verbindung", detail.clone());
+            if self.error_msg.is_none() {
+                self.error_msg = Some(detail);
+            }
+        }
     }
 
     /// Navigate to a favourite/location: a remote endpoint URL re-opens its
@@ -140,6 +159,7 @@ impl App {
         std::mem::swap(&mut t.scan_handle, &mut self.scan_handle);
         std::mem::swap(&mut t.progress, &mut self.progress);
         std::mem::swap(&mut t.scan_running, &mut self.scan_running);
+        std::mem::swap(&mut t.scan_was_canceled, &mut self.scan_was_canceled);
         std::mem::swap(&mut t.history, &mut self.history);
         std::mem::swap(&mut t.forward, &mut self.forward);
         std::mem::swap(&mut t.failed_paths, &mut self.failed_paths);

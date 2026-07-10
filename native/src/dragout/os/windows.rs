@@ -9,10 +9,10 @@
 
 use std::cell::RefCell;
 use std::mem::ManuallyDrop;
-use windows::core::{implement, Result, HRESULT};
+use windows::core::{implement, Error, Result, HRESULT};
 use windows::Win32::Foundation::{
     BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
-    OLE_E_ADVISENOTSUPPORTED, POINT, S_OK,
+    E_INVALIDARG, OLE_E_ADVISENOTSUPPORTED, POINT, S_OK,
 };
 use windows::Win32::System::Com::{
     IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET,
@@ -25,6 +25,8 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Shell::{SHCreateStdEnumFmtEtc, DROPFILES};
+
+use super::{DragOutEffect, DragOutOutcome};
 
 // ─── CF_HDROP global build ───────────────────────────────────────────────────
 
@@ -190,13 +192,33 @@ impl IDropSource_Impl for DropSource_Impl {
 
 // ─── Public entry point ──────────────────────────────────────────────────────
 
-/// Run an OS drag for `files`, blocking until the user drops (anywhere) or
-/// cancels. Returns true if a MOVE was performed (so the caller can refresh).
-/// Best-effort: any failure returns false without disturbing the app.
-pub fn drag_out(files: &[String]) -> bool {
+fn classify_drag_result(hr: HRESULT, effect: DROPEFFECT) -> Result<DragOutOutcome> {
+    if hr == DRAGDROP_S_CANCEL {
+        return Ok(DragOutOutcome::Cancelled);
+    }
+    if hr.is_err() {
+        return Err(hr.into());
+    }
+
+    // DoDragDrop documents both S_OK and DRAGDROP_S_DROP as successful return
+    // values. The target's output effect is authoritative after either one.
+    let effect = if (effect & DROPEFFECT_MOVE) == DROPEFFECT_MOVE {
+        DragOutEffect::Move
+    } else if (effect & DROPEFFECT_COPY) == DROPEFFECT_COPY {
+        DragOutEffect::Copy
+    } else {
+        DragOutEffect::None
+    };
+    Ok(DragOutOutcome::Dropped(effect))
+}
+
+/// Run an OS drag for `files`, blocking until the user drops or cancels.
+/// Cancellation and an accepted drop are returned as explicit outcomes; COM
+/// and OLE failures retain their HRESULT in the returned error.
+pub fn drag_out(files: &[String]) -> Result<DragOutOutcome> {
     let files: Vec<String> = files.iter().filter(|p| !p.is_empty()).cloned().collect();
     if files.is_empty() {
-        return false;
+        return Err(Error::from_hresult(E_INVALIDARG));
     }
     let data: IDataObject = FileData {
         files,
@@ -213,5 +235,47 @@ pub fn drag_out(files: &[String]) -> bool {
             &mut effect,
         )
     };
-    hr == DRAGDROP_S_DROP && (effect & DROPEFFECT_MOVE) == DROPEFFECT_MOVE
+    classify_drag_result(hr, effect)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::E_UNEXPECTED;
+
+    #[test]
+    fn classifies_cancel_without_reading_an_effect() {
+        assert_eq!(
+            classify_drag_result(DRAGDROP_S_CANCEL, DROPEFFECT_MOVE).unwrap(),
+            DragOutOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn classifies_successful_copy_move_and_no_effect() {
+        assert_eq!(
+            classify_drag_result(DRAGDROP_S_DROP, DROPEFFECT_COPY).unwrap(),
+            DragOutOutcome::Dropped(DragOutEffect::Copy)
+        );
+        assert_eq!(
+            classify_drag_result(S_OK, DROPEFFECT_MOVE).unwrap(),
+            DragOutOutcome::Dropped(DragOutEffect::Move)
+        );
+        assert_eq!(
+            classify_drag_result(DRAGDROP_S_DROP, DROPEFFECT::default()).unwrap(),
+            DragOutOutcome::Dropped(DragOutEffect::None)
+        );
+    }
+
+    #[test]
+    fn preserves_failure_hresult() {
+        let error = classify_drag_result(E_UNEXPECTED, DROPEFFECT::default()).unwrap_err();
+        assert_eq!(error.code(), E_UNEXPECTED);
+    }
+
+    #[test]
+    fn rejects_an_empty_file_list_before_entering_ole() {
+        let error = drag_out(&[]).unwrap_err();
+        assert_eq!(error.code(), E_INVALIDARG);
+    }
 }

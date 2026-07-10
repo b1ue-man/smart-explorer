@@ -1,8 +1,10 @@
 # Smart Explorer — Native (Rust + egui)
 
-Schlanke, schnelle native Variante. Single-EXE, kein Chromium, kein Browser,
-kein Node. Sie ist weiterhin portabel startbar, wird aber regulär auch als
-per-user NSIS-Installer mit Selbst-Update ausgeliefert.
+Schlanke, schnelle native Variante. Die GUI selbst ist ein einzelnes natives
+Binary — kein Chromium, Browser oder Node. Sie ist weiterhin portabel startbar;
+die reguläre per-user Installation ergänzt den verifizierten Update-Helfer und
+den `se`-Terminal-Companion. Updates werden geprüft gestagt und erst nach
+expliziter Bestätigung transaktional angewendet.
 
 ## Größe & Geschwindigkeit (im Vergleich zur Electron-Variante)
 
@@ -35,8 +37,8 @@ cargo build --release
 Release-Artefakte werden nicht per Hand kopiert. Der aktuelle lokale
 Release-Flow steht in [`../docs/RELEASING.md`](../docs/RELEASING.md); auf einem
 Windows-Rechner ist `..\native\publish-release-local.ps1` der Standard, weil der
-Wrapper Windows- und Linux-Feed-Payloads inklusive `se` zusammen aktualisiert
-und die SHA-256 Dateien prüft.
+Wrapper Windows- und Linux-Feed-Payloads inklusive `se` gemeinsam in einem
+isolierten Baum baut, prüft und erst danach rollback-geschützt veröffentlicht.
 
 Bench-Mode:
 ```bash

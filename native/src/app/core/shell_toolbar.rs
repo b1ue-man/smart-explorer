@@ -157,6 +157,23 @@ impl App {
             ui.separator();
 
             let has_sel = !self.selection.is_empty();
+            let delete_disposition = self
+                .remote
+                .as_ref()
+                .map(|remote| remote.backend.delete_disposition());
+            let delete_tip = match delete_disposition {
+                Some(crate::vfs::DeleteDisposition::Recycle) | None => {
+                    "Entf — in Papierkorb"
+                }
+                Some(crate::vfs::DeleteDisposition::Permanent) => {
+                    "Entf — Server löscht endgültig (mit Bestätigung)"
+                }
+                Some(crate::vfs::DeleteDisposition::Unsupported) => {
+                    "Diese Quelle ist schreibgeschützt"
+                }
+            };
+            let can_delete = has_sel
+                && delete_disposition != Some(crate::vfs::DeleteDisposition::Unsupported);
             // Grouped feature menus (moved off the sidebar). Copy/cut/paste stay
             // on Ctrl+C/X/V and the right-click menu — out of the nav bar.
             ui.menu_button("🔌 Verbindung", |ui| {
@@ -182,8 +199,8 @@ impl App {
             }
             ui.separator();
             if ui
-                .add_enabled(has_sel, egui::Button::new("🗑").small())
-                .on_hover_text("Entf — in Papierkorb")
+                .add_enabled(can_delete, egui::Button::new("🗑").small())
+                .on_hover_text(delete_tip)
                 .clicked()
             {
                 self.trash_selected();
@@ -255,12 +272,21 @@ impl App {
                     if !self.root_path.is_empty() {
                         let key = self.location_key(&self.root_path);
                         self.dir_sort.insert(key, self.dirs_first);
-                        save_dir_sort(&self.dir_sort);
+                        if let Err(error) = save_dir_sort(&self.dir_sort) {
+                            self.error_msg = Some(format!("Ordnersortierung speichern: {error}"));
+                        }
                     }
                     self.recompute_view();
                 }
-                ui.toggle_value(&mut self.show_analytics, "📊")
-                    .on_hover_text("Speicher-Analyse (Treemap, größte Ordner/Dateien)");
+                if ui
+                    .toggle_value(&mut self.show_analytics, "📊")
+                    .on_hover_text("Speicher-Analyse (Treemap, größte Ordner/Dateien)")
+                    .changed()
+                    && !self.show_analytics
+                {
+                    self.cancel_analytics_scan();
+                    self.cancel_reclaim_scan();
+                }
                 if ui
                     .toggle_value(&mut self.show_filters, "🔍 Filter")
                     .on_hover_text("Filterleiste ein-/ausklappen")

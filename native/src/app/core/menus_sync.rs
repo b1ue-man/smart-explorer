@@ -16,8 +16,7 @@ impl App {
                     .on_hover_text("Verbindung trennen")
                     .clicked()
             {
-                self.remote = None;
-                self.net_conn = None;
+                self.clear_disconnected_source_view();
                 self.notice = Some(("Verbindung getrennt".to_string(), std::time::Instant::now()));
             }
         });
@@ -81,8 +80,20 @@ impl App {
             );
         }
         if let Some(acc) = to_remove {
-            let _ = crate::creds::remove_connection(&acc);
-            self.saved_connections = crate::creds::load_connections();
+            match crate::creds::remove_connection(&acc) {
+                Ok(()) => {
+                    self.saved_connections = crate::creds::load_connections();
+                    self.notice = Some((
+                        "Gespeicherte Verbindung entfernt".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.error_msg = Some(format!(
+                        "Gespeicherte Verbindung konnte nicht entfernt werden: {error}"
+                    ));
+                }
+            }
         }
         if let Some(c) = to_connect {
             self.connect_saved(&c);
@@ -179,23 +190,38 @@ impl App {
         {
             if bg {
                 match crate::autostart::enable() {
-                    Ok(_) => {
-                        crate::daemon::clear_stop();
-                        crate::autostart::spawn_daemon_now();
-                        self.notice = Some((
-                            "✓ Hintergrund-Sync aktiviert".to_string(),
-                            std::time::Instant::now(),
-                        ));
-                    }
+                    Ok(_) => match crate::daemon::clear_stop() {
+                        Ok(()) => {
+                            crate::autostart::spawn_daemon_now();
+                            self.notice = Some((
+                                "✓ Hintergrund-Sync aktiviert".to_string(),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        Err(error) => {
+                            let rollback = crate::autostart::disable()
+                                .err()
+                                .map(|rollback| format!("; Autostart-Rücknahme: {rollback}"))
+                                .unwrap_or_default();
+                            self.error_msg = Some(format!(
+                                    "Hintergrund-Sync bleibt aus: Stoppsperre konnte nicht sicher aufgehoben werden: {error}{rollback}"
+                                ));
+                        }
+                    },
                     Err(e) => self.error_msg = Some(format!("Autostart: {}", e)),
                 }
             } else {
-                let _ = crate::autostart::disable();
-                crate::daemon::request_stop();
-                self.notice = Some((
-                    "Hintergrund-Sync deaktiviert".to_string(),
-                    std::time::Instant::now(),
-                ));
+                match crate::autostart::disable() {
+                    Ok(()) => {
+                        self.notice = Some((
+                            "Hintergrund-Sync deaktiviert".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.error_msg = Some(format!("Autostart: {error}"));
+                    }
+                }
             }
         }
         ui.horizontal(|ui| {
@@ -207,7 +233,7 @@ impl App {
                 self.show_daemon_log = true;
             }
         });
-        if crate::daemon::is_running() {
+        if bg && crate::daemon::is_running() {
             let age = crate::daemon::last_heartbeat_age().unwrap_or(0);
             ui.colored_label(
                 Color32::from_rgb(120, 200, 255),
@@ -218,6 +244,11 @@ impl App {
                 Color32::from_gray(150),
                 "Dienst startet beim nächsten Anmelden.",
             );
+        } else if crate::daemon::is_running() {
+            ui.colored_label(
+                Color32::from_gray(150),
+                "Hintergrund-Sync aus · Share-Sitzungsdienst aktiv.",
+            );
         }
         // Check cadence (how often the daemon evaluates schedules / reacts).
         ui.horizontal(|ui| {
@@ -225,67 +256,107 @@ impl App {
                 "Wie oft der Dienst nach fälligen Aufträgen, Änderungen (Echtzeit) und \
                  angeschlossenen Geräten sieht. Kürzer = reaktiver, mehr CPU.",
             );
-            let mut cad = crate::daemon::cadence_secs();
-            if ui
-                .add(egui::DragValue::new(&mut cad).range(2..=3600).suffix(" s"))
-                .changed()
-            {
-                crate::daemon::set_cadence_secs(cad);
+            match crate::daemon::cadence_secs() {
+                Ok(mut cadence) => {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut cadence)
+                                .range(2..=3600)
+                                .suffix(" s"),
+                        )
+                        .changed()
+                    {
+                        self.report_daemon_control(
+                            "Prüfintervall speichern",
+                            crate::daemon::set_cadence_secs(cadence),
+                        );
+                    }
+                }
+                Err(error) => {
+                    ui.colored_label(Color32::from_rgb(230, 120, 100), "nicht lesbar")
+                        .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
+                }
             }
         });
 
         // Pause / resume.
         ui.horizontal(|ui| {
             match crate::daemon::pause_remaining() {
-                Some(r) if r == i64::MAX => {
+                Ok(Some(r)) if r == i64::MAX => {
                     ui.colored_label(Color32::from_rgb(230, 180, 90), "⏸ pausiert (dauerhaft)");
                 }
-                Some(r) => {
+                Ok(Some(r)) => {
                     ui.colored_label(
                         Color32::from_rgb(230, 180, 90),
                         format!("⏸ pausiert (noch {} min)", (r / 60).max(1)),
                     );
                 }
-                None => {
+                Ok(None) => {
                     ui.colored_label(Color32::from_gray(140), "Pause:");
+                }
+                Err(error) => {
+                    ui.colored_label(Color32::from_rgb(230, 120, 100), "⏸ Status nicht lesbar")
+                        .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
                 }
             }
             if ui.small_button("2 h").clicked() {
-                crate::daemon::pause_for_secs(2 * 3600);
+                self.report_daemon_control(
+                    "Pause speichern",
+                    crate::daemon::pause_for_secs(2 * 3600),
+                );
             }
             if ui.small_button("8 h").clicked() {
-                crate::daemon::pause_for_secs(8 * 3600);
+                self.report_daemon_control(
+                    "Pause speichern",
+                    crate::daemon::pause_for_secs(8 * 3600),
+                );
             }
             if ui.small_button("24 h").clicked() {
-                crate::daemon::pause_for_secs(24 * 3600);
+                self.report_daemon_control(
+                    "Pause speichern",
+                    crate::daemon::pause_for_secs(24 * 3600),
+                );
             }
             if ui
                 .small_button("∞")
                 .on_hover_text("Dauerhaft pausieren")
                 .clicked()
             {
-                crate::daemon::pause_indefinite();
+                self.report_daemon_control("Pause speichern", crate::daemon::pause_indefinite());
             }
             if ui.small_button("▶ Fortsetzen").clicked() {
-                crate::daemon::resume();
+                self.report_daemon_control("Pause aufheben", crate::daemon::resume());
             }
         });
 
         // Auto-pause conditions.
-        let (mut bat, mut met) = crate::daemon::autopause_flags();
-        ui.horizontal(|ui| {
-            let c1 = ui
-                .checkbox(&mut bat, "Im Energiesparmodus pausieren")
-                .on_hover_text("Synchronisierung anhalten, solange der Windows-Energiesparmodus aktiv ist")
-                .changed();
-            let c2 = ui
-                .checkbox(&mut met, "Bei getakteter Verbindung")
-                .on_hover_text("Synchronisierung anhalten, solange eine getaktete Netzwerkverbindung erkannt wird (Windows)")
-                .changed();
-            if c1 || c2 {
-                crate::daemon::set_autopause_flags(bat, met);
+        match crate::daemon::autopause_flags() {
+            Ok((mut battery, mut metered)) => {
+                ui.horizontal(|ui| {
+                    let battery_changed = ui
+                        .checkbox(&mut battery, "Im Energiesparmodus pausieren")
+                        .on_hover_text("Synchronisierung anhalten, solange der Windows-Energiesparmodus aktiv ist")
+                        .changed();
+                    let metered_changed = ui
+                        .checkbox(&mut metered, "Bei getakteter Verbindung")
+                        .on_hover_text("Synchronisierung anhalten, solange eine getaktete Netzwerkverbindung erkannt wird (Windows)")
+                        .changed();
+                    if battery_changed || metered_changed {
+                        self.report_daemon_control(
+                            "Automatische Pause speichern",
+                            crate::daemon::set_autopause_flags(battery, metered),
+                        );
+                    }
+                });
             }
-        });
+            Err(error) => {
+                ui.colored_label(
+                    Color32::from_rgb(230, 120, 100),
+                    "Automatische Pause nicht lesbar · Hintergrund-Sync gesperrt",
+                )
+                .on_hover_text(error.to_string());
+            }
+        }
 
         ui.label(
             RichText::new("Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.")
@@ -294,210 +365,9 @@ impl App {
         );
     }
 
-    /// Saved-setups manager: list jobs with run / edit / delete / enable, plus
-    /// "new". This is the rich overview the user asked for (source → target,
-    /// method, schedule). Persists to sync/jobs.tsv on every change.
-    /// Read-only viewer for the background daemon's run log (Group J).
-    pub(in crate::app) fn ui_daemon_log(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_daemon_log;
-        egui::Window::new("📜 Sync-Protokoll")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([640.0, 380.0])
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Letzte Hintergrund-Sync-Läufe (neueste unten).")
-                            .small()
-                            .color(Color32::from_gray(140)),
-                    );
-                });
-                ui.separator();
-                let log = crate::daemon::read_log_tail(300);
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut log.as_str())
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(18),
-                        );
-                    });
-            });
-        self.show_daemon_log = open;
-    }
-
-    pub(in crate::app) fn ui_sync_jobs(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_sync_jobs;
-        let mut run_id: Option<String> = None;
-        let mut compare_id: Option<String> = None;
-        let mut edit_id: Option<String> = None;
-        let mut del_id: Option<String> = None;
-        let mut toggle_id: Option<String> = None;
-        let mut new_blank = false;
-        let jobs = self.sync_jobs.clone();
-        let results = crate::syncjobs::load_results();
-        egui::Window::new("⚙ Sync-Setups")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([640.0, 440.0])
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("＋ Neues Setup").clicked() {
-                        new_blank = true;
-                    }
-                    ui.label(
-                        RichText::new("Quelle ⇄ Ziel, Methode, Zeitplan — bleibt nach Neustart erhalten.")
-                            .small()
-                            .color(Color32::from_gray(140)),
-                    );
-                });
-                ui.separator();
-                if jobs.is_empty() {
-                    ui.add_space(8.0);
-                    ui.colored_label(
-                        Color32::from_gray(140),
-                        "Noch keine Setups. „＋ Neues Setup“ anlegen oder im Split-View zwei Ordner per Rechtsklick verbinden.",
-                    );
-                    return;
-                }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for j in &jobs {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
-                                if !j.enabled {
-                                    ui.colored_label(Color32::from_gray(130), "⏸ deaktiviert");
-                                }
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("✕").on_hover_text("Setup löschen").clicked() {
-                                        del_id = Some(j.id.clone());
-                                    }
-                                    if ui.small_button("✎ Bearbeiten").clicked() {
-                                        edit_id = Some(j.id.clone());
-                                    }
-                                    let enable_label = if j.enabled { "⏸ Aus" } else { "▶ Ein" };
-                                    if ui.small_button(enable_label).on_hover_text("Zeitplan aktivieren/deaktivieren").clicked() {
-                                        toggle_id = Some(j.id.clone());
-                                    }
-                                    if !self.bisync_running
-                                        && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()
-                                    {
-                                        run_id = Some(j.id.clone());
-                                    }
-                                    if !self.preview_running
-                                        && ui.small_button("🔍 Vergleichen").on_hover_text("Beide Seiten vergleichen, ohne etwas zu ändern (zeigt, was synchronisiert würde)").clicked()
-                                    {
-                                        compare_id = Some(j.id.clone());
-                                    }
-                                });
-                            });
-                            ui.label(
-                                RichText::new(format!("{}  →  {}", j.source, j.target))
-                                    .small()
-                                    .color(Color32::from_gray(170)),
-                            );
-                            let sched = match j.trigger {
-                                crate::syncjobs::Trigger::Manual => "manuell".to_string(),
-                                crate::syncjobs::Trigger::Interval => {
-                                    format!("alle {} min", j.interval_min)
-                                }
-                                crate::syncjobs::Trigger::Calendar => {
-                                    let t = min_to_hm(j.cal_time_min);
-                                    if j.cal_monthday != 0 {
-                                        format!("monatl. am {}. um {}", j.cal_monthday, t)
-                                    } else if j.cal_weekdays == 0 {
-                                        format!("täglich {}", t)
-                                    } else {
-                                        const D: [&str; 7] =
-                                            ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-                                        let days: Vec<&str> = (0..7)
-                                            .filter(|i| (j.cal_weekdays >> i) & 1 == 1)
-                                            .map(|i| D[i])
-                                            .collect();
-                                        format!("{} {}", days.join(","), t)
-                                    }
-                                }
-                                crate::syncjobs::Trigger::RealTime => {
-                                    format!("Echtzeit (+{}s)", j.rt_debounce_secs)
-                                }
-                                crate::syncjobs::Trigger::OnStartup => "beim Start".to_string(),
-                                crate::syncjobs::Trigger::OnConnect => {
-                                    if j.connect_match.is_empty() {
-                                        "bei USB/Gerät".to_string()
-                                    } else {
-                                        format!("bei Gerät „{}“", j.connect_match)
-                                    }
-                                }
-                            };
-                            let last = if j.last_run == 0 {
-                                "nie".to_string()
-                            } else {
-                                fmt_ms(j.last_run * 1000)
-                            };
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} · {} · {} · zuletzt: {}",
-                                    j.direction.label(),
-                                    j.conflict.label(),
-                                    sched,
-                                    last
-                                ))
-                                .small()
-                                .color(Color32::from_gray(140)),
-                            );
-                            // Live status from the last recorded run.
-                            if let Some(r) = results.get(&j.id) {
-                                let color = match r.note.as_str() {
-                                    "ok" => Color32::from_rgb(120, 200, 120),
-                                    "Konflikte" => Color32::from_rgb(230, 200, 90),
-                                    _ => Color32::from_rgb(230, 120, 120),
-                                };
-                                ui.label(
-                                    RichText::new(format!(
-                                        "● {} — {}→ {}← {}gelöscht · {}Konflikte · {}Fehler",
-                                        r.note, r.a_to_b, r.b_to_a, r.deleted, r.conflicts, r.errors
-                                    ))
-                                    .small()
-                                    .color(color),
-                                );
-                            }
-                        });
-                    }
-                });
-            });
-        self.show_sync_jobs = open;
-        if new_blank {
-            self.job_editor = Some(JobEditor::blank(String::new(), String::new()));
-        }
-        if let Some(id) = edit_id {
-            if let Some(j) = self.sync_jobs.iter().find(|j| j.id == id) {
-                self.job_editor = Some(JobEditor::from_job(j));
-            }
-        }
-        if let Some(id) = toggle_id {
-            if let Some(j) = self.sync_jobs.iter_mut().find(|j| j.id == id) {
-                j.enabled = !j.enabled;
-                let job = j.clone();
-                let _ = crate::syncjobs::upsert(&job);
-                self.sync_jobs = crate::syncjobs::load();
-            }
-        }
-        if let Some(id) = del_id {
-            let _ = crate::syncjobs::remove(&id);
-            self.sync_jobs = crate::syncjobs::load();
-        }
-        if let Some(id) = run_id {
-            self.run_job(&id);
-        }
-        if let Some(id) = compare_id {
-            if let Some(j) = self.sync_jobs.iter().find(|j| j.id == id).cloned() {
-                self.launch_preview(&j);
-            }
+    fn report_daemon_control(&mut self, action: &str, result: std::io::Result<()>) {
+        if let Err(error) = result {
+            self.error_msg = Some(format!("{action} fehlgeschlagen: {error}"));
         }
     }
 }

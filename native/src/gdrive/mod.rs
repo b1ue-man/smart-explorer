@@ -23,8 +23,16 @@ mod cache;
 mod changes;
 #[path = "core/core.rs"]
 mod core;
+#[path = "core/dedupe.rs"]
+mod dedupe;
 #[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core/promotion.rs"]
+mod promotion;
+#[path = "core/promotion_api.rs"]
+mod promotion_api;
+#[path = "core/resumable.rs"]
+mod resumable;
 #[path = "core/state.rs"]
 mod state;
 #[path = "core/transfer.rs"]

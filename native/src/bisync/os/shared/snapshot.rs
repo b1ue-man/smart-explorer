@@ -1,10 +1,17 @@
 use crate::vfs::Backend;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use super::paths::{join, rel_of};
-use super::types::{Baseline, CompareMode, Sig, Tree};
+use super::snapshot_hash::hash_file;
+pub use super::snapshot_hash::HashMode;
+pub(super) use super::snapshot_hash::{hash_mode, md5_hex_to_u64, md5_to_u64};
+use super::types::{Baseline, Sig, Tree};
+
+const MAX_WALK_NODES: u64 = 1_000_000;
+const MAX_WALK_TEXT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_WALK_DEPTH: usize = 512;
 
 /// What to skip while walking: hidden files, ignore globs (matched on the
 /// relative path), and size/age bounds (Group G). A bound of 0 means "no limit".
@@ -56,99 +63,6 @@ pub fn empty_globset() -> globset::GlobSet {
     globset::GlobSetBuilder::new().build().unwrap()
 }
 
-/// First 8 bytes of a 16-byte MD5 digest folded into a u64 (the Sig content
-/// key). 0 is reserved for "no hash" (an unreadable file or an un-hashed side),
-/// so a real digest of all-zero high bytes is bumped to 1.
-pub(super) fn md5_to_u64(d: &[u8; 16]) -> u64 {
-    let mut v = [0u8; 8];
-    v.copy_from_slice(&d[..8]);
-    let h = u64::from_be_bytes(v);
-    if h == 0 {
-        1
-    } else {
-        h
-    } // reserve 0 for "no hash"
-}
-
-/// Parse a hex MD5 string (e.g. Google Drive `md5Checksum`) into the Sig key.
-pub(crate) fn md5_hex_to_u64(hex: &str) -> u64 {
-    let hex = hex.trim();
-    if hex.len() < 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return 0;
-    }
-    let mut d = [0u8; 16];
-    for i in 0..16 {
-        d[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
-    }
-    md5_to_u64(&d)
-}
-
-/// Stream the file through MD5 → Sig key. Used only when the backend does NOT
-/// already provide a content hash (so for a local file this is a cheap local
-/// read; for a remote without native hashes it's a download — the slow path).
-fn hash_file(be: &dyn Backend, path: &str, cancel: &AtomicBool) -> u64 {
-    use std::io::Read;
-    let mut ctx = md5::Context::new();
-    if let Ok(mut r) = be.open_read(path) {
-        let mut buf = [0u8; 65536];
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return 0; // abort promptly when the user stops
-            }
-            match r.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => ctx.consume(&buf[..n]),
-                Err(_) => return 0,
-            }
-        }
-    } else {
-        return 0;
-    }
-    md5_to_u64(&ctx.compute().0)
-}
-
-/// How a walk obtains a file's content hash (decided per side by `hash_mode`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HashMode {
-    /// Don't hash — size/mtime only.
-    None,
-    /// Use the backend's FREE native hash if present, else leave it 0. Never
-    /// reads/downloads file content (so a hash-less remote stays free).
-    NativeOnly,
-    /// Native hash if present, else read the file to hash it (a cheap local read,
-    /// or — only when the user explicitly chose Checksum — a remote download).
-    Full,
-}
-
-/// Decide how to hash `this` side given the `other` side and the compare mode.
-/// The goal: use a content hash whenever it's FREE or CHEAP, so files whose
-/// mtime differs but content matches are not re-transferred — without ever
-/// downloading a hash-less remote behind the user's back.
-pub(super) fn hash_mode(this: &dyn Backend, other: &dyn Backend, compare: CompareMode) -> HashMode {
-    match compare {
-        // Pure size compare is already transfer-optimal (identical files share a
-        // size) and the user asked to ignore everything else → no hashing.
-        CompareMode::SizeOnly => HashMode::None,
-        // Explicit checksum: this side MUST yield a content hash even if that
-        // means reading/downloading it (native hash is still used first).
-        CompareMode::Checksum => HashMode::Full,
-        // Default size+mtime: mtime is unreliable across systems (a cloud upload
-        // gets a fresh modifiedTime). Opportunistically use a content hash when
-        // it's free (native) or cheap (a local read to match the OTHER side's
-        // free native hash). Never download a hash-less remote here — that's the
-        // explicit Checksum mode's job; fall back to mtime+size for it.
-        CompareMode::MtimeSize => {
-            if this.provides_content_hash() {
-                HashMode::NativeOnly
-            } else if this.is_local() && other.provides_content_hash() {
-                HashMode::Full
-            } else {
-                HashMode::None
-            }
-        }
-    }
-}
-
 /// One side's last-known tree (rel → Sig) reconstructed from the saved baseline,
 /// used by `walk_files` to reuse stored hashes for files whose size+mtime are
 /// unchanged (so a large local tree isn't re-hashed on every run).
@@ -156,72 +70,6 @@ pub(super) fn prev_side(base: &Baseline, side_a: bool) -> Tree {
     base.iter()
         .filter_map(|(rel, (a, b))| (if side_a { *a } else { *b }).map(|s| (rel.clone(), s)))
         .collect()
-}
-
-/// Recursively list files (not dirs) of a backend subtree → rel → Sig,
-/// honouring the hidden/ignore filter.
-///
-/// The walk is breadth-first and **fans out each level across the backend's
-/// `parallelism()`** — decisive for remotes like Drive where every `list_dir`
-/// is a network round-trip and a 27k-file tree spans hundreds of folders.
-/// Build the signature `Tree` from the agent's one-pass server-side walk
-/// (`Backend::walk_hashed`), applying the same client-side `filter` the per-dir
-/// walk would. `Some` = ran server-side; `None` = backend declined → caller
-/// falls back. MD5 is requested only for `HashMode::Full` (so `NativeOnly`/`None`
-/// keep their "don't hash" semantics — SFTP has no free hash). The agent's MD5
-/// hex maps through `md5_hex_to_u64`, the same key the local side derives from
-/// `hash_file`, so cross-side compares stay correct.
-fn walk_hashed_via_agent(
-    be: &dyn Backend,
-    root: &str,
-    cancel: &AtomicBool,
-    filter: &WalkFilter,
-    hash: HashMode,
-) -> Option<Tree> {
-    let want_hash = matches!(hash, HashMode::Full);
-    let (tx, rx) = crossbeam_channel::unbounded::<crate::vfs::HashHit>();
-    let mut tree = Tree::new();
-    let ran = std::thread::scope(|scope| {
-        let h = scope.spawn(|| be.walk_hashed(root, want_hash, tx, cancel));
-        for hit in rx.iter() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            if hit.is_dir {
-                continue; // the Tree tracks files
-            }
-            if filter.ignore.is_match(&hit.rel) {
-                continue;
-            }
-            // Unix dotfile = hidden (the agent doesn't carry an attribute).
-            let hidden = hit
-                .rel
-                .rsplit('/')
-                .next()
-                .is_some_and(|n| n.starts_with('.'));
-            if !filter.include_hidden && hidden {
-                continue;
-            }
-            if !filter.size_age_ok(hit.size, hit.mtime_ms) {
-                continue;
-            }
-            let h = hit.md5.as_deref().map(md5_hex_to_u64).unwrap_or(0);
-            tree.insert(
-                hit.rel,
-                Sig {
-                    size: hit.size,
-                    mtime_ms: hit.mtime_ms,
-                    hash: h,
-                },
-            );
-        }
-        h.join().unwrap_or(false)
-    });
-    if ran {
-        Some(tree)
-    } else {
-        None
-    }
 }
 
 /// Backends that report `parallelism() == 1` (SFTP/FTP) stay effectively
@@ -239,12 +87,51 @@ pub fn walk_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
+    walk_files_impl(be, root, cancel, filter, hash, prev, false)
+}
+
+/// Mirror destinations on ID-addressed providers may contain pre-existing
+/// duplicate regular-file names. The caller must preflight and apply an exact
+/// dedupe plan before any path-based writes; this walk only selects the same
+/// deterministic newest ID for planning.
+pub(super) fn walk_files_with_duplicate_files(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    prev: Option<&Tree>,
+) -> io::Result<Tree> {
+    walk_files_impl(be, root, cancel, filter, hash, prev, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_files_impl(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    prev: Option<&Tree>,
+    allow_duplicate_files: bool,
+) -> io::Result<Tree> {
+    let canceled = || {
+        io::Error::new(
+            io::ErrorKind::Interrupted,
+            "synchronization tree walk canceled",
+        )
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return Err(canceled());
+    }
     // Fast path: when the backend can produce the signature SERVER-SIDE (the SSH
     // agent's WalkHashed), get the whole tree — including content MD5 for Full —
     // in one pass without downloading a single file. Falls through to the per-dir
     // walk if it didn't run.
     if be.supports_walk_hashed() {
-        if let Some(tree) = walk_hashed_via_agent(be, root, cancel, filter, hash) {
+        if let Some(tree) =
+            super::snapshot_agent::walk_hashed_via_agent(be, root, cancel, filter, hash)?
+        {
             return Ok(tree);
         }
     }
@@ -252,10 +139,19 @@ pub fn walk_files(
     let par = be.parallelism().max(1);
     let out: Mutex<Tree> = Mutex::new(Tree::new());
     let mut level = vec![root.to_string()];
+    let nodes = AtomicU64::new(1);
+    let text_bytes = AtomicU64::new(root.len() as u64);
+    let mut depth = 0usize;
 
     while !level.is_empty() {
+        if depth > MAX_WALK_DEPTH {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("sync tree exceeds {MAX_WALK_DEPTH} levels"),
+            ));
+        }
         if cancel.load(Ordering::Relaxed) {
-            break;
+            return Err(canceled());
         }
         let next: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let first_err: Mutex<Option<io::Error>> = Mutex::new(None);
@@ -280,16 +176,92 @@ pub fn walk_files(
                     let dir = &level[i];
                     match be.list_dir(dir) {
                         Ok(entries) => {
-                            let mut files: Vec<(String, Sig)> = Vec::new();
+                            let mut files: Vec<(String, Sig, String)> = Vec::new();
                             let mut dirs: Vec<String> = Vec::new();
+                            let mut child_names: std::collections::HashMap<
+                                String,
+                                (bool, std::collections::HashSet<String>),
+                            > = std::collections::HashMap::new();
                             for m in entries {
                                 if cancel.load(Ordering::Relaxed) {
                                     break; // stop promptly mid-directory (esp. when hashing)
+                                }
+                                if let Err(error) = crate::vfs::validate_child_name(&m.name) {
+                                    let mut slot = first_err
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    if slot.is_none() {
+                                        *slot = Some(error);
+                                    }
+                                    return;
+                                }
+                                let id = m.id.clone();
+                                let duplicate_invalid = match child_names.get_mut(&m.name) {
+                                    None => {
+                                        let mut ids = std::collections::HashSet::new();
+                                        if let Some(id) = id.as_ref() {
+                                            ids.insert(id.clone());
+                                        }
+                                        child_names.insert(
+                                            m.name.clone(),
+                                            (m.is_dir || m.is_symlink, ids),
+                                        );
+                                        false
+                                    }
+                                    Some((prior_non_regular, ids)) => {
+                                        !allow_duplicate_files
+                                            || *prior_non_regular
+                                            || m.is_dir
+                                            || m.is_symlink
+                                            || id.as_ref().is_none_or(|id| !ids.insert(id.clone()))
+                                    }
+                                };
+                                if duplicate_invalid {
+                                    let mut slot = first_err
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    if slot.is_none() {
+                                        *slot = Some(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!(
+                                                "backend returned duplicate child name in {dir}: {:?}",
+                                                m.name
+                                            ),
+                                        ));
+                                    }
+                                    return;
+                                }
+                                if m.is_symlink {
+                                    let mut slot = first_err
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    if slot.is_none() {
+                                        *slot = Some(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!("link-like sync source is unsupported: {dir}/{}", m.name),
+                                        ));
+                                    }
+                                    return;
                                 }
                                 if !filter.include_hidden && m.hidden {
                                     continue;
                                 }
                                 let p = join(dir, &m.name);
+                                if nodes.fetch_add(1, Ordering::Relaxed) >= MAX_WALK_NODES
+                                    || text_bytes.fetch_add(p.len() as u64, Ordering::Relaxed)
+                                        > MAX_WALK_TEXT_BYTES.saturating_sub(p.len() as u64)
+                                {
+                                    let mut slot = first_err
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    if slot.is_none() {
+                                        *slot = Some(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            "sync tree exceeds its bounded collection budget",
+                                        ));
+                                    }
+                                    return;
+                                }
                                 let rel = rel_of(&p, root);
                                 if filter.ignore.is_match(&rel) {
                                     continue;
@@ -329,7 +301,47 @@ pub fn walk_files(
                                             {
                                                 ph
                                             } else {
-                                                hash_file(be, &p, cancel)
+                                                match hash_file(be, &p, cancel) {
+                                                    Ok(hash) => hash,
+                                                    Err(error) => {
+                                                        let mut slot = first_err.lock().unwrap_or_else(
+                                                            |poisoned| poisoned.into_inner(),
+                                                        );
+                                                        if slot.is_none() {
+                                                            *slot = Some(io::Error::new(
+                                                                error.kind(),
+                                                                format!("hash {p}: {error}"),
+                                                            ));
+                                                        }
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        HashMode::FullFresh => {
+                                            let native = m
+                                                .content_md5
+                                                .as_deref()
+                                                .map(md5_hex_to_u64)
+                                                .unwrap_or(0);
+                                            if native != 0 {
+                                                native
+                                            } else {
+                                                match hash_file(be, &p, cancel) {
+                                                    Ok(hash) => hash,
+                                                    Err(error) => {
+                                                        let mut slot = first_err.lock().unwrap_or_else(
+                                                            |poisoned| poisoned.into_inner(),
+                                                        );
+                                                        if slot.is_none() {
+                                                            *slot = Some(io::Error::new(
+                                                                error.kind(),
+                                                                format!("fresh checksum {p}: {error}"),
+                                                            ));
+                                                        }
+                                                        return;
+                                                    }
+                                                }
                                             }
                                         }
                                     };
@@ -340,22 +352,24 @@ pub fn walk_files(
                                             mtime_ms: m.mtime_ms,
                                             hash: h,
                                         },
+                                        id.unwrap_or_default(),
                                     ));
                                 }
                             }
                             if !files.is_empty() {
                                 let mut o =
                                     out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                                // A backend may report two files with the same
-                                // name in one folder (e.g. Google Drive keys by
-                                // id, not name). Keep the newest deterministically
-                                // so the plan is stable rather than order-dependent.
-                                for (rel, sig) in files {
-                                    match o.get(&rel) {
-                                        Some(prev) if prev.mtime_ms >= sig.mtime_ms => {}
-                                        _ => {
-                                            o.insert(rel, sig);
-                                        }
+                                files.sort_by(|left, right| {
+                                    left.0
+                                        .cmp(&right.0)
+                                        .then_with(|| right.1.mtime_ms.cmp(&left.1.mtime_ms))
+                                        .then_with(|| left.2.cmp(&right.2))
+                                });
+                                let mut prior_rel: Option<String> = None;
+                                for (rel, sig, _) in files {
+                                    if prior_rel.as_deref() != Some(&rel) {
+                                        o.insert(rel.clone(), sig);
+                                        prior_rel = Some(rel);
                                     }
                                 }
                             }
@@ -379,6 +393,13 @@ pub fn walk_files(
             }
         });
 
+        // A worker can observe cancellation while it is part-way through a
+        // directory. Never turn that partial level into a successful snapshot:
+        // callers persist successful walks as the next deletion baseline.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(canceled());
+        }
+
         if let Some(e) = first_err
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -388,6 +409,7 @@ pub fn walk_files(
         level = next
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        depth += 1;
     }
     Ok(out
         .into_inner()

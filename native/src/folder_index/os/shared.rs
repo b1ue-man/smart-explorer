@@ -1,174 +1,98 @@
 use crossbeam_channel::Sender;
-use rayon::prelude::*;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::io;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use super::filters::path_has_skipped_segment;
 use super::model::{FolderIndex, IndexMsg};
-use super::platform::should_skip_meta;
+
+#[path = "persistence.rs"]
+mod persistence;
+#[path = "rank.rs"]
+mod rank;
+#[path = "walk.rs"]
+mod walk;
+
+pub use rank::stat_and_rank;
 
 impl FolderIndex {
-    /// Build an index by walking the given roots in parallel, collecting only
-    /// directories. Sends progress over `tx` and posts the final result.
-    pub fn build_async(roots: Vec<PathBuf>, tx: Sender<IndexMsg>, cancel: Arc<AtomicBool>) {
+    /// Build and atomically persist an index on a detached worker. A terminal
+    /// message is sent only after traversal and persistence have both finished.
+    pub fn build_async(
+        roots: Vec<PathBuf>,
+        persist_path: PathBuf,
+        tx: Sender<IndexMsg>,
+        cancel: Arc<AtomicBool>,
+    ) -> io::Result<()> {
         std::thread::Builder::new()
             .name("index-builder".into())
-            .spawn(move || {
-                let paths = Mutex::new(Vec::<String>::with_capacity(200_000));
-                let counter = Arc::new(AtomicU64::new(0));
-                let last_emit = Arc::new(Mutex::new(std::time::Instant::now()));
-
-                for root in &roots {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    walk_folders(root.clone(), &paths, &counter, &cancel, &tx, &last_emit);
-                }
-
-                let collected: Vec<String> = paths.into_inner().unwrap_or_default();
-                let mut set: HashSet<String> = HashSet::with_capacity(collected.len());
-                for p in collected {
-                    set.insert(p);
-                }
-
-                let _ = tx.send(IndexMsg::Done(FolderIndex { paths: set }));
-            })
-            .ok();
+            .spawn(move || run_builder(roots, persist_path, tx, cancel))
+            .map(|_| ())
     }
 }
 
-/// I/O part of the search: stat the candidates and sort by
-/// (score DESC, mtime DESC). Free function on owned data so callers can run
-/// it on a background thread without borrowing the index.
-pub fn stat_and_rank(candidates: Vec<(String, i32)>, max: usize) -> Vec<(String, i32)> {
-    let mut with_mtime: Vec<(String, i32, i64)> = candidates
-        .into_par_iter()
-        .map(|(p, score)| {
-            let mtime = std::fs::metadata(&p)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            (p, score, mtime)
+fn run_builder(
+    roots: Vec<PathBuf>,
+    persist_path: PathBuf,
+    tx: Sender<IndexMsg>,
+    cancel: Arc<AtomicBool>,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build_message(roots, &persist_path, &tx, &cancel)
+    }));
+    let message = match result {
+        Err(payload) => IndexMsg::Failed(format!(
+            "folder-index worker panicked: {}",
+            panic_detail(payload)
+        )),
+        Ok(Some(message)) => message,
+        Ok(None) => return,
+    };
+
+    if tx.send(message).is_err() {
+        cancel.store(true, Ordering::Release);
+    }
+}
+
+fn build_message(
+    roots: Vec<PathBuf>,
+    persist_path: &std::path::Path,
+    tx: &Sender<IndexMsg>,
+    cancel: &AtomicBool,
+) -> Option<IndexMsg> {
+    let index = match walk::build_index(roots, tx, cancel) {
+        Ok(index) => index,
+        Err(walk::WalkStop::Canceled) => return Some(IndexMsg::Canceled),
+        Err(walk::WalkStop::ReceiverClosed) => return None,
+        Err(walk::WalkStop::Failed(error)) => return Some(IndexMsg::Failed(error)),
+    };
+    if cancel.load(Ordering::Acquire) {
+        return Some(IndexMsg::Canceled);
+    }
+    if tx
+        .send(IndexMsg::Progress {
+            count: index.len() as u64,
+            current: "Index wird gespeichert…".to_string(),
         })
-        .collect();
-    // Score primary (desc), mtime secondary (desc, most recent first)
-    with_mtime.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-    with_mtime.truncate(max);
-    with_mtime.into_iter().map(|(p, s, _)| (p, s)).collect()
+        .is_err()
+    {
+        return None;
+    }
+    Some(
+        match index.save_cancellable(persist_path, || cancel.load(Ordering::Acquire)) {
+            Ok(persistence::SaveOutcome::Saved) => IndexMsg::Complete(index),
+            Ok(persistence::SaveOutcome::Canceled) => IndexMsg::Canceled,
+            Err(error) => IndexMsg::Failed(format!("folder index could not be saved: {error}")),
+        },
+    )
 }
 
-fn walk_folders(
-    root: PathBuf,
-    paths: &Mutex<Vec<String>>,
-    counter: &Arc<AtomicU64>,
-    cancel: &Arc<AtomicBool>,
-    tx: &Sender<IndexMsg>,
-    last_emit: &Arc<Mutex<std::time::Instant>>,
-) {
-    // First add the root itself
-    if std::fs::metadata(&root).is_ok() {
-        let rs = root.to_string_lossy().replace('\\', "/");
-        if let Ok(mut g) = paths.lock() {
-            g.push(rs);
-            counter.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-    walk_parallel(vec![root], paths, counter, cancel, tx, last_emit);
-}
-
-fn walk_parallel(
-    dirs: Vec<PathBuf>,
-    paths: &Mutex<Vec<String>>,
-    counter: &Arc<AtomicU64>,
-    cancel: &Arc<AtomicBool>,
-    tx: &Sender<IndexMsg>,
-    last_emit: &Arc<Mutex<std::time::Instant>>,
-) {
-    if dirs.is_empty() || cancel.load(Ordering::Relaxed) {
-        return;
-    }
-    dirs.into_par_iter().for_each(|dir| {
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        let read = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        let mut local_dirs: Vec<String> = Vec::with_capacity(16);
-        let mut subdirs: Vec<PathBuf> = Vec::with_capacity(16);
-        for er in read {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            let entry = match er {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let meta = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            if !meta.is_dir() || meta.is_symlink() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            // Filter out hidden / system / dotfolders / generic IDs.
-            if should_skip_meta(&name, &meta) {
-                continue;
-            }
-            let path = entry.path();
-            let s = path.to_string_lossy().replace('\\', "/");
-            local_dirs.push(s);
-            subdirs.push(path);
-        }
-        if !local_dirs.is_empty() {
-            if let Ok(mut g) = paths.lock() {
-                let new_count = g.len() + local_dirs.len();
-                g.extend(local_dirs);
-                counter.store(new_count as u64, Ordering::Relaxed);
-            }
-            // Throttled progress emission
-            if let Ok(mut le) = last_emit.lock() {
-                if le.elapsed().as_millis() > 200 {
-                    *le = std::time::Instant::now();
-                    let _ = tx.send(IndexMsg::Progress {
-                        count: counter.load(Ordering::Relaxed),
-                        current: dir.to_string_lossy().to_string(),
-                    });
-                }
-            }
-        }
-        if !subdirs.is_empty() {
-            walk_parallel(subdirs, paths, counter, cancel, tx, last_emit);
-        }
-    });
-}
-impl FolderIndex {
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let mut buf = String::with_capacity(self.paths.len() * 50);
-        for p in &self.paths {
-            buf.push_str(p);
-            buf.push('\n');
-        }
-        std::fs::write(path, buf)
-    }
-
-    pub fn load(path: &Path) -> std::io::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        // While loading, drop any entries that contain a skip-matching segment
-        // anywhere in their path. This cleans up legacy indices built before
-        // the filter existed - no rebuild needed.
-        let paths: HashSet<String> = content
-            .lines()
-            .filter(|l| !l.is_empty())
-            .filter(|l| !path_has_skipped_segment(l))
-            .map(|l| l.to_string())
-            .collect();
-        Ok(Self { paths })
+fn panic_detail(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
     }
 }

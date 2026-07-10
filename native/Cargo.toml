@@ -1,15 +1,19 @@
 [package]
 name = "smart_explorer"
-version = "0.5.119"
+version = "0.5.120"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
 
 [dependencies]
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "wgpu"] }
+eframe = { version = "0.29", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu"] }
 egui_extras = { version = "0.29", features = ["datepicker"] }
 rayon = "1.10"
 crossbeam-channel = "0.5"
+# The conflict editor uses deadline-aware Myers line diffs (linear auxiliary
+# space) instead of allocating a quadratic LCS table. Only the std/text API is
+# enabled, so this remains a pure-Rust dependency for both release targets.
+similar = { version = "3.1.1", default-features = false, features = ["std", "text"] }
 notify = "6"
 regex = "1"
 globset = "0.4"
@@ -32,6 +36,10 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # FTP/FTPS backend (ftp.rs). Blocking FtpStream (no runtime). rustls (NOT
 # native-tls) to avoid schannel/OpenSSL FFI on GNU. See docs/GOTCHAS.md.
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
+# Remote writers stage data in an anonymous disk-backed file until the caller
+# explicitly flushes. This keeps aborted/large uploads off the heap and avoids
+# exposing partially written remote files before the commit boundary.
+tempfile = "3"
 # Explicit ring-backed rustls ClientConfig for FTPS (no aws-lc); webpki-roots
 # bundles the trust store (no OS cert dependency). Shared 0.23 build with
 # ureq/russh/suppaftp.
@@ -112,6 +120,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_SystemServices",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
@@ -120,6 +129,7 @@ windows = { version = "0.58", features = [
 
 # Host-only (CI / `cargo test`); never part of the Windows build.
 [target.'cfg(not(windows))'.dependencies]
+libc = "0.2" # renameat2(RENAME_NOREPLACE) for race-free local move quarantine
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
 [profile.release]

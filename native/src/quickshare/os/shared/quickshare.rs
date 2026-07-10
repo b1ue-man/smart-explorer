@@ -13,8 +13,6 @@
 //!
 //! Discovery is pure Rust (`mdns-sd`) and runs only while the Teilen view is
 //! open, so it adds no idle overhead.
-#![allow(dead_code)]
-
 use crossbeam_channel::{unbounded, Receiver};
 use std::collections::BTreeMap;
 
@@ -36,9 +34,10 @@ pub struct QuickShare {
 
 impl QuickShare {
     /// Start browsing (and advertising) the Quick Share mDNS service. Returns
-    /// None if mDNS can't be initialised.
-    pub fn start(my_name: &str) -> Option<QuickShare> {
-        let daemon = mdns_sd::ServiceDaemon::new().ok()?;
+    /// an explicit error if discovery cannot be initialised.
+    pub fn start(my_name: &str) -> Result<QuickShare, String> {
+        let daemon = mdns_sd::ServiceDaemon::new()
+            .map_err(|error| format!("mDNS-Dienst konnte nicht gestartet werden: {error}"))?;
 
         // Advertise ourselves so Android can see this PC (best-effort).
         if let Ok(host) = hostname_local() {
@@ -54,10 +53,9 @@ impl QuickShare {
             }
         }
 
-        let browse = match daemon.browse(SERVICE) {
-            Ok(rx) => rx,
-            Err(_) => return None,
-        };
+        let browse = daemon
+            .browse(SERVICE)
+            .map_err(|error| format!("Quick-Share-Suche konnte nicht gestartet werden: {error}"))?;
         let (tx, events) = unbounded();
         std::thread::Builder::new()
             .name("quickshare-mdns".into())
@@ -76,18 +74,24 @@ impl QuickShare {
                                 .unwrap_or_default();
                             devices
                                 .insert(info.get_fullname().to_string(), QsDevice { name, addr });
-                            let _ = tx.send(devices.values().cloned().collect());
+                            if tx.send(devices.values().cloned().collect()).is_err() {
+                                break;
+                            }
                         }
                         mdns_sd::ServiceEvent::ServiceRemoved(_, fullname) => {
                             devices.remove(&fullname);
-                            let _ = tx.send(devices.values().cloned().collect());
+                            if tx.send(devices.values().cloned().collect()).is_err() {
+                                break;
+                            }
                         }
                         _ => {}
                     }
                 }
             })
-            .ok();
-        Some(QuickShare {
+            .map_err(|error| {
+                format!("Quick-Share-Thread konnte nicht gestartet werden: {error}")
+            })?;
+        Ok(QuickShare {
             events,
             _daemon: daemon,
         })

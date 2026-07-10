@@ -10,7 +10,6 @@ pub mod connect;
 pub mod copy;
 pub mod creds;
 pub mod daemon;
-#[cfg(windows)]
 pub mod dragout;
 pub mod filter;
 pub mod folder_index;
@@ -48,11 +47,6 @@ pub fn run_gui() -> eframe::Result<()> {
     updater::cleanup_old_binaries();
     updater::archive_current_version();
     let args: Vec<String> = std::env::args().collect();
-
-    if args.iter().any(|a| a == "--apply-update") {
-        updater::run_apply_worker(&args);
-        return Ok(());
-    }
 
     if args.iter().any(|a| a == "--sync-daemon") {
         daemon::run_daemon();

@@ -1,7 +1,8 @@
 use std::io::{Read, Write};
 
 use super::{
-    Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta, VfsResult,
+    Backend, BackendHandle, DeleteDisposition, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta,
+    VfsResult,
 };
 
 /// Wraps any backend with a short-TTL **directory-listing cache** so interactive
@@ -83,6 +84,21 @@ impl CachingBackend {
             }
         }
     }
+
+    fn invalidate_prefix(&self, path: &str) {
+        if let Ok(mut c) = self.cache.lock() {
+            let key = Self::norm(path);
+            let child_prefix = if key == "/" {
+                "/".to_string()
+            } else {
+                format!("{key}/")
+            };
+            c.retain(|cached, _| cached != &key && !cached.starts_with(&child_prefix));
+            if let Some(parent) = Self::parent_of(&key) {
+                c.remove(&parent);
+            }
+        }
+    }
 }
 
 impl Backend for CachingBackend {
@@ -91,6 +107,9 @@ impl Backend for CachingBackend {
     }
     fn root_display(&self) -> String {
         self.inner.root_display()
+    }
+    fn state_identity(&self) -> String {
+        self.inner.state_identity()
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -122,6 +141,10 @@ impl Backend for CachingBackend {
         }
         self.inner.stat(path)
     }
+    fn try_exists(&self, path: &str) -> VfsResult<bool> {
+        // Existence gates mutations, so bypass potentially stale listing data.
+        self.inner.try_exists(path)
+    }
     fn exists(&self, path: &str) -> bool {
         self.inner.exists(path)
     }
@@ -149,9 +172,27 @@ impl Backend for CachingBackend {
     }
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         let r = self.inner.rename(src, dst);
-        self.invalidate(src);
-        self.invalidate(dst);
+        self.invalidate_prefix(src);
+        self.invalidate_prefix(dst);
         r
+    }
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let result = self.inner.rename_no_replace(src, dst);
+        self.invalidate_prefix(src);
+        self.invalidate_prefix(dst);
+        result
+    }
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        let result = self.inner.promote_staged(staged, destination);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        result
+    }
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        let result = self.inner.promote_staged_no_replace(staged, destination);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        result
     }
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         let r = self.inner.remove_file(path);
@@ -165,7 +206,7 @@ impl Backend for CachingBackend {
     }
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
         let r = self.inner.remove_dir(path);
-        self.invalidate(path);
+        self.invalidate_prefix(path);
         r
     }
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
@@ -178,6 +219,18 @@ impl Backend for CachingBackend {
     }
     fn rename_overwrites(&self) -> bool {
         self.inner.rename_overwrites()
+    }
+    fn plan_dedupe_recursive(
+        &self,
+        root: &str,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> VfsResult<Vec<super::DedupeCandidate>> {
+        self.inner.plan_dedupe_recursive(root, keep)
+    }
+    fn apply_dedupe_plan(&self, plan: &[super::DedupeCandidate]) -> VfsResult<usize> {
+        let result = self.inner.apply_dedupe_plan(plan);
+        self.invalidate_cache(); // an exact plan can span many folders
+        result
     }
     fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
         let r = self.inner.dedupe_recursive(root, keep);
@@ -207,6 +260,9 @@ impl Backend for CachingBackend {
             c.clear();
         }
     }
+    fn delete_disposition(&self) -> DeleteDisposition {
+        self.inner.delete_disposition()
+    }
     // Forward the agent capability so analytics' one-shot server-side walk works
     // through the cache wrapper (otherwise it fell back to per-dir listing).
     fn supports_walk_tree(&self) -> bool {
@@ -216,7 +272,7 @@ impl Backend for CachingBackend {
         &self,
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-    ) -> Option<crate::agent_proto::WireNode> {
+    ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
         self.inner.walk_tree(root, on_progress)
     }
     fn supports_bulk_tree(&self) -> bool {
@@ -227,7 +283,7 @@ impl Backend for CachingBackend {
     }
     fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
         let r = self.inner.put_tree(src, root);
-        self.invalidate(root); // new tree appears under root + its parent listing
+        self.invalidate_prefix(root);
         r
     }
     fn supports_search(&self) -> bool {
@@ -239,7 +295,7 @@ impl Backend for CachingBackend {
         spec: &crate::agent_proto::SearchSpec,
         tx: crossbeam_channel::Sender<SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         self.inner.search(root, spec, tx, cancel)
     }
     fn supports_walk_hashed(&self) -> bool {
@@ -251,7 +307,7 @@ impl Backend for CachingBackend {
         want_hash: bool,
         tx: crossbeam_channel::Sender<HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         self.inner.walk_hashed(root, want_hash, tx, cancel)
     }
 }

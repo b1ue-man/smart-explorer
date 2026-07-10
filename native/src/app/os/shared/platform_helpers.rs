@@ -1,6 +1,7 @@
 use super::super::prelude::*;
 
 #[derive(Clone, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::app) struct ClipboardVirtualFile {
     pub(in crate::app) abs: String,
     pub(in crate::app) rel: String,
@@ -40,7 +41,17 @@ pub(in crate::app) fn drain_scan_channel(
                 got_done = true;
                 break;
             }
-            Err(_) => break,
+            Err(crossbeam_channel::TryRecvError::Empty) => break,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                let message = "Scan-Worker wurde ohne Abschlussmeldung beendet".to_string();
+                *error_msg = Some(message.clone());
+                progress.errors = progress.errors.saturating_add(1);
+                if failed_paths.len() < 500 {
+                    failed_paths.push(("Scan-Worker".into(), message));
+                }
+                got_done = true;
+                break;
+            }
         }
     }
     let got_entries = !new_entries.is_empty();
@@ -155,12 +166,12 @@ impl UiState {
         s
     }
 
-    pub(in crate::app) fn save(&self) {
+    pub(in crate::app) fn save(&self) -> std::io::Result<()> {
         let txt = format!(
             "show_filters={}\nshow_summary={}\n",
             self.show_filters as u8, self.show_summary as u8
         );
-        let _ = std::fs::write(appdata_file("ui_state.txt"), txt);
+        std::fs::write(appdata_file("ui_state.txt"), txt)
     }
 }
 
@@ -182,11 +193,13 @@ pub(in crate::app) fn load_dir_sort() -> std::collections::HashMap<String, bool>
     m
 }
 
-pub(in crate::app) fn save_dir_sort(map: &std::collections::HashMap<String, bool>) {
+pub(in crate::app) fn save_dir_sort(
+    map: &std::collections::HashMap<String, bool>,
+) -> std::io::Result<()> {
     let mut lines: Vec<String> = map
         .iter()
         .map(|(p, v)| format!("{}\t{}", p, *v as u8))
         .collect();
     lines.sort();
-    let _ = std::fs::write(appdata_file("dir_sort.tsv"), lines.join("\n"));
+    std::fs::write(appdata_file("dir_sort.tsv"), lines.join("\n"))
 }

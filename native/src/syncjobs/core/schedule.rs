@@ -3,7 +3,7 @@ use super::types::{SyncJob, Trigger};
 pub(super) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or(0)
 }
 
@@ -38,9 +38,12 @@ impl SyncJob {
             return false;
         }
         match self.trigger {
-            Trigger::Interval => {
-                self.interval_min > 0 && (now - self.last_run) >= (self.interval_min as i64 * 60)
-            }
+            Trigger::Interval => i64::try_from(self.interval_min)
+                .ok()
+                .and_then(|minutes| minutes.checked_mul(60))
+                .is_some_and(|interval| {
+                    interval > 0 && now.saturating_sub(self.last_run) >= interval
+                }),
             Trigger::Calendar => match self.last_occurrence(now) {
                 Some(occ) => {
                     if self.last_run >= occ {
@@ -50,7 +53,7 @@ impl SyncJob {
                     } else {
                         // No catch-up: only fire close to the scheduled instant
                         // (within one daemon check window's grace, about 2 min).
-                        (now - occ) <= 120
+                        now.saturating_sub(occ) <= 120
                     }
                 }
                 None => false,
@@ -71,7 +74,7 @@ impl SyncJob {
     /// Does `day` (Mon=0..Sun=6 weekday, plus day-of-month) match this calendar?
     fn day_matches(&self, weekday_mon0: u32, day_of_month: u32) -> bool {
         if self.cal_monthday != 0 {
-            return day_of_month == self.cal_monthday as u32;
+            return day_of_month == u32::from(self.cal_monthday);
         }
         if self.cal_weekdays == 0 {
             return true;
@@ -84,10 +87,11 @@ impl SyncJob {
     fn last_occurrence(&self, now: i64) -> Option<i64> {
         use chrono::{Datelike, Duration, Local, TimeZone};
         let now_dt = Local.timestamp_opt(now, 0).single()?;
-        let (h, m) = (
-            (self.cal_time_min / 60).clamp(0, 23) as u32,
-            (self.cal_time_min % 60).clamp(0, 59) as u32,
-        );
+        if !(0..24 * 60).contains(&self.cal_time_min) {
+            return None;
+        }
+        let h = u32::try_from(self.cal_time_min / 60).ok()?;
+        let m = u32::try_from(self.cal_time_min % 60).ok()?;
         for back in 0..366 {
             let d = (now_dt - Duration::days(back)).date_naive();
             if !self.day_matches(d.weekday().num_days_from_monday(), d.day()) {
@@ -123,6 +127,11 @@ mod tests {
         assert!(j.due(700 + 600));
         j.enabled = false;
         assert!(!j.due(99999), "disabled never due");
+
+        j.enabled = true;
+        j.interval_min = u64::MAX;
+        j.last_run = i64::MIN;
+        assert!(!j.due(i64::MAX), "overflowing intervals fail closed");
     }
 
     #[test]

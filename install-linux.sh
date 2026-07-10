@@ -21,7 +21,11 @@ else
 fi
 TMP_DIR=""
 DRY_RUN=0
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P || pwd)"
+if SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)"; then
+  :
+else
+  SCRIPT_DIR="$(pwd -P)"
+fi
 
 case "${1:-}" in
   --dry-run) DRY_RUN=1 ;;
@@ -221,12 +225,34 @@ release_assets_available() {
 }
 
 use_release_assets() {
-  (
-    cd "$TMP_DIR"
-    sha256sum -c smart_explorer.sha256
-    sha256sum -c smart_explorer_updater.sha256
-    sha256sum -c se.sha256
-  )
+  verify_payload_sha256 "$TMP_DIR/smart_explorer" "$TMP_DIR/smart_explorer.sha256"
+  verify_payload_sha256 "$TMP_DIR/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater.sha256"
+  verify_payload_sha256 "$TMP_DIR/se" "$TMP_DIR/se.sha256"
+}
+
+verify_payload_sha256() {
+  verify_sidecar_line=""
+  IFS= read -r verify_sidecar_line < "$2" || [ -n "$verify_sidecar_line" ] || {
+    echo "smart-explorer install: empty SHA256 sidecar: $2" >&2
+    return 1
+  }
+  verify_expected=${verify_sidecar_line%% *}
+  verify_actual_line=$(sha256sum "$1")
+  verify_actual=${verify_actual_line%% *}
+  if [ "${#verify_expected}" -ne 64 ]; then
+    echo "smart-explorer install: invalid SHA256 sidecar: $2" >&2
+    return 1
+  fi
+  case "$verify_expected" in
+    *[!0-9a-fA-F]*)
+      echo "smart-explorer install: invalid SHA256 sidecar: $2" >&2
+      return 1
+      ;;
+  esac
+  if [ "$verify_expected" != "$verify_actual" ]; then
+    echo "smart-explorer install: SHA256 mismatch for $1" >&2
+    return 1
+  fi
 }
 
 find_local_source() {

@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::*;
+use crate::app::analytics_accessibility::treemap_accessible_list;
 
 impl App {
     /// Storage-analytics overlay: a dedicated low-memory size scan rendered as a
@@ -12,42 +13,30 @@ impl App {
             self.ui_reclaim(ctx);
             return;
         }
-        // First open with nothing scanned yet → scan the current remote folder if
-        // browsing a remote, otherwise the whole local drive.
-        if self.analytics_tree.is_none() && self.analytics_scan.is_none() {
-            if let Some(rs) = self.remote.as_ref() {
-                let be = rs.backend.clone();
-                let label = rs.label.clone();
-                let root = self.root_path.clone();
-                self.start_analytics_scan_remote(be, root, label);
-            } else {
-                let r = self.analytics_default_root();
-                if !r.is_empty() {
-                    self.start_analytics_scan(r);
-                }
-            }
-        }
         if self.analytics_counts.is_none() {
             if let Some(node) = self.analytics_focus_node() {
                 self.analytics_counts = Some(count_subtree(node));
             }
         }
 
-        let drive = self.drive_usage(&self.analytics_root_path);
+        let source = self.analytics_source.clone();
+        let root_path = source
+            .as_ref()
+            .map(StorageScanSource::root)
+            .unwrap_or("")
+            .to_string();
+        let drive = self.drive_usage(&root_path);
         let drives = self.drive_info.clone();
-        let root_label = if self.analytics_root_path.is_empty() {
-            "—".to_string()
-        } else {
-            self.analytics_root_path.clone()
-        };
+        let root_label = source
+            .as_ref()
+            .map(StorageScanSource::display)
+            .unwrap_or_else(|| "—".to_string());
         // Current remote (for the "scan this remote folder" button) + the source
         // the current tree came from (for ⟳ to re-walk the same place).
         let remote_scan: Option<(crate::vfs::BackendHandle, String, String)> = self
             .remote
             .as_ref()
             .map(|rs| (rs.backend.clone(), self.root_path.clone(), rs.label.clone()));
-        let cur_backend = self.analytics_backend.clone();
-        let cur_root = self.analytics_root_path.clone();
         let focus_segs = self.analytics_focus.clone();
         let focus_path = self.analytics_focus_path();
         let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);
@@ -59,9 +48,11 @@ impl App {
                 s.progress.bytes.load(Relaxed),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
-                s.cancel_requested,
             )
         });
+        let run_state = self.analytics_state;
+        let issue_count = self.analytics_issues.len() as u64 + self.analytics_suppressed_issues;
+        let first_issue = self.analytics_issues.first().cloned();
 
         let focus_node = self.analytics_focus_node();
         let cached_cells = &self.analytics_cells;
@@ -74,8 +65,7 @@ impl App {
         let mut drill_path: Option<String> = None; // treemap click → drill into folder
         let mut set_focus: Option<usize> = None; // breadcrumb truncate
         let mut go_up = false;
-        let mut rescan: Option<String> = None; // local path to (re)scan
-        let mut rescan_remote: Option<(crate::vfs::BackendHandle, String, String)> = None;
+        let mut rescan_source: Option<StorageScanSource> = None;
         let mut pick_folder = false;
         let mut cancel = false;
         let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
@@ -103,15 +93,19 @@ impl App {
                                 .color(Color32::from_gray(150)),
                         );
                         for (root, free, total) in &drives {
-                            let dl: String = root.chars().take(2).collect();
                             let used = total.saturating_sub(*free);
                             let label = if *total > 0 {
-                                format!("{} ({}/{})", dl, format_bytes(used), format_bytes(*total))
+                                format!(
+                                    "{} ({}/{})",
+                                    root,
+                                    format_bytes(used),
+                                    format_bytes(*total)
+                                )
                             } else {
-                                dl.clone()
+                                root.clone()
                             };
                             if ui.button(label).clicked() {
-                                rescan = Some(format!("{}/", dl));
+                                rescan_source = Some(StorageScanSource::local(root.clone()));
                             }
                         }
                         if ui.button("📁 Ordner…").clicked() {
@@ -128,16 +122,19 @@ impl App {
                                 .on_hover_text(format!("Aktuellen Remote-Ordner scannen: {}", root))
                                 .clicked()
                             {
-                                rescan_remote = Some((be.clone(), root.clone(), label.clone()));
+                                rescan_source = Some(StorageScanSource::remote(
+                                    be.clone(),
+                                    root.clone(),
+                                    label.clone(),
+                                ));
                             }
                         }
-                        if ui.button("⟳").on_hover_text("Neu scannen").clicked() {
-                            // Re-walk whatever the current tree came from.
-                            if let Some(be) = &cur_backend {
-                                rescan_remote = Some((be.clone(), cur_root.clone(), String::new()));
-                            } else {
-                                rescan = Some(root_label.clone());
-                            }
+                        if ui
+                            .add_enabled(source.is_some(), egui::Button::new("⟳"))
+                            .on_hover_text("Dieselbe Quelle neu scannen")
+                            .clicked()
+                        {
+                            rescan_source = source.clone();
                         }
                     });
 
@@ -158,7 +155,13 @@ impl App {
                             }
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("📂 Im Explorer öffnen").clicked() {
+                            if ui
+                                .add_enabled(
+                                    source.is_some() && focus_node.is_some(),
+                                    egui::Button::new("📂 Im Explorer öffnen"),
+                                )
+                                .clicked()
+                            {
                                 nav = Some(focus_path.clone());
                             }
                         });
@@ -178,23 +181,19 @@ impl App {
                         );
                     }
 
-                    if let Some((f, d, b, root, secs, canceling)) = &scan_info {
+                    if let Some((f, d, b, root, secs)) = &scan_info {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             let rate = if *secs > 0.0 { *f as f32 / *secs } else { 0.0 };
                             ui.label(format!(
-                                "{} {} … {} Dateien · {} Ordner · {}  ({:.0}/s)",
-                                if *canceling { "Breche ab" } else { "Scanne" },
+                                "Scanne {} … {} Dateien · {} Ordner · {}  ({:.0}/s)",
                                 root,
                                 f,
                                 d,
                                 format_bytes(*b),
                                 rate
                             ));
-                            if ui
-                                .add_enabled(!*canceling, egui::Button::new("Abbrechen"))
-                                .clicked()
-                            {
+                            if ui.button("Abbrechen").clicked() {
                                 cancel = true;
                             }
                         });
@@ -210,7 +209,46 @@ impl App {
                             );
                         });
                     }
+                    match run_state {
+                        StorageRunState::Idle => {
+                            ui.colored_label(
+                                Color32::from_gray(150),
+                                "Waehlen Sie ein Laufwerk, einen Ordner oder die aktuelle Remote-Verbindung.",
+                            );
+                        }
+                        StorageRunState::Canceled => {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 190, 90),
+                                "Scan abgebrochen. Ein neuer Scan startet nur nach Ihrer Auswahl.",
+                            );
+                        }
+                        StorageRunState::Partial => {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 190, 90),
+                                format!("Teilresultat: {issue_count} Pfad(e) konnten nicht gelesen werden."),
+                            );
+                        }
+                        StorageRunState::Failed => {
+                            let detail = first_issue
+                                .as_ref()
+                                .map(|issue| format!("{}: {}", issue.path, issue.detail))
+                                .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
+                            ui.colored_label(
+                                Color32::from_rgb(255, 120, 100),
+                                format!("Scan fehlgeschlagen: {detail}"),
+                            );
+                        }
+                        StorageRunState::Running | StorageRunState::Complete => {}
+                    }
                     ui.separator();
+
+                    treemap_accessible_list(
+                        ui,
+                        focus_node,
+                        &focus_path,
+                        &mut drill_path,
+                        &mut reveal,
+                    );
 
                     // ── Nested treemap ──
                     let tm_w = ui.available_width();
@@ -231,6 +269,15 @@ impl App {
                     } else {
                         cached_cells
                     };
+                    tm_resp.widget_info(|| {
+                        treemap_widget_info(
+                            &root_label,
+                            &focus_path,
+                            focus_size,
+                            cells.len(),
+                            focus_node.is_some(),
+                        )
+                    });
 
                     let painter = ui.painter_at(tm_rect);
                     painter.rect_filled(tm_rect, 0.0, Color32::from_gray(22));
@@ -335,13 +382,11 @@ impl App {
         if cancel {
             self.cancel_analytics_scan();
         }
-        if let Some((be, root, label)) = rescan_remote {
-            self.start_analytics_scan_remote(be, root, label);
+        if let Some(scan_source) = rescan_source {
+            self.start_analytics_source(scan_source);
         } else if pick_folder {
-            let init = self.analytics_root_path.clone();
+            let init = root_path.clone();
             self.open_picker(PickerPurpose::AnalyticsFolder, &init);
-        } else if let Some(r) = rescan {
-            self.start_analytics_scan(r);
         } else if let Some(p) = drill_path {
             self.analytics_focus = self.analytics_path_to_focus(&p);
             self.analytics_invalidate();
@@ -354,19 +399,73 @@ impl App {
         }
         if !open {
             self.cancel_analytics_scan();
+            self.cancel_reclaim_scan();
             self.show_analytics = false;
         }
+        if panel != self.analytics_panel {
+            match panel {
+                AnalyticsPanel::Treemap => self.cancel_reclaim_scan(),
+                AnalyticsPanel::Reclaim => self.cancel_analytics_scan(),
+            }
+        }
         self.analytics_panel = panel;
-        if let Some(p) = nav {
-            self.start_scan(PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)));
-        } else if let Some(p) = reveal {
+        if let (Some(p), Some(scan_source)) = (nav, source.as_ref()) {
+            self.navigate_storage_source(scan_source, &p);
+        } else if let (Some(p), Some(scan_source)) = (reveal, source.as_ref()) {
             // Navigate the main explorer to the file's parent, then close.
             if let Some((parent, _)) = p.rsplit_once('/') {
-                self.start_scan(PathBuf::from(
-                    parent.replace('/', std::path::MAIN_SEPARATOR_STR),
-                ));
+                let parent = if parent.is_empty() { "/" } else { parent };
+                self.navigate_storage_source(scan_source, parent);
             }
             self.show_analytics = false;
         }
+    }
+}
+
+fn treemap_widget_info(
+    root_label: &str,
+    focus_path: &str,
+    focus_size: u64,
+    cell_count: usize,
+    has_data: bool,
+) -> egui::WidgetInfo {
+    let location = if focus_path.is_empty() {
+        root_label
+    } else {
+        focus_path
+    };
+    let label = if has_data {
+        format!(
+            "Treemap für {location}. {cell_count} sichtbare Elemente, insgesamt {}. Ordner oder Datei anklicken, um sie zu öffnen",
+            format_bytes(focus_size)
+        )
+    } else {
+        "Treemap. Noch keine Scan-Daten vorhanden".to_string()
+    };
+    let mut info = egui::WidgetInfo::labeled(egui::WidgetType::Button, has_data, label);
+    info.value = has_data.then_some(focus_size as f64);
+    info
+}
+
+#[cfg(test)]
+mod accessibility_tests {
+    use super::*;
+
+    #[test]
+    fn treemap_semantics_include_location_count_and_size_state() {
+        let info = treemap_widget_info("C:/", "C:/Users", 1024, 7, true);
+        let label = info.label.as_deref().unwrap_or_default();
+        assert!(label.contains("C:/Users"));
+        assert!(label.contains("7 sichtbare Elemente"));
+        assert_eq!(info.typ, egui::WidgetType::Button);
+        assert_eq!(info.value, Some(1024.0));
+        assert!(info.enabled);
+    }
+
+    #[test]
+    fn empty_treemap_is_disabled_and_named() {
+        let info = treemap_widget_info("—", "", 0, 0, false);
+        assert!(!info.enabled);
+        assert!(info.label.is_some_and(|label| !label.is_empty()));
     }
 }

@@ -2,19 +2,22 @@
 //!
 //! Two parts, deliberately separated:
 //!  * **Secrets** (passwords / key passphrases) → the OS keyring (Windows
-//!    Credential Manager via keyring `windows-native`; an in-memory mock
-//!    off-Windows). Never written to disk by us.
+//!    Credential Manager via keyring `windows-native`). Never written to disk
+//!    by us. Unsupported platforms return an explicit error instead of using
+//!    keyring's process-local mock as if it were durable.
 //!  * **Connection metadata** (protocol / host / port / user / auth kind / key
 //!    path / root / label — NO secret) → a plain TSV file in appdata, so the
 //!    saved-connection list survives restarts.
 #![allow(dead_code)] // staged: consumed by the connect-UI step.
 
-use keyring::Entry;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use super::core::{parse, serialize, SavedConnection};
+use super::{secure_store, transaction};
 
-const KEYRING_SERVICE: &str = "smart_explorer";
+static STORE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn app_data_dir() -> PathBuf {
     crate::support_dirs::app_data_dir()
@@ -27,36 +30,84 @@ fn connections_path() -> PathBuf {
 // ── secrets (keyring) ────────────────────────────────────────────────────────
 
 pub fn set_secret(account: &str, secret: &str) -> Result<(), String> {
-    Entry::new(KEYRING_SERVICE, account)
-        .map_err(|e| e.to_string())?
-        .set_password(secret)
-        .map_err(|e| e.to_string())
+    secure_store::set_secret(account, secret)
 }
 
+pub fn get_secret_checked(account: &str) -> Result<Option<String>, String> {
+    secure_store::get_secret(account)
+}
+
+/// Compatibility helper for read paths that already treat a missing or
+/// inaccessible credential as unavailable. Mutating flows use the checked API.
 pub fn get_secret(account: &str) -> Option<String> {
-    Entry::new(KEYRING_SERVICE, account)
-        .ok()
-        .and_then(|e| e.get_password().ok())
+    get_secret_checked(account).ok().flatten()
 }
 
+pub fn delete_secret_checked(account: &str) -> Result<(), String> {
+    secure_store::delete_secret(account)
+}
+
+/// Compatibility helper for non-critical cleanup. Removal and disconnect
+/// flows use `delete_secret_checked` so they cannot report false success.
 pub fn delete_secret(account: &str) {
-    if let Ok(e) = Entry::new(KEYRING_SERVICE, account) {
-        let _ = e.delete_credential();
-    }
+    let _ = delete_secret_checked(account);
 }
 
 // ── connection metadata (TSV file) ──────────────────────────────────────────
 
-fn load_connections_from(path: &std::path::Path) -> Vec<SavedConnection> {
+fn load_connections_from(path: &Path) -> Vec<SavedConnection> {
     match std::fs::read_to_string(path) {
         Ok(s) => s.lines().filter_map(parse).collect(),
         Err(_) => Vec::new(),
     }
 }
 
-fn save_connections_to(path: &std::path::Path, conns: &[SavedConnection]) -> std::io::Result<()> {
+fn load_connections_for_update(path: &Path) -> std::io::Result<Vec<SavedConnection>> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    body.lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            parse(line).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Ungültige gespeicherte Verbindung in Zeile {}", index + 1),
+                )
+            })
+        })
+        .collect()
+}
+
+fn save_connections_to(path: &Path, conns: &[SavedConnection]) -> std::io::Result<()> {
     let body: String = conns.iter().map(serialize).collect::<Vec<_>>().join("\n");
-    std::fs::write(path, body)
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(body.as_bytes())?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+fn store_write_guard() -> MutexGuard<'static, ()> {
+    match STORE_WRITE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn restore_secret(account: &str, previous: Option<&str>) -> Result<(), String> {
+    match previous {
+        Some(secret) => set_secret(account, secret),
+        None => delete_secret_checked(account),
+    }
 }
 
 pub fn load_connections() -> Vec<SavedConnection> {
@@ -65,31 +116,86 @@ pub fn load_connections() -> Vec<SavedConnection> {
 
 /// Add or replace (by account) a saved connection.
 pub fn save_connection(c: &SavedConnection) -> std::io::Result<()> {
-    let mut conns = load_connections();
+    let _guard = store_write_guard();
+    let path = connections_path();
+    let mut conns = load_connections_for_update(&path)?;
     let acc = c.account();
     conns.retain(|x| x.account() != acc);
     conns.push(c.clone());
-    save_connections_to(&connections_path(), &conns)
+    save_connections_to(&path, &conns)
+}
+
+/// Add or replace connection metadata together with its optional secret.
+/// A metadata failure restores the previous credential before returning.
+pub fn save_connection_with_secret(
+    c: &SavedConnection,
+    secret: Option<&str>,
+) -> Result<(), String> {
+    let _guard = store_write_guard();
+    let path = connections_path();
+    let mut conns = load_connections_for_update(&path)
+        .map_err(|error| format!("Verbindungsmetadaten lesen: {error}"))?;
+    let account = c.account();
+    conns.retain(|item| item.account() != account);
+    conns.push(c.clone());
+
+    let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
+        return save_connections_to(&path, &conns)
+            .map_err(|error| format!("Verbindungsmetadaten speichern: {error}"));
+    };
+    let previous = get_secret_checked(&account)
+        .map_err(|error| format!("Vorherige Anmeldeinformation lesen: {error}"))?;
+
+    transaction::commit_secret_and_metadata(
+        "Verbindung speichern",
+        || set_secret(&account, secret),
+        || {
+            save_connections_to(&path, &conns)
+                .map_err(|error| format!("Verbindungsmetadaten speichern: {error}"))
+        },
+        || restore_secret(&account, previous.as_deref()),
+    )
 }
 
 /// Move a saved connection to the most-recent position (end of the file) so
 /// the sidebar can show the freshest connections first and overflow the rest.
 /// No-op if the account isn't saved.
-pub fn touch_connection(account: &str) {
-    let mut conns = load_connections();
+pub fn touch_connection(account: &str) -> std::io::Result<()> {
+    let _guard = store_write_guard();
+    touch_connection_in(&connections_path(), account)
+}
+
+fn touch_connection_in(path: &Path, account: &str) -> std::io::Result<()> {
+    // MRU updates are mutations too: use the strict reader so a malformed or
+    // temporarily unreadable store can never be rewritten as a partial list.
+    let mut conns = load_connections_for_update(path)?;
     if let Some(pos) = conns.iter().position(|x| x.account() == account) {
         let c = conns.remove(pos);
         conns.push(c);
-        let _ = save_connections_to(&connections_path(), &conns);
+        save_connections_to(path, &conns)?;
     }
+    Ok(())
 }
 
 /// Remove a saved connection by account and drop its stored secret.
-pub fn remove_connection(account: &str) -> std::io::Result<()> {
-    let mut conns = load_connections();
+pub fn remove_connection(account: &str) -> Result<(), String> {
+    let _guard = store_write_guard();
+    let path = connections_path();
+    let mut conns = load_connections_for_update(&path)
+        .map_err(|error| format!("Verbindungsmetadaten lesen: {error}"))?;
     conns.retain(|x| x.account() != account);
-    delete_secret(account);
-    save_connections_to(&connections_path(), &conns)
+    let previous = get_secret_checked(account)
+        .map_err(|error| format!("Anmeldeinformation vor dem Entfernen lesen: {error}"))?;
+
+    transaction::commit_secret_and_metadata(
+        "Verbindung entfernen",
+        || delete_secret_checked(account),
+        || {
+            save_connections_to(&path, &conns)
+                .map_err(|error| format!("Verbindungsmetadaten speichern: {error}"))
+        },
+        || restore_secret(account, previous.as_deref()),
+    )
 }
 
 #[cfg(test)]
@@ -134,20 +240,61 @@ mod tests {
 
     #[test]
     fn secret_api_contract() {
-        // On Windows this hits Credential Manager and round-trips. Off-Windows
-        // there is no backend (set is a no-op, get returns None) — so we only
-        // assert the contract that holds everywhere: the calls don't panic, and
-        // a successful set that is actually persisted reads back identically.
+        // On Windows this hits Credential Manager and round-trips. Unsupported
+        // builds return an explicit error instead of accepting a mock write.
         let acct = format!("smart_explorer_test_{}", std::process::id());
         match set_secret(&acct, "s3cr3t") {
             Ok(()) => {
-                if let Some(got) = get_secret(&acct) {
-                    assert_eq!(got, "s3cr3t");
-                    delete_secret(&acct);
-                    assert!(get_secret(&acct).is_none());
-                }
+                assert_eq!(
+                    get_secret_checked(&acct).unwrap().as_deref(),
+                    Some("s3cr3t")
+                );
+                delete_secret_checked(&acct).unwrap();
+                assert!(get_secret_checked(&acct).unwrap().is_none());
             }
             Err(_) => { /* no keyring backend in this environment */ }
         }
+    }
+
+    #[test]
+    fn update_rejects_malformed_metadata_instead_of_overwriting_it() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "creds_invalid_test_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, "not-a-valid-connection").unwrap();
+        let error = load_connections_for_update(&p).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "not-a-valid-connection"
+        );
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn touch_rejects_malformed_metadata_without_erasing_it() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "creds_touch_invalid_test_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let original = format!("{}\nnot-a-valid-connection", serialize(&sample_pw()));
+        std::fs::write(&p, &original).unwrap();
+
+        let error = touch_connection_in(&p, &sample_pw().account()).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), original);
+        std::fs::remove_file(&p).ok();
     }
 }

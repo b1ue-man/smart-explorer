@@ -24,11 +24,8 @@ pub(crate) fn read_stdin_secret() -> Result<String, String> {
 
 pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String> {
     let conn = build_saved_connection(input)?;
-    if let Some(secret) = conn.pending_secret.as_deref().filter(|s| !s.is_empty()) {
-        crate::creds::set_secret(&conn.saved.account(), secret)
-            .map_err(|e| format!("secret speichern: {e}"))?;
-    }
-    crate::creds::save_connection(&conn.saved).map_err(|e| format!("connection speichern: {e}"))?;
+    crate::creds::save_connection_with_secret(&conn.saved, conn.pending_secret.as_deref())
+        .map_err(|e| format!("connection speichern: {e}"))?;
     Ok(format!(
         "Saved connection {}\t{}",
         conn.saved.display(),
@@ -37,7 +34,8 @@ pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String>
 }
 
 pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, String> {
-    let mut profiles = crate::share::ShareProfiles::load(Some(default_home()));
+    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+        .map_err(|error| format!("share profile laden: {error}"))?;
     let existing = profiles.direct_contact_id_from_code(code)?;
     let (contact_id, created, request_needed) = match existing {
         Some(id) => {
@@ -74,7 +72,8 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, 
 }
 
 pub(crate) fn add_room(code: &str, name: &str) -> Result<String, String> {
-    let mut profiles = crate::share::ShareProfiles::load(Some(default_home()));
+    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+        .map_err(|error| format!("share profile laden: {error}"))?;
     let room_id = profiles.add_room_from_code(code, name)?;
     profiles
         .save()

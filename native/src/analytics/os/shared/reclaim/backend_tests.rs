@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct MockBackend {
     entries: Mutex<HashMap<String, Vec<VfsMeta>>>,
+    lists: AtomicUsize,
     open_reads: AtomicUsize,
     walk_hits: Mutex<Option<Vec<HashHit>>>,
+    walk_error: Mutex<Option<String>>,
 }
 
 impl MockBackend {
@@ -25,6 +27,12 @@ impl MockBackend {
         *be.walk_hits.lock().unwrap() = Some(hits);
         be
     }
+
+    fn with_failing_walk(hits: Vec<HashHit>, error: &str) -> Arc<Self> {
+        let be = Self::with_walk_hits(hits);
+        *be.walk_error.lock().unwrap() = Some(error.to_string());
+        be
+    }
 }
 
 impl Backend for MockBackend {
@@ -37,6 +45,7 @@ impl Backend for MockBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.lists.fetch_add(1, Ordering::Relaxed);
         self.entries
             .lock()
             .unwrap()
@@ -84,14 +93,17 @@ impl Backend for MockBackend {
         _want_hash: bool,
         tx: crossbeam_channel::Sender<HashHit>,
         _cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         let Some(hits) = self.walk_hits.lock().unwrap().clone() else {
-            return false;
+            return Ok(false);
         };
         for hit in hits {
             let _ = tx.send(hit);
         }
-        true
+        if let Some(error) = self.walk_error.lock().unwrap().clone() {
+            return Err(io::Error::other(error));
+        }
+        Ok(true)
     }
 }
 
@@ -141,6 +153,20 @@ fn hashless_remote_does_not_download_to_hash() {
 }
 
 #[test]
+fn root_listing_failure_is_explicit() {
+    let be = Arc::new(MockBackend::default());
+    let report = scan_reclaim_backend(
+        be,
+        "/missing",
+        &ReclaimProgress::default(),
+        &ReclaimOptions::default(),
+    );
+    assert!(report.root_error.is_some());
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(report.suppressed_errors, 0);
+}
+
+#[test]
 fn agent_walk_hashed_is_preferred() {
     let md5 = "900150983cd24fb0d6963f7d28e17f72".to_string();
     let be = MockBackend::with_walk_hits(vec![
@@ -171,4 +197,71 @@ fn agent_walk_hashed_is_preferred() {
         DuplicateEvidence::AgentMd5
     );
     assert_eq!(be.open_reads.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn partial_agent_walk_error_is_reported_without_listing_fallback() {
+    let be = MockBackend::with_failing_walk(
+        vec![HashHit {
+            rel: "partial.bin".into(),
+            is_dir: false,
+            size: 3,
+            mtime_ms: 1,
+            md5: Some("900150983cd24fb0d6963f7d28e17f72".into()),
+        }],
+        "late hash failure",
+    );
+    let report = scan_reclaim_backend(
+        be.clone(),
+        "/",
+        &ReclaimProgress::default(),
+        &ReclaimOptions {
+            duplicate_min_bytes: 1,
+            ..ReclaimOptions::default()
+        },
+    );
+
+    assert_eq!(report.files, 1);
+    assert!(report
+        .root_error
+        .as_deref()
+        .is_some_and(|error| error.contains("late hash failure")));
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(be.lists.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn backend_retains_only_bounded_top_candidates_and_reports_totals() {
+    let largest_md5 = "900150983cd24fb0d6963f7d28e17f72";
+    let other_md5 = "d41d8cd98f00b204e9800998ecf8427e";
+    let mut entries = vec![
+        file("largest-a.bin", 32, Some(largest_md5)),
+        file("largest-b.bin", 32, Some(largest_md5)),
+    ];
+    for index in 1..=6 {
+        entries.push(file(&format!("small-{index}.bin"), index, Some(other_md5)));
+    }
+    let backend = MockBackend::with_entries(entries);
+    let report = scan_reclaim_backend(
+        backend,
+        "/",
+        &ReclaimProgress::default(),
+        &ReclaimOptions {
+            large_min_bytes: 1,
+            duplicate_min_bytes: 1,
+            max_items: 2,
+            ..ReclaimOptions::default()
+        },
+    );
+
+    assert_eq!(report.result_counts.large_files, 8);
+    assert_eq!(report.large_files.len(), 2);
+    assert_eq!(report.duplicate_candidates, 8);
+    assert_eq!(report.duplicate_candidates_retained, 2);
+    assert_eq!(report.result_counts.duplicate_groups, 1);
+    assert_eq!(report.duplicate_groups.len(), 1);
+    assert!(report
+        .large_files
+        .iter()
+        .all(|item| item.name.starts_with("largest-")));
 }

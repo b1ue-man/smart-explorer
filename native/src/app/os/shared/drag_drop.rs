@@ -43,15 +43,16 @@ impl App {
             }
         };
         let n = paths.len();
-        self.copy_paths_into(paths, dest, shift);
-        self.notice = Some((
-            format!(
-                "📥 {} Element(e) werden {}…",
-                n,
-                if shift { "verschoben" } else { "kopiert" }
-            ),
-            std::time::Instant::now(),
-        ));
+        if self.copy_paths_into(paths, dest, shift) {
+            self.notice = Some((
+                format!(
+                    "📥 {} Element(e) werden {}…",
+                    n,
+                    if shift { "verschoben" } else { "kopiert" }
+                ),
+                std::time::Instant::now(),
+            ));
+        }
     }
 
     /// Which tab a screen point drops onto — a tab header, or (in split) a
@@ -111,11 +112,16 @@ impl App {
                     return;
                 }
                 let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
-                self.copy_paths_into(files, dest, move_files);
-                self.notice = Some((
-                    format!("{} Element(e) werden kopiert…", n),
-                    std::time::Instant::now(),
-                ));
+                if self.copy_paths_into(files, dest, move_files) {
+                    self.notice = Some((
+                        format!(
+                            "{} Element(e) werden {}…",
+                            n,
+                            if move_files { "verschoben" } else { "kopiert" }
+                        ),
+                        std::time::Instant::now(),
+                    ));
+                }
             }
             // local → remote (upload)
             (None, Some(be)) => {
@@ -160,7 +166,9 @@ impl App {
         let n = files.len();
         let same_server = std::sync::Arc::ptr_eq(&src, &tgt);
         let (tx, rx) = unbounded();
-        std::thread::Builder::new()
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let spawn = std::thread::Builder::new()
             .name("remote-to-remote".into())
             .spawn(move || {
                 copy_remote_paths_progress(
@@ -171,29 +179,44 @@ impl App {
                     same_server,
                     filter,
                     &tx,
+                    &worker_cancel,
                 );
-            })
-            .ok();
-        self.upload_rx = Some(rx);
-        self.transfer_progress = Some(TransferProgress::new(
-            TransferKind::RemoteCopy,
-            if same_server {
-                "Kopiere remote"
-            } else {
-                "Uebertrage remote"
-            },
-            n as u64,
-            0,
-        ));
-        let how = if same_server {
-            "Remote→Remote, serverseitig"
-        } else {
-            "Remote→Remote"
-        };
-        self.notice = Some((
-            format!("⇄ Übertrage {} Element(e) ({})…", n, how),
-            std::time::Instant::now(),
-        ));
+            });
+        match spawn {
+            Ok(worker) => {
+                self.upload_rx = Some(rx);
+                self.transfer_cancel = Some(cancel);
+                self.transfer_worker = Some(worker);
+                self.transfer_progress = Some(TransferProgress::new(
+                    TransferKind::RemoteCopy,
+                    if same_server {
+                        "Kopiere remote"
+                    } else {
+                        "Uebertrage remote"
+                    },
+                    n as u64,
+                    0,
+                ));
+                let how = if same_server {
+                    "Remote→Remote, serverseitig"
+                } else {
+                    "Remote→Remote"
+                };
+                self.notice = Some((
+                    format!("⇄ Übertrage {} Element(e) ({})…", n, how),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.upload_rx = None;
+                self.transfer_progress = None;
+                self.transfer_cancel = None;
+                self.transfer_worker = None;
+                self.error_msg = Some(format!(
+                    "Remote-Übertragung konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     /// Download remote `files` into a local folder, off the UI thread (reuses
@@ -214,23 +237,46 @@ impl App {
         }
         let n = files.len();
         let (tx, rx) = unbounded();
-        std::thread::Builder::new()
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let spawn = std::thread::Builder::new()
             .name("remote-download-multi".into())
             .spawn(move || {
-                download_paths_progress(&*backend, &files, &dest_local, filter, &tx);
-            })
-            .ok();
-        self.upload_rx = Some(rx);
-        self.transfer_progress = Some(TransferProgress::new(
-            TransferKind::Download,
-            "Lade herunter",
-            n as u64,
-            0,
-        ));
-        self.notice = Some((
-            format!("⬇ Lade {} Element(e) herunter…", n),
-            std::time::Instant::now(),
-        ));
+                download_paths_progress(
+                    &*backend,
+                    &files,
+                    &dest_local,
+                    filter,
+                    &tx,
+                    &worker_cancel,
+                );
+            });
+        match spawn {
+            Ok(worker) => {
+                self.upload_rx = Some(rx);
+                self.transfer_cancel = Some(cancel);
+                self.transfer_worker = Some(worker);
+                self.transfer_progress = Some(TransferProgress::new(
+                    TransferKind::Download,
+                    "Lade herunter",
+                    n as u64,
+                    0,
+                ));
+                self.notice = Some((
+                    format!("⬇ Lade {} Element(e) herunter…", n),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.upload_rx = None;
+                self.transfer_progress = None;
+                self.transfer_cancel = None;
+                self.transfer_worker = None;
+                self.error_msg = Some(format!(
+                    "Remote-Download konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     /// Drive an active internal file drag each frame: paint a cursor chip,
@@ -261,18 +307,36 @@ impl App {
                     // needs real local paths). May briefly block on the download.
                     let files = if let Some(be) = self.drag_src.take() {
                         cleanup_after_drag = true;
-                        download_remote_paths_for_clipboard(&*be, &files, self.drag_filter.take())
+                        match download_remote_paths_for_clipboard(
+                            &*be,
+                            &files,
+                            self.drag_filter.take(),
+                        ) {
+                            Ok(files) => files,
+                            Err(error) => {
+                                self.error_msg = Some(format!("Drag-and-drop: {error}"));
+                                return;
+                            }
+                        }
                     } else {
                         self.drag_filter = None;
                         files
                     };
-                    drag_out_files(&files);
+                    let outcome = drag_out_files(&files);
                     if cleanup_after_drag {
                         for f in &files {
                             cleanup_temp_copy(Path::new(f));
                         }
                     }
-                    self.rescan();
+                    match outcome {
+                        Ok(crate::dragout::DragOutOutcome::Dropped(
+                            crate::dragout::DragOutEffect::Move,
+                        )) if !cleanup_after_drag => self.rescan(),
+                        Ok(_) => {}
+                        Err(error) => {
+                            self.error_msg = Some(format!("Drag-and-drop: {error}"));
+                        }
+                    }
                     return;
                 }
             }

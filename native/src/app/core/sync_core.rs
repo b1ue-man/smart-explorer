@@ -34,41 +34,63 @@ impl App {
     }
 
     pub(in crate::app) fn drain_sync(&mut self) {
-        let msg = match self.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(m) => m,
-            None => return,
+        let msg = match self.sync_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(message)) => message,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.sync_rx = None;
+                self.sync_running = false;
+                self.sync_progress = None;
+                self.sync_cancel = None;
+                self.error_msg =
+                    Some("Spiegelungs-Thread wurde ohne Ergebnis beendet.".to_string());
+                return;
+            }
         };
         match msg {
             crate::sync::SyncMsg::Progress(p) => {
                 self.sync_progress = Some(p);
             }
             crate::sync::SyncMsg::Done(r) => {
+                let canceled = self
+                    .sync_cancel
+                    .as_ref()
+                    .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed));
                 self.sync_rx = None;
                 self.sync_running = false;
                 self.sync_progress = None;
                 self.sync_cancel = None;
                 if r.stats.errors > 0 {
+                    let example = r
+                        .errors
+                        .first()
+                        .map(|(path, detail)| format!(" ({path}: {detail})"))
+                        .unwrap_or_default();
                     self.error_msg = Some(format!(
-                        "Spiegelung: {} kopiert, {} Fehler",
-                        r.stats.copied, r.stats.errors
+                        "Spiegelung unvollständig: {} kopiert, {} Fehler{}",
+                        r.stats.copied, r.stats.errors, example
+                    ));
+                } else if canceled {
+                    self.notice = Some((
+                        format!("Spiegelung abgebrochen: {} bereits kopiert", r.stats.copied),
+                        std::time::Instant::now(),
+                    ));
+                } else {
+                    self.notice = Some((
+                        format!(
+                            "✓ Spiegelung fertig: {} kopiert, {} übersprungen ({} MB)",
+                            r.stats.copied,
+                            r.stats.skipped,
+                            r.stats.bytes / 1_048_576
+                        ),
+                        std::time::Instant::now(),
                     ));
                 }
-                self.notice = Some((
-                    format!(
-                        "✓ Spiegelung fertig: {} kopiert, {} übersprungen ({} MB)",
-                        r.stats.copied,
-                        r.stats.skipped,
-                        r.stats.bytes / 1_048_576
-                    ),
-                    std::time::Instant::now(),
-                ));
             }
         }
     }
 
-    /// Two-way sync the current location with `dest_local` (safe defaults: both
-    /// directions, strict file-level conflicts, reversible, 30-day version
-    /// retention). Conflicts come back for resolution.
+    /// Two-way sync the current location with safe, reversible defaults.
     pub(in crate::app) fn start_bisync(&mut self, dest_local: String) {
         if self.root_path.is_empty() {
             return;
@@ -92,10 +114,7 @@ impl App {
         );
     }
 
-    /// The single two-way-sync launcher used by the ad-hoc button, saved jobs,
-    /// and the split-view "sync these two folders" action. Builds the ignore
-    /// globset inside the worker (GlobSet isn't `Send`-cheap to pass), runs
-    /// `bisync::run`, and stamps `running_job` so completion can mark the job.
+    /// Shared checked launcher for ad-hoc, saved-job, and split-view syncs.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::app) fn launch_bisync(
         &mut self,
@@ -109,44 +128,60 @@ impl App {
         bounds: (u64, u64, i64, i64),
         job_id: Option<String>,
     ) {
-        if self.bisync_running {
+        if self.bisync_running
+            || self.conflict_resolution.is_some()
+            || self.merge.is_some()
+            || self.merge_load_rx.is_some()
+            || self.merge_apply_rx.is_some()
+            || self.conflict_baseline_dirty
+        {
             self.notice = Some((
-                "Es läuft bereits ein Sync — bitte warten.".to_string(),
+                "Es läuft bereits ein Sync oder eine Konfliktauflösung — bitte warten.".to_string(),
                 std::time::Instant::now(),
             ));
             return;
         }
-        let pair = crate::bisync::pair_id(&root_a, &root_b);
-        self.bisync_ctx = Some(BisyncCtx {
+        let mut glob_builder = globset::GlobSetBuilder::new();
+        for pattern in ignore.iter().map(|pattern| pattern.trim()) {
+            if pattern.is_empty() {
+                continue;
+            }
+            match globset::Glob::new(pattern) {
+                Ok(glob) => glob_builder.add(glob),
+                Err(error) => {
+                    self.error_msg =
+                        Some(format!("Ungültiges Ausschlussmuster '{pattern}': {error}"));
+                    return;
+                }
+            };
+        }
+        let ignore = match glob_builder.build() {
+            Ok(globs) => globs,
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Ausschlussmuster konnten nicht erstellt werden: {error}"
+                ));
+                return;
+            }
+        };
+        let pair = crate::bisync::pair_id_for(&*a, &root_a, &*b, &root_b);
+        let context = BisyncCtx {
             a: a.clone(),
             root_a: root_a.clone(),
             b: b.clone(),
             root_b: root_b.clone(),
             pair,
             baseline: crate::bisync::Baseline::new(),
-        });
+        };
         let (tx, rx) = unbounded();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel_t = cancel.clone();
-        std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("bisync".into())
             .spawn(move || {
-                let mut gb = globset::GlobSetBuilder::new();
-                for pat in &ignore {
-                    let pat = pat.trim();
-                    if pat.is_empty() {
-                        continue;
-                    }
-                    if let Ok(g) = globset::Glob::new(pat) {
-                        gb.add(g);
-                    }
-                }
-                let gs = gb
-                    .build()
-                    .unwrap_or_else(|_| crate::bisync::empty_globset());
                 let f = crate::bisync::WalkFilter {
                     include_hidden,
-                    ignore: &gs,
+                    ignore: &ignore,
                     min_size: bounds.0,
                     max_size: bounds.1,
                     after_mtime_ms: bounds.2,
@@ -155,21 +190,31 @@ impl App {
                 let _ = tx.send(crate::bisync::run(
                     &*a, &root_a, &*b, &root_b, opts, &cancel_t, &f,
                 ));
-            })
-            .ok();
-        self.bisync_cancel = Some(cancel);
-        self.bisync_rx = Some(rx);
-        self.bisync_running = true;
-        self.running_job = job_id;
-        self.notice = Some((
-            "⇄ 2-Wege-Sync läuft…".to_string(),
-            std::time::Instant::now(),
-        ));
+            });
+        match spawn {
+            Ok(_) => {
+                self.bisync_ctx = Some(context);
+                self.bisync_cancel = Some(cancel);
+                self.bisync_rx = Some(rx);
+                self.bisync_running = true;
+                self.running_job = job_id;
+                self.notice = Some((
+                    "⇄ 2-Wege-Sync läuft…".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.bisync_ctx = None;
+                self.bisync_cancel = None;
+                self.bisync_rx = None;
+                self.bisync_running = false;
+                self.running_job = None;
+                self.error_msg = Some(format!("2-Wege-Sync-Thread konnte nicht starten: {error}"));
+            }
+        }
     }
 
-    /// Run a saved sync setup now. Local↔local resolves instantly; if either
-    /// endpoint is a saved-connection remote URL it's re-opened off the UI
-    /// thread first (so the window doesn't freeze), then launched.
+    /// Resolve any remote endpoints off-thread, then run a saved sync setup.
     pub(in crate::app) fn run_job(&mut self, id: &str) {
         if self.bisync_running || self.job_connect_rx.is_some() {
             self.notice = Some((
@@ -182,7 +227,13 @@ impl App {
             Some(j) => j.clone(),
             None => return,
         };
-        let opts = job.opts(false);
+        let (opts, bounds) = match checked_job_settings(&job) {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.error_msg = Some(format!("Ungültiges Sync-Setup: {error}"));
+                return;
+            }
+        };
         // Pure local: resolve inline (no network) and launch immediately.
         if !crate::connect::is_remote_url(&job.source)
             && !crate::connect::is_remote_url(&job.target)
@@ -197,7 +248,7 @@ impl App {
                 opts,
                 job.include_hidden,
                 job.ignore.clone(),
-                job.filter_bounds(now_secs_i64()),
+                bounds,
                 Some(job.id.clone()),
             );
             return;
@@ -205,7 +256,7 @@ impl App {
         // Remote endpoint(s): re-open the saved connection(s) off-thread.
         let (src, tgt) = (job.source.clone(), job.target.clone());
         let (tx, rx) = unbounded();
-        std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("job-connect".into())
             .spawn(move || {
                 let res = (|| {
@@ -214,34 +265,56 @@ impl App {
                     Ok::<_, String>((a, b))
                 })();
                 let _ = tx.send(res);
-            })
-            .ok();
-        self.job_connect_rx = Some(rx);
-        self.job_connect_pending = Some(job);
-        self.notice = Some((
-            "Verbinde mit Remote-Ziel…".to_string(),
-            std::time::Instant::now(),
-        ));
+            });
+        match spawn {
+            Ok(_) => {
+                self.job_connect_rx = Some(rx);
+                self.job_connect_pending = Some(job);
+                self.notice = Some((
+                    "Verbinde mit Remote-Ziel…".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.job_connect_rx = None;
+                self.job_connect_pending = None;
+                self.error_msg = Some(format!(
+                    "Remote-Sync-Verbindung konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     /// Once a remote job's endpoints are open, launch the sync (UI thread).
     pub(in crate::app) fn drain_job_connect(&mut self) {
-        let res = match self
-            .job_connect_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok())
-        {
-            Some(r) => r,
-            None => return,
+        let res = match self.job_connect_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.job_connect_rx = None;
+                self.job_connect_pending = None;
+                self.error_msg =
+                    Some("Remote-Sync-Verbindung wurde ohne Ergebnis beendet.".to_string());
+                return;
+            }
         };
         self.job_connect_rx = None;
         let job = match self.job_connect_pending.take() {
             Some(j) => j,
-            None => return,
+            None => {
+                self.error_msg = Some("Remote-Sync-Auftrag fehlt.".to_string());
+                return;
+            }
         };
         match res {
             Ok(((a, root_a), (b, root_b))) => {
-                let opts = job.opts(false);
+                let (opts, bounds) = match checked_job_settings(&job) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        self.error_msg = Some(format!("Ungültiges Sync-Setup: {error}"));
+                        return;
+                    }
+                };
                 self.launch_bisync(
                     a,
                     root_a,
@@ -250,117 +323,13 @@ impl App {
                     opts,
                     job.include_hidden,
                     job.ignore.clone(),
-                    job.filter_bounds(now_secs_i64()),
+                    bounds,
                     Some(job.id.clone()),
                 );
             }
             Err(e) => {
                 self.error_msg = Some(format!("Remote-Sync: {}", e));
             }
-        }
-    }
-
-    /// Result of an interactive cloud authorize (#19, slice 1).
-    pub(in crate::app) fn drain_cloud_auth(&mut self) {
-        let res = match self
-            .cloud_auth_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok())
-        {
-            Some(r) => r,
-            None => return,
-        };
-        self.cloud_auth_rx = None;
-        self.cloud_authing = false;
-        match res {
-            Ok(()) => {
-                self.notice = Some((
-                    "✓ Google Drive verbunden".to_string(),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(e) => {
-                self.error_msg = Some(format!("Cloud-Anmeldung: {}", e));
-            }
-        }
-    }
-
-    /// Open Google Drive as the active remote and browse it (reuses the normal
-    /// connect drain → sidebar/scan path). Connects off the UI thread.
-    pub(in crate::app) fn open_gdrive_browse(&mut self) {
-        if !crate::cloud::is_connected(crate::cloud::Provider::GDrive) {
-            self.error_msg = Some("Google Drive ist nicht verbunden.".to_string());
-            return;
-        }
-        let (tx, rx) = unbounded();
-        self.connect_rx = Some(rx);
-        self.connecting = true;
-        std::thread::Builder::new()
-            .name("gdrive-open".into())
-            .spawn(move || {
-                let res = match crate::connect::open_gdrive("/") {
-                    Ok((be, root)) => {
-                        crate::connect::ConnectResult::Ok(crate::connect::Connected {
-                            remote: Some(crate::connect::RemoteState {
-                                backend: be,
-                                label: "Google Drive".to_string(),
-                                agent_version: None,
-                                zip_return: None,
-                                sftp: None,
-                                account: None,
-                                endpoint_prefix: Some("gdrive://".to_string()),
-                            }),
-                            net: None,
-                            target: root,
-                            label: "Google Drive".to_string(),
-                        })
-                    }
-                    Err(e) => crate::connect::ConnectResult::Err(e),
-                };
-                let _ = tx.send(res);
-            })
-            .ok();
-        self.notice = Some((
-            "Verbinde mit Google Drive…".to_string(),
-            std::time::Instant::now(),
-        ));
-    }
-
-    /// Open Google Drive inside the picker (so a sync folder can be chosen on
-    /// Drive). Connects off the UI thread via the picker's connect channel.
-    pub(in crate::app) fn picker_open_gdrive(&mut self) {
-        let (tx, rx) = unbounded();
-        std::thread::Builder::new()
-            .name("gdrive-pick".into())
-            .spawn(move || {
-                let res = match crate::connect::open_gdrive("/") {
-                    Ok((be, root)) => {
-                        crate::connect::ConnectResult::Ok(crate::connect::Connected {
-                            remote: Some(crate::connect::RemoteState {
-                                backend: be,
-                                label: "Google Drive".to_string(),
-                                agent_version: None,
-                                zip_return: None,
-                                sftp: None,
-                                account: None,
-                                endpoint_prefix: Some("gdrive://".to_string()),
-                            }),
-                            net: None,
-                            target: root,
-                            label: "Google Drive".to_string(),
-                        })
-                    }
-                    Err(e) => crate::connect::ConnectResult::Err(e),
-                };
-                let _ = tx.send(res);
-            })
-            .ok();
-        if let Some(p) = self.picker.as_mut() {
-            p.connect_rx = Some(rx);
-            p.connecting = true;
-            p.is_remote = true;
-            p.endpoint_prefix = "gdrive://".to_string();
-            p.conn_label = "Google Drive".to_string();
         }
     }
 
@@ -419,4 +388,15 @@ impl App {
             None,
         );
     }
+}
+
+type SyncFilterBounds = (u64, u64, i64, i64);
+type CheckedJobSettings = (crate::bisync::BisyncOptions, SyncFilterBounds);
+
+fn checked_job_settings(job: &crate::syncjobs::SyncJob) -> Result<CheckedJobSettings, String> {
+    job.validate()?;
+    Ok((
+        job.checked_opts(false)?,
+        job.checked_filter_bounds(now_secs_i64())?,
+    ))
 }

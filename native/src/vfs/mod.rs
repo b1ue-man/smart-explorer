@@ -20,6 +20,8 @@
 mod cache;
 #[path = "core/core.rs"]
 mod core;
+#[path = "core/delete.rs"]
+mod delete;
 #[path = "core/dispatch.rs"]
 mod dispatch;
 #[path = "os/shared/local.rs"]
@@ -30,16 +32,30 @@ mod local_platform;
 #[cfg(not(windows))]
 #[path = "os/linux_os/local_platform.rs"]
 mod local_platform;
+#[path = "core/promotion.rs"]
+mod promotion;
 
 pub use self::cache::CachingBackend;
 pub use self::core::{
-    Backend, BackendHandle, ChangeKind, HashHit, Scheme, SearchHit, VfsChange, VfsChangeBatch,
-    VfsMeta, VfsResult,
+    Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
+    SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
+};
+pub(crate) use self::delete::validate_child_name;
+pub use self::delete::{
+    remove_entry, remove_entry_controlled, DeleteTarget, RecursiveDeleteFailure,
+    RecursiveDeletePhase, RecursiveDeleteProgress, RecursiveDeleteReport, RecursiveDeleteStatus,
 };
 #[allow(unused_imports)]
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
+pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 
+#[cfg(test)]
+#[path = "core/delete_tests.rs"]
+mod delete_tests;
+#[cfg(test)]
+#[path = "core/promotion_tests.rs"]
+mod promotion_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

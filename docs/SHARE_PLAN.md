@@ -1,5 +1,12 @@
 # Peer file sharing — implementation plan (#21 → build)
 
+> **Historical/superseded architecture.** This document records the original
+> Noise/TCP, direct-only design. Current code uses authenticated Iroh/QUIC
+> sessions, tries direct paths first, and can fall back to the end-to-end
+> encrypted Iroh relay bundled with `se-share-server`. Incoming filesystem
+> streams re-evaluate live grants/export policy, and policy changes close cached
+> sessions. See [`FILE_OPS_MATRIX.md`](FILE_OPS_MATRIX.md) for the current path.
+
 Goal: device-to-device file sharing where **our server only routes discovery**
 (rendezvous/signaling); **file bytes go directly peer-to-peer, end-to-end
 encrypted**. Two modes:
