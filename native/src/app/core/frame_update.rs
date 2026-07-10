@@ -15,6 +15,36 @@ impl eframe::App for App {
         self.update_keyboard(ctx);
         self.update_layout(ctx);
         self.update_repaint(ctx);
+        if self.post_update_startup_pending {
+            if let Err(error) = crate::updater::acknowledge_update_startup() {
+                panic!("{error}");
+            }
+            self.post_update_startup_pending = false;
+            // Do not run abandoned-staging cleanup in the replacement process:
+            // v0.5.119 can have another hash-verified worker queued behind the
+            // updater lock. The next ordinary launch performs cleanup after
+            // those compatibility workers have had a chance to finish.
+            crate::updater::archive_current_version();
+            if crate::autostart::is_enabled() {
+                self.post_update_daemon_at =
+                    Some(Instant::now() + std::time::Duration::from_secs(5));
+                ctx.request_repaint_after(std::time::Duration::from_secs(5));
+            }
+        }
+        if self
+            .post_update_daemon_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.post_update_daemon_at = None;
+            match crate::daemon::request_stop() {
+                Ok(()) => crate::autostart::spawn_daemon_now(),
+                Err(error) => {
+                    self.error_msg = Some(format!(
+                        "Hintergrunddienst konnte nach dem Update nicht sicher neu gestartet werden: {error}"
+                    ));
+                }
+            }
+        }
     }
 }
 

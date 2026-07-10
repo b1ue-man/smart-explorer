@@ -289,7 +289,7 @@ impl App {
                             painter.rect_stroke(
                                 cell.rect,
                                 2.0,
-                                egui::Stroke::new(1.0, Color32::from_black_alpha(130)),
+                                egui::Stroke::new(1.0_f32, Color32::from_black_alpha(130)),
                             );
                             let hr = egui::Rect::from_min_max(
                                 cell.rect.min,
@@ -308,7 +308,7 @@ impl App {
                             painter.rect_stroke(
                                 cell.rect,
                                 1.0,
-                                egui::Stroke::new(0.5, Color32::from_black_alpha(70)),
+                                egui::Stroke::new(0.5_f32, Color32::from_black_alpha(70)),
                             );
                             if cell.rect.width() > 40.0 && cell.rect.height() > 15.0 {
                                 let col = cell.color;

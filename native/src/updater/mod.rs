@@ -18,6 +18,8 @@ mod os;
 mod os;
 #[path = "os/shared/staging.rs"]
 mod staging;
+#[path = "os/shared/startup_ack.rs"]
+mod startup_ack;
 #[path = "core/types.rs"]
 mod types;
 
@@ -33,6 +35,9 @@ pub use feed::{download_update, download_version, list_remote_versions};
 pub use flow::{check_async, update_to_latest_async};
 pub use os::revert_to;
 pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};
+pub(crate) use startup_ack::{
+    acknowledge_update_startup, capture_update_startup_ack, update_startup_ack_pending,
+};
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 
 #[cfg(test)]

@@ -8,6 +8,40 @@ const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 const INSTALLED_CLI_EXE: &str = "se.exe";
 const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
+pub(super) fn create_startup_ack(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+pub(super) fn publish_startup_ack(pending: &Path, final_path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+    let pending = pending
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let final_path = final_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    if unsafe {
+        MoveFileExW(
+            pending.as_ptr(),
+            final_path.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn binary_suffix() -> &'static str {
     ".exe"
 }
@@ -55,85 +89,6 @@ fn swap_in(new_exe: &Path, expected_sha256: &str) -> Result<PathBuf, String> {
     Ok(cur_exe)
 }
 
-fn should_elevate_for_spawn(e: &std::io::Error) -> bool {
-    matches!(e.raw_os_error(), Some(5) | Some(740) | Some(1314))
-        || e.kind() == std::io::ErrorKind::PermissionDenied
-}
-
-fn spawn_elevated_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    fn wide_os(s: &OsStr) -> Vec<u16> {
-        s.encode_wide().chain(std::iter::once(0)).collect()
-    }
-    fn wide_str(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    let verb = wide_str("runas");
-    let file = wide_os(exe.as_os_str());
-    let params = wide_str(&join_windows_args(args));
-    let rc = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            verb.as_ptr(),
-            file.as_ptr(),
-            params.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    } as isize;
-    if rc > 32 {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("Administratorfreigabe abgebrochen oder verweigert (ShellExecuteW={rc})"),
-        ))
-    }
-}
-
-fn join_windows_args(args: &[&str]) -> String {
-    args.iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn quote_windows_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && !arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'))
-    {
-        return arg.to_string();
-    }
-
-    let mut out = String::from("\"");
-    let mut backslashes = 0usize;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                out.push_str(&"\\".repeat(backslashes * 2 + 1));
-                out.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                out.push_str(&"\\".repeat(backslashes));
-                backslashes = 0;
-                out.push(ch);
-            }
-        }
-    }
-    out.push_str(&"\\".repeat(backslashes * 2));
-    out.push('"');
-    out
-}
-
 pub(super) fn installed_updater_path() -> Result<PathBuf, String> {
     let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let dir = cur
@@ -167,22 +122,24 @@ pub(super) fn spawn_update_helper(
         .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
     match command.spawn() {
         Ok(_) => Ok(()),
-        Err(error) if should_elevate_for_spawn(&error) => {
-            verify_sha256(helper, helper_sha256)?;
-            let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-            spawn_elevated_detached(helper, &refs)
-                .map_err(|error| format!("Updater-Helfer mit UAC starten: {error}"))
-        }
         Err(_) => {
             verify_sha256(helper, helper_sha256)?;
             let mut retry = std::process::Command::new(helper);
             retry
                 .args(args)
                 .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-            retry
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("Updater-Helfer starten: {error}"))
+            match retry.spawn() {
+                Ok(_) => Ok(()),
+                Err(error)
+                    if matches!(error.raw_os_error(), Some(5) | Some(740) | Some(1314))
+                        || error.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    Err(format!(
+                        "Updater-Helfer benoetigt Administratorrechte; bitte den Installer verwenden: {error}"
+                    ))
+                }
+                Err(error) => Err(format!("Updater-Helfer starten: {error}")),
+            }
         }
     }
 }

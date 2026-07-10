@@ -6,9 +6,11 @@ impl App {
         // Clean up dead-session temp copies and mark this live session.
         let recoverable_temp_sessions = init_temp_session();
         let mut startup_daemon_error = None;
+        let post_update_startup_pending =
+            just_updated && crate::updater::update_startup_ack_pending();
         // Background sync is opt-in. Share may start a session worker later,
         // without registering that worker for logon or enabling scheduled jobs.
-        if crate::autostart::is_enabled() {
+        if crate::autostart::is_enabled() && !post_update_startup_pending {
             if just_updated {
                 // Hand off to a fresh daemon running the new executable.
                 match crate::daemon::request_stop() {
@@ -117,23 +119,24 @@ impl App {
 
         // A snoozed bundle remains the only candidate on the next launch.
         // Do not silently replace it with a new download before consent.
-        let update_rx = if staged_update.is_some() || staging_load_failed {
-            None
-        } else {
-            let (utx, urx) = unbounded();
-            match crate::updater::check_async(utx, false) {
-                Ok(()) => Some(urx),
-                Err(error) => {
-                    let detail =
-                        format!("Automatische Update-Prüfung konnte nicht starten: {error}");
-                    startup_update_error = Some(match startup_update_error {
-                        Some(existing) => format!("{existing}\n{detail}"),
-                        None => detail,
-                    });
-                    None
+        let update_rx =
+            if post_update_startup_pending || staged_update.is_some() || staging_load_failed {
+                None
+            } else {
+                let (utx, urx) = unbounded();
+                match crate::updater::check_async(utx, false) {
+                    Ok(()) => Some(urx),
+                    Err(error) => {
+                        let detail =
+                            format!("Automatische Update-Prüfung konnte nicht starten: {error}");
+                        startup_update_error = Some(match startup_update_error {
+                            Some(existing) => format!("{existing}\n{detail}"),
+                            None => detail,
+                        });
+                        None
+                    }
                 }
-            }
-        };
+            };
         let show_update_dialog = staged_update.is_some();
         let update_ready = staged_update.map(ReadyUpdate::Staged);
 
@@ -253,6 +256,8 @@ impl App {
             pane_rects: Vec::new(),
             current_render_tab: 0,
             shown: false,
+            post_update_startup_pending,
+            post_update_daemon_at: None,
             band_base: HashSet::new(),
             band_suppressed: false,
             pending_scroll_row: None,

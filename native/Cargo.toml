@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.120"
+version = "0.5.121"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -60,6 +60,9 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Cross-platform file identity checks keep updater targets, staging payloads,
+# and bookkeeping files from aliasing through hard links or symlinks.
+same-file = "1"
 getrandom = "0.2"
 # MD5 (pure Rust) for content-equality compare using the SAME hash remotes
 # expose natively (Google Drive md5Checksum, Nextcloud/ownCloud oc:checksums) —

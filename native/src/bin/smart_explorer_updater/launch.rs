@@ -1,36 +1,376 @@
-use super::args::ApplyArgs;
 use super::hash::verify_sha256;
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+const ACK_PATH_ENV: &str = "SMART_EXPLORER_UPDATE_ACK_PATH";
+const ACK_TOKEN_ENV: &str = "SMART_EXPLORER_UPDATE_ACK_TOKEN";
+const ACK_PAYLOAD_ENV: &str = "SMART_EXPLORER_UPDATE_ACK_PAYLOAD";
+const ACK_SIGNAL_ENV: &str = "SMART_EXPLORER_UPDATE_ACK_SIGNAL";
+const ACK_PREFIX: &str = "update_start_ack_";
+
+struct AckEnvironment<'a> {
+    path: &'a Path,
+    token: &'a str,
+    payload: Option<&'a str>,
+    signal: &'a str,
+}
 
 pub(crate) fn spawn_verified_detached(
     exe: &Path,
     expected_sha256: &str,
     args: &[&str],
 ) -> std::io::Result<()> {
+    spawn_child(exe, expected_sha256, args, None).map(|_| ())
+}
+
+/// Start a replacement app and retain the child handle until its first GUI
+/// frame writes the one-shot acknowledgement. Every error is returned only
+/// after the exact child has exited, so callers may safely roll back its EXE.
+pub(crate) fn spawn_verified_acknowledged(
+    exe: &Path,
+    expected_sha256: &str,
+    args: &[&str],
+) -> std::io::Result<()> {
+    spawn_verified_acknowledged_with(exe, expected_sha256, args, Duration::from_secs(45))
+}
+
+/// Use the durable completion receipt itself as the app-written ACK. If this
+/// helper exits after the first frame but before cleanup, a serialized worker
+/// can still recognize the completed launch without starting a duplicate app.
+pub(crate) fn spawn_verified_acknowledged_receipt(
+    exe: &Path,
+    expected_sha256: &str,
+    args: &[&str],
+    receipt_path: &Path,
+    receipt_prefix: &[u8],
+) -> std::io::Result<()> {
+    let token = random_token()?;
+    let prefix = std::str::from_utf8(receipt_prefix).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Startabschluss ist kein UTF-8: {error}"),
+        )
+    })?;
+    let payload = format!("{prefix}{token}\n");
+    ensure_ack_path_missing(receipt_path)?;
+    let (listener, signal) = ack_listener()?;
+    let environment = AckEnvironment {
+        path: receipt_path,
+        token: &token,
+        payload: Some(&payload),
+        signal: &signal,
+    };
+    let mut child = spawn_child(exe, expected_sha256, args, Some(environment))?;
+    wait_for_ack(
+        &mut child,
+        &listener,
+        receipt_path,
+        &payload,
+        &token,
+        Duration::from_secs(45),
+        false,
+    )
+}
+
+fn spawn_verified_acknowledged_with(
+    exe: &Path,
+    expected_sha256: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let token = random_token()?;
+    let ack_path = super::logging::appdata_dir().join(format!("{ACK_PREFIX}{token}"));
+    ensure_ack_path_missing(&ack_path)?;
+    let (listener, signal) = ack_listener()?;
+    let environment = AckEnvironment {
+        path: &ack_path,
+        token: &token,
+        payload: None,
+        signal: &signal,
+    };
+    let mut child = spawn_child(exe, expected_sha256, args, Some(environment))?;
+    wait_for_ack(
+        &mut child, &listener, &ack_path, &token, &token, timeout, true,
+    )
+}
+
+fn spawn_child(
+    exe: &Path,
+    expected_sha256: &str,
+    args: &[&str],
+    ack: Option<AckEnvironment<'_>>,
+) -> std::io::Result<std::process::Child> {
     validate_before_spawn(exe, expected_sha256)?;
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(args);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
-        if cmd.spawn().is_ok() {
-            return Ok(());
+        let mut command = configured_command(exe, args, ack.as_ref());
+        command.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+        match command.spawn() {
+            Ok(child) => Ok(child),
+            Err(_) => {
+                validate_before_spawn(exe, expected_sha256)?;
+                let mut retry = configured_command(exe, args, ack.as_ref());
+                retry.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+                retry.spawn()
+            }
         }
-        validate_before_spawn(exe, expected_sha256)?;
-        let mut retry = std::process::Command::new(exe);
-        retry
-            .args(args)
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-        retry.spawn().map(|_| ())
     }
     #[cfg(not(windows))]
-    {
-        cmd.spawn().map(|_| ())
+    configured_command(exe, args, ack.as_ref()).spawn()
+}
+
+fn configured_command(
+    exe: &Path,
+    args: &[&str],
+    ack: Option<&AckEnvironment<'_>>,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(args)
+        .env_remove(ACK_PATH_ENV)
+        .env_remove(ACK_TOKEN_ENV)
+        .env_remove(ACK_PAYLOAD_ENV)
+        .env_remove(ACK_SIGNAL_ENV);
+    if let Some(ack) = ack {
+        command
+            .env(ACK_PATH_ENV, ack.path)
+            .env(ACK_TOKEN_ENV, ack.token)
+            .env(ACK_SIGNAL_ENV, ack.signal);
+        if let Some(payload) = ack.payload {
+            command.env(ACK_PAYLOAD_ENV, payload);
+        }
     }
+    command
+}
+
+fn wait_for_ack(
+    child: &mut std::process::Child,
+    listener: &std::net::TcpListener,
+    ack_path: &Path,
+    expected_content: &str,
+    expected_token: &str,
+    timeout: Duration,
+    remove_on_success: bool,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let signal = match receive_signal(listener, expected_token) {
+            Ok(signal) => signal,
+            Err(error) => {
+                return fail_or_accept_published(
+                    child,
+                    ack_path,
+                    expected_content,
+                    remove_on_success,
+                    error,
+                );
+            }
+        };
+        if let Some(mut signal) = signal {
+            if !matches!(read_ack(ack_path, expected_content), Ok(true)) {
+                super::logging::append_log(
+                    "warning: gueltiges Startsignal empfangen, aber Bestaetigungsdatei nicht erneut lesbar; Update bleibt aus Sicherheitsgruenden committed",
+                );
+            }
+            // A durable first-frame ACK is the commit point. Do not roll back
+            // after it: the app may now start background children safely.
+            use std::io::Write;
+            if let Err(error) = signal.write_all(&[1]).and_then(|_| signal.flush()) {
+                super::logging::append_log(&format!(
+                    "warning: dauerhafte Startbestaetigung wurde akzeptiert, aber die Freigabeantwort schlug fehl: {error}"
+                ));
+            }
+            if remove_on_success {
+                cleanup_ack(ack_path);
+            }
+            return Ok(());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return fail_or_accept_published(
+                    child,
+                    ack_path,
+                    expected_content,
+                    remove_on_success,
+                    std::io::Error::other(format!(
+                        "Ersatzprogramm endete vor der Startbestaetigung ({status})"
+                    )),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return fail_or_accept_published(
+                    child,
+                    ack_path,
+                    expected_content,
+                    remove_on_success,
+                    error,
+                );
+            }
+        }
+        if Instant::now() >= deadline {
+            return fail_or_accept_published(
+                child,
+                ack_path,
+                expected_content,
+                remove_on_success,
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Ersatzprogramm bestaetigte seinen ersten GUI-Frame nicht rechtzeitig",
+                ),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn fail_or_accept_published(
+    child: &mut std::process::Child,
+    ack_path: &Path,
+    expected_content: &str,
+    remove_on_success: bool,
+    error: std::io::Error,
+) -> std::io::Result<()> {
+    if matches!(read_ack(ack_path, expected_content), Ok(true)) {
+        super::logging::append_log(&format!(
+            "warning: Startsignal fehlgeschlagen, aber dauerhafte Bestaetigung ist gueltig; Update bleibt committed: {error}"
+        ));
+        if remove_on_success {
+            cleanup_ack(ack_path);
+        }
+        Ok(())
+    } else {
+        fail_after_stopping(child, ack_path, error)
+    }
+}
+
+fn ack_listener() -> std::io::Result<(std::net::TcpListener, String)> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    listener.set_nonblocking(true)?;
+    let address = listener.local_addr()?.to_string();
+    Ok((listener, address))
+}
+
+fn receive_signal(
+    listener: &std::net::TcpListener,
+    expected_token: &str,
+) -> std::io::Result<Option<std::net::TcpStream>> {
+    use std::io::Read;
+    loop {
+        let (stream, peer) = match listener.accept() {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !peer.ip().is_loopback() {
+            continue;
+        }
+        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut response = [0u8; 32];
+        (&stream).read_exact(&mut response)?;
+        if response == expected_token.as_bytes() {
+            return Ok(Some(stream));
+        }
+    }
+}
+
+fn read_ack(path: &Path, expected_content: &str) -> std::io::Result<bool> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Startbestaetigung {} ist keine regulaere Datei",
+                path.display()
+            ),
+        ));
+    }
+    if metadata.len() != expected_content.len() as u64 {
+        return Ok(false);
+    }
+    use std::io::Read;
+    let mut token = String::with_capacity(expected_content.len());
+    std::fs::File::open(path)?
+        .take(expected_content.len() as u64 + 1)
+        .read_to_string(&mut token)?;
+    if token != expected_content {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Startbestaetigung enthaelt ein fremdes Token",
+        ))
+    } else {
+        Ok(true)
+    }
+}
+
+fn fail_after_stopping(
+    child: &mut std::process::Child,
+    ack_path: &Path,
+    error: std::io::Error,
+) -> std::io::Result<()> {
+    stop_and_reap(child);
+    cleanup_ack(ack_path);
+    Err(error)
+}
+
+fn stop_and_reap(child: &mut std::process::Child) {
+    if child.try_wait().is_ok_and(|status| status.is_some()) {
+        return;
+    }
+    let _ = child.kill();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) | Err(_) => {
+                // A rollback is unsafe until this exact process is known to
+                // have exited. Remaining here retains every rollback file.
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+fn ensure_ack_path_missing(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("Startbestaetigung {} existiert bereits", path.display()),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_ack(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            super::logging::append_log(&format!(
+                "warning: Startbestaetigung {} entfernen: {error}",
+                path.display()
+            ));
+        }
+    }
+}
+
+fn random_token() -> std::io::Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| std::io::Error::other(format!("Starttoken erzeugen: {error}")))?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        token.push(HEX[(byte >> 4) as usize] as char);
+        token.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(token)
 }
 
 fn validate_before_spawn(exe: &Path, expected_sha256: &str) -> std::io::Result<()> {
@@ -42,212 +382,40 @@ fn validate_before_spawn(exe: &Path, expected_sha256: &str) -> std::io::Result<(
     })
 }
 
-#[cfg(windows)]
-pub(crate) fn relaunch_elevated(args: &ApplyArgs) -> std::io::Result<()> {
-    let exe = std::env::current_exe()?;
-    validate_helper_for_elevation(&exe, &args.helper_sha256)?;
-    let argv = elevated_argv(args);
-    spawn_elevated_detached(&exe, &argv)
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn elevated_argv(args: &ApplyArgs) -> Vec<String> {
-    let argv = vec![
-        "--apply".to_string(),
-        "--target".to_string(),
-        args.target.to_string_lossy().into_owned(),
-        "--target-sha256".to_string(),
-        args.target_sha256.clone(),
-        "--staged".to_string(),
-        args.staged.to_string_lossy().into_owned(),
-        "--staged-sha256".to_string(),
-        args.staged_sha256.clone(),
-        "--helper-target".to_string(),
-        args.helper_target.to_string_lossy().into_owned(),
-        "--helper-sha256".to_string(),
-        args.helper_sha256.clone(),
-        "--cli-staged".to_string(),
-        args.cli_staged.to_string_lossy().into_owned(),
-        "--cli-target".to_string(),
-        args.cli_target.to_string_lossy().into_owned(),
-        "--cli-sha256".to_string(),
-        args.cli_sha256.clone(),
-        "--archive".to_string(),
-        args.archive.to_string_lossy().into_owned(),
-        "--parent-pid".to_string(),
-        args.parent_pid.to_string(),
-        "--version".to_string(),
-        args.version.clone(),
-        "--last-applied".to_string(),
-        args.last_applied.to_string_lossy().into_owned(),
-        "--error-file".to_string(),
-        args.error_file.to_string_lossy().into_owned(),
-        "--manifest".to_string(),
-        args.manifest.to_string_lossy().into_owned(),
-        "--pin-file".to_string(),
-        args.pin_file.to_string_lossy().into_owned(),
-        "--elevated".to_string(),
-    ];
-    argv
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn validate_helper_for_elevation(
-    exe: &Path,
-    expected_sha256: &str,
-) -> std::io::Result<()> {
-    verify_sha256(exe, expected_sha256).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Updater-Helfer vor UAC revalidieren: {e}"),
-        )
-    })
-}
-
-#[cfg(not(windows))]
-pub(crate) fn relaunch_elevated(_args: &ApplyArgs) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "elevation is only supported on Windows",
-    ))
-}
-
-#[cfg(windows)]
-fn spawn_elevated_detached(exe: &Path, args: &[String]) -> std::io::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    fn wide_os(s: &OsStr) -> Vec<u16> {
-        s.encode_wide().chain(std::iter::once(0)).collect()
-    }
-    fn wide_str(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    let verb = wide_str("runas");
-    let file = wide_os(exe.as_os_str());
-    let params = wide_str(&join_windows_args(args));
-    let rc = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            verb.as_ptr(),
-            file.as_ptr(),
-            params.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    } as isize;
-    if rc > 32 {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("Administratorfreigabe abgebrochen oder verweigert (ShellExecuteW={rc})"),
-        ))
-    }
-}
-
-#[cfg(windows)]
-fn join_windows_args(args: &[String]) -> String {
-    args.iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-#[cfg(windows)]
-fn quote_windows_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && !arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'))
-    {
-        return arg.to_string();
-    }
-
-    let mut out = String::from("\"");
-    let mut backslashes = 0usize;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                out.push_str(&"\\".repeat(backslashes * 2 + 1));
-                out.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                out.push_str(&"\\".repeat(backslashes));
-                backslashes = 0;
-                out.push(ch);
-            }
-        }
-    }
-    out.push_str(&"\\".repeat(backslashes * 2));
-    out.push('"');
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn unique_temp_file(name: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "smart-explorer-updater-launch-{name}-{}-{nanos}",
-            std::process::id()
-        ))
-    }
-
-    fn args_with_hashes(hash: &str) -> ApplyArgs {
-        ApplyArgs {
-            target: "target.exe".into(),
-            target_sha256: hash.to_string(),
-            staged: "staged.exe".into(),
-            staged_sha256: hash.to_string(),
-            helper_target: "helper-target.exe".into(),
-            helper_sha256: hash.to_string(),
-            cli_staged: "cli-staged.exe".into(),
-            cli_target: "cli-target.exe".into(),
-            cli_sha256: hash.to_string(),
-            archive: "archive.exe".into(),
-            parent_pid: 42,
-            version: "1.2.3".into(),
-            last_applied: "last.txt".into(),
-            error_file: "error.txt".into(),
-            manifest: "manifest.json".into(),
-            pin_file: "pin.txt".into(),
-            elevated: false,
-        }
-    }
-
     #[test]
-    fn elevated_argv_carries_staged_and_helper_hashes() {
-        let hash = "b".repeat(64);
-        let argv = elevated_argv(&args_with_hashes(&hash));
-
-        assert!(argv
-            .windows(2)
-            .any(|pair| pair[0] == "--staged-sha256" && pair[1] == hash));
-        assert!(argv
-            .windows(2)
-            .any(|pair| pair[0] == "--helper-sha256" && pair[1] == hash));
+    fn acknowledgement_tokens_are_128_bit_hex() {
+        let token = random_token().unwrap();
+        assert_eq!(token.len(), 32);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn helper_hash_guard_rejects_same_size_tamper_before_elevation() {
-        let path = unique_temp_file("helper");
-        std::fs::write(&path, b"good").unwrap();
-        let expected = super::super::hash::sha256_file(&path).unwrap();
-        std::fs::write(&path, b"evil").unwrap();
+    fn acknowledged_launch_waits_for_child_response() {
+        let shell = Path::new("/bin/bash");
+        let hash = super::super::hash::sha256_file(shell).unwrap();
+        let script = "printf '%s' \"$SMART_EXPLORER_UPDATE_ACK_TOKEN\" > \"$SMART_EXPLORER_UPDATE_ACK_PATH\"; host=${SMART_EXPLORER_UPDATE_ACK_SIGNAL%:*}; port=${SMART_EXPLORER_UPDATE_ACK_SIGNAL##*:}; exec 3<>\"/dev/tcp/$host/$port\"; printf '%s' \"$SMART_EXPLORER_UPDATE_ACK_TOKEN\" >&3; dd bs=1 count=1 <&3 >/dev/null 2>&1; sleep 0.1";
 
-        assert!(validate_helper_for_elevation(&path, &expected).is_err());
+        spawn_verified_acknowledged_with(shell, &hash, &["-c", script], Duration::from_secs(2))
+            .unwrap();
+    }
 
-        let _ = std::fs::remove_file(path);
+    #[cfg(unix)]
+    #[test]
+    fn child_exit_without_ack_is_rejected() {
+        let shell = Path::new("/bin/bash");
+        let hash = super::super::hash::sha256_file(shell).unwrap();
+
+        assert!(spawn_verified_acknowledged_with(
+            shell,
+            &hash,
+            &["-c", "exit 7"],
+            Duration::from_secs(2),
+        )
+        .is_err());
     }
 }
