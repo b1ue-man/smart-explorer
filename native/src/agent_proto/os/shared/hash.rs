@@ -18,28 +18,36 @@ pub(crate) fn handle_walk_hashed(
     let mut stack = vec![base.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
-            break;
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "agent hash walk canceled",
+            ));
         }
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for ent in rd.flatten() {
-            let ft = match ent.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+        for ent in std::fs::read_dir(&dir)? {
+            let ent = ent?;
+            let ft = ent.file_type()?;
             if ft.is_symlink() {
                 continue;
             }
             let p = ent.path();
             let rel = p
                 .strip_prefix(base)
-                .unwrap_or(&p)
-                .to_string_lossy()
+                .map_err(|_| io::Error::other("hash entry escaped its root"))?
+                .to_str()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "hash relative path is not valid UTF-8",
+                    )
+                })?
                 .replace('\\', "/");
+            let md = ent.metadata()?;
+            let mtime = md.modified().ok().map(systemtime_ms).unwrap_or(0);
             if ft.is_dir() {
-                if is_pseudo_dir(&p.to_string_lossy()) {
+                let path = p.to_str().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "hash path is not valid UTF-8")
+                })?;
+                if is_pseudo_dir(path) {
                     continue;
                 }
                 emit(
@@ -49,20 +57,14 @@ pub(crate) fn handle_walk_hashed(
                         rel,
                         is_dir: true,
                         size: 0,
-                        mtime_ms: 0,
+                        mtime_ms: mtime,
                         md5: None,
                     },
                 )?;
                 stack.push(p.clone());
             } else if ft.is_file() {
-                let md = ent.metadata().ok();
-                let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
-                let mtime = md
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .map(systemtime_ms)
-                    .unwrap_or(0);
-                let md5 = if want_hash { md5_file(&p).ok() } else { None };
+                let size = md.len();
+                let md5 = if want_hash { Some(md5_file(&p)?) } else { None };
                 emit(
                     sink,
                     id,

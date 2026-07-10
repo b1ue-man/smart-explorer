@@ -3,42 +3,14 @@ use super::*;
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Remove this session's open/edit temp copies (the saved-back ones are
-        // already on the remote). Files an editor still holds open survive to
-        // the next startup sweep.
-        cleanup_session_temp();
-        if let Some(h) = self.scan_handle.take() {
-            h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        for t in &mut self.tabs {
-            if let Some(h) = t.scan_handle.take() {
-                h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-        if let Some(h) = self.copy_handle.take() {
-            h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        if let Some(c) = self.index_cancel.take() {
-            c.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        if let Some(c) = self.clip_key_cancel.take() {
-            c.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        if self.index_dirty {
-            let _ = self.folder_index.save(&folder_index_path());
-        }
-        self.watcher = None;
-        self.watcher_rx = None;
-
-        self.entries = Vec::new();
-        self.view = Vec::new();
-        self.selection = HashSet::new();
-        self.recent = Vec::new();
-        self.tabs = Vec::new();
+        let _ = self.prepare_for_exit(false);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.shutdown_prepared {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.update_background(ctx);
         self.update_keyboard(ctx);
         self.update_layout(ctx);
@@ -63,6 +35,7 @@ impl App {
         self.drain_inactive_tabs();
         self.drain_copy();
         self.drain_index();
+        self.drain_index_save();
         self.drain_watcher();
         self.drain_folder_search();
         self.drain_trash();
@@ -78,6 +51,7 @@ impl App {
         self.drain_merge();
         self.drain_job_connect();
         self.drain_picker_connect();
+        self.drain_picker_list();
         self.drain_cloud_auth();
         self.drain_file_open();
         self.poll_remote_edits();
@@ -100,7 +74,9 @@ impl App {
 
         // Files dropped onto the window from the OS (Explorer/desktop) → land
         // in the current folder. Processed once per frame.
-        self.handle_os_drop(ctx);
+        if !self.show_disclaimer {
+            self.handle_os_drop(ctx);
+        }
 
         // Open the command-line path on the first frame (folder double-click /
         // "Open in Smart Explorer" / default-manager handoff). A file path
@@ -174,13 +150,31 @@ impl App {
             || matches!(&self.copy_progress, Some(p) if !p.done)
             || self.sync_running
             || self.bisync_running
+            || self.preview_running
+            || self.apply_one_rx.is_some()
+            || self.merge_load_rx.is_some()
+            || self.merge_apply_rx.is_some()
             || self.index_building
+            || self.index_save_active()
             || self.band_active
             || !self.file_open_rx.is_empty()
             || self.upload_rx.is_some()
             || self.remote_op_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
+            || self.connecting
+            || self.agent_activate_rx.is_some()
+            || self.remote_versions_rx.is_some()
+            || self.rollback_rx.is_some()
+            || self.trash_rx.is_some()
+            || self.trash_worker.is_some()
+            || self.clip_prepare_rx.is_some()
+            || self.share_open_rx.is_some()
+            || !self.edit_save_rx.is_empty()
+            || self
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.connecting || picker.listing)
             || self.cloud_authing
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));

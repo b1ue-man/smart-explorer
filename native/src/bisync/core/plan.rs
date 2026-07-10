@@ -33,7 +33,7 @@ pub(super) fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bo
             }
             match opts.compare {
                 CompareMode::SizeOnly => true,
-                CompareMode::Checksum => a.hash == b.hash,
+                CompareMode::Checksum => a.hash != 0 && b.hash != 0 && a.hash == b.hash,
                 CompareMode::MtimeSize => (a.mtime_ms - b.mtime_ms).abs() <= opts.modify_window_ms,
             }
         }
@@ -67,8 +67,23 @@ pub fn plan(
         for rel in rels {
             let sn = src.get(rel).copied();
             let dn = dst.get(rel).copied();
-            if sig_eq(sn, dn, &opts) {
+            if opts.move_files && sn.is_none() {
+                // A completed move intentionally leaves the destination while
+                // the source is absent. It must never be reinterpreted as a
+                // mirror deletion after a baseline-save failure.
                 converged.push(rel.clone());
+                continue;
+            }
+            if sig_eq(sn, dn, &opts) {
+                if opts.move_files && sn.is_some() {
+                    actions.push(if atob {
+                        Action::FinalizeMoveAtoB(rel.clone())
+                    } else {
+                        Action::FinalizeMoveBtoA(rel.clone())
+                    });
+                } else {
+                    converged.push(rel.clone());
+                }
                 continue;
             }
             match (sn, dn) {
@@ -101,6 +116,30 @@ pub fn plan(
         let an = a.get(rel).copied();
         let bn = b.get(rel).copied();
         let (ba, bb) = base.get(rel).copied().unwrap_or((None, None));
+
+        if opts.move_files {
+            match opts.direction {
+                Direction::AtoB if an.is_none() => {
+                    // Destination-only is the expected terminal state of a
+                    // move, including when the prior baseline write failed.
+                    converged.push(rel.clone());
+                    continue;
+                }
+                Direction::BtoA if bn.is_none() => {
+                    converged.push(rel.clone());
+                    continue;
+                }
+                Direction::AtoB if an.is_some() && sig_eq(an, bn, &opts) => {
+                    actions.push(Action::FinalizeMoveAtoB(rel.clone()));
+                    continue;
+                }
+                Direction::BtoA if bn.is_some() && sig_eq(an, bn, &opts) => {
+                    actions.push(Action::FinalizeMoveBtoA(rel.clone()));
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let a_changed = !sig_eq(an, ba, &opts);
         let b_changed = !sig_eq(bn, bb, &opts);
 
@@ -219,6 +258,8 @@ pub fn update_baseline(
         let rel = match act {
             Action::CopyAtoB(r)
             | Action::CopyBtoA(r)
+            | Action::FinalizeMoveAtoB(r)
+            | Action::FinalizeMoveBtoA(r)
             | Action::DeleteA(r)
             | Action::DeleteB(r)
             | Action::KeepBothAtoB(r)

@@ -1,7 +1,7 @@
 use super::core::{hmac_proof, presence_payload, random_bytes, sanitize_name, verify_hmac};
 use super::fs;
 use super::profiles::ShareProfiles;
-use super::wire::{Ctrl, FsRequest};
+use super::wire::{Ctrl, FsErrorKind, FsRequest, FsResponse};
 use crate::vfs::{Backend, LocalBackend, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io;
@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 #[test]
 fn room_code_uses_persistent_secret_format() {
-    let code = ShareProfiles::new_room_code();
+    let code = ShareProfiles::new_room_code().unwrap();
     let parts: Vec<&str> = code.split('-').collect();
     assert_eq!(parts.len(), 4);
     assert_eq!(parts[0], "SE");
@@ -19,7 +19,7 @@ fn room_code_uses_persistent_secret_format() {
 
 #[test]
 fn presence_hmac_covers_iroh_discovery_fields() {
-    let secret = random_bytes::<32>();
+    let secret = random_bytes::<32>().unwrap();
     let candidates = vec!["192.168.1.20:1234".to_string()];
     let payload = presence_payload(
         "direct",
@@ -78,6 +78,52 @@ fn ctrl_roundtrips() {
         serde_json::from_slice::<Ctrl>(&j).unwrap(),
         Ctrl::Fs { .. }
     ));
+}
+
+#[test]
+fn fs_error_wire_accepts_legacy_message_only_response() {
+    let encoded = br#"{"r":"err","msg":"legacy missing"}"#;
+    let response = serde_json::from_slice::<FsResponse>(encoded).unwrap();
+    match response {
+        FsResponse::Err { kind, msg } => {
+            assert_eq!(kind, None);
+            assert_eq!(msg, "legacy missing");
+        }
+        _ => panic!("error response expected"),
+    }
+}
+
+#[test]
+fn typed_not_found_error_remains_readable_by_legacy_peer() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "r", rename_all = "snake_case")]
+    enum LegacyFsResponse {
+        Err { msg: String },
+    }
+
+    let response = FsResponse::Err {
+        kind: Some(FsErrorKind::NotFound),
+        msg: "missing".to_string(),
+    };
+    let encoded = serde_json::to_vec(&response).unwrap();
+    assert!(encoded
+        .windows(b"\"kind\":\"not_found\"".len())
+        .any(|window| window == b"\"kind\":\"not_found\""));
+    match serde_json::from_slice::<LegacyFsResponse>(&encoded).unwrap() {
+        LegacyFsResponse::Err { msg } => assert_eq!(msg, "missing"),
+    }
+}
+
+#[test]
+fn fs_error_wire_tolerates_future_error_kind() {
+    let encoded = br#"{"r":"err","kind":"permission_denied","msg":"denied"}"#;
+    match serde_json::from_slice::<FsResponse>(encoded).unwrap() {
+        FsResponse::Err { kind, msg } => {
+            assert_eq!(kind, Some(FsErrorKind::Unknown));
+            assert_eq!(msg, "denied");
+        }
+        _ => panic!("error response expected"),
+    }
 }
 
 #[test]

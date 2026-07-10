@@ -1,6 +1,87 @@
-//! Minimal line-level two-way merge used to resolve sync conflicts: an LCS line
-//! diff groups the two versions into equal runs and change blocks ("hunks").
-//! The UI uses `rows`/`assemble_rows` for side-by-side conflict resolution.
+//! Bounded line-level two-way merge used to resolve sync conflicts. Myers'
+//! algorithm groups the versions into equal runs and change blocks ("hunks")
+//! without allocating the old quadratic LCS table. Operational entry points
+//! also enforce input limits and a deadline so the UI can fail closed instead
+//! of presenting an approximate diff.
+
+use similar::{Algorithm, ChangeTag, TextDiff};
+use std::fmt;
+use std::time::{Duration, Instant};
+
+const MAX_INPUT_BYTES_PER_SIDE: usize = 16 * 1024 * 1024;
+const MAX_TOTAL_LINES: usize = 500_000;
+const DEFAULT_DIFF_TIMEOUT: Duration = Duration::from_secs(2);
+const DEADLINE_CHECK_INTERVAL: usize = 1_024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LineMergeError {
+    InputTooLarge {
+        side: char,
+        actual: usize,
+        limit: usize,
+    },
+    TooManyLines {
+        actual: usize,
+        limit: usize,
+    },
+    TimedOut {
+        limit: Duration,
+    },
+    InvalidTimeout,
+}
+
+impl fmt::Display for LineMergeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InputTooLarge {
+                side,
+                actual,
+                limit,
+            } => write!(
+                f,
+                "Seite {side} ist mit {actual} Bytes zu groß (Limit: {limit} Bytes)."
+            ),
+            Self::TooManyLines { actual, limit } => write!(
+                f,
+                "Der Zeilenvergleich enthält {actual} Zeilen (Limit: {limit})."
+            ),
+            Self::TimedOut { limit } => write!(
+                f,
+                "Der Zeilenvergleich wurde nach {} ms abgebrochen; ein angenähertes Ergebnis wird nicht angezeigt.",
+                limit.as_millis()
+            ),
+            Self::InvalidTimeout => write!(f, "Das Zeitlimit für den Zeilenvergleich ist ungültig."),
+        }
+    }
+}
+
+impl std::error::Error for LineMergeError {}
+
+#[derive(Clone, Copy)]
+struct MergeDeadline {
+    at: Instant,
+    limit: Duration,
+}
+
+impl MergeDeadline {
+    fn new(limit: Duration) -> Result<Self, LineMergeError> {
+        if limit.is_zero() {
+            return Err(LineMergeError::TimedOut { limit });
+        }
+        let at = Instant::now()
+            .checked_add(limit)
+            .ok_or(LineMergeError::InvalidTimeout)?;
+        Ok(Self { at, limit })
+    }
+
+    fn check(self) -> Result<(), LineMergeError> {
+        if Instant::now() >= self.at {
+            Err(LineMergeError::TimedOut { limit: self.limit })
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg(test)]
@@ -22,24 +103,46 @@ pub struct Hunk {
     pub choice: Choice,
 }
 
-/// LCS-based line diff of `a` vs `b` → hunks (equal runs + change blocks). The
-/// default choice for a change block is the A (source/left) side.
-pub fn diff(a: &str, b: &str) -> Vec<Hunk> {
+/// Deadline-aware Myers line diff of `a` vs `b` → hunks (equal runs +
+/// change blocks). The default choice for a change block is A (source/left).
+pub fn diff(a: &str, b: &str) -> Result<Vec<Hunk>, LineMergeError> {
+    let (hunks, _) = timed_hunks(a, b, DEFAULT_DIFF_TIMEOUT)?;
+    Ok(hunks)
+}
+
+fn timed_hunks(
+    a: &str,
+    b: &str,
+    timeout: Duration,
+) -> Result<(Vec<Hunk>, MergeDeadline), LineMergeError> {
+    let deadline = MergeDeadline::new(timeout)?;
+    validate_input_size('A', a)?;
+    validate_input_size('B', b)?;
+    let a_line_count = a.lines().count();
+    let b_line_count = b.lines().count();
+    let total_lines =
+        a_line_count
+            .checked_add(b_line_count)
+            .ok_or(LineMergeError::TooManyLines {
+                actual: usize::MAX,
+                limit: MAX_TOTAL_LINES,
+            })?;
+    if total_lines > MAX_TOTAL_LINES {
+        return Err(LineMergeError::TooManyLines {
+            actual: total_lines,
+            limit: MAX_TOTAL_LINES,
+        });
+    }
+    deadline.check()?;
+
     let al: Vec<&str> = a.lines().collect();
     let bl: Vec<&str> = b.lines().collect();
-    let (n, m) = (al.len(), bl.len());
-
-    // dp[i][j] = LCS length of al[i..] and bl[j..].
-    let mut dp = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            dp[i][j] = if al[i] == bl[j] {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
+    let mut config = TextDiff::configure();
+    config.algorithm(Algorithm::Myers).deadline(deadline.at);
+    let line_diff = config.diff_slices(&al, &bl);
+    // `similar` deliberately returns an approximation when its deadline is
+    // reached. Reject it before exposing any choices to the user.
+    deadline.check()?;
 
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut eq: Vec<String> = Vec::new();
@@ -70,34 +173,41 @@ pub fn diff(a: &str, b: &str) -> Vec<Hunk> {
         }
     }
 
-    let (mut i, mut j) = (0usize, 0usize);
-    while i < n && j < m {
-        if al[i] == bl[j] {
-            flush_change(&mut hunks, &mut ca, &mut cb);
-            eq.push(al[i].to_string());
-            i += 1;
-            j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
-            flush_eq(&mut hunks, &mut eq);
-            ca.push(al[i].to_string());
-            i += 1;
-        } else {
-            flush_eq(&mut hunks, &mut eq);
-            cb.push(bl[j].to_string());
-            j += 1;
+    for (index, change) in line_diff.iter_all_changes().enumerate() {
+        if index % DEADLINE_CHECK_INTERVAL == 0 {
+            deadline.check()?;
+        }
+        match change.tag() {
+            ChangeTag::Equal => {
+                flush_change(&mut hunks, &mut ca, &mut cb);
+                eq.push(change.value().to_string());
+            }
+            ChangeTag::Delete => {
+                flush_eq(&mut hunks, &mut eq);
+                ca.push(change.value().to_string());
+            }
+            ChangeTag::Insert => {
+                flush_eq(&mut hunks, &mut eq);
+                cb.push(change.value().to_string());
+            }
         }
     }
     flush_eq(&mut hunks, &mut eq);
-    while i < n {
-        ca.push(al[i].to_string());
-        i += 1;
-    }
-    while j < m {
-        cb.push(bl[j].to_string());
-        j += 1;
-    }
     flush_change(&mut hunks, &mut ca, &mut cb);
-    hunks
+    deadline.check()?;
+    Ok((hunks, deadline))
+}
+
+fn validate_input_size(side: char, value: &str) -> Result<(), LineMergeError> {
+    if value.len() > MAX_INPUT_BYTES_PER_SIDE {
+        Err(LineMergeError::InputTooLarge {
+            side,
+            actual: value.len(),
+            limit: MAX_INPUT_BYTES_PER_SIDE,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 /// One aligned row of a side-by-side (git-style) diff: the A line and the B line
@@ -117,11 +227,22 @@ pub struct Row {
 /// a change block, A and B lines are paired by position (extra lines on the
 /// longer side get a gap on the other). Defaults: keep the side(s) that have
 /// content, preferring A when both differ.
-pub fn rows(a: &str, b: &str) -> Vec<Row> {
+pub fn rows(a: &str, b: &str) -> Result<Vec<Row>, LineMergeError> {
+    rows_with_timeout(a, b, DEFAULT_DIFF_TIMEOUT)
+}
+
+/// Build rows with an explicit limit. This is public so non-GUI callers can
+/// choose a tighter budget while retaining the same fail-closed semantics.
+pub fn rows_with_timeout(a: &str, b: &str, timeout: Duration) -> Result<Vec<Row>, LineMergeError> {
+    let (hunks, deadline) = timed_hunks(a, b, timeout)?;
     let mut rows = Vec::new();
-    for h in diff(a, b) {
+    let mut row_count = 0usize;
+    for h in hunks {
         if h.equal {
             for l in h.a {
+                if row_count.is_multiple_of(DEADLINE_CHECK_INTERVAL) {
+                    deadline.check()?;
+                }
                 rows.push(Row {
                     left: Some(l.clone()),
                     right: Some(l),
@@ -129,10 +250,14 @@ pub fn rows(a: &str, b: &str) -> Vec<Row> {
                     take_left: true,
                     take_right: false,
                 });
+                row_count += 1;
             }
         } else {
             let n = h.a.len().max(h.b.len());
             for i in 0..n {
+                if row_count.is_multiple_of(DEADLINE_CHECK_INTERVAL) {
+                    deadline.check()?;
+                }
                 let left = h.a.get(i).cloned();
                 let right = h.b.get(i).cloned();
                 let (tl, tr) = match (&left, &right) {
@@ -147,10 +272,12 @@ pub fn rows(a: &str, b: &str) -> Vec<Row> {
                     take_left: tl,
                     take_right: tr,
                 });
+                row_count += 1;
             }
         }
     }
-    rows
+    deadline.check()?;
+    Ok(rows)
 }
 
 /// The full A (left/source) version reconstructed from the aligned rows.
@@ -216,71 +343,5 @@ pub fn assemble(hunks: &[Hunk]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identical_is_one_equal_hunk() {
-        let h = diff("a\nb\nc", "a\nb\nc");
-        assert_eq!(h.len(), 1);
-        assert!(h[0].equal);
-        assert_eq!(assemble(&h), "a\nb\nc");
-    }
-
-    #[test]
-    fn middle_change_splits_into_three() {
-        // equal "a", change (b1 vs b2), equal "c"
-        let h = diff("a\nb1\nc", "a\nb2\nc");
-        assert_eq!(h.len(), 3);
-        assert!(h[0].equal && !h[1].equal && h[2].equal);
-        assert_eq!(h[1].a, vec!["b1".to_string()]);
-        assert_eq!(h[1].b, vec!["b2".to_string()]);
-        // default A
-        assert_eq!(assemble(&h), "a\nb1\nc");
-    }
-
-    #[test]
-    fn choices_assemble_correctly() {
-        let mut h = diff("a\nx\nc", "a\ny\nc");
-        h[1].choice = Choice::B;
-        assert_eq!(assemble(&h), "a\ny\nc");
-        h[1].choice = Choice::Both;
-        assert_eq!(assemble(&h), "a\nx\ny\nc");
-        h[1].choice = Choice::Neither;
-        assert_eq!(assemble(&h), "a\nc");
-    }
-
-    #[test]
-    fn rows_align_and_default_to_a() {
-        let r = rows("a\nx\nc", "a\ny\nc");
-        // a (equal), x|y (diff), c (equal)
-        assert_eq!(r.len(), 3);
-        assert!(r[0].equal && r[2].equal);
-        assert!(!r[1].equal);
-        assert_eq!(r[1].left.as_deref(), Some("x"));
-        assert_eq!(r[1].right.as_deref(), Some("y"));
-        assert!(r[1].take_left && !r[1].take_right);
-        assert_eq!(assemble_rows(&r), "a\nx\nc");
-    }
-
-    #[test]
-    fn rows_per_line_accept() {
-        let mut r = rows("a\nx\nc", "a\ny\nc");
-        r[1].take_left = false;
-        r[1].take_right = true;
-        assert_eq!(assemble_rows(&r), "a\ny\nc");
-        r[1].take_left = true; // accept both lines
-        assert_eq!(assemble_rows(&r), "a\nx\ny\nc");
-    }
-
-    #[test]
-    fn pure_insertion_on_b() {
-        // A has nothing extra; B adds a line in the middle
-        let h = diff("a\nc", "a\nb\nc");
-        // equal a, change (a:[] b:[b]), equal c
-        let change: Vec<&Hunk> = h.iter().filter(|x| !x.equal).collect();
-        assert_eq!(change.len(), 1);
-        assert!(change[0].a.is_empty());
-        assert_eq!(change[0].b, vec!["b".to_string()]);
-    }
-}
+#[path = "linemerge_tests.rs"]
+mod tests;

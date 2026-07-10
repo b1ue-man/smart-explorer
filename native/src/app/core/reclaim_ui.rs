@@ -1,26 +1,22 @@
 use super::prelude::*;
 use super::*;
+use crate::app::reclaim_results_ui::{
+    result_count_label, select_items, selected_bytes, ui_empty, ui_item, ui_items, ui_section,
+};
 
 impl App {
     pub(in crate::app) fn ui_reclaim(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         self.poll_reclaim_scan();
-        if self.reclaim_report.is_none() && self.reclaim_scan.is_none() {
-            if let Some((backend, root, label)) = self
-                .remote
-                .as_ref()
-                .map(|r| (r.backend.clone(), self.root_path.clone(), r.label.clone()))
-            {
-                self.start_reclaim_scan_remote(backend, root, label);
-            } else {
-                let root = self.analytics_default_root();
-                if !root.is_empty() {
-                    self.start_reclaim_scan(root);
-                }
-            }
-        }
-
         let drives = self.drive_info.clone();
+        let source = self.reclaim_source.clone();
+        let current_remote = self.remote.as_ref().map(|remote| {
+            StorageScanSource::remote(
+                remote.backend.clone(),
+                self.root_path.clone(),
+                remote.label.clone(),
+            )
+        });
         let scan_info = self.reclaim_scan.as_ref().map(|s| {
             (
                 s.progress.files.load(Relaxed),
@@ -30,14 +26,13 @@ impl App {
                 s.progress.hashed.load(Relaxed),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
-                s.cancel_requested,
             )
         });
-        let report = self.reclaim_report.clone();
+        let report = self.reclaim_report.as_ref();
         let mut selected = self.reclaim_selected.clone();
         let mut panel = self.analytics_panel;
         let mut open = true;
-        let mut rescan: Option<String> = None;
+        let mut rescan: Option<StorageScanSource> = None;
         let mut pick_folder = false;
         let mut cancel = false;
         let mut reveal: Option<String> = None;
@@ -46,8 +41,24 @@ impl App {
         let mut trash_selected = false;
         let mut large_gb = self.reclaim_large_min_gb;
         let mut stale_days = self.reclaim_stale_days;
-        let report_is_remote = report.as_ref().is_some_and(|r| r.is_remote);
-        let is_remote = report_is_remote || self.remote.is_some();
+        let report_is_remote = report.is_some_and(|r| r.is_remote);
+        let is_remote =
+            report_is_remote || source.as_ref().is_some_and(StorageScanSource::is_remote);
+        let run_state = self.reclaim_state;
+        let issue_count = self.reclaim_issues.len() as u64 + self.reclaim_suppressed_issues;
+        let first_issue = self.reclaim_issues.first().cloned();
+        let issue_text = if issue_count > 0 {
+            let mut lines = self.reclaim_issues.clone();
+            if self.reclaim_suppressed_issues > 0 {
+                lines.push(format!(
+                    "… {} weitere Probleme unterdrückt",
+                    self.reclaim_suppressed_issues
+                ));
+            }
+            lines.join("\n")
+        } else {
+            String::new()
+        };
 
         egui::Window::new("📊 Speicher-Analyse")
             .id(egui::Id::new("analyse_reclaim"))
@@ -71,21 +82,26 @@ impl App {
                             .color(Color32::from_gray(150)),
                     );
                     for (root, _free, _total) in &drives {
-                        let dl: String = root.chars().take(2).collect();
-                        if ui.button(dl.clone()).clicked() {
-                            rescan = Some(format!("{}/", dl));
+                        if ui.button(root.as_str()).clicked() {
+                            rescan = Some(StorageScanSource::local(root.clone()));
                         }
                     }
                     if ui.button("Ordner...").clicked() {
                         pick_folder = true;
                     }
-                    if ui.button("Neu scannen").clicked() {
-                        if let Some(r) = report.as_ref().map(|r| r.root.clone()) {
-                            rescan = Some(r);
+                    if let Some(remote_source) = &current_remote {
+                        if ui.button("Aktueller Remote-Ordner").clicked() {
+                            rescan = Some(remote_source.clone());
                         }
                     }
+                    if ui
+                        .add_enabled(source.is_some(), egui::Button::new("Neu scannen"))
+                        .clicked()
+                    {
+                        rescan = source.clone();
+                    }
                     ui.separator();
-                    ui.label("Gross ab");
+                    ui.label("Groß ab");
                     ui.add(
                         egui::DragValue::new(&mut large_gb)
                             .speed(0.25)
@@ -101,15 +117,43 @@ impl App {
                     );
                 });
 
+                if let Some(report) = report {
+                    let large_bytes =
+                        (large_gb.max(0.01) * 1024.0 * 1024.0 * 1024.0) as u64;
+                    if report.large_min_bytes != large_bytes || report.stale_days != stale_days {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 190, 90),
+                            "Einstellungen geändert — für passende Ergebnisse neu scannen.",
+                        );
+                    }
+                }
+
                 if is_remote {
                     ui.colored_label(
                         Color32::from_rgb(255, 190, 90),
-                        "Remote-Reclaim ist read-only: Free-/Agent-Hashes werden nur zur Review angezeigt.",
+                        "Remote-Reclaim ist schreibgeschützt: Hash-Ergebnisse dienen nur der Prüfung.",
                     );
                 }
 
-                if let Some((files, dirs, bytes, fingerprinted, hashed, root, secs, canceling)) =
-                    &scan_info
+                if issue_count > 0 {
+                    egui::CollapsingHeader::new(format!("Probleme ({issue_count})"))
+                        .default_open(run_state == StorageRunState::Failed)
+                        .show(ui, |ui| {
+                            let mut text = issue_text.clone();
+                            let rows = text.lines().count().clamp(2, 10);
+                            ui.add(
+                                egui::TextEdit::multiline(&mut text)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(rows),
+                            );
+                            if ui.button("Probleme kopieren").clicked() {
+                                ctx.copy_text(issue_text.clone());
+                            }
+                        });
+                }
+
+                if let Some((files, dirs, bytes, fingerprinted, hashed, root, secs)) = &scan_info
                 {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -119,8 +163,7 @@ impl App {
                             0.0
                         };
                         ui.label(format!(
-                            "{} {} - {} Dateien - {} Ordner - {} - {} Fingerprints - {} Hashes ({:.0}/s)",
-                            if *canceling { "Breche ab" } else { "Scanne" },
+                            "Scanne {} - {} Dateien - {} Ordner - {} - {} Fingerprints - {} Hashes ({:.0}/s)",
                             root,
                             files,
                             dirs,
@@ -129,15 +172,12 @@ impl App {
                             hashed,
                             rate
                         ));
-                        if ui
-                            .add_enabled(!*canceling, egui::Button::new("Abbrechen"))
-                            .clicked()
-                        {
+                        if ui.button("Abbrechen").clicked() {
                             cancel = true;
                         }
                     });
                     ctx.request_repaint_after(std::time::Duration::from_millis(150));
-                } else if let Some(r) = &report {
+                } else if let Some(r) = report {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(&r.root).strong());
                         ui.label(format!(
@@ -147,10 +187,25 @@ impl App {
                             format_bytes(r.bytes)
                         ));
                         ui.label(format!(
-                            "- {} moeglich",
+                            "- {} möglich",
                             format_bytes(r.reclaimable_bytes())
                         ));
                     });
+                    if r.has_truncated_results() {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 190, 90),
+                            "Ergebnislisten sind begrenzt; Gesamtzahlen stehen in den Überschriften.",
+                        );
+                    }
+                    if r.duplicate_candidates_truncated() {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 190, 90),
+                            format!(
+                                "Duplikatprüfung: {} der {} größten geeigneten Kandidaten zurückbehalten.",
+                                r.duplicate_candidates_retained, r.duplicate_candidates
+                            ),
+                        );
+                    }
                     ui.horizontal_wrapped(|ui| {
                         if ui.button("Duplikatkopien").clicked() {
                             select_dupes = true;
@@ -180,10 +235,13 @@ impl App {
                             trash_selected = true;
                         }
                     });
-                    if !r.errors.is_empty() {
+                    if !r.errors.is_empty() || r.suppressed_errors > 0 {
                         ui.colored_label(
                             Color32::from_rgb(255, 160, 120),
-                            format!("{} Pfade konnten nicht gelesen werden", r.errors.len()),
+                            format!(
+                                "{} Pfade konnten nicht gelesen werden",
+                                r.errors.len() as u64 + r.suppressed_errors
+                            ),
                         );
                     }
                     ui.separator();
@@ -191,7 +249,12 @@ impl App {
                         .id_salt("reclaim_results")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui_section(ui, "Duplikate", |ui| {
+                            let duplicate_title = result_count_label(
+                                "Duplikate",
+                                r.duplicate_groups.len(),
+                                r.result_counts.duplicate_groups,
+                            );
+                            ui_section(ui, &duplicate_title, |ui| {
                                 if r.duplicate_groups.is_empty() {
                                     ui_empty(ui);
                                 }
@@ -223,8 +286,9 @@ impl App {
                             });
                             ui_items(
                                 ui,
-                                "Grosse Dateien",
+                                "Große Dateien",
                                 &r.large_files,
+                                r.result_counts.large_files,
                                 &mut selected,
                                 &mut reveal,
                             );
@@ -232,6 +296,7 @@ impl App {
                                 ui,
                                 "Alte Dateien",
                                 &r.stale_files,
+                                r.result_counts.stale_files,
                                 &mut selected,
                                 &mut reveal,
                             );
@@ -239,6 +304,7 @@ impl App {
                                 ui,
                                 "Leere Dateien",
                                 &r.empty_files,
+                                r.result_counts.empty_files,
                                 &mut selected,
                                 &mut reveal,
                             );
@@ -246,16 +312,61 @@ impl App {
                                 ui,
                                 "Leere Ordner",
                                 &r.empty_dirs,
+                                r.result_counts.empty_dirs,
                                 &mut selected,
                                 &mut reveal,
                             );
-                            ui_items(ui, "Cleanup-Ziele", &r.cleanup, &mut selected, &mut reveal);
+                            ui_items(
+                                ui,
+                                "Bereinigungsziele",
+                                &r.cleanup,
+                                r.result_counts.cleanup,
+                                &mut selected,
+                                &mut reveal,
+                            );
                         });
                 } else {
-                    ui.colored_label(Color32::from_gray(140), "Kein lokaler Reclaim-Scan aktiv.");
+                    match run_state {
+                        StorageRunState::Idle => {
+                            ui.colored_label(
+                                Color32::from_gray(150),
+                                "Wählen Sie eine Quelle. Es startet kein Scan automatisch.",
+                            );
+                        }
+                        StorageRunState::Canceled => {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 190, 90),
+                                "Scan abgebrochen. Ein neuer Scan startet nur nach Ihrer Auswahl.",
+                            );
+                        }
+                        StorageRunState::Partial => {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 190, 90),
+                                format!("Teilresultat: {issue_count} Pfad(e) konnten nicht gelesen werden."),
+                            );
+                        }
+                        StorageRunState::Failed => {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 120, 100),
+                                format!(
+                                    "Scan fehlgeschlagen: {}",
+                                    first_issue
+                                        .clone()
+                                        .unwrap_or_else(|| "Unbekannter Fehler".to_string())
+                                ),
+                            );
+                        }
+                        StorageRunState::Running | StorageRunState::Complete => {}
+                    }
                 }
             });
 
+        if panel != self.analytics_panel {
+            match panel {
+                AnalyticsPanel::Treemap => self.cancel_reclaim_scan(),
+                AnalyticsPanel::Reclaim => self.cancel_analytics_scan(),
+            }
+        }
         self.analytics_panel = panel;
         self.reclaim_large_min_gb = large_gb;
         self.reclaim_stale_days = stale_days;
@@ -273,129 +384,27 @@ impl App {
             self.cancel_reclaim_scan();
         }
         if pick_folder {
-            let init = report
+            let init = source
                 .as_ref()
-                .map(|r| r.root.clone())
+                .map(StorageScanSource::root)
+                .map(str::to_string)
                 .unwrap_or_else(|| self.analytics_default_root());
             self.open_picker(PickerPurpose::ReclaimFolder, &init);
-        } else if let Some(root) = rescan {
-            self.start_reclaim_scan(root);
+        } else if let Some(scan_source) = rescan {
+            self.start_reclaim_source(scan_source);
         }
-        if let Some(path) = reveal {
-            self.open_in_explorer(&path);
+        if let (Some(path), Some(scan_source)) = (reveal, source.as_ref()) {
+            let parent = path
+                .rsplit_once('/')
+                .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                .unwrap_or(scan_source.root());
+            self.navigate_storage_source(scan_source, parent);
+            self.show_analytics = false;
         }
         if !open {
             self.cancel_reclaim_scan();
+            self.cancel_analytics_scan();
             self.show_analytics = false;
         }
     }
-}
-
-fn ui_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(title)
-        .default_open(true)
-        .show(ui, |ui| add(ui));
-}
-
-fn ui_items(
-    ui: &mut egui::Ui,
-    title: &str,
-    items: &[crate::analytics::ReclaimItem],
-    selected: &mut HashSet<String>,
-    reveal: &mut Option<String>,
-) {
-    egui::CollapsingHeader::new(format!("{} ({})", title, items.len()))
-        .default_open(false)
-        .show(ui, |ui| {
-            if items.is_empty() {
-                ui_empty(ui);
-            }
-            for item in items {
-                ui_item(ui, item, selected, reveal, false);
-            }
-        });
-}
-
-fn ui_item(
-    ui: &mut egui::Ui,
-    item: &crate::analytics::ReclaimItem,
-    selected: &mut HashSet<String>,
-    reveal: &mut Option<String>,
-    first_duplicate: bool,
-) {
-    ui.horizontal(|ui| {
-        let mut on = selected.contains(&item.path);
-        if ui.checkbox(&mut on, "").changed() {
-            if on {
-                selected.insert(item.path.clone());
-            } else {
-                selected.remove(&item.path);
-            }
-        }
-        ui.label(RichText::new(format_bytes(item.size)).monospace());
-        if first_duplicate {
-            ui.label(
-                RichText::new("behalten")
-                    .small()
-                    .color(Color32::from_gray(140)),
-            );
-        }
-        let date = if item.mtime_ms > 0 {
-            format_date(item.mtime_ms)
-        } else {
-            "-".to_string()
-        };
-        ui.label(RichText::new(date).small().color(Color32::from_gray(150)));
-        ui.add(egui::Label::new(&item.name).truncate())
-            .on_hover_text(&item.path);
-        if !item.reason.is_empty() {
-            ui.label(
-                RichText::new(format!("{} · {}", item.reason, item.confidence.label()))
-                    .small()
-                    .color(Color32::from_gray(150)),
-            );
-        } else {
-            ui.label(
-                RichText::new(item.confidence.label())
-                    .small()
-                    .color(Color32::from_gray(150)),
-            );
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Anzeigen").clicked() {
-                *reveal = Some(item.path.clone());
-            }
-        });
-    });
-}
-
-fn ui_empty(ui: &mut egui::Ui) {
-    ui.colored_label(Color32::from_gray(120), "(keine)");
-}
-
-fn select_items(selected: &mut HashSet<String>, items: &[crate::analytics::ReclaimItem]) {
-    for item in items {
-        if item.confidence.quick_selectable() {
-            selected.insert(item.path.clone());
-        }
-    }
-}
-
-fn selected_bytes(report: &crate::analytics::ReclaimReport, selected: &HashSet<String>) -> u64 {
-    let mut seen = HashSet::new();
-    let mut total = 0u64;
-    for item in report
-        .large_files
-        .iter()
-        .chain(report.stale_files.iter())
-        .chain(report.empty_files.iter())
-        .chain(report.empty_dirs.iter())
-        .chain(report.cleanup.iter())
-        .chain(report.duplicate_groups.iter().flat_map(|g| g.items.iter()))
-    {
-        if selected.contains(&item.path) && seen.insert(item.path.as_str()) {
-            total = total.saturating_add(item.size);
-        }
-    }
-    total
 }

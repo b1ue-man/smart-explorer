@@ -2,7 +2,7 @@
 name = "smart-explorer-share-server"
 version = "0.1.0"
 edition = "2021"
-description = "Rendezvous/signaling server for Smart Explorer peer file sharing — routes discovery only, never file data."
+description = "Untrusted Smart Explorer signaling server with an optional Iroh encrypted-traffic relay."
 
 [[bin]]
 name = "se-share-server"

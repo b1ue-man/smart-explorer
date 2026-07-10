@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::table_accessibility::TableRowSemantics;
 use super::*;
 
 impl App {
@@ -86,27 +87,35 @@ impl App {
                     let e = &self.entries[entry_idx];
                     let selected = self.selection.contains(&e.key());
                     row.set_selected(selected);
+                    let row_semantics = TableRowSemantics::new(
+                        e.name.as_ref(),
+                        e.path.as_ref(),
+                        e.is_dir,
+                        selected,
+                    );
 
-                    let mut handle_resp = |resp: egui::Response, ui: &egui::Ui| {
-                        if resp.clicked() {
-                            let m = ui.input(|i| {
-                                (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
-                            });
-                            row_click = Some((entry_idx, m.0, m.1));
-                        }
-                        if resp.double_clicked() {
-                            row_dblclick = Some(entry_idx);
-                        }
-                        if resp.secondary_clicked() {
-                            row_rclick = Some(entry_idx);
-                        }
-                        // Dragging a row begins a file drag (resolved after the
-                        // table). The rubber-band bails when a drag is active, so
-                        // these don't fight.
-                        if resp.drag_started() {
-                            drag_start = Some(entry_idx);
-                        }
-                    };
+                    let mut handle_resp =
+                        |resp: egui::Response, ui: &egui::Ui, column: &str, value: &str| {
+                            row_semantics.annotate_cell(&resp, column, value);
+                            if resp.clicked() {
+                                let m = ui.input(|i| {
+                                    (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
+                                });
+                                row_click = Some((entry_idx, m.0, m.1));
+                            }
+                            if resp.double_clicked() {
+                                row_dblclick = Some(entry_idx);
+                            }
+                            if resp.secondary_clicked() {
+                                row_rclick = Some(entry_idx);
+                            }
+                            // Dragging a row begins a file drag (resolved after the
+                            // table). The rubber-band bails when a drag is active, so
+                            // these don't fight.
+                            if resp.drag_started() {
+                                drag_start = Some(entry_idx);
+                            }
+                        };
 
                     let handle_cell = |ui: &mut egui::Ui, content: &str, right_align: bool| {
                         let cell_w = ui.available_width();
@@ -163,7 +172,7 @@ impl App {
                             );
                         }
                         paint_cell_text(ui, rect, e.name.as_ref(), false, color, indent + 20.0);
-                        handle_resp(resp, ui);
+                        handle_resp(resp, ui, "Name", e.name.as_ref());
                     });
 
                     // ─── Path (relative) ───────────────────────────────
@@ -183,7 +192,7 @@ impl App {
                             e.path.to_string()
                         };
                         let resp = handle_cell(ui, &rel, false);
-                        handle_resp(resp, ui);
+                        handle_resp(resp, ui, "Pfad", &rel);
                     });
 
                     // ─── Size ──────────────────────────────────────────
@@ -194,29 +203,32 @@ impl App {
                             format_bytes(e.size)
                         };
                         let resp = handle_cell(ui, &txt, true);
-                        handle_resp(resp, ui);
+                        handle_resp(resp, ui, "Größe", &txt);
                     });
 
                     // ─── Dates ─────────────────────────────────────────
                     row.col(|ui| {
-                        let resp = handle_cell(ui, &format_date(e.mtime_ms), false);
-                        handle_resp(resp, ui);
+                        let value = format_date(e.mtime_ms);
+                        let resp = handle_cell(ui, &value, false);
+                        handle_resp(resp, ui, "Geändert", &value);
                     });
                     row.col(|ui| {
-                        let resp = handle_cell(ui, &format_date(e.btime_ms), false);
-                        handle_resp(resp, ui);
+                        let value = format_date(e.btime_ms);
+                        let resp = handle_cell(ui, &value, false);
+                        handle_resp(resp, ui, "Erstellt", &value);
                     });
 
                     // ─── Ext ───────────────────────────────────────────
                     row.col(|ui| {
                         let resp = handle_cell(ui, e.ext.as_ref(), false);
-                        handle_resp(resp, ui);
+                        handle_resp(resp, ui, "Typ", e.ext.as_ref());
                     });
 
                     // ─── Depth ─────────────────────────────────────────
                     row.col(|ui| {
-                        let resp = handle_cell(ui, &format!("{}", e.depth), true);
-                        handle_resp(resp, ui);
+                        let value = e.depth.to_string();
+                        let resp = handle_cell(ui, &value, true);
+                        handle_resp(resp, ui, "Tiefe", &value);
                     });
                 });
             });
@@ -359,152 +371,15 @@ impl App {
             }
         }
 
-        // ─── Rubber-band selection + empty-space interactions ─────────────
-        let table_rect = ui.min_rect();
-        let body_viewport = egui::Rect::from_min_max(
-            egui::pos2(table_rect.left(), table_rect.top() + 24.0),
-            table_rect.max,
-        );
-
-        let (primary_pressed, primary_down, primary_released, ptr_pos, ctrl_now, secondary_clicked) =
-            ui.input(|i| {
-                (
-                    i.pointer.primary_pressed(),
-                    i.pointer.primary_down(),
-                    i.pointer.primary_released(),
-                    i.pointer.latest_pos(),
-                    i.modifiers.ctrl || i.modifiers.command,
-                    i.pointer.secondary_clicked(),
-                )
-            });
-
-        // base_y maps content row i to screen y: row_top(i) = base_y + i*row_h
-        let base_y = visible_rows
-            .first()
-            .map(|&(idx, rect)| rect.top() - idx as f32 * row_h);
-
-        let anything_dragged = ui.ctx().dragged_id().is_some();
-
-        // A row was interacted with this frame? Then the pointer is over a row,
-        // not empty space — the rubber-band / empty-space-clear logic must not
-        // touch the selection that the row handlers just set.
         let row_hit = row_click.is_some() || row_dblclick.is_some() || row_rclick.is_some();
-
-        if primary_pressed && !anything_dragged && !self.band_suppressed {
-            if let Some(p) = ptr_pos {
-                if body_viewport.contains(p) {
-                    // Store the press in SCREEN coordinates so the drag-distance
-                    // test is stable even if the table's base-Y shifts a pixel
-                    // when layout settles (which previously could both spuriously
-                    // start a band and mis-clear the bottom row's selection).
-                    self.band_press = Some((p.x, p.y));
-                    self.band_base = if ctrl_now {
-                        self.selection.clone()
-                    } else {
-                        HashSet::new()
-                    };
-                }
-            }
-        }
-
-        if let Some((press_x, press_y)) = self.band_press.filter(|_| !self.band_suppressed) {
-            if anything_dragged {
-                // A column-resize (or other) drag claimed the pointer.
-                self.band_press = None;
-                self.band_active = false;
-            } else if primary_down {
-                if let (Some(p), Some(by)) = (ptr_pos, base_y) {
-                    if self.band_active
-                        || (p.y - press_y).abs() > 4.0
-                        || (p.x - press_x).abs() > 4.0
-                    {
-                        self.band_active = true;
-                        let (lo_y, hi_y) = if press_y < p.y {
-                            (press_y, p.y)
-                        } else {
-                            (p.y, press_y)
-                        };
-                        // Map both screen endpoints to rows via the current base-Y.
-                        let lo_off = lo_y - by;
-                        let hi_off = hi_y - by;
-                        let mut sel = self.band_base.clone();
-                        if total_rows > 0 && hi_off >= 0.0 {
-                            let lo_row = (lo_off / row_h).floor().max(0.0) as usize;
-                            let hi_row =
-                                ((hi_off / row_h).floor() as isize).min(total_rows as isize - 1);
-                            if hi_row >= 0 && lo_row < total_rows {
-                                for r in lo_row..=(hi_row as usize) {
-                                    sel.insert(self.entries[self.view[r].0].path.clone());
-                                }
-                            }
-                        }
-                        self.selection = sel;
-
-                        // Draw the band (screen coords, clamped to the viewport)
-                        let y0 = lo_y.max(body_viewport.top());
-                        let y1 = hi_y.min(body_viewport.bottom());
-                        let x0 = press_x.min(p.x).max(body_viewport.left());
-                        let x1 = press_x.max(p.x).min(body_viewport.right());
-                        if y1 > y0 && x1 > x0 {
-                            let rect =
-                                egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
-                            let painter = ui.painter();
-                            painter.rect_filled(
-                                rect,
-                                0.0,
-                                Color32::from_rgba_unmultiplied(90, 140, 255, 36),
-                            );
-                            painter.rect_stroke(
-                                rect,
-                                0.0,
-                                egui::Stroke::new(1.0, Color32::from_rgb(90, 140, 255)),
-                            );
-                        }
-
-                        // Auto-scroll when the pointer leaves the viewport
-                        if p.y > body_viewport.bottom() - 4.0 {
-                            let bottom_row = (((body_viewport.bottom() - by) / row_h) as usize + 2)
-                                .min(total_rows.saturating_sub(1));
-                            self.pending_scroll_row = Some(bottom_row);
-                        } else if p.y < body_viewport.top() + 4.0 {
-                            let top_row = (((body_viewport.top() - by) / row_h).max(0.0) as usize)
-                                .saturating_sub(2);
-                            self.pending_scroll_row = Some(top_row);
-                        }
-                        ui.ctx().request_repaint();
-                    }
-                }
-            }
-            if primary_released {
-                // Click (no drag) on empty space below the rows clears the
-                // selection, like Explorer — but ONLY if the click didn't land
-                // on a row (otherwise we'd wipe the just-made selection).
-                if !self.band_active && !row_hit {
-                    if let (Some(p), Some(by)) = (ptr_pos, base_y) {
-                        let last_bottom = by + total_rows as f32 * row_h;
-                        if p.y > last_bottom + 2.0 && body_viewport.contains(p) {
-                            self.selection.clear();
-                            self.cursor = None;
-                        }
-                    }
-                }
-                self.band_press = None;
-                self.band_active = false;
-            }
-        }
-
-        // Right-click on empty space → folder background menu
-        if secondary_clicked && row_rclick.is_none() {
-            if let Some(p) = ptr_pos {
-                let on_empty = match base_y {
-                    Some(by) => p.y > by + total_rows as f32 * row_h,
-                    None => true,
-                };
-                if body_viewport.contains(p) && on_empty {
-                    self.show_background_menu();
-                }
-            }
-        }
+        self.update_table_background_interaction(
+            ui,
+            &visible_rows,
+            row_h,
+            total_rows,
+            row_hit,
+            row_rclick.is_some(),
+        );
 
         // Queue icon extraction for any type seen this frame but not cached.
         for key in needed_icons {

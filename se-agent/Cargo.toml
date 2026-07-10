@@ -1,5 +1,6 @@
 # Standalone minimal build of the SSH remote agent (`se-agent`), kept OUT of the
-# app crate so it pulls ONLY rayon+std — no ring/TLS/GUI — and therefore
+# app crate so it pulls only rayon plus the tiny libc syscall bindings — no
+# ring/TLS/GUI — and therefore
 # cross-compiles to static musl for arbitrary Linux servers without a musl C
 # toolchain. It shares the protocol/walk source with the app via #[path] include
 # of native/src/agent_proto.rs, so there is one definition. See
@@ -16,6 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 rayon = "1.10"
+
+[target.'cfg(unix)'.dependencies]
+# Atomic no-replace promotion uses renameat2(RENAME_NOREPLACE) on Linux.
+libc = "0.2"
 
 [profile.release]
 opt-level = "z"

@@ -13,6 +13,14 @@ impl GDriveBackend {
         Ok(t.access_token.clone())
     }
 
+    /// Refresh even when the cached expiry has not elapsed. Drive can revoke
+    /// an access token early; resumable requests retry one 401 with this path.
+    pub(super) fn force_refresh_bearer(&self) -> VfsResult<String> {
+        let mut tokens = self.tokens_guard()?;
+        *tokens = cloud::refresh_access(Provider::GDrive).map_err(err)?;
+        Ok(tokens.access_token.clone())
+    }
+
     pub(super) fn get_json(&self, url: &str) -> VfsResult<serde_json::Value> {
         let auth = self.bearer()?;
         let bearer = format!("Bearer {}", auth);

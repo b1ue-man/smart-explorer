@@ -42,6 +42,22 @@ fn local_list_and_stat() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[cfg(unix)]
+#[test]
+fn local_list_rejects_non_unicode_names() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = temp_dir("non_unicode");
+    let invalid = OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
+    std::fs::write(dir.join(invalid), b"data").unwrap();
+    let backend = LocalBackend::new(&fwd(&dir));
+
+    let error = backend.list_dir(&fwd(&dir)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn local_read_write_copy_rename_remove() {
     let dir = temp_dir("rw");
@@ -99,6 +115,9 @@ fn copy_file_default_impl_streams() {
         }
         fn rename(&self, s: &str, d: &str) -> VfsResult<()> {
             self.0.rename(s, d)
+        }
+        fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+            self.0.promote_staged(staged, destination)
         }
         fn remove_file(&self, p: &str) -> VfsResult<()> {
             self.0.remove_file(p)
@@ -368,6 +387,55 @@ fn caching_backend_stat_cache_invalidates_after_mutation() {
     assert_eq!(cached.stat("/x/a.txt").unwrap().name, "from-stat");
     assert_eq!(inner.list_hits.load(Ordering::SeqCst), 1);
     assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn caching_backend_rename_invalidates_cached_descendants() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counter(AtomicUsize);
+    impl Backend for Counter {
+        fn scheme(&self) -> Scheme {
+            Scheme::Sftp
+        }
+        fn root_display(&self) -> String {
+            "/".into()
+        }
+        fn list_dir(&self, _path: &str) -> VfsResult<Vec<VfsMeta>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+        fn stat(&self, _path: &str) -> VfsResult<VfsMeta> {
+            Err(io::ErrorKind::NotFound.into())
+        }
+        fn open_read(&self, _path: &str) -> VfsResult<Box<dyn Read + Send>> {
+            Err(io::ErrorKind::Unsupported.into())
+        }
+        fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
+            Err(io::ErrorKind::Unsupported.into())
+        }
+        fn rename(&self, _source: &str, _destination: &str) -> VfsResult<()> {
+            Ok(())
+        }
+        fn remove_file(&self, _path: &str) -> VfsResult<()> {
+            Ok(())
+        }
+        fn remove_dir(&self, _path: &str) -> VfsResult<()> {
+            Ok(())
+        }
+        fn mkdir_all(&self, _path: &str) -> VfsResult<()> {
+            Ok(())
+        }
+    }
+
+    let inner = Arc::new(Counter(AtomicUsize::new(0)));
+    let cached = CachingBackend::new(inner.clone() as BackendHandle);
+    cached.list_dir("/old/sub").unwrap();
+    cached.list_dir("/old/sub").unwrap();
+    assert_eq!(inner.0.load(Ordering::SeqCst), 1);
+    cached.rename("/old", "/new").unwrap();
+    cached.list_dir("/old/sub").unwrap();
+    assert_eq!(inner.0.load(Ordering::SeqCst), 2);
 }
 
 #[test]

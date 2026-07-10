@@ -110,12 +110,12 @@ fn staged_payload_path_binds_sha256_in_name() {
 #[test]
 fn pin_roundtrip() {
     let had = pinned_version();
-    archive::set_pin("0.3.6");
+    archive::set_pin("0.3.6").unwrap();
     assert!(is_auto_update_paused());
     assert_eq!(pinned_version().as_deref(), Some("0.3.6"));
-    resume_auto_update();
+    resume_auto_update().unwrap();
     assert!(!is_auto_update_paused());
     if let Some(v) = had {
-        archive::set_pin(&v);
+        archive::set_pin(&v).unwrap();
     }
 }

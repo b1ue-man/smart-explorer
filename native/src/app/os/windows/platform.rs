@@ -5,15 +5,18 @@ use super::shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
 
 pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
     use windows::core::PCWSTR;
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO};
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_TASKMODAL, MB_YESNO,
+    };
     let t: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     let m: Vec<u16> = msg.encode_utf16().chain(Some(0)).collect();
     let r = unsafe {
         MessageBoxW(
-            None,
+            GetActiveWindow(),
             PCWSTR(m.as_ptr()),
             PCWSTR(t.as_ptr()),
-            MB_YESNO | MB_ICONWARNING,
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TASKMODAL,
         )
     };
     r == IDYES
@@ -162,8 +165,11 @@ pub(in crate::app) fn open_terminal_at(path: &str) {
     }
 }
 
-pub(in crate::app) fn spawn_updated_app(exe: &Path) {
-    let _ = std::process::Command::new(exe).arg("--updated").spawn();
+pub(in crate::app) fn spawn_updated_app(exe: &Path) -> std::io::Result<()> {
+    std::process::Command::new(exe)
+        .arg("--updated")
+        .spawn()
+        .map(|_| ())
 }
 
 pub(in crate::app) fn update_payload_name() -> &'static str {
@@ -234,8 +240,10 @@ pub(in crate::app) fn clipboard_file_ops_supported() -> bool {
     true
 }
 
-pub(in crate::app) fn drag_out_files(files: &[String]) {
-    crate::dragout::drag_out(files);
+pub(in crate::app) fn drag_out_files(
+    files: &[String],
+) -> Result<crate::dragout::DragOutOutcome, String> {
+    crate::dragout::drag_out(files).map_err(|error| error.to_string())
 }
 
 pub(in crate::app) fn os_drag_out_supported() -> bool {
@@ -282,6 +290,11 @@ pub(in crate::app) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::R
     }
 }
 
+pub(in crate::app) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
 pub(in crate::app) fn process_running(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{
@@ -290,7 +303,9 @@ pub(in crate::app) fn process_running(pid: u32) -> bool {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            return false;
+            // ERROR_INVALID_PARAMETER is the documented nonexistent-PID case.
+            // Access-denied and other failures are ambiguous, so fail closed.
+            return std::io::Error::last_os_error().raw_os_error() != Some(87);
         }
         let mut code = 0u32;
         let ok = GetExitCodeProcess(handle, &mut code);

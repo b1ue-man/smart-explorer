@@ -117,16 +117,42 @@ pub(crate) struct FsMeta {
     pub(crate) id: Option<String>,
 }
 
+/// One compact node in the bounded, post-order tree-walk stream. IDs are
+/// assigned parent-first, while nodes are emitted child-first so the receiver
+/// can assemble the final tree without retaining a second flat copy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsWalkNode {
+    pub(crate) id: u64,
+    pub(crate) parent: Option<u64>,
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) size: u64,
+}
+
+/// A deliberately small, additive classification for filesystem failures.
+/// The message remains the source of detail; this kind exists only where a
+/// caller must make a safe control-flow decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FsErrorKind {
+    NotFound,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
     ListDir { path: String },
     Stat { path: String },
+    WalkTree { path: String },
     Read { path: String },
     Write { path: String },
     WriteDone,
     MkdirAll { path: String },
     Rename { src: String, dst: String },
+    RenameNoReplace { src: String, dst: String },
+    PromoteStaged { staged: String, destination: String },
     CopyFile { src: String, dst: String },
     RemoveFile { path: String },
     RemoveDir { path: String },
@@ -135,12 +161,34 @@ pub(crate) enum FsRequest {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "r", rename_all = "snake_case")]
 pub(crate) enum FsResponse {
-    Entries { entries: Vec<FsMeta> },
-    Meta { meta: FsMeta },
-    Data { size: u64 },
+    Entries {
+        entries: Vec<FsMeta>,
+    },
+    Meta {
+        meta: FsMeta,
+    },
+    WalkBatch {
+        nodes: Vec<FsWalkNode>,
+        files: u64,
+        dirs: u64,
+        bytes: u64,
+    },
+    WalkDone {
+        files: u64,
+        dirs: u64,
+        bytes: u64,
+        nodes: u64,
+    },
+    Data {
+        size: u64,
+    },
     Ready,
     Ok,
-    Err { msg: String },
+    Err {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<FsErrorKind>,
+        msg: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

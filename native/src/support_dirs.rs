@@ -16,7 +16,7 @@ fn data_home() -> PathBuf {
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(".local").join("share");
         }
-        return std::env::temp_dir();
+        std::env::temp_dir()
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]

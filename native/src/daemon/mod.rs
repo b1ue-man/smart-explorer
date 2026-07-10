@@ -10,12 +10,40 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
+#[path = "os/shared/backend_budget.rs"]
+mod backend_budget;
+#[path = "os/shared/backend_delete.rs"]
+mod backend_delete;
 #[path = "os/shared/backend_server.rs"]
 mod backend_server;
+#[path = "os/shared/backend_transfer.rs"]
+mod backend_transfer;
+#[path = "os/shared/backend_tree_send.rs"]
+mod backend_tree_send;
+#[path = "os/shared/backend_walk.rs"]
+mod backend_walk;
 #[path = "os/shared/ipc.rs"]
 mod ipc;
+#[path = "os/shared/ipc_client.rs"]
+mod ipc_client;
+#[path = "os/shared/ipc_host.rs"]
+mod ipc_host;
+#[path = "os/shared/ipc_host_events.rs"]
+mod ipc_host_events;
+#[path = "os/shared/ipc_listener.rs"]
+mod ipc_listener;
+#[path = "os/shared/ipc_protocol.rs"]
+mod ipc_protocol;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/ipc_storage.rs"]
+mod ipc_storage;
+#[cfg(windows)]
+#[path = "os/windows/ipc_storage.rs"]
+mod ipc_storage;
 #[path = "os/shared/job.rs"]
 mod job;
+#[path = "os/shared/job_supervisor.rs"]
+mod job_supervisor;
 #[path = "os/shared/line.rs"]
 mod line;
 #[path = "os/shared/locks.rs"]
@@ -26,6 +54,8 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/platform.rs"]
 mod platform;
+#[path = "os/shared/request_workers.rs"]
+mod request_workers;
 #[path = "os/shared/schedule.rs"]
 mod schedule;
 #[path = "os/shared/state.rs"]
@@ -33,7 +63,7 @@ mod state;
 
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker, refresh_share_worker_checked, send_share_command, ShareWorkerSnapshot,
+    refresh_share_worker_checked, send_share_command, ShareWorkerSnapshot,
 };
 #[allow(unused_imports)]
 pub use platform::DriveInfo;

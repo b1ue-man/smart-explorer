@@ -11,7 +11,12 @@ impl App {
             None => return,
         };
         let mut open = true;
-        let mut save = false;
+        let existing_job = ed
+            .id
+            .as_ref()
+            .and_then(|id| self.sync_jobs.iter().find(|job| &job.id == id))
+            .cloned();
+        let mut job_to_save = None;
         let mut cancel = false;
         // Set when a "Durchsuchen" button is clicked → open the in-app picker
         // after `ed` is restored to self.job_editor (so the picker can write
@@ -298,10 +303,10 @@ impl App {
                         });
                         ui.end_row();
 
-                        ui.label("Befehl davor").on_hover_text("Vor dem Lauf ausführen (nur Hintergrund-Dienst)");
+                        ui.label("Befehl davor").on_hover_text("Vor dem Lauf ausführen (nur Hintergrund-Dienst). Ein Fehler bricht den Sync ab; es werden keine Dateien verändert.");
                         ui.add(egui::TextEdit::singleline(&mut ed.run_before).hint_text("optional").desired_width(360.0));
                         ui.end_row();
-                        ui.label("Befehl danach").on_hover_text("Nach dem Lauf ausführen (nur Hintergrund-Dienst)");
+                        ui.label("Befehl danach").on_hover_text("Nach jedem gestarteten Sync ausführen, auch bei Sync-Fehlern oder Konflikten (nicht nach Abbruch). Fehler werden im Ergebnis protokolliert.");
                         ui.add(egui::TextEdit::singleline(&mut ed.run_after).hint_text("optional").desired_width(360.0));
                         ui.end_row();
 
@@ -311,9 +316,16 @@ impl App {
                     });
                 });
                 ui.separator();
+                let validation = ed.build_sync_job(existing_job.as_ref());
+                if let Err(error) = &validation {
+                    ui.colored_label(Color32::from_rgb(230, 120, 120), error);
+                }
                 ui.horizontal(|ui| {
-                    if ui.button("✔ Speichern").clicked() {
-                        save = true;
+                    if ui
+                        .add_enabled(validation.is_ok(), egui::Button::new("✔ Speichern"))
+                        .clicked()
+                    {
+                        job_to_save = validation.ok();
                     }
                     if ui.button("Abbrechen").clicked() {
                         cancel = true;
@@ -324,102 +336,22 @@ impl App {
             // Dropped (taken at top) — leaving job_editor as None closes it.
             return;
         }
-        if save {
-            if ed.source.trim().is_empty() || ed.target.trim().is_empty() {
-                self.error_msg = Some("Quelle und Ziel dürfen nicht leer sein.".to_string());
-                self.job_editor = Some(ed); // keep the dialog open
-                return;
-            }
-            let name = if ed.name.trim().is_empty() {
-                let base = ed
-                    .source
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("Sync");
-                base.to_string()
-            } else {
-                ed.name.trim().to_string()
-            };
-            let ignore: Vec<String> = ed
-                .ignore
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            let mut job = match &ed.id {
-                // Editing: preserve id + last_run from the stored job.
-                Some(id) => {
-                    let mut j = self
-                        .sync_jobs
-                        .iter()
-                        .find(|j| &j.id == id)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            crate::syncjobs::SyncJob::new(
-                                name.clone(),
-                                ed.source.clone(),
-                                ed.target.clone(),
-                            )
-                        });
-                    j.name = name.clone();
-                    j.source = ed.source.trim().to_string();
-                    j.target = ed.target.trim().to_string();
-                    j
-                }
-                None => crate::syncjobs::SyncJob::new(
-                    name.clone(),
-                    ed.source.trim().to_string(),
-                    ed.target.trim().to_string(),
-                ),
-            };
-            job.direction = ed.direction;
-            job.conflict = ed.conflict;
-            job.retain_days = ed.retain_days.trim().parse().unwrap_or(30);
-            job.interval_min = ed.interval_min.trim().parse().unwrap_or(0);
-            job.include_hidden = ed.include_hidden;
-            job.ignore = ignore;
-            job.enabled = ed.enabled;
-            job.trigger = ed.trigger;
-            if let Some(m) = hm_to_min(&ed.cal_time) {
-                job.cal_time_min = m;
-            }
-            job.cal_weekdays = ed.cal_weekdays;
-            job.cal_monthday = ed.cal_monthday.trim().parse().unwrap_or(0).min(31);
-            job.rt_debounce_secs = ed.rt_debounce.trim().parse().unwrap_or(10);
-            job.connect_match = ed.connect_match.trim().to_string();
-            job.active_from_min = hm_to_min(&ed.active_from).unwrap_or(0);
-            job.active_to_min = hm_to_min(&ed.active_to).unwrap_or(0);
-            job.catch_up = ed.catch_up;
-            job.delete_policy = ed.delete_policy;
-            job.move_files = ed.move_files && ed.direction != crate::bisync::Direction::Both;
-            job.compare = ed.compare;
-            job.modify_window_sec = ed.modify_window.trim().parse().unwrap_or(0);
-            job.versioning_scheme = ed.versioning_scheme;
-            job.retain_count = ed.retain_count.trim().parse().unwrap_or(0);
-            job.use_recycle_bin = ed.use_recycle_bin;
-            job.max_delete = ed.max_delete.trim().parse().unwrap_or(0);
-            job.max_delete_pct = ed.max_delete_pct.trim().parse().unwrap_or(0);
-            job.filter_min_size_kb = ed.filter_min_size_kb.trim().parse().unwrap_or(0);
-            job.filter_max_size_kb = ed.filter_max_size_kb.trim().parse().unwrap_or(0);
-            job.filter_max_age_days = ed.filter_max_age_days.trim().parse().unwrap_or(0);
-            job.filter_min_age_days = ed.filter_min_age_days.trim().parse().unwrap_or(0);
-            job.bwlimit_kbps = ed.bwlimit_kbps.trim().parse().unwrap_or(0);
-            job.max_transfers = ed.max_transfers.trim().parse().unwrap_or(0);
-            job.atomic_copy = ed.atomic_copy;
-            job.verify = ed.verify;
-            job.retries = ed.retries.trim().parse().unwrap_or(0);
-            job.retry_delay_secs = ed.retry_delay_secs.trim().parse().unwrap_or(2);
-            job.run_before = ed.run_before.trim().to_string();
-            job.run_after = ed.run_after.trim().to_string();
+        if let Some(job) = job_to_save {
             match crate::syncjobs::upsert(&job) {
-                Ok(_) => {
-                    self.sync_jobs = crate::syncjobs::load();
-                    self.notice = Some((
-                        format!("✓ Setup „{}“ gespeichert", job.name),
-                        std::time::Instant::now(),
-                    ));
-                }
+                Ok(_) => match crate::syncjobs::load() {
+                    Ok(jobs) => {
+                        self.sync_jobs = jobs;
+                        self.notice = Some((
+                            format!("✓ Setup „{}“ gespeichert", job.name),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.error_msg = Some(format!(
+                            "Setup gespeichert, aber nicht neu geladen: {error}"
+                        ));
+                    }
+                },
                 Err(e) => {
                     self.error_msg = Some(format!("Setup speichern: {}", e));
                     self.job_editor = Some(ed);

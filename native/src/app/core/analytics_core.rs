@@ -80,19 +80,34 @@ impl App {
 
     /// Full `/`-path of the current drill focus.
     pub(in crate::app) fn analytics_focus_path(&self) -> String {
-        let root = self.analytics_root_path.trim_end_matches('/');
+        let root = self.analytics_root();
         if self.analytics_focus.is_empty() {
             root.to_string()
         } else {
-            format!("{}/{}", root, self.analytics_focus.join("/"))
+            format!(
+                "{}/{}",
+                root.trim_end_matches('/'),
+                self.analytics_focus.join("/")
+            )
         }
+    }
+
+    pub(in crate::app) fn analytics_root(&self) -> &str {
+        self.analytics_source
+            .as_ref()
+            .map(StorageScanSource::root)
+            .unwrap_or("")
     }
 
     /// Default scan target: the DRIVE ROOT of the current folder (WizTree-style
     /// whole-drive view) — never the app's own folder. Falls back to the current
     /// root for UNC / non-drive paths.
     pub(in crate::app) fn analytics_default_root(&self) -> String {
-        let rp = self.root_path.trim_end_matches('/');
+        let normalized = self.root_path.replace('\\', "/");
+        if normalized == "/" {
+            return normalized;
+        }
+        let rp = normalized.trim_end_matches('/');
         let b = rp.as_bytes();
         if b.len() >= 2 && b[1] == b':' {
             format!("{}:/", b[0] as char)
@@ -103,11 +118,16 @@ impl App {
 
     /// Map a full `/`-path back to focus segments relative to the scanned root.
     pub(in crate::app) fn analytics_path_to_focus(&self, full: &str) -> Vec<String> {
-        let root = self.analytics_root_path.trim_end_matches('/');
-        let rest = full
-            .strip_prefix(root)
-            .unwrap_or("")
-            .trim_start_matches('/');
+        let root = self.analytics_root().trim_end_matches('/');
+        let full = full.trim_end_matches('/');
+        let rest = if full == root {
+            ""
+        } else {
+            full.strip_prefix(root)
+                .filter(|rest| rest.starts_with('/'))
+                .unwrap_or("")
+                .trim_start_matches('/')
+        };
         if rest.is_empty() {
             Vec::new()
         } else {
@@ -125,42 +145,62 @@ impl App {
     /// Kick off a dedicated low-memory size scan of `root_path` on a background
     /// thread; the result lands via `poll_analytics_scan`.
     pub(in crate::app) fn start_analytics_scan(&mut self, root_path: String) {
-        let norm = root_path.trim_end_matches('/').to_string();
-        if norm.is_empty() {
+        self.start_analytics_source(StorageScanSource::local(root_path));
+    }
+
+    pub(in crate::app) fn start_analytics_source(&mut self, source: StorageScanSource) {
+        self.cancel_analytics_worker();
+        if source.root().is_empty() {
+            let detail = "Leeres Scan-Ziel".to_string();
+            self.analytics_source = None;
+            self.analytics_state = StorageRunState::Failed;
+            self.analytics_tree = None;
+            self.analytics_issues = vec![crate::analytics::ScanIssue {
+                path: String::new(),
+                detail: detail.clone(),
+            }];
+            self.analytics_suppressed_issues = 0;
+            self.push_app_error("Speicher-Analyse", detail);
             return;
-        }
-        if let Some(s) = &self.analytics_scan {
-            s.progress
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let p = crate::analytics::Progress::default();
         let (tx, rx) = crossbeam_channel::unbounded();
         let p2 = p.clone();
         // A bare drive letter ("C:") must become a root ("C:\") or read_dir
         // would target the drive's *current directory* instead of its root.
-        let sep = std::path::MAIN_SEPARATOR;
-        let mut native = norm.replace('/', std::path::MAIN_SEPARATOR_STR);
-        if native.len() == 2 && native.as_bytes()[1] == b':' {
-            native.push(sep);
-        }
-        let root_pb = PathBuf::from(native);
-        std::thread::spawn(move || {
-            let node = crate::analytics::scan(&root_pb, &p2);
-            let _ = tx.send(node);
-        });
-        self.analytics_scan = Some(AnalyticsScan {
-            rx,
-            progress: p,
-            root: norm.clone(),
-            started: Instant::now(),
-            cancel_requested: false,
-        });
-        self.analytics_root_path = norm;
-        self.analytics_backend = None;
+        let worker_source = source.clone();
+        let spawn = std::thread::Builder::new()
+            .name("storage-analytics".into())
+            .spawn(move || {
+                let outcome = scan_storage_source(worker_source, &p2);
+                let _ = tx.send(outcome);
+            });
+        self.analytics_source = Some(source.clone());
         self.analytics_focus.clear();
         self.analytics_tree = None;
+        self.analytics_issues.clear();
+        self.analytics_suppressed_issues = 0;
         self.analytics_invalidate();
+        match spawn {
+            Ok(_) => {
+                self.analytics_scan = Some(AnalyticsScan {
+                    rx,
+                    progress: p,
+                    root: source.display(),
+                    started: Instant::now(),
+                });
+                self.analytics_state = StorageRunState::Running;
+            }
+            Err(error) => {
+                let detail = format!("Scan-Thread konnte nicht starten: {error}");
+                self.analytics_state = StorageRunState::Failed;
+                self.analytics_issues.push(crate::analytics::ScanIssue {
+                    path: source.root().to_string(),
+                    detail: detail.clone(),
+                });
+                self.push_app_error("Speicher-Analyse", detail);
+            }
+        }
     }
 
     /// Kick off an analytics scan of a REMOTE folder via its VFS backend
@@ -171,88 +211,101 @@ impl App {
         root: String,
         label: String,
     ) {
-        let t = root.trim_end_matches('/');
-        let norm = if t.is_empty() {
-            "/".to_string()
-        } else {
-            t.to_string()
-        };
-        if let Some(s) = &self.analytics_scan {
-            s.progress
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let p = crate::analytics::Progress::default();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let p2 = p.clone();
-        let be = backend.clone();
-        let scan_root = norm.clone();
-        std::thread::spawn(move || {
-            // If the backend has a server-side agent, let IT walk the whole tree
-            // (one request, no per-dir round-trip) while streaming live progress
-            // into `p2`; else walk client-side.
-            let node = if be.supports_walk_tree() {
-                let prog = p2.clone();
-                let on_progress = move |files: u64, bytes: u64| -> bool {
-                    prog.files
-                        .store(files, std::sync::atomic::Ordering::Relaxed);
-                    prog.bytes
-                        .store(bytes, std::sync::atomic::Ordering::Relaxed);
-                    !prog.cancel.load(std::sync::atomic::Ordering::Relaxed)
-                };
-                match be.walk_tree(&scan_root, &on_progress) {
-                    Some(w) => crate::analytics::from_wire(w),
-                    None => crate::analytics::scan_backend(&*be, &scan_root, &p2),
-                }
-            } else {
-                crate::analytics::scan_backend(&*be, &scan_root, &p2)
-            };
-            let _ = tx.send(node);
-        });
-        self.analytics_scan = Some(AnalyticsScan {
-            rx,
-            progress: p,
-            root: if label.is_empty() {
-                norm.clone()
-            } else {
-                format!("{} · {}", label, norm)
-            },
-            started: Instant::now(),
-            cancel_requested: false,
-        });
-        self.analytics_root_path = norm;
-        self.analytics_backend = Some(backend);
-        self.analytics_focus.clear();
-        self.analytics_tree = None;
-        self.analytics_invalidate();
+        self.start_analytics_source(StorageScanSource::remote(backend, root, label));
     }
 
     /// Drain a finished analytics scan into the tree (called each frame).
     pub(in crate::app) fn poll_analytics_scan(&mut self) {
-        let mut got = None;
-        let mut canceled = false;
-        if let Some(scan) = &self.analytics_scan {
-            canceled = scan.cancel_requested;
-            if let Ok(node) = scan.rx.try_recv() {
-                got = Some(node);
+        let message = self.analytics_scan.as_ref().map(|scan| scan.rx.try_recv());
+        match message {
+            Some(Ok(outcome)) => {
+                self.analytics_scan = None;
+                self.analytics_state = outcome.status.into();
+                self.analytics_tree = outcome.tree;
+                self.analytics_issues = outcome.issues;
+                self.analytics_suppressed_issues = outcome.suppressed_issues;
+                self.analytics_invalidate();
+                self.log_analytics_outcome();
             }
-        }
-        if let Some(node) = got {
-            if !canceled {
-                self.analytics_tree = Some(node);
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.analytics_scan = None;
+                self.analytics_state = StorageRunState::Failed;
+                let detail = "Scan-Thread wurde ohne Ergebnis beendet".to_string();
+                self.analytics_issues.push(crate::analytics::ScanIssue {
+                    path: self.analytics_root().to_string(),
+                    detail: detail.clone(),
+                });
+                self.push_app_error("Speicher-Analyse", detail);
             }
-            self.analytics_scan = None;
-            self.analytics_invalidate();
+            _ => {}
         }
     }
 
     pub(in crate::app) fn cancel_analytics_scan(&mut self) {
-        if let Some(scan) = &mut self.analytics_scan {
-            scan.cancel_requested = true;
+        if self.cancel_analytics_worker() {
+            self.analytics_state = StorageRunState::Canceled;
+            self.analytics_issues.clear();
+            self.analytics_suppressed_issues = 0;
+        }
+    }
+
+    fn cancel_analytics_worker(&mut self) -> bool {
+        if let Some(scan) = self.analytics_scan.take() {
             scan.progress
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
         }
+    }
+
+    fn log_analytics_outcome(&mut self) {
+        if !matches!(
+            self.analytics_state,
+            StorageRunState::Partial | StorageRunState::Failed
+        ) {
+            return;
+        }
+        let first = self
+            .analytics_issues
+            .first()
+            .map(|issue| format!("{}: {}", issue.path, issue.detail))
+            .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
+        let count = self.analytics_issues.len() as u64 + self.analytics_suppressed_issues;
+        self.push_app_error(
+            "Speicher-Analyse",
+            format!("{count} Leseproblem(e); erstes Problem: {first}"),
+        );
+    }
+
+    pub(in crate::app) fn navigate_storage_source(
+        &mut self,
+        source: &StorageScanSource,
+        target: &str,
+    ) {
+        match source {
+            StorageScanSource::Local { .. } => self.remote = None,
+            StorageScanSource::Remote { backend, label, .. } => {
+                let same_backend = self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|remote| Arc::ptr_eq(&remote.backend, backend));
+                if !same_backend {
+                    self.remote = Some(crate::connect::RemoteState {
+                        backend: backend.clone(),
+                        label: label.clone(),
+                        agent_version: None,
+                        zip_return: None,
+                        sftp: None,
+                        account: None,
+                        endpoint_prefix: None,
+                    });
+                }
+            }
+        }
+        let native = target.replace('/', std::path::MAIN_SEPARATOR_STR);
+        self.start_scan(PathBuf::from(native));
     }
 
     pub(in crate::app) fn ui_summary(&mut self, ui: &mut egui::Ui) {
@@ -330,5 +383,45 @@ impl App {
             }
         }
         None
+    }
+}
+
+fn scan_storage_source(
+    source: StorageScanSource,
+    progress: &crate::analytics::Progress,
+) -> crate::analytics::ScanOutcome {
+    match source {
+        StorageScanSource::Local { root } => {
+            let native = root.replace('/', std::path::MAIN_SEPARATOR_STR);
+            crate::analytics::scan(&PathBuf::from(native), progress)
+        }
+        StorageScanSource::Remote { backend, root, .. } => {
+            backend.invalidate_cache();
+            if !backend.supports_walk_tree() {
+                return crate::analytics::scan_backend(&*backend, &root, progress);
+            }
+            let live = progress.clone();
+            let on_progress = move |files: u64, bytes: u64| -> bool {
+                live.files
+                    .store(files, std::sync::atomic::Ordering::Relaxed);
+                live.bytes
+                    .store(bytes, std::sync::atomic::Ordering::Relaxed);
+                !live.cancel.load(std::sync::atomic::Ordering::Relaxed)
+            };
+            match backend.walk_tree(&root, &on_progress) {
+                Ok(Some(tree)) if !progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
+                    crate::analytics::ScanOutcome::complete(crate::analytics::from_wire(tree))
+                }
+                Ok(Some(_)) => crate::analytics::ScanOutcome::canceled(),
+                Ok(None) if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
+                    crate::analytics::ScanOutcome::canceled()
+                }
+                Ok(None) => crate::analytics::scan_backend(&*backend, &root, progress),
+                Err(_) if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
+                    crate::analytics::ScanOutcome::canceled()
+                }
+                Err(error) => crate::analytics::ScanOutcome::failed(root, error.to_string()),
+            }
+        }
     }
 }

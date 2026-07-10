@@ -18,7 +18,8 @@ fn prune_count_keeps_newest_n() {
             days: 0,
             count: 2,
         },
-    );
+    )
+    .unwrap();
     assert!(v.join("400").exists() && v.join("300").exists());
     assert!(!v.join("200").exists() && !v.join("100").exists());
     std::fs::remove_dir_all(&v).ok();
@@ -51,7 +52,7 @@ fn max_delete_guard_aborts_mass_deletion() {
     let o2 = super::super::run(&ba, &ra, &bb, &rb, opts, &cancel, &f);
     assert!(!o2.errors.is_empty(), "guard reports an abort");
     assert!(b.join("f1.txt").exists(), "nothing deleted when aborted");
-    let pair = pair_id(&ra, &rb);
+    let pair = pair_id_for(&ba, &ra, &bb, &rb);
     let _ = std::fs::remove_file(baseline_path(&pair));
     let _ = std::fs::remove_dir_all(versions_dir(&pair));
     for d in [&a, &b] {

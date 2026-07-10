@@ -1,9 +1,13 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 4;
+pub const PROTO_VERSION: u32 = 6;
 
 /// Payload chunk size for streamed byte transfers.
 pub const CHUNK: usize = 256 * 1024;
+
+/// Per-request frame backlog. At the maximum data-frame size this permits
+/// about 8 MiB of pipelining while applying end-to-end streaming backpressure.
+pub const TRANSFER_FRAME_BACKLOG: usize = 32;
 
 /// Backend-neutral directory entry.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -53,6 +57,10 @@ pub enum Frame {
     Dir(Vec<WireMeta>),
     Stat(String),
     Meta(WireMeta),
+    /// Fallible existence probe. Only a genuine not-found result maps to
+    /// `Exists(false)`; all other failures are returned as `Err`.
+    TryExists(String),
+    Exists(bool),
     WalkTree(String),
     Tree(WireNode),
     /// Read `len` bytes from `offset` (len 0 = to EOF) -> `Data`* `End`.
@@ -73,6 +81,11 @@ pub enum Frame {
         src: String,
         dst: String,
     },
+    /// Atomically rename `src` only when `dst` does not exist.
+    RenameNoReplace {
+        src: String,
+        dst: String,
+    },
     Remove {
         path: String,
         recursive: bool,
@@ -82,7 +95,8 @@ pub enum Frame {
     GetTree(String),
     /// Receive an entire subtree.
     PutTree(String),
-    /// Header for one entry inside a Get/PutTree stream.
+    /// Header for one entry inside a Get/PutTree stream. `rel` must be a
+    /// validated, non-empty path relative to the requested transfer root.
     TreeEntry {
         rel: String,
         is_dir: bool,

@@ -195,39 +195,48 @@ impl SyncJob {
     /// (min_size, max_size, after_mtime_ms, before_mtime_ms) for the walk filter,
     /// resolving the age windows against `now_secs`.
     pub fn filter_bounds(&self, now_secs: i64) -> (u64, u64, i64, i64) {
-        let min_size = self.filter_min_size_kb.saturating_mul(1024);
-        let max_size = self.filter_max_size_kb.saturating_mul(1024);
-        let after = if self.filter_max_age_days > 0 {
-            (now_secs - self.filter_max_age_days as i64 * 86_400) * 1000
-        } else {
-            0
-        };
-        let before = if self.filter_min_age_days > 0 {
-            (now_secs - self.filter_min_age_days as i64 * 86_400) * 1000
-        } else {
-            0
-        };
-        (min_size, max_size, after, before)
+        self.checked_filter_bounds(now_secs)
+            // Contradictory bounds reject every possible file. Callers that do
+            // not surface validation errors therefore still fail closed.
+            .unwrap_or((u64::MAX, 1, 0, 0))
     }
 
-    /// Compile the ignore patterns into a GlobSet (bad patterns are skipped).
+    pub fn checked_filter_bounds(&self, now_secs: i64) -> Result<(u64, u64, i64, i64), String> {
+        self.validate()?;
+        let min_size = self
+            .filter_min_size_kb
+            .checked_mul(1024)
+            .ok_or_else(|| "filter_min_size_kb overflows bytes".to_string())?;
+        let max_size = self
+            .filter_max_size_kb
+            .checked_mul(1024)
+            .ok_or_else(|| "filter_max_size_kb overflows bytes".to_string())?;
+        let after = checked_age_bound(now_secs, self.filter_max_age_days, false)?;
+        let before = checked_age_bound(now_secs, self.filter_min_age_days, true)?;
+        Ok((min_size, max_size, after, before))
+    }
+
+    /// Compile the ignore patterns. Invalid input yields a match-all set so an
+    /// unchecked caller skips every path instead of silently dropping a rule.
     pub fn glob_set(&self) -> globset::GlobSet {
-        let mut b = globset::GlobSetBuilder::new();
-        for pat in &self.ignore {
-            let pat = pat.trim();
-            if pat.is_empty() {
-                continue;
-            }
-            if let Ok(g) = globset::Glob::new(pat) {
-                b.add(g);
-            }
-        }
-        b.build().unwrap_or_else(|_| crate::bisync::empty_globset())
+        self.checked_glob_set()
+            .unwrap_or_else(|_| rejecting_glob_set())
     }
 
     /// Engine options derived from this job's settings.
     pub fn opts(&self, dry_run: bool) -> crate::bisync::BisyncOptions {
-        crate::bisync::BisyncOptions {
+        self.checked_opts(dry_run)
+            .unwrap_or_else(|_| crate::bisync::BisyncOptions {
+                dry_run: true,
+                delete: DeletePolicy::NoDelete,
+                move_files: false,
+                ..Default::default()
+            })
+    }
+
+    pub fn checked_opts(&self, dry_run: bool) -> Result<crate::bisync::BisyncOptions, String> {
+        self.validate()?;
+        Ok(crate::bisync::BisyncOptions {
             direction: self.direction,
             conflict: self.conflict,
             reversible: true,
@@ -235,7 +244,10 @@ impl SyncJob {
             delete: self.delete_policy,
             move_files: self.move_files,
             compare: self.compare,
-            modify_window_ms: self.modify_window_sec as i64 * 1000,
+            modify_window_ms: i64::try_from(self.modify_window_sec)
+                .map_err(|_| "modify_window_sec is too large".to_string())?
+                .checked_mul(1000)
+                .ok_or_else(|| "modify_window_sec overflows milliseconds".to_string())?,
             versioning: crate::bisync::Versioning {
                 scheme: self.versioning_scheme,
                 days: self.retain_days,
@@ -244,14 +256,53 @@ impl SyncJob {
             use_recycle: self.use_recycle_bin,
             max_delete: self.max_delete,
             max_delete_pct: self.max_delete_pct,
-            bwlimit_bps: self.bwlimit_kbps.saturating_mul(1024),
-            max_transfers: self.max_transfers as usize,
+            bwlimit_bps: self
+                .bwlimit_kbps
+                .checked_mul(1024)
+                .ok_or_else(|| "bwlimit_kbps overflows bytes per second".to_string())?,
+            max_transfers: usize::try_from(self.max_transfers)
+                .map_err(|_| "max_transfers is too large for this platform".to_string())?,
             atomic: self.atomic_copy,
             verify: self.verify,
-            retries: self.retries as u32,
+            retries: u32::try_from(self.retries)
+                .map_err(|_| "retries must not exceed 4294967295".to_string())?,
             retry_delay_secs: self.retry_delay_secs,
-        }
+        })
     }
+}
+
+fn checked_age_bound(now_secs: i64, days: u64, is_upper_bound: bool) -> Result<i64, String> {
+    if days == 0 {
+        return Ok(0);
+    }
+    let seconds = days
+        .checked_mul(86_400)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| "filter age overflows seconds".to_string())?;
+    let cutoff_secs = now_secs
+        .checked_sub(seconds)
+        .ok_or_else(|| "filter age underflows the timestamp".to_string())?;
+    let cutoff_ms = cutoff_secs
+        .checked_mul(1000)
+        .ok_or_else(|| "filter age overflows milliseconds".to_string())?;
+    if cutoff_ms <= 0 {
+        if is_upper_bound {
+            return Err("minimum-age filter predates the supported timestamp range".into());
+        }
+        return Ok(0);
+    }
+    Ok(cutoff_ms)
+}
+
+fn rejecting_glob_set() -> globset::GlobSet {
+    let mut builder = globset::GlobSetBuilder::new();
+    builder.add(
+        globset::Glob::new("**")
+            .expect("the built-in match-all glob must remain valid for fail-closed filtering"),
+    );
+    builder
+        .build()
+        .expect("the built-in match-all glob set must compile")
 }
 
 #[cfg(test)]
@@ -266,5 +317,40 @@ mod tests {
         assert!(gs.is_match("foo/bar.tmp"));
         assert!(gs.is_match("cache/x/y"));
         assert!(!gs.is_match("keep/me.txt"));
+    }
+
+    #[test]
+    fn invalid_glob_and_numeric_settings_fail_closed() {
+        let mut j = SyncJob::new("x".into(), "a".into(), "b".into());
+        j.ignore = vec!["[".into()];
+        assert!(j.glob_set().is_match("anything/at/all"));
+
+        j.ignore.clear();
+        j.max_delete_pct = 101;
+        assert!(j.opts(false).dry_run);
+        assert_eq!(j.opts(false).delete, DeletePolicy::NoDelete);
+        assert_eq!(j.filter_bounds(1_000), (u64::MAX, 1, 0, 0));
+    }
+
+    #[test]
+    fn checked_bounds_and_options_use_exact_conversions() {
+        let mut j = SyncJob::new("x".into(), "a".into(), "b".into());
+        j.filter_min_size_kb = 2;
+        j.filter_max_size_kb = 8;
+        j.filter_max_age_days = 2;
+        j.filter_min_age_days = 1;
+        j.modify_window_sec = 3;
+        j.bwlimit_kbps = 4;
+        j.retries = 5;
+        let now = 1_700_000_000;
+
+        assert_eq!(
+            j.checked_filter_bounds(now).unwrap(),
+            (2048, 8192, (now - 2 * 86_400) * 1000, (now - 86_400) * 1000,)
+        );
+        let opts = j.checked_opts(false).unwrap();
+        assert_eq!(opts.modify_window_ms, 3000);
+        assert_eq!(opts.bwlimit_bps, 4096);
+        assert_eq!(opts.retries, 5);
     }
 }

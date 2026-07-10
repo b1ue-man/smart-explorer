@@ -29,6 +29,9 @@
   ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
   !define CLI_SRC "target/x86_64-pc-windows-gnu/release/se.exe"
 !endif
+!ifndef INSTALLER_OUT
+  !define INSTALLER_OUT "../release-native/Smart Explorer Setup ${VERSION}.exe"
+!endif
 
 !define APP_NAME "Smart Explorer"
 !define EXE_NAME "Smart Explorer.exe"
@@ -40,7 +43,7 @@
 
 Unicode true
 Name "${APP_NAME} ${VERSION}"
-OutFile "../release-native/Smart Explorer Setup ${VERSION}.exe"
+OutFile "${INSTALLER_OUT}"
 Icon "${__FILEDIR__}\assets\smart-explorer-icon.ico"
 UninstallIcon "${__FILEDIR__}\assets\smart-explorer-icon.ico"
 RequestExecutionLevel user

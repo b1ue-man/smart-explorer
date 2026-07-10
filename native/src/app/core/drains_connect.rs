@@ -2,29 +2,6 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    pub(in crate::app) fn maybe_save_index(&mut self) {
-        if !self.index_dirty || self.index_last_saved.elapsed().as_secs() < 30 {
-            return;
-        }
-        let mut buf = String::with_capacity(self.folder_index.len() * 50);
-        for p in self.folder_index.iter() {
-            buf.push_str(p);
-            buf.push('\n');
-        }
-        let target = folder_index_path();
-        std::thread::Builder::new()
-            .name("index-save".into())
-            .spawn(move || {
-                let tmp = target.with_extension("txt.tmp");
-                if std::fs::write(&tmp, buf).is_ok() {
-                    let _ = std::fs::rename(&tmp, &target);
-                }
-            })
-            .ok();
-        self.index_dirty = false;
-        self.index_last_saved = std::time::Instant::now();
-    }
-
     // ─── Channel drains ─────────────────────────────────────────────────
 
     pub(in crate::app) fn drain_scan(&mut self) {
@@ -88,21 +65,52 @@ impl App {
             None => return,
         };
         let mut done = false;
+        let mut disconnected = false;
         for _ in 0..16 {
             match rx.try_recv() {
                 Ok(CopyMsg::Progress(p)) => self.copy_progress = Some(p),
-                Ok(CopyMsg::Done { progress, errors }) => {
+                Ok(CopyMsg::Done {
+                    mut progress,
+                    errors,
+                }) => {
+                    progress.done = true;
                     self.copy_progress = Some(progress);
                     self.copy_errors = errors;
                     done = true;
                     break;
                 }
-                Err(_) => break,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
             }
         }
+        if disconnected && !done {
+            let message = "Kopier-Thread wurde ohne Ergebnis beendet.".to_string();
+            let progress = self.copy_progress.get_or_insert(CopyProgress {
+                files_done: 0,
+                files_total: 0,
+                bytes_done: 0,
+                bytes_total: 0,
+                elapsed_ms: 0,
+                errors: 0,
+                canceled: false,
+                done: false,
+            });
+            progress.errors = progress.errors.saturating_add(1);
+            progress.done = true;
+            self.copy_errors
+                .push(("Kopier-Worker".to_string(), message.clone()));
+            self.error_msg = Some(message);
+            let refresh = self.finish_copy_job();
+            if refresh {
+                self.rescan();
+            }
+            return;
+        }
         if done {
-            self.copy_rx = None;
-            self.copy_handle = None;
+            let canceled = matches!(&self.copy_progress, Some(p) if p.canceled);
             if !self.copy_errors.is_empty() {
                 self.error_msg = Some(format!(
                     "{} Fehler beim Kopieren — erste: {}",
@@ -113,50 +121,39 @@ impl App {
                         .unwrap_or_default()
                 ));
             }
-            if self.copy_refresh_after {
-                self.copy_refresh_after = false;
+            if canceled {
+                self.notice = Some((
+                    "Kopiervorgang abgebrochen; bereits abgeschlossene Dateien bleiben erhalten."
+                        .to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            let refresh = self.finish_copy_job();
+            if refresh {
                 self.rescan();
             }
         }
     }
 
-    pub(in crate::app) fn drain_trash(&mut self) {
-        let mut msg: Option<Option<String>> = None;
-        if let Some(rx) = self.trash_rx.as_ref() {
-            if let Ok(m) = rx.try_recv() {
-                msg = Some(m);
-            }
-        }
-        if let Some(m) = msg {
-            self.trash_rx = None;
-            match m {
-                None => {
-                    self.notice = Some((
-                        "✓ In Papierkorb verschoben".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                }
-                Some(e) => {
-                    self.error_msg = Some(format!("Papierkorb: {}", e));
-                    // State may be out of sync with disk — refresh.
-                    self.rescan();
-                }
-            }
-        }
-    }
-
     pub(in crate::app) fn drain_clip_prepare(&mut self) {
-        let mut files = None;
-        if let Some(rx) = self.clip_prepare_rx.as_ref() {
-            if let Ok(f) = rx.try_recv() {
-                files = Some(f);
+        let result = match self.clip_prepare_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.clip_prepare_rx = None;
+                self.error_msg =
+                    Some("Gefilterte Zwischenablage wurde ohne Ergebnis beendet.".to_string());
+                return;
             }
-        }
-        let files = match files {
-            Some(f) => f,
-            None => return,
         };
         self.clip_prepare_rx = None;
+        let files = match result {
+            Ok(files) => files,
+            Err(error) => {
+                self.error_msg = Some(error);
+                return;
+            }
+        };
         if files.is_empty() {
             self.notice = Some((
                 "Keine Dateien entsprechen dem aktiven Filter".to_string(),
@@ -188,27 +185,27 @@ impl App {
 
     pub(in crate::app) fn drain_update(&mut self) {
         use crate::updater::UpdateMsg;
-        let mut msg = None;
-        if let Some(rx) = self.update_rx.as_ref() {
-            if let Ok(m) = rx.try_recv() {
-                msg = Some(m);
+        let msg = match self.update_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(message)) => message,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.update_rx = None;
+                self.error_msg = Some("Update-Prüfung wurde unerwartet beendet.".to_string());
+                return;
             }
-        }
-        let msg = match msg {
-            Some(m) => m,
-            None => return,
         };
         self.update_rx = None;
         match msg {
-            UpdateMsg::AppliedViaWorker { version } => {
-                // The exe couldn't be replaced in place; a worker will do it
-                // after we exit. Sentinel empty path = "just close, don't
-                // relaunch" (the worker relaunches).
+            UpdateMsg::Finished => {}
+            UpdateMsg::Staged(bundle) => {
+                let version = bundle.version().to_string();
                 self.notice = Some((
                     format!("⬆ Update auf v{} bereit (Neustart wendet es an)", version),
                     std::time::Instant::now(),
                 ));
-                self.update_ready = Some((version, PathBuf::new()));
+                self.update_release_available = None;
+                self.update_ready = Some(ReadyUpdate::Staged(bundle));
+                self.show_update_dialog = true;
             }
             UpdateMsg::UpToDate { feed_version } => {
                 self.notice = Some((
@@ -229,13 +226,23 @@ impl App {
             UpdateMsg::Error(e) => {
                 self.error_msg = Some(format!("Update: {}", e));
             }
+            UpdateMsg::BackgroundError(e) => {
+                self.push_app_error("Automatische Update-Prüfung", e);
+            }
         }
     }
 
     pub(in crate::app) fn check_updates_manual(&mut self) {
         let (tx, rx) = unbounded();
-        self.update_rx = Some(rx);
-        crate::updater::check_async(tx, true);
+        match crate::updater::check_async(tx, true) {
+            Ok(()) => self.update_rx = Some(rx),
+            Err(error) => {
+                self.update_rx = None;
+                self.error_msg = Some(format!(
+                    "Update-Prüfung konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     // ─── Remote connections ─────────────────────────────────────────────
@@ -246,9 +253,18 @@ impl App {
         form: crate::connect::ConnectForm,
         secret: Option<String>,
     ) {
-        self.connecting = true;
         self.error_msg = None;
-        self.connect_rx = Some(crate::connect::spawn_connect(form, secret));
+        match crate::connect::spawn_connect(form, secret) {
+            Ok(rx) => {
+                self.connect_rx = Some(rx);
+                self.connecting = true;
+            }
+            Err(error) => {
+                self.connect_rx = None;
+                self.connecting = false;
+                self.error_msg = Some(error);
+            }
+        }
     }
 
     /// Connect to a saved connection: pre-fill from metadata + load its secret.
@@ -257,15 +273,29 @@ impl App {
         let secret = crate::creds::get_secret(&c.account());
         // Bump to most-recent so the sidebar keeps the freshest connections up
         // front and overflows the stale ones into the menu.
-        crate::creds::touch_connection(&c.account());
+        let touch_error = crate::creds::touch_connection(&c.account())
+            .err()
+            .map(|error| format!("Verbindungsliste konnte nicht aktualisiert werden: {error}"));
         self.saved_connections = crate::creds::load_connections();
         self.begin_connect(form, secret);
+        if let Some(detail) = touch_error {
+            self.push_app_error("Gespeicherte Verbindung", detail.clone());
+            if self.error_msg.is_none() {
+                self.error_msg = Some(detail);
+            }
+        }
     }
 
     pub(in crate::app) fn drain_connect(&mut self) {
-        let msg = match self.connect_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(m) => m,
-            None => return,
+        let msg = match self.connect_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(message)) => message,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.connect_rx = None;
+                self.connecting = false;
+                self.error_msg = Some("Verbindungs-Thread wurde ohne Ergebnis beendet.".into());
+                return;
+            }
         };
         self.connect_rx = None;
         self.connecting = false;

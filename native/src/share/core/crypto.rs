@@ -17,43 +17,50 @@ pub(crate) fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
     let mut out = [0u8; N];
-    fill_random(&mut out);
-    out
+    fill_random(&mut out)?;
+    Ok(out)
 }
 
-pub(crate) fn random_token(bytes: usize) -> String {
+pub(crate) fn random_token(bytes: usize) -> Result<String, String> {
     let mut raw = vec![0u8; bytes];
-    fill_random(&mut raw);
-    b64(&raw)
+    fill_random(&mut raw)?;
+    Ok(b64(&raw))
 }
 
-pub(crate) fn random_hex_token<const N: usize>() -> String {
-    hex(&random_bytes::<N>())
+pub(crate) fn random_hex_token<const N: usize>() -> Result<String, String> {
+    Ok(hex(&random_bytes::<N>()?))
 }
 
-fn fill_random(out: &mut [u8]) {
+fn fill_random(out: &mut [u8]) -> Result<(), String> {
+    fill_random_with(out, getrandom::getrandom)
+}
+
+fn fill_random_with<E: std::fmt::Display>(
+    out: &mut [u8],
+    mut source: impl FnMut(&mut [u8]) -> Result<(), E>,
+) -> Result<(), String> {
     let mut last_err = None;
     for _ in 0..3 {
-        match getrandom::getrandom(out) {
-            Ok(()) => return,
+        match source(out) {
+            Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e),
         }
     }
-    panic!(
+    Err(format!(
         "secure random source unavailable after retries: {}",
         last_err
             .map(|e| e.to_string())
             .unwrap_or_else(|| "unknown error".to_string())
-    );
+    ))
 }
 
-pub(crate) fn random_uuid_v4() -> String {
-    let mut b = random_bytes::<16>();
+pub(crate) fn random_uuid_v4() -> Result<String, String> {
+    let mut b = random_bytes::<16>()?;
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
-    format!(
+    Ok(format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         b[0],
         b[1],
@@ -71,7 +78,7 @@ pub(crate) fn random_uuid_v4() -> String {
         b[13],
         b[14],
         b[15]
-    )
+    ))
 }
 
 pub(crate) fn b64(raw: &[u8]) -> String {
@@ -175,5 +182,22 @@ pub(crate) fn sanitize_name(name: &str) -> String {
         "datei".to_string()
     } else {
         n
+    }
+}
+
+#[cfg(test)]
+mod entropy_tests {
+    use super::fill_random_with;
+
+    #[test]
+    fn entropy_failure_is_returned_after_bounded_retries() {
+        let mut calls = 0;
+        let error = fill_random_with(&mut [0u8; 8], |_| {
+            calls += 1;
+            Err::<(), _>("entropy offline")
+        })
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(error.contains("entropy offline"));
     }
 }

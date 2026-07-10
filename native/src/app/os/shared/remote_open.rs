@@ -2,26 +2,16 @@ use super::prelude::*;
 use super::*;
 use crate::app::shared_platform_helpers::ClipboardEffect;
 
+#[path = "remote_zip.rs"]
+mod zip;
+
 fn should_cleanup_missing_temp(mtime_ms: i64, process_finished: bool, dirty: bool) -> bool {
     mtime_ms == 0 && process_finished && !dirty
 }
 
 #[cfg(test)]
-mod tests {
-    use super::should_cleanup_missing_temp;
-
-    #[test]
-    fn finished_launcher_does_not_cleanup_existing_clean_temp() {
-        assert!(!should_cleanup_missing_temp(123, true, false));
-    }
-
-    #[test]
-    fn missing_clean_temp_can_be_untracked_after_launcher_finishes() {
-        assert!(should_cleanup_missing_temp(0, true, false));
-        assert!(!should_cleanup_missing_temp(0, false, false));
-        assert!(!should_cleanup_missing_temp(0, true, true));
-    }
-}
+#[path = "remote_open_tests.rs"]
+mod tests;
 
 impl App {
     /// Open a file in its associated app (`OpenMode::Default`) or via the native
@@ -62,7 +52,15 @@ impl App {
             );
             return;
         }
-        let dest = open_temp_path(&local_name);
+        let dest = match open_temp_path(&local_name) {
+            Ok(dest) => dest,
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Temporärer Pfad für „{name}“ konnte nicht angelegt werden: {error}"
+                ));
+                return;
+            }
+        };
         self.remote_edits.retain(|e| e.temp != dest);
         self.remote_edits.push(RemoteEdit {
             temp: dest.clone(),
@@ -76,13 +74,17 @@ impl App {
             uploading: false,
             process: None,
         });
+        if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
+            self.remote_edits.retain(|edit| edit.temp != dest);
+            cleanup_temp_copy(&dest);
+            self.error_msg = Some(format!(
+                "Remote-Datei kann ohne Wiederherstellungsmanifest nicht sicher geöffnet werden: {error}"
+            ));
+            return;
+        }
         let (tx, rx) = unbounded();
-        self.notice = Some((
-            format!("⬇ Öffne „{}“ (Speichern landet auf dem Remote)…", name),
-            std::time::Instant::now(),
-        ));
         let dest_t = dest.clone();
-        std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("remote-open".into())
             .spawn(move || {
                 // Capture the remote's mtime at download time so save-back can
@@ -92,67 +94,23 @@ impl App {
                     (p, rm)
                 });
                 let _ = tx.send(res);
-            })
-            .ok();
-        self.file_open_rx.push((rx, mode, dest));
-    }
-
-    /// Open a local `.zip` as a browsable, read-only "remote" so it navigates
-    /// like a folder (rscan walks the `ZipBackend`; ⏏ returns to the folder it
-    /// lives in). Files inside open via the normal download-to-temp path.
-    pub(in crate::app) fn open_zip(&mut self, zip_path: &str) {
-        let parent = zip_path.rsplit_once('/').map(|(p, _)| p.to_string());
-        match crate::zipfs::ZipBackend::open(zip_path) {
-            Ok(be) => {
-                let name = zip_path.rsplit('/').next().unwrap_or("Archiv").to_string();
-                self.remote = Some(crate::connect::RemoteState {
-                    backend: Arc::new(be),
-                    label: format!("📦 {}", name),
-                    agent_version: None,
-                    zip_return: parent,
-                    sftp: None,
-                    account: None,
-                    endpoint_prefix: None,
-                });
-                self.start_scan(PathBuf::from("/")); // root inside the archive
+            });
+        match spawn {
+            Ok(_) => {
+                self.file_open_rx.push((rx, mode, dest));
+                self.notice = Some((
+                    format!("⬇ Öffne „{}“ (Speichern landet auf dem Remote)…", name),
+                    std::time::Instant::now(),
+                ));
             }
-            Err(e) => self.error_msg = Some(format!("ZIP konnte nicht geöffnet werden: {e}")),
+            Err(error) => {
+                self.remote_edits.retain(|edit| edit.temp != dest);
+                cleanup_temp_copy(&dest);
+                self.error_msg = Some(format!(
+                    "Remote-Datei konnte nicht geöffnet werden: {error}"
+                ));
+            }
         }
-    }
-
-    /// Extract a local `.zip` into a sibling folder named after the archive,
-    /// off-thread; the result + a refresh land via `drain_remote_op`.
-    pub(in crate::app) fn start_zip_extract(&mut self, zip_path: String) {
-        if self.remote_op_rx.is_some() {
-            self.notice = Some((
-                "Es läuft bereits eine Aktion…".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let name = zip_path.rsplit('/').next().unwrap_or("archiv").to_string();
-        let stem = if name.to_ascii_lowercase().ends_with(".zip") {
-            &name[..name.len() - 4]
-        } else {
-            &name
-        };
-        let dest = match zip_path.rsplit_once('/') {
-            Some((p, _)) => format!("{}/{}", p, stem),
-            None => stem.to_string(),
-        };
-        let dest_pb = PathBuf::from(dest.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let (tx, rx) = unbounded();
-        self.remote_op_rx = Some(rx);
-        self.notice = Some((format!("📦 Entpacke „{name}“…"), std::time::Instant::now()));
-        std::thread::Builder::new()
-            .name("zip-extract".into())
-            .spawn(move || {
-                let r = crate::zipfs::extract_all(&zip_path, &dest_pb)
-                    .map(|n| format!("✓ Entpackt: {} Datei(en)", n))
-                    .map_err(|e| format!("Entpacken: {e}"));
-                let _ = tx.send(r);
-            })
-            .ok();
     }
 
     /// Open the file at `idx` via the native "Open with…" chooser (downloading a
@@ -186,7 +144,11 @@ impl App {
                     self.error_msg = Some(format!("Datei oeffnen: {}", e));
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, mode, temp)),
-                Err(_) => {}
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.remote_edits.retain(|edit| edit.temp != temp);
+                    cleanup_temp_copy(&temp);
+                    self.error_msg = Some("Remote-Datei-Download wurde unerwartet beendet.".into());
+                }
             }
         }
         self.file_open_rx = pending;
@@ -219,6 +181,7 @@ impl App {
         self.last_edit_poll = std::time::Instant::now();
         let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String, i64)> = Vec::new();
         let mut cleanup_done: Vec<PathBuf> = Vec::new();
+        let mut manifest_changed = false;
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
             if m == 0 {
@@ -235,12 +198,14 @@ impl App {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
                 e.dirty = false;
+                manifest_changed = true;
                 continue;
             }
             if m == e.baseline_mtime {
                 continue;
             }
             e.dirty = true;
+            manifest_changed = true;
             if m == e.seen_mtime {
                 e.uploading = true;
                 e.baseline_mtime = m;
@@ -261,15 +226,17 @@ impl App {
             }
             self.remote_edits
                 .retain(|e| !cleanup_done.iter().any(|temp| temp == &e.temp));
+            manifest_changed = true;
+        }
+        if manifest_changed && !self.remote_edits.is_empty() {
+            if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
+                self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
+            }
         }
         for (temp, be, remote, name, known) in launch {
             let (tx, rx) = unbounded();
-            self.edit_save_rx.push(rx);
-            self.notice = Some((
-                format!("↑ Speichere „{}“ auf dem Remote…", name),
-                std::time::Instant::now(),
-            ));
-            std::thread::Builder::new()
+            let expected_temp = temp.clone();
+            let spawn = std::thread::Builder::new()
                 .name("remote-edit-save".into())
                 .spawn(move || {
                     // Conflict guard: if the remote advanced past what we last
@@ -287,8 +254,30 @@ impl App {
                         }
                     };
                     let _ = tx.send((temp, res));
-                })
-                .ok();
+                });
+            match spawn {
+                Ok(_) => {
+                    self.edit_save_rx.push((rx, expected_temp));
+                    self.notice = Some((
+                        format!("↑ Speichere „{}“ auf dem Remote…", name),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    if let Some(edit) = self
+                        .remote_edits
+                        .iter_mut()
+                        .find(|edit| edit.temp == expected_temp)
+                    {
+                        edit.uploading = false;
+                        edit.dirty = true;
+                        edit.baseline_mtime = 0;
+                    }
+                    self.error_msg = Some(format!(
+                        "Remote-Speichern konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
         }
     }
 
@@ -297,9 +286,11 @@ impl App {
             return;
         }
         let mut pending = Vec::new();
-        for rx in std::mem::take(&mut self.edit_save_rx) {
+        let mut manifest_changed = false;
+        for (rx, expected_temp) in std::mem::take(&mut self.edit_save_rx) {
             match rx.try_recv() {
                 Ok((temp, res)) => {
+                    manifest_changed = true;
                     if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
                         e.uploading = false;
                         match res {
@@ -337,11 +328,31 @@ impl App {
                         }
                     }
                 }
-                Err(crossbeam_channel::TryRecvError::Empty) => pending.push(rx),
-                Err(_) => {}
+                Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, expected_temp)),
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    manifest_changed = true;
+                    if let Some(edit) = self
+                        .remote_edits
+                        .iter_mut()
+                        .find(|edit| edit.temp == expected_temp)
+                    {
+                        edit.uploading = false;
+                        edit.dirty = true;
+                        edit.baseline_mtime = 0;
+                    }
+                    self.error_msg = Some(format!(
+                        "Remote-Speichern „{}“ wurde unerwartet beendet; die lokale Datei bleibt zur Wiederholung erhalten.",
+                        expected_temp.display()
+                    ));
+                }
             }
         }
         self.edit_save_rx = pending;
+        if manifest_changed && !self.remote_edits.is_empty() {
+            if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
+                self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
+            }
+        }
     }
 
     /// Upload local `paths` (files and/or folders, recursively) into the remote
@@ -362,41 +373,65 @@ impl App {
         }
         let n = paths.len();
         let (tx, rx) = unbounded();
-        std::thread::Builder::new()
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let spawn = std::thread::Builder::new()
             .name("remote-upload".into())
             .spawn(move || {
-                upload_paths_progress(&*backend, &paths, &dest_root, &tx);
-            })
-            .ok();
-        self.upload_rx = Some(rx);
-        self.transfer_progress = Some(TransferProgress::new(
-            TransferKind::Upload,
-            "Lade hoch",
-            n as u64,
-            0,
-        ));
-        self.notice = Some((
-            format!("⬆ Lade {} Element(e) hoch…", n),
-            std::time::Instant::now(),
-        ));
+                upload_paths_progress(&*backend, &paths, &dest_root, &tx, &worker_cancel);
+            });
+        match spawn {
+            Ok(worker) => {
+                self.upload_rx = Some(rx);
+                self.transfer_cancel = Some(cancel);
+                self.transfer_worker = Some(worker);
+                self.transfer_progress = Some(TransferProgress::new(
+                    TransferKind::Upload,
+                    "Lade hoch",
+                    n as u64,
+                    0,
+                ));
+                self.notice = Some((
+                    format!("⬆ Lade {} Element(e) hoch…", n),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.upload_rx = None;
+                self.transfer_progress = None;
+                self.transfer_cancel = None;
+                self.transfer_worker = None;
+                self.error_msg = Some(format!(
+                    "Remote-Upload konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     /// Once selected remote files have downloaded to temp, put them on the
     /// Windows clipboard as CF_HDROP so they paste into Explorer.
     pub(in crate::app) fn drain_clip_download(&mut self) {
-        let local = match self
-            .clip_download_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok())
-        {
-            Some(v) => v,
-            None => return,
+        let result = match self.clip_download_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.clip_download_rx = None;
+                self.error_msg = Some("Zwischenablage: Download-Worker wurde beendet".to_string());
+                return;
+            }
         };
         self.clip_download_rx = None;
-        if local.is_empty() {
-            self.error_msg = Some("Zwischenablage: Download fehlgeschlagen".to_string());
-            return;
-        }
+        let local = match result {
+            Ok(local) if !local.is_empty() => local,
+            Ok(_) => {
+                self.error_msg = Some("Zwischenablage: keine Dateien vorbereitet".to_string());
+                return;
+            }
+            Err(error) => {
+                self.error_msg = Some(format!("Zwischenablage: {error}"));
+                return;
+            }
+        };
         match write_clipboard_files(&local, ClipboardEffect::Copy) {
             Ok(_) => {
                 self.virtual_clip = None;

@@ -1,16 +1,12 @@
 use std::path::Path;
 
-pub(crate) fn local_scan_threads() -> usize {
-    std::env::var("SMART_EXPLORER_ANALYTICS_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(2)
-        .clamp(1, 4)
-}
+pub(crate) const MAX_RECLAIM_ERRORS: usize = 64;
 
-pub(crate) fn truncate<T>(v: &mut Vec<T>, max: usize) {
-    if v.len() > max {
-        v.truncate(max);
+pub(crate) fn push_bounded_error(errors: &mut Vec<String>, suppressed: &mut u64, error: String) {
+    if errors.len() < MAX_RECLAIM_ERRORS {
+        errors.push(error);
+    } else {
+        *suppressed = suppressed.saturating_add(1);
     }
 }
 
@@ -21,6 +17,11 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn stale_cutoff_ms(now: i64, stale_days: u64) -> i64 {
+    let age_ms = stale_days.saturating_mul(86_400_000);
+    now.saturating_sub(i64::try_from(age_ms).unwrap_or(i64::MAX))
+}
+
 pub(crate) fn systemtime_ms(t: std::time::SystemTime) -> i64 {
     t.duration_since(std::time::UNIX_EPOCH)
         .map(systemtime_ms_from_duration)
@@ -28,7 +29,7 @@ pub(crate) fn systemtime_ms(t: std::time::SystemTime) -> i64 {
 }
 
 fn systemtime_ms_from_duration(d: std::time::Duration) -> i64 {
-    d.as_secs() as i64 * 1000 + i64::from(d.subsec_millis())
+    i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
 }
 
 pub(crate) fn to_fwd(path: &Path) -> String {
@@ -65,4 +66,21 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stale_cutoff_ms, systemtime_ms_from_duration};
+
+    #[test]
+    fn huge_age_and_duration_saturate_without_wrapping() {
+        assert_eq!(
+            stale_cutoff_ms(10, u64::MAX),
+            10i64.saturating_sub(i64::MAX)
+        );
+        assert_eq!(
+            systemtime_ms_from_duration(std::time::Duration::MAX),
+            i64::MAX
+        );
+    }
 }

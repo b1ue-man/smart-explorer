@@ -1,6 +1,7 @@
 use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::time::Instant;
 
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
@@ -140,8 +141,6 @@ pub struct DirectContact {
     pub last_error: Option<String>,
     #[serde(default)]
     pub presence: Option<PeerPresence>,
-    #[serde(default)]
-    pub exports: ShareExportConfig,
     #[serde(default = "default_direct_access_state")]
     pub access_state: DirectAccessState,
     #[serde(default)]
@@ -360,7 +359,13 @@ pub enum ShareEvent {
     },
 }
 
-pub(crate) type CmdTx = Sender<ShareCmd>;
+pub(crate) struct PendingShareCmd {
+    pub(crate) command: ShareCmd,
+    pub(crate) acknowledgement: Sender<Result<(), String>>,
+    pub(crate) expires_at: Instant,
+}
+
+pub(crate) type CmdTx = Sender<PendingShareCmd>;
 
 #[derive(Clone)]
 pub(crate) struct ShareAuthState {

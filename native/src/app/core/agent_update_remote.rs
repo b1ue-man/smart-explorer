@@ -2,9 +2,6 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    /// Deploy + activate the SSH remote agent on the ALREADY-connected SFTP
-    /// session (runtime opt-in, #24) — no reconnect. Blocking deploy runs
-    /// off-thread; the result is installed by `drain_agent_activate`.
     pub(in crate::app) fn start_agent_activation(&mut self) {
         if self.agent_activate_rx.is_some() {
             return;
@@ -17,13 +14,8 @@ impl App {
             _ => return,
         };
         let (tx, rx) = unbounded();
-        self.agent_activate_rx = Some(rx);
-        self.agent_activate_for = Some(sftp.clone());
-        self.notice = Some((
-            "⚡ Aktiviere Remote-Agent…".to_string(),
-            std::time::Instant::now(),
-        ));
-        std::thread::Builder::new()
+        let target = sftp.clone();
+        let spawn = std::thread::Builder::new()
             .name("agent-activate".into())
             .spawn(move || {
                 let inner: crate::vfs::BackendHandle = sftp.clone();
@@ -34,24 +26,41 @@ impl App {
                     })
                     .map_err(|e| e.to_string());
                 let _ = tx.send(r);
-            })
-            .ok();
+            });
+        match spawn {
+            Ok(_) => {
+                self.agent_activate_rx = Some(rx);
+                self.agent_activate_for = Some(target);
+                self.notice = Some((
+                    "⚡ Aktiviere Remote-Agent…".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.agent_activate_rx = None;
+                self.agent_activate_for = None;
+                self.error_msg = Some(format!(
+                    "Agent-Aktivierung konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     pub(in crate::app) fn drain_agent_activate(&mut self) {
-        let res = match self
-            .agent_activate_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok())
-        {
-            Some(r) => r,
-            None => return,
+        let res = match self.agent_activate_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.agent_activate_rx = None;
+                self.agent_activate_for = None;
+                self.error_msg = Some("Agent-Aktivierung wurde ohne Ergebnis beendet.".to_string());
+                return;
+            }
         };
         self.agent_activate_rx = None;
         let target = self.agent_activate_for.take();
         match res {
             Ok((agent, ver)) => {
-                // Install only if we're still on the same SFTP session.
                 let same = matches!(
                     (self.remote.as_ref().and_then(|rs| rs.sftp.as_ref()), target.as_ref()),
                     (Some(a), Some(b)) if Arc::ptr_eq(a, b)
@@ -62,19 +71,18 @@ impl App {
                         rs.backend = cache_remote(Arc::new(agent));
                         rs.agent_version = Some(ver);
                     }
-                    // Persist so this connection auto-uses the agent next time.
-                    if let Some(acc) = account {
-                        let mut conns = crate::creds::load_connections();
-                        if let Some(c) = conns.iter_mut().find(|c| c.account() == acc) {
-                            c.use_agent = true;
-                            let _ = crate::creds::save_connection(c);
-                            self.saved_connections = crate::creds::load_connections();
-                        }
+                    let persistence_error = persist_agent_preference(account.as_deref(), true);
+                    self.saved_connections = crate::creds::load_connections();
+                    if let Some(error) = persistence_error {
+                        self.error_msg = Some(format!(
+                            "Remote-Agent ist aktiv, aber die Einstellung wurde nicht gespeichert: {error}"
+                        ));
+                    } else {
+                        self.notice = Some((
+                            "⚡ Remote-Agent aktiv".to_string(),
+                            std::time::Instant::now(),
+                        ));
                     }
-                    self.notice = Some((
-                        "⚡ Remote-Agent aktiv".to_string(),
-                        std::time::Instant::now(),
-                    ));
                     self.rescan();
                 }
             }
@@ -82,11 +90,15 @@ impl App {
         }
     }
 
-    /// Remove the remote agent from THIS connection: switch back to plain SFTP
-    /// immediately (dropping the `AgentBackend` tears its bridge down → the
-    /// remote `se-agent` process exits), un-persist the preference, and delete
-    /// `~/.cache/smart-explorer` on the server (best-effort, off the UI thread).
+    /// Switch back to SFTP and remove the deployed agent off-thread.
     pub(in crate::app) fn remove_agent_now(&mut self) {
+        if self.remote_op_rx.is_some() {
+            self.notice = Some((
+                "Es läuft bereits ein Remote-Vorgang…".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
         let (sftp, account) = match self.remote.as_ref() {
             Some(rs) if rs.agent_version.is_some() => match &rs.sftp {
                 Some(s) => (s.clone(), rs.account.clone()),
@@ -98,85 +110,133 @@ impl App {
             rs.backend = cache_remote(sftp.clone());
             rs.agent_version = None;
         }
-        if let Some(acc) = account {
-            let mut conns = crate::creds::load_connections();
-            if let Some(c) = conns.iter_mut().find(|c| c.account() == acc) {
-                c.use_agent = false;
-                let _ = crate::creds::save_connection(c);
-                self.saved_connections = crate::creds::load_connections();
-            }
-        }
-        std::thread::Builder::new()
+        let persistence_error = persist_agent_preference(account.as_deref(), false);
+        self.saved_connections = crate::creds::load_connections();
+        let (tx, rx) = unbounded();
+        let spawn = std::thread::Builder::new()
             .name("agent-remove".into())
             .spawn(move || {
-                let _ = crate::agent::remove_from_sftp(&sftp);
-            })
-            .ok();
-        self.notice = Some((
-            "Remote-Agent entfernt — Verbindung läuft wieder über SFTP".to_string(),
-            std::time::Instant::now(),
-        ));
+                let result =
+                    crate::agent::remove_from_sftp(&sftp)
+                        .map_err(|error| format!("Agent entfernen: {error}"))
+                        .and_then(|()| match persistence_error {
+                            Some(error) => Err(format!(
+                                "Remote-Agent entfernt, Einstellung nicht gespeichert: {error}"
+                            )),
+                            None => Ok("Remote-Agent entfernt — Verbindung läuft wieder über SFTP"
+                                .to_string()),
+                        });
+                let _ = tx.send(result);
+            });
+        match spawn {
+            Ok(_) => {
+                self.remote_op_rx = Some(rx);
+                self.notice = Some((
+                    "Entferne Remote-Agent…".to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Verbindung nutzt wieder SFTP, aber die Agent-Bereinigung konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
-    /// One-time (cached) fetch of previously-released versions from the GitHub
-    /// feed for the rollback list. No-op if already fetched / fetching.
     pub(in crate::app) fn fetch_remote_versions(&mut self) {
         if self.remote_versions.is_some() || self.remote_versions_rx.is_some() {
             return;
         }
         let (tx, rx) = unbounded();
-        self.remote_versions_rx = Some(rx);
-        std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("versions-list".into())
             .spawn(move || {
                 let _ = tx.send(crate::updater::list_remote_versions());
-            })
-            .ok();
+            });
+        match spawn {
+            Ok(_) => self.remote_versions_rx = Some(rx),
+            Err(error) => {
+                self.remote_versions = Some(Vec::new());
+                self.error_msg = Some(format!(
+                    "Versionsabfrage konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
-    /// Download a released version's binary (off-thread); installed by
-    /// `drain_version_channels`. `forward` = a newer release to install as an
-    /// update (no rollback pin); else a rollback to an older version.
-    pub(in crate::app) fn start_version_download(&mut self, version: String, forward: bool) {
+    pub(in crate::app) fn start_version_download(&mut self, version: String) {
         if self.rollback_rx.is_some() {
             return;
         }
         let (tx, rx) = unbounded();
-        self.rollback_rx = Some(rx);
-        self.rollback_forward = forward;
-        let verb = if forward { "Update" } else { "Lade" };
-        self.notice = Some((format!("⬇ {verb} v{version} …"), std::time::Instant::now()));
-        std::thread::Builder::new()
+        let notice = format!("⬇ Lade v{version} …");
+        let spawn = std::thread::Builder::new()
             .name("version-dl".into())
             .spawn(move || {
                 let r = crate::updater::download_version(&version).map(|p| (version, p));
                 let _ = tx.send(r);
-            })
-            .ok();
+            });
+        match spawn {
+            Ok(_) => {
+                self.rollback_rx = Some(rx);
+                self.notice = Some((notice, std::time::Instant::now()));
+            }
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Versionsdownload konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
-    /// Download + roll back to an older released version.
     pub(in crate::app) fn start_rollback_download(&mut self, version: String) {
-        self.start_version_download(version, false);
+        self.start_version_download(version);
     }
 
-    /// Download + install a newer released version as a forward update.
     pub(in crate::app) fn start_install_download(&mut self, version: String) {
-        self.start_version_download(version, true);
+        if self.update_rx.is_some() {
+            self.notice = Some((
+                "Eine Update-Prüfung läuft bereits…".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let (tx, rx) = unbounded();
+        let shown_version = version.clone();
+        let spawn = std::thread::Builder::new()
+            .name("update-version-dl".into())
+            .spawn(move || {
+                let message = match crate::updater::download_update(&version) {
+                    Ok(bundle) => crate::updater::UpdateMsg::Staged(bundle),
+                    Err(error) => crate::updater::UpdateMsg::Error(error),
+                };
+                let _ = tx.send(message);
+            });
+        match spawn {
+            Ok(_) => {
+                self.update_rx = Some(rx);
+                self.notice = Some((
+                    format!("⬇ Stage Update v{shown_version} …"),
+                    std::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Update-Download konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     pub(in crate::app) fn drain_version_channels(&mut self) {
-        if let Some(rx) = self.remote_versions_rx.as_ref() {
-            if let Ok(list) = rx.try_recv() {
-                // The list is newest-first with the current version excluded, so
-                // the first entry strictly newer than us is the update on offer.
+        match self.remote_versions_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(list)) => {
                 let current = env!("CARGO_PKG_VERSION");
                 self.update_release_available = list
                     .iter()
                     .find(|v| crate::updater::is_newer(v, current))
                     .cloned();
-                // Tell the user once, so a newer release is surfaced without
-                // opening the update menu or pressing "Jetzt prüfen".
                 if let Some(v) = self.update_release_available.clone() {
                     if !self.update_release_notified {
                         self.update_release_notified = true;
@@ -189,41 +249,50 @@ impl App {
                 self.remote_versions = Some(list);
                 self.remote_versions_rx = None;
             }
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.remote_versions_rx = None;
+                self.remote_versions = Some(Vec::new());
+                self.error_msg = Some("Versionsabfrage wurde ohne Ergebnis beendet.".to_string());
+            }
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => {}
         }
-        if let Some(rx) = self.rollback_rx.as_ref() {
-            if let Ok(res) = rx.try_recv() {
+        match self.rollback_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(res)) => {
                 self.rollback_rx = None;
-                let forward = self.rollback_forward;
                 match res {
-                    Ok((ver, exe)) => {
-                        let applied = if forward {
-                            crate::updater::install_version(&exe, &ver)
-                        } else {
-                            crate::updater::revert_to(&exe, &ver)
-                        };
-                        match applied {
-                            Ok(cur) => {
-                                if forward {
-                                    self.update_release_available = None;
-                                }
-                                self.update_ready = Some((ver, cur));
-                            }
-                            Err(e) => {
-                                let what = if forward { "Update" } else { "Zurückrollen" };
-                                self.error_msg = Some(format!("{what}: {e}"));
-                            }
+                    Ok((ver, exe)) => match crate::updater::revert_to(&exe, &ver) {
+                        Ok(cur) => {
+                            self.update_ready = Some(ReadyUpdate::InstalledRollback {
+                                version: ver,
+                                executable: cur,
+                            });
+                            self.show_update_dialog = true;
                         }
-                    }
+                        Err(e) => {
+                            self.error_msg = Some(format!("Zurückrollen: {e}"));
+                        }
+                    },
                     Err(e) => self.error_msg = Some(format!("Version laden: {e}")),
                 }
             }
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.rollback_rx = None;
+                self.error_msg = Some("Versionsdownload wurde ohne Ergebnis beendet.".to_string());
+            }
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => {}
         }
     }
 
     pub(in crate::app) fn drain_remote_op(&mut self) {
-        let res = match self.remote_op_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(r) => r,
-            None => return,
+        let res = match self.remote_op_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.remote_op_rx = None;
+                self.error_msg = Some("Remote-Vorgang wurde ohne Ergebnis beendet.".to_string());
+                self.rescan();
+                return;
+            }
         };
         self.remote_op_rx = None;
         match res {
@@ -231,13 +300,16 @@ impl App {
                 self.notice = Some((msg, std::time::Instant::now()));
                 self.rescan();
             }
-            // The worker already includes the operation context in the message.
-            Err(e) => self.error_msg = Some(e),
+            Err(e) => {
+                self.error_msg = Some(e);
+                // Some backends can report an error after the server already
+                // committed the operation. Refresh so the visible state never
+                // remains optimistically stale after an ambiguous failure.
+                self.rescan();
+            }
         }
     }
 
-    /// Our own right-click menu for a remote entry (the Windows shell menu can't
-    /// act on remote paths). Each action routes through the backend.
     pub(in crate::app) fn ui_remote_ctx(&mut self, ctx: &egui::Context) {
         let (pos, idx) = match self.remote_ctx {
             Some(v) => v,
@@ -373,53 +445,24 @@ impl App {
                 self.rename_focus = true;
             }
             A::DownloadTo => {
-                // Browse for the local destination in the in-app picker; the
-                // download starts when the user confirms a folder.
                 let _ = name;
                 self.open_picker(PickerPurpose::DownloadTo { src: path }, "");
             }
         }
     }
+}
 
-    pub(in crate::app) fn drain_upload(&mut self) {
-        let rx = match self.upload_rx.as_ref() {
-            Some(rx) => rx,
-            None => return,
-        };
-        let mut done: Option<(TransferProgress, Vec<String>)> = None;
-        for _ in 0..16 {
-            match rx.try_recv() {
-                Ok(TransferMsg::Progress(progress)) => {
-                    self.transfer_progress = Some(progress);
-                }
-                Ok(TransferMsg::Done { progress, errors }) => {
-                    self.transfer_progress = Some(progress.clone());
-                    done = Some((progress, errors));
-                    break;
-                }
-                Err(_) => break,
-            }
-        }
-        let (progress, errors) = match done {
-            Some(done) => done,
-            None => return,
-        };
-        self.upload_rx = None;
-        self.transfer_progress = None;
-        if !errors.is_empty() {
-            self.error_msg = Some(format!(
-                "Übertragung: {} Fehler (z. B. {})",
-                errors.len(),
-                errors[0]
-            ));
-        }
-        self.notice = Some((
-            format!("✓ {} übertragen", progress.files_done),
-            std::time::Instant::now(),
-        ));
-        // Show the newly uploaded files.
-        if self.remote.is_some() && !self.root_path.is_empty() {
-            self.rescan();
-        }
-    }
+fn persist_agent_preference(account: Option<&str>, enabled: bool) -> Option<String> {
+    let account = account?;
+    let mut connections = crate::creds::load_connections();
+    let Some(connection) = connections
+        .iter_mut()
+        .find(|connection| connection.account() == account)
+    else {
+        return Some("gespeicherte Verbindung nicht gefunden".to_string());
+    };
+    connection.use_agent = enabled;
+    crate::creds::save_connection(connection)
+        .err()
+        .map(|error| error.to_string())
 }

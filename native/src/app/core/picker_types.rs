@@ -10,7 +10,7 @@ pub(in crate::app) enum PickerPurpose {
     ScanFolder,
     /// Pick a folder to run storage-analytics on (local).
     AnalyticsFolder,
-    /// Pick a local folder for find-and-reclaim.
+    /// Pick a local or remote folder for read-only find-and-reclaim analysis.
     ReclaimFolder,
     /// One-way mirror the current folder into a local destination.
     MirrorDest,
@@ -39,11 +39,14 @@ impl PickerPurpose {
         }
     }
     /// Whether to offer remote connections too. Sync source/target and the
-    /// storage-analysis target can point at a remote; the rest are local-only.
+    /// storage-analysis targets can point at a remote; the rest are local-only.
     pub(in crate::app) fn local_only(&self) -> bool {
         !matches!(
             self,
-            PickerPurpose::SyncSource | PickerPurpose::SyncTarget | PickerPurpose::AnalyticsFolder
+            PickerPurpose::SyncSource
+                | PickerPurpose::SyncTarget
+                | PickerPurpose::AnalyticsFolder
+                | PickerPurpose::ReclaimFolder
         )
     }
 }
@@ -65,6 +68,10 @@ pub(in crate::app) struct PickerState {
     pub(in crate::app) cwd: String,
     /// Sub-folders of `cwd` (name only), sorted.
     pub(in crate::app) entries: Vec<String>,
+    /// Selected folder row; Enter opens the focused/selected row.
+    pub(in crate::app) selected: Option<usize>,
+    pub(in crate::app) list_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    pub(in crate::app) listing: bool,
     pub(in crate::app) error: Option<String>,
     /// Async connect for a saved connection.
     pub(in crate::app) connect_rx: Option<Receiver<crate::connect::ConnectResult>>,
@@ -72,6 +79,7 @@ pub(in crate::app) struct PickerState {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::app) enum ClipKey {
     Copy,
     Cut,

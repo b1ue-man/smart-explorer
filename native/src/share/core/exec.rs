@@ -1,122 +1,170 @@
-use std::io::{self, Read};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
 use super::fs::ShareExportConfig;
 use super::types::{ExecRequest, ExecResult};
 
-pub(crate) fn run(req: ExecRequest, cfg: &ShareExportConfig) -> io::Result<ExecResult> {
+const MAX_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
+const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_ARG_COUNT: usize = 256;
+const MAX_ARG_BYTES: usize = 64 * 1024;
+const MAX_SINGLE_ARG_BYTES: usize = 16 * 1024;
+const MAX_CWD_BYTES: usize = 4 * 1024;
+const MAX_GLOBAL_EXEC: usize = 2;
+const MAX_PEER_EXEC: usize = 1;
+
+static ACTIVE_EXEC: AtomicUsize = AtomicUsize::new(0);
+static PEER_EXEC: OnceLock<Mutex<HashMap<String, Weak<AtomicUsize>>>> = OnceLock::new();
+
+#[derive(Debug)]
+pub(super) struct PreparedExec {
+    _request: ValidatedExec,
+    _permit: ExecPermit,
+}
+
+#[derive(Debug)]
+struct ValidatedExec {
+    _argv: Vec<String>,
+    _cwd: Option<String>,
+    _timeout: Duration,
+    _max_output_bytes: usize,
+    _shell: bool,
+}
+
+#[derive(Debug)]
+struct ExecPermit {
+    peer: Arc<AtomicUsize>,
+}
+
+impl Drop for ExecPermit {
+    fn drop(&mut self) {
+        self.peer.fetch_sub(1, Ordering::AcqRel);
+        ACTIVE_EXEC.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(super) fn peer_slots(peer_key: &str) -> Arc<AtomicUsize> {
+    let registry = PEER_EXEC.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut peers = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    peers.retain(|_, slots| slots.strong_count() > 0);
+    if let Some(slots) = peers.get(peer_key).and_then(Weak::upgrade) {
+        return slots;
+    }
+    let slots = Arc::new(AtomicUsize::new(0));
+    peers.insert(peer_key.to_string(), Arc::downgrade(&slots));
+    slots
+}
+
+/// Validates and reserves all execution resources before the caller creates a
+/// blocking task or process. Shell and argv execution intentionally share the
+/// same full-code-execution permission boundary.
+pub(super) fn prepare(
+    req: ExecRequest,
+    cfg: &ShareExportConfig,
+    peer: Arc<AtomicUsize>,
+) -> io::Result<PreparedExec> {
     if !cfg.allow_exec {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "remote execution is not enabled for this peer",
+            "remote full-code execution is not enabled for this account",
         ));
     }
-    if req.shell && !cfg.allow_shell_exec {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "remote shell execution is not enabled for this peer",
-        ));
+    let request = validate(req)?;
+    acquire(&ACTIVE_EXEC, MAX_GLOBAL_EXEC, "global")?;
+    if let Err(error) = acquire(&peer, MAX_PEER_EXEC, "per-peer") {
+        ACTIVE_EXEC.fetch_sub(1, Ordering::AcqRel);
+        return Err(error);
     }
-    if req.argv.is_empty() || req.argv[0].trim().is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "empty remote command",
-        ));
-    }
-
-    let mut cmd = command_for(&req);
-    if let Some(cwd) = req.cwd.as_deref().filter(|s| !s.trim().is_empty()) {
-        cmd.current_dir(cwd);
-    }
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("stdout pipe unavailable"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("stderr pipe unavailable"))?;
-    let max = req.max_output_bytes.max(1) as usize;
-    let out_handle = thread::spawn(move || read_limited(stdout, max));
-    let err_handle = thread::spawn(move || read_limited(stderr, max));
-
-    let deadline = Instant::now() + Duration::from_millis(req.timeout_ms.max(1));
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break Some(status);
-        }
-        if Instant::now() >= deadline {
-            timed_out = true;
-            let _ = child.kill();
-            break child.wait().ok();
-        }
-        thread::sleep(Duration::from_millis(25));
-    };
-
-    let (stdout, stdout_truncated) = out_handle
-        .join()
-        .unwrap_or_else(|_| Ok((Vec::new(), true)))?;
-    let (stderr, stderr_truncated) = err_handle
-        .join()
-        .unwrap_or_else(|_| Ok((Vec::new(), true)))?;
-
-    Ok(ExecResult {
-        stdout,
-        stderr,
-        exit_code: status.and_then(|s| s.code()),
-        timed_out,
-        stdout_truncated,
-        stderr_truncated,
+    Ok(PreparedExec {
+        _request: request,
+        _permit: ExecPermit { peer },
     })
 }
 
-fn command_for(req: &ExecRequest) -> Command {
-    if req.shell {
-        shell_command(&req.argv[0])
-    } else {
-        let mut cmd = Command::new(&req.argv[0]);
-        cmd.args(&req.argv[1..]);
-        cmd
+impl PreparedExec {
+    pub(super) fn run(self) -> io::Result<ExecResult> {
+        // Arbitrary code can detach from a Unix process group. Until both
+        // supported platforms have a typed adapter that guarantees descendant
+        // containment and teardown on timeout/disconnect, fail closed instead
+        // of offering a partially safe remote-exec implementation.
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "remote execution is disabled: full process-tree containment is unavailable",
+        ))
     }
 }
 
-#[cfg(windows)]
-fn shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", command]);
-    cmd
-}
-
-#[cfg(not(windows))]
-fn shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("sh");
-    cmd.args(["-lc", command]);
-    cmd
-}
-
-fn read_limited(mut reader: impl Read, max: usize) -> io::Result<(Vec<u8>, bool)> {
-    let mut out = Vec::new();
-    let mut truncated = false;
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
+fn validate(req: ExecRequest) -> io::Result<ValidatedExec> {
+    if req.argv.is_empty() || req.argv[0].trim().is_empty() {
+        return Err(invalid("empty remote command"));
+    }
+    if req.argv.len() > MAX_ARG_COUNT {
+        return Err(invalid("remote command has too many arguments"));
+    }
+    if req.shell && req.argv.len() != 1 {
+        return Err(invalid(
+            "shell execution accepts exactly one command string",
+        ));
+    }
+    let mut arg_bytes = 0usize;
+    for arg in &req.argv {
+        if arg.as_bytes().contains(&0) {
+            return Err(invalid("remote command contains a NUL byte"));
         }
-        let remaining = max.saturating_sub(out.len());
-        if remaining > 0 {
-            out.extend_from_slice(&buf[..n.min(remaining)]);
+        if arg.len() > MAX_SINGLE_ARG_BYTES {
+            return Err(invalid("remote command argument is too large"));
         }
-        if n > remaining {
-            truncated = true;
+        arg_bytes = arg_bytes
+            .checked_add(arg.len())
+            .ok_or_else(|| invalid("remote command size overflow"))?;
+        if arg_bytes > MAX_ARG_BYTES {
+            return Err(invalid("remote command is too large"));
         }
     }
-    Ok((out, truncated))
+
+    let cwd = req.cwd.filter(|cwd| !cwd.trim().is_empty());
+    if let Some(cwd) = &cwd {
+        if cwd.len() > MAX_CWD_BYTES {
+            return Err(invalid("remote working directory is too large"));
+        }
+        if cwd.as_bytes().contains(&0) {
+            return Err(invalid("remote working directory contains a NUL byte"));
+        }
+    }
+
+    let max_output = req.max_output_bytes.clamp(1, MAX_OUTPUT_BYTES);
+    let max_output_bytes = usize::try_from(max_output)
+        .map_err(|_| invalid("remote output limit does not fit this platform"))?;
+    Ok(ValidatedExec {
+        _argv: req.argv,
+        _cwd: cwd,
+        _timeout: Duration::from_millis(req.timeout_ms.clamp(1, MAX_TIMEOUT_MS)),
+        _max_output_bytes: max_output_bytes,
+        _shell: req.shell,
+    })
+}
+
+fn acquire(counter: &AtomicUsize, limit: usize, scope: &str) -> io::Result<()> {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            active.checked_add(1).filter(|next| *next <= limit)
+        })
+        .map(|_| ())
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("remote execution {scope} concurrency limit reached"),
+            )
+        })
+}
+
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
 #[cfg(test)]
@@ -125,99 +173,80 @@ mod tests {
 
     fn req() -> ExecRequest {
         ExecRequest {
-            argv: vec!["rustc".into(), "--version".into()],
+            argv: vec!["program".into(), "--version".into()],
             cwd: None,
-            timeout_ms: 10_000,
-            max_output_bytes: 16,
+            timeout_ms: 30_000,
+            max_output_bytes: 1024,
             shell: false,
+        }
+    }
+
+    fn allowed() -> ShareExportConfig {
+        ShareExportConfig {
+            allow_exec: true,
+            ..Default::default()
         }
     }
 
     #[test]
     fn exec_is_denied_by_default() {
-        let err = run(req(), &ShareExportConfig::default()).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let error = prepare(req(), &ShareExportConfig::default(), Arc::default()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
-    fn shell_requires_separate_permission() {
-        let mut cfg = ShareExportConfig {
-            allow_exec: true,
-            ..Default::default()
-        };
-        let mut r = req();
-        r.shell = true;
-        r.argv = vec!["echo hi".into()];
-        let err = run(r.clone(), &cfg).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-        cfg.allow_shell_exec = true;
-        let _ = run(r, &cfg);
+    fn shell_uses_the_same_permission_but_runtime_fails_closed() {
+        let mut request = req();
+        request.shell = true;
+        request.argv = vec!["echo hi".into()];
+        let error = prepare(request, &allowed(), Arc::default())
+            .unwrap()
+            .run()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 
     #[test]
-    fn argv_execution_returns_status_and_stdout() {
-        let cfg = ShareExportConfig {
-            allow_exec: true,
-            ..Default::default()
-        };
-        let mut r = req();
-        r.max_output_bytes = 1024;
-        let result = run(r, &cfg).unwrap();
-        assert_eq!(result.exit_code, Some(0));
-        assert!(String::from_utf8_lossy(&result.stdout).contains("rustc"));
-        assert!(!result.timed_out);
+    fn request_limits_are_clamped_before_execution() {
+        let mut request = req();
+        request.timeout_ms = u64::MAX;
+        request.max_output_bytes = u64::MAX;
+        let validated = validate(request).unwrap();
+        assert_eq!(validated._timeout, Duration::from_millis(MAX_TIMEOUT_MS));
+        assert_eq!(validated._max_output_bytes, MAX_OUTPUT_BYTES as usize);
     }
 
     #[test]
-    fn output_is_truncated_but_command_completes() {
-        let cfg = ShareExportConfig {
-            allow_exec: true,
-            ..Default::default()
-        };
-        let mut r = req();
-        r.max_output_bytes = 4;
-        let result = run(r, &cfg).unwrap();
-        assert_eq!(result.exit_code, Some(0));
-        assert_eq!(result.stdout.len(), 4);
-        assert!(result.stdout_truncated);
+    fn oversized_strings_and_ambiguous_shell_argv_are_rejected() {
+        let mut request = req();
+        request.cwd = Some("x".repeat(MAX_CWD_BYTES + 1));
+        assert_eq!(
+            validate(request).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let mut request = req();
+        request.argv[0] = "x".repeat(MAX_SINGLE_ARG_BYTES + 1);
+        assert_eq!(
+            validate(request).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let mut request = req();
+        request.shell = true;
+        assert_eq!(
+            validate(request).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
-    fn timeout_kills_command_and_marks_result() {
-        let cfg = ShareExportConfig {
-            allow_exec: true,
-            ..Default::default()
-        };
-        let mut r = sleep_req();
-        r.timeout_ms = 50;
-        let result = run(r, &cfg).unwrap();
-        assert!(result.timed_out);
-    }
-
-    #[cfg(windows)]
-    fn sleep_req() -> ExecRequest {
-        ExecRequest {
-            argv: vec![
-                "powershell".into(),
-                "-NoProfile".into(),
-                "-Command".into(),
-                "Start-Sleep -Milliseconds 500".into(),
-            ],
-            cwd: None,
-            timeout_ms: 10_000,
-            max_output_bytes: 16,
-            shell: false,
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn sleep_req() -> ExecRequest {
-        ExecRequest {
-            argv: vec!["sh".into(), "-c".into(), "sleep 1".into()],
-            cwd: None,
-            timeout_ms: 10_000,
-            max_output_bytes: 16,
-            shell: false,
-        }
+    fn per_peer_slot_is_reserved_and_released() {
+        let peer = Arc::new(AtomicUsize::new(0));
+        let first = prepare(req(), &allowed(), peer.clone()).unwrap();
+        let error = prepare(req(), &allowed(), peer.clone()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        drop(first);
+        assert!(prepare(req(), &allowed(), peer).is_ok());
     }
 }

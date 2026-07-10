@@ -1,8 +1,8 @@
-use super::api::{drive_request, export_ext, export_format, open_stream, send_retry, API};
-use super::core::{cloud_urlenc, norm, split_parent};
+use super::api::{drive_request, export_ext, export_format, open_stream, API};
+use super::core::{cloud_urlenc, norm};
 use super::transfer::open_writer;
 use super::GDriveBackend;
-use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+use crate::vfs::{Backend, DedupeCandidate, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
@@ -17,6 +17,22 @@ impl Backend for GDriveBackend {
         } else {
             format!("/{}", self.root)
         }
+    }
+
+    fn state_identity(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let account = self
+            .tokens_guard()
+            .ok()
+            .map(|tokens| {
+                let digest = Sha256::digest(tokens.refresh_token.as_bytes());
+                digest[..12]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| "token-cache-unavailable".into());
+        format!("gdrive:{account}:{}", self.root)
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -71,8 +87,8 @@ impl Backend for GDriveBackend {
                 self.forget_path_prefix(&child_path);
             }
         }
-        // This directory's children are now fully enumerated -> future creates
-        // here can skip the existence probe (see `upload`/`ensure_dir`).
+        // Folder creation can use this complete snapshot to skip a redundant
+        // lookup. File uploads still re-probe because Drive names are not unique.
         self.listed_guard()?.insert(norm(path));
         self.persist_path_cache();
         Ok(out)
@@ -165,43 +181,27 @@ impl Backend for GDriveBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        Ok(open_writer(self, path))
+        open_writer(self, path)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let id = self.resolve(src)?;
-        let src_key = norm(src);
-        let dst_key = norm(dst);
-        let (src_parent, _) = split_parent(&src_key);
-        let (dst_parent, dst_name) = split_parent(&dst_key);
-        let src_parent_id = self.ensure_dir(&src_parent)?;
-        let dst_parent_id = self.ensure_dir(&dst_parent)?;
-        let auth = self.bearer()?;
-        let bearer = format!("Bearer {}", auth);
-        let mut url = format!("{}/files/{}?fields=id", API, id);
-        if src_parent_id != dst_parent_id {
-            url.push_str(&format!(
-                "&addParents={}&removeParents={}",
-                dst_parent_id, src_parent_id
-            ));
-        }
-        let payload = serde_json::json!({ "name": dst_name }).to_string();
-        send_retry(|| {
-            drive_request(
-                ureq::request("PATCH", &url)
-                    .set("Authorization", &bearer)
-                    .set("Content-Type", "application/json")
-                    .send_string(&payload),
-            )
-        })?;
-        self.forget_path_prefix(&norm(src));
-        self.remember_path(&norm(dst), &id, None)?;
-        self.persist_path_cache();
-        Ok(())
+        self.rename_serialized(src, dst)
+    }
+
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_staged_file(staged, destination)
+    }
+
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_staged_file_no_replace(staged, destination)
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         self.trash(path)
+    }
+
+    fn delete_disposition(&self) -> crate::vfs::DeleteDisposition {
+        crate::vfs::DeleteDisposition::Recycle
     }
 
     fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
@@ -215,56 +215,12 @@ impl Backend for GDriveBackend {
         }
     }
 
-    fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
-        let root_n = norm(root);
-        let mut removed = 0usize;
-        let mut stack = vec![root_n.clone()];
-        while let Some(dir) = stack.pop() {
-            let dir_rel = if root_n.is_empty() {
-                dir.clone()
-            } else {
-                dir.strip_prefix(&root_n)
-                    .unwrap_or("")
-                    .trim_start_matches('/')
-                    .to_string()
-            };
-            let entries = self.list_dir(&dir)?;
-            let mut by_name: HashMap<String, Vec<VfsMeta>> = HashMap::new();
-            for m in entries {
-                if m.is_dir {
-                    let child = if dir.is_empty() {
-                        m.name.clone()
-                    } else {
-                        format!("{}/{}", dir.trim_end_matches('/'), m.name)
-                    };
-                    stack.push(child);
-                } else {
-                    by_name.entry(m.name.clone()).or_default().push(m);
-                }
-            }
-            for (name, mut group) in by_name {
-                if group.len() < 2 {
-                    continue; // only ever remove EXTRA copies, never singletons
-                }
-                let rel = if dir_rel.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}/{}", dir_rel, name)
-                };
-                // Newest first; if the name belongs in the mirror, keep it and
-                // trash the older copies; if it's an orphaned dup, trash them all.
-                group.sort_by_key(|m| std::cmp::Reverse(m.mtime_ms));
-                let start = if keep(&rel) { 1 } else { 0 };
-                for extra in &group[start..] {
-                    if let Some(id) = &extra.id {
-                        if self.trash_id(id).is_ok() {
-                            removed += 1;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(removed)
+    fn plan_dedupe_recursive(
+        &self,
+        root: &str,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> VfsResult<Vec<DedupeCandidate>> {
+        self.plan_duplicate_cleanup(root, keep)
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {

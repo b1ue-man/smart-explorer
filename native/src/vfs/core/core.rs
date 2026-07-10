@@ -66,6 +66,22 @@ pub struct VfsChangeBatch {
 
 pub type VfsResult<T> = io::Result<T>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeleteDisposition {
+    Recycle,
+    Permanent,
+    Unsupported,
+}
+
+/// One exact, read-only-planned duplicate cleanup target. Backends with stable
+/// IDs must populate `id` so applying an earlier safety preflight cannot delete
+/// a different same-name object after concurrent changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DedupeCandidate {
+    pub path: String,
+    pub id: Option<String>,
+}
+
 /// The storage interface. One implementation per protocol. `Send + Sync` so a
 /// single handle can be shared across rayon workers / scan + copy threads.
 pub trait Backend: Send + Sync {
@@ -74,10 +90,31 @@ pub trait Backend: Send + Sync {
     /// Forward-slash display root (where navigation starts / what the UI shows).
     fn root_display(&self) -> String;
 
+    /// Stable, non-secret identity for persisted side-specific state. Remote
+    /// backends should include their account/host endpoint, not only a path, so
+    /// two different connections named `/` cannot share a sync baseline.
+    fn state_identity(&self) -> String {
+        format!("{:?}:{}", self.scheme(), self.root_display())
+    }
+
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>>;
     fn stat(&self, path: &str) -> VfsResult<VfsMeta>;
+
+    /// Check whether `path` exists without treating access, transport, or
+    /// parsing failures as absence. Safety-critical overwrite and uniqueness
+    /// decisions must use this fallible form.
+    fn try_exists(&self, path: &str) -> VfsResult<bool> {
+        match self.stat(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Best-effort existence hint retained for non-destructive UI paths.
+    /// Mutating code must use `try_exists` so failures cannot look absent.
     fn exists(&self, path: &str) -> bool {
-        self.stat(path).is_ok()
+        self.try_exists(path).unwrap_or(false)
     }
 
     /// Stable backend identity for `path`, when the provider has one. Local
@@ -102,15 +139,60 @@ pub trait Backend: Send + Sync {
     /// (read from src backend, write to dst backend).
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let mut r = self.open_read(src)?;
-        let mut w = self.open_write(dst)?;
-        let n = io::copy(&mut r, &mut w)?;
-        Ok(n)
+        let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
+        let result = (|| {
+            let mut writer = self.open_write(&staged)?;
+            let copied = io::copy(&mut r, &mut writer)?;
+            writer.flush()?;
+            drop(writer);
+            super::promotion::promote_staged_replace(self, &staged, dst)?;
+            Ok(copied)
+        })();
+        if result.is_err() {
+            let _ = self.remove_file(&staged);
+        }
+        result
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()>;
+
+    /// Move `src` to a destination that must not already exist. This is a hard
+    /// atomicity contract: an existence probe followed by ordinary rename does
+    /// not satisfy it because another writer can create `dst` between calls.
+    /// Backends without a protocol/OS no-replace primitive stay unsupported.
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let _ = (src, dst);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "backend has no atomic no-replace rename",
+        ))
+    }
+
+    /// Commit a complete staged regular file without exposing partial content
+    /// or removing the old file before the replacement is visible. The default
+    /// uses only declared atomic primitives. ID-addressed providers may override
+    /// this with a verified update of the existing destination identity, but
+    /// must leave the namespace unambiguous on every successful return.
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        super::promotion::default_promote_staged(self, staged, destination)
+    }
+
+    /// Commit a complete staged regular file only if `destination` is still
+    /// absent. This must be one atomic no-replace operation; callers use it
+    /// after an absence preflight so a concurrent creator is never replaced.
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        super::promotion::default_promote_staged_no_replace(self, staged, destination)
+    }
     fn remove_file(&self, path: &str) -> VfsResult<()>;
     fn remove_dir(&self, path: &str) -> VfsResult<()>;
     fn mkdir_all(&self, path: &str) -> VfsResult<()>;
+
+    /// Semantics of this backend's `remove_*` methods. Most network protocols
+    /// delete permanently; providers such as Drive override this when removal
+    /// is recoverable, and read-only backends report Unsupported.
+    fn delete_disposition(&self) -> DeleteDisposition {
+        DeleteDisposition::Permanent
+    }
 
     /// Directory-walk width. Local = all cores; remote backends return a small
     /// number (a few SSH channels / one control connection).
@@ -118,10 +200,12 @@ pub trait Backend: Send + Sync {
         rayon::current_num_threads()
     }
 
-    /// Does `rename(src, dst)` atomically REPLACE an existing `dst`? Only then is
-    /// the "write temp then rename" safe-copy pattern correct. Default false -
-    /// e.g. Google Drive allows duplicate names so a rename creates a second file
-    /// instead of overwriting; SFTP/FTP renames may fail if the target exists.
+    /// Does `rename(src, dst)` atomically REPLACE an existing regular-file
+    /// `dst`, leaving an observer with either the old or new complete file?
+    /// Only then is the "write temp then rename" safe-copy pattern correct.
+    /// Default false. Providers such as Google Drive permit duplicate names and
+    /// therefore refuse occupied path renames; SFTP/FTP may also fail when the
+    /// target exists.
     /// Local filesystems override this to true.
     fn rename_overwrites(&self) -> bool {
         false
@@ -146,6 +230,37 @@ pub trait Backend: Send + Sync {
         self.remove_file(path)
     }
 
+    /// Plan the exact duplicate objects a mirror cleanup would remove, without
+    /// mutating anything. The orchestration layer uses this count in its delete
+    /// safety guard before any copy or delete begins.
+    fn plan_dedupe_recursive(
+        &self,
+        root: &str,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> VfsResult<Vec<DedupeCandidate>> {
+        let _ = (root, keep);
+        Ok(Vec::new())
+    }
+
+    /// Apply a previously preflighted cleanup plan. ID-addressed backends must
+    /// delete the exact recorded ID rather than resolving the path again.
+    fn apply_dedupe_plan(&self, plan: &[DedupeCandidate]) -> VfsResult<usize> {
+        let mut removed = 0usize;
+        for candidate in plan {
+            if let Err(error) = self.remove_file_id(&candidate.path, candidate.id.as_deref()) {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "duplicate cleanup stopped after {removed}/{} exact removals at {} (id {:?}): {error}",
+                        plan.len(), candidate.path, candidate.id
+                    ),
+                ));
+            }
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
     /// Make a mirror destination exact on backends that allow duplicate names
     /// (Google Drive): within `root` (recursively), for any name that has MORE
     /// THAN ONE file, keep just the newest if its relative path passes `keep`,
@@ -153,8 +268,8 @@ pub trait Backend: Send + Sync {
     /// are never touched (the normal plan handles those). Default no-op (names
     /// are already unique). Returns the count removed.
     fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
-        let _ = (root, keep);
-        Ok(0)
+        let plan = self.plan_dedupe_recursive(root, keep)?;
+        self.apply_dedupe_plan(&plan)
     }
 
     /// Is this a local-filesystem backend? Reading a local file to hash it is
@@ -220,8 +335,8 @@ pub trait Backend: Send + Sync {
         &self,
         _root: &str,
         _on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-    ) -> Option<crate::agent_proto::WireNode> {
-        None
+    ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
+        Ok(None)
     }
 
     /// Can this backend transfer an entire subtree in ONE session (the SSH
@@ -261,18 +376,19 @@ pub trait Backend: Send + Sync {
     }
 
     /// Recursively search under `root` server-side, streaming each match into
-    /// `tx` (paths RELATIVE to `root`). Returns true if the backend ran the
-    /// search (false = unsupported -> caller does a client-side walk). `cancel`
-    /// aborts the stream. Only the agent overrides this.
+    /// `tx` (paths RELATIVE to `root`). `Ok(true)` means the operation completed;
+    /// `Ok(false)` is reserved for an explicitly unsupported capability and may
+    /// only be returned before sending any hits. Transport, protocol, remote,
+    /// and cancellation failures are errors, never fallback signals.
     fn search(
         &self,
         root: &str,
         spec: &crate::agent_proto::SearchSpec,
         tx: crossbeam_channel::Sender<SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         let _ = (root, spec, tx, cancel);
-        false
+        Ok(false)
     }
 
     /// Can this backend produce the SYNC SIGNATURE (size+mtime, and MD5 on
@@ -284,18 +400,20 @@ pub trait Backend: Send + Sync {
     }
 
     /// Walk `root` server-side, streaming a `HashHit` per entry (rel path) into
-    /// `tx`; computes MD5 per file when `want_hash`. Returns true if the backend
-    /// ran it (false = unsupported -> caller does the client-side walk). `cancel`
-    /// aborts. Only the agent overrides this.
+    /// `tx`; computes MD5 per file when `want_hash`. `Ok(true)` means the walk
+    /// completed; `Ok(false)` is reserved for an explicitly unsupported
+    /// capability and may only be returned before sending entries. All failures
+    /// after dispatch are errors so callers never merge partial and fallback
+    /// snapshots.
     fn walk_hashed(
         &self,
         root: &str,
         want_hash: bool,
         tx: crossbeam_channel::Sender<HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
-    ) -> bool {
+    ) -> VfsResult<bool> {
         let _ = (root, want_hash, tx, cancel);
-        false
+        Ok(false)
     }
 }
 

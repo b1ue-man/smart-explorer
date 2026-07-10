@@ -80,19 +80,20 @@ jobs:
           cargo clippy --manifest-path ../share-server/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path ../se-agent/Cargo.toml --all-targets -- -D warnings
 
-      - name: Check SSH agent (static musl)
-        working-directory: se-agent
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      - name: Build and verify embedded SSH agents
+        working-directory: .
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl
-          cargo build --release --target aarch64-unknown-linux-musl
+          native/build-agent-bundles.sh
+          if ! git diff --exit-code -- native/agent-bin; then
+            echo "::error::Committed SSH-agent bundles are stale. Run native/build-agent-bundles.sh and commit native/agent-bin/."
+            exit 1
+          fi
 
       - name: Check context-menu COM DLL
         working-directory: native/explorer-command
         run: cargo check --target x86_64-pc-windows-gnu
 
-      - name: Check share rendezvous server
+      - name: Check share signaling/relay server
         working-directory: share-server
         run: |
           cargo check
@@ -102,17 +103,18 @@ jobs:
       - name: Release build
         run: |
           cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater --bin se
-          cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se
+          mkdir -p out
+          SMART_EXPLORER_FEED_DIR="$PWD/out" \
+          SMART_EXPLORER_SHARE_DIR="$PWD/out" \
+            ./publish-linux-feed-wsl.sh
 
       - name: Build context-menu COM DLL
         working-directory: native/explorer-command
         run: cargo build --release --target x86_64-pc-windows-gnu
 
-      - name: Build share rendezvous server
+      - name: Build share signaling/relay server
         working-directory: share-server
-        run: |
-          cargo build --release --target x86_64-pc-windows-gnu --bin se-share-server
-          cargo build --release --bin se-share-server
+        run: cargo build --release --target x86_64-pc-windows-gnu --bin se-share-server
 
       - name: Stage feed + build installer
         id: stage
@@ -121,13 +123,9 @@ jobs:
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
           cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
           cp "target/x86_64-pc-windows-gnu/release/se.exe" "out/se.exe"
-          cp "target/release/smart_explorer" "out/smart_explorer"
-          cp "target/release/smart_explorer_updater" "out/smart_explorer_updater"
-          cp "target/release/se" "out/se"
           cp "../install-linux.sh" "out/install-linux.sh"
           cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
           cp "../share-server/target/x86_64-pc-windows-gnu/release/se-share-server.exe" "out/se-share-server.exe"
-          cp "../share-server/target/release/se-share-server" "out/se-share-server-linux"
           ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
           ( cd out
             sha256sum smart_explorer.exe > smart_explorer.exe.sha256
@@ -137,11 +135,18 @@ jobs:
             sha256sum smart_explorer_updater > smart_explorer_updater.sha256
             sha256sum se > se.sha256
           )
+          {
+            printf 'version=%s\n' "$ver"
+            for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
+              printf '%s=%s\n' "$payload" "$(sha256sum "out/$payload" | awk '{print $1}')"
+            done
+          } > out/windows-build.manifest
+          file out/smart_explorer | grep -Eq 'statically linked|static-pie linked'
+          file out/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
           printf '%s\n' "$ver" > out/version.txt
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           # NSIS installer (per-user; sets the Git update source + context menu).
-          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" -DCLI_SRC="target/x86_64-pc-windows-gnu/release/se.exe" installer.nsi
-          cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
+          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" -DCLI_SRC="target/x86_64-pc-windows-gnu/release/se.exe" -DINSTALLER_OUT="$PWD/out/Smart Explorer Setup $ver.exe" installer.nsi
           echo "Built version $ver (Windows exe/updater/se + Linux desktop binaries/se + dll + installer)"
 
       - uses: actions/upload-artifact@v4
@@ -176,7 +181,79 @@ jobs:
           test -s ../release-native/update-feed/smart_explorer.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.sha256
           test -s ../release-native/update-feed/se.sha256
-          echo "Feed matches Cargo.toml ($ver)."
+          test -s ../release-native/update-feed/windows-build.manifest
+          test -s "../release-native/Smart Explorer Setup $ver.exe"
+          test -s "../release-native/Smart Explorer.exe"
+          test -s "../release-native/Smart Explorer Updater.exe"
+          test -s ../release-native/se.exe
+          test -s ../release-native/share-server/se-share-server.exe
+          test -s ../release-native/share-server/se-share-server-linux
+          test -s ../release-native/smart_explorer_command.dll
+          test -x ../install-linux.sh
+          (
+            cd ../release-native/update-feed
+            sha256sum -c smart_explorer.exe.sha256
+            sha256sum -c smart_explorer_updater.exe.sha256
+            sha256sum -c se.exe.sha256
+            sha256sum -c smart_explorer.sha256
+            sha256sum -c smart_explorer_updater.sha256
+            sha256sum -c se.sha256
+            for payload in \
+              smart_explorer.exe smart_explorer_updater.exe se.exe \
+              smart_explorer smart_explorer_updater se; do
+              expected="$(awk 'NR == 1 { print $1 }' "$payload.sha256")"
+              actual="$(sha256sum "$payload" | awk '{ print $1 }')"
+              if ! [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || [[ "${expected,,}" != "$actual" ]]; then
+                echo "::error::$payload.sha256 does not bind the exact $payload bytes."
+                exit 1
+              fi
+            done
+          )
+          manifest=../release-native/update-feed/windows-build.manifest
+          if [[ "$(awk -F= '$1 == "version" { count++; value=substr($0, index($0, "=") + 1) } END { sub(/\r$/, "", value); if (count != 1) exit 1; print value }' "$manifest")" != "$ver" ]]; then
+            echo "::error::Committed Windows build manifest does not bind version $ver."
+            exit 1
+          fi
+          for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
+            hash="$(sha256sum "../release-native/update-feed/$payload" | awk '{print $1}')"
+            if [[ "$(tr -d '\r' < "$manifest" | grep -Fxc "$payload=$hash")" != 1 ]]; then
+              echo "::error::Committed Windows build manifest does not bind $payload."
+              exit 1
+            fi
+          done
+          file ../release-native/update-feed/smart_explorer | grep -Eq 'statically linked|static-pie linked'
+          file ../release-native/share-server/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
+          x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllGetClassObject
+          x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllCanUnloadNow
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [[ "${GITHUB_REF_NAME#v}" != "$ver" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $ver."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/heads/release/* ]]; then
+            branch_ver="${GITHUB_REF_NAME##*/}"
+            branch_ver="${branch_ver#v}"
+            if [[ "$branch_ver" != "$ver" ]]; then
+              echo "::error::Release branch $GITHUB_REF_NAME does not match Cargo.toml version $ver."
+              exit 1
+            fi
+          fi
+          # Fresh builds above are compile gates. GitHub Release assets must be
+          # the exact committed artifacts that installed clients fetch and that
+          # this release gate just verified, so replace out/ only after checks.
+          for asset in \
+            smart_explorer.exe smart_explorer_updater.exe se.exe \
+            smart_explorer.exe.sha256 smart_explorer_updater.exe.sha256 se.exe.sha256 \
+            smart_explorer smart_explorer_updater se \
+            smart_explorer.sha256 smart_explorer_updater.sha256 se.sha256 \
+            version.txt; do
+            cp "../release-native/update-feed/$asset" "out/$asset"
+          done
+          cp "../release-native/Smart Explorer Setup $ver.exe" "out/Smart Explorer Setup $ver.exe"
+          cp ../release-native/smart_explorer_command.dll out/smart_explorer_command.dll
+          cp ../release-native/share-server/se-share-server.exe out/se-share-server.exe
+          cp ../release-native/share-server/se-share-server-linux out/se-share-server-linux
+          cp ../install-linux.sh out/install-linux.sh
+          echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
 
       - name: Publish GitHub Release
         # Fires on a v* tag, a manual dispatch, OR a push to a release/** branch.
@@ -214,7 +291,8 @@ jobs:
             - **smart_explorer** / **smart_explorer_updater** — Linux x86_64
               desktop app and updater payloads used by the one-line installer.
             - **se-share-server.exe** / **se-share-server-linux** —
-              standalone rendezvous server for direct peer sharing.
+              standalone signaling server plus Iroh encrypted-traffic relay for
+              direct peer sharing.
 
             Built by CI (ubuntu + mingw-w64 + `x86_64-pc-windows-gnu`). Update +
             release flow: `docs/RELEASING.md`.

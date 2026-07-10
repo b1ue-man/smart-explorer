@@ -3,11 +3,14 @@
 //! decide what to move to the recycle bin.
 
 mod backend;
+mod backend_duplicates;
 #[cfg(test)]
 mod backend_tests;
+mod budget;
 mod cleanup;
 mod duplicates;
 mod local;
+mod retention;
 mod types;
 mod util;
 mod verify;

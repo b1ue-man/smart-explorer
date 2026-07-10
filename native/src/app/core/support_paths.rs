@@ -1,5 +1,4 @@
 use super::prelude::*;
-use super::*;
 
 /// First-run liability notice (single source: the repo's DISCLAIMER.txt, also
 /// used by the installer's accept page).
@@ -62,19 +61,6 @@ pub(in crate::app) fn default_device_name() -> String {
         .unwrap_or_else(|_| "Mein Gerät".to_string())
 }
 
-/// Stream a remote file to a temp copy and return its local path (for opening
-/// remote files in their associated app). Overwrites a prior copy of the same
-/// name so re-opening picks up fresh content.
-pub(in crate::app) fn download_to_temp(
-    be: &dyn crate::vfs::Backend,
-    path: &str,
-    name: &str,
-) -> Result<String, String> {
-    download_to(be, path, &open_temp_path(name))
-}
-
-/// Stream a remote file to an explicit local `dest` (creating parents). Returns
-/// the local path string for launching.
 /// How an opened file is launched once it's local: the OS default app, or the
 /// native Windows "Open with…" chooser (the `openas` shell verb).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

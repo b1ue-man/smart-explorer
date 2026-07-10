@@ -16,6 +16,10 @@ pub(super) fn updater_error_path() -> PathBuf {
     appdata_dir().join("last_updater_error.txt")
 }
 
+pub(super) fn staged_update_manifest_path() -> PathBuf {
+    appdata_dir().join("staged_update.json")
+}
+
 pub fn take_updater_error() -> Option<String> {
     let p = updater_error_path();
     let raw = std::fs::read_to_string(&p).ok()?;
@@ -57,8 +61,11 @@ pub fn update_source_str() -> Option<String> {
 pub fn set_update_source(path: &str) -> std::io::Result<()> {
     let path = path.trim();
     if path.is_empty() {
-        let _ = std::fs::remove_file(override_path());
-        Ok(())
+        match std::fs::remove_file(override_path()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     } else {
         std::fs::write(override_path(), path)
     }

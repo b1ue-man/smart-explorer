@@ -35,18 +35,27 @@ impl App {
             let backend = rs.backend.clone();
             let n = items.len();
             let (tx, rx) = unbounded();
-            self.clip_download_rx = Some(rx);
-            self.notice = Some((
-                format!("Bereite {} Element(e) fuer die Zwischenablage vor...", n),
-                std::time::Instant::now(),
-            ));
-            std::thread::Builder::new()
+            let spawn = std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
                     let local = download_remote_clipboard_items(&*backend, &items, filter);
                     let _ = tx.send(local);
-                })
-                .ok();
+                });
+            match spawn {
+                Ok(_) => {
+                    self.clip_download_rx = Some(rx);
+                    self.notice = Some((
+                        format!("Bereite {} Element(e) fuer die Zwischenablage vor...", n),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.clip_download_rx = None;
+                    self.error_msg = Some(format!(
+                        "Zwischenablage-Download konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
             return;
         }
         let has_dir = self
@@ -67,26 +76,35 @@ impl App {
             let filter = self.filter.clone();
             let prefix = self.root_prefix();
             let (tx, rx) = unbounded();
-            self.clip_prepare_rx = Some(rx);
-            self.notice = Some((
-                "Sammle gefilterte Dateien…".to_string(),
-                std::time::Instant::now(),
-            ));
-            std::thread::Builder::new()
+            let spawn = std::thread::Builder::new()
                 .name("clip-prepare".into())
                 .spawn(move || {
                     let cf = CompiledFilter::compile(&filter);
                     let mut out: Vec<ClipboardVirtualFile> = Vec::new();
                     for e in &seeds {
-                        if e.is_dir {
+                        if e.is_dir && !e.is_symlink {
                             let parent_norm = e.parent.trim_end_matches('/');
                             let base = format!("{}/", parent_norm);
-                            let sub = crate::scanner::collect_recursive(
+                            let collected = crate::scanner::collect_recursive(
                                 &PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
                                 false,
                                 e.depth + 1,
+                                &std::sync::atomic::AtomicBool::new(false),
                             );
-                            for s in sub {
+                            if !collected.is_complete() {
+                                let first = collected
+                                    .issues
+                                    .first()
+                                    .map(|issue| format!("{}: {}", issue.path, issue.detail))
+                                    .unwrap_or_else(|| "unvollständige Ordnererfassung".to_string());
+                                let total = collected.issues.len() as u64
+                                    + collected.suppressed_issues;
+                                let _ = tx.send(Err(format!(
+                                    "Gefilterte Zwischenablage konnte nicht vollständig erstellt werden ({total} Fehler): {first}"
+                                )));
+                                return;
+                            }
+                            for s in collected.entries {
                                 if !s.is_dir && cf.matches(&s, &prefix) {
                                     let rel = s
                                         .path
@@ -99,6 +117,13 @@ impl App {
                                         size: s.size,
                                         mtime_ms: s.mtime_ms,
                                     });
+                                    if out.len() >= 1_000_000 {
+                                        let _ = tx.send(Err(
+                                            "Gefilterte Zwischenablage überschreitet das Limit von 1.000.000 Dateien."
+                                                .to_string(),
+                                        ));
+                                        return;
+                                    }
                                 }
                             }
                         } else {
@@ -111,9 +136,23 @@ impl App {
                             });
                         }
                     }
-                    let _ = tx.send(out);
-                })
-                .ok();
+                    let _ = tx.send(Ok(out));
+                });
+            match spawn {
+                Ok(_) => {
+                    self.clip_prepare_rx = Some(rx);
+                    self.notice = Some((
+                        "Sammle gefilterte Dateien…".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.clip_prepare_rx = None;
+                    self.error_msg = Some(format!(
+                        "Gefilterte Zwischenablage konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
             return;
         }
 
@@ -186,24 +225,15 @@ impl App {
         // copy them directly without the COM stream round-trip.
         if let Some((seq, pairs)) = self.virtual_clip.clone() {
             if virtual_clipboard_sequence() == Some(seq) {
-                self.notice = Some((
-                    format!("📥 Einfügen (gefiltert): {} Datei(en)", pairs.len()),
-                    std::time::Instant::now(),
-                ));
-                let (tx, rx) = unbounded();
-                let h = crate::copy::start_copy_pairs(pairs, dest, Conflict::Rename, tx);
-                self.copy_handle = Some(h);
-                self.copy_rx = Some(rx);
-                self.copy_progress = Some(CopyProgress {
-                    files_done: 0,
-                    files_total: 0,
-                    bytes_done: 0,
-                    bytes_total: 0,
-                    elapsed_ms: 0,
-                    errors: 0,
-                    done: false,
-                });
-                self.copy_refresh_after = true;
+                let count = pairs.len();
+                if self.start_copy_job(CopyMode::Copy, true, move |tx| {
+                    crate::copy::start_copy_pairs(pairs, dest, Conflict::Rename, tx)
+                }) {
+                    self.notice = Some((
+                        format!("📥 Einfügen (gefiltert): {} Datei(en)", count),
+                        std::time::Instant::now(),
+                    ));
+                }
                 return;
             } else {
                 self.virtual_clip = None;
@@ -227,18 +257,12 @@ impl App {
             ));
             return;
         }
-        self.notice = Some((
-            format!(
-                "📥 Füge {} {} ein…",
-                paths.len(),
-                if is_cut {
-                    "Datei(en) (verschieben)"
-                } else {
-                    "Datei(en)"
-                }
-            ),
-            std::time::Instant::now(),
-        ));
+        let count = paths.len();
+        let mode = if is_cut {
+            CopyMode::Move
+        } else {
+            CopyMode::Copy
+        };
         let common_parent = PathBuf::from(&paths[0])
             .parent()
             .map(|p| p.to_path_buf())
@@ -248,26 +272,22 @@ impl App {
             dest,
             preserve_structure: true,
             conflict: Conflict::Rename,
-            mode: if is_cut {
-                CopyMode::Move
-            } else {
-                CopyMode::Copy
-            },
+            mode,
         };
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let h = start_copy_from_paths(paths, opts, tx);
-        self.copy_handle = Some(h);
-        self.copy_rx = Some(rx);
-        self.copy_progress = Some(CopyProgress {
-            files_done: 0,
-            files_total: 0,
-            bytes_done: 0,
-            bytes_total: 0,
-            elapsed_ms: 0,
-            errors: 0,
-            done: false,
-        });
-        self.copy_refresh_after = true;
+        if self.start_copy_job(mode, true, move |tx| start_copy_from_paths(paths, opts, tx)) {
+            self.notice = Some((
+                format!(
+                    "📥 Füge {} {} ein…",
+                    count,
+                    if is_cut {
+                        "Datei(en) (verschieben)"
+                    } else {
+                        "Datei(en)"
+                    }
+                ),
+                std::time::Instant::now(),
+            ));
+        }
     }
 
     // ─── Drag-and-drop into the app ─────────────────────────────────────
@@ -279,19 +299,15 @@ impl App {
         paths: Vec<String>,
         dest: PathBuf,
         move_files: bool,
-    ) {
+    ) -> bool {
         if paths.is_empty() {
-            return;
+            return false;
         }
-        if self
-            .copy_progress
-            .as_ref()
-            .map(|p| !p.done)
-            .unwrap_or(false)
-        {
-            self.error_msg = Some("Es läuft bereits ein Kopiervorgang.".to_string());
-            return;
-        }
+        let mode = if move_files {
+            CopyMode::Move
+        } else {
+            CopyMode::Copy
+        };
         let common_parent = PathBuf::from(&paths[0])
             .parent()
             .map(|p| p.to_path_buf())
@@ -301,25 +317,8 @@ impl App {
             dest,
             preserve_structure: true,
             conflict: Conflict::Rename,
-            mode: if move_files {
-                CopyMode::Move
-            } else {
-                CopyMode::Copy
-            },
+            mode,
         };
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let h = start_copy_from_paths(paths, opts, tx);
-        self.copy_handle = Some(h);
-        self.copy_rx = Some(rx);
-        self.copy_progress = Some(CopyProgress {
-            files_done: 0,
-            files_total: 0,
-            bytes_done: 0,
-            bytes_total: 0,
-            elapsed_ms: 0,
-            errors: 0,
-            done: false,
-        });
-        self.copy_refresh_after = true;
+        self.start_copy_job(mode, true, move |tx| start_copy_from_paths(paths, opts, tx))
     }
 }

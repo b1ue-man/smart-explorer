@@ -1,6 +1,14 @@
-use super::types::{SyncJob, Trigger};
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
-use std::path::PathBuf;
+#[cfg(test)]
+use super::persistence_codec::parse_kv;
+pub(super) use super::persistence_codec::san;
+use super::persistence_codec::{parse_kv_checked, serialize_kv};
+use super::types::SyncJob;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const MAX_JOB_FILE_BYTES: u64 = 1024 * 1024;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn app_data_dir() -> PathBuf {
     crate::support_dirs::sync_data_dir()
@@ -13,9 +21,23 @@ pub fn jobs_path() -> PathBuf {
 
 /// Directory holding one `<id>.conf` per job.
 pub fn jobs_dir() -> PathBuf {
-    let d = app_data_dir().join("jobs");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    app_data_dir().join("jobs")
+}
+
+fn ensure_jobs_dir() -> io::Result<PathBuf> {
+    let directory = jobs_dir();
+    std::fs::create_dir_all(&directory)?;
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "sync jobs path is not a regular directory: {}",
+                directory.display()
+            ),
+        ));
+    }
+    Ok(directory)
 }
 
 pub(super) fn job_file(dir: &std::path::Path, id: &str) -> PathBuf {
@@ -23,210 +45,21 @@ pub(super) fn job_file(dir: &std::path::Path, id: &str) -> PathBuf {
 }
 
 /// Strip anything that could escape the filename (ids are hex, but be safe).
-fn san_id(s: &str) -> String {
+pub(super) fn san_id(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect()
 }
 
-/// Strip characters that would break the one-value-per-line format.
-pub(super) fn san(s: &str) -> String {
-    s.replace(['\t', '\n', '\r'], " ")
-}
-
-/// Serialize one job as a `key=value` block (the body of its `.conf` file).
-fn serialize_kv(j: &SyncJob) -> String {
-    let mut s = String::new();
-    s.push_str("# Smart Explorer sync job\n");
-    s.push_str(&format!("id={}\n", san(&j.id)));
-    s.push_str(&format!("name={}\n", san(&j.name)));
-    s.push_str(&format!("source={}\n", san(&j.source)));
-    s.push_str(&format!("target={}\n", san(&j.target)));
-    s.push_str(&format!("direction={}\n", j.direction.as_str()));
-    s.push_str(&format!("conflict={}\n", j.conflict.as_str()));
-    s.push_str(&format!("retain_days={}\n", j.retain_days));
-    s.push_str(&format!("interval_min={}\n", j.interval_min));
-    s.push_str(&format!(
-        "include_hidden={}\n",
-        if j.include_hidden { 1 } else { 0 }
-    ));
-    for pat in &j.ignore {
-        let p = san(pat);
-        if !p.trim().is_empty() {
-            s.push_str(&format!("ignore={}\n", p));
-        }
-    }
-    s.push_str(&format!("last_run={}\n", j.last_run));
-    s.push_str(&format!("enabled={}\n", if j.enabled { 1 } else { 0 }));
-    s.push_str(&format!("trigger={}\n", j.trigger.as_str()));
-    s.push_str(&format!("cal_time_min={}\n", j.cal_time_min));
-    s.push_str(&format!("cal_weekdays={}\n", j.cal_weekdays));
-    s.push_str(&format!("cal_monthday={}\n", j.cal_monthday));
-    s.push_str(&format!("rt_debounce_secs={}\n", j.rt_debounce_secs));
-    s.push_str(&format!("connect_match={}\n", san(&j.connect_match)));
-    s.push_str(&format!("active_from_min={}\n", j.active_from_min));
-    s.push_str(&format!("active_to_min={}\n", j.active_to_min));
-    s.push_str(&format!("catch_up={}\n", if j.catch_up { 1 } else { 0 }));
-    s.push_str(&format!("delete_policy={}\n", j.delete_policy.as_str()));
-    s.push_str(&format!(
-        "move_files={}\n",
-        if j.move_files { 1 } else { 0 }
-    ));
-    s.push_str(&format!("compare={}\n", j.compare.as_str()));
-    s.push_str(&format!("modify_window_sec={}\n", j.modify_window_sec));
-    s.push_str(&format!(
-        "versioning_scheme={}\n",
-        j.versioning_scheme.as_str()
-    ));
-    s.push_str(&format!("retain_count={}\n", j.retain_count));
-    s.push_str(&format!(
-        "use_recycle_bin={}\n",
-        if j.use_recycle_bin { 1 } else { 0 }
-    ));
-    s.push_str(&format!("max_delete={}\n", j.max_delete));
-    s.push_str(&format!("max_delete_pct={}\n", j.max_delete_pct));
-    s.push_str(&format!("filter_min_size_kb={}\n", j.filter_min_size_kb));
-    s.push_str(&format!("filter_max_size_kb={}\n", j.filter_max_size_kb));
-    s.push_str(&format!("filter_max_age_days={}\n", j.filter_max_age_days));
-    s.push_str(&format!("filter_min_age_days={}\n", j.filter_min_age_days));
-    s.push_str(&format!("bwlimit_kbps={}\n", j.bwlimit_kbps));
-    s.push_str(&format!("max_transfers={}\n", j.max_transfers));
-    s.push_str(&format!(
-        "atomic_copy={}\n",
-        if j.atomic_copy { 1 } else { 0 }
-    ));
-    s.push_str(&format!("verify={}\n", if j.verify { 1 } else { 0 }));
-    s.push_str(&format!("retries={}\n", j.retries));
-    s.push_str(&format!("retry_delay_secs={}\n", j.retry_delay_secs));
-    s.push_str(&format!("run_before={}\n", san(&j.run_before)));
-    s.push_str(&format!("run_after={}\n", san(&j.run_after)));
-    s
-}
-
-/// Parse one `key=value` job block. Tolerant: unknown keys ignored, missing keys
-/// take defaults, repeated `ignore=` lines accumulate.
-pub(super) fn parse_kv(body: &str) -> Option<SyncJob> {
-    let mut j = SyncJob::new(String::new(), String::new(), String::new());
-    j.id.clear();
-    j.ignore.clear();
-    let mut saw_any = false;
-    let mut saw_trigger = false;
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+pub(super) fn load_dir(dir: &Path) -> io::Result<Vec<SyncJob>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("conf") {
             continue;
         }
-        let (k, v) = match line.split_once('=') {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => continue,
-        };
-        saw_any = true;
-        match k {
-            "id" => j.id = v.to_string(),
-            "name" => j.name = v.to_string(),
-            "source" => j.source = v.to_string(),
-            "target" => j.target = v.to_string(),
-            "direction" => j.direction = Direction::parse(v).unwrap_or(Direction::Both),
-            "conflict" => j.conflict = ConflictMode::parse(v).unwrap_or(ConflictMode::FileLevel),
-            "retain_days" => j.retain_days = v.parse().unwrap_or(30),
-            "interval_min" => j.interval_min = v.parse().unwrap_or(0),
-            "include_hidden" => j.include_hidden = v != "0",
-            "ignore" if !v.is_empty() => {
-                j.ignore.push(v.to_string());
-            }
-            "last_run" => j.last_run = v.parse().unwrap_or(0),
-            "enabled" => j.enabled = v != "0",
-            "trigger" => {
-                j.trigger = Trigger::parse(v).unwrap_or(Trigger::Manual);
-                saw_trigger = true;
-            }
-            "cal_time_min" => j.cal_time_min = v.parse().unwrap_or(540),
-            "cal_weekdays" => j.cal_weekdays = v.parse().unwrap_or(0),
-            "cal_monthday" => j.cal_monthday = v.parse().unwrap_or(0),
-            "rt_debounce_secs" => j.rt_debounce_secs = v.parse().unwrap_or(10),
-            "connect_match" => j.connect_match = v.to_string(),
-            "active_from_min" => j.active_from_min = v.parse().unwrap_or(0),
-            "active_to_min" => j.active_to_min = v.parse().unwrap_or(0),
-            "catch_up" => j.catch_up = v != "0",
-            "delete_policy" => {
-                j.delete_policy = DeletePolicy::parse(v).unwrap_or(DeletePolicy::Propagate)
-            }
-            "move_files" => j.move_files = v != "0",
-            "compare" => j.compare = CompareMode::parse(v).unwrap_or(CompareMode::MtimeSize),
-            "modify_window_sec" => j.modify_window_sec = v.parse().unwrap_or(0),
-            "versioning_scheme" => {
-                j.versioning_scheme = VersioningScheme::parse(v).unwrap_or(VersioningScheme::Days)
-            }
-            "retain_count" => j.retain_count = v.parse().unwrap_or(0),
-            "use_recycle_bin" => j.use_recycle_bin = v != "0",
-            "max_delete" => j.max_delete = v.parse().unwrap_or(0),
-            "max_delete_pct" => j.max_delete_pct = v.parse().unwrap_or(0),
-            "filter_min_size_kb" => j.filter_min_size_kb = v.parse().unwrap_or(0),
-            "filter_max_size_kb" => j.filter_max_size_kb = v.parse().unwrap_or(0),
-            "filter_max_age_days" => j.filter_max_age_days = v.parse().unwrap_or(0),
-            "filter_min_age_days" => j.filter_min_age_days = v.parse().unwrap_or(0),
-            "bwlimit_kbps" => j.bwlimit_kbps = v.parse().unwrap_or(0),
-            "max_transfers" => j.max_transfers = v.parse().unwrap_or(0),
-            "atomic_copy" => j.atomic_copy = v != "0",
-            "verify" => j.verify = v != "0",
-            "retries" => j.retries = v.parse().unwrap_or(0),
-            "retry_delay_secs" => j.retry_delay_secs = v.parse().unwrap_or(2),
-            "run_before" => j.run_before = v.to_string(),
-            "run_after" => j.run_after = v.to_string(),
-            _ => {}
-        }
-    }
-    if !saw_trigger && j.interval_min > 0 {
-        j.trigger = Trigger::Interval;
-    }
-    if saw_any && !j.id.is_empty() {
-        Some(j)
-    } else {
-        None
-    }
-}
-
-/// Legacy positional-TSV line parser (for one-time import of the old jobs.tsv).
-fn parse_legacy(line: &str) -> Option<SyncJob> {
-    let f: Vec<&str> = line.split('\t').collect();
-    if f.len() < 12 {
-        return None;
-    }
-    let mut j = SyncJob::new(f[1].to_string(), f[2].to_string(), f[3].to_string());
-    j.id = f[0].to_string();
-    j.direction = Direction::parse(f[4]).unwrap_or(Direction::Both);
-    j.conflict = ConflictMode::parse(f[5]).unwrap_or(ConflictMode::FileLevel);
-    j.retain_days = f[6].parse().unwrap_or(30);
-    j.interval_min = f[7].parse().unwrap_or(0);
-    j.include_hidden = f[8] != "0";
-    j.ignore = if f[9].is_empty() {
-        Vec::new()
-    } else {
-        f[9].split('\u{1f}').map(|s| s.to_string()).collect()
-    };
-    j.last_run = f[10].parse().unwrap_or(0);
-    j.enabled = f[11] != "0";
-    j.trigger = if j.interval_min > 0 {
-        Trigger::Interval
-    } else {
-        Trigger::Manual
-    };
-    Some(j)
-}
-
-fn load_dir(dir: &std::path::Path) -> Vec<SyncJob> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("conf") {
-                if let Ok(body) = std::fs::read_to_string(&p) {
-                    if let Some(j) = parse_kv(&body) {
-                        out.push(j);
-                    }
-                }
-            }
-        }
+        out.push(load_job_file(&path)?);
     }
     out.sort_by(|a, b| {
         a.name
@@ -234,59 +67,94 @@ fn load_dir(dir: &std::path::Path) -> Vec<SyncJob> {
             .cmp(&b.name.to_lowercase())
             .then(a.id.cmp(&b.id))
     });
-    out
+    Ok(out)
 }
 
-pub(super) fn write_job(dir: &std::path::Path, job: &SyncJob) -> std::io::Result<()> {
-    std::fs::write(job_file(dir, &job.id), serialize_kv(job))
+pub(super) fn load_job_file(path: &Path) -> io::Result<SyncJob> {
+    let body = read_regular_utf8(path, MAX_JOB_FILE_BYTES, "sync job configuration")?;
+    let job = parse_kv_checked(&body).map_err(|error| {
+        invalid_data(format!(
+            "invalid sync job configuration {}: {error}",
+            path.display()
+        ))
+    })?;
+    let expected_id = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| invalid_data("configuration filename is not valid UTF-8"))?;
+    if job.id != expected_id {
+        return Err(invalid_data(format!(
+            "sync job id {:?} does not match filename {:?}: {}",
+            job.id,
+            expected_id,
+            path.display()
+        )));
+    }
+    Ok(job)
 }
 
-fn save_dir(dir: &std::path::Path, jobs: &[SyncJob]) -> std::io::Result<()> {
-    let keep: Vec<String> = jobs.iter().map(|j| san_id(&j.id)).collect();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("conf") {
-                let stem = p
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !keep.contains(&stem) {
-                    let _ = std::fs::remove_file(&p);
-                }
-            }
+pub(super) fn write_job(dir: &Path, job: &SyncJob) -> io::Result<()> {
+    job.validate()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    if job.id != san_id(&job.id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sync job id contains characters that are unsafe in filenames",
+        ));
+    }
+    atomic_write(&job_file(dir, &job.id), serialize_kv(job).as_bytes())
+}
+
+#[cfg(test)]
+fn save_dir(dir: &Path, jobs: &[SyncJob]) -> io::Result<()> {
+    for job in jobs {
+        job.validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        if job.id != san_id(&job.id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsafe sync job id",
+            ));
         }
     }
+    let keep: Vec<String> = jobs.iter().map(|j| san_id(&j.id)).collect();
     for j in jobs {
         write_job(dir, j)?;
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("conf") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| invalid_data("sync job filename is not valid UTF-8"))?;
+        if !keep.iter().any(|id| id == stem) {
+            std::fs::remove_file(path)?;
+        }
     }
     Ok(())
 }
 
-pub fn load() -> Vec<SyncJob> {
-    let dir = jobs_dir();
-    let jobs = load_dir(&dir);
-    if jobs.is_empty() {
-        let legacy = jobs_path();
-        if let Ok(s) = std::fs::read_to_string(&legacy) {
-            let imported: Vec<SyncJob> = s.lines().filter_map(parse_legacy).collect();
-            if !imported.is_empty() {
-                let _ = save_dir(&dir, &imported);
-                let _ = std::fs::rename(&legacy, legacy.with_extension("tsv.imported"));
-                return load_dir(&dir);
-            }
-        }
-    }
-    jobs
+pub fn load() -> io::Result<Vec<SyncJob>> {
+    let directory = ensure_jobs_dir()?;
+    super::migration::load_or_migrate(&directory, &jobs_path())
 }
 
 /// Add or replace a job (by id) - rewrites just that job's file.
-pub fn upsert(job: &SyncJob) -> std::io::Result<()> {
-    write_job(&jobs_dir(), job)
+pub fn upsert(job: &SyncJob) -> io::Result<()> {
+    let directory = ensure_jobs_dir()?;
+    write_job(&directory, job)
 }
 
-pub fn remove(id: &str) -> std::io::Result<()> {
+pub fn remove(id: &str) -> io::Result<()> {
+    if id != san_id(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsafe sync job id",
+        ));
+    }
     match std::fs::remove_file(job_file(&jobs_dir(), id)) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -294,9 +162,90 @@ pub fn remove(id: &str) -> std::io::Result<()> {
     }
 }
 
+pub(super) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut last_collision = None;
+    for _ in 0..16 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(
+            ".{}.{}.{}.tmp",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("sync-job"),
+            std::process::id(),
+            sequence
+        ));
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let result = (|| {
+            file.write_all(contents)?;
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            super::platform::atomic_replace(&temp, path)?;
+            super::platform::sync_parent(parent)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        return result;
+    }
+    Err(last_collision.unwrap_or_else(|| {
+        io::Error::new(io::ErrorKind::AlreadyExists, "temporary filename collision")
+    }))
+}
+
+pub(super) fn read_regular_utf8(path: &Path, limit: u64, label: &str) -> io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(invalid_data(format!(
+            "{label} is not a regular file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() > limit {
+        return Err(invalid_data(format!(
+            "{label} exceeds {limit} bytes: {}",
+            path.display()
+        )));
+    }
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| invalid_data(format!("{label} size does not fit this platform")))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid_data(format!(
+            "{label} exceeds {limit} bytes: {}",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|error| invalid_data(format!("{label} is not UTF-8: {error}")))
+}
+
+fn invalid_data(error: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bisync::{ConflictMode, Direction};
+    use crate::syncjobs::persistence_codec::parse_legacy;
 
     fn sample() -> SyncJob {
         let mut j = SyncJob::new("Docs".into(), "C:/a".into(), "D:/b".into());
@@ -360,17 +309,17 @@ mod tests {
         let a = SyncJob::new("A".into(), "s".into(), "t".into());
         let b = SyncJob::new("B".into(), "s2".into(), "t2".into());
         save_dir(&dir, &[a.clone(), b.clone()]).unwrap();
-        assert_eq!(load_dir(&dir).len(), 2);
+        assert_eq!(load_dir(&dir).unwrap().len(), 2);
 
         let mut a2 = a.clone();
         a2.name = "A2".into();
         write_job(&dir, &a2).unwrap();
-        let l2 = load_dir(&dir);
+        let l2 = load_dir(&dir).unwrap();
         assert_eq!(l2.iter().find(|j| j.id == a.id).unwrap().name, "A2");
         assert_eq!(l2.len(), 2);
 
         save_dir(&dir, std::slice::from_ref(&b)).unwrap();
-        let l3 = load_dir(&dir);
+        let l3 = load_dir(&dir).unwrap();
         assert_eq!(l3.len(), 1);
         assert_eq!(l3[0].id, b.id);
         std::fs::remove_dir_all(&dir).ok();
@@ -400,5 +349,34 @@ mod tests {
         assert_eq!(back.direction, Direction::AtoB);
         assert_eq!(back.conflict, ConflictMode::NewerWins);
         assert_eq!(back.ignore.len(), 2);
+    }
+
+    #[test]
+    fn invalid_or_mismatched_config_is_never_loaded() {
+        let dir = temp_dir();
+        let mut invalid = SyncJob::new("bad".into(), "s".into(), "t".into());
+        invalid.max_delete_pct = 101;
+        assert_eq!(
+            write_job(&dir, &invalid).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+
+        let valid = SyncJob::new("good".into(), "s".into(), "t".into());
+        std::fs::write(dir.join("different.conf"), serialize_kv(&valid)).unwrap();
+        assert!(load_dir(&dir).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_preflights_every_job_before_removing_old_files() {
+        let dir = temp_dir();
+        let old = SyncJob::new("old".into(), "s".into(), "t".into());
+        save_dir(&dir, std::slice::from_ref(&old)).unwrap();
+        let mut invalid = SyncJob::new("bad".into(), "x".into(), "y".into());
+        invalid.max_delete_pct = 101;
+        assert!(save_dir(&dir, &[invalid]).is_err());
+        assert_eq!(load_dir(&dir).unwrap().len(), 1);
+        assert_eq!(load_dir(&dir).unwrap()[0].id, old.id);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

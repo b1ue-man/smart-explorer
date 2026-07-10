@@ -1,19 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use super::core::{
-    b64, b64_decode, hex, hex_decode, public_fingerprint, random_bytes, random_hex_token,
-    random_token,
-};
-use super::fs::{ShareExportConfig, SharedRoot};
-use super::types::{
-    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile,
-    ShareStatus,
-};
+use super::core::{hex, hex_decode, public_fingerprint, random_bytes, random_hex_token};
+use super::fs::ShareExportConfig;
+use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
-const PROFILES_FILE: &str = "share_profiles.json";
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
-const SHARE_PROFILE_VERSION: u32 = 3;
+pub(super) const SHARE_PROFILE_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShareProfiles {
@@ -49,79 +42,6 @@ fn default_true() -> bool {
 }
 
 impl ShareProfiles {
-    pub fn load(default_home: Option<String>) -> Self {
-        let path = crate::support_dirs::app_data_file(PROFILES_FILE);
-        let mut profiles = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<ShareProfiles>(&s).ok())
-            .unwrap_or_default();
-        if profiles.schema_version != SHARE_PROFILE_VERSION {
-            profiles.direct_contacts.clear();
-            profiles.direct_grants.clear();
-            profiles.rooms.clear();
-            profiles.schema_version = SHARE_PROFILE_VERSION;
-        }
-        if profiles.default_direct_exports.roots.is_empty() {
-            if let Some(home) = default_home {
-                profiles.default_direct_exports.roots.push(SharedRoot {
-                    label: "Home".to_string(),
-                    path: home,
-                });
-            }
-        }
-        profiles
-    }
-
-    pub fn save(&self) -> std::io::Result<()> {
-        let path = crate::support_dirs::app_data_file(PROFILES_FILE);
-        std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
-        std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
-    }
-
-    pub fn add_direct_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
-        let parsed = DirectCode::parse(code)?;
-        if self
-            .direct_contacts
-            .iter()
-            .any(|c| c.lookup_id == parsed.lookup_id)
-        {
-            return Err("Direktgeraet ist bereits gespeichert".into());
-        }
-        let id = random_token(10);
-        let label = if name.trim().is_empty() {
-            format!(
-                "Direkt {}",
-                &parsed.fingerprint[..parsed.fingerprint.len().min(8)]
-            )
-        } else {
-            name.trim().to_string()
-        };
-        crate::creds::set_secret(&direct_contact_secret_account(&id), &b64(&parsed.secret))
-            .map_err(|e| format!("Secret speichern: {e}"))?;
-        self.direct_contacts.push(DirectContact {
-            id: id.clone(),
-            display_name: label,
-            lookup_id: parsed.lookup_id,
-            expected_fingerprint: parsed.fingerprint,
-            expected_node_id: parsed.node_id,
-            remote_device_id: None,
-            remote_public_key: None,
-            auto_connect: true,
-            auto_open: false,
-            last_seen: None,
-            status: ShareStatus::WaitingForAccess,
-            last_error: None,
-            presence: None,
-            exports: self.default_direct_exports.clone(),
-            access_state: DirectAccessState::Pending,
-            request_sent_at: Some(super::core::now_secs()),
-            accepted_at: None,
-            accepted_public_key: None,
-        });
-        let _ = self.save();
-        Ok(id)
-    }
-
     pub fn direct_contact_id_from_code(&self, code: &str) -> Result<Option<String>, String> {
         let parsed = DirectCode::parse(code)?;
         Ok(self
@@ -161,70 +81,32 @@ impl ShareProfiles {
         }
     }
 
-    pub fn add_room_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
-        let parsed = RoomCode::parse(code)?;
-        if let Some(existing) = self.rooms.iter().find(|r| r.room_id == parsed.room_id) {
-            return Ok(existing.id.clone());
-        }
-        let id = random_token(10);
-        let label = if name.trim().is_empty() {
-            "Raum".to_string()
-        } else {
-            name.trim().to_string()
-        };
-        crate::creds::set_secret(&room_secret_account(&id), &b64(&parsed.secret))
-            .map_err(|e| format!("Raum-Secret speichern: {e}"))?;
-        self.rooms.push(RoomProfile {
-            id: id.clone(),
-            name: label,
-            room_id: parsed.room_id,
-            auto_join: true,
-            last_seen: None,
-            status: ShareStatus::Waiting,
-            members: Vec::new(),
-            exports: self.default_direct_exports.clone(),
-        });
-        let _ = self.save();
-        Ok(id)
-    }
-
-    pub fn new_room_code() -> String {
-        let room_id = random_hex_token::<12>();
-        let secret = random_bytes::<32>();
-        format!("SE-R3-{room_id}-{}", hex(&secret))
-    }
-
-    pub fn direct_secret(contact: &DirectContact) -> Option<Vec<u8>> {
-        crate::creds::get_secret(&direct_contact_secret_account(&contact.id))
-            .and_then(|s| b64_decode(&s).ok())
-    }
-
-    pub fn room_secret(room: &RoomProfile) -> Option<Vec<u8>> {
-        crate::creds::get_secret(&room_secret_account(&room.id)).and_then(|s| b64_decode(&s).ok())
-    }
-
-    pub fn room_code(room: &RoomProfile) -> Option<String> {
-        Self::room_secret(room).map(|s| format!("SE-R3-{}-{}", room.room_id, hex(&s)))
+    pub fn new_room_code() -> Result<String, String> {
+        let room_id = random_hex_token::<12>()
+            .map_err(|error| format!("Sichere Raum-ID erzeugen: {error}"))?;
+        let secret = random_bytes::<32>()
+            .map_err(|error| format!("Sicheres Raum-Secret erzeugen: {error}"))?;
+        Ok(format!("SE-R3-{room_id}-{}", hex(&secret)))
     }
 }
 
-pub(crate) fn direct_contact_secret_account(id: &str) -> String {
+pub(super) fn direct_contact_secret_account(id: &str) -> String {
     format!("{DIRECT_CONTACT_SECRET_PREFIX}{id}")
 }
 
-pub(crate) fn room_secret_account(id: &str) -> String {
+pub(super) fn room_secret_account(id: &str) -> String {
     format!("{ROOM_SECRET_PREFIX}{id}")
 }
 
-struct DirectCode {
-    lookup_id: String,
-    secret: Vec<u8>,
-    fingerprint: String,
-    node_id: String,
+pub(super) struct DirectCode {
+    pub(super) lookup_id: String,
+    pub(super) secret: Vec<u8>,
+    pub(super) fingerprint: String,
+    pub(super) node_id: String,
 }
 
 impl DirectCode {
-    fn parse(code: &str) -> Result<Self, String> {
+    pub(super) fn parse(code: &str) -> Result<Self, String> {
         let rest = code
             .trim()
             .strip_prefix("SE-D3-")
@@ -254,13 +136,13 @@ impl DirectCode {
     }
 }
 
-struct RoomCode {
-    room_id: String,
-    secret: Vec<u8>,
+pub(super) struct RoomCode {
+    pub(super) room_id: String,
+    pub(super) secret: Vec<u8>,
 }
 
 impl RoomCode {
-    fn parse(code: &str) -> Result<Self, String> {
+    pub(super) fn parse(code: &str) -> Result<Self, String> {
         let rest = code
             .trim()
             .strip_prefix("SE-R3-")

@@ -6,16 +6,18 @@
 //! webpki-roots. The single control connection is serialized behind a `Mutex`
 //! (`parallelism() == 1`).
 //!
-//! Listings are parsed by suppaftp's `list::File` (posix / dos / mlsx). File I/O
-//! buffers whole files in memory (FTP has no seekable streaming copy): download
-//! via `retr_as_buffer`, upload via `put_file` on flush/drop.
+//! Listings are parsed by suppaftp's `list::File` (posix / dos / mlsx). RETR
+//! streams directly from the data connection. Uploads spool to disk and issue a
+//! streaming STOR only at the caller's explicit `flush` commit boundary.
 
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
-use std::io::{self, Cursor, Read, Write};
-use std::sync::{Arc, Mutex};
+use std::io::{self, Read, Write};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use suppaftp::types::FileType;
 use suppaftp::{RustlsConnector, RustlsFtpStream};
+
+use super::io_adapters::{FtpConnection, FtpWriter};
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
@@ -57,6 +59,30 @@ fn dir_meta(name: String) -> VfsMeta {
         id: None,
         content_md5: None,
     }
+}
+
+fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
+    let file = line.parse::<suppaftp::list::File>().map_err(|error| {
+        let preview: String = line.chars().take(160).collect();
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("FTP LIST row could not be parsed ({error}): {preview:?}"),
+        )
+    })?;
+    let name = file.name().to_string();
+    crate::vfs::validate_child_name(&name)?;
+    Ok(VfsMeta {
+        is_dir: file.is_directory(),
+        is_symlink: file.is_symlink(),
+        size: file.size() as u64,
+        mtime_ms: systime_ms(file.modified()),
+        btime_ms: 0,
+        hidden: name.starts_with('.'),
+        system: false,
+        name,
+        id: None,
+        content_md5: None,
+    })
 }
 
 // ── URL ──────────────────────────────────────────────────────────────────────
@@ -138,7 +164,7 @@ fn rustls_client_config() -> Arc<rustls::ClientConfig> {
 // ── backend ──────────────────────────────────────────────────────────────────
 
 pub struct FtpBackend {
-    conn: Arc<Mutex<RustlsFtpStream>>,
+    conn: Arc<FtpConnection>,
     root: String,
     /// `ftp(s)://user@host:port/root` for UI display (connect-UI step).
     #[allow(dead_code)]
@@ -166,18 +192,10 @@ pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
         u.root
     );
     Ok(FtpBackend {
-        conn: Arc::new(Mutex::new(ftp)),
+        conn: Arc::new(FtpConnection::new(ftp)),
         root: u.root,
         url,
     })
-}
-
-impl FtpBackend {
-    fn lock(&self) -> io::Result<std::sync::MutexGuard<'_, RustlsFtpStream>> {
-        self.conn
-            .lock()
-            .map_err(|_| io_err("FTP-Verbindung vergiftet"))
-    }
 }
 
 impl Backend for FtpBackend {
@@ -187,35 +205,18 @@ impl Backend for FtpBackend {
     fn root_display(&self) -> String {
         self.root.clone()
     }
+    fn state_identity(&self) -> String {
+        self.url.clone()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let lines = {
-            let mut g = self.lock()?;
-            g.list(Some(path)).map_err(io_err)?
-        };
-        let mut out = Vec::new();
-        for line in lines {
-            // suppaftp parses unix/dos/mlsx; skip lines it can't read.
-            if let Ok(f) = line.parse::<suppaftp::list::File>() {
-                let name = f.name().to_string();
-                if name == "." || name == ".." {
-                    continue;
-                }
-                out.push(VfsMeta {
-                    is_dir: f.is_directory(),
-                    is_symlink: f.is_symlink(),
-                    size: f.size() as u64,
-                    mtime_ms: systime_ms(f.modified()),
-                    btime_ms: 0,
-                    hidden: name.starts_with('.'),
-                    system: false,
-                    name,
-                    id: None,
-                    content_md5: None,
-                });
-            }
-        }
-        Ok(out)
+        let lines = self
+            .conn
+            .with_stream(|stream| stream.list(Some(path)).map_err(io_err))?;
+        lines
+            .into_iter()
+            .map(|line| parse_list_line(&line))
+            .collect()
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
@@ -238,102 +239,61 @@ impl Backend for FtpBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let buf = {
-            let mut g = self.lock()?;
-            g.retr_as_buffer(path).map_err(io_err)?
-        };
-        Ok(Box::new(buf)) // Cursor<Vec<u8>>
+        Ok(Box::new(self.conn.open_reader(path)?))
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        Ok(Box::new(FtpWriter {
-            conn: self.conn.clone(),
-            path: path.to_string(),
-            buf: Vec::new(),
-            committed: false,
-        }))
+        Ok(Box::new(FtpWriter::new(
+            self.conn.clone(),
+            path.to_string(),
+        )?))
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let mut g = self.lock()?;
-        g.rename(src, dst).map_err(io_err)
+        self.conn
+            .with_stream(|stream| stream.rename(src, dst).map_err(io_err))
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        let mut g = self.lock()?;
-        g.rm(path).map_err(io_err)
+        self.conn
+            .with_stream(|stream| stream.rm(path).map_err(io_err))
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        let mut g = self.lock()?;
-        g.rmdir(path).map_err(io_err)
+        self.conn
+            .with_stream(|stream| stream.rmdir(path).map_err(io_err))
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         let absolute = path.starts_with('/');
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut g = self.lock()?;
-        let mut cur = String::new();
-        for part in parts {
-            if cur.is_empty() {
-                if absolute {
+        self.conn.with_stream(|stream| {
+            let original = stream.pwd().map_err(io_err)?;
+            let mut cur = String::new();
+            for part in parts {
+                if cur.is_empty() {
+                    if absolute {
+                        cur.push('/');
+                    }
+                } else {
                     cur.push('/');
                 }
-            } else {
-                cur.push('/');
+                cur.push_str(part);
+                if let Err(mkdir_error) = stream.mkdir(&cur) {
+                    stream.cwd(&cur).map_err(|verify_error| {
+                        io::Error::other(format!(
+                            "FTP mkdir failed for {cur}: {mkdir_error}; existing-directory verification failed: {verify_error}"
+                        ))
+                    })?;
+                    stream.cwd(&original).map_err(io_err)?;
+                }
             }
-            cur.push_str(part);
-            let _ = g.mkdir(&cur); // ignore "already exists"
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn parallelism(&self) -> usize {
         1 // single control connection
-    }
-}
-
-// ── buffering writer (one-shot STOR on flush/drop) ───────────────────────────
-
-struct FtpWriter {
-    conn: Arc<Mutex<RustlsFtpStream>>,
-    path: String,
-    buf: Vec<u8>,
-    committed: bool,
-}
-
-impl FtpWriter {
-    fn commit(&mut self) -> io::Result<()> {
-        if self.committed {
-            return Ok(());
-        }
-        self.committed = true;
-        let data = std::mem::take(&mut self.buf);
-        let mut g = self
-            .conn
-            .lock()
-            .map_err(|_| io_err("FTP-Verbindung vergiftet"))?;
-        let mut cur = Cursor::new(data);
-        g.put_file(&self.path, &mut cur).map(|_| ()).map_err(io_err)
-    }
-}
-
-impl Write for FtpWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.committed {
-            return Err(io_err("Upload bereits abgeschlossen"));
-        }
-        self.buf.extend_from_slice(data);
-        Ok(data.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.commit()
-    }
-}
-
-impl Drop for FtpWriter {
-    fn drop(&mut self) {
-        let _ = self.commit();
     }
 }
 
@@ -383,6 +343,22 @@ mod tests {
         assert_eq!(parent_dir("/a/b/c.txt"), "/a/b");
         assert_eq!(parent_dir("/a"), "/");
         assert_eq!(parent_dir("/"), "/");
+    }
+
+    #[test]
+    fn list_rows_are_fail_closed() {
+        let entry = parse_list_line("-rw-rw-r-- 1 0 1 8192 Nov 5 2018 report.txt").unwrap();
+        assert_eq!(entry.name, "report.txt");
+        assert_eq!(entry.size, 8192);
+
+        assert_eq!(
+            parse_list_line("this server row is not parseable")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(parse_list_line("-rw-rw-r-- 1 0 1 1 Nov 5 2018 ..").is_err());
+        assert!(parse_list_line("-rw-rw-r-- 1 0 1 1 Nov 5 2018 ..\\escape").is_err());
     }
 
     #[test]

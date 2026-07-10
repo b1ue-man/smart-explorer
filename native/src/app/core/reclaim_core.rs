@@ -1,5 +1,7 @@
 use super::prelude::*;
 use super::*;
+use crate::app::delete_worker::DeleteReporter;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 impl App {
     pub(in crate::app) fn reclaim_options(&self) -> crate::analytics::ReclaimOptions {
@@ -14,41 +16,64 @@ impl App {
     }
 
     pub(in crate::app) fn start_reclaim_scan(&mut self, root_path: String) {
-        let norm = root_path.trim_end_matches('/').to_string();
-        if norm.is_empty() || crate::connect::is_remote_url(&norm) {
-            self.error_msg = Some("Aufraeumen scannt in diesem Build lokale Ordner.".to_string());
+        self.start_reclaim_source(StorageScanSource::local(root_path));
+    }
+
+    pub(in crate::app) fn start_reclaim_source(&mut self, source: StorageScanSource) {
+        self.cancel_reclaim_worker();
+        if source.root().is_empty() {
+            let detail = "Leeres Reclaim-Ziel".to_string();
+            self.reclaim_source = None;
+            self.reclaim_state = StorageRunState::Failed;
+            self.reclaim_report = None;
+            self.reclaim_issues = vec![detail.clone()];
+            self.reclaim_suppressed_issues = 0;
+            self.push_app_error("Find & Reclaim", detail);
             return;
-        }
-        if let Some(s) = &self.reclaim_scan {
-            s.progress
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let progress = crate::analytics::ReclaimProgress::default();
         let opts = self.reclaim_options();
         let (tx, rx) = unbounded();
         let p2 = progress.clone();
-        let mut native = norm.replace('/', std::path::MAIN_SEPARATOR_STR);
-        if native.len() == 2 && native.as_bytes()[1] == b':' {
-            native.push(std::path::MAIN_SEPARATOR);
-        }
-        let root = PathBuf::from(native);
-        std::thread::Builder::new()
+        let worker_source = source.clone();
+        let spawn = std::thread::Builder::new()
             .name("reclaim-scan".into())
             .spawn(move || {
-                let report = crate::analytics::scan_reclaim(&root, &p2, &opts);
-                let _ = tx.send(report);
-            })
-            .ok();
-        self.reclaim_scan = Some(ReclaimScan {
-            rx,
-            progress,
-            root: norm,
-            started: Instant::now(),
-            cancel_requested: false,
-        });
+                let report = match worker_source {
+                    StorageScanSource::Local { root } => {
+                        let native = root.replace('/', std::path::MAIN_SEPARATOR_STR);
+                        crate::analytics::scan_reclaim(&PathBuf::from(native), &p2, &opts)
+                    }
+                    StorageScanSource::Remote { backend, root, .. } => {
+                        backend.invalidate_cache();
+                        crate::analytics::scan_reclaim_backend(backend, &root, &p2, &opts)
+                    }
+                };
+                let outcome = reclaim_scan_outcome(report, &p2);
+                let _ = tx.send(outcome);
+            });
+        self.reclaim_source = Some(source.clone());
         self.reclaim_report = None;
         self.reclaim_selected.clear();
+        self.reclaim_issues.clear();
+        self.reclaim_suppressed_issues = 0;
+        match spawn {
+            Ok(_) => {
+                self.reclaim_scan = Some(ReclaimScan {
+                    rx,
+                    progress,
+                    root: source.display(),
+                    started: Instant::now(),
+                });
+                self.reclaim_state = StorageRunState::Running;
+            }
+            Err(error) => {
+                let detail = format!("Reclaim-Thread konnte nicht starten: {error}");
+                self.reclaim_state = StorageRunState::Failed;
+                self.reclaim_issues.push(detail.clone());
+                self.push_app_error("Find & Reclaim", detail);
+            }
+        }
     }
 
     pub(in crate::app) fn start_reclaim_scan_remote(
@@ -57,70 +82,68 @@ impl App {
         root: String,
         label: String,
     ) {
-        let t = root.trim_end_matches('/');
-        let norm = if t.is_empty() {
-            "/".to_string()
-        } else {
-            t.to_string()
-        };
-        if let Some(s) = &self.reclaim_scan {
-            s.progress
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let progress = crate::analytics::ReclaimProgress::default();
-        let opts = self.reclaim_options();
-        let (tx, rx) = unbounded();
-        let p2 = progress.clone();
-        let be = backend.clone();
-        let scan_root = norm.clone();
-        std::thread::Builder::new()
-            .name("reclaim-remote-scan".into())
-            .spawn(move || {
-                let report = crate::analytics::scan_reclaim_backend(be, &scan_root, &p2, &opts);
-                let _ = tx.send(report);
-            })
-            .ok();
-        self.reclaim_scan = Some(ReclaimScan {
-            rx,
-            progress,
-            root: if label.is_empty() {
-                norm
-            } else {
-                format!("{} · {}", label, norm)
-            },
-            started: Instant::now(),
-            cancel_requested: false,
-        });
-        self.reclaim_report = None;
-        self.reclaim_selected.clear();
+        self.start_reclaim_source(StorageScanSource::remote(backend, root, label));
     }
 
     pub(in crate::app) fn poll_reclaim_scan(&mut self) {
-        let mut got = None;
-        let mut canceled = false;
-        if let Some(scan) = &self.reclaim_scan {
-            canceled = scan.cancel_requested;
-            if let Ok(report) = scan.rx.try_recv() {
-                got = Some(report);
+        let message = self.reclaim_scan.as_ref().map(|scan| scan.rx.try_recv());
+        match message {
+            Some(Ok(outcome)) => {
+                self.reclaim_scan = None;
+                self.reclaim_state = outcome.status;
+                self.reclaim_report = outcome.report;
+                self.reclaim_issues = outcome.issues;
+                self.reclaim_suppressed_issues = outcome.suppressed_issues;
+                self.reclaim_selected.clear();
+                self.log_reclaim_outcome();
             }
-        }
-        if let Some(report) = got {
-            if !canceled {
-                self.reclaim_report = Some(report);
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.reclaim_scan = None;
+                self.reclaim_state = StorageRunState::Failed;
+                let detail = "Reclaim-Thread wurde ohne Ergebnis beendet".to_string();
+                self.reclaim_issues.push(detail.clone());
+                self.push_app_error("Find & Reclaim", detail);
             }
-            self.reclaim_scan = None;
-            self.reclaim_selected.clear();
+            _ => {}
         }
     }
 
     pub(in crate::app) fn cancel_reclaim_scan(&mut self) {
-        if let Some(scan) = &mut self.reclaim_scan {
-            scan.cancel_requested = true;
+        if self.cancel_reclaim_worker() {
+            self.reclaim_state = StorageRunState::Canceled;
+            self.reclaim_issues.clear();
+            self.reclaim_suppressed_issues = 0;
+        }
+    }
+
+    fn cancel_reclaim_worker(&mut self) -> bool {
+        if let Some(scan) = self.reclaim_scan.take() {
             scan.progress
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
         }
+    }
+
+    fn log_reclaim_outcome(&mut self) {
+        if !matches!(
+            self.reclaim_state,
+            StorageRunState::Partial | StorageRunState::Failed
+        ) {
+            return;
+        }
+        let first = self
+            .reclaim_issues
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
+        let count = self.reclaim_issues.len() as u64 + self.reclaim_suppressed_issues;
+        self.push_app_error(
+            "Find & Reclaim",
+            format!("{count} Leseproblem(e); erstes Problem: {first}"),
+        );
     }
 
     pub(in crate::app) fn select_reclaim_duplicate_copies(&mut self) {
@@ -136,6 +159,10 @@ impl App {
 
     pub(in crate::app) fn trash_reclaim_selected(&mut self) {
         if self.reclaim_selected.is_empty() {
+            return;
+        }
+        if self.trash_rx.is_some() || self.trash_worker.is_some() {
+            self.error_msg = Some("Ein Löschvorgang läuft bereits.".to_string());
             return;
         }
         let Some(report_snapshot) = self.reclaim_report.clone() else {
@@ -185,29 +212,56 @@ impl App {
             return;
         }
         let delete_paths = plan.delete_paths.clone();
-        let native_paths: Vec<PathBuf> = delete_paths
-            .iter()
-            .map(|p| PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)))
-            .collect();
-        if let Some(report) = &mut self.reclaim_report {
-            report.prune_paths(&delete_paths);
-        }
-        self.reclaim_selected.clear();
-
         let (tx, rx) = unbounded();
-        self.trash_rx = Some(rx);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
         let root = report_snapshot.root;
         let selected = paths;
         let journal_plan = plan.clone();
-        std::thread::Builder::new()
+        let attempted = delete_paths.len();
+        let mut initial =
+            DeleteProgress::new(DeleteKind::Recycle, DeleteOrigin::Reclaim, attempted);
+        initial.phase = DeletePhase::Applying;
+        let worker_progress = initial.clone();
+        let spawn = std::thread::Builder::new()
             .name("reclaim-trash".into())
             .spawn(move || {
-                let res = trash::delete_all(&native_paths);
-                let err = res.err().map(|e| e.to_string());
-                append_reclaim_journal(root, selected, journal_plan, err.as_deref());
-                let _ = tx.send(err);
-            })
-            .ok();
+                let mut outcome =
+                    DeleteOutcome::new(DeleteKind::Recycle, DeleteOrigin::Reclaim, attempted);
+                let mut reporter = DeleteReporter::new(tx, worker_cancel.clone(), worker_progress);
+                for display in delete_paths {
+                    if worker_cancel.load(Ordering::Acquire)
+                        || !reporter.begin_opaque_apply(&display)
+                    {
+                        outcome.canceled = true;
+                        break;
+                    }
+                    outcome.entries_planned = outcome.entries_planned.saturating_add(1);
+                    let native = PathBuf::from(display.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    match trash::delete(native) {
+                        Ok(()) => {
+                            outcome.entries_deleted = outcome.entries_deleted.saturating_add(1);
+                            outcome.record_success(display);
+                            reporter.finish_target(true, true);
+                        }
+                        Err(error) => {
+                            outcome.partial_mutation = true;
+                            outcome.record_error(display, error.to_string());
+                            reporter.finish_target(false, false);
+                        }
+                    }
+                }
+                if worker_cancel.load(Ordering::Acquire) && outcome.processed < outcome.attempted {
+                    outcome.canceled = true;
+                }
+                if let Err(error) =
+                    append_reclaim_journal(&root, &selected, &journal_plan, &outcome)
+                {
+                    outcome.record_aux_error("Reclaim-Journal".to_string(), error.to_string());
+                }
+                reporter.finish(outcome);
+            });
+        self.install_delete_worker(spawn, rx, cancel, initial, DeleteOrigin::Reclaim);
     }
 
     fn reclaim_selected_paths_expanded(&self) -> Vec<String> {
@@ -234,6 +288,40 @@ impl App {
     }
 }
 
+fn reclaim_scan_outcome(
+    report: crate::analytics::ReclaimReport,
+    progress: &crate::analytics::ReclaimProgress,
+) -> ReclaimScanOutcome {
+    if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return ReclaimScanOutcome {
+            report: None,
+            status: StorageRunState::Canceled,
+            issues: Vec::new(),
+            suppressed_issues: 0,
+        };
+    }
+    let mut issues = report.errors.clone();
+    if let Some(root_error) = &report.root_error {
+        if !issues.contains(root_error) {
+            issues.insert(0, root_error.clone());
+        }
+    }
+    let status = if report.root_error.is_some() {
+        StorageRunState::Failed
+    } else if issues.is_empty() && report.suppressed_errors == 0 {
+        StorageRunState::Complete
+    } else {
+        StorageRunState::Partial
+    };
+    let suppressed_issues = report.suppressed_errors;
+    ReclaimScanOutcome {
+        report: (status != StorageRunState::Failed).then_some(report),
+        status,
+        issues,
+        suppressed_issues,
+    }
+}
+
 fn reclaim_items(report: &crate::analytics::ReclaimReport) -> Vec<&crate::analytics::ReclaimItem> {
     let mut out = Vec::new();
     out.extend(report.large_files.iter());
@@ -248,34 +336,39 @@ fn reclaim_items(report: &crate::analytics::ReclaimReport) -> Vec<&crate::analyt
 }
 
 fn append_reclaim_journal(
-    root: String,
-    selected: Vec<String>,
-    plan: crate::analytics::ReclaimTrashPlan,
-    error: Option<&str>,
-) {
+    root: &str,
+    selected: &[String],
+    plan: &crate::analytics::ReclaimTrashPlan,
+    outcome: &DeleteOutcome,
+) -> std::io::Result<()> {
     let dir = crate::support_dirs::app_data_dir().join("reclaim");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
+    std::fs::create_dir_all(&dir)?;
     let path = dir.join("actions.jsonl");
     let ts = chrono::Local::now().to_rfc3339();
     let value = serde_json::json!({
         "ts": ts,
         "root": root,
         "selected": selected,
-        "delete_paths": plan.delete_paths,
-        "verified_duplicate_paths": plan.verified_duplicate_paths,
-        "skipped_paths": plan.skipped_paths,
-        "risky_paths": plan.risky_paths,
+        "delete_paths": &plan.delete_paths,
+        "verified_duplicate_paths": &plan.verified_duplicate_paths,
+        "skipped_paths": &plan.skipped_paths,
+        "risky_paths": &plan.risky_paths,
         "estimated_bytes": plan.estimated_bytes,
-        "result": error.unwrap_or("ok"),
+        "attempted": outcome.attempted,
+        "processed": outcome.processed,
+        "succeeded_paths": &outcome.succeeded_paths,
+        "canceled": outcome.canceled,
+        "entries_planned": outcome.entries_planned,
+        "entries_deleted": outcome.entries_deleted,
+        "partial_mutation": outcome.partial_mutation,
+        "errors": &outcome.errors,
+        "suppressed_errors": outcome.suppressed_errors,
     });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "{}", value);
-    }
+        .open(path)?;
+    use std::io::Write;
+    writeln!(file, "{value}")?;
+    file.flush()
 }

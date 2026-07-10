@@ -1,9 +1,19 @@
 use std::io::{self, Read, Write};
 
-use super::types::{Frame, SearchSpec, WireMeta, WireNode};
+use super::node_codec::{decode_node, validate_node};
+use super::relative_path::ValidatedRelativePath;
+use super::types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK};
 
 /// Reject absurd frame lengths from a corrupt/hostile stream before allocating.
-const MAX_FRAME: usize = 64 * 1024 * 1024;
+pub(super) const MAX_FRAME: usize = 64 * 1024 * 1024;
+
+pub(super) fn validate_frame_len(len: usize) -> io::Result<()> {
+    if len > MAX_FRAME {
+        Err(bad("frame too large"))
+    } else {
+        Ok(())
+    }
+}
 
 fn put_u32(b: &mut Vec<u8>, v: u32) {
     b.extend_from_slice(&v.to_le_bytes());
@@ -41,7 +51,7 @@ fn put_opt_str(b: &mut Vec<u8>, s: &Option<String>) {
     }
 }
 
-struct Reader<'a> {
+pub(super) struct Reader<'a> {
     b: &'a [u8],
     i: usize,
 }
@@ -64,23 +74,35 @@ impl<'a> Reader<'a> {
         Ok(self.take(1)?[0])
     }
 
-    fn u32(&mut self) -> io::Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    pub(super) fn u32(&mut self) -> io::Result<u32> {
+        let bytes = self
+            .take(4)?
+            .try_into()
+            .map_err(|_| bad("invalid u32 field length"))?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
-    fn u64(&mut self) -> io::Result<u64> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    pub(super) fn u64(&mut self) -> io::Result<u64> {
+        let bytes = self
+            .take(8)?
+            .try_into()
+            .map_err(|_| bad("invalid u64 field length"))?;
+        Ok(u64::from_le_bytes(bytes))
     }
 
     fn i64(&mut self) -> io::Result<i64> {
-        Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+        let bytes = self
+            .take(8)?
+            .try_into()
+            .map_err(|_| bad("invalid i64 field length"))?;
+        Ok(i64::from_le_bytes(bytes))
     }
 
-    fn bool(&mut self) -> io::Result<bool> {
+    pub(super) fn bool(&mut self) -> io::Result<bool> {
         Ok(self.u8()? != 0)
     }
 
-    fn string(&mut self) -> io::Result<String> {
+    pub(super) fn string(&mut self) -> io::Result<String> {
         let n = self.u32()? as usize;
         let s = self.take(n)?;
         String::from_utf8(s.to_vec()).map_err(|_| bad("invalid utf8"))
@@ -89,6 +111,18 @@ impl<'a> Reader<'a> {
     fn bytes(&mut self) -> io::Result<Vec<u8>> {
         let n = self.u32()? as usize;
         Ok(self.take(n)?.to_vec())
+    }
+
+    fn bounded_bytes(&mut self, maximum: usize) -> io::Result<Vec<u8>> {
+        let length = self.u32()? as usize;
+        if length > maximum {
+            return Err(bad("data frame exceeds the protocol chunk size"));
+        }
+        Ok(self.take(length)?.to_vec())
+    }
+
+    fn is_finished(&self) -> bool {
+        self.i == self.b.len()
     }
 
     fn opt_str(&mut self) -> io::Result<Option<String>> {
@@ -132,25 +166,18 @@ fn put_node(b: &mut Vec<u8>, n: &WireNode) {
     }
 }
 
-fn get_node(r: &mut Reader) -> io::Result<WireNode> {
-    let name = r.string()?;
-    let size = r.u64()?;
-    let is_dir = r.bool()?;
-    let n = r.u32()? as usize;
-    let mut children = Vec::with_capacity(n.min(1024));
-    for _ in 0..n {
-        children.push(get_node(r)?);
-    }
-    Ok(WireNode {
-        name,
-        size,
-        is_dir,
-        children,
-    })
-}
-
 impl Frame {
-    pub fn encode(&self, req_id: u64) -> Vec<u8> {
+    pub fn encode(&self, req_id: u64) -> io::Result<Vec<u8>> {
+        match self {
+            Frame::Data(data) if data.len() > CHUNK => {
+                return Err(bad("data frame exceeds the protocol chunk size"))
+            }
+            Frame::Tree(node) => validate_node(node)?,
+            Frame::TreeEntry { rel, .. } => {
+                ValidatedRelativePath::parse(rel)?;
+            }
+            _ => {}
+        }
         let mut b = Vec::new();
         put_u64(&mut b, req_id);
         match self {
@@ -296,11 +323,26 @@ impl Frame {
                 put_str(&mut b, e);
             }
             Frame::Cancel => b.push(27),
+            Frame::TryExists(p) => {
+                b.push(28);
+                put_str(&mut b, p);
+            }
+            Frame::Exists(exists) => {
+                b.push(29);
+                put_bool(&mut b, *exists);
+            }
+            Frame::RenameNoReplace { src, dst } => {
+                b.push(30);
+                put_str(&mut b, src);
+                put_str(&mut b, dst);
+            }
         }
-        b
+        validate_frame_len(b.len())?;
+        Ok(b)
     }
 
     pub fn decode(body: &[u8]) -> io::Result<(u64, Frame)> {
+        validate_frame_len(body.len())?;
         let mut r = Reader::new(body);
         let req_id = r.u64()?;
         let frame = match r.u8()? {
@@ -321,14 +363,14 @@ impl Frame {
             5 => Frame::Stat(r.string()?),
             6 => Frame::Meta(get_meta(&mut r)?),
             7 => Frame::WalkTree(r.string()?),
-            8 => Frame::Tree(get_node(&mut r)?),
+            8 => Frame::Tree(decode_node(&mut r)?),
             9 => Frame::Read {
                 path: r.string()?,
                 offset: r.u64()?,
                 len: r.u64()?,
             },
             10 => Frame::Write(r.string()?),
-            11 => Frame::Data(r.bytes()?),
+            11 => Frame::Data(r.bounded_bytes(CHUNK)?),
             12 => Frame::Copy {
                 src: r.string()?,
                 dst: r.string()?,
@@ -344,12 +386,15 @@ impl Frame {
             15 => Frame::Mkdir(r.string()?),
             16 => Frame::GetTree(r.string()?),
             17 => Frame::PutTree(r.string()?),
-            18 => Frame::TreeEntry {
-                rel: r.string()?,
-                is_dir: r.bool()?,
-                size: r.u64()?,
-                mtime_ms: r.i64()?,
-            },
+            18 => {
+                let rel = ValidatedRelativePath::parse(&r.string()?)?;
+                Frame::TreeEntry {
+                    rel: rel.as_str().to_string(),
+                    is_dir: r.bool()?,
+                    size: r.u64()?,
+                    mtime_ms: r.i64()?,
+                }
+            }
             19 => Frame::Search {
                 root: r.string()?,
                 spec: SearchSpec {
@@ -386,14 +431,23 @@ impl Frame {
             25 => Frame::End,
             26 => Frame::Err(r.string()?),
             27 => Frame::Cancel,
+            28 => Frame::TryExists(r.string()?),
+            29 => Frame::Exists(r.bool()?),
+            30 => Frame::RenameNoReplace {
+                src: r.string()?,
+                dst: r.string()?,
+            },
             t => return Err(bad(&format!("unknown frame tag {t}"))),
         };
+        if !r.is_finished() {
+            return Err(bad("trailing bytes after frame payload"));
+        }
         Ok((req_id, frame))
     }
 }
 
 pub fn write_frame(w: &mut impl Write, req_id: u64, frame: &Frame) -> io::Result<()> {
-    let body = frame.encode(req_id);
+    let body = frame.encode(req_id)?;
     w.write_all(&(body.len() as u32).to_le_bytes())?;
     w.write_all(&body)?;
     w.flush()
@@ -410,9 +464,7 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<(u64, Frame)>> {
         }
     }
     let len = u32::from_le_bytes(lenb) as usize;
-    if len > MAX_FRAME {
-        return Err(bad("frame too large"));
-    }
+    validate_frame_len(len)?;
     let mut body = vec![0u8; len];
     r.read_exact(&mut body)?;
     Ok(Some(Frame::decode(&body)?))

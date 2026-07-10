@@ -9,120 +9,227 @@ pub(crate) struct ReplaceTargetError {
 }
 
 impl ReplaceTargetError {
-    fn new(msg: impl Into<String>, needs_elevation: bool) -> Self {
+    pub(crate) fn new(msg: impl Into<String>, needs_elevation: bool) -> Self {
         Self {
             msg: msg.into(),
             needs_elevation,
         }
     }
 
-    fn io(context: impl Into<String>, e: std::io::Error) -> Self {
+    pub(crate) fn io(context: impl Into<String>, error: std::io::Error) -> Self {
         Self::new(
-            format!("{}: {}", context.into(), e),
-            should_elevate_for_io(&e),
+            format!("{}: {}", context.into(), error),
+            should_elevate_for_io(&error),
         )
+    }
+
+    pub(crate) fn integrity(message: impl Into<String>) -> Self {
+        Self::new(message, false)
     }
 }
 
-pub(crate) fn replace_target_from_staged(
-    staged: &Path,
-    target: &Path,
-    staged_len: u64,
-    expected_sha256: Option<&str>,
-) -> Result<(), ReplaceTargetError> {
-    let pending = unique_sibling(target, "update-pending");
-    let old = unique_sibling(target, "update-old");
-    let _ = std::fs::remove_file(&pending);
-    copy_checked(staged, &pending, staged_len, expected_sha256)?;
+pub(crate) struct Replacement<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) staged: &'a Path,
+    pub(crate) target: &'a Path,
+    pub(crate) sha256: &'a str,
+}
 
-    match std::fs::rename(target, &old) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::rename(&pending, target).map_err(|e| {
-                let _ = std::fs::remove_file(&pending);
-                ReplaceTargetError::io(format!("Einsetzen {}", target.display()), e)
-            })?;
-            return Ok(());
+struct Prepared {
+    label: String,
+    target: PathBuf,
+    pending: PathBuf,
+    old: PathBuf,
+    existed: bool,
+}
+
+pub(crate) struct AppliedTransaction {
+    prepared: Vec<Prepared>,
+    finished: bool,
+}
+
+pub(crate) fn replace_transaction(
+    replacements: &[Replacement<'_>],
+) -> Result<AppliedTransaction, ReplaceTargetError> {
+    let mut prepared = Vec::with_capacity(replacements.len());
+    for replacement in replacements {
+        if let Err(error) = verify_sha256(replacement.staged, replacement.sha256) {
+            cleanup_pending(&prepared);
+            return Err(ReplaceTargetError::integrity(error));
         }
-        Err(e) => {
-            let _ = std::fs::remove_file(&pending);
-            return Err(ReplaceTargetError::io(
-                format!("Ziel sichern {}", target.display()),
-                e,
+        let pending = unique_sibling(replacement.target, "update-pending");
+        let old = unique_sibling(replacement.target, "update-old");
+        let _ = std::fs::remove_file(&pending);
+        let _ = std::fs::remove_file(&old);
+        if let Err(error) = copy_checked(
+            replacement.staged,
+            &pending,
+            replacement.sha256,
+            replacement.label,
+        ) {
+            cleanup_pending(&prepared);
+            return Err(error);
+        }
+        prepared.push(Prepared {
+            label: replacement.label.to_string(),
+            target: replacement.target.to_path_buf(),
+            pending,
+            old,
+            existed: replacement.target.exists(),
+        });
+    }
+
+    for index in 0..prepared.len() {
+        if !prepared[index].existed {
+            continue;
+        }
+        if let Err(error) = std::fs::rename(&prepared[index].target, &prepared[index].old) {
+            let rollback = restore_old_targets(&prepared[..index]);
+            cleanup_pending(&prepared);
+            return Err(combine_rollback_error(
+                ReplaceTargetError::io(format!("{} Ziel sichern", prepared[index].label), error),
+                rollback,
             ));
         }
     }
 
-    if let Err(e) = std::fs::rename(&pending, target) {
-        let restore = std::fs::rename(&old, target);
-        let _ = std::fs::remove_file(&pending);
-        return match restore {
-            Ok(()) => Err(ReplaceTargetError::io("Einsetzen fehlgeschlagen", e)),
-            Err(restore_err) => Err(ReplaceTargetError::new(
-                format!("Einsetzen fehlgeschlagen: {e}; Rollback fehlgeschlagen: {restore_err}"),
-                should_elevate_for_io(&e) || should_elevate_for_io(&restore_err),
-            )),
-        };
+    for index in 0..prepared.len() {
+        if let Err(error) = std::fs::rename(&prepared[index].pending, &prepared[index].target) {
+            for installed in &prepared[..index] {
+                let _ = std::fs::remove_file(&installed.target);
+            }
+            let rollback = restore_old_targets(&prepared);
+            cleanup_pending(&prepared);
+            return Err(combine_rollback_error(
+                ReplaceTargetError::io(format!("{} einsetzen", prepared[index].label), error),
+                rollback,
+            ));
+        }
     }
 
-    let _ = std::fs::remove_file(&old);
-    Ok(())
+    Ok(AppliedTransaction {
+        prepared,
+        finished: false,
+    })
+}
+
+impl AppliedTransaction {
+    pub(crate) fn rollback(&mut self) -> Result<(), String> {
+        if self.finished {
+            return Ok(());
+        }
+        for item in &self.prepared {
+            if item.existed {
+                let _ = std::fs::remove_file(&item.target);
+            } else if item.target.exists() {
+                std::fs::remove_file(&item.target).map_err(|error| {
+                    format!("Neues Ziel {} entfernen: {error}", item.target.display())
+                })?;
+            }
+        }
+        restore_old_targets(&self.prepared)?;
+        cleanup_pending(&self.prepared);
+        self.finished = true;
+        Ok(())
+    }
+
+    pub(crate) fn finalize(&mut self) {
+        if self.finished {
+            return;
+        }
+        for item in &self.prepared {
+            let _ = std::fs::remove_file(&item.old);
+            let _ = std::fs::remove_file(&item.pending);
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for AppliedTransaction {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.rollback();
+        }
+    }
 }
 
 fn copy_checked(
-    src: &Path,
-    dest: &Path,
-    expected_len: u64,
-    expected_sha256: Option<&str>,
+    source: &Path,
+    destination: &Path,
+    expected_sha256: &str,
+    label: &str,
 ) -> Result<(), ReplaceTargetError> {
-    let copied = match std::fs::copy(src, dest) {
-        Ok(n) => n,
-        Err(e) => {
-            let _ = std::fs::remove_file(dest);
-            return Err(ReplaceTargetError::io(
-                format!("Staging kopieren {} -> {}", src.display(), dest.display()),
-                e,
-            ));
+    let expected_len = std::fs::metadata(source)
+        .map_err(|error| ReplaceTargetError::io(format!("{label} Quelle lesen"), error))?
+        .len();
+    let copied = std::fs::copy(source, destination).map_err(|error| {
+        let _ = std::fs::remove_file(destination);
+        ReplaceTargetError::io(format!("{label} temporaer kopieren"), error)
+    })?;
+    let actual_len = std::fs::metadata(destination)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if copied != expected_len || actual_len != expected_len {
+        let _ = std::fs::remove_file(destination);
+        return Err(ReplaceTargetError::integrity(format!(
+            "{label} unvollstaendig kopiert: {} von {} Bytes",
+            copied.min(actual_len),
+            expected_len
+        )));
+    }
+    verify_sha256(destination, expected_sha256).map_err(|error| {
+        let _ = std::fs::remove_file(destination);
+        ReplaceTargetError::integrity(error)
+    })
+}
+
+fn restore_old_targets(items: &[Prepared]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for item in items.iter().rev().filter(|item| item.existed) {
+        if item.old.exists() {
+            if let Err(error) = std::fs::rename(&item.old, &item.target) {
+                errors.push(format!("{}: {error}", item.target.display()));
+            }
         }
-    };
-    let actual = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-    if copied != expected_len || actual != expected_len {
-        let _ = std::fs::remove_file(dest);
-        return Err(ReplaceTargetError::new(
-            format!(
-                "unvollstaendig gestaged: {} von {} Bytes",
-                actual.min(copied),
-                expected_len
-            ),
-            false,
-        ));
     }
-
-    if let Some(expected_hash) = expected_sha256 {
-        verify_sha256(dest, expected_hash).map_err(|e| {
-            let _ = std::fs::remove_file(dest);
-            ReplaceTargetError::new(e, false)
-        })?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
+}
 
-    Ok(())
+fn cleanup_pending(items: &[Prepared]) {
+    for item in items {
+        let _ = std::fs::remove_file(&item.pending);
+    }
+}
+
+fn combine_rollback_error(
+    mut primary: ReplaceTargetError,
+    rollback: Result<(), String>,
+) -> ReplaceTargetError {
+    if let Err(error) = rollback {
+        primary.msg = format!("{}; Rollback fehlgeschlagen: {error}", primary.msg);
+    }
+    primary
 }
 
 fn unique_sibling(target: &Path, role: &str) -> PathBuf {
     let name = target
         .file_name()
-        .map(|s| s.to_string_lossy().to_string())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "smart_explorer".to_string());
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
+        .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    target.with_file_name(format!("{name}.{role}.{}.{}", std::process::id(), nanos))
+    target.with_file_name(format!("{name}.{role}.{}.{nanos}", std::process::id()))
 }
 
-fn should_elevate_for_io(e: &std::io::Error) -> bool {
-    matches!(e.raw_os_error(), Some(5) | Some(740) | Some(1314))
-        || e.kind() == std::io::ErrorKind::PermissionDenied
+fn should_elevate_for_io(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5) | Some(740) | Some(1314))
+        || error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 #[cfg(test)]
@@ -130,33 +237,60 @@ mod tests {
     use super::*;
     use crate::hash::sha256_file;
 
-    fn unique_temp_dir(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "smart-explorer-updater-replace-{name}-{}-{nanos}",
-            std::process::id()
-        ))
+    #[test]
+    fn transaction_rejects_tamper_without_changing_any_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_staged = dir.path().join("app-staged");
+        let cli_staged = dir.path().join("cli-staged");
+        let app_target = dir.path().join("app");
+        let cli_target = dir.path().join("cli");
+        std::fs::write(&app_staged, b"new-app").unwrap();
+        std::fs::write(&cli_staged, b"new-cli").unwrap();
+        std::fs::write(&app_target, b"old-app").unwrap();
+        std::fs::write(&cli_target, b"old-cli").unwrap();
+        let app_hash = sha256_file(&app_staged).unwrap();
+        let cli_hash = sha256_file(&cli_staged).unwrap();
+        std::fs::write(&cli_staged, b"bad-cli").unwrap();
+
+        let result = replace_transaction(&[
+            Replacement {
+                label: "App",
+                staged: &app_staged,
+                target: &app_target,
+                sha256: &app_hash,
+            },
+            Replacement {
+                label: "CLI",
+                staged: &cli_staged,
+                target: &cli_target,
+                sha256: &cli_hash,
+            },
+        ]);
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&app_target).unwrap(), b"old-app");
+        assert_eq!(std::fs::read(&cli_target).unwrap(), b"old-cli");
     }
 
     #[test]
-    fn replace_rejects_same_size_tampered_staged_payload() {
-        let dir = unique_temp_dir("payload");
-        std::fs::create_dir_all(&dir).unwrap();
-        let staged = dir.join("staged.exe");
-        let target = dir.join("target.exe");
-        std::fs::write(&staged, b"good").unwrap();
+    fn explicit_rollback_restores_all_replaced_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        let target = dir.path().join("target");
+        std::fs::write(&staged, b"new").unwrap();
         std::fs::write(&target, b"old").unwrap();
-        let expected = sha256_file(&staged).unwrap();
-        std::fs::write(&staged, b"evil").unwrap();
+        let hash = sha256_file(&staged).unwrap();
+        let mut transaction = replace_transaction(&[Replacement {
+            label: "App",
+            staged: &staged,
+            target: &target,
+            sha256: &hash,
+        }])
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
 
-        let result = replace_target_from_staged(&staged, &target, 4, Some(&expected));
+        transaction.rollback().unwrap();
 
-        assert!(result.is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"old");
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

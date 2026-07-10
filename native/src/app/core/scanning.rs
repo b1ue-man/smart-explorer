@@ -26,6 +26,7 @@ impl App {
         self.last_anchor = None;
         self.cursor = None;
         self.progress = empty_progress();
+        self.scan_was_canceled = false;
         self.error_msg = None;
         self.failed_paths = Vec::new();
         self.summary_cache = None;
@@ -127,7 +128,16 @@ impl App {
         if let Some(h) = self.scan_handle.take() {
             h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.scan_running = false;
+        if self.scan_rx.is_some() {
+            self.scan_was_canceled = true;
+            self.scan_running = true;
+            self.notice = Some((
+                "⚠ Scan-Abbruch angefordert; bereits geladene Ergebnisse bleiben sichtbar.".into(),
+                std::time::Instant::now(),
+            ));
+        } else {
+            self.scan_running = false;
+        }
     }
 
     /// Run a recursive name search SERVER-SIDE (the SSH agent) under the current
@@ -168,6 +178,7 @@ impl App {
         self.last_anchor = None;
         self.cursor = None;
         self.progress = empty_progress();
+        self.scan_was_canceled = false;
         self.error_msg = None;
         self.failed_paths = Vec::new();
         self.summary_cache = None;
@@ -193,6 +204,13 @@ impl App {
         if self.index_building {
             return;
         }
+        if self.index_save_active() {
+            self.notice = Some((
+                "Ordnerindex wird gerade gespeichert; Aufbau danach erneut starten.".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
         if let Some(c) = self.index_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -206,36 +224,50 @@ impl App {
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        FolderIndex::build_async(roots, tx, cancel.clone());
-        self.index_rx = Some(rx);
-        self.index_cancel = Some(cancel);
+        match FolderIndex::build_async(roots, folder_index_path(), tx, cancel.clone()) {
+            Ok(()) => {
+                self.index_rx = Some(rx);
+                self.index_cancel = Some(cancel);
+            }
+            Err(error) => {
+                self.index_building = false;
+                self.index_rx = None;
+                self.index_cancel = None;
+                self.error_msg = Some(format!(
+                    "Ordnerindex-Worker konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     pub(in crate::app) fn cancel_index_build(&mut self) {
-        if let Some(c) = self.index_cancel.take() {
+        if let Some(c) = self.index_cancel.as_ref() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.index_building = false;
-        self.index_rx = None;
+        if self.index_building {
+            self.notice = Some((
+                "Index-Abbruch angefordert; der vorhandene Index bleibt erhalten.".to_string(),
+                std::time::Instant::now(),
+            ));
+        }
     }
 
     pub(in crate::app) fn drain_index(&mut self) {
-        let rx = match self.index_rx.as_ref() {
+        let rx = match self.index_rx.take() {
             Some(r) => r,
             None => return,
         };
+        let mut keep_receiver = true;
         for _ in 0..16 {
             match rx.try_recv() {
                 Ok(IndexMsg::Progress { count, current }) => {
                     self.index_progress = count;
                     self.index_progress_path = current;
                 }
-                Ok(IndexMsg::Done(idx)) => {
-                    let _ = idx.save(&folder_index_path());
+                Ok(IndexMsg::Complete(idx)) => {
                     self.folder_index = idx;
-                    self.index_building = false;
-                    self.index_rx = None;
-                    self.index_cancel = None;
+                    self.finish_index_worker();
+                    keep_receiver = false;
                     if !self.folder_search_query.is_empty() {
                         self.run_folder_search();
                     }
@@ -245,15 +277,48 @@ impl App {
                     ));
                     break;
                 }
-                Err(_) => break,
+                Ok(IndexMsg::Canceled) => {
+                    self.finish_index_worker();
+                    keep_receiver = false;
+                    self.notice = Some((
+                        "Indexaufbau abgebrochen; der vorhandene Index bleibt erhalten."
+                            .to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    break;
+                }
+                Ok(IndexMsg::Failed(error)) => {
+                    self.finish_index_worker();
+                    keep_receiver = false;
+                    self.error_msg = Some(format!("Ordnerindex fehlgeschlagen: {error}"));
+                    break;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.finish_index_worker();
+                    keep_receiver = false;
+                    self.error_msg =
+                        Some("Ordnerindex-Worker wurde ohne Abschlussmeldung beendet.".to_string());
+                    break;
+                }
             }
         }
+        if keep_receiver {
+            self.index_rx = Some(rx);
+        }
+    }
+
+    fn finish_index_worker(&mut self) {
+        self.index_building = false;
+        self.index_cancel = None;
+        self.index_progress_path.clear();
     }
 
     /// Two-stage search: fuzzy scoring runs synchronously (pure CPU, fast),
     /// then a background thread stats the candidates and re-ranks by mtime —
     /// disk I/O never blocks the UI thread.
     pub(in crate::app) fn run_folder_search(&mut self) {
+        self.folder_search_seq = self.folder_search_seq.wrapping_add(1);
         if self.folder_search_query.is_empty() || self.folder_index.is_empty() {
             self.folder_search_results.clear();
             self.folder_search_rx = None;
@@ -264,31 +329,49 @@ impl App {
             .search_scored(&self.folder_search_query, 90);
         // Provisional, score-only results shown immediately
         self.folder_search_results = scored.iter().take(30).cloned().collect();
-        self.folder_search_seq += 1;
         let seq = self.folder_search_seq;
         let (tx, rx) = unbounded();
-        self.folder_search_rx = Some(rx);
-        std::thread::Builder::new()
+        match std::thread::Builder::new()
             .name("search-rank".into())
             .spawn(move || {
                 let ranked = crate::folder_index::stat_and_rank(scored, 30);
                 let _ = tx.send((seq, ranked));
-            })
-            .ok();
+            }) {
+            Ok(_) => self.folder_search_rx = Some(rx),
+            Err(error) => {
+                self.folder_search_rx = None;
+                self.error_msg = Some(format!(
+                    "Ordnersuche-Ranking konnte nicht gestartet werden: {error}"
+                ));
+            }
+        }
     }
 
     pub(in crate::app) fn drain_folder_search(&mut self) {
         let mut done = false;
+        let mut disconnected = false;
         if let Some(rx) = self.folder_search_rx.as_ref() {
-            while let Ok((seq, ranked)) = rx.try_recv() {
-                if seq == self.folder_search_seq {
-                    self.folder_search_results = ranked;
-                    done = true;
+            loop {
+                match rx.try_recv() {
+                    Ok((seq, ranked)) => {
+                        if seq == self.folder_search_seq {
+                            self.folder_search_results = ranked;
+                            done = true;
+                        }
+                    }
+                    Err(crossbeam_channel::TryRecvError::Empty) => break,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        disconnected = !done;
+                        break;
+                    }
                 }
             }
         }
-        if done {
+        if done || disconnected {
             self.folder_search_rx = None;
+        }
+        if disconnected {
+            self.error_msg = Some("Ordnersuche-Ranking wurde ohne Ergebnis beendet.".to_string());
         }
     }
 

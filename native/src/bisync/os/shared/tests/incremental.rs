@@ -47,6 +47,14 @@ impl Backend for Counting {
         self.inner.rename(src, dst)
     }
 
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        self.inner.rename_no_replace(src, dst)
+    }
+
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.inner.promote_staged(staged, destination)
+    }
+
     fn rename_overwrites(&self) -> bool {
         true
     }
@@ -119,6 +127,14 @@ impl Backend for ChangeSource {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.inner.rename(src, dst)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        self.inner.rename_no_replace(src, dst)
+    }
+
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.inner.promote_staged(staged, destination)
     }
 
     fn rename_overwrites(&self) -> bool {
@@ -222,7 +238,7 @@ fn incremental_mirror_skips_target_tree_listing() {
         "target touched path is verified"
     );
 
-    let pair = pair_id(&ra, &rb);
+    let pair = pair_id_for(&ca, &ra, &cb, &rb);
     let _ = std::fs::remove_file(baseline_path(&pair));
     let _ = std::fs::remove_dir_all(versions_dir(&pair));
     for d in [&a, &b] {
@@ -299,7 +315,7 @@ fn incremental_drive_like_rename_deletes_old_target_path() {
     assert_eq!(std::fs::read(b.join("new.txt")).unwrap(), b"v1");
     assert_eq!(b_lists.load(Ordering::Relaxed), 0);
 
-    let pair = pair_id(&ra, &rb);
+    let pair = pair_id_for(&source, &ra, &target, &rb);
     let _ = std::fs::remove_file(baseline_path(&pair));
     let _ = std::fs::remove_dir_all(versions_dir(&pair));
     for d in [&a, &b] {

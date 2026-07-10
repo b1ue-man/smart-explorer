@@ -1,15 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use super::archive::{archive_binary, resume_auto_update, set_pin};
-use super::config::{last_applied_path, updater_error_path};
+use super::archive::{archive_binary, archived_sha256, pinned_version, restore_pin, set_pin};
 use super::core::{replace_file_with_staged, staged_sha256_from_path, verify_sha256};
-use super::feed::{Feed, PayloadSpec};
-
-#[path = "windows/processes.rs"]
-mod processes;
-
-use processes::{stop_target_processes_for_update, wait_for_pid_exit};
+use super::feed::PayloadSpec;
 
 const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 const INSTALLED_CLI_EXE: &str = "se.exe";
@@ -56,43 +49,10 @@ pub(super) fn cli_payload_spec() -> PayloadSpec {
 
 /// The "rename dance" that swaps `new_exe` into the running binary's path.
 /// Returns the path the caller should relaunch with `--updated`.
-fn swap_in(new_exe: &Path) -> Result<PathBuf, String> {
+fn swap_in(new_exe: &Path, expected_sha256: &str) -> Result<PathBuf, String> {
     let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    let expected_sha256 = staged_sha256_from_path(new_exe);
-    replace_file_with_staged(
-        new_exe,
-        &cur_exe,
-        "Programmdatei",
-        expected_sha256.as_deref(),
-    )?;
+    replace_file_with_staged(new_exe, &cur_exe, "Programmdatei", Some(expected_sha256))?;
     Ok(cur_exe)
-}
-
-/// Spawn a process fully detached: no console window, and broken away from any
-/// job object so it outlives this process.
-fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<()> {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(args);
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
-    match cmd.spawn() {
-        Ok(_) => return Ok(()),
-        Err(e) if should_elevate_for_spawn(&e) => {
-            return spawn_elevated_detached(exe, args);
-        }
-        Err(_) => {}
-    }
-    let mut c2 = std::process::Command::new(exe);
-    c2.args(args)
-        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-    match c2.spawn() {
-        Ok(_) => Ok(()),
-        Err(e) if should_elevate_for_spawn(&e) => spawn_elevated_detached(exe, args),
-        Err(e) => Err(e),
-    }
 }
 
 fn should_elevate_for_spawn(e: &std::io::Error) -> bool {
@@ -174,7 +134,7 @@ fn quote_windows_arg(arg: &str) -> String {
     out
 }
 
-fn installed_updater_path() -> Result<PathBuf, String> {
+pub(super) fn installed_updater_path() -> Result<PathBuf, String> {
     let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let dir = cur
         .parent()
@@ -182,7 +142,7 @@ fn installed_updater_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_UPDATER_EXE))
 }
 
-fn installed_cli_path() -> Result<PathBuf, String> {
+pub(super) fn installed_cli_path() -> Result<PathBuf, String> {
     let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let dir = cur
         .parent()
@@ -190,199 +150,41 @@ fn installed_cli_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_CLI_EXE))
 }
 
-struct CopyRetryError {
-    msg: String,
-    needs_elevation: bool,
-    integrity_error: bool,
-}
-
-fn copy_with_retries(
-    src: &Path,
-    dest: &Path,
-    label: &str,
-    expected_sha256: Option<&str>,
-) -> Result<(), CopyRetryError> {
-    let mut last = None;
-    let mut needs_elevation = false;
-    let mut integrity_error = false;
-    for _ in 0..10 {
-        match replace_file_with_staged(src, dest, label, expected_sha256) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                needs_elevation |= looks_like_elevation_error(&e);
-                integrity_error |= looks_like_integrity_error(&e);
-                last = Some(e);
-                std::thread::sleep(Duration::from_millis(350));
-            }
-        }
-    }
-    Err(CopyRetryError {
-        msg: format!(
-            "{} kopieren ({} -> {}): {}",
-            label,
-            src.display(),
-            dest.display(),
-            last.unwrap_or_else(|| "unbekannter Fehler".to_string())
-        ),
-        needs_elevation,
-        integrity_error,
-    })
-}
-
-pub(super) fn ensure_installed_updater(
-    feed: &Feed,
-    version: &str,
-    refresh: bool,
-) -> Result<PathBuf, String> {
-    let dest = installed_updater_path()?;
-    if !refresh && dest.exists() {
-        return Ok(dest);
-    }
-
-    match feed.fetch_updater_exe(version) {
-        Ok(staged) => {
-            let expected_sha256 = staged_sha256_from_path(&staged);
-            match copy_with_retries(&staged, &dest, "Updater-Helfer", expected_sha256.as_deref()) {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(&staged);
-                    Ok(dest)
-                }
-                Err(e) if !e.integrity_error && (e.needs_elevation || dest.exists()) => Ok(staged),
-                Err(e) => {
-                    let _ = std::fs::remove_file(&staged);
-                    Err(e.msg)
-                }
-            }
-        }
-        Err(_e) if dest.exists() => Ok(dest),
-        Err(e) => Err(format!(
-            "Updater-Helfer fehlt und konnte nicht aus dem Feed geladen werden: {}",
-            e
-        )),
-    }
-}
-
-pub(super) fn ensure_installed_cli(
-    feed: &Feed,
-    version: &str,
-    refresh: bool,
-) -> Result<PathBuf, String> {
-    let dest = installed_cli_path()?;
-    if !refresh && dest.exists() {
-        return Ok(dest);
-    }
-
-    let staged = feed.fetch_cli_exe(version)?;
-    let expected_sha256 = staged_sha256_from_path(&staged);
-    match copy_with_retries(
-        &staged,
-        &dest,
-        "Terminal-Begleiter",
-        expected_sha256.as_deref(),
-    ) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&staged);
-            Ok(dest)
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&staged);
-            Err(e.msg)
-        }
-    }
-}
-
-pub(super) fn apply_via_installed_updater(
+pub(super) fn spawn_update_helper(
     helper: &Path,
-    staged_exe: &Path,
-    version: &str,
+    helper_sha256: &str,
+    args: &[String],
 ) -> Result<(), String> {
-    let cur_exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    let target = cur_exe.to_string_lossy().into_owned();
-    let staged = staged_exe.to_string_lossy().into_owned();
-    let parent_pid = std::process::id().to_string();
-    let last_applied = last_applied_path().to_string_lossy().into_owned();
-    let error_file = updater_error_path().to_string_lossy().into_owned();
-    if let Some(hash) = staged_sha256_from_path(staged_exe) {
-        verify_sha256(staged_exe, &hash)?;
-    }
-    if let Some(hash) = staged_sha256_from_path(helper) {
-        verify_sha256(helper, &hash)?;
-    }
-    let mut argv = vec![
-        "--apply".to_string(),
-        "--target".to_string(),
-        target,
-        "--staged".to_string(),
-        staged,
-        "--parent-pid".to_string(),
-        parent_pid,
-        "--version".to_string(),
-        version.to_string(),
-        "--last-applied".to_string(),
-        last_applied,
-        "--error-file".to_string(),
-        error_file,
-    ];
-    if let Some(hash) = staged_sha256_from_path(staged_exe) {
-        argv.push("--staged-sha256".to_string());
-        argv.push(hash);
-    }
-    if let Some(hash) = staged_sha256_from_path(helper) {
-        argv.push("--helper-sha256".to_string());
-        argv.push(hash);
-    }
-    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    spawn_detached(helper, &argv_refs).map_err(|e| format!("Updater-Helfer starten: {}", e))?;
-    Ok(())
-}
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
-/// Worker entry point (`--apply-update <target> <parent_pid>`).
-pub fn run_apply_worker(args: &[String]) {
-    let i = match args.iter().position(|a| a == "--apply-update") {
-        Some(i) => i,
-        None => return,
-    };
-    let target = match args.get(i + 1) {
-        Some(t) => PathBuf::from(t),
-        None => return,
-    };
-    let parent_pid: u32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let src = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-
-    wait_for_pid_exit(parent_pid, Duration::from_secs(30));
-    request_daemon_stop_for_update();
-    let _ = stop_target_processes_for_update(&target);
-
-    let mut replaced = false;
-    for _ in 0..60 {
-        let expected_sha256 = staged_sha256_from_path(&src);
-        if replace_file_with_staged(&src, &target, "Apply-Worker", expected_sha256.as_deref())
-            .is_ok()
-        {
-            replaced = true;
-            break;
+    verify_sha256(helper, helper_sha256)?;
+    let mut command = std::process::Command::new(helper);
+    command
+        .args(args)
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+    match command.spawn() {
+        Ok(_) => Ok(()),
+        Err(error) if should_elevate_for_spawn(&error) => {
+            verify_sha256(helper, helper_sha256)?;
+            let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+            spawn_elevated_detached(helper, &refs)
+                .map_err(|error| format!("Updater-Helfer mit UAC starten: {error}"))
         }
-        std::thread::sleep(Duration::from_millis(500));
+        Err(_) => {
+            verify_sha256(helper, helper_sha256)?;
+            let mut retry = std::process::Command::new(helper);
+            retry
+                .args(args)
+                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+            retry
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Updater-Helfer starten: {error}"))
+        }
     }
-    if replaced {
-        let _ = ensure_share_firewall_rule_for(&target);
-        let _ = spawn_detached(&target, &["--updated"]);
-    }
-}
-
-fn looks_like_elevation_error(msg: &str) -> bool {
-    let lower = msg.to_ascii_lowercase();
-    lower.contains("access is denied")
-        || lower.contains("zugriff")
-        || lower.contains("permission")
-        || lower.contains("os error 5")
-}
-
-fn looks_like_integrity_error(msg: &str) -> bool {
-    msg.contains("Pruefsumme") || msg.contains("SHA-256") || msg.contains("Hash-Datei")
 }
 
 fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {
@@ -425,38 +227,35 @@ fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {
     }
 }
 
-fn request_daemon_stop_for_update() {
-    let sync = crate::support_dirs::sync_data_dir();
-    let _ = std::fs::write(sync.join("daemon.stop"), "stop");
-}
-
 /// Revert to an archived binary.
 pub fn revert_to(archived: &Path, version: &str) -> Result<PathBuf, String> {
     if !archived.exists() {
         return Err("Archivierte Version nicht gefunden".into());
     }
-    archive_binary(env!("CARGO_PKG_VERSION"));
-    let cur_exe = swap_in(archived)?;
+    let archived_hash = rollback_sha256(archived)?;
+    archive_binary(env!("CARGO_PKG_VERSION"))?;
+    let previous_pin = pinned_version();
+    set_pin(version).map_err(|error| format!("Rollback-Pin speichern: {error}"))?;
+    let cur_exe = match swap_in(archived, &archived_hash) {
+        Ok(path) => path,
+        Err(primary) => {
+            return Err(match restore_pin(previous_pin.as_deref()) {
+                Ok(()) => primary,
+                Err(restore) => format!(
+                    "{primary}; vorheriger Update-Pin konnte nicht wiederhergestellt werden: {restore}"
+                ),
+            });
+        }
+    };
     let _ = ensure_share_firewall_rule_for(&cur_exe);
-    set_pin(version);
     Ok(cur_exe)
 }
 
-/// Install a downloaded released binary as a forward update.
-pub fn install_version(downloaded: &Path, version: &str) -> Result<PathBuf, String> {
-    if !downloaded.exists() {
-        return Err("Heruntergeladene Version nicht gefunden".into());
+fn rollback_sha256(path: &Path) -> Result<String, String> {
+    if let Some(hash) = staged_sha256_from_path(path) {
+        verify_sha256(path, &hash)?;
+        Ok(hash)
+    } else {
+        archived_sha256(path)
     }
-    archive_binary(env!("CARGO_PKG_VERSION"));
-    if let Ok(helper) = installed_updater_path() {
-        if helper.exists() {
-            resume_auto_update();
-            apply_via_installed_updater(&helper, downloaded, version)?;
-            return Ok(PathBuf::new());
-        }
-    }
-    let cur_exe = swap_in(downloaded)?;
-    let _ = ensure_share_firewall_rule_for(&cur_exe);
-    resume_auto_update();
-    Ok(cur_exe)
 }

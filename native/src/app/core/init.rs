@@ -4,26 +4,59 @@ use super::*;
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
         // Clean up dead-session temp copies and mark this live session.
-        init_temp_session();
-        // Keep the background worker alive across startup and self-update. It
-        // owns background sync and persistent Share sessions, so it is started
-        // even when no sync job is currently due.
-        let _ = crate::autostart::enable();
-        if just_updated {
-            // Hand off to a fresh daemon running the new exe: ask the old one to
-            // stop and spawn a new one (which waits for the old to exit).
-            crate::daemon::request_stop();
-            crate::autostart::spawn_daemon_now();
-        } else if !crate::daemon::is_running() {
-            crate::daemon::clear_stop();
-            crate::autostart::spawn_daemon_now();
+        let recoverable_temp_sessions = init_temp_session();
+        let mut startup_daemon_error = None;
+        // Background sync is opt-in. Share may start a session worker later,
+        // without registering that worker for logon or enabling scheduled jobs.
+        if crate::autostart::is_enabled() {
+            if just_updated {
+                // Hand off to a fresh daemon running the new executable.
+                match crate::daemon::request_stop() {
+                    Ok(()) => crate::autostart::spawn_daemon_now(),
+                    Err(error) => {
+                        startup_daemon_error = Some(format!(
+                            "Hintergrunddienst konnte beim Update nicht sicher neu gestartet werden: {error}"
+                        ));
+                    }
+                }
+            } else if !crate::daemon::is_running() {
+                match crate::daemon::clear_stop() {
+                    Ok(()) => crate::autostart::spawn_daemon_now(),
+                    Err(error) => {
+                        startup_daemon_error = Some(format!(
+                            "Hintergrunddienst bleibt gestoppt; Stoppsperre konnte nicht aufgehoben werden: {error}"
+                        ));
+                    }
+                }
+            }
         }
-        crate::daemon::ensure_worker_ready();
         let home = dirs_home();
         let default_share_path = home.to_string_lossy().replace('\\', "/");
-        let share_identity = crate::share::ShareIdentity::load_or_create(default_device_name());
-        let share_profiles = crate::share::ShareProfiles::load(Some(default_share_path.clone()));
-        let room_draft_code = crate::share::ShareProfiles::new_room_code();
+        let default_share_device_name = default_device_name();
+        let (share_identity, share_identity_error) =
+            match crate::share::ShareIdentity::load_or_create(default_share_device_name.clone()) {
+                Ok(identity) => (Some(identity), None),
+                Err(error) => (None, Some(error)),
+            };
+        let share_device_draft = share_identity
+            .as_ref()
+            .map(|identity| identity.device_name.clone())
+            .unwrap_or(default_share_device_name);
+        let (share_profiles, mut share_profiles_error) =
+            match crate::share::ShareProfiles::load_checked(Some(default_share_path.clone())) {
+                Ok(profiles) => (profiles, None),
+                Err(error) => (crate::share::ShareProfiles::default(), Some(error)),
+            };
+        let room_draft_code = match crate::share::ShareProfiles::new_room_code() {
+            Ok(code) => code,
+            Err(error) => {
+                share_profiles_error = Some(match share_profiles_error {
+                    Some(existing) => format!("{existing}; Raumcode erzeugen: {error}"),
+                    None => format!("Raumcode erzeugen: {error}"),
+                });
+                String::new()
+            }
+        };
         let drives = list_drives();
         let drive_info = drive_info_list(&drives);
         let recent: Vec<String> = std::fs::read_to_string(settings_path())
@@ -40,13 +73,69 @@ impl App {
             })
             .unwrap_or_default();
         let ui_state = UiState::load();
-        let startup_update_error =
-            crate::updater::take_updater_error().map(|e| format!("Update-Helfer: {}", e));
+        let mut startup_update_error = crate::updater::take_updater_error()
+            .map(|e| format!("Update-Helfer: {e}"))
+            .or_else(|| {
+                (recoverable_temp_sessions > 0).then(|| {
+                    format!(
+                        "{} wiederherstellbare Sitzung(en) mit möglicherweise ungespeicherten Remote-Dateien unter {} gefunden.",
+                        recoverable_temp_sessions,
+                        temp_root().display()
+                    )
+                })
+            });
+        let (staged_update, staging_load_failed) = if just_updated {
+            (None, false)
+        } else {
+            match crate::updater::load_staged_update() {
+                Ok(bundle) => (bundle, false),
+                Err(error) => {
+                    let detail = format!("Gestagtes Update konnte nicht geladen werden: {error}");
+                    startup_update_error = Some(match startup_update_error.take() {
+                        Some(existing) => format!("{existing}\n{detail}"),
+                        None => detail,
+                    });
+                    (None, true)
+                }
+            }
+        };
+        let (sync_jobs, sync_jobs_error) = match crate::syncjobs::load() {
+            Ok(jobs) => (jobs, None),
+            Err(error) => (
+                Vec::new(),
+                Some(format!(
+                    "Gespeicherte Sync-Jobs konnten nicht geladen werden: {error}"
+                )),
+            ),
+        };
+        for detail in startup_daemon_error.into_iter().chain(sync_jobs_error) {
+            startup_update_error = Some(match startup_update_error.take() {
+                Some(existing) => format!("{existing}\n{detail}"),
+                None => detail,
+            });
+        }
 
-        // Kick off the automatic update check (silent unless an update is
-        // found and applied).
-        let (utx, urx) = unbounded();
-        crate::updater::check_async(utx, false);
+        // A snoozed bundle remains the only candidate on the next launch.
+        // Do not silently replace it with a new download before consent.
+        let update_rx = if staged_update.is_some() || staging_load_failed {
+            None
+        } else {
+            let (utx, urx) = unbounded();
+            match crate::updater::check_async(utx, false) {
+                Ok(()) => Some(urx),
+                Err(error) => {
+                    let detail =
+                        format!("Automatische Update-Prüfung konnte nicht starten: {error}");
+                    startup_update_error = Some(match startup_update_error {
+                        Some(existing) => format!("{existing}\n{detail}"),
+                        None => detail,
+                    });
+                    None
+                }
+            }
+        };
+        let show_update_dialog = staged_update.is_some();
+        let update_ready = staged_update.map(ReadyUpdate::Staged);
 
         Self {
             root_path: String::new(),
@@ -59,6 +148,7 @@ impl App {
             scan_rx: None,
             scan_handle: None,
             progress: empty_progress(),
+            scan_was_canceled: false,
 
             filter: FilterDef::new(),
             sort_key: SortKey::Path,
@@ -70,15 +160,21 @@ impl App {
             dir_sort: load_dir_sort(),
             show_analytics: false,
             analytics_tree: None,
-            analytics_root_path: String::new(),
+            analytics_source: None,
+            analytics_state: StorageRunState::Idle,
+            analytics_issues: Vec::new(),
+            analytics_suppressed_issues: 0,
             analytics_focus: Vec::new(),
             analytics_scan: None,
-            analytics_backend: None,
             analytics_cells: Vec::new(),
             analytics_cells_rect: egui::Rect::ZERO,
             analytics_counts: None,
             analytics_panel: AnalyticsPanel::Treemap,
             reclaim_scan: None,
+            reclaim_source: None,
+            reclaim_state: StorageRunState::Idle,
+            reclaim_issues: Vec::new(),
+            reclaim_suppressed_issues: 0,
             reclaim_report: None,
             reclaim_selected: HashSet::new(),
             reclaim_large_min_gb: 1.0,
@@ -102,6 +198,7 @@ impl App {
             copy_handle: None,
             copy_progress: None,
             copy_errors: Vec::new(),
+            copy_active_mode: None,
             copy_refresh_after: false,
 
             error_msg: startup_update_error,
@@ -195,12 +292,17 @@ impl App {
             folder_search_seq: 0,
 
             trash_rx: None,
+            trash_worker: None,
+            trash_cancel: None,
+            trash_progress: None,
+            trash_origin: None,
 
-            update_rx: Some(urx),
-            update_ready: None,
+            update_rx,
+            update_ready,
+            show_update_dialog,
+            shutdown_prepared: false,
             remote_versions: None,
             remote_versions_rx: None,
-            rollback_forward: false,
             update_release_available: None,
             update_release_notified: false,
             rollback_rx: None,
@@ -215,6 +317,8 @@ impl App {
             watcher_rx: None,
             index_dirty: false,
             index_last_saved: std::time::Instant::now(),
+            index_save_rx: None,
+            index_save_worker: None,
 
             clip_key_rx: None,
             clip_key_cancel: None,
@@ -237,6 +341,9 @@ impl App {
             bisync_ctx: None,
             bisync_conflicts: Vec::new(),
             show_bisync_conflicts: false,
+            conflict_bulk: None,
+            conflict_resolution: None,
+            conflict_baseline_dirty: false,
             merge: None,
             merge_load_rx: None,
             merge_apply_rx: None,
@@ -251,7 +358,7 @@ impl App {
             sync_cancel: None,
             bisync_cancel: None,
 
-            sync_jobs: crate::syncjobs::load(),
+            sync_jobs,
             show_sync_jobs: false,
             show_daemon_log: false,
             job_editor: None,
@@ -266,6 +373,8 @@ impl App {
             last_edit_poll: Instant::now(),
             upload_rx: None,
             transfer_progress: None,
+            transfer_cancel: None,
+            transfer_worker: None,
             remote_op_rx: None,
             agent_activate_rx: None,
             agent_activate_for: None,
@@ -283,9 +392,11 @@ impl App {
             show_share: false,
             share_server: load_share_server(),
             share_server_draft: load_share_server(),
-            share_device_draft: share_identity.device_name.clone(),
+            share_device_draft,
             share_identity,
+            share_identity_error,
             share_profiles,
+            share_profiles_error,
             share_tab: 0,
             share_direct_code_input: String::new(),
             share_direct_name_input: String::new(),
@@ -314,6 +425,7 @@ impl App {
             share_worker_candidates: Vec::new(),
             quickshare: None,
             qs_devices: Vec::new(),
+            quickshare_error: None,
         }
     }
 }

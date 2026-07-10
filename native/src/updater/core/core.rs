@@ -60,7 +60,7 @@ pub(super) fn parse_sha256_file(raw: &str, name: &str) -> Result<String, String>
     }
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(super) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file =
         std::fs::File::open(path).map_err(|e| format!("Hash lesen {}: {}", path.display(), e))?;
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();

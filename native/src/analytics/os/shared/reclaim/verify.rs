@@ -161,7 +161,7 @@ mod tests {
             ..ReclaimReport::default()
         };
         std::fs::write(&copy, b"diff").unwrap();
-        let plan = prepare_reclaim_trash_plan(&report, &[copy_s.clone()]);
+        let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
         assert!(plan.delete_paths.is_empty());
         assert_eq!(plan.skipped_paths, vec![copy_s]);
         let _ = std::fs::remove_dir_all(&base);
@@ -195,7 +195,7 @@ mod tests {
             }],
             ..ReclaimReport::default()
         };
-        let plan = prepare_reclaim_trash_plan(&report, &[copy_s.clone()]);
+        let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
         assert_eq!(plan.delete_paths, vec![copy_s.clone()]);
         assert_eq!(plan.verified_duplicate_paths, vec![copy_s]);
         assert!(plan.skipped_paths.is_empty());

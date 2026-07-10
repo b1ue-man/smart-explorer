@@ -3,6 +3,7 @@ use super::*;
 impl App {
     /// One-pass batched mutation. Collects only the affected paths instead of
     /// cloning the whole index on every remove/rename burst.
+    #[cfg(windows)]
     pub(in crate::app) fn apply_batched_changes(
         &mut self,
         additions: &[String],

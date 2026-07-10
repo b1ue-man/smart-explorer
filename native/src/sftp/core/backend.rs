@@ -101,6 +101,10 @@ impl Backend for SftpBackend {
         self.root.clone()
     }
 
+    fn state_identity(&self) -> String {
+        self.url.clone()
+    }
+
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let sftp = self.sftp.clone();
         let rt = self.rt.clone();
@@ -125,6 +129,14 @@ impl Backend for SftpBackend {
             .block_on(async move { sftp.symlink_metadata(p).await })
             .map_err(io_err)?;
         Ok(to_vfs(basename(path), &meta))
+    }
+
+    fn try_exists(&self, path: &str) -> VfsResult<bool> {
+        let sftp = self.sftp.clone();
+        let rt = self.rt.clone();
+        let path = path.to_string();
+        rt.block_on(async move { sftp.try_exists(path).await })
+            .map_err(io_err)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
@@ -159,6 +171,13 @@ impl Backend for SftpBackend {
         let (s, d) = (src.to_string(), dst.to_string());
         rt.block_on(async move { sftp.rename(s, d).await })
             .map_err(io_err)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        // russh-sftp speaks SFTP v3. SSH_FXP_RENAME in that protocol must fail
+        // when newpath already exists, so the request itself is the atomic
+        // no-replace gate rather than a racy client-side existence probe.
+        self.rename(src, dst)
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {

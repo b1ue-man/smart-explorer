@@ -48,24 +48,32 @@ impl App {
     }
 
     pub(in crate::app) fn ui_update_dialog(&mut self, ctx: &egui::Context) {
-        let (version, exe) = match self.update_ready.clone() {
-            Some(v) => v,
+        let ready = match self.update_ready.clone() {
+            Some(ready) if self.show_update_dialog => ready,
             None => return,
+            Some(_) => return,
         };
+        let version = ready.version().to_string();
         let mut restart = false;
         let mut later = false;
+        let mut discard = false;
         egui::Window::new("Update bereit")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(format!(
-                    "Version {} wurde installiert. Zum Übernehmen ist ein Neustart nötig.",
-                    version
-                ));
+                let message = match &ready {
+                    ReadyUpdate::Staged(_) => format!(
+                        "Version {version} wurde geprüft und bereitgestellt. Installiert wird sie erst nach Ihrer Bestätigung."
+                    ),
+                    ReadyUpdate::InstalledRollback { .. } => format!(
+                        "Version {version} wurde für den Rollback eingesetzt. Zum Übernehmen ist ein Neustart nötig."
+                    ),
+                };
+                ui.label(message);
                 ui.colored_label(
                     Color32::from_gray(150),
-                    "„Später“ behält die laufende Version bei; das Update greift beim nächsten Start.",
+                    "„Später“ behält ein gestagtes Update unverändert; beim nächsten Start wird erneut gefragt.",
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -75,19 +83,66 @@ impl App {
                     if ui.button("Später").clicked() {
                         later = true;
                     }
+                    if matches!(&ready, ReadyUpdate::Staged(_))
+                        && ui.button("Verwerfen").clicked()
+                    {
+                        discard = true;
+                    }
                 });
             });
         if restart {
-            // Empty exe = the worker path: it relaunches after we exit, so just
-            // close. Otherwise the new binary is already in place — relaunch it.
-            if !exe.as_os_str().is_empty() {
-                spawn_updated_app(&exe);
+            let preflight = match &ready {
+                ReadyUpdate::Staged(bundle) => crate::updater::verify_staged_update(bundle),
+                ReadyUpdate::InstalledRollback { .. } => Ok(()),
+            };
+            if let Err(error) = preflight {
+                self.error_msg = Some(format!("Update-Staging ist nicht mehr gültig: {error}"));
+                return;
             }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if let Err(error) = self.prepare_for_update_apply() {
+                self.error_msg = Some(format!(
+                    "Neustart wurde nicht begonnen; laufende Arbeit konnte nicht sicher bewahrt werden: {error}"
+                ));
+                return;
+            }
+            let launch = match &ready {
+                ReadyUpdate::Staged(bundle) => crate::updater::apply_staged_update(bundle),
+                ReadyUpdate::InstalledRollback { executable, .. } => spawn_updated_app(executable)
+                    .map_err(|error| format!("Rollback-Version starten: {error}")),
+            };
+            match launch {
+                Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                Err(error) => {
+                    self.shutdown_prepared = false;
+                    self.error_msg = Some(format!(
+                        "Neustart-Helfer konnte nicht gestartet werden; das gestagte Update bleibt erhalten: {error}"
+                    ));
+                }
+            }
+        } else if discard {
+            let ReadyUpdate::Staged(bundle) = &ready else {
+                return;
+            };
+            match crate::updater::discard_staged_update(bundle) {
+                Ok(()) => {
+                    self.update_ready = None;
+                    self.show_update_dialog = false;
+                    self.notice = Some((
+                        format!("Gestagtes Update v{version} verworfen"),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.error_msg = Some(format!("Gestagtes Update verwerfen: {error}"));
+                }
+            }
         } else if later {
-            self.update_ready = None;
+            self.show_update_dialog = false;
+            if matches!(ready, ReadyUpdate::InstalledRollback { .. }) {
+                self.update_ready = None;
+            }
             self.notice = Some((
-                format!("Update v{} greift beim nächsten Start", version),
+                format!("Update v{version} bleibt für später bereit"),
                 std::time::Instant::now(),
             ));
         }
@@ -241,6 +296,9 @@ impl App {
                     if self.connecting {
                         ui.spinner();
                         ui.label("Verbinde…");
+                        if ui.button("Abbrechen").clicked() {
+                            close = true;
+                        }
                     } else {
                         if ui.button(RichText::new("Verbinden").strong()).clicked() {
                             do_connect = true;
@@ -257,7 +315,9 @@ impl App {
         if do_connect {
             let form = self.connect_form.clone();
             self.begin_connect(form, None);
-        } else if close && !self.connecting {
+        } else if close {
+            self.connect_rx = None;
+            self.connecting = false;
             self.show_connect = false;
         }
     }
@@ -269,7 +329,8 @@ impl App {
         if !self.show_disclaimer {
             return;
         }
-        // Dim everything behind the notice.
+        // Fill the viewport even though the main layout is intentionally not
+        // rendered while this first-run gate is open.
         egui::Area::new(egui::Id::new("disclaimer_backdrop"))
             .order(egui::Order::Background)
             .show(ctx, |ui| {
@@ -306,7 +367,11 @@ impl App {
                 });
             });
         if accept {
-            let _ = std::fs::write(appdata_file("disclaimer_ack.txt"), "1");
+            if let Err(error) = std::fs::write(appdata_file("disclaimer_ack.txt"), "1") {
+                self.error_msg = Some(format!(
+                    "Haftungshinweis konnte nicht dauerhaft bestätigt werden: {error}"
+                ));
+            }
             self.show_disclaimer = false;
         }
     }
@@ -378,8 +443,14 @@ impl App {
                             &[
                                 ("Ctrl+C / Ctrl+X / Ctrl+V", "Kopieren / Ausschneiden / Einfügen"),
                                 ("Ctrl+Shift+C", "Pfade als Text kopieren"),
-                                ("Entf", "In den Papierkorb"),
-                                ("Shift+Entf", "Endgültig löschen"),
+                                (
+                                    "Entf",
+                                    "Papierkorb, sofern verfügbar; sonst endgültig mit Bestätigung",
+                                ),
+                                (
+                                    "Shift+Entf",
+                                    "Endgültig löschen, sofern die Quelle dies unterstützt",
+                                ),
                                 ("F2", "Umbenennen"),
                                 ("Ctrl+Shift+N", "Neuer Ordner"),
                                 ("Alt+Enter", "Eigenschaften"),
@@ -407,108 +478,5 @@ impl App {
                 });
             });
         self.show_help = open;
-    }
-
-    pub(in crate::app) fn ui_copy_dialog(&mut self, ctx: &egui::Context) {
-        let mut close = false;
-        let title = if self.copy_mode_pending == CopyMode::Copy {
-            "Kopieren"
-        } else {
-            "Verschieben"
-        };
-        let running = matches!(&self.copy_progress, Some(p) if !p.done);
-        let done = matches!(&self.copy_progress, Some(p) if p.done);
-
-        egui::Window::new(title)
-            .fixed_size([560.0, 280.0])
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.label(format!("{} Einträge ausgewählt", self.selection.len()));
-                ui.horizontal(|ui| {
-                    ui.label("Modus:");
-                    ui.radio_value(&mut self.copy_mode_pending, CopyMode::Copy, "kopieren");
-                    ui.radio_value(&mut self.copy_mode_pending, CopyMode::Move, "verschieben");
-                });
-                ui.colored_label(
-                    egui::Color32::from_gray(160),
-                    "Ordner werden rekursiv expandiert; nur Dateien die dem aktuellen Filter entsprechen werden kopiert. Ordnerstruktur wird erhalten, leere Ordner weggelassen.",
-                );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Ziel:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.copy_dest)
-                            .desired_width(360.0)
-                            .hint_text("Zielordner…"),
-                    );
-                    if ui.add_enabled(!running, egui::Button::new("Wählen…")).clicked() {
-                        let init = self.copy_dest.clone();
-                        self.open_picker(PickerPurpose::CopyDest, &init);
-                    }
-                });
-                ui.checkbox(
-                    &mut self.copy_preserve,
-                    "Ordnerstruktur erhalten (leere Ordner werden weggelassen)",
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Bei Konflikt:");
-                    ui.radio_value(&mut self.copy_conflict, Conflict::Rename, "umbenennen");
-                    ui.radio_value(&mut self.copy_conflict, Conflict::Overwrite, "überschreiben");
-                    ui.radio_value(&mut self.copy_conflict, Conflict::Skip, "überspringen");
-                });
-
-                if let Some(ref p) = self.copy_progress {
-                    let frac = if p.bytes_total > 0 {
-                        p.bytes_done as f32 / p.bytes_total as f32
-                    } else if p.files_total > 0 {
-                        p.files_done as f32 / p.files_total as f32
-                    } else {
-                        0.0
-                    };
-                    ui.add(egui::ProgressBar::new(frac).show_percentage());
-                    ui.label(format!(
-                        "{}/{} Dateien · {} / {} · {:.1}s{}",
-                        p.files_done,
-                        p.files_total,
-                        format_bytes(p.bytes_done),
-                        format_bytes(p.bytes_total),
-                        p.elapsed_ms as f64 / 1000.0,
-                        if p.errors > 0 {
-                            format!(" · {} Fehler", p.errors)
-                        } else {
-                            String::new()
-                        },
-                    ));
-                }
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                !self.copy_dest.is_empty() && !running,
-                                egui::Button::new(RichText::new("Start").strong()),
-                            )
-                            .clicked()
-                        {
-                            self.confirm_copy();
-                        }
-                        if ui.add_enabled(!running, egui::Button::new("Abbrechen")).clicked() {
-                            close = true;
-                        }
-                    });
-                });
-            });
-
-        if close || done {
-            self.copy_open = false;
-            if done && self.copy_mode_pending == CopyMode::Move {
-                let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-                self.entries.retain(|e| !removed.contains(&e.key()));
-                self.recompute_view();
-            }
-        }
     }
 }

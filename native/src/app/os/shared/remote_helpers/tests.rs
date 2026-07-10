@@ -4,7 +4,7 @@ use crate::types::FilterDef;
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -34,14 +34,53 @@ fn txt_filter() -> FilterDef {
 
 fn done_from(
     rx: &crossbeam_channel::Receiver<TransferMsg>,
-) -> (crate::app::app_models::TransferProgress, Vec<String>) {
+) -> (crate::app::app_models::TransferProgress, Vec<String>, bool) {
     let mut done = None;
     while let Ok(msg) = rx.try_recv() {
-        if let TransferMsg::Done { progress, errors } = msg {
-            done = Some((progress, errors));
+        if let TransferMsg::Done {
+            progress,
+            errors,
+            canceled,
+        } = msg
+        {
+            done = Some((progress, errors, canceled));
         }
     }
     done.expect("transfer should send Done")
+}
+
+fn numbered_name(index: usize) -> String {
+    if index == 1 {
+        "entry.txt".to_string()
+    } else {
+        format!("entry ({index}).txt")
+    }
+}
+
+#[test]
+fn remote_unique_name_checks_the_bound_and_never_reuses_it() {
+    let root = temp_dir("remote_unique_bound");
+    for index in 1..1000 {
+        std::fs::write(root.join(numbered_name(index)), b"occupied").unwrap();
+    }
+    let backend = crate::vfs::LocalBackend::new(&fwd(&root));
+
+    let last = find_remote_unique_name(&backend, &fwd(&root), numbered_name).unwrap();
+    assert_eq!(last, numbered_name(1000));
+    std::fs::write(root.join(&last), b"occupied").unwrap();
+    assert!(find_remote_unique_name(&backend, &fwd(&root), numbered_name).is_err());
+
+    assert!(ensure_remote_destination_free(&backend, &fwd(&root.join(&last))).is_err());
+    assert!(ensure_remote_destination_free(&backend, &fwd(&root.join("free.txt"))).is_ok());
+
+    let probe_error = find_remote_unique_name_with(
+        |_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "blocked")),
+        &fwd(&root),
+        numbered_name,
+    )
+    .expect_err("a failed existence probe must not look like a free name");
+    assert!(probe_error.contains("Ziel prüfen"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 fn copy_tree_contents(src: &Path, dst: &Path) -> io::Result<u64> {
@@ -153,7 +192,7 @@ fn remote_clipboard_downloads_folder_tree() {
     let be = crate::vfs::LocalBackend::new(&fwd(&remote));
     let item = (format!("{}/Gate", fwd(&remote)), "Gate".to_string(), true);
 
-    let local = download_remote_clipboard_items(&be, &[item], None);
+    let local = download_remote_clipboard_items(&be, &[item], None).unwrap();
 
     assert_eq!(local.len(), 1);
     let local_dir = PathBuf::from(&local[0]);
@@ -177,7 +216,7 @@ fn remote_clipboard_filters_folder_tree() {
     let be = crate::vfs::LocalBackend::new(&root);
     let item = (format!("{root}/Gate"), "Gate".to_string(), true);
 
-    let local = download_remote_clipboard_items(&be, &[item], Some((txt_filter(), root)));
+    let local = download_remote_clipboard_items(&be, &[item], Some((txt_filter(), root))).unwrap();
 
     assert_eq!(local.len(), 1);
     let local_dir = PathBuf::from(&local[0]);
@@ -199,10 +238,18 @@ fn remote_upload_copies_folder_tree_without_bulk() {
     std::fs::write(local.join("Gate/sub/b.txt"), b"beta").unwrap();
     let be = crate::vfs::LocalBackend::new(&fwd(&remote));
     let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(false);
 
-    upload_paths_progress(&be, &[fwd(&local.join("Gate"))], &fwd(&remote), &tx);
+    upload_paths_progress(
+        &be,
+        &[fwd(&local.join("Gate"))],
+        &fwd(&remote),
+        &tx,
+        &cancel,
+    );
 
-    let (progress, errors) = done_from(&rx);
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(!canceled);
     assert_eq!(progress.files_total, 2);
     assert_eq!(progress.files_done, 2);
     assert!(errors.is_empty(), "{errors:?}");
@@ -225,10 +272,18 @@ fn remote_upload_uses_bulk_tree_for_folder_backend() {
     std::fs::write(local.join("Gate/sub/b.txt"), b"beta").unwrap();
     let be = BulkLocalBackend::new(&fwd(&remote));
     let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(false);
 
-    upload_paths_progress(&be, &[fwd(&local.join("Gate"))], &fwd(&remote), &tx);
+    upload_paths_progress(
+        &be,
+        &[fwd(&local.join("Gate"))],
+        &fwd(&remote),
+        &tx,
+        &cancel,
+    );
 
-    let (progress, errors) = done_from(&rx);
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(!canceled);
     assert_eq!(be.put_calls.load(Ordering::Relaxed), 1);
     assert_eq!(progress.files_total, 2);
     assert_eq!(progress.files_done, 2);
@@ -252,10 +307,19 @@ fn remote_download_uses_bulk_tree_for_folder_backend() {
     std::fs::write(remote.join("Gate/sub/b.txt"), b"beta").unwrap();
     let be = BulkLocalBackend::new(&fwd(&remote));
     let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(false);
 
-    download_paths_progress(&be, &[fwd(&remote.join("Gate"))], &fwd(&dest), None, &tx);
+    download_paths_progress(
+        &be,
+        &[fwd(&remote.join("Gate"))],
+        &fwd(&dest),
+        None,
+        &tx,
+        &cancel,
+    );
 
-    let (progress, errors) = done_from(&rx);
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(!canceled);
     assert_eq!(be.get_calls.load(Ordering::Relaxed), 1);
     assert_eq!(progress.files_total, 2);
     assert_eq!(progress.files_done, 2);
@@ -280,10 +344,19 @@ fn remote_download_filters_selected_folder() {
     let be = crate::vfs::LocalBackend::new(&root);
     let src = format!("{root}/Gate");
     let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(false);
 
-    download_paths_progress(&be, &[src], &fwd(&dest), Some((txt_filter(), root)), &tx);
+    download_paths_progress(
+        &be,
+        &[src],
+        &fwd(&dest),
+        Some((txt_filter(), root)),
+        &tx,
+        &cancel,
+    );
 
-    let (progress, errors) = done_from(&rx);
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(!canceled);
     assert_eq!(progress.files_total, 2);
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(std::fs::read(dest.join("Gate/a.txt")).unwrap(), b"alpha");

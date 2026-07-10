@@ -12,20 +12,18 @@ use super::wire::FsMeta;
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
 pub(crate) const CHUNK: usize = 256 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SharedRoot {
     pub label: String,
     pub path: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShareExportConfig {
     pub roots: Vec<SharedRoot>,
     pub include_connections: bool,
     #[serde(default)]
     pub allow_exec: bool,
-    #[serde(default)]
-    pub allow_shell_exec: bool,
 }
 
 #[derive(Clone)]
@@ -105,6 +103,43 @@ pub(crate) fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::R
     }
     let t = resolve(path, exports)?;
     Ok(t.backend.stat(&t.path)?.into())
+}
+
+pub(crate) fn rename(
+    source: &str,
+    destination: &str,
+    exports: &Arc<Mutex<ShareExportConfig>>,
+    no_replace: bool,
+) -> io::Result<()> {
+    let source = resolve(source, exports)?;
+    let destination = resolve(destination, exports)?;
+    if source.mount_key != destination.mount_key {
+        return Err(eio("Quelle und Ziel liegen nicht auf derselben Freigabe"));
+    }
+    if no_replace {
+        source
+            .backend
+            .rename_no_replace(&source.path, &destination.path)
+    } else {
+        source.backend.rename(&source.path, &destination.path)
+    }
+}
+
+pub(crate) fn promote_staged(
+    staged: &str,
+    destination: &str,
+    exports: &Arc<Mutex<ShareExportConfig>>,
+) -> io::Result<()> {
+    let staged = resolve(staged, exports)?;
+    let destination = resolve(destination, exports)?;
+    if staged.mount_key != destination.mount_key {
+        return Err(eio(
+            "Staging-Datei und Ziel liegen nicht auf derselben Freigabe",
+        ));
+    }
+    staged
+        .backend
+        .promote_staged(&staged.path, &destination.path)
 }
 
 pub(crate) fn resolve(

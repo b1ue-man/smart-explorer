@@ -221,6 +221,9 @@ impl Backend for ZipBackend {
     fn remove_dir(&self, _path: &str) -> VfsResult<()> {
         Err(readonly())
     }
+    fn delete_disposition(&self) -> crate::vfs::DeleteDisposition {
+        crate::vfs::DeleteDisposition::Unsupported
+    }
     fn mkdir_all(&self, _path: &str) -> VfsResult<()> {
         Err(readonly())
     }

@@ -18,29 +18,54 @@
 
 #[path = "os/shared/apply.rs"]
 mod apply;
+#[path = "os/shared/apply_delete.rs"]
+mod apply_delete;
+#[path = "os/shared/apply_guard.rs"]
+mod apply_guard;
+#[path = "os/shared/apply_retry.rs"]
+mod apply_retry;
+#[path = "os/shared/apply_transfer.rs"]
+mod apply_transfer;
 #[path = "core/plan.rs"]
 mod core;
 #[path = "os/shared/incremental.rs"]
 mod incremental;
+#[path = "os/shared/incremental_changes.rs"]
+mod incremental_changes;
+#[path = "os/shared/incremental_collect.rs"]
+mod incremental_collect;
+#[path = "os/shared/move_finalize.rs"]
+mod move_finalize;
 #[path = "os/shared/orchestration.rs"]
 mod orchestration;
 #[path = "core/paths.rs"]
 mod paths;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
+#[path = "os/shared/resolve.rs"]
+mod resolve_conflict;
 #[path = "os/shared/snapshot.rs"]
 mod snapshot;
+#[path = "os/shared/snapshot_agent.rs"]
+mod snapshot_agent;
+#[path = "os/shared/snapshot_hash.rs"]
+mod snapshot_hash;
 #[path = "os/shared/state_store.rs"]
 mod state_store;
+#[path = "os/shared/state_types.rs"]
+mod state_types;
+#[path = "os/shared/state_validation.rs"]
+mod state_validation;
 #[path = "core/types.rs"]
 mod types;
 
-pub use apply::{apply, resolve};
+pub use apply::apply;
 pub use core::{plan, update_baseline};
 pub use orchestration::{preview, run, Outcome, Preview};
 pub use persistence::{
-    baseline_path, load_baseline, pair_id, prune_versions, save_baseline, versions_dir,
+    baseline_path, load_baseline, pair_id, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
+pub use resolve_conflict::{resolve, resolve_checked, ResolvePhase};
 pub use snapshot::{empty_globset, walk_files, HashMode, WalkFilter};
 pub use types::{
     Action, Baseline, BisyncOptions, BisyncStats, CompareMode, Conflict, ConflictMode,

@@ -1,7 +1,24 @@
 mod connections;
 mod ops;
+#[cfg(test)]
+mod ops_safety_tests;
+#[cfg(test)]
+mod ops_search_tests;
+#[cfg(test)]
+mod ops_transfer_tests;
+mod os;
 mod setup;
 mod target;
+mod transfer;
+mod tree_apply;
+mod tree_destination;
+mod tree_guard;
+mod tree_ops;
+mod tree_plan;
+#[cfg(test)]
+mod tree_preflight_tests;
+mod tree_remove;
+mod tree_spool;
 
 use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
@@ -104,6 +121,11 @@ struct RemoveArgs {
     recursive: bool,
     #[arg(short, long, help = "Required for destructive delete")]
     force: bool,
+    #[arg(
+        long,
+        help = "Allow deleting a filesystem root or saved connection's configured root"
+    )]
+    no_preserve_root: bool,
 }
 
 #[derive(Args)]
@@ -132,12 +154,18 @@ struct ExecArgs {
     cwd: Option<String>,
     #[arg(long, default_value_t = 30, help = "Remote timeout in seconds")]
     timeout: u64,
-    #[arg(long, default_value_t = 1024 * 1024, help = "Maximum stdout/stderr bytes returned")]
+    #[arg(
+        long,
+        default_value_t = 1024 * 1024,
+        help = "Maximum combined stdout and stderr bytes returned"
+    )]
     max_output: u64,
     #[arg(
         long,
-        help = "Run a shell command; remote peer must allow shell execution"
+        help = "Keep the remote exit status even when returned output was truncated"
     )]
+    allow_truncated_output: bool,
+    #[arg(long, help = "Run one shell command under the full-code permission")]
     shell: Option<String>,
     #[arg(
         trailing_var_arg = true,
@@ -189,7 +217,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         }
         Command::Rm(args) => {
             let t = target::resolve(&args.target)?;
-            ops::remove(&t, args.recursive, args.force)?;
+            ops::remove(&t, args.recursive, args.force, args.no_preserve_root)?;
             Ok(0)
         }
         Command::Mkdir(args) => {
@@ -229,10 +257,30 @@ fn exec(args: ExecArgs) -> Result<i32, String> {
     io::stderr()
         .write_all(&result.stderr)
         .map_err(|e| e.to_string())?;
-    if result.timed_out {
-        return Ok(124);
+    if result.stdout_truncated || result.stderr_truncated {
+        let streams = match (result.stdout_truncated, result.stderr_truncated) {
+            (true, true) => "stdout and stderr",
+            (true, false) => "stdout",
+            (false, true) => "stderr",
+            (false, false) => unreachable!(),
+        };
+        writeln!(
+            io::stderr(),
+            "\nse: warning: remote {streams} was truncated at the enforced output limit"
+        )
+        .map_err(|error| error.to_string())?;
     }
-    Ok(result.exit_code.unwrap_or(1).clamp(0, 255))
+    Ok(exec_result_code(&result, args.allow_truncated_output))
+}
+
+fn exec_result_code(result: &crate::share::ExecResult, allow_truncated_output: bool) -> i32 {
+    if (result.stdout_truncated || result.stderr_truncated) && !allow_truncated_output {
+        return 125;
+    }
+    if result.timed_out {
+        return 124;
+    }
+    result.exit_code.unwrap_or(1).clamp(0, 255)
 }
 
 #[cfg(test)]
@@ -266,11 +314,19 @@ mod tests {
             _ => panic!("wrong command"),
         }
 
-        let cli = Cli::parse_from(["se", "rm", "--recursive", "--force", "@a:/dir"]);
+        let cli = Cli::parse_from([
+            "se",
+            "rm",
+            "--recursive",
+            "--force",
+            "--no-preserve-root",
+            "@a:/dir",
+        ]);
         match cli.command {
             super::Command::Rm(args) => {
                 assert!(args.recursive);
                 assert!(args.force);
+                assert!(args.no_preserve_root);
                 assert_eq!(args.target, "@a:/dir");
             }
             _ => panic!("wrong command"),
@@ -279,14 +335,36 @@ mod tests {
 
     #[test]
     fn parses_shell_exec_without_argv() {
-        let cli = Cli::parse_from(["se", "exec", "share://direct/c", "--shell", "echo hi"]);
+        let cli = Cli::parse_from([
+            "se",
+            "exec",
+            "share://direct/c",
+            "--allow-truncated-output",
+            "--shell",
+            "echo hi",
+        ]);
         match cli.command {
             super::Command::Exec(args) => {
                 assert_eq!(args.shell.as_deref(), Some("echo hi"));
                 assert!(args.argv.is_empty());
+                assert!(args.allow_truncated_output);
             }
             _ => panic!("wrong command"),
         }
+    }
+
+    #[test]
+    fn truncated_exec_output_has_a_distinct_failure_status() {
+        let result = crate::share::ExecResult {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            timed_out: false,
+            stdout_truncated: true,
+            stderr_truncated: false,
+        };
+        assert_eq!(super::exec_result_code(&result, false), 125);
+        assert_eq!(super::exec_result_code(&result, true), 0);
     }
 
     #[test]

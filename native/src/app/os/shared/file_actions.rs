@@ -34,55 +34,6 @@ impl App {
         self.cursor = None;
     }
 
-    /// Permanently delete the selection (bypassing the recycle bin), after an
-    /// explicit confirmation. Runs the deletes on a worker thread.
-    pub(in crate::app) fn delete_permanent(&mut self) {
-        if self.selection.is_empty() {
-            return;
-        }
-        let n = self.selection.len();
-        if !confirm_yes_no(
-            "Endgültig löschen",
-            &format!(
-                "{} Eintrag/Einträge UNWIDERRUFLICH löschen (nicht in den Papierkorb)?",
-                n
-            ),
-        ) {
-            return;
-        }
-        let paths: Vec<PathBuf> = self
-            .selection
-            .iter()
-            .map(|k| PathBuf::from(sel_key_path(k).replace('/', std::path::MAIN_SEPARATOR_STR)))
-            .collect();
-        let removed: HashSet<Arc<str>> = self.selection.drain().collect();
-        self.entries.retain(|e| !removed.contains(&e.key()));
-        self.cursor = None;
-        self.recompute_view();
-
-        let (tx, rx) = unbounded();
-        self.trash_rx = Some(rx); // reuse the trash result channel/drain
-        std::thread::Builder::new()
-            .name("delete-permanent".into())
-            .spawn(move || {
-                let mut first_err: Option<String> = None;
-                for p in &paths {
-                    let res = if p.is_dir() {
-                        std::fs::remove_dir_all(p)
-                    } else {
-                        std::fs::remove_file(p)
-                    };
-                    if let Err(e) = res {
-                        if first_err.is_none() {
-                            first_err = Some(e.to_string());
-                        }
-                    }
-                }
-                let _ = tx.send(first_err);
-            })
-            .ok();
-    }
-
     pub(in crate::app) fn star_current_folder(&mut self) {
         if self.root_path.is_empty() {
             return;
@@ -120,29 +71,40 @@ impl App {
             let backend = rs.backend.clone();
             let base = self.root_path.trim_end_matches('/').to_string();
             let (tx, rx) = unbounded();
-            self.remote_op_rx = Some(rx);
-            std::thread::Builder::new()
+            let spawn = std::thread::Builder::new()
                 .name("remote-mkdir".into())
                 .spawn(move || {
-                    let mut name = "Neuer Ordner".to_string();
-                    let mut i = 2;
-                    while backend.exists(&format!("{}/{}", base, name)) && i < 1000 {
-                        name = format!("Neuer Ordner ({})", i);
-                        i += 1;
-                    }
-                    let path = format!("{}/{}", base, name);
-                    let _ = tx.send(
+                    let result = (|| -> Result<String, String> {
+                        let name = find_remote_unique_name(&*backend, &base, |index| {
+                            if index == 1 {
+                                "Neuer Ordner".to_string()
+                            } else {
+                                format!("Neuer Ordner ({index})")
+                            }
+                        })?;
+                        let path = rjoin(&base, &name);
                         backend
                             .mkdir_all(&path)
-                            .map(|_| format!("✓ Ordner erstellt: {}", name))
-                            .map_err(|e| format!("Ordner erstellen: {}", e)),
-                    );
-                })
-                .ok();
-            self.notice = Some((
-                "Ordner wird erstellt…".to_string(),
-                std::time::Instant::now(),
-            ));
+                            .map_err(|error| format!("Ordner erstellen: {error}"))?;
+                        Ok(format!("✓ Ordner erstellt: {name}"))
+                    })();
+                    let _ = tx.send(result);
+                });
+            match spawn {
+                Ok(_) => {
+                    self.remote_op_rx = Some(rx);
+                    self.notice = Some((
+                        "Ordner wird erstellt…".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.remote_op_rx = None;
+                    self.error_msg = Some(format!(
+                        "Remote-Ordnererstellung konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
             return;
         }
         let base = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -186,45 +148,81 @@ impl App {
             let root = self.root_path.trim_end_matches('/').to_string();
             let (base, ext) = (base.to_string(), ext.to_string());
             let (tx, rx) = unbounded();
-            self.remote_op_rx = Some(rx);
-            std::thread::Builder::new()
+            let spawn = std::thread::Builder::new()
                 .name("remote-newfile".into())
                 .spawn(move || {
                     use std::io::Write;
-                    let mut name = format!("{}.{}", base, ext);
-                    let mut i = 2;
-                    while backend.exists(&format!("{}/{}", root, name)) && i < 1000 {
-                        name = format!("{} ({}).{}", base, i, ext);
-                        i += 1;
-                    }
-                    let path = format!("{}/{}", root, name);
-                    let r = (|| -> Result<(), String> {
-                        let mut w = backend.open_write(&path).map_err(|e| e.to_string())?;
-                        w.flush().map_err(|e| e.to_string())?;
-                        Ok(())
+                    let result = (|| -> Result<String, String> {
+                        let name = find_remote_unique_name(&*backend, &root, |index| {
+                            if index == 1 {
+                                format!("{base}.{ext}")
+                            } else {
+                                format!("{base} ({index}).{ext}")
+                            }
+                        })?;
+                        let path = rjoin(&root, &name);
+                        let staged = crate::vfs::unique_staging_path(&*backend, &path, "new-file")
+                            .map_err(|error| error.to_string())?;
+                        let result = (|| {
+                            let mut writer = backend
+                                .open_write(&staged)
+                                .map_err(|error| error.to_string())?;
+                            writer.flush().map_err(|error| error.to_string())?;
+                            drop(writer);
+                            backend
+                                .rename_no_replace(&staged, &path)
+                                .map_err(|error| error.to_string())
+                        })();
+                        if let Err(error) = result {
+                            let _ = backend.remove_file(&staged);
+                            return Err(error);
+                        }
+                        Ok(format!("✓ Datei erstellt: {name}"))
                     })();
-                    let _ = tx.send(
-                        r.map(|_| format!("✓ Datei erstellt: {}", name))
-                            .map_err(|e| format!("Datei erstellen: {}", e)),
-                    );
-                })
-                .ok();
-            self.notice = Some((
-                "Datei wird erstellt…".to_string(),
-                std::time::Instant::now(),
-            ));
+                    let _ = tx.send(result.map_err(|error| format!("Datei erstellen: {error}")));
+                });
+            match spawn {
+                Ok(_) => {
+                    self.remote_op_rx = Some(rx);
+                    self.notice = Some((
+                        "Datei wird erstellt…".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(error) => {
+                    self.remote_op_rx = None;
+                    self.error_msg = Some(format!(
+                        "Remote-Dateierstellung konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
             return;
         }
         // Local view.
         let base_dir = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let mut target = base_dir.join(format!("{}.{}", base, ext));
-        let mut i = 2;
-        while target.exists() {
-            target = base_dir.join(format!("{} ({}).{}", base, i, ext));
-            i += 1;
-        }
-        match std::fs::File::create(&target) {
-            Ok(_) => {
+        let created = (1..=10_000).find_map(|index| {
+            let target = if index == 1 {
+                base_dir.join(format!("{base}.{ext}"))
+            } else {
+                base_dir.join(format!("{base} ({index}).{ext}"))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+            {
+                Ok(file) => Some(Ok((target, file))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        });
+        match created.unwrap_or_else(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "Kein freier Dateiname nach 10.000 Versuchen",
+            ))
+        }) {
+            Ok((target, _file)) => {
                 self.rescan();
                 let nm = target
                     .file_name()
@@ -348,19 +346,24 @@ impl App {
             }
             let backend = rs.backend.clone();
             let (tx, rx) = unbounded();
-            self.remote_op_rx = Some(rx);
-            std::thread::Builder::new()
+            let spawn = std::thread::Builder::new()
                 .name("remote-rename".into())
                 .spawn(move || {
-                    let _ = tx.send(
-                        backend
-                            .rename(&old_fwd, &new_fwd)
-                            .map(|_| format!("✓ Umbenannt: {}", draft))
-                            .map_err(|e| format!("Umbenennen: {}", e)),
-                    );
-                })
-                .ok();
-            self.selection.clear();
+                    let result = backend
+                        .rename_no_replace(&old_fwd, &new_fwd)
+                        .map(|_| format!("✓ Umbenannt: {}", draft))
+                        .map_err(|error| format!("Ziel sicher umbenennen: {error}"));
+                    let _ = tx.send(result);
+                });
+            match spawn {
+                Ok(_) => self.remote_op_rx = Some(rx),
+                Err(error) => {
+                    self.remote_op_rx = None;
+                    self.error_msg = Some(format!(
+                        "Remote-Umbenennen konnte nicht gestartet werden: {error}"
+                    ));
+                }
+            }
             return;
         }
         let old = PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -371,11 +374,10 @@ impl App {
         if new == old {
             return;
         }
-        if new.exists() {
-            self.error_msg = Some(format!("Ziel existiert bereits: {}", draft));
-            return;
-        }
-        match std::fs::rename(&old, &new) {
+        let old_fwd = old.to_string_lossy().replace('\\', "/");
+        let new_fwd = new.to_string_lossy().replace('\\', "/");
+        let backend = crate::vfs::LocalBackend::new("/");
+        match crate::vfs::Backend::rename_no_replace(&backend, &old_fwd, &new_fwd) {
             Ok(_) => {
                 self.selection.clear();
                 self.rescan();
@@ -403,25 +405,12 @@ impl App {
             conflict: self.copy_conflict,
             mode: self.copy_mode_pending,
         };
-        let (tx, rx) = unbounded();
-        let h = start_copy_expanded(
-            seeds,
-            Some((self.filter.clone(), self.root_prefix())),
-            opts,
-            tx,
-        );
-        self.copy_handle = Some(h);
-        self.copy_rx = Some(rx);
-        self.copy_progress = Some(CopyProgress {
-            files_done: 0,
-            files_total: 0,
-            bytes_done: 0,
-            bytes_total: 0,
-            elapsed_ms: 0,
-            errors: 0,
-            done: false,
+        let mode = opts.mode;
+        let filter = self.filter.clone();
+        let root_prefix = self.root_prefix();
+        self.start_copy_job(mode, false, move |tx| {
+            start_copy_expanded(seeds, Some((filter, root_prefix)), opts, tx)
         });
-        self.copy_errors.clear();
     }
 
     // ─── Clipboard ──────────────────────────────────────────────────────

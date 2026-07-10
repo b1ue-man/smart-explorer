@@ -10,14 +10,26 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
+#[path = "os/shared/migration.rs"]
+mod migration;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
+#[path = "os/shared/persistence_codec.rs"]
+mod persistence_codec;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os.rs"]
+mod platform;
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod platform;
 #[path = "os/shared/results.rs"]
 mod results;
 #[path = "core/schedule.rs"]
 mod schedule;
 #[path = "core/types.rs"]
 mod types;
+#[path = "core/validation.rs"]
+mod validation;
 
 #[allow(unused_imports)]
 pub use persistence::{jobs_dir, jobs_path, load, remove, upsert};

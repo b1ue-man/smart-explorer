@@ -5,12 +5,13 @@ One version number drives everything: `native/Cargo.toml`.
 
 ```
  bump Cargo.toml ─▶ build (CI or publish-release-local.ps1)
-                     ├─▶ update feed   release-native/update-feed/{version.txt, OS payloads, se sidecar}   (committed → served over raw.githubusercontent)
+                     ├─▶ update feed   version + manifest + Windows/Linux app/updater/se + hashes
                      ├─▶ installer     Windows NSIS + Linux install-linux.sh
-                     └─▶ GitHub Release vX.Y.Z  (Windows + Linux binaries, installer, script, dll, version.txt)
+                     └─▶ GitHub Release vX.Y.Z  (verified feed payloads/hashes + installer/script/dll/share servers)
                                          │
  installed app on launch ──▶ reads update_source (default: the Git feed on main)
-                          ──▶ feed version.txt > my version?  ──▶ download OS payload, swap, restart
+                          ──▶ newer version? ──▶ stage + SHA-check app/updater/se
+                                                ──▶ ask user ──▶ helper transaction + restart
 ```
 
 The version is consistent across all four outputs because each reads it from
@@ -36,21 +37,31 @@ user can pull updates.
 2. **Build + stage** the release artifacts:
    - Windows workstation default: `.\native\publish-release-local.ps1`
      builds the Windows app/updater/`se`/installer with `publish-update.ps1`, then
-     calls WSL to build the Linux musl app/updater/`se`/share-server payloads and
-     verifies all update-feed SHA-256 files. This is the preferred local release
-     path.
+     calls WSL to build the Linux musl app/updater/`se`/share-server payloads.
+     Both platforms are built and verified in one isolated release tree. Only
+     then does the wrapper promote the ancillary artifacts and complete feed
+     with rollback backups, writing `version.txt` as the final commit marker.
+     This is the preferred local release path.
    - Linux/WSL Linux payload repair only:
      `native/publish-linux-feed-wsl.sh --write-version`. This script prepares
      temporary Zig/LLD wrappers automatically and can bootstrap Zig into
-     `~/.local/zig` when missing.
-   - Windows-only partial feed: `cd native; .\publish-update.ps1 -AllowPartialFeed`.
-     Use this only when you intentionally do not want a complete Windows+Linux
-     update feed.
+     `~/.local/zig` when missing. Before it may write a version, the existing
+     Windows payloads/hashes must be bound to the same version by
+     `windows-build.manifest`; otherwise it refuses to publish.
+   - Windows-only validation bundle:
+     `.\native\publish-release-local.ps1 -SkipLinuxFeed`. It writes a clearly
+     non-publishable `release-native/windows-partial-vX.Y.Z/` bundle without
+     changing the shared update feed or its `version.txt`. A direct
+     `publish-update.ps1` run also requires `-AllowPartialFeed`, a nonstandard
+     `-Feed` path, and an explicit isolated `-ReleaseOutput` outside both the
+     feed and the shared `release-native/` root; it always refuses to write the
+     shared feed/artifacts.
    - Older all-in-one Linux/WSL cross path: `native/publish-feed.sh`, when that
      host already has the Windows GNU and NSIS dependencies installed.
-3. **Commit** `release-native/` (`update-feed/{version.txt, smart_explorer.exe,
+3. **Commit** `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
    smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
    se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
+   `smart_explorer_command.dll`, both `share-server/` payloads, and
    `Smart Explorer Setup X.Y.Z.exe`).
 4. **Merge to `main`** — the feed is served from `main`, so updates only go live
    once `main` has the new feed:
@@ -72,8 +83,9 @@ user can pull updates.
 
 The local Windows release wrapper expects WSL with Rust installed. It ensures
 the Linux musl target is present, uses Zig for C dependencies where WSL lacks a
-system compiler, filters the musl-only `-ldl` linker mismatch, and writes
-`version.txt` only after the Linux payloads are staged.
+system compiler, filters the musl-only `-ldl` linker mismatch, and leaves the
+live feed untouched while either platform build or staged verification is in
+progress. Promotion failures restore the prior feed and ancillary files.
 
 Before cutting a release on a workstation, the fast environment check is:
 
@@ -87,9 +99,11 @@ audit, Windows-target check, host tests, Windows test-harness compile, clippy,
 static-musl `se-agent` builds, COM DLL check/build, share-server checks/builds,
 Windows + Linux release builds including the `se` terminal companion, installer
 build (NSIS), artifact upload, and Release publication. Before publishing it
-**fails the release if the committed
-feed `version.txt` ≠ `Cargo.toml`** — so a release can never ship while the
-auto-update feed version is stale (forces step 2–3 above).
+**fails the release if the committed feed version, Windows build manifest,
+payload hashes, installer, DLL, and share-server artifacts are incomplete or
+inconsistent**. Fresh CI builds remain compile gates; GitHub Release assets are
+then copied from those verified committed artifacts, so the published bytes
+are the same bytes served by the auto-update feed.
 
 ## The update feed (what the app reads)
 
@@ -99,6 +113,7 @@ http(s)/Git URL — only the transport differs (`updater.rs`'s `Feed` enum):
 ```
 release-native/update-feed/
   version.txt          first line = "X.Y.Z"
+  windows-build.manifest   binds the version to all three Windows payload hashes
   smart_explorer.exe   Windows app payload
   smart_explorer.exe.sha256
   smart_explorer_updater.exe   Windows updater helper
@@ -113,19 +128,14 @@ release-native/update-feed/
   se.sha256
 ```
 
-Since v0.5.77, the normal update path uses a separate
-updater helper installed next to the app binary (`Smart Explorer Updater.exe`
-on Windows, `smart_explorer_updater` on Linux). Since v0.5.118, the feed also
-ships the terminal companion (`se.exe` on Windows, `se` on Linux). The app
-stages the OS-specific GUI payload, refreshes the `se` sidecar and helper from
-the same feed, then exits while the helper performs the GUI replacement and
-relaunches the app. When an existing install first lands on v0.5.118 via the
-older updater, the next equal-version update check silently installs the missing
-`se` sidecar.
-The one unavoidable migration exception is v0.5.76 -> v0.5.77: v0.5.76 does
-not know how to fetch the helper yet, so it can only update the main exe. On
-the first v0.5.77 launch, the app silently ensures the helper is present for
-all later updates.
+The normal update path uses a separate helper installed next to the app binary
+(`Smart Explorer Updater.exe` on Windows, `smart_explorer_updater` on Linux) and
+the feed also ships the terminal companion (`se.exe` on Windows, `se` on Linux).
+For a newer version, the app downloads all three OS-specific payloads into app
+data, verifies their required SHA-256 files, and durably records one staging
+manifest. No installed file or process changes during this check. The dialog's
+**Later** action keeps that exact verified staging for the next launch;
+**Discard** removes it. Only explicit **Restart now** consent starts the helper.
 
 The `.sha256` files are integrity checks for broken or partial downloads. They
 are not a substitute for code signing. The industry-standard trust path for
@@ -148,14 +158,25 @@ may be:
 On every launch (and on "Jetzt prüfen"):
 1. resolve the update source; fetch the feed's `version.txt`;
 2. if the feed version is **newer** than the running binary (`CARGO_PKG_VERSION`),
-   download the OS-specific app payload, archive the current binary (for rollback),
-   "rename-dance" the new one in, and prompt to restart;
-3. equal/older → up to date. A manual rollback pins the version and pauses
-   auto-update until "Auf neueste aktualisieren".
+   download and hash-verify the OS-specific app/updater/`se` bundle, persist its
+   manifest, and prompt without changing the installation;
+3. after explicit consent, preserve in-flight app state, launch the hash-bound
+   helper, and close the GUI. The helper waits for that exact parent PID, asks
+   the daemon to stop naturally, and refuses to replace while another matching
+   app process remains;
+4. verify and archive the outgoing app with a SHA-256 sidecar, revalidate every
+   staged executable, transactionally replace helper/`se`/app, and relaunch the
+   verified new app. A replacement or launch failure rolls all targets back and
+   attempts to start the verified previous app;
+5. equal/older → up to date. A manual rollback atomically pins the selected
+   version and pauses automatic forward checks until "Auf neueste aktualisieren".
 
-So a release is "done" when, for the new version: `Cargo.toml` = feed
-`version.txt` = Release tag = installer version, and the feed + Release live on
-`main`.
+So a release is "done" only when, for the new version: `Cargo.toml` = feed
+`version.txt` = Windows build manifest = Release tag = installer version; all
+six update payload hashes verify; and the GitHub Release is visible with the
+Windows/Linux app, updater, and `se` payloads and hashes, installer,
+`install-linux.sh`, context-menu DLL, both share-server payloads, and
+`version.txt`.
 
 ### Troubleshooting: socket access denied
 
@@ -172,6 +193,7 @@ grep '^version' native/Cargo.toml
 cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
 cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256
+grep -Fx "version=$(sed -nE 's/^version = \"([^\"]+)\".*/\1/p' ../../native/Cargo.toml | head -1)" windows-build.manifest
 git show origin/main:release-native/update-feed/version.txt   # must match, on main
 ```
 

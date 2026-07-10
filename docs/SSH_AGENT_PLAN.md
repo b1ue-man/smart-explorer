@@ -7,9 +7,11 @@ the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
 Status: **fully implemented & build-verified (host + windows-gnu); the agent is
-functional for Linux x86_64/aarch64 servers. The ENTIRE deep-integration roadmap
-ships — P0 (protocol v2) + P1 (read) in 0.5.69; P2 (write) + P3 (server-local
-copy/move/delete/mkdir) in 0.5.70; P4 (recursive bulk folder transfer) in 0.5.71;
+functional for Linux x86_64/aarch64 servers. The current wire/behavior version
+is protocol v6, with bounded frames/tree/search state and explicit cancellation.
+The historical rollout shipped P0 (then protocol v2) + P1 (read) in 0.5.69;
+P2 (write) + P3 (server-local copy/move/delete/mkdir) in 0.5.70; P4 (recursive
+bulk folder transfer) in 0.5.71;
 P5 (server-side recursive search) in 0.5.72; P6 (sync signature + content hashing
 via the agent), live analytics-walk progress, and the in-app "remove agent"
 action in 0.5.73. The agent multiplexes every op over one channel, streams
@@ -24,10 +26,10 @@ tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
 
 ### Implementation status
 
-- ✅ **Phase 1 — protocol + agent core** (`agent_proto.rs`, `src/bin/se-agent.rs`).
+- ✅ **Phase 1 — protocol + agent core** (`agent_proto/`, `src/bin/se-agent.rs`).
   Framed wire protocol + server-side local fs ops + `serve()`. Unit-tested
   (req/resp roundtrip, framed `serve()` over an in-memory pipe).
-- ✅ **Phase 2 — `AgentBackend`** (`agent.rs`) implementing `vfs::Backend`;
+- ✅ **Phase 2 — `AgentBackend`** (`agent/`) implementing `vfs::Backend`;
   `vfs::Backend::{supports_walk_tree,walk_tree}` hooks; the analytics remote
   scan uses `walk_tree` (one server-side walk) with client-side fallback;
   `analytics::from_wire`. Tested end-to-end against an in-process agent over a
@@ -74,10 +76,11 @@ tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
   socket bridge, and a child-process test that drives the ACTUAL bundled musl
   binary end to end.
 
-Regenerating the binaries (e.g. on a `PROTO_VERSION` bump):
-`cd se-agent && cargo build --release --target x86_64-unknown-linux-musl` and
-`… --target aarch64-unknown-linux-musl` (set `RUSTFLAGS="-C linker=rust-lld"`
-for aarch64), then copy the outputs into `native/agent-bin/`.
+Regenerating both committed binaries after a `PROTO_VERSION`/shared-source bump:
+run `native/build-agent-bundles.sh` from the repository root (or
+`native/build-agent-bundles.sh --check-env` for prerequisites). The script owns
+the x86_64/aarch64 static-musl build, staging, protocol probe, and atomic
+replacement; do not hand-copy one architecture as the final release path.
 
 ---
 
@@ -95,8 +98,8 @@ per-dir round-trip) and returns a compact result:
 
 - **Storage analysis:** the entire `SizeNode` tree is computed remotely and sent
   back once (millions of files, ~one response).
-- **Browse:** a `list_dir` is still one message, but with no per-entry latency
-  and optional server-side prefetch of sub-folders.
+- **Browse:** a `list_dir` is still one message, with no per-entry latency. The
+  earlier speculative-prefetch idea was dropped; caching handles revisits.
 - **Search / filter:** run server-side over the live tree; stream only matches.
 
 This is exactly Roadmap **21b ("Peer-agent Backend")**, but bootstrapped over

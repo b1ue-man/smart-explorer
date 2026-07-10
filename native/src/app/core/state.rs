@@ -1,3 +1,4 @@
+use super::bisync_conflicts::{ConflictBulkRun, ConflictResolutionTask};
 use super::prelude::*;
 use super::*;
 use crate::app::shared_platform_helpers::ClipboardVirtualFile;
@@ -11,8 +12,27 @@ type JobConnectEndpoints = (
 );
 type JobConnectRx = Receiver<Result<JobConnectEndpoints, String>>;
 type FileOpenTask = (Receiver<Result<(String, i64), String>>, OpenMode, PathBuf);
+type EditSaveTask = (Receiver<(PathBuf, SaveResult)>, PathBuf);
 type ShareOpenRx =
     Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>;
+
+#[derive(Clone)]
+pub(in crate::app) enum ReadyUpdate {
+    Staged(crate::updater::StagedUpdate),
+    InstalledRollback {
+        version: String,
+        executable: PathBuf,
+    },
+}
+
+impl ReadyUpdate {
+    pub(in crate::app) fn version(&self) -> &str {
+        match self {
+            Self::Staged(bundle) => bundle.version(),
+            Self::InstalledRollback { version, .. } => version,
+        }
+    }
+}
 
 pub struct App {
     pub(in crate::app) root_path: String,
@@ -27,6 +47,7 @@ pub struct App {
     pub(in crate::app) scan_rx: Option<Receiver<ScanMessage>>,
     pub(in crate::app) scan_handle: Option<ScanHandle>,
     pub(in crate::app) progress: ScanProgress,
+    pub(in crate::app) scan_was_canceled: bool,
 
     pub(in crate::app) filter: FilterDef,
     pub(in crate::app) sort_key: SortKey,
@@ -45,15 +66,14 @@ pub struct App {
     pub(in crate::app) show_analytics: bool,
     /// Dedicated low-memory size tree for analytics (own scan, not the view).
     pub(in crate::app) analytics_tree: Option<crate::analytics::SizeNode>,
-    /// Path the tree was scanned for (`/`-normalised, no trailing slash).
-    pub(in crate::app) analytics_root_path: String,
+    pub(in crate::app) analytics_source: Option<StorageScanSource>,
+    pub(in crate::app) analytics_state: StorageRunState,
+    pub(in crate::app) analytics_issues: Vec<crate::analytics::ScanIssue>,
+    pub(in crate::app) analytics_suppressed_issues: u64,
     /// In-memory drill position within the tree (segment names from the root).
     pub(in crate::app) analytics_focus: Vec<String>,
     /// A running background analytics scan, if any.
     pub(in crate::app) analytics_scan: Option<AnalyticsScan>,
-    /// Backend the current analytics tree was scanned with (None = local fs).
-    /// Set when analysing a remote, so rescans re-walk the same source.
-    pub(in crate::app) analytics_backend: Option<crate::vfs::BackendHandle>,
     /// Cached nested-treemap cells for the current focus + the rect they were
     /// laid out for (recomputed on drill or resize).
     pub(in crate::app) analytics_cells: Vec<TmCell>,
@@ -62,6 +82,10 @@ pub struct App {
     pub(in crate::app) analytics_counts: Option<(u64, u64)>,
     pub(in crate::app) analytics_panel: AnalyticsPanel,
     pub(in crate::app) reclaim_scan: Option<ReclaimScan>,
+    pub(in crate::app) reclaim_source: Option<StorageScanSource>,
+    pub(in crate::app) reclaim_state: StorageRunState,
+    pub(in crate::app) reclaim_issues: Vec<String>,
+    pub(in crate::app) reclaim_suppressed_issues: u64,
     pub(in crate::app) reclaim_report: Option<crate::analytics::ReclaimReport>,
     pub(in crate::app) reclaim_selected: HashSet<String>,
     pub(in crate::app) reclaim_large_min_gb: f64,
@@ -92,6 +116,9 @@ pub struct App {
     pub(in crate::app) copy_handle: Option<CopyHandle>,
     pub(in crate::app) copy_progress: Option<CopyProgress>,
     pub(in crate::app) copy_errors: Vec<(String, String)>,
+    /// Mode captured when the current worker is admitted. Unlike the dialog
+    /// draft, this cannot change while completion handling is pending.
+    pub(in crate::app) copy_active_mode: Option<CopyMode>,
     /// Refresh the current directory when the running copy job finishes
     /// (set for paste operations into the current folder).
     pub(in crate::app) copy_refresh_after: bool,
@@ -229,15 +256,22 @@ pub struct App {
     pub(in crate::app) folder_search_rx: Option<FolderSearchRx>,
     pub(in crate::app) folder_search_seq: u64,
 
-    // Background trash result
-    pub(in crate::app) trash_rx: Option<Receiver<Option<String>>>,
+    // Background recycle/permanent-delete lifecycle.
+    pub(in crate::app) trash_rx: Option<Receiver<DeleteMsg>>,
+    pub(in crate::app) trash_worker: Option<std::thread::JoinHandle<()>>,
+    pub(in crate::app) trash_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub(in crate::app) trash_progress: Option<DeleteProgress>,
+    pub(in crate::app) trash_origin: Option<DeleteOrigin>,
 
     // ─── Self-update ────────────────────────────────────────────────────
     pub(in crate::app) update_rx: Option<Receiver<crate::updater::UpdateMsg>>,
-    /// A downloaded update is swapped in and waiting for a restart: (version,
-    /// new exe path). Shows the restart-now prompt; the new binary is already
-    /// on disk, so "Später" just keeps running the old code until next launch.
-    pub(in crate::app) update_ready: Option<(String, PathBuf)>,
+    /// A forward update remains a typed, verified staging bundle until the
+    /// user explicitly consents to restart/apply.
+    pub(in crate::app) update_ready: Option<ReadyUpdate>,
+    pub(in crate::app) show_update_dialog: bool,
+    /// Makes shutdown preparation idempotent when explicit update restart is
+    /// followed by eframe's normal `on_exit` callback.
+    pub(in crate::app) shutdown_prepared: bool,
     pub(in crate::app) update_feed_draft: String,
     /// Previously-released versions from the GitHub feed (#rollback). None = not
     /// fetched yet; `Some(vec)` = fetched (possibly empty).
@@ -245,10 +279,6 @@ pub struct App {
     pub(in crate::app) remote_versions_rx: Option<Receiver<Vec<String>>>,
     /// Rollback-to-a-released-version download in flight: Ok((version, exe)).
     pub(in crate::app) rollback_rx: Option<Receiver<Result<(String, PathBuf), String>>>,
-    /// True when the in-flight `rollback_rx` download is a FORWARD update
-    /// (install a newer release) rather than a rollback — picks `install_version`
-    /// vs `revert_to` when it lands.
-    pub(in crate::app) rollback_forward: bool,
     /// Newest released version that is strictly newer than the running one, once
     /// the release list has been fetched. Drives the "⬆ Update verfügbar" banner
     /// and a one-shot notice, so a newer release is offered automatically
@@ -264,7 +294,7 @@ pub struct App {
     pub(in crate::app) integration_ctx_menu: bool,
 
     // Filter-aware clipboard (virtual files)
-    pub(in crate::app) clip_prepare_rx: Option<Receiver<Vec<ClipboardVirtualFile>>>,
+    pub(in crate::app) clip_prepare_rx: Option<Receiver<Result<Vec<ClipboardVirtualFile>, String>>>,
     pub(in crate::app) virtual_clip: Option<(u32, Vec<(String, String)>)>, // (clipboard seq, (abs, rel))
 
     // Filesystem watcher state
@@ -273,6 +303,8 @@ pub struct App {
         Option<crossbeam_channel::Receiver<notify::Result<notify::Event>>>,
     pub(in crate::app) index_dirty: bool,
     pub(in crate::app) index_last_saved: std::time::Instant,
+    pub(in crate::app) index_save_rx: Option<crossbeam_channel::Receiver<()>>,
+    pub(in crate::app) index_save_worker: Option<std::thread::JoinHandle<Result<(), String>>>,
 
     /// Background clipboard-key detection. egui swallows Ctrl+C/X/V and, for a
     /// file (non-text) clipboard, emits no paste event AND triggers no frame
@@ -307,6 +339,9 @@ pub struct App {
     pub(in crate::app) bisync_ctx: Option<BisyncCtx>,
     pub(in crate::app) bisync_conflicts: Vec<crate::bisync::Conflict>,
     pub(in crate::app) show_bisync_conflicts: bool,
+    pub(in crate::app) conflict_bulk: Option<ConflictBulkRun>,
+    pub(in crate::app) conflict_resolution: Option<ConflictResolutionTask>,
+    pub(in crate::app) conflict_baseline_dirty: bool,
     /// Line-merge editor for one conflict (None = closed) + its async channels.
     pub(in crate::app) merge: Option<MergeUi>,
     pub(in crate::app) merge_load_rx: Option<MergeLoadRx>,
@@ -320,7 +355,10 @@ pub struct App {
     pub(in crate::app) preview_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(in crate::app) show_preview: bool,
     /// Result channel for a single-file "sync this one" from the compare view.
-    pub(in crate::app) apply_one_rx: Option<Receiver<String>>,
+    /// The action is returned with the outcome so it is removed from the
+    /// preview only after the apply actually succeeded.
+    pub(in crate::app) apply_one_rx:
+        Option<Receiver<(crate::bisync::Action, Result<String, String>)>>,
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     pub(in crate::app) sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(in crate::app) bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -349,11 +387,14 @@ pub struct App {
     /// How remote files are opened/edited (temp-watch vs CfAPI) — persisted.
     /// Temp-mode edit-watch: re-upload each temp copy to the remote on save.
     pub(in crate::app) remote_edits: Vec<RemoteEdit>,
-    pub(in crate::app) edit_save_rx: Vec<Receiver<(PathBuf, SaveResult)>>,
+    pub(in crate::app) edit_save_rx: Vec<EditSaveTask>,
     pub(in crate::app) last_edit_poll: Instant,
-    /// In-flight upload of clipboard/dropped files into a remote folder.
+    /// One visible remote upload, download, or remote-to-remote transfer.
     pub(in crate::app) upload_rx: Option<Receiver<TransferMsg>>,
     pub(in crate::app) transfer_progress: Option<TransferProgress>,
+    pub(in crate::app) transfer_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Joined after a terminal message; detached on exit if a backend call is still blocked.
+    pub(in crate::app) transfer_worker: Option<std::thread::JoinHandle<()>>,
     /// In-flight one-shot remote op (new folder, rename, download-to).
     /// Ok(notice)/Err(msg); the worker includes the op context in both.
     pub(in crate::app) remote_op_rx: Option<Receiver<Result<String, String>>>,
@@ -368,7 +409,7 @@ pub struct App {
     pub(in crate::app) remote_ctx: Option<(egui::Pos2, usize)>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
-    pub(in crate::app) clip_download_rx: Option<Receiver<Vec<String>>>,
+    pub(in crate::app) clip_download_rx: Option<Receiver<Result<Vec<String>, String>>>,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     pub(in crate::app) cloud_client_id_draft: String,
@@ -383,8 +424,10 @@ pub struct App {
     pub(in crate::app) share_server: String,
     pub(in crate::app) share_server_draft: String,
     pub(in crate::app) share_device_draft: String,
-    pub(in crate::app) share_identity: crate::share::ShareIdentity,
+    pub(in crate::app) share_identity: Option<crate::share::ShareIdentity>,
+    pub(in crate::app) share_identity_error: Option<String>,
     pub(in crate::app) share_profiles: crate::share::ShareProfiles,
+    pub(in crate::app) share_profiles_error: Option<String>,
     pub(in crate::app) share_tab: usize,
     pub(in crate::app) share_direct_code_input: String,
     pub(in crate::app) share_direct_name_input: String,
@@ -416,4 +459,5 @@ pub struct App {
     // Quick Share (Android) LAN discovery — started lazily when Teilen opens.
     pub(in crate::app) quickshare: Option<crate::quickshare::QuickShare>,
     pub(in crate::app) qs_devices: Vec<crate::quickshare::QsDevice>,
+    pub(in crate::app) quickshare_error: Option<String>,
 }

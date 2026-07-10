@@ -8,7 +8,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_t = cancel.clone();
         let ctx = ctx.clone();
-        std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("clip-keys".into())
             .spawn(move || {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -39,10 +39,20 @@ impl App {
                         ctx.request_repaint();
                     }
                 }
-            })
-            .ok();
-        self.clip_key_rx = Some(rx);
-        self.clip_key_cancel = Some(cancel);
+            });
+        match spawn {
+            Ok(_) => {
+                self.clip_key_rx = Some(rx);
+                self.clip_key_cancel = Some(cancel);
+            }
+            Err(error) => {
+                self.clip_key_rx = None;
+                self.clip_key_cancel = None;
+                self.error_msg = Some(format!(
+                    "Zwischenablage-Tastaturüberwachung konnte nicht starten: {error}"
+                ));
+            }
+        }
     }
 
     pub(in crate::app) fn start_watcher(&mut self) {
@@ -65,10 +75,39 @@ impl App {
         } else {
             self.drives.iter().map(PathBuf::from).collect()
         };
+        let mut watched = 0usize;
+        let mut failed = 0usize;
+        let mut watch_errors = Vec::new();
         for root in &roots {
             if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
-                eprintln!("watch failed for {}: {}", root.display(), e);
+                failed = failed.saturating_add(1);
+                if watch_errors.len() < 10 {
+                    watch_errors.push(format!("{}: {e}", root.display()));
+                }
+            } else {
+                watched = watched.saturating_add(1);
             }
+        }
+        if watched == 0 {
+            self.error_msg = Some(format!(
+                "Ordnerindex-Watcher konnte keine Wurzel überwachen{}",
+                watch_errors
+                    .first()
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default()
+            ));
+            return;
+        }
+        if !watch_errors.is_empty() {
+            self.push_app_error(
+                "Ordnerindex-Watcher",
+                format!(
+                    "{} von {} Wurzeln konnten nicht überwacht werden; erstes Problem: {}",
+                    failed,
+                    roots.len(),
+                    watch_errors[0]
+                ),
+            );
         }
         self.watcher = Some(watcher);
         self.watcher_rx = Some(rx);
@@ -78,13 +117,31 @@ impl App {
         use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
 
         let mut events: Vec<notify::Event> = Vec::new();
+        let mut watcher_error = None;
+        let mut disconnected = false;
         if let Some(rx) = self.watcher_rx.as_ref() {
             for _ in 0..8000 {
                 match rx.try_recv() {
                     Ok(Ok(e)) => events.push(e),
-                    Ok(Err(_)) | Err(_) => break,
+                    Ok(Err(error)) => {
+                        watcher_error = Some(error.to_string());
+                        break;
+                    }
+                    Err(crossbeam_channel::TryRecvError::Empty) => break,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
                 }
             }
+        }
+        if let Some(error) = watcher_error {
+            self.push_app_error("Ordnerindex-Watcher", error);
+        }
+        if disconnected {
+            self.watcher_rx = None;
+            self.watcher = None;
+            self.error_msg = Some("Ordnerindex-Watcher wurde unerwartet beendet.".to_string());
         }
         if events.is_empty() {
             return;

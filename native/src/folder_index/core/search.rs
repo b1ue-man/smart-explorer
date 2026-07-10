@@ -1,25 +1,50 @@
 use rayon::prelude::*;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
-use super::model::FolderIndex;
+use super::model::{FolderIndex, MAX_INDEX_PATHS};
 
 impl FolderIndex {
     /// CPU-only part of the search: parallel fuzzy scoring, sorted by score
     /// descending, truncated to `n`. No filesystem access - safe to run on
     /// the UI thread even with a cold disk.
     pub fn search_scored(&self, query: &str, n: usize) -> Vec<(String, i32)> {
-        if query.is_empty() || self.paths.is_empty() {
+        let n = n.min(MAX_INDEX_PATHS);
+        if query.is_empty() || self.paths.is_empty() || n == 0 {
             return Vec::new();
         }
         let q_lower: Vec<u8> = query.bytes().map(|b| b.to_ascii_lowercase()).collect();
 
-        let mut scored: Vec<(String, i32)> = self
+        let top = self
             .paths
             .par_iter()
-            .filter_map(|p| fuzzy_score(&q_lower, p.as_bytes()).map(|s| (p.clone(), s)))
+            .filter_map(|path| {
+                let path: &str = path.as_ref();
+                fuzzy_score(&q_lower, path.as_bytes()).map(|score| (score, path))
+            })
+            .fold(BinaryHeap::new, |mut heap, candidate| {
+                retain_best(&mut heap, candidate, n);
+                heap
+            })
+            .reduce(BinaryHeap::new, |mut left, right| {
+                for Reverse(candidate) in right {
+                    retain_best(&mut left, candidate, n);
+                }
+                left
+            });
+        let mut scored: Vec<(String, i32)> = top
+            .into_iter()
+            .map(|Reverse((score, path))| (path.to_owned(), score))
             .collect();
         scored.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
-        scored.truncate(n);
         scored
+    }
+}
+
+fn retain_best<'a>(heap: &mut BinaryHeap<Reverse<(i32, &'a str)>>, item: (i32, &'a str), n: usize) {
+    heap.push(Reverse(item));
+    if heap.len() > n {
+        heap.pop();
     }
 }
 

@@ -7,15 +7,18 @@ use crossbeam_channel::{unbounded, Receiver};
 use std::sync::Arc;
 
 /// Connect off the UI thread; the app drains the single result.
-pub fn spawn_connect(form: ConnectForm, secret: Option<String>) -> Receiver<ConnectResult> {
+pub fn spawn_connect(
+    form: ConnectForm,
+    secret: Option<String>,
+) -> Result<Receiver<ConnectResult>, String> {
     let (tx, rx) = unbounded();
     std::thread::Builder::new()
         .name("connect".into())
         .spawn(move || {
             let _ = tx.send(do_connect(form, secret));
         })
-        .ok();
-    rx
+        .map_err(|error| format!("Verbindungs-Thread konnte nicht gestartet werden: {error}"))?;
+    Ok(rx)
 }
 
 fn opt(s: &str) -> Option<String> {
@@ -44,11 +47,14 @@ fn label_for(form: &ConnectForm, port: u16) -> String {
 }
 
 fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
-    let port: u16 = form
-        .port
-        .trim()
-        .parse()
-        .unwrap_or_else(|_| form.protocol.default_port());
+    let port = if form.port.trim().is_empty() {
+        form.protocol.default_port()
+    } else {
+        match form.port.trim().parse::<u16>() {
+            Ok(port) if port > 0 => port,
+            _ => return ConnectResult::Err("Ungültiger Port (erwartet: 1–65535)".into()),
+        }
+    };
 
     match form.protocol {
         Protocol::Sftp => connect_sftp(form, secret, port),
@@ -81,7 +87,11 @@ fn connect_sftp(form: ConnectForm, secret: Option<String>, port: u16) -> Connect
     match crate::sftp::SftpBackend::connect(cfg) {
         Ok(be) => {
             let s = if form.use_key { passphrase } else { password };
-            persist(&form, port, Some(&s));
+            if let Err(error) = persist(&form, port, Some(&s)) {
+                return ConnectResult::Err(format!(
+                    "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"
+                ));
+            }
             let label = label_for(&form, port);
             // Opt-in: try to deploy + use the SSH remote agent (#24). Any
             // failure (no bundled binary, no exec right, ...) falls back to
@@ -143,7 +153,11 @@ fn connect_ftp(form: ConnectForm, secret: Option<String>, port: u16) -> ConnectR
     );
     match crate::ftp::backend_from_url(&url) {
         Ok(be) => {
-            persist(&form, port, Some(&password));
+            if let Err(error) = persist(&form, port, Some(&password)) {
+                return ConnectResult::Err(format!(
+                    "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"
+                ));
+            }
             let label = label_for(&form, port);
             ConnectResult::Ok(Connected {
                 remote: Some(RemoteState {
@@ -177,7 +191,11 @@ fn connect_webdav(form: ConnectForm, secret: Option<String>, port: u16) -> Conne
     };
     match crate::webdav::WebdavBackend::connect(cfg) {
         Ok(be) => {
-            persist(&form, port, Some(&password));
+            if let Err(error) = persist(&form, port, Some(&password)) {
+                return ConnectResult::Err(format!(
+                    "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"
+                ));
+            }
             let label = label_for(&form, port);
             ConnectResult::Ok(Connected {
                 remote: Some(RemoteState {
@@ -207,7 +225,11 @@ fn connect_share(form: ConnectForm, secret: Option<String>, port: u16) -> Connec
         opt(&password).as_deref(),
     ) {
         Ok(nc) => {
-            persist(&form, port, Some(&password));
+            if let Err(error) = persist(&form, port, Some(&password)) {
+                return ConnectResult::Err(format!(
+                    "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"
+                ));
+            }
             let label = label_for(&form, port);
             ConnectResult::Ok(Connected {
                 remote: None,

@@ -13,9 +13,12 @@ Examples:
   se connections add-peer --code SE-D3-... --name Laptop
   se connections add-room --code SE-R1-... --name Team
 
-Peer and room setup saves to Smart Explorer's normal profile store, then wakes the
-same background share worker the GUI uses. The other client still confirms the
-request in its normal Smart Explorer UI.";
+Peer setup is one-sided: it saves to Smart Explorer's normal profile store, then
+wakes the same background share worker the GUI uses. The other client still
+confirms the request in its normal Smart Explorer UI. Re-running add-peer for an
+existing code requeues the access request when access is still needed;
+--no-request only saves it locally.
+Room setup uses that same profile store and worker.";
 
 const ADD_HELP: &str = "\
 Save a configured remote connection in Smart Explorer's normal connection store.
@@ -29,7 +32,7 @@ Save a Smart Explorer direct peer from the other client's direct code.
 
 The command is one-sided: paste the code here, and the other Smart Explorer
 client receives the normal confirmation request. Re-running the same command with
-an already-saved code requeues the access request for that existing contact.";
+an already-saved code requeues the access request when access is still needed.";
 
 const ADD_ROOM_HELP: &str = "\
 Save a Smart Explorer room from a room invite code and configure the share worker
