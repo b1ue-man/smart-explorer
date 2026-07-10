@@ -137,6 +137,43 @@ manifest. No installed file or process changes during this check. The dialog's
 **Later** action keeps that exact verified staging for the next launch;
 **Discard** removes it. Only explicit **Restart now** consent starts the helper.
 
+The helper's launch protocol is a release compatibility boundary because an
+older app downloads the **new** helper before asking it to apply the update.
+The v0.5.121 helper therefore retains a fail-closed bridge for the exact
+v0.5.119 argument set: it requires the staged app SHA-256, replaces only the app
+(v0.5.119 already refreshed the CLI and helper), and refuses every UAC handoff.
+The modern helper also fails closed when an apply needs elevation: launching the
+replacement GUI from an elevated worker would incorrectly keep the app running
+as administrator. Use the matching installer for a protected installation.
+Any modern-only argument selects the full transactional parser and a malformed
+modern request never downgrades to legacy mode. The bridge waits for the exact
+old parent without an arbitrary timeout (v0.5.119 can leave the helper waiting
+after **Later**) and serializes duplicate workers for the same target. A worker
+retires an older/equal request only after a target-bound completion receipt
+proves the installed winner; a newer request rebases on that verified winner
+and attempts to apply without ever downgrading it. If the freshly launched
+winner still holds the executable, the queued newer worker fails visibly and
+retains its payload instead of claiming success. Before replacement, the helper
+durably publishes an exclusive target-keyed intent containing the requested
+version plus the old and staged SHA-256 values. A helper interrupted between
+replacement and status publication therefore cannot let a later stale worker
+adopt the new binary as its baseline: the next worker must complete that exact
+intent or fail closed and direct the user to the installer. The receipt binds
+the target key, version, and app SHA-256; after its first GUI frame the new app
+syncs a private sibling, atomically publishes the nonce-bound receipt, then
+completes a two-way loopback handshake with the helper. Publishing that receipt
+is the irreversible commit point; the helper retains rollback state and the
+durable intent until then. Recovery waits for an already running exact target
+to publish that receipt and fails closed if it does not; it never launches a
+duplicate replacement instance.
+Update status/error state is prepared before launch so startup cannot consume
+stale state. The acknowledged replacement launch defers abandoned-staging
+cleanup until the next ordinary start, allowing queued v0.5.119 workers to
+retain their verified payloads. Keep the
+legacy-argv, serialization/rebase, durable-intent, completion-receipt,
+prelaunch-state, rollback, path-alias, and tamper regressions until the minimum
+source is newer than v0.5.119.
+
 The `.sha256` files are integrity checks for broken or partial downloads. They
 are not a substitute for code signing. The industry-standard trust path for
 Windows distribution is still: sign every release, keep one stable publisher
@@ -165,9 +202,13 @@ On every launch (and on "Jetzt prüfen"):
    the daemon to stop naturally, and refuses to replace while another matching
    app process remains;
 4. verify and archive the outgoing app with a SHA-256 sidecar, revalidate every
-   staged executable, transactionally replace helper/`se`/app, and relaunch the
-   verified new app. A replacement or launch failure rolls all targets back and
-   attempts to start the verified previous app;
+   staged executable, and reject aliased target/staging/status paths. Replace
+   helper, `se`, then app while keeping each installed target name continuously
+   populated (`ReplaceFileW` on Windows; verified backup plus atomic rename on
+   Linux). Prepare visible status, launch the verified app, and retain rollback
+   files until its first GUI frame returns a durable nonce acknowledgement. A
+   replacement or acknowledged-launch failure rolls all targets and status back
+   and attempts to start the verified previous app;
 5. equal/older → up to date. A manual rollback atomically pins the selected
    version and pauses automatic forward checks until "Auf neueste aktualisieren".
 

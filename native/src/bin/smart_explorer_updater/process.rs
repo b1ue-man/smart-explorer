@@ -90,6 +90,24 @@ fn clear_daemon_runtime_markers() {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn target_is_running(target: &Path) -> Result<bool, StopTargetError> {
+    linux_target_pids(target).map(|running| !running.is_empty())
+}
+
+#[cfg(windows)]
+pub(crate) fn target_is_running(target: &Path) -> Result<bool, StopTargetError> {
+    find_target_processes(target).map(|running| !running.is_empty())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn target_is_running(_target: &Path) -> Result<bool, StopTargetError> {
+    Err(StopTargetError::new(
+        "Prozesspruefung wird auf diesem Betriebssystem nicht unterstuetzt",
+        false,
+    ))
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), StopTargetError> {
     request_daemon_stop_marker();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);

@@ -1,38 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use super::hash::verify_sha256;
+use super::hash::{sha256_file, verify_sha256};
 
-#[derive(Debug)]
-pub(crate) struct ReplaceTargetError {
-    pub(crate) msg: String,
-    pub(crate) needs_elevation: bool,
-}
-
-impl ReplaceTargetError {
-    pub(crate) fn new(msg: impl Into<String>, needs_elevation: bool) -> Self {
-        Self {
-            msg: msg.into(),
-            needs_elevation,
-        }
-    }
-
-    pub(crate) fn io(context: impl Into<String>, error: std::io::Error) -> Self {
-        Self::new(
-            format!("{}: {}", context.into(), error),
-            should_elevate_for_io(&error),
-        )
-    }
-
-    pub(crate) fn integrity(message: impl Into<String>) -> Self {
-        Self::new(message, false)
-    }
-}
+#[path = "replace_platform.rs"]
+mod replace_platform;
+pub(crate) use replace_platform::ReplaceTargetError;
+use replace_platform::{copy_checked, ensure_missing, verify_regular_sha256};
 
 pub(crate) struct Replacement<'a> {
     pub(crate) label: &'a str,
     pub(crate) staged: &'a Path,
     pub(crate) target: &'a Path,
     pub(crate) sha256: &'a str,
+    pub(crate) expected_target_sha256: Option<&'a str>,
 }
 
 struct Prepared {
@@ -41,6 +21,9 @@ struct Prepared {
     pending: PathBuf,
     old: PathBuf,
     existed: bool,
+    original_sha256: Option<String>,
+    new_sha256: String,
+    post_install_invalid: bool,
 }
 
 pub(crate) struct AppliedTransaction {
@@ -51,59 +34,57 @@ pub(crate) struct AppliedTransaction {
 pub(crate) fn replace_transaction(
     replacements: &[Replacement<'_>],
 ) -> Result<AppliedTransaction, ReplaceTargetError> {
+    replace_transaction_impl(replacements, || {})
+}
+
+fn replace_transaction_impl(
+    replacements: &[Replacement<'_>],
+    before_first_install: impl FnOnce(),
+) -> Result<AppliedTransaction, ReplaceTargetError> {
     let mut prepared = Vec::with_capacity(replacements.len());
     for replacement in replacements {
-        if let Err(error) = verify_sha256(replacement.staged, replacement.sha256) {
-            cleanup_pending(&prepared);
-            return Err(ReplaceTargetError::integrity(error));
+        if let Err(error) = verify_regular_sha256(
+            replacement.staged,
+            replacement.sha256,
+            &format!("{} Quelle", replacement.label),
+        ) {
+            return Err(with_cleanup_warnings(error, cleanup_pending(&prepared)));
         }
-        let pending = unique_sibling(replacement.target, "update-pending");
-        let old = unique_sibling(replacement.target, "update-old");
-        let _ = std::fs::remove_file(&pending);
-        let _ = std::fs::remove_file(&old);
+        let pending = replace_platform::unique_sibling(replacement.target, "update-pending");
+        let old = replace_platform::unique_sibling(replacement.target, "update-old");
+        let (existed, original_sha256) = match original_target(replacement) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(with_cleanup_warnings(error, cleanup_pending(&prepared)));
+            }
+        };
         if let Err(error) = copy_checked(
             replacement.staged,
             &pending,
             replacement.sha256,
             replacement.label,
         ) {
-            cleanup_pending(&prepared);
-            return Err(error);
+            return Err(with_cleanup_warnings(error, cleanup_pending(&prepared)));
         }
         prepared.push(Prepared {
             label: replacement.label.to_string(),
             target: replacement.target.to_path_buf(),
             pending,
             old,
-            existed: replacement.target.exists(),
+            existed,
+            original_sha256,
+            new_sha256: replacement.sha256.to_string(),
+            post_install_invalid: false,
         });
     }
 
+    before_first_install();
     for index in 0..prepared.len() {
-        if !prepared[index].existed {
-            continue;
-        }
-        if let Err(error) = std::fs::rename(&prepared[index].target, &prepared[index].old) {
-            let rollback = restore_old_targets(&prepared[..index]);
-            cleanup_pending(&prepared);
-            return Err(combine_rollback_error(
-                ReplaceTargetError::io(format!("{} Ziel sichern", prepared[index].label), error),
-                rollback,
-            ));
-        }
-    }
-
-    for index in 0..prepared.len() {
-        if let Err(error) = std::fs::rename(&prepared[index].pending, &prepared[index].target) {
-            for installed in &prepared[..index] {
-                let _ = std::fs::remove_file(&installed.target);
-            }
-            let rollback = restore_old_targets(&prepared);
-            cleanup_pending(&prepared);
-            return Err(combine_rollback_error(
-                ReplaceTargetError::io(format!("{} einsetzen", prepared[index].label), error),
-                rollback,
-            ));
+        if let Err(error) = install_one(&mut prepared[index]) {
+            let rollback = rollback_items(&prepared[..=index]);
+            let mut error = combine_rollback_error(error, rollback);
+            error = with_cleanup_warnings(error, cleanup_pending(&prepared));
+            return Err(error);
         }
     }
 
@@ -113,83 +94,217 @@ pub(crate) fn replace_transaction(
     })
 }
 
+fn original_target(
+    replacement: &Replacement<'_>,
+) -> Result<(bool, Option<String>), ReplaceTargetError> {
+    match std::fs::symlink_metadata(replacement.target) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            let hash = sha256_file(replacement.target).map_err(ReplaceTargetError::integrity)?;
+            if let Some(expected) = replacement.expected_target_sha256 {
+                if !hash.eq_ignore_ascii_case(expected) {
+                    return Err(ReplaceTargetError::integrity(format!(
+                        "{} Ziel hat eine unerwartete Pruefsumme: erwartet {expected}, erhalten {hash}",
+                        replacement.label
+                    )));
+                }
+            }
+            Ok((true, Some(hash)))
+        }
+        Ok(_) => Err(ReplaceTargetError::integrity(format!(
+            "{} Ziel {} ist keine regulaere Datei",
+            replacement.label,
+            replacement.target.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if replacement.expected_target_sha256.is_some() {
+                Err(ReplaceTargetError::integrity(format!(
+                    "{} erwartetes Ziel {} fehlt",
+                    replacement.label,
+                    replacement.target.display()
+                )))
+            } else {
+                Ok((false, None))
+            }
+        }
+        Err(error) => Err(ReplaceTargetError::io(
+            format!("{} Ziel pruefen", replacement.label),
+            error,
+        )),
+    }
+}
+
+fn install_one(item: &mut Prepared) -> Result<(), ReplaceTargetError> {
+    if item.existed {
+        install_over_existing(item)
+    } else {
+        verify_regular_sha256(
+            &item.pending,
+            &item.new_sha256,
+            &format!("{} vorbereitete Datei", item.label),
+        )?;
+        ensure_missing(&item.target, &format!("{} Ziel", item.label))?;
+        replace_platform::rename_no_replace(&item.pending, &item.target).map_err(|error| {
+            ReplaceTargetError::io(format!("{} neues Ziel einsetzen", item.label), error)
+        })?;
+        verify_regular_sha256(
+            &item.target,
+            &item.new_sha256,
+            &format!("{} eingesetzte Datei", item.label),
+        )
+    }
+}
+
+fn install_over_existing(item: &mut Prepared) -> Result<(), ReplaceTargetError> {
+    let original = item.original_sha256.clone().ok_or_else(|| {
+        ReplaceTargetError::integrity(format!("{} urspruengliche Pruefsumme fehlt", item.label))
+    })?;
+    let result = replace_platform::replace_existing_with_guard(
+        &item.pending,
+        &item.target,
+        &item.old,
+        |backup_ready| {
+            verify_regular_sha256(
+                &item.pending,
+                &item.new_sha256,
+                &format!("{} vorbereitete Datei", item.label),
+            )?;
+            verify_regular_sha256(
+                &item.target,
+                &original,
+                &format!("{} Ziel unmittelbar vor dem Ersetzen", item.label),
+            )?;
+            if backup_ready {
+                verify_regular_sha256(
+                    &item.old,
+                    &original,
+                    &format!("{} Rollback-Sicherung", item.label),
+                )?;
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(()) => {}
+        Err(replace_platform::InstallError::Guard(error)) => return Err(error),
+        Err(replace_platform::InstallError::Io(error)) => {
+            let mut failure =
+                ReplaceTargetError::io(format!("{} atomar einsetzen", item.label), error);
+            if let Err(recovery) = replace_platform::recover_failed_install(item) {
+                failure.msg = format!(
+                    "{}; unmittelbare Wiederherstellung: {recovery}",
+                    failure.msg
+                );
+            }
+            return Err(failure);
+        }
+    }
+    item.post_install_invalid = true;
+    verify_regular_sha256(
+        &item.old,
+        &original,
+        &format!("{} Rollback-Sicherung nach dem Ersetzen", item.label),
+    )?;
+    verify_regular_sha256(
+        &item.target,
+        &item.new_sha256,
+        &format!("{} eingesetzte Datei", item.label),
+    )?;
+    item.post_install_invalid = false;
+    Ok(())
+}
+
+pub(crate) fn replace_transaction_with_retries(
+    replacements: &[Replacement<'_>],
+) -> Result<AppliedTransaction, ReplaceTargetError> {
+    let mut last = None;
+    for _ in 0..10 {
+        match replace_transaction(replacements) {
+            Ok(transaction) => return Ok(transaction),
+            Err(error)
+                if error.needs_elevation
+                    || error.msg.contains("Rollback fehlgeschlagen")
+                    || error.msg.contains("Pruefsumme") =>
+            {
+                return Err(error);
+            }
+            Err(error) => last = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    Err(last.unwrap_or_else(|| ReplaceTargetError::new("unbekannter Fehler", false)))
+}
+
 impl AppliedTransaction {
     pub(crate) fn rollback(&mut self) -> Result<(), String> {
         if self.finished {
             return Ok(());
         }
-        for item in &self.prepared {
-            if item.existed {
-                let _ = std::fs::remove_file(&item.target);
-            } else if item.target.exists() {
-                std::fs::remove_file(&item.target).map_err(|error| {
-                    format!("Neues Ziel {} entfernen: {error}", item.target.display())
-                })?;
-            }
+        rollback_items(&self.prepared)?;
+        let warnings = cleanup_pending(&self.prepared);
+        if !warnings.is_empty() {
+            return Err(warnings.join("; "));
         }
-        restore_old_targets(&self.prepared)?;
-        cleanup_pending(&self.prepared);
         self.finished = true;
         Ok(())
     }
 
     pub(crate) fn finalize(&mut self) {
-        if self.finished {
-            return;
+        for warning in self.finish_cleanup() {
+            super::logging::append_log(&format!("warning: {warning}"));
         }
+    }
+
+    fn finish_cleanup(&mut self) -> Vec<String> {
+        if self.finished {
+            return Vec::new();
+        }
+        let mut warnings = Vec::new();
         for item in &self.prepared {
-            let _ = std::fs::remove_file(&item.old);
-            let _ = std::fs::remove_file(&item.pending);
+            remove_artifact(&item.old, "Rollback-Sicherung", &mut warnings);
+            remove_artifact(&item.pending, "vorbereitete Datei", &mut warnings);
         }
         self.finished = true;
+        warnings
     }
 }
 
 impl Drop for AppliedTransaction {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = self.rollback();
+            if let Err(error) = self.rollback() {
+                super::logging::append_log(&format!(
+                    "warning: automatischer Update-Rollback fehlgeschlagen: {error}"
+                ));
+            }
         }
     }
 }
 
-fn copy_checked(
-    source: &Path,
-    destination: &Path,
-    expected_sha256: &str,
-    label: &str,
-) -> Result<(), ReplaceTargetError> {
-    let expected_len = std::fs::metadata(source)
-        .map_err(|error| ReplaceTargetError::io(format!("{label} Quelle lesen"), error))?
-        .len();
-    let copied = std::fs::copy(source, destination).map_err(|error| {
-        let _ = std::fs::remove_file(destination);
-        ReplaceTargetError::io(format!("{label} temporaer kopieren"), error)
-    })?;
-    let actual_len = std::fs::metadata(destination)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    if copied != expected_len || actual_len != expected_len {
-        let _ = std::fs::remove_file(destination);
-        return Err(ReplaceTargetError::integrity(format!(
-            "{label} unvollstaendig kopiert: {} von {} Bytes",
-            copied.min(actual_len),
-            expected_len
-        )));
-    }
-    verify_sha256(destination, expected_sha256).map_err(|error| {
-        let _ = std::fs::remove_file(destination);
-        ReplaceTargetError::integrity(error)
-    })
+#[derive(Clone, Copy)]
+enum RollbackAction {
+    Restore,
+    RestoreInvalid,
+    AlreadyOriginal,
+    RemoveNew,
+    Untouched,
 }
 
-fn restore_old_targets(items: &[Prepared]) -> Result<(), String> {
+fn rollback_items(items: &[Prepared]) -> Result<(), String> {
+    let actions = items
+        .iter()
+        .map(rollback_action)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut errors = Vec::new();
-    for item in items.iter().rev().filter(|item| item.existed) {
-        if item.old.exists() {
-            if let Err(error) = std::fs::rename(&item.old, &item.target) {
-                errors.push(format!("{}: {error}", item.target.display()));
-            }
+    for (item, action) in items.iter().zip(actions).rev() {
+        let result = match action {
+            RollbackAction::Restore => restore_one(item),
+            RollbackAction::RestoreInvalid => restore_invalid(item),
+            RollbackAction::AlreadyOriginal => remove_verified_backup(item),
+            RollbackAction::RemoveNew => remove_new_target(item),
+            RollbackAction::Untouched => Ok(()),
+        };
+        if let Err(error) = result {
+            errors.push(error);
         }
     }
     if errors.is_empty() {
@@ -199,10 +314,125 @@ fn restore_old_targets(items: &[Prepared]) -> Result<(), String> {
     }
 }
 
-fn cleanup_pending(items: &[Prepared]) {
-    for item in items {
-        let _ = std::fs::remove_file(&item.pending);
+fn rollback_action(item: &Prepared) -> Result<RollbackAction, String> {
+    let target_hash = replace_platform::regular_file_hash(&item.target, "Rollback-Ziel")?;
+    if item.existed {
+        let original = item
+            .original_sha256
+            .as_deref()
+            .ok_or_else(|| format!("Rollback-Pruefsumme fuer {} fehlt", item.target.display()))?;
+        match target_hash.as_deref() {
+            Some(hash) if hash.eq_ignore_ascii_case(original) => {
+                if item.old.exists() {
+                    replace_platform::verify_file_hash(&item.old, original, "Rollback-Sicherung")?;
+                }
+                Ok(RollbackAction::AlreadyOriginal)
+            }
+            Some(hash) if hash.eq_ignore_ascii_case(&item.new_sha256) => {
+                replace_platform::verify_file_hash(&item.old, original, "Rollback-Sicherung")?;
+                Ok(RollbackAction::Restore)
+            }
+            _ if item.post_install_invalid => {
+                replace_platform::verify_file_hash(&item.old, original, "Rollback-Sicherung")?;
+                Ok(RollbackAction::RestoreInvalid)
+            }
+            Some(hash) => Err(format!(
+                "Rollback-Ziel {} wurde unerwartet veraendert (Pruefsumme {hash})",
+                item.target.display()
+            )),
+            None => Err(format!("Rollback-Ziel {} fehlt", item.target.display())),
+        }
+    } else {
+        match target_hash.as_deref() {
+            None => Ok(RollbackAction::Untouched),
+            Some(hash) if hash.eq_ignore_ascii_case(&item.new_sha256) => {
+                Ok(RollbackAction::RemoveNew)
+            }
+            Some(hash) => Err(format!(
+                "Neues Rollback-Ziel {} wurde unerwartet veraendert (Pruefsumme {hash})",
+                item.target.display()
+            )),
+        }
     }
+}
+
+fn restore_one(item: &Prepared) -> Result<(), String> {
+    let original = item
+        .original_sha256
+        .as_deref()
+        .ok_or_else(|| format!("Rollback-Pruefsumme fuer {} fehlt", item.target.display()))?;
+    replace_platform::restore_original(&item.old, &item.target, original, Some(&item.new_sha256))
+}
+
+fn restore_invalid(item: &Prepared) -> Result<(), String> {
+    let original = item
+        .original_sha256
+        .as_deref()
+        .ok_or_else(|| format!("Rollback-Pruefsumme fuer {} fehlt", item.target.display()))?;
+    replace_platform::restore_original(&item.old, &item.target, original, None)
+}
+
+fn remove_verified_backup(item: &Prepared) -> Result<(), String> {
+    let Some(original) = item.original_sha256.as_deref() else {
+        return Err(format!(
+            "Rollback-Pruefsumme fuer {} fehlt",
+            item.target.display()
+        ));
+    };
+    replace_platform::verify_file_hash(&item.target, original, "bereits wiederhergestelltes Ziel")?;
+    if item.old.exists() {
+        replace_platform::verify_file_hash(&item.old, original, "Rollback-Sicherung")?;
+        replace_platform::remove_file(&item.old)
+            .map_err(|error| format!("{} entfernen: {error}", item.old.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_new_target(item: &Prepared) -> Result<(), String> {
+    replace_platform::verify_file_hash(&item.target, &item.new_sha256, "neues Rollback-Ziel")?;
+    replace_platform::remove_file(&item.target)
+        .map_err(|error| format!("Neues Ziel {} entfernen: {error}", item.target.display()))?;
+    match std::fs::symlink_metadata(&item.target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "Neues Ziel {} besteht weiter",
+            item.target.display()
+        )),
+        Err(error) => Err(format!(
+            "Neues Ziel {} pruefen: {error}",
+            item.target.display()
+        )),
+    }
+}
+
+fn cleanup_pending(items: &[Prepared]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for item in items {
+        remove_artifact(&item.pending, "vorbereitete Datei", &mut warnings);
+    }
+    warnings
+}
+
+fn remove_artifact(path: &Path, label: &str, warnings: &mut Vec<String>) {
+    if let Err(error) = replace_platform::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            warnings.push(format!("{label} {} entfernen: {error}", path.display()));
+        }
+    }
+}
+
+fn with_cleanup_warnings(
+    mut error: ReplaceTargetError,
+    warnings: Vec<String>,
+) -> ReplaceTargetError {
+    if !warnings.is_empty() {
+        error.msg = format!(
+            "{}; Aufraeumen fehlgeschlagen: {}",
+            error.msg,
+            warnings.join("; ")
+        );
+    }
+    error
 }
 
 fn combine_rollback_error(
@@ -215,82 +445,6 @@ fn combine_rollback_error(
     primary
 }
 
-fn unique_sibling(target: &Path, role: &str) -> PathBuf {
-    let name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "smart_explorer".to_string());
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    target.with_file_name(format!("{name}.{role}.{}.{nanos}", std::process::id()))
-}
-
-fn should_elevate_for_io(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(5) | Some(740) | Some(1314))
-        || error.kind() == std::io::ErrorKind::PermissionDenied
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::hash::sha256_file;
-
-    #[test]
-    fn transaction_rejects_tamper_without_changing_any_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let app_staged = dir.path().join("app-staged");
-        let cli_staged = dir.path().join("cli-staged");
-        let app_target = dir.path().join("app");
-        let cli_target = dir.path().join("cli");
-        std::fs::write(&app_staged, b"new-app").unwrap();
-        std::fs::write(&cli_staged, b"new-cli").unwrap();
-        std::fs::write(&app_target, b"old-app").unwrap();
-        std::fs::write(&cli_target, b"old-cli").unwrap();
-        let app_hash = sha256_file(&app_staged).unwrap();
-        let cli_hash = sha256_file(&cli_staged).unwrap();
-        std::fs::write(&cli_staged, b"bad-cli").unwrap();
-
-        let result = replace_transaction(&[
-            Replacement {
-                label: "App",
-                staged: &app_staged,
-                target: &app_target,
-                sha256: &app_hash,
-            },
-            Replacement {
-                label: "CLI",
-                staged: &cli_staged,
-                target: &cli_target,
-                sha256: &cli_hash,
-            },
-        ]);
-
-        assert!(result.is_err());
-        assert_eq!(std::fs::read(&app_target).unwrap(), b"old-app");
-        assert_eq!(std::fs::read(&cli_target).unwrap(), b"old-cli");
-    }
-
-    #[test]
-    fn explicit_rollback_restores_all_replaced_targets() {
-        let dir = tempfile::tempdir().unwrap();
-        let staged = dir.path().join("staged");
-        let target = dir.path().join("target");
-        std::fs::write(&staged, b"new").unwrap();
-        std::fs::write(&target, b"old").unwrap();
-        let hash = sha256_file(&staged).unwrap();
-        let mut transaction = replace_transaction(&[Replacement {
-            label: "App",
-            staged: &staged,
-            target: &target,
-            sha256: &hash,
-        }])
-        .unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new");
-
-        transaction.rollback().unwrap();
-
-        assert_eq!(std::fs::read(&target).unwrap(), b"old");
-    }
-}
+#[path = "replace_tests.rs"]
+mod tests;

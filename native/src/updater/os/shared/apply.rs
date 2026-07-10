@@ -57,7 +57,7 @@ pub fn apply_staged_update(bundle: &StagedUpdate) -> Result<(), String> {
     ];
 
     // Keep this immediately adjacent to the process boundary. The helper also
-    // validates itself on entry and again before an elevated relaunch.
+    // validates itself on entry and fails closed if elevation would be needed.
     verify_sha256(bundle.helper().path(), bundle.helper().sha256())?;
     os::spawn_update_helper(bundle.helper().path(), bundle.helper().sha256(), &args)
 }

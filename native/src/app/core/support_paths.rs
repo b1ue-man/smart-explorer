@@ -262,7 +262,7 @@ pub(in crate::app) fn draw_accel_badge(painter: &egui::Painter, rect: egui::Rect
     painter.rect_stroke(
         at,
         3.0,
-        egui::Stroke::new(1.0, Color32::from_rgb(120, 90, 30)),
+        egui::Stroke::new(1.0_f32, Color32::from_rgb(120, 90, 30)),
     );
     painter.text(
         at.center(),

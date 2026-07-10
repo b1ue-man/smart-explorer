@@ -195,8 +195,11 @@ fn paint_landing_tile(
         ui.visuals().widgets.inactive.bg_stroke.color
     };
     ui.painter().rect_filled(rect.shrink(0.5), 6.0, fill);
-    ui.painter()
-        .rect_stroke(rect.shrink(0.5), 6.0, egui::Stroke::new(1.0, stroke_color));
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        6.0,
+        egui::Stroke::new(1.0_f32, stroke_color),
+    );
 
     let accent = if tile.warn {
         Color32::from_rgb(220, 150, 80)

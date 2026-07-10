@@ -199,6 +199,10 @@ pub struct App {
     pub(in crate::app) current_render_tab: usize,
     /// False until we've revealed the window (maximized) after the first paint.
     pub(in crate::app) shown: bool,
+    /// Defer updater cleanup and daemon restart until the first frame has
+    /// durably acknowledged this replacement process.
+    pub(in crate::app) post_update_startup_pending: bool,
+    pub(in crate::app) post_update_daemon_at: Option<Instant>,
 
     pub(in crate::app) pending_scroll_row: Option<usize>,
 

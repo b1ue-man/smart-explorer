@@ -7,6 +7,31 @@ use super::feed::PayloadSpec;
 const INSTALLED_UPDATER: &str = "smart_explorer_updater";
 const INSTALLED_CLI: &str = "se";
 
+pub(super) fn create_startup_ack(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+pub(super) fn sync_startup_ack_parent(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()
+}
+
+pub(super) fn publish_startup_ack(pending: &Path, final_path: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(pending, final_path)?;
+    if let Err(error) = sync_startup_ack_parent(final_path) {
+        let _ = std::fs::remove_file(final_path);
+        let _ = std::fs::remove_file(pending);
+        return Err(error);
+    }
+    let _ = std::fs::remove_file(pending);
+    let _ = sync_startup_ack_parent(final_path);
+    Ok(())
+}
+
 pub(super) fn binary_suffix() -> &'static str {
     ""
 }

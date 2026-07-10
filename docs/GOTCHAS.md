@@ -97,12 +97,49 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   PID to exit, requests a graceful daemon stop, and refuses to continue while a
   matching Smart Explorer binary is still running. Do not reintroduce force-kill
   behavior to make an update appear successful.
+- **The downloaded helper must understand the previous app's launch protocol.**
+  v0.5.119 installs the new feed helper and invokes it with only the legacy app
+  target/staging/status fields plus the staged app hash; the normally installed
+  helper path carries no helper-hash argument. Removing the explicit legacy
+  parser makes updates fail before replacement with a missing SHA argument. The
+  bridge must stay fail-closed: require the staged SHA, never downgrade a request
+  containing any modern-only flag, and never UAC-relaunch an updater. This also
+  applies to the modern protocol: an elevated helper would otherwise launch the
+  GUI with administrator privileges. Require the installer when cleanup or
+  replacement needs elevation.
+  The first helper must wait for the exact v0.5.119 parent without a fixed
+  timeout and serialize duplicate workers for the same installed target. Retire
+  an older/equal request only when a target-key/version/app-SHA completion
+  receipt proves the winner; rebase a newer request on that verified target and
+  attempt it without downgrading. If the launched winner blocks a queued newer
+  worker, fail visibly and retain the payload. Before changing the target,
+  durably create an exclusive target-keyed intent that binds the requested
+  version, baseline SHA, and staged SHA. If a helper dies after replacement but
+  before status/receipt publication, a later stale worker must recover that
+  exact intent or fail closed; it must never adopt the unproven binary as a new
+  baseline. The replacement app syncs a private receipt sibling after its first
+  GUI frame, atomically publishes it, and completes a nonce-bound two-way
+  loopback handshake. Receipt publication is the irreversible commit point;
+  the helper retains rollback state and the intent until then. Do not run
+  recovery launch while the exact target process is already running without a
+  receipt; wait for its receipt and then fail closed rather than creating a
+  duplicate. Do not run abandoned-staging cleanup in that acknowledged launch;
+  a queued v0.5.119 worker can still own another verified payload.
+  Visible update status/error state must be prepared before launching the new
+  or restored app. Preserve the exact-v0.5.119 argv, prelaunch-state,
+  durable-intent, receipt, serialization/rebase, rollback, path-alias, and
+  target-drift regressions.
 - Before replacement, the helper verifies and durably archives the outgoing app
-  with a SHA-256 sidecar. It prepares checked sibling files, then replaces the
-  updater, `se`, and app as one rollback-capable transaction. A failed replace or
-  failed launch restores the previous targets and attempts to relaunch the
-  verified old app. Length checks alone are not an acceptable replacement for
-  the immediate SHA-256 revalidation at each process/replacement boundary.
+  with a SHA-256 sidecar. It rejects aliases between executable, staging, and
+  bookkeeping paths and prepares checked sibling files. Existing targets must
+  remain continuously addressable: Windows uses `ReplaceFileW` with a verified
+  backup, while Linux creates a verified backup and atomically renames over the
+  target. Replace updater, `se`, then app so an interruption always leaves a
+  runnable old or new GUI. A failed replace or failed acknowledged launch
+  restores the previous targets and status, then attempts to relaunch the
+  verified old app.
+  Length checks alone are not an acceptable replacement for the immediate
+  SHA-256 revalidation at each process/replacement boundary.
 - Release publication is also transactional: build into isolated staging,
   verify all six Windows/Linux feed payloads and hashes plus the Windows build
   manifest, promote with rollback backups, and move `version.txt` last. A

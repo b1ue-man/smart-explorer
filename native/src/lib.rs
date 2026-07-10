@@ -44,9 +44,14 @@ pub mod zipfs;
 pub fn run_gui() -> eframe::Result<()> {
     install_panic_logger();
 
-    updater::cleanup_old_binaries();
-    updater::archive_current_version();
     let args: Vec<String> = std::env::args().collect();
+    let just_updated = args.iter().any(|a| a == "--updated");
+    let startup_ack_pending =
+        updater::capture_update_startup_ack(just_updated).unwrap_or_else(|error| panic!("{error}"));
+    if !startup_ack_pending {
+        updater::cleanup_old_binaries();
+        updater::archive_current_version();
+    }
 
     if args.iter().any(|a| a == "--sync-daemon") {
         daemon::run_daemon();
@@ -62,7 +67,6 @@ pub fn run_gui() -> eframe::Result<()> {
     #[cfg(windows)]
     shell_register::cleanup_stale_default_manager();
 
-    let just_updated = args.iter().any(|a| a == "--updated");
     let initial_path = args
         .iter()
         .skip(1)
