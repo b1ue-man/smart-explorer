@@ -4,8 +4,9 @@
 # cross-compiles to static musl for arbitrary Linux servers without a musl C
 # toolchain. It shares the protocol/walk source with the app via #[path] include
 # of native/src/agent_proto.rs, so there is one definition. See
-# docs/SSH_AGENT_PLAN.md §7. Build:
+# docs/SSH_AGENT_PLAN.md §7. Diagnostic build:
 #   cd se-agent && cargo build --release --target x86_64-unknown-linux-musl
+# Regenerate committed payloads only through native/build-agent-bundles.sh.
 [package]
 name = "se-agent"
 version = "0.1.0"
