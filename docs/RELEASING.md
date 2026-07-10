@@ -105,6 +105,17 @@ inconsistent**. Fresh CI builds remain compile gates; GitHub Release assets are
 then copied from those verified committed artifacts, so the published bytes
 are the same bytes served by the auto-update feed.
 
+The desktop app embeds the two static-musl SSH-agent payloads from
+`native/agent-bin/`. `native/build-agent-bundles.sh` remaps the repository and
+Cargo source roots to stable virtual paths and forces its own target directory,
+then CI rebuilds both architectures and compares them byte-for-byte with the
+committed payloads. Run that script and commit both binaries before a release;
+do not bypass the exact-byte guard or copy binaries from an unrelated target
+directory. A caller needing custom compiler flags must use an ordinary
+diagnostic `cargo build`; the canonical bundle script rejects
+`RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` because release payloads must use the
+same compiler flags on every machine.
+
 ## The update feed (what the app reads)
 
 A folder with OS-specific payloads, identical for a local folder or an
@@ -139,7 +150,7 @@ manifest. No installed file or process changes during this check. The dialog's
 
 The helper's launch protocol is a release compatibility boundary because an
 older app downloads the **new** helper before asking it to apply the update.
-The v0.5.121 helper therefore retains a fail-closed bridge for the exact
+The current helper therefore retains a fail-closed bridge for the exact
 v0.5.119 argument set: it requires the staged app SHA-256, replaces only the app
 (v0.5.119 already refreshed the CLI and helper), and refuses every UAC handoff.
 The modern helper also fails closed when an apply needs elevation: launching the

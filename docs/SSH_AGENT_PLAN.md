@@ -80,7 +80,10 @@ Regenerating both committed binaries after a `PROTO_VERSION`/shared-source bump:
 run `native/build-agent-bundles.sh` from the repository root (or
 `native/build-agent-bundles.sh --check-env` for prerequisites). The script owns
 the x86_64/aarch64 static-musl build, staging, protocol probe, and atomic
-replacement; do not hand-copy one architecture as the final release path.
+replacement. It remaps machine-specific repository and Cargo source paths,
+forces the target directory it later stages from, and CI compares both committed
+payloads byte-for-byte after rebuilding them. Do not hand-copy one architecture
+or bypass that freshness check as the final release path.
 
 ---
 

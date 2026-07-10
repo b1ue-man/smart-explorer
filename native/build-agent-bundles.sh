@@ -4,8 +4,8 @@
 # never ship with stale committed binaries.
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd "$script_dir/.." && pwd -P)"
 agent_dir="$repo_root/se-agent"
 bundle_dir="$script_dir/agent-bin"
 x86_target="x86_64-unknown-linux-musl"
@@ -34,6 +34,44 @@ test -x "$rust_lld" || { echo "rust-lld not found: $rust_lld" >&2; exit 1; }
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld"
 
+# Cargo dependency sources retain their absolute CARGO_HOME in release
+# binaries. Remap machine-specific source roots so the byte-for-byte freshness
+# check in CI is portable between developer machines and GitHub runners.
+cargo_home="${CARGO_HOME:-${HOME:?HOME is required when CARGO_HOME is unset}/.cargo}"
+case "$cargo_home" in
+  /*) ;;
+  *)
+    cargo_home="$PWD/$cargo_home"
+    ;;
+esac
+if [ "$cargo_home" != "/" ]; then
+  cargo_home="${cargo_home%/}"
+fi
+export CARGO_HOME="$cargo_home"
+if [ "$cargo_home" = "$repo_root" ]; then
+  echo "CARGO_HOME must not be the repository root for reproducible agent builds" >&2
+  exit 1
+fi
+
+# CARGO_ENCODED_RUSTFLAGS preserves paths containing spaces and takes
+# precedence over every other Cargo rustflags source. The committed payloads
+# have one canonical flag set, so reject ambient overrides instead of producing
+# machine-specific bytes.
+if [ -n "${RUSTFLAGS:-}" ] || [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+  echo "unset RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for reproducible agent builds" >&2
+  exit 1
+fi
+flag_separator=$'\x1f'
+repo_remap="--remap-path-prefix=$repo_root=/workspace"
+cargo_remap="--remap-path-prefix=$cargo_home=/cargo"
+# rustc applies the last matching remap. Keep a repository-local CARGO_HOME
+# mapped to /cargo rather than the broader /workspace prefix.
+case "$cargo_home/" in
+  "$repo_root/"*) remap_flags="${repo_remap}${flag_separator}${cargo_remap}" ;;
+  *) remap_flags="${cargo_remap}${flag_separator}${repo_remap}" ;;
+esac
+export CARGO_ENCODED_RUSTFLAGS="$remap_flags"
+
 if [ "$check_env" = "1" ]; then
   echo "SSH-agent bundle environment OK ($x86_target, $arm_target; $rust_lld)"
   exit 0
@@ -41,8 +79,10 @@ fi
 
 (
   cd "$agent_dir"
-  cargo build --release --target "$x86_target" --bin se-agent
-  cargo build --release --target "$arm_target" --bin se-agent
+  # Match the copy source below even when the caller configures another target
+  # directory globally or through the environment.
+  cargo build --release --target-dir "$agent_dir/target" --target "$x86_target" --bin se-agent
+  cargo build --release --target-dir "$agent_dir/target" --target "$arm_target" --bin se-agent
 )
 
 mkdir -p "$bundle_dir"
