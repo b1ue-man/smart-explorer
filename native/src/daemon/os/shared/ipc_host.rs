@@ -18,6 +18,9 @@ pub(super) struct ShareHostState {
     pub(super) identity_error: Option<String>,
     pub(super) profiles: crate::share::ShareProfiles,
     pub(super) profiles_error: Option<String>,
+    /// Explicit Share stop barrier. Periodic reloads may refresh state while
+    /// suspended, but only an IPC RefreshShare request may start service again.
+    pub(super) suspended: bool,
     pub(super) server: String,
     pub(super) running_server: String,
     pub(super) signal_connected: bool,
@@ -49,6 +52,7 @@ impl ShareHost {
             identity_error,
             profiles,
             profiles_error,
+            suspended: false,
             server,
             running_server: String::new(),
             signal_connected: false,
@@ -57,13 +61,9 @@ impl ShareHost {
             ui_events: Vec::new(),
             pending_direct_requests: Vec::new(),
         };
-        let host = ShareHost {
+        ShareHost {
             state: Arc::new(Mutex::new(state)),
-        };
-        if let Err(error) = host.reload_now() {
-            log(&format!("share worker initial load failed: {error}"));
         }
-        host
     }
 
     pub(crate) fn tick(&self) {
@@ -120,6 +120,17 @@ impl ShareHost {
         Ok(state.service.is_some())
     }
 
+    pub(crate) fn refresh_now(&self) -> Result<bool, String> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
+            state.suspended = false;
+        }
+        self.reload_now()
+    }
+
     pub(super) fn send_command(&self, cmd: crate::share::ShareCmd) -> Result<(), String> {
         let answer_device = match &cmd {
             crate::share::ShareCmd::AnswerDirectRequest { presence, .. } => {
@@ -133,13 +144,17 @@ impl ShareHost {
                 .lock()
                 .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
             if let crate::share::ShareCmd::Stop = &cmd {
-                if let Some(service) = state.service.as_ref() {
-                    service.cmd(crate::share::ShareCmd::Stop)?;
-                }
-                state.service = None;
+                // Establish the barrier before asking the service to stop. If
+                // delivery is ambiguous, periodic reloads still cannot race a
+                // maintenance operation; an explicit RefreshShare releases it.
+                state.suspended = true;
+                let service = state.service.take();
                 state.running_server.clear();
                 state.signal_connected = false;
                 state.signal_error = None;
+                if let Some(service) = service {
+                    service.cmd(crate::share::ShareCmd::Stop)?;
+                }
                 state.ui_events.push(crate::share::ShareEvent::Status(
                     "Share-Worker getrennt".to_string(),
                 ));
@@ -269,7 +284,7 @@ fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<(), String>
         .identity
         .clone()
         .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())?;
-    if state.server.trim().is_empty() || !state.profiles.auto_connect {
+    if !share_service_requested(state.suspended, &state.server, state.profiles.auto_connect) {
         if let Some(service) = state.service.take() {
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
@@ -314,6 +329,10 @@ fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<(), String>
         configure_service(service, &state.profiles)?;
     }
     Ok(())
+}
+
+fn share_service_requested(suspended: bool, server: &str, auto_connect: bool) -> bool {
+    !suspended && !server.trim().is_empty() && auto_connect
 }
 
 fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
@@ -377,4 +396,17 @@ fn default_home() -> String {
         .unwrap_or_else(std::env::temp_dir)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::share_service_requested;
+
+    #[test]
+    fn explicit_stop_barrier_blocks_periodic_auto_connect_reload() {
+        assert!(share_service_requested(false, "127.0.0.1:9", true));
+        assert!(!share_service_requested(true, "127.0.0.1:9", true));
+        assert!(!share_service_requested(false, "", true));
+        assert!(!share_service_requested(false, "127.0.0.1:9", false));
+    }
 }

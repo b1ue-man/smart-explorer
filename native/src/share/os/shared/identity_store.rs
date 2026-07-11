@@ -1,26 +1,49 @@
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::identity::{DirectCodeRotation, IdentityPersistence, ShareIdentity};
+use super::identity::{
+    DirectCodeRotation, IdentityPersistence, IdentityRepair, IdentityRepairAction, ShareIdentity,
+};
 
 const IDENTITY_FILE: &str = "share_identity.json";
 const MAX_IDENTITY_BYTES: u64 = 64 * 1024;
+static IDENTITY_TRANSACTION_LOCK: Mutex<()> = Mutex::new(());
+
+struct IdentityTransactionGuard {
+    _process_guard: MutexGuard<'static, ()>,
+    _system_guard: super::identity_lock::IdentityLock,
+}
 
 impl ShareIdentity {
     pub fn load_or_create(default_name: String) -> Result<Self, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
         Self::load_or_create_with(default_name, &mut SystemIdentityPersistence)
     }
 
-    pub fn save(&self) -> Result<(), String> {
-        self.save_with(&mut SystemIdentityPersistence)
+    pub fn repair_missing(default_name: String) -> Result<IdentityRepair, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
+        Self::repair_missing_with(default_name, &mut SystemIdentityPersistence)
+    }
+
+    pub fn repair_action_needed(default_name: String) -> Result<IdentityRepairAction, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
+        Self::repair_action_needed_with(default_name, &mut SystemIdentityPersistence)
     }
 
     pub fn regenerate_direct_code(&mut self) -> Result<DirectCodeRotation, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
         self.regenerate_direct_code_with(&mut SystemIdentityPersistence)
     }
 
     pub fn set_device_name(&mut self, name: String) -> Result<(), String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
         self.set_device_name_with(name, &mut SystemIdentityPersistence)
     }
 }
@@ -146,6 +169,18 @@ pub(super) fn save_secret(account: &str, secret: &str) -> Result<(), String> {
 
 pub(super) fn delete_secret(account: &str) -> Result<(), String> {
     crate::creds::delete_secret_checked(account)
+}
+
+fn identity_transaction_guard() -> io::Result<IdentityTransactionGuard> {
+    let process_guard = match IDENTITY_TRANSACTION_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let system_guard = super::identity_lock::acquire(&crate::support_dirs::app_data_dir())?;
+    Ok(IdentityTransactionGuard {
+        _process_guard: process_guard,
+        _system_guard: system_guard,
+    })
 }
 
 fn identity_path() -> PathBuf {

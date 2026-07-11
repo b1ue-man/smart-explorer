@@ -20,6 +20,12 @@ mod fs;
 mod fs_error;
 #[path = "core/identity.rs"]
 mod identity;
+#[cfg(not(windows))]
+#[path = "os/linux_os/identity_lock.rs"]
+mod identity_lock;
+#[cfg(windows)]
+#[path = "os/windows/identity_lock.rs"]
+mod identity_lock;
 #[path = "os/shared/identity_store.rs"]
 mod identity_store;
 #[path = "core/io_deadline.rs"]
@@ -68,7 +74,7 @@ mod walk_assembly;
 mod wire;
 
 pub use self::fs::{ShareExportConfig, SharedRoot};
-pub use self::identity::{DirectCodeRotation, ShareIdentity};
+pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub use self::profile_persistence::ProfileChange;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;

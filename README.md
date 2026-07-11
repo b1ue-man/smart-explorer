@@ -57,6 +57,11 @@ SE-R3-... --name Team` tritt einem Raum bei. Entfernen geht mit
 sich über `se share configure`, `identity`, `status`, `request`, `export`,
 `room` und `worker` vollständig verwalten; `status` unterscheidet dabei einen
 laufenden Worker von einer tatsächlich verbundenen Signaling-Sitzung.
+Hat eine alte Linux-Version Identitätsmetadaten ohne dauerhaft gespeicherte
+Secrets hinterlassen, nennt der CLI den gezielten Reparaturbefehl
+`se share identity --repair`. Er läuft nur bei tatsächlich fehlendem
+Secret-Material; eine ersetzte Identität macht alte Einladungen und
+Vertrauensbindungen ungültig, sodass die Peers neu gekoppelt werden müssen.
 
 ---
 
@@ -92,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.123.exe`](release-native/Smart%20Explorer%20Setup%200.5.123.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.124.exe`](release-native/Smart%20Explorer%20Setup%200.5.124.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer

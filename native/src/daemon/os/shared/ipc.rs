@@ -33,7 +33,7 @@ pub(super) fn handle_client(
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         ),
-        IpcRequest::RefreshShare { .. } => match host.reload_now() {
+        IpcRequest::RefreshShare { .. } => match host.refresh_now() {
             Ok(running) => write_response(&mut stream, &IpcResponse::RefreshOk { running }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
