@@ -65,13 +65,17 @@ jobs:
       - name: Check (windows target)
         run: cargo check --target x86_64-pc-windows-gnu
 
-      - name: Unit tests (host)
-        # The crate is host-buildable (rfd xdg-portal on non-Windows), so the
-        # full unit-test suite runs here — no display needed.
-        run: cargo test --bin smart_explorer
+      - name: Tests (host, including se subprocess coverage)
+        # One build job and one test thread keep memory bounded while exercising
+        # the library, every binary harness, and native/tests/se_cli.rs.
+        env:
+          CARGO_BUILD_JOBS: 1
+        run: cargo test --all-targets --no-fail-fast -- --test-threads=1
 
       - name: Compile test harness (windows target)
-        run: cargo test --no-run --bin smart_explorer --target x86_64-pc-windows-gnu
+        env:
+          CARGO_BUILD_JOBS: 1
+        run: cargo test --no-run --all-targets --target x86_64-pc-windows-gnu
 
       - name: Clippy
         run: |

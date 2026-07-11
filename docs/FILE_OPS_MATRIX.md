@@ -54,16 +54,19 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 
 ## C. Terminal `se` command -> backend method -> status
 
-The terminal companion uses the same app-data directory, saved connections,
-keyring entries, Share profiles, and daemon worker as the GUI. Targets can be
+The terminal companion works without a graphical session and uses the same
+app-data directory, saved connections, credential records, Share profiles, and
+daemon worker as the GUI. Targets can be
 full endpoints, local paths, or saved-connection shorthand:
 `@label-or-account:/path`.
 
 | CLI command | Routed to | Local | Remote (SFTP/FTP/WebDAV/Drive) | Peer via Share-Server |
 |---|---|---|---|---|
-| `se connections list` | `creds::load_connections()` + `ShareProfiles::load()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
-| `se connections add` | `creds::save_connection()` + keyring secret | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup | n/a |
-| `se connections add-peer` / `add-room` | `ShareProfiles::{add_direct_from_code, add_room_from_code}` + checked daemon profile reload | n/a | n/a | ✅ one-sided setup; other peer confirms direct access as usual |
+| `se doctor [--json]` | bounded, non-mutating checks of app-data, credentials, profiles, server config, and daemon heartbeat | ✅ | ✅ corruption and backend errors produce exit 1 | ✅ configuration health without starting Share |
+| `se connections list` | checked credential metadata + `ShareProfiles::load_checked()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
+| `se connections add` / `remove` | transactional metadata + platform credential store | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup and removal | n/a |
+| `se connections add-peer` / `add-room` / `remove-peer` / `remove-room` | revision-checked `ShareProfiles` persistence + daemon profile reload | n/a | n/a | ✅ one-sided setup/removal; other peer confirms direct access as usual |
+| `se share ...` | checked Share identity/profile persistence + authenticated local daemon IPC | n/a | n/a | ✅ configure, identity, status, requests, exports, rooms, refresh, and stop |
 | `se ls` / `se stat` | `list_dir` / `stat` | ✅ | ✅ | ✅ |
 | `se cat` / `se get` | `open_read` | ✅ | ✅ | ✅ |
 | `se put` / `se mkdir` | `open_write` / `mkdir_all` | ✅ | ✅ | ✅ |
@@ -71,7 +74,7 @@ full endpoints, local paths, or saved-connection shorthand:
 | `se mv` | rename when possible, else copy+delete | ✅ | ✅ | ✅ |
 | `se rm` | `remove_file` / recursive child walk + `remove_dir` | ✅ `--force`; roots also require `--no-preserve-root` | ✅ `--force`; configured roots also require `--no-preserve-root` | ✅ `--force`; virtual roots also require `--no-preserve-root` |
 | `se search` | backend search, fallback traversal | ✅ | ✅ | ✅ |
-| `se exec` | Share daemon IPC -> peer exec request | n/a | ❌ SFTP-agent execution out of scope | ❌ runtime-disabled until full process-tree containment is available on every supported OS |
+| `se exec` | immediate fail-closed CLI rejection | n/a | ❌ SFTP-agent execution out of scope | ❌ runtime-disabled until full process-tree containment is available on every supported OS |
 
 ## D. Current caveats
 
@@ -102,6 +105,11 @@ full endpoints, local paths, or saved-connection shorthand:
 5. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
    are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
    large folders therefore need enough local temp space before the drop/paste.
+6. **Linux headless credentials use owner-protected files.** The DBus-free
+   backend enforces a `0700` directory, `0600` single-link records, bounded
+   versioned envelopes, atomic replacement, and interprocess locking. It is not
+   encryption against root, the same Unix account, or offline access to an
+   unencrypted disk. Windows continues to use Credential Manager.
 
 ## E. Remote file opening
 

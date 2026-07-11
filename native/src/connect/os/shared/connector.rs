@@ -263,7 +263,8 @@ pub fn open_saved_at(
 ) -> Result<(BackendHandle, String), String> {
     if !c.protocol.is_url() {
         // Share: the UNC is browsed locally once authenticated.
-        let secret = crate::creds::get_secret(&c.account());
+        let secret = crate::creds::get_secret_checked(&c.account())
+            .map_err(|error| format!("Gespeicherte Anmeldeinformation lesen: {error}"))?;
         let mut form = ConnectForm::from_saved(c);
         form.save = false;
         match do_connect(form, secret) {
@@ -274,7 +275,8 @@ pub fn open_saved_at(
             ConnectResult::Err(e) => Err(e),
         }
     } else {
-        let secret = crate::creds::get_secret(&c.account());
+        let secret = crate::creds::get_secret_checked(&c.account())
+            .map_err(|error| format!("Gespeicherte Anmeldeinformation lesen: {error}"))?;
         let mut form = ConnectForm::from_saved(c);
         form.root = if path.is_empty() {
             "/".into()
@@ -317,7 +319,7 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
     }
     let (proto, user, host, port, path) =
         parse_remote_url(endpoint).ok_or_else(|| "Ungültige Remote-Adresse".to_string())?;
-    let conns = crate::creds::load_connections();
+    let conns = crate::creds::load_connections_checked()?;
     let c = conns
         .iter()
         .find(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port)

@@ -21,17 +21,21 @@ else
 fi
 TMP_DIR=""
 DRY_RUN=0
+CLI_ONLY=0
 if SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)"; then
   :
 else
   SCRIPT_DIR="$(pwd -P)"
 fi
 
-case "${1:-}" in
-  --dry-run) DRY_RUN=1 ;;
-  "") ;;
-  *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
-esac
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --cli-only) CLI_ONLY=1 ;;
+    *) echo "usage: $0 [--dry-run] [--cli-only]" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 cleanup() {
   if [ -n "$TMP_DIR" ]; then
@@ -107,9 +111,9 @@ need_system_packages() {
   if ! have_cmd curl && ! have_cmd wget; then
     missing="$missing curl-or-wget"
   fi
-  # Cargo is only needed when GitHub release assets are unavailable, but release
-  # assets are intentionally optional. Install it up front so this one script can
-  # always fall back to a source build without asking the user to do more work.
+  # This check runs only after verified release assets were unavailable. Cargo
+  # and desktop libraries are therefore source-build prerequisites, not costs
+  # imposed on the normal binary installation path.
   if ! have_cmd cargo; then
     missing="$missing cargo"
   fi
@@ -205,17 +209,28 @@ case "$(uname -m)" in
   *) echo "smart-explorer install: only x86_64 Linux desktops are supported by this installer right now" >&2; exit 1 ;;
 esac
 
-install_system_packages
-TMP_DIR="$(mktemp -d)"
-
 need chmod
 need mkdir
 need mktemp
 need sha256sum
 need install
+need ln
+if ! have_cmd curl && ! have_cmd wget; then
+  echo "smart-explorer install: install curl or wget first" >&2
+  exit 1
+fi
+TMP_DIR="$(mktemp -d)"
 
 release_assets_available() {
   log "Trying latest GitHub Release assets from $BASE_URL ..."
+  if [ "$DRY_RUN" = 1 ]; then
+    return 0
+  fi
+  if [ "$CLI_ONLY" = 1 ]; then
+    fetch_optional "$BASE_URL/se" "$TMP_DIR/se" && \
+    fetch_optional "$BASE_URL/se.sha256" "$TMP_DIR/se.sha256"
+    return
+  fi
   fetch_optional "$BASE_URL/smart_explorer" "$TMP_DIR/smart_explorer" && \
   fetch_optional "$BASE_URL/smart_explorer.sha256" "$TMP_DIR/smart_explorer.sha256" && \
   fetch_optional "$BASE_URL/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater" && \
@@ -225,6 +240,14 @@ release_assets_available() {
 }
 
 use_release_assets() {
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: verify downloaded release SHA-256 sidecars"
+    return 0
+  fi
+  if [ "$CLI_ONLY" = 1 ]; then
+    verify_payload_sha256 "$TMP_DIR/se" "$TMP_DIR/se.sha256"
+    return
+  fi
   verify_payload_sha256 "$TMP_DIR/smart_explorer" "$TMP_DIR/smart_explorer.sha256"
   verify_payload_sha256 "$TMP_DIR/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater.sha256"
   verify_payload_sha256 "$TMP_DIR/se" "$TMP_DIR/se.sha256"
@@ -281,26 +304,43 @@ prepare_source_build() {
   fi
 
   if [ "$DRY_RUN" = 1 ]; then
-    log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se (in $src/native)"
+    if [ "$CLI_ONLY" = 1 ]; then
+      log "dry-run: cargo build --release --bin se (in $src/native)"
+    else
+      log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se (in $src/native)"
+    fi
+  elif [ "$CLI_ONLY" = 1 ]; then
+    # One codegen job keeps fallback builds within modest workstation memory.
+    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin se)
   else
-    (cd "$src/native" && cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se)
+    # One codegen job keeps fallback builds within modest workstation memory.
+    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se)
   fi
   printf '%s\n' "$src/native/target/release"
 }
 
 install_files() {
   src_dir="$1"
-  run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
-  run install -m 755 "$src_dir/smart_explorer" "$APP_BIN"
-  run install -m 755 "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
+  if [ "$CLI_ONLY" = 1 ]; then
+    run mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+  else
+    run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
+    run install -m 755 "$src_dir/smart_explorer" "$APP_BIN"
+    run install -m 755 "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
+  fi
   run install -m 755 "$src_dir/se" "$CLI_BIN"
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: write $INSTALL_DIR/update_source.txt"
   else
     printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
   fi
-  run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
+  if [ "$CLI_ONLY" != 1 ]; then
+    run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
+  fi
   run ln -sf "$CLI_BIN" "$BIN_DIR/se"
+  if [ "$CLI_ONLY" = 1 ]; then
+    return 0
+  fi
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: fetch icon $RAW_BASE_URL/native/assets/smart-explorer-logo-256.png -> $ICON_DIR/smart-explorer.png"
   else
@@ -333,15 +373,39 @@ if release_assets_available; then
   use_release_assets
   install_files "$TMP_DIR"
 else
-  log "Latest release does not have Linux desktop assets yet; falling back to a source build."
+  if [ "$CLI_ONLY" = 1 ]; then
+    log "Latest release does not have the Linux se asset; falling back to a source build."
+  else
+    log "Latest release does not have Linux desktop assets yet; falling back to a source build."
+  fi
+  install_system_packages
   build_dir="$(prepare_source_build)"
   install_files "$build_dir"
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
-  log "dry-run: Smart Explorer install path would be: $APP_BIN"
+  if [ "$CLI_ONLY" = 1 ]; then
+    log "dry-run: se install path would be: $CLI_BIN"
+  else
+    log "dry-run: Smart Explorer install path would be: $APP_BIN"
+  fi
 else
-  log "Smart Explorer installed: $APP_BIN"
-  log "Run it from your app launcher or with: $BIN_DIR/smart_explorer"
+  "$CLI_BIN" --version >&2
+  if [ "$CLI_ONLY" != 1 ]; then
+    log "Smart Explorer installed: $APP_BIN"
+    log "Run it from your app launcher or with: $BIN_DIR/smart_explorer"
+  fi
   log "Terminal companion installed: $BIN_DIR/se"
+  case ":${PATH:-}:" in
+    *":$BIN_DIR:"*) ;;
+    *)
+      log "WARNING: $BIN_DIR is not in PATH. Add it with:"
+      log "  export PATH=\"$BIN_DIR:\$PATH\""
+      ;;
+  esac
+  resolved_se="$(command -v se 2>/dev/null || true)"
+  if [ -n "$resolved_se" ] && [ "$resolved_se" != "$BIN_DIR/se" ]; then
+    log "WARNING: 'se' currently resolves to $resolved_se, not the managed $BIN_DIR/se."
+    log "Put $BIN_DIR first in PATH and run: hash -r"
+  fi
 fi

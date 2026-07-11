@@ -10,6 +10,10 @@ pub struct ShareWorkerSnapshot {
     pub events: Vec<crate::share::ShareEvent>,
     pub pending_direct_requests: Vec<crate::share::PeerPresence>,
     pub running: bool,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub last_error: Option<String>,
     pub relay_url: String,
     pub candidates: Vec<String>,
 }

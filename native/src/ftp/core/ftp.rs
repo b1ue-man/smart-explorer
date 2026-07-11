@@ -96,6 +96,40 @@ struct FtpUrl {
     root: String,
 }
 
+fn decode_userinfo(value: &str) -> io::Result<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len() {
+            return Err(io_err(
+                "unvollstaendige Prozentkodierung in FTP-Zugangsdaten",
+            ));
+        }
+        let high = hex_nibble(bytes[index + 1])
+            .ok_or_else(|| io_err("ungueltige Prozentkodierung in FTP-Zugangsdaten"))?;
+        let low = hex_nibble(bytes[index + 2])
+            .ok_or_else(|| io_err("ungueltige Prozentkodierung in FTP-Zugangsdaten"))?;
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    String::from_utf8(decoded).map_err(|_| io_err("FTP-Zugangsdaten sind nicht gueltiges UTF-8"))
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
     let u = url.trim();
     let (secure, rest) = if let Some(r) = u.strip_prefix("ftps://") {
@@ -120,8 +154,8 @@ fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
     };
     let (user, password) = match userinfo {
         Some(ui) => match ui.find(':') {
-            Some(j) => (ui[..j].to_string(), ui[j + 1..].to_string()),
-            None => (ui.to_string(), String::new()),
+            Some(j) => (decode_userinfo(&ui[..j])?, decode_userinfo(&ui[j + 1..])?),
+            None => (decode_userinfo(ui)?, String::new()),
         },
         // Bare ftp://host → anonymous login (the standard FTP convention).
         None => ("anonymous".to_string(), "anonymous@example.com".to_string()),
@@ -310,6 +344,15 @@ mod tests {
         assert_eq!(u.host, "host");
         assert_eq!(u.port, 2121);
         assert_eq!(u.root, "/pub/data");
+    }
+
+    #[test]
+    fn url_decodes_encoded_userinfo_exactly() {
+        let u = parse_ftp_url("ftp://domain%40alice:p%3Aa%20ss%25%40word@host:21/").unwrap();
+        assert_eq!(u.user, "domain@alice");
+        assert_eq!(u.password, "p:a ss%@word");
+        assert!(parse_ftp_url("ftp://user:%GG@host/").is_err());
+        assert!(parse_ftp_url("ftp://user:%A@host/").is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::core::{hex, hex_decode, public_fingerprint, random_bytes, random_hex_token};
 use super::fs::ShareExportConfig;
@@ -8,8 +9,24 @@ const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
 pub(super) const SHARE_PROFILE_VERSION: u32 = 3;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ProfileRevision {
+    #[default]
+    Untracked,
+    Missing,
+    Digest([u8; 32]),
+}
+
+impl ProfileRevision {
+    pub(crate) fn from_contents(contents: &str) -> Self {
+        Self::Digest(Sha256::digest(contents.as_bytes()).into())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShareProfiles {
+    #[serde(skip)]
+    pub(crate) storage_revision: ProfileRevision,
     #[serde(default)]
     pub schema_version: u32,
     #[serde(default = "default_true")]
@@ -27,6 +44,7 @@ pub struct ShareProfiles {
 impl Default for ShareProfiles {
     fn default() -> Self {
         Self {
+            storage_revision: ProfileRevision::Untracked,
             schema_version: SHARE_PROFILE_VERSION,
             auto_connect: true,
             default_direct_exports: ShareExportConfig::default(),

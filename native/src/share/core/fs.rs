@@ -183,7 +183,7 @@ pub(crate) fn resolve(
 
 fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<ResolvedTarget> {
     if c.protocol == Protocol::Share {
-        let secret = crate::creds::get_secret(&c.account());
+        let secret = crate::creds::get_secret_checked(&c.account()).map_err(eio)?;
         let nc = crate::net::NetConnection::connect(
             &c.root,
             opt(&c.user).as_deref(),

@@ -30,9 +30,17 @@ Dateisystemdaten im Klartext. Toolbar → **📡 Teilen**; Server in Einstellung
 **TEILEN**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
-**Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** nutzt dieselben
-gespeicherten Verbindungen, App-Daten, Keyring-Secrets, Share-Profile und den
-Daemon wie die GUI. Beispiele: `se connections list`, `se ls @label:/pfad`,
+**Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** arbeitet auch
+ohne GUI-Sitzung und nutzt dieselben gespeicherten Verbindungen, App-Daten,
+Zugangsdaten, Share-Profile und den Daemon wie die GUI. Unter Windows liegen
+Secrets im Credential Manager. Unter Linux nutzt Smart Explorer bewusst einen
+DBus-freien, benutzereigenen Dateispeicher
+(`$XDG_DATA_HOME/smart_explorer/secrets-v1`, Verzeichnis `0700`, Dateien `0600`),
+damit SSH, CI und Dienste funktionieren. Dieser Linux-Speicher schützt durch
+Unix-Rechte vor anderen normalen Benutzern, verschlüsselt aber nicht gegen
+`root`, denselben Benutzer oder Offline-Zugriff auf einen unverschlüsselten
+Datenträger. Beispiele: `se doctor --json`, `se connections list`,
+`se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
 Execution ist bis zu einer plattformuebergreifend sicheren Prozessbaum-Kapselung
@@ -44,7 +52,11 @@ example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
 speichert eine UNC-Verbindung, `se connections add-peer --code SE-D3-... --name
 Laptop` reiht die normale Freigabeanfrage ueber den Share-Worker ein, und `se connections add-room --code
-SE-R3-... --name Team` tritt einem Raum bei.
+SE-R3-... --name Team` tritt einem Raum bei. Entfernen geht mit
+`se connections remove`, `remove-peer` und `remove-room`. Headless Share lässt
+sich über `se share configure`, `identity`, `status`, `request`, `export`,
+`room` und `worker` vollständig verwalten; `status` unterscheidet dabei einen
+laufenden Worker von einer tatsächlich verbundenen Signaling-Sitzung.
 
 ---
 
@@ -72,13 +84,20 @@ angezeigt). Keine Rechtsberatung.
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
 ```
 
+**Linux nur Terminal (ohne Desktop-/X11-Abhängigkeiten):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
+```
+
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.122.exe`](release-native/Smart%20Explorer%20Setup%200.5.122.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.123.exe`](release-native/Smart%20Explorer%20Setup%200.5.123.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
-   öffnen", installiert `se.exe` fuer Terminal-Operationen — **und stellt die
+   öffnen", installiert `se.exe` fuer Terminal-Operationen und trägt dessen
+   Ordner in den Benutzer-`PATH` ein (sichtbar in neu geöffneten Terminals) — **und stellt die
    Update-Prüfung auf den Git-Feed ein. Neue Versionen werden automatisch geprüft
    und sicher bereitgestellt; installiert werden sie erst nach deiner Bestätigung.**
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)

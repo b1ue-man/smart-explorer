@@ -1,8 +1,11 @@
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::ipc_protocol::ShareWorkerSnapshot;
 use super::state::log;
+
+const MAX_SHARE_SERVER_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct ShareHost {
@@ -17,6 +20,8 @@ pub(super) struct ShareHostState {
     pub(super) profiles_error: Option<String>,
     pub(super) server: String,
     pub(super) running_server: String,
+    pub(super) signal_connected: bool,
+    pub(super) signal_error: Option<String>,
     pub(super) last_reload: Instant,
     pub(super) ui_events: Vec<crate::share::ShareEvent>,
     pub(super) pending_direct_requests: Vec<crate::share::PeerPresence>,
@@ -34,7 +39,10 @@ impl ShareHost {
                 Ok(profiles) => (profiles, None),
                 Err(error) => (crate::share::ShareProfiles::default(), Some(error)),
             };
-        let server = load_share_server();
+        let server = load_share_server().unwrap_or_else(|error| {
+            log(&format!("share server configuration is invalid: {error}"));
+            String::new()
+        });
         let state = ShareHostState {
             service: None,
             identity,
@@ -43,6 +51,8 @@ impl ShareHost {
             profiles_error,
             server,
             running_server: String::new(),
+            signal_connected: false,
+            signal_error: None,
             last_reload: Instant::now() - Duration::from_secs(60),
             ui_events: Vec::new(),
             pending_direct_requests: Vec::new(),
@@ -76,7 +86,13 @@ impl ShareHost {
             .lock()
             .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
         state.last_reload = Instant::now();
-        state.server = load_share_server();
+        state.server = match load_share_server() {
+            Ok(server) => server,
+            Err(error) => {
+                stop_service_locked(&mut state)?;
+                return Err(format!("Share-Server-Konfiguration lesen: {error}"));
+            }
+        };
         match crate::share::ShareIdentity::load_or_create(default_device_name()) {
             Ok(identity) => {
                 state.identity = Some(identity);
@@ -122,6 +138,8 @@ impl ShareHost {
                 }
                 state.service = None;
                 state.running_server.clear();
+                state.signal_connected = false;
+                state.signal_error = None;
                 state.ui_events.push(crate::share::ShareEvent::Status(
                     "Share-Worker getrennt".to_string(),
                 ));
@@ -178,6 +196,8 @@ impl ShareHost {
             events: std::mem::take(&mut state.ui_events),
             pending_direct_requests: state.pending_direct_requests.clone(),
             running,
+            connected: state.signal_connected,
+            last_error: state.signal_error.clone(),
             relay_url,
             candidates,
         }
@@ -254,6 +274,8 @@ fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<(), String>
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
         state.running_server.clear();
+        state.signal_connected = false;
+        state.signal_error = None;
         return Ok(());
     }
     let needs_restart = state
@@ -273,6 +295,8 @@ fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<(), String>
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
         state.running_server.clear();
+        state.signal_connected = false;
+        state.signal_error = None;
         match crate::share::ShareService::start(
             state.server.clone(),
             identity.clone(),
@@ -297,6 +321,7 @@ fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
         service.cmd(crate::share::ShareCmd::Stop)?;
     }
     state.running_server.clear();
+    state.signal_connected = false;
     Ok(())
 }
 
@@ -312,10 +337,31 @@ pub(super) fn configure_service(
     })
 }
 
-fn load_share_server() -> String {
-    std::fs::read_to_string(crate::support_dirs::app_data_file("share_server.txt"))
+fn load_share_server() -> Result<String, String> {
+    let path = crate::support_dirs::app_data_file("share_server.txt");
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() {
+        return Err("Share server configuration is not a regular file".into());
+    }
+    if metadata.len() > MAX_SHARE_SERVER_BYTES {
+        return Err("Share server configuration exceeds its 16 KiB limit".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::fs::File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(MAX_SHARE_SERVER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_SHARE_SERVER_BYTES {
+        return Err("Share server configuration exceeds its 16 KiB limit".into());
+    }
+    String::from_utf8(bytes)
         .map(|server| server.trim().to_string())
-        .unwrap_or_default()
+        .map_err(|_| "Share server configuration is not valid UTF-8".into())
 }
 
 fn default_device_name() -> String {

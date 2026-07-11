@@ -4,6 +4,10 @@ use keyring::{Entry, Error};
 
 const KEYRING_SERVICE: &str = "smart_explorer";
 
+pub(super) fn description() -> &'static str {
+    "Windows Credential Manager"
+}
+
 fn entry(account: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, account)
         .map_err(|error| format!("Windows-Anmeldeinformationsverwaltung öffnen: {error}"))

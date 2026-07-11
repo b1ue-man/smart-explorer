@@ -14,3 +14,13 @@ pub(super) fn same_file(left: &str, right: &str) -> io::Result<bool> {
     let right = right.metadata()?;
     Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
 }
+
+pub(super) fn validate_connection_protocol(protocol: crate::creds::Protocol) -> Result<(), String> {
+    if protocol == crate::creds::Protocol::Share {
+        return Err(
+            "UNC authentication is only supported on Windows; mount the share with CIFS and use its local mount path"
+                .to_string(),
+        );
+    }
+    Ok(())
+}

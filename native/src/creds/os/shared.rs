@@ -1,16 +1,16 @@
 //! Credential + saved-connection store for remote backends.
 //!
 //! Two parts, deliberately separated:
-//!  * **Secrets** (passwords / key passphrases) → the OS keyring (Windows
-//!    Credential Manager via keyring `windows-native`). Never written to disk
-//!    by us. Unsupported platforms return an explicit error instead of using
-//!    keyring's process-local mock as if it were durable.
+//!  * **Secrets** (passwords / key passphrases) → the platform credential
+//!    backend. Windows uses Credential Manager; Linux uses bounded,
+//!    owner-protected files so headless sessions do not depend on D-Bus.
 //!  * **Connection metadata** (protocol / host / port / user / auth kind / key
 //!    path / root / label — NO secret) → a plain TSV file in appdata, so the
 //!    saved-connection list survives restarts.
 #![allow(dead_code)] // staged: consumed by the connect-UI step.
 
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -18,6 +18,13 @@ use super::core::{parse, serialize, SavedConnection};
 use super::{secure_store, transaction};
 
 static STORE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+const MAX_CONNECTION_BYTES: u64 = 1024 * 1024;
+const STORE_LOCK_FILE: &str = "connections.lock";
+
+struct StoreWriteGuard {
+    _process_guard: MutexGuard<'static, ()>,
+    _file_guard: File,
+}
 
 fn app_data_dir() -> PathBuf {
     crate::support_dirs::app_data_dir()
@@ -27,7 +34,7 @@ fn connections_path() -> PathBuf {
     app_data_dir().join("connections.txt")
 }
 
-// ── secrets (keyring) ────────────────────────────────────────────────────────
+// ── secrets (platform credential backend) ───────────────────────────────────
 
 pub fn set_secret(account: &str, secret: &str) -> Result<(), String> {
     secure_store::set_secret(account, secret)
@@ -53,17 +60,30 @@ pub fn delete_secret(account: &str) {
     let _ = delete_secret_checked(account);
 }
 
+/// Human-readable backend identity for diagnostics. This intentionally says
+/// nothing about individual accounts and never reads secret material.
+pub fn secret_store_description() -> &'static str {
+    secure_store::description()
+}
+
+/// Verify that the selected backend can be opened without creating a secret.
+pub fn probe_secret_store() -> Result<(), String> {
+    secure_store::get_secret("smart-explorer:credential-store-probe")
+        .map(|_| ())
+        .map_err(|error| format!("Anmeldeinformationsspeicher pruefen: {error}"))
+}
+
 // ── connection metadata (TSV file) ──────────────────────────────────────────
 
 fn load_connections_from(path: &Path) -> Vec<SavedConnection> {
-    match std::fs::read_to_string(path) {
+    match read_connections_file(path) {
         Ok(s) => s.lines().filter_map(parse).collect(),
         Err(_) => Vec::new(),
     }
 }
 
 fn load_connections_for_update(path: &Path) -> std::io::Result<Vec<SavedConnection>> {
-    let body = match std::fs::read_to_string(path) {
+    let body = match read_connections_file(path) {
         Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
@@ -82,8 +102,53 @@ fn load_connections_for_update(path: &Path) -> std::io::Result<Vec<SavedConnecti
         .collect()
 }
 
+fn read_connections_file(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata is not a regular file",
+        ));
+    }
+    if metadata.len() > MAX_CONNECTION_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata exceeds its 1 MiB limit",
+        ));
+    }
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata length does not fit this platform",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(MAX_CONNECTION_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONNECTION_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata exceeds its 1 MiB limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata is not valid UTF-8",
+        )
+    })
+}
+
 fn save_connections_to(path: &Path, conns: &[SavedConnection]) -> std::io::Result<()> {
     let body: String = conns.iter().map(serialize).collect::<Vec<_>>().join("\n");
+    if body.len() as u64 > MAX_CONNECTION_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "connection metadata exceeds its 1 MiB limit",
+        ));
+    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
@@ -96,11 +161,33 @@ fn save_connections_to(path: &Path, conns: &[SavedConnection]) -> std::io::Resul
         .map_err(|error| error.error)
 }
 
-fn store_write_guard() -> MutexGuard<'static, ()> {
-    match STORE_WRITE_LOCK.lock() {
+fn store_write_guard() -> std::io::Result<StoreWriteGuard> {
+    let process_guard = match STORE_WRITE_LOCK.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    };
+    let directory = app_data_dir();
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join(STORE_LOCK_FILE);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        if !metadata.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "connection transaction lock is not a regular file",
+            ));
+        }
     }
+    let file_guard = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file_guard.lock()?;
+    Ok(StoreWriteGuard {
+        _process_guard: process_guard,
+        _file_guard: file_guard,
+    })
 }
 
 fn restore_secret(account: &str, previous: Option<&str>) -> Result<(), String> {
@@ -114,9 +201,16 @@ pub fn load_connections() -> Vec<SavedConnection> {
     load_connections_from(&connections_path())
 }
 
+/// Strict connection metadata load for CLI/automation paths. Unlike the
+/// compatibility helper above, corruption and I/O failures remain visible.
+pub fn load_connections_checked() -> Result<Vec<SavedConnection>, String> {
+    load_connections_for_update(&connections_path())
+        .map_err(|error| format!("Verbindungsmetadaten lesen: {error}"))
+}
+
 /// Add or replace (by account) a saved connection.
 pub fn save_connection(c: &SavedConnection) -> std::io::Result<()> {
-    let _guard = store_write_guard();
+    let _guard = store_write_guard()?;
     let path = connections_path();
     let mut conns = load_connections_for_update(&path)?;
     let acc = c.account();
@@ -131,7 +225,8 @@ pub fn save_connection_with_secret(
     c: &SavedConnection,
     secret: Option<&str>,
 ) -> Result<(), String> {
-    let _guard = store_write_guard();
+    let _guard =
+        store_write_guard().map_err(|error| format!("Verbindungsspeicher sperren: {error}"))?;
     let path = connections_path();
     let mut conns = load_connections_for_update(&path)
         .map_err(|error| format!("Verbindungsmetadaten lesen: {error}"))?;
@@ -161,7 +256,7 @@ pub fn save_connection_with_secret(
 /// the sidebar can show the freshest connections first and overflow the rest.
 /// No-op if the account isn't saved.
 pub fn touch_connection(account: &str) -> std::io::Result<()> {
-    let _guard = store_write_guard();
+    let _guard = store_write_guard()?;
     touch_connection_in(&connections_path(), account)
 }
 
@@ -179,7 +274,8 @@ fn touch_connection_in(path: &Path, account: &str) -> std::io::Result<()> {
 
 /// Remove a saved connection by account and drop its stored secret.
 pub fn remove_connection(account: &str) -> Result<(), String> {
-    let _guard = store_write_guard();
+    let _guard =
+        store_write_guard().map_err(|error| format!("Verbindungsspeicher sperren: {error}"))?;
     let path = connections_path();
     let mut conns = load_connections_for_update(&path)
         .map_err(|error| format!("Verbindungsmetadaten lesen: {error}"))?;
@@ -238,22 +334,17 @@ mod tests {
         std::fs::remove_file(&p).ok();
     }
 
+    #[cfg(windows)]
     #[test]
-    fn secret_api_contract() {
-        // On Windows this hits Credential Manager and round-trips. Unsupported
-        // builds return an explicit error instead of accepting a mock write.
+    fn windows_secret_api_contract() {
         let acct = format!("smart_explorer_test_{}", std::process::id());
-        match set_secret(&acct, "s3cr3t") {
-            Ok(()) => {
-                assert_eq!(
-                    get_secret_checked(&acct).unwrap().as_deref(),
-                    Some("s3cr3t")
-                );
-                delete_secret_checked(&acct).unwrap();
-                assert!(get_secret_checked(&acct).unwrap().is_none());
-            }
-            Err(_) => { /* no keyring backend in this environment */ }
-        }
+        set_secret(&acct, "s3cr3t").unwrap();
+        assert_eq!(
+            get_secret_checked(&acct).unwrap().as_deref(),
+            Some("s3cr3t")
+        );
+        delete_secret_checked(&acct).unwrap();
+        assert!(get_secret_checked(&acct).unwrap().is_none());
     }
 
     #[test]

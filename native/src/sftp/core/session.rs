@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub(super) struct Client {
     host: String,
     port: u16,
+    host_key_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl client::Handler for Client {
@@ -18,7 +19,27 @@ impl client::Handler for Client {
         &mut self,
         server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(known_hosts_accept(&self.host, self.port, server_public_key))
+        match known_hosts_accept(&self.host, self.port, server_public_key) {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                if let Ok(mut error) = self.host_key_error.lock() {
+                    *error = Some(format!(
+                        "SFTP host key changed for {}:{}",
+                        self.host, self.port
+                    ));
+                }
+                Ok(false)
+            }
+            Err(storage_error) => {
+                if let Ok(mut error) = self.host_key_error.lock() {
+                    *error = Some(format!(
+                        "SFTP host key could not be verified for {}:{}: {storage_error}",
+                        self.host, self.port
+                    ));
+                }
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -26,13 +47,23 @@ pub(super) async fn connect_async(
     cfg: SftpConfig,
 ) -> io::Result<(client::Handle<Client>, SftpSession)> {
     let config = Arc::new(client::Config::default());
+    let host_key_error = Arc::new(std::sync::Mutex::new(None));
     let handler = Client {
         host: cfg.host.clone(),
         port: cfg.port,
+        host_key_error: host_key_error.clone(),
     };
-    let mut session = client::connect(config, (cfg.host.as_str(), cfg.port), handler)
-        .await
-        .map_err(io_err)?;
+    let mut session = match client::connect(config, (cfg.host.as_str(), cfg.port), handler).await {
+        Ok(session) => session,
+        Err(error) => {
+            if let Ok(mut detail) = host_key_error.lock() {
+                if let Some(detail) = detail.take() {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, detail));
+                }
+            }
+            return Err(io_err(error));
+        }
+    };
 
     let authed = match &cfg.auth {
         SftpAuth::Password(pw) => session

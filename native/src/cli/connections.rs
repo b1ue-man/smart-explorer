@@ -9,13 +9,16 @@ Examples:
   se connections list
   se connections add sftp --host example.com --user alice --root /srv --label prod --password-stdin
   se connections add webdav --host cloud.example.com --user alice --root /remote.php/dav/files/alice --label cloud --password-stdin
-  se connections add share --root \"\\\\server\\share\" --label nas
+  se connections add share --root \"\\\\server\\share\" --label nas  (Windows only)
   se connections add-peer --code SE-D3-... --name Laptop
-  se connections add-room --code SE-R1-... --name Team
+  se connections add-room --code SE-R3-... --name Team
+  se connections remove prod
+  se connections remove-peer Laptop
+  se connections remove-room Team
 
 Peer setup is one-sided: it saves to Smart Explorer's normal profile store, then
-wakes the same background share worker the GUI uses. The other client still
-confirms the request in its normal Smart Explorer UI. Re-running add-peer for an
+wakes the background Share worker. The other client confirms with `se share
+status` plus `se share request accept`, or in the GUI. Re-running add-peer for an
 existing code requeues the access request when access is still needed;
 --no-request only saves it locally.
 Room setup uses that same profile store and worker.";
@@ -31,8 +34,9 @@ const ADD_PEER_HELP: &str = "\
 Save a Smart Explorer direct peer from the other client's direct code.
 
 The command is one-sided: paste the code here, and the other Smart Explorer
-client receives the normal confirmation request. Re-running the same command with
-an already-saved code requeues the access request when access is still needed.";
+client receives the normal confirmation request in its CLI or GUI. Re-running the
+same command with an already-saved code requeues the request when access is still
+needed.";
 
 const ADD_ROOM_HELP: &str = "\
 Save a Smart Explorer room from a room invite code and configure the share worker
@@ -55,12 +59,21 @@ enum Command {
         )]
         json: bool,
     },
-    #[command(about = "Save an SFTP/FTP/FTPS/WebDAV/UNC remote", long_about = ADD_HELP)]
+    #[command(
+        about = "Save an SFTP/FTP/FTPS/WebDAV remote or Windows UNC share",
+        long_about = ADD_HELP
+    )]
     Add(ConnectionAddArgs),
     #[command(about = "Add or requeue a direct Smart Explorer peer", long_about = ADD_PEER_HELP)]
     AddPeer(PeerAddArgs),
     #[command(about = "Add a Smart Explorer share room", long_about = ADD_ROOM_HELP)]
     AddRoom(RoomAddArgs),
+    #[command(about = "Remove one saved remote by exact label or account")]
+    Remove(SelectorArgs),
+    #[command(about = "Remove one Share peer by exact name or id")]
+    RemovePeer(SelectorArgs),
+    #[command(about = "Remove one Share room by exact name or id")]
+    RemoveRoom(SelectorArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -115,12 +128,15 @@ struct ConnectionAddArgs {
     label: String,
     #[arg(long, help = "SFTP private key path")]
     key: Option<String>,
-    #[arg(long, help = "Use the local SSH agent for SFTP")]
+    #[arg(
+        long,
+        help = "Deploy the Smart Explorer acceleration agent after SFTP login"
+    )]
     agent: bool,
     #[arg(
         long,
         conflicts_with = "password_stdin",
-        help = "Password or token to store in the existing Smart Explorer keyring entry"
+        help = "Password or token to store in Smart Explorer's credential store"
     )]
     password: Option<String>,
     #[arg(long, help = "Read the password or token from stdin")]
@@ -151,6 +167,12 @@ struct RoomAddArgs {
     code: String,
     #[arg(long, default_value = "", help = "Local display name for this room")]
     name: String,
+}
+
+#[derive(Args)]
+struct SelectorArgs {
+    #[arg(help = "Exact saved label, account, name, or id")]
+    selector: String,
 }
 
 pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
@@ -189,11 +211,25 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             println!("{msg}");
             Ok(0)
         }
+        Command::Remove(args) => {
+            println!("{}", setup::remove_remote(&args.selector)?);
+            Ok(0)
+        }
+        Command::RemovePeer(args) => {
+            println!("{}", setup::remove_peer(&args.selector)?);
+            Ok(0)
+        }
+        Command::RemoveRoom(args) => {
+            println!("{}", setup::remove_room(&args.selector)?);
+            Ok(0)
+        }
     }
 }
 
 fn print_connections(json: bool) -> Result<(), String> {
-    let conns = crate::creds::load_connections();
+    let conns = crate::creds::load_connections_checked()?;
+    let profiles = crate::share::ShareProfiles::load_checked(None)
+        .map_err(|error| format!("share profiles: {error}"))?;
     if json {
         let rows: Vec<_> = conns
             .iter()
@@ -209,7 +245,7 @@ fn print_connections(json: bool) -> Result<(), String> {
                     "use_agent": c.use_agent,
                 })
             })
-            .chain(share_connection_rows_json())
+            .chain(share_connection_rows_json(profiles))
             .collect();
         println!(
             "{}",
@@ -226,14 +262,15 @@ fn print_connections(json: bool) -> Result<(), String> {
             if c.use_agent { "agent" } else { "" }
         );
     }
-    for line in share_connection_rows_text() {
+    for line in share_connection_rows_text(profiles) {
         println!("{line}");
     }
     Ok(())
 }
 
-fn share_connection_rows_json() -> impl Iterator<Item = serde_json::Value> {
-    let profiles = crate::share::ShareProfiles::load(None);
+fn share_connection_rows_json(
+    profiles: crate::share::ShareProfiles,
+) -> impl Iterator<Item = serde_json::Value> {
     let direct = profiles.direct_contacts.into_iter().map(|c| {
         let endpoint = crate::share::PeerOpenTarget::Direct {
             contact_id: c.id.clone(),
@@ -280,8 +317,7 @@ fn share_connection_rows_json() -> impl Iterator<Item = serde_json::Value> {
     direct.chain(rooms)
 }
 
-fn share_connection_rows_text() -> Vec<String> {
-    let profiles = crate::share::ShareProfiles::load(None);
+fn share_connection_rows_text(profiles: crate::share::ShareProfiles) -> Vec<String> {
     let mut rows = Vec::new();
     for c in profiles.direct_contacts {
         let endpoint = crate::share::PeerOpenTarget::Direct { contact_id: c.id }.endpoint_prefix();
@@ -332,6 +368,15 @@ mod tests {
         match cli.command {
             RootCommand::Connections(args) => match args.command {
                 super::Command::List { json } => assert!(json),
+                _ => panic!("wrong command"),
+            },
+            _ => panic!("wrong command"),
+        }
+
+        let cli = Cli::parse_from(["se", "connections", "remove-peer", "Laptop"]);
+        match cli.command {
+            RootCommand::Connections(args) => match args.command {
+                super::Command::RemovePeer(args) => assert_eq!(args.selector, "Laptop"),
                 _ => panic!("wrong command"),
             },
             _ => panic!("wrong command"),
