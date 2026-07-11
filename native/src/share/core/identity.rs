@@ -8,6 +8,10 @@ const IDENTITY_KEY_ACCOUNT: &str = "share:identity:iroh_secret";
 const DIRECT_SECRET_PREFIX: &str = "share:identity:direct_secret:";
 const SECRET_BYTES: usize = 32;
 
+#[path = "identity_repair.rs"]
+mod repair;
+pub use repair::{IdentityRepair, IdentityRepairAction};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct IdentityDisk {
     device_id: String,
@@ -42,49 +46,23 @@ impl ShareIdentity {
         default_name: String,
         storage: &mut impl IdentityPersistence,
     ) -> Result<Self, String> {
-        let Some(raw) = storage
-            .load_identity()
-            .map_err(|error| format!("Share-Identitaet lesen: {error}"))?
-        else {
+        let Some(disk) = load_disk(storage)? else {
             return Self::create(default_name, storage);
         };
-        let disk: IdentityDisk = serde_json::from_str(&raw)
-            .map_err(|error| format!("Share-Identitaet ist beschaedigt: {error}"))?;
-        validate_disk(&disk)?;
         let iroh_bytes = load_required_secret(storage, IDENTITY_KEY_ACCOUNT, "Iroh-Identitaet")?;
         let iroh_secret = iroh::SecretKey::from_bytes(&iroh_bytes);
+        validate_iroh_matches(&disk, &iroh_secret)?;
         let direct_secret = load_required_secret(
             storage,
             &direct_secret_account(&disk.direct_lookup_id),
             "Direkt-Code",
         )?;
-        let node_id = iroh_secret.public().to_string();
-        if disk
-            .node_id
-            .as_deref()
-            .filter(|saved| !saved.trim().is_empty())
-            .is_some_and(|saved| saved != node_id)
-        {
-            return Err(
-                "Share-Identitaet passt nicht zum sicher gespeicherten Iroh-Schluessel".into(),
-            );
-        }
-        let public_key = node_id.clone();
-        let fingerprint = public_fingerprint(public_key.as_bytes());
-        Ok(Self {
-            device_id: disk.device_id,
-            device_name: if disk.device_name.trim().is_empty() {
-                default_name
-            } else {
-                disk.device_name
-            },
-            direct_lookup_id: disk.direct_lookup_id,
-            public_key,
-            fingerprint,
-            node_id,
+        Ok(Self::from_disk(
+            disk,
+            default_name,
             iroh_secret,
             direct_secret,
-        })
+        ))
     }
 
     fn create(device_name: String, storage: &mut impl IdentityPersistence) -> Result<Self, String> {
@@ -102,51 +80,45 @@ impl ShareIdentity {
                 let bytes = random_bytes::<SECRET_BYTES>()
                     .map_err(|error| format!("Sicheren Iroh-Schluessel erzeugen: {error}"))?;
                 let secret = iroh::SecretKey::from_bytes(&bytes);
-                storage
-                    .save_secret(IDENTITY_KEY_ACCOUNT, &b64(&secret.to_bytes()))
-                    .map_err(|error| format!("Iroh-Identitaet speichern: {error}"))?;
+                save_secret_verified(storage, IDENTITY_KEY_ACCOUNT, &bytes, "Iroh-Identitaet")?;
                 (secret, true)
             }
         };
-        let (direct_lookup_id, direct_secret) = match allocate_direct_secret(storage) {
+        let (direct_lookup_id, direct_secret) = match allocate_direct_secret(storage, None) {
             Ok(allocated) => allocated,
             Err(error) => {
-                if created_iroh_secret {
-                    let _ = storage.delete_secret(IDENTITY_KEY_ACCOUNT);
-                }
-                return Err(error);
+                let cleanup = created_iroh_secret
+                    .then(|| cleanup_secret(storage, IDENTITY_KEY_ACCOUNT, "Iroh-Secret"))
+                    .flatten()
+                    .into_iter()
+                    .collect();
+                return Err(with_cleanup(error, cleanup));
             }
         };
-        let node_id = iroh_secret.public().to_string();
-        let public_key = node_id.clone();
-        let identity = Self {
+        let identity = Self::new(
             device_id,
             device_name,
             direct_lookup_id,
-            fingerprint: public_fingerprint(public_key.as_bytes()),
-            public_key,
-            node_id,
             iroh_secret,
             direct_secret,
-        };
+        );
         if let Err(error) = identity.save_with(storage) {
-            let mut cleanup = Vec::new();
-            if let Err(cleanup_error) =
-                storage.delete_secret(&direct_secret_account(&identity.direct_lookup_id))
-            {
-                cleanup.push(format!("Direkt-Secret: {cleanup_error}"));
-            }
+            let mut cleanup = cleanup_secret(
+                storage,
+                &direct_secret_account(&identity.direct_lookup_id),
+                "Direkt-Secret",
+            )
+            .into_iter()
+            .collect::<Vec<_>>();
             if created_iroh_secret {
-                if let Err(cleanup_error) = storage.delete_secret(IDENTITY_KEY_ACCOUNT) {
-                    cleanup.push(format!("Iroh-Secret: {cleanup_error}"));
-                }
+                cleanup.extend(cleanup_secret(storage, IDENTITY_KEY_ACCOUNT, "Iroh-Secret"));
             }
             return Err(with_cleanup(error, cleanup));
         }
         Ok(identity)
     }
 
-    pub(super) fn save_with(&self, storage: &mut impl IdentityPersistence) -> Result<(), String> {
+    fn save_with(&self, storage: &mut impl IdentityPersistence) -> Result<(), String> {
         let contents = serde_json::to_string_pretty(&self.to_disk())
             .map_err(|error| format!("Share-Identitaet kodieren: {error}"))?;
         storage
@@ -172,8 +144,19 @@ impl ShareIdentity {
         &mut self,
         storage: &mut impl IdentityPersistence,
     ) -> Result<DirectCodeRotation, String> {
+        let mut current = self.reload_persisted_with(storage)?;
+        let outcome = current.rotate_loaded_direct_code_with(storage)?;
+        *self = current;
+        Ok(outcome)
+    }
+
+    fn rotate_loaded_direct_code_with(
+        &mut self,
+        storage: &mut impl IdentityPersistence,
+    ) -> Result<DirectCodeRotation, String> {
         let old_account = direct_secret_account(&self.direct_lookup_id);
-        let (direct_lookup_id, direct_secret) = allocate_direct_secret(storage)?;
+        let (direct_lookup_id, direct_secret) =
+            allocate_direct_secret(storage, Some(&self.direct_lookup_id))?;
         let new_account = direct_secret_account(&direct_lookup_id);
         let mut candidate = self.clone();
         candidate.direct_lookup_id = direct_lookup_id;
@@ -203,6 +186,17 @@ impl ShareIdentity {
         name: String,
         storage: &mut impl IdentityPersistence,
     ) -> Result<(), String> {
+        let mut current = self.reload_persisted_with(storage)?;
+        current.rename_loaded_with(name, storage)?;
+        *self = current;
+        Ok(())
+    }
+
+    fn rename_loaded_with(
+        &mut self,
+        name: String,
+        storage: &mut impl IdentityPersistence,
+    ) -> Result<(), String> {
         let trimmed = name.trim();
         if trimmed.is_empty() || trimmed == self.device_name {
             return Ok(());
@@ -212,6 +206,28 @@ impl ShareIdentity {
         candidate.save_with(storage)?;
         *self = candidate;
         Ok(())
+    }
+
+    fn reload_persisted_with(
+        &self,
+        storage: &mut impl IdentityPersistence,
+    ) -> Result<Self, String> {
+        let disk = load_disk(storage)?
+            .ok_or_else(|| "Share-Identitaet fehlt; Aenderung wurde verweigert".to_string())?;
+        let iroh_bytes = load_required_secret(storage, IDENTITY_KEY_ACCOUNT, "Iroh-Identitaet")?;
+        let iroh_secret = iroh::SecretKey::from_bytes(&iroh_bytes);
+        validate_iroh_matches(&disk, &iroh_secret)?;
+        let direct_secret = load_required_secret(
+            storage,
+            &direct_secret_account(&disk.direct_lookup_id),
+            "Direkt-Code",
+        )?;
+        Ok(Self::from_disk(
+            disk,
+            self.device_name.clone(),
+            iroh_secret,
+            direct_secret,
+        ))
     }
 
     fn to_disk(&self) -> IdentityDisk {
@@ -224,6 +240,47 @@ impl ShareIdentity {
             node_id: Some(self.node_id.clone()),
         }
     }
+
+    fn from_disk(
+        disk: IdentityDisk,
+        default_name: String,
+        iroh_secret: iroh::SecretKey,
+        direct_secret: [u8; SECRET_BYTES],
+    ) -> Self {
+        let device_name = if disk.device_name.trim().is_empty() {
+            default_name
+        } else {
+            disk.device_name
+        };
+        Self::new(
+            disk.device_id,
+            device_name,
+            disk.direct_lookup_id,
+            iroh_secret,
+            direct_secret,
+        )
+    }
+
+    fn new(
+        device_id: String,
+        device_name: String,
+        direct_lookup_id: String,
+        iroh_secret: iroh::SecretKey,
+        direct_secret: [u8; SECRET_BYTES],
+    ) -> Self {
+        let node_id = iroh_secret.public().to_string();
+        let public_key = node_id.clone();
+        Self {
+            device_id,
+            device_name,
+            direct_lookup_id,
+            fingerprint: public_fingerprint(public_key.as_bytes()),
+            public_key,
+            node_id,
+            iroh_secret,
+            direct_secret,
+        }
+    }
 }
 
 pub(crate) fn direct_secret_account(lookup_id: &str) -> String {
@@ -232,10 +289,14 @@ pub(crate) fn direct_secret_account(lookup_id: &str) -> String {
 
 fn allocate_direct_secret(
     storage: &mut impl IdentityPersistence,
+    excluded_lookup_id: Option<&str>,
 ) -> Result<(String, [u8; SECRET_BYTES]), String> {
     for _ in 0..16 {
         let lookup_id = random_hex_token::<12>()
             .map_err(|error| format!("Sichere Direkt-ID erzeugen: {error}"))?;
+        if excluded_lookup_id == Some(lookup_id.as_str()) {
+            continue;
+        }
         let account = direct_secret_account(&lookup_id);
         if storage
             .load_secret(&account)
@@ -246,12 +307,44 @@ fn allocate_direct_secret(
         }
         let secret = random_bytes::<SECRET_BYTES>()
             .map_err(|error| format!("Sicheres Direkt-Secret erzeugen: {error}"))?;
-        storage
-            .save_secret(&account, &b64(&secret))
-            .map_err(|error| format!("Direkt-Secret speichern: {error}"))?;
+        save_secret_verified(storage, &account, &secret, "Direkt-Secret")?;
         return Ok((lookup_id, secret));
     }
     Err("Kein freier Speicherplatz fuer einen neuen Direkt-Code gefunden".into())
+}
+
+fn save_secret_verified(
+    storage: &mut impl IdentityPersistence,
+    account: &str,
+    secret: &[u8; SECRET_BYTES],
+    label: &str,
+) -> Result<(), String> {
+    let result = storage
+        .save_secret(account, &b64(secret))
+        .map_err(|error| format!("{label} speichern: {error}"))
+        .and_then(|()| match load_optional_secret(storage, account, label)? {
+            Some(stored) if stored == *secret => Ok(()),
+            Some(_) => Err(format!("{label} wurde mit anderen Bytes gespeichert")),
+            None => Err(format!("{label} wurde nicht im sicheren Speicher behalten")),
+        });
+    if let Err(error) = result {
+        let cleanup = cleanup_secret(storage, account, label)
+            .into_iter()
+            .collect();
+        return Err(with_cleanup(error, cleanup));
+    }
+    Ok(())
+}
+
+fn cleanup_secret(
+    storage: &mut impl IdentityPersistence,
+    account: &str,
+    label: &str,
+) -> Option<String> {
+    storage
+        .delete_secret(account)
+        .err()
+        .map(|error| format!("{label}: {error}"))
 }
 
 fn load_required_secret(
@@ -259,11 +352,20 @@ fn load_required_secret(
     account: &str,
     label: &str,
 ) -> Result<[u8; SECRET_BYTES], String> {
-    let raw = storage
+    load_optional_secret(storage, account, label)?
+        .ok_or_else(|| format!("{label} fehlt im sicheren Speicher"))
+}
+
+fn load_optional_secret(
+    storage: &mut impl IdentityPersistence,
+    account: &str,
+    label: &str,
+) -> Result<Option<[u8; SECRET_BYTES]>, String> {
+    storage
         .load_secret(account)
         .map_err(|error| format!("{label} lesen: {error}"))?
-        .ok_or_else(|| format!("{label} fehlt im sicheren Speicher"))?;
-    decode_secret(&raw, label)
+        .map(|raw| decode_secret(&raw, label))
+        .transpose()
 }
 
 fn decode_secret(raw: &str, label: &str) -> Result<[u8; SECRET_BYTES], String> {
@@ -278,6 +380,32 @@ fn validate_disk(disk: &IdentityDisk) -> Result<(), String> {
         return Err("Share-Identitaet enthaelt keine stabile Geraete- oder Direkt-ID".into());
     }
     Ok(())
+}
+
+fn validate_iroh_matches(disk: &IdentityDisk, iroh_secret: &iroh::SecretKey) -> Result<(), String> {
+    let node_id = iroh_secret.public().to_string();
+    if disk
+        .node_id
+        .as_deref()
+        .filter(|saved| !saved.trim().is_empty())
+        .is_some_and(|saved| saved != node_id)
+    {
+        return Err("Share-Identitaet passt nicht zum sicher gespeicherten Iroh-Schluessel".into());
+    }
+    Ok(())
+}
+
+fn load_disk(storage: &mut impl IdentityPersistence) -> Result<Option<IdentityDisk>, String> {
+    storage
+        .load_identity()
+        .map_err(|error| format!("Share-Identitaet lesen: {error}"))?
+        .map(|raw| {
+            let disk: IdentityDisk = serde_json::from_str(&raw)
+                .map_err(|error| format!("Share-Identitaet ist beschaedigt: {error}"))?;
+            validate_disk(&disk)?;
+            Ok(disk)
+        })
+        .transpose()
 }
 
 fn with_cleanup(error: String, cleanup: Vec<String>) -> String {
@@ -300,111 +428,5 @@ pub(super) trait IdentityPersistence {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::{direct_secret_account, IdentityPersistence, ShareIdentity};
-
-    #[derive(Default)]
-    struct FakePersistence {
-        identity: Option<String>,
-        secrets: HashMap<String, String>,
-        fail_identity_save: bool,
-        fail_secret_save: bool,
-    }
-
-    impl IdentityPersistence for FakePersistence {
-        fn load_identity(&mut self) -> Result<Option<String>, String> {
-            Ok(self.identity.clone())
-        }
-
-        fn save_identity(&mut self, contents: &str) -> Result<(), String> {
-            if self.fail_identity_save {
-                Err("disk full".into())
-            } else {
-                self.identity = Some(contents.to_string());
-                Ok(())
-            }
-        }
-
-        fn load_secret(&mut self, account: &str) -> Result<Option<String>, String> {
-            Ok(self.secrets.get(account).cloned())
-        }
-
-        fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
-            if self.fail_secret_save {
-                Err("secure store unavailable".into())
-            } else {
-                self.secrets.insert(account.to_string(), secret.to_string());
-                Ok(())
-            }
-        }
-
-        fn delete_secret(&mut self, account: &str) -> Result<(), String> {
-            self.secrets.remove(account);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn missing_persisted_direct_secret_never_produces_a_code() {
-        let mut storage = FakePersistence::default();
-        let identity = ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
-        storage
-            .secrets
-            .remove(&direct_secret_account(&identity.direct_lookup_id));
-        assert!(ShareIdentity::load_or_create_with("device".into(), &mut storage).is_err());
-    }
-
-    #[test]
-    fn failed_initial_metadata_write_cleans_up_new_secrets() {
-        let mut storage = FakePersistence {
-            fail_identity_save: true,
-            ..FakePersistence::default()
-        };
-        assert!(ShareIdentity::load_or_create_with("device".into(), &mut storage).is_err());
-        assert!(storage.secrets.is_empty());
-        assert!(storage.identity.is_none());
-    }
-
-    #[test]
-    fn failed_rotation_secret_write_keeps_the_old_identity_and_code() {
-        let mut storage = FakePersistence::default();
-        let mut identity =
-            ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
-        let old_code = identity.direct_code();
-        let old_lookup = identity.direct_lookup_id.clone();
-        storage.fail_secret_save = true;
-        assert!(identity.regenerate_direct_code_with(&mut storage).is_err());
-        assert_eq!(identity.direct_code(), old_code);
-        assert_eq!(identity.direct_lookup_id, old_lookup);
-    }
-
-    #[test]
-    fn failed_rotation_metadata_write_keeps_old_code_and_removes_candidate_secret() {
-        let mut storage = FakePersistence::default();
-        let mut identity =
-            ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
-        let old_code = identity.direct_code();
-        let old_accounts = storage.secrets.clone();
-        storage.fail_identity_save = true;
-        assert!(identity.regenerate_direct_code_with(&mut storage).is_err());
-        assert_eq!(identity.direct_code(), old_code);
-        assert_eq!(storage.secrets, old_accounts);
-    }
-
-    #[test]
-    fn successful_rotation_returns_the_single_persisted_code() {
-        let mut storage = FakePersistence::default();
-        let mut identity =
-            ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
-        let old_account = direct_secret_account(&identity.direct_lookup_id);
-        let outcome = identity.regenerate_direct_code_with(&mut storage).unwrap();
-        assert_eq!(outcome.code, identity.direct_code());
-        assert_eq!(outcome.cleanup_warning, None);
-        assert!(!storage.secrets.contains_key(&old_account));
-        assert!(storage
-            .secrets
-            .contains_key(&direct_secret_account(&identity.direct_lookup_id)));
-    }
-}
+#[path = "identity_tests.rs"]
+mod tests;

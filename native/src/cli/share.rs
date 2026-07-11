@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 mod exports;
+#[path = "share/identity_command.rs"]
+mod identity_command;
 
 const MAX_SERVER_BYTES: usize = 16 * 1024;
 
@@ -17,7 +19,7 @@ enum Command {
     #[command(about = "Configure and start the headless Share worker")]
     Configure(ConfigureArgs),
     #[command(about = "Show this device's Share identity and direct invite code")]
-    Identity(JsonArgs),
+    Identity(identity_command::IdentityArgs),
     #[command(about = "Show worker, peer, room, and pending-request status")]
     Status(JsonArgs),
     #[command(about = "Accept or reject a pending direct access request")]
@@ -93,7 +95,7 @@ enum WorkerCommand {
 pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
     match args.command {
         Command::Configure(args) => configure(args)?,
-        Command::Identity(args) => identity(args.json)?,
+        Command::Identity(args) => identity_command::run(args)?,
         Command::Status(args) => status(args.json)?,
         Command::Request(args) => match args.command {
             RequestCommand::Accept(answer) => answer_request(answer, true)?,
@@ -110,7 +112,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
 
 fn configure(args: ConfigureArgs) -> Result<(), String> {
     let server = validate_server(&args.server)?;
-    let mut identity = crate::share::ShareIdentity::load_or_create(default_device_name())?;
+    let mut identity = identity_command::load_with_repair_hint()?;
     if let Some(name) = args.device_name {
         identity.set_device_name(name)?;
     }
@@ -126,31 +128,6 @@ fn configure(args: ConfigureArgs) -> Result<(), String> {
     )?;
     refresh_required()?;
     println!("Share worker configured for {server}");
-    Ok(())
-}
-
-fn identity(json: bool) -> Result<(), String> {
-    let identity = crate::share::ShareIdentity::load_or_create(default_device_name())?;
-    let direct_code = identity.direct_code();
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "device_id": identity.device_id,
-                "device_name": identity.device_name,
-                "fingerprint": identity.fingerprint,
-                "node_id": identity.node_id,
-                "direct_code": direct_code,
-            }))
-            .map_err(|error| error.to_string())?
-        );
-    } else {
-        println!("device_id\t{}", identity.device_id);
-        println!("device_name\t{}", identity.device_name);
-        println!("fingerprint\t{}", identity.fingerprint);
-        println!("node_id\t{}", identity.node_id);
-        println!("direct_code\t{direct_code}");
-    }
     Ok(())
 }
 

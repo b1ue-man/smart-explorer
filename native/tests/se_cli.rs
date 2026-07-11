@@ -4,5 +4,8 @@ mod connections;
 mod local;
 #[path = "se_cli/process.rs"]
 mod process;
+#[cfg(target_os = "linux")]
+#[path = "se_cli/share.rs"]
+mod share;
 #[path = "se_cli/support.rs"]
 mod support;

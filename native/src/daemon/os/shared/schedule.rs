@@ -145,6 +145,12 @@ pub fn run_daemon() {
     if let Err(e) = start_listener(share_host.clone()) {
         log(&format!("background worker IPC failed: {e}"));
     }
+    // Publish the lightweight control plane before starting Iroh. A terminal
+    // client can now observe the daemon immediately even when relay discovery
+    // makes the initial Share load take several seconds.
+    if let Err(error) = share_host.reload_now() {
+        log(&format!("share worker initial load failed: {error}"));
+    }
     let mut job_supervisor = JobSupervisor::new();
     let mut sync_enabled = crate::autostart::is_enabled();
 
