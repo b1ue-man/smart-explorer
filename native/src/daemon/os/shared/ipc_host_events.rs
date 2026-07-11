@@ -22,10 +22,19 @@ impl ShareHost {
             let mut ui_event = Some(event.clone());
             match event {
                 Event::Status(status) => log(&format!("share: {status}")),
-                Event::Error(error) => log(&format!("share error: {error}")),
-                Event::ServerConnected => log("share signaling connected"),
+                Event::Error(error) => {
+                    log(&format!("share error: {error}"));
+                    state.signal_error = Some(error);
+                }
+                Event::ServerConnected => {
+                    log("share signaling connected");
+                    state.signal_connected = true;
+                    state.signal_error = None;
+                }
                 Event::ServerDisconnected(error) => {
                     log(&format!("share signaling disconnected: {error}"));
+                    state.signal_connected = false;
+                    state.signal_error = Some(error);
                 }
                 Event::DirectAvailable {
                     lookup_id,

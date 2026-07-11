@@ -12,3 +12,7 @@ pub(super) fn same_file(left: &str, right: &str) -> std::io::Result<bool> {
 pub(super) fn local_path(path: &str) -> std::path::PathBuf {
     platform::local_path(path)
 }
+
+pub(super) fn validate_connection_protocol(protocol: crate::creds::Protocol) -> Result<(), String> {
+    platform::validate_connection_protocol(protocol)
+}

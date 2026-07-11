@@ -165,7 +165,8 @@ fn open_connection_at(
     path: &str,
 ) -> Result<(BackendHandle, String, Option<crate::net::NetConnection>), String> {
     if c.protocol == Protocol::Share {
-        let secret = crate::creds::get_secret(&c.account());
+        let secret = crate::creds::get_secret_checked(&c.account())
+            .map_err(|error| format!("saved credential read failed: {error}"))?;
         let net = crate::net::NetConnection::connect(
             &c.root,
             non_empty(&c.user).as_deref(),
@@ -189,7 +190,7 @@ fn saved_shorthand(spec: &str) -> Result<Option<(SavedConnection, String)>, Stri
     let Some(rest) = spec.strip_prefix('@') else {
         return Ok(None);
     };
-    let conns = crate::creds::load_connections();
+    let conns = crate::creds::load_connections_checked()?;
     saved_shorthand_from(rest, spec, conns)
 }
 

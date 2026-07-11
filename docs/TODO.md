@@ -16,7 +16,6 @@ later, superseded, or currently regressed.
 | A1 | Analytics **charts + export** — click a category/type bar → filter, size + age histograms, CSV export | ⬜ | builds on A0/A0b |
 | A3 | Analytics **scale** — all-drives aggregation dashboard plus persisted snapshots / growth-over-time | ⬜ | selecting and scanning one whole drive is already shipped; live multi-drive aggregation/history is not |
 | 23 | **Faster remote browsing** — listing cache ✅ 0.5.59; prefetch dropped; 0.5.110 adds recursive parallel remote listing for high-latency backends, persistent Drive path→id/mime hints, and lazy `stat` reuse from fresh listings. | 🚧 | code shipped; remaining: live Drive latency validation on a real account |
-| T1 | **`se` executable integration coverage** | ⬜ | parser/module tests cover safety logic, but no subprocess tests exercise the built CLI's stdout/stderr/exit behavior for ordinary file commands or Share-daemon IPC |
 | 24 | **SSH agent real-server smoke test** — implementation is complete for Linux x86_64/aarch64 and locally covered by socket + real bundled-musl child-process tests; only a live SSH-server exercise remains. | 🚧 | code shipped through 0.5.73; needs a real SSH box only |
 | 21 | **Peer file sharing real-device validation** — current Iroh/QUIC implementation needs a two-machine direct-path and relay-fallback smoke test | 🚧 | code has local direct-session tests; every incoming stream rechecks live authorization and policy changes close cached sessions |
 | 21c | **Peer remote execution containment** — validated Share exec requests deliberately return `Unsupported` | ⬜ | enable only after Windows and Linux can contain and tear down the complete descendant process tree on timeout/disconnect; argv and shell modes intentionally share one full-code-execution permission |
@@ -62,7 +61,7 @@ a Google OAuth *Client ID* (Desktop type) from the user/publisher — see
 | 6b | Drag files **between tabs/panes**: drag rows onto a tab header or the other split pane → copy (Shift = move); cursor chip + drop-target highlight. Band-select stays intact (it bails while a drag is active). | ✅ | 0.5.13 |
 | 6c | Drag files **out to Explorer** (Windows): OLE `DoDragDrop` + CF_HDROP `IDataObject`/`IDropSource` (`dragout/`); kicks in when an internal drag leaves the window. Cancel, copy, move, and COM failure are distinct typed outcomes; genuine failures reach the UI and a local move triggers refresh. | ✅ | 0.5.13+ current outcome path |
 | 16 | Maximize regression: builder-`maximized` showed a white default-size window then jumped → "flashbang". Now opens at a sane size and maximizes on the first painted frame. | ✅ | 0.5.13 |
-| 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via keyring creds). | ✅ | 0.5.14 |
+| 17 | **In-app folder picker** for sync setups: browse local drives **and saved remote connections** through the same `Backend` and pick a folder — no more typing a remote location. Remote jobs re-open the saved connection (GUI off-thread + background daemon via the platform credential store). | ✅ | 0.5.14 |
 | 18 | Trackpad **inertia scroll stuttered**; now repaints while egui animates the smooth-scroll so it glides to a smooth stop. | ✅ | 0.5.14 |
 
 ## Shipped — remote files, cloud (Drive), CfAPI history, sharing, Quick Share
@@ -90,7 +89,7 @@ path is temp-watch.)
 | 30 | **Native CfAPI on-demand provider research/prototype** — `docs/CFAPI_REVIEW.md` records the review of the old provider approach and why it is risky. There is no active `cfprovider.rs`/`cfsync.rs` provider in current `native/src`; revive only as a new feature after the documented safety fixes. | historical | not an active shipped code path |
 | Q1 | **Quick Share LAN discovery** — the `_FC9F5ED42C8A._tcp` mDNS browser/advertiser starts lazily while Teilen is visible, discovered devices are rendered read-only, and startup failures are logged with an explicit retry. | 🚧 | current source is wired; live Android/Windows LAN validation remains at the top |
 | Q2 | **Quick Share transfer** — Nearby Connections UKEY2 + protobuf OfflineFrames (+ BLE wake). Needs real-device iteration; own paired share already covers transfer. | later | docs/QUICKSHARE.md |
-| 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, token storage (refresh token in keyring), Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
+| 19.1 | **Cloud OAuth foundation** — `cloud.rs`: PKCE loopback flow, client-ID config, refresh-token storage in the platform credential backend, Google-Drive endpoints; Settings → "CLOUD (GOOGLE DRIVE)" to paste the client ID + "Mit Google verbinden". 5 unit tests (incl. RFC 7636 PKCE vector). | ✅ slice 1 | 0.5.15 |
 | 19.2 | **Google Drive `Backend`** (`gdrive/`): full `vfs::Backend` over Drive v3 REST — list/stat/read **and** write/mkdir/rename(move)/trash, path→id cache, token auto-refresh, paginated listing, and disk-spooled resumable uploads with retry/status recovery and final size+MD5 verification. Wired: "☁ Drive öffnen" (browse), Drive as a place in the picker, `gdrive:///path` sync endpoints resolved in GUI + daemon. So Drive can be browsed AND two-way-synced. | ✅ slice 2 | 0.5.16+ current upload path |
 | 19.4 | **Self-setup instructions** — the app is not a hosted service: each user creates their own Google OAuth client. In-app collapsible guide + console link in Settings, full walkthrough in [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md), README note. Covers the Desktop-app loopback (no redirect URI) and the Testing-mode 7-day-token caveat. | ✅ | 0.5.17 |
 
@@ -152,8 +151,9 @@ A1/A2/A3/A4 (see "Still open" at the top).
   + drives + saved connections; local nav is instant `std::fs`, remote connects
   async then lists via `Backend::list_dir`. "Choose" returns a local path or a
   `proto://user@host:port/path` endpoint. `connect::resolve_endpoint` re-opens
-  the matching saved connection (by protocol+user+host+port) using the keyring
-  secret — so remote jobs run both interactively (off-thread) and in the daemon.
+  the matching saved connection (by protocol+user+host+port) using its platform
+  credential-store secret — so remote jobs run both interactively (off-thread)
+  and in the daemon.
   **0.5.58:** generalised to a `PickerPurpose` enum used by *all* folder dialogs
   (open/scan, analytics target, mirror/bisync dest, copy dest, remote
   download-to) — the OS folder dialog (rfd `pick_folder`) is gone; `local_only`
@@ -165,8 +165,10 @@ A1/A2/A3/A4 (see "Still open" at the top).
 - **Background daemon (#4):** `daemon/` is a headless `--sync-daemon` process
   started by per-user autostart. It validates each persisted job before endpoint
   resolution, reopens saved remote/Drive/Share endpoints through the same
-  keyring-backed connector as the GUI, supervises due/event-triggered work, and
-  exposes heartbeat/status/control IPC. The update helper requests a graceful
+  platform credential-backed connector as the GUI, supervises due/event-triggered work, and
+  exposes heartbeat/status/control IPC. Windows uses Credential Manager; Linux
+  uses the same DBus-free, owner-protected credential files as the terminal.
+  The update helper requests a graceful
   daemon stop and refuses replacement while matching app processes remain.
 - **Drag-and-drop (#6):** OS drops and internal tab/pane drags are shipped. On
   Windows, dragging out uses OLE/CF_HDROP; remote selections are eagerly

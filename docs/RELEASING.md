@@ -95,7 +95,8 @@ Before cutting a release on a workstation, the fast environment check is:
 
 `build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
 `x86_64-pc-windows-gnu`, the verified cross-compile): format check, dependency
-audit, Windows-target check, host tests, Windows test-harness compile, clippy,
+audit, Windows-target check, all-target host tests (including built-`se`
+headless subprocess tests), Windows test-harness compile, clippy,
 static-musl `se-agent` builds, COM DLL check/build, share-server checks/builds,
 Windows + Linux release builds including the `se` terminal companion, installer
 build (NSIS), artifact upload, and Release publication. Before publishing it
@@ -104,6 +105,18 @@ payload hashes, installer, DLL, and share-server artifacts are incomplete or
 inconsistent**. Fresh CI builds remain compile gates; GitHub Release assets are
 then copied from those verified committed artifacts, so the published bytes
 are the same bytes served by the auto-update feed.
+
+The Linux installer first tries the verified GitHub Release payloads, so a
+terminal-only installation needs no Rust or desktop toolchain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
+```
+
+If release assets are unavailable it falls back to a one-job local Cargo build.
+The Windows installer registers its exact install directory in the per-user
+`PATH`; the helper records ownership so uninstall removes only the component it
+added and refuses to delete `se.exe` if safe PATH cleanup fails.
 
 The desktop app embeds the two static-musl SSH-agent payloads from
 `native/agent-bin/`. `native/build-agent-bundles.sh` remaps the repository and

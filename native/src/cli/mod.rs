@@ -1,4 +1,5 @@
 mod connections;
+mod doctor;
 mod ops;
 #[cfg(test)]
 mod ops_safety_tests;
@@ -8,6 +9,7 @@ mod ops_search_tests;
 mod ops_transfer_tests;
 mod os;
 mod setup;
+mod share;
 mod target;
 mod transfer;
 mod tree_apply;
@@ -24,13 +26,13 @@ use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 
 const CLI_HELP: &str = "\
-Smart Explorer terminal access to the same saved remotes, Share peers, keyring
-secrets, and background worker used by the GUI.
+Smart Explorer terminal access to the same saved remotes, Share peers,
+credential store, and background worker used by the GUI.
 
 Targets:
   @label:/path               saved connection shorthand
-  sftp://host/path           full endpoint
-  webdav://host/path         full endpoint
+  sftp://user@host:22/path   saved endpoint (exact user/host/port match)
+  webdav://user@host:443/path saved endpoint (exact user/host/port match)
   share://direct/id/path     Smart Explorer peer endpoint
   C:\\local\\path or ./path   local filesystem path
 
@@ -40,7 +42,8 @@ Examples:
   se ls @prod:/srv
   se get @prod:/srv/report.txt .\\report.txt
   se cp -r @prod:/exports share://direct/peer-id/Drop
-  se exec share://direct/peer-id -- powershell -NoProfile -Command hostname";
+  se doctor --json
+  se share status --json";
 
 #[derive(Parser)]
 #[command(
@@ -57,6 +60,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "Diagnose terminal configuration without starting the GUI")]
+    Doctor(doctor::DoctorArgs),
+    #[command(about = "Configure and manage headless Smart Explorer Share")]
+    Share(share::ShareArgs),
     #[command(about = "Manage saved remotes and Share contacts")]
     Connections(connections::ConnectionsArgs),
     #[command(about = "List a directory")]
@@ -79,7 +86,7 @@ enum Command {
     Mkdir(PathArg),
     #[command(about = "Search names below a target")]
     Search(SearchArgs),
-    #[command(about = "Run a command on an allowed Smart Explorer Share peer")]
+    #[command(about = "Unavailable: remote execution is disabled in this release")]
     Exec(ExecArgs),
 }
 
@@ -187,6 +194,8 @@ pub fn run() -> i32 {
 
 fn run_inner(cli: Cli) -> Result<i32, String> {
     match cli.command {
+        Command::Doctor(args) => doctor::run(args),
+        Command::Share(args) => share::run(args),
         Command::Connections(args) => connections::run(args),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
@@ -235,52 +244,16 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
 }
 
 fn exec(args: ExecArgs) -> Result<i32, String> {
-    let (target, _) = crate::share::PeerOpenTarget::from_endpoint(&args.target)
-        .ok_or_else(|| "exec target must be a share:// endpoint".to_string())?;
-    let (argv, shell) = match (args.shell, args.argv.is_empty()) {
-        (Some(cmd), true) => (vec![cmd], true),
-        (Some(_), false) => return Err("use either --shell or argv after --, not both".into()),
-        (None, true) => return Err("missing command; pass argv after -- or use --shell".into()),
-        (None, false) => (args.argv, false),
-    };
-    let req = crate::share::ExecRequest {
-        argv,
-        cwd: args.cwd,
-        timeout_ms: args.timeout.saturating_mul(1000),
-        max_output_bytes: args.max_output,
-        shell,
-    };
-    let result = crate::daemon::exec_share(target, req)?;
-    io::stdout()
-        .write_all(&result.stdout)
-        .map_err(|e| e.to_string())?;
-    io::stderr()
-        .write_all(&result.stderr)
-        .map_err(|e| e.to_string())?;
-    if result.stdout_truncated || result.stderr_truncated {
-        let streams = match (result.stdout_truncated, result.stderr_truncated) {
-            (true, true) => "stdout and stderr",
-            (true, false) => "stdout",
-            (false, true) => "stderr",
-            (false, false) => unreachable!(),
-        };
-        writeln!(
-            io::stderr(),
-            "\nse: warning: remote {streams} was truncated at the enforced output limit"
-        )
-        .map_err(|error| error.to_string())?;
-    }
-    Ok(exec_result_code(&result, args.allow_truncated_output))
-}
-
-fn exec_result_code(result: &crate::share::ExecResult, allow_truncated_output: bool) -> i32 {
-    if (result.stdout_truncated || result.stderr_truncated) && !allow_truncated_output {
-        return 125;
-    }
-    if result.timed_out {
-        return 124;
-    }
-    result.exit_code.unwrap_or(1).clamp(0, 255)
+    let ExecArgs {
+        target: _,
+        cwd: _,
+        timeout: _,
+        max_output: _,
+        allow_truncated_output: _,
+        shell: _,
+        argv: _,
+    } = args;
+    Err("remote execution is unsupported in this release".to_string())
 }
 
 #[cfg(test)]
@@ -354,17 +327,35 @@ mod tests {
     }
 
     #[test]
-    fn truncated_exec_output_has_a_distinct_failure_status() {
-        let result = crate::share::ExecResult {
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-            exit_code: Some(0),
-            timed_out: false,
-            stdout_truncated: true,
-            stderr_truncated: false,
-        };
-        assert_eq!(super::exec_result_code(&result, false), 125);
-        assert_eq!(super::exec_result_code(&result, true), 0);
+    fn exec_fails_before_contacting_the_worker() {
+        let cli = Cli::parse_from(["se", "exec", "share://direct/c", "--", "echo", "hello"]);
+        assert_eq!(
+            super::run_inner(cli).unwrap_err(),
+            "remote execution is unsupported in this release"
+        );
+    }
+
+    #[test]
+    fn parses_doctor_and_headless_share_commands() {
+        assert!(Cli::try_parse_from(["se", "doctor", "--json"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "se",
+            "share",
+            "configure",
+            "--server",
+            "wss://share.example.test"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "se",
+            "share",
+            "request",
+            "accept",
+            "device-a",
+            "--fingerprint",
+            "0011"
+        ])
+        .is_ok());
     }
 
     #[test]

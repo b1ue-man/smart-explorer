@@ -69,3 +69,9 @@ fn file_key(file: &File) -> io::Result<(u32, u64)> {
         (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low);
     Ok((information.volume_serial_number, index))
 }
+
+pub(super) fn validate_connection_protocol(
+    _protocol: crate::creds::Protocol,
+) -> Result<(), String> {
+    Ok(())
+}

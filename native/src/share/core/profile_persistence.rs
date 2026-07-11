@@ -1,8 +1,8 @@
 use super::core::{b64, random_token};
 use super::fs::SharedRoot;
 use super::profiles::{
-    direct_contact_secret_account, room_secret_account, DirectCode, RoomCode, ShareProfiles,
-    SHARE_PROFILE_VERSION,
+    direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
+    ShareProfiles, SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -19,21 +19,30 @@ impl ShareProfiles {
         default_home: Option<String>,
         storage: &mut impl ProfilePersistence,
     ) -> Result<Self, String> {
-        let mut profiles = match storage
+        let loaded = storage
             .load_profiles()
-            .map_err(|error| format!("Share-Profile lesen: {error}"))?
-        {
-            Some(raw) => serde_json::from_str::<ShareProfiles>(&raw)
-                .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?,
-            None => ShareProfiles::default(),
+            .map_err(|error| format!("Share-Profile lesen: {error}"))?;
+        let missing = loaded.is_none();
+        let (mut profiles, revision) = match loaded {
+            Some(raw) => {
+                let revision = ProfileRevision::from_contents(&raw);
+                let profiles = serde_json::from_str::<ShareProfiles>(&raw)
+                    .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
+                (profiles, revision)
+            }
+            None => (ShareProfiles::default(), ProfileRevision::Missing),
         };
+        profiles.storage_revision = revision;
         if profiles.schema_version != SHARE_PROFILE_VERSION {
             return Err(format!(
                 "Nicht unterstuetzte Share-Profilversion {} (erwartet {})",
                 profiles.schema_version, SHARE_PROFILE_VERSION
             ));
         }
-        if profiles.default_direct_exports.roots.is_empty() {
+        // Home is a first-run default only. Once a profile file exists, an
+        // empty export list is an explicit deny-all configuration and must not
+        // silently re-expose the user's home directory.
+        if missing && profiles.default_direct_exports.roots.is_empty() {
             if let Some(home) = default_home {
                 profiles.default_direct_exports.roots.push(SharedRoot {
                     label: "Home".to_string(),
@@ -44,12 +53,17 @@ impl ShareProfiles {
         Ok(profiles)
     }
 
-    pub(super) fn save_with(&self, storage: &mut impl ProfilePersistence) -> Result<(), String> {
+    pub(super) fn save_with(
+        &mut self,
+        storage: &mut impl ProfilePersistence,
+    ) -> Result<(), String> {
         let contents = serde_json::to_string_pretty(self)
             .map_err(|error| format!("Share-Profile kodieren: {error}"))?;
-        storage
-            .save_profiles(&contents)
-            .map_err(|error| format!("Share-Profile speichern: {error}"))
+        let revision = storage
+            .save_profiles(&contents, &self.storage_revision)
+            .map_err(|error| format!("Share-Profile speichern: {error}"))?;
+        self.storage_revision = revision;
+        Ok(())
     }
 
     pub(super) fn persist_replacement_with(
@@ -237,7 +251,11 @@ fn cleanup_new_secret(
 
 pub(super) trait ProfilePersistence {
     fn load_profiles(&mut self) -> Result<Option<String>, String>;
-    fn save_profiles(&mut self, contents: &str) -> Result<(), String>;
+    fn save_profiles(
+        &mut self,
+        contents: &str,
+        expected: &ProfileRevision,
+    ) -> Result<ProfileRevision, String>;
     fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String>;
     fn delete_secret(&mut self, account: &str) -> Result<(), String>;
 }
@@ -246,7 +264,7 @@ pub(super) trait ProfilePersistence {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{ProfilePersistence, ShareProfiles};
+    use super::{ProfilePersistence, ProfileRevision, ShareProfiles};
 
     #[derive(Default)]
     struct FakePersistence {
@@ -261,12 +279,24 @@ mod tests {
             Ok(self.profiles.clone())
         }
 
-        fn save_profiles(&mut self, contents: &str) -> Result<(), String> {
+        fn save_profiles(
+            &mut self,
+            contents: &str,
+            expected: &ProfileRevision,
+        ) -> Result<ProfileRevision, String> {
             if self.fail_profile_save {
                 Err("disk full".into())
             } else {
+                let current = self
+                    .profiles
+                    .as_deref()
+                    .map(ProfileRevision::from_contents)
+                    .unwrap_or(ProfileRevision::Missing);
+                if !matches!(expected, ProfileRevision::Untracked) && expected != &current {
+                    return Err("Share profiles changed concurrently".into());
+                }
                 self.profiles = Some(contents.to_string());
-                Ok(())
+                Ok(ProfileRevision::from_contents(contents))
             }
         }
 
@@ -313,5 +343,36 @@ mod tests {
             .is_err());
         assert!(profiles.direct_contacts.is_empty());
         assert!(storage.profiles.is_none());
+    }
+
+    #[test]
+    fn persisted_empty_export_list_is_not_replaced_with_home() {
+        let mut storage = FakePersistence::default();
+        let mut profiles =
+            ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage)
+                .expect("load first-run profiles");
+        assert_eq!(profiles.default_direct_exports.roots.len(), 1);
+        profiles.default_direct_exports.roots.clear();
+        profiles
+            .save_with(&mut storage)
+            .expect("persist empty list");
+
+        let reloaded = ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage)
+            .expect("reload explicit empty list");
+        assert!(reloaded.default_direct_exports.roots.is_empty());
+    }
+
+    #[test]
+    fn stale_profile_revision_cannot_overwrite_a_newer_save() {
+        let mut storage = FakePersistence::default();
+        let mut first = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
+        let mut stale = first.clone();
+        first.auto_connect = false;
+        first.save_with(&mut storage).unwrap();
+        stale.auto_connect = true;
+        let error = stale.save_with(&mut storage).unwrap_err();
+        assert!(error.contains("concurrently"));
+        let current = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
+        assert!(!current.auto_connect);
     }
 }

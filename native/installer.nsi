@@ -10,6 +10,7 @@
 ;
 ; What it sets up so the app "just works":
 ;   * installs Smart Explorer.exe (per-user, %LOCALAPPDATA%\Programs)
+;   * makes the bundled se.exe available from new terminals via the user PATH
 ;   * points auto-update at the Git feed (update_source.txt) on first install
 ;   * registers the "In Smart Explorer öffnen" right-click verb (HKCU, reversible)
 ;   * Start-menu + desktop shortcuts, Add/Remove Programs entry
@@ -107,6 +108,15 @@ Section "Install"
   Delete "$INSTDIR\${CLI_EXE_NAME}"
   File "/oname=${CLI_EXE_NAME}" "${CLI_SRC}"
 
+  ; Use the Rust helper instead of NSIS string operations: normal NSIS builds
+  ; can truncate a long PATH. The helper preserves the raw registry value type,
+  ; adds exactly one component, records ownership, and broadcasts the change.
+  ExecWait '"$INSTDIR\${CLI_EXE_NAME}" --install-cli-path' $1
+  IntCmp $1 0 cli_path_done cli_path_failed cli_path_failed
+  cli_path_failed:
+    MessageBox MB_OK|MB_ICONEXCLAMATION "se.exe wurde installiert, aber der Benutzer-PATH konnte nicht aktualisiert werden.$\r$\nTerminal-Aufruf: $INSTDIR\${CLI_EXE_NAME}"
+  cli_path_done:
+
   File "${__FILEDIR__}\..\LICENSE"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
@@ -172,6 +182,14 @@ Section "Uninstall"
   ; exe is deleted, so folder-opening can't be left pointing at a missing file.
   nsExec::ExecToStack '"$INSTDIR\${EXE_NAME}" --unregister'
   Sleep 600
+  ; Remove only the exact PATH component that this installer recorded as its
+  ; own, leaving user-added and similarly named entries untouched.
+  ExecWait '"$INSTDIR\${CLI_EXE_NAME}" --uninstall-cli-path' $1
+  IntCmp $1 0 cli_path_removed cli_path_remove_failed cli_path_remove_failed
+  cli_path_remove_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Der Smart-Explorer-Eintrag konnte nicht sicher aus dem Benutzer-PATH entfernt werden. Die Deinstallation wurde beendet, bevor se.exe gelöscht wurde.$\r$\nBitte erneut versuchen oder ausführen: $INSTDIR\${CLI_EXE_NAME} --uninstall-cli-path" /SD IDOK
+    Abort
+  cli_path_removed:
   ; Fallback: remove our uniquely-named context-menu verb keys directly (always
   ; safe — we fully own these).
   DeleteRegKey HKCU "Software\Classes\Directory\shell\${VERB}"

@@ -14,15 +14,37 @@ pub(crate) struct RemoteConnectionInput {
     pub(crate) secret: Option<String>,
 }
 
+const MAX_STDIN_SECRET_BYTES: u64 = 64 * 1024;
+
 pub(crate) fn read_stdin_secret() -> Result<String, String> {
+    read_secret_from(std::io::stdin().lock())
+}
+
+fn read_secret_from(reader: impl Read) -> Result<String, String> {
     let mut secret = String::new();
-    std::io::stdin()
+    reader
+        .take(MAX_STDIN_SECRET_BYTES + 1)
         .read_to_string(&mut secret)
         .map_err(|e| format!("password stdin: {e}"))?;
+    if secret.len() as u64 > MAX_STDIN_SECRET_BYTES {
+        return Err(format!(
+            "password stdin exceeds the {MAX_STDIN_SECRET_BYTES}-byte limit"
+        ));
+    }
     Ok(secret.trim_end_matches(['\r', '\n']).to_string())
 }
 
 pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String> {
+    super::os::validate_connection_protocol(input.protocol)?;
+    if input
+        .secret
+        .as_ref()
+        .is_some_and(|secret| secret.len() as u64 > MAX_STDIN_SECRET_BYTES)
+    {
+        return Err(format!(
+            "password exceeds the {MAX_STDIN_SECRET_BYTES}-byte limit"
+        ));
+    }
     let conn = build_saved_connection(input)?;
     crate::creds::save_connection_with_secret(&conn.saved, conn.pending_secret.as_deref())
         .map_err(|e| format!("connection speichern: {e}"))?;
@@ -31,6 +53,104 @@ pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String>
         conn.saved.display(),
         conn.saved.account()
     ))
+}
+
+pub(crate) fn remove_remote(selector: &str) -> Result<String, String> {
+    let selector = required_selector(selector)?;
+    let mut matches = crate::creds::load_connections_checked()?
+        .into_iter()
+        .filter(|connection| connection.account() == selector || connection.display() == selector)
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|connection| connection.account());
+    matches.dedup_by(|left, right| left.account() == right.account());
+    let connection = exact_match(matches, &selector, "saved connection", |connection| {
+        connection.account()
+    })?;
+    let account = connection.account();
+    crate::creds::remove_connection(&account)
+        .map_err(|error| format!("remove saved connection {account}: {error}"))?;
+    Ok(format!("Removed saved connection {account}"))
+}
+
+pub(crate) fn remove_peer(selector: &str) -> Result<String, String> {
+    let selector = required_selector(selector)?;
+    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+        .map_err(|error| format!("share profile laden: {error}"))?;
+    let matches = profiles
+        .direct_contacts
+        .iter()
+        .filter(|contact| contact.id == selector || contact.display_name == selector)
+        .cloned()
+        .collect::<Vec<_>>();
+    let contact = exact_match(matches, &selector, "peer", |contact| contact.id.clone())?;
+    let change = profiles
+        .remove_direct_contact(&contact.id)
+        .map_err(|error| format!("remove peer {}: {error}", contact.id))?;
+    if let Some(warning) = change.cleanup_warning {
+        return Err(format!("removed peer {}, but {warning}", contact.id));
+    }
+    Ok(format!(
+        "Removed peer {}{}",
+        contact.id,
+        worker_refresh_suffix()
+    ))
+}
+
+pub(crate) fn remove_room(selector: &str) -> Result<String, String> {
+    let selector = required_selector(selector)?;
+    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+        .map_err(|error| format!("share profile laden: {error}"))?;
+    let matches = profiles
+        .rooms
+        .iter()
+        .filter(|room| room.id == selector || room.room_id == selector || room.name == selector)
+        .cloned()
+        .collect::<Vec<_>>();
+    let room = exact_match(matches, &selector, "room", |room| room.id.clone())?;
+    let change = profiles
+        .remove_room(&room.id)
+        .map_err(|error| format!("remove room {}: {error}", room.id))?;
+    if let Some(warning) = change.cleanup_warning {
+        return Err(format!("removed room {}, but {warning}", room.id));
+    }
+    Ok(format!(
+        "Removed room {}{}",
+        room.id,
+        worker_refresh_suffix()
+    ))
+}
+
+fn required_selector(selector: &str) -> Result<String, String> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        Err("selector must not be empty".to_string())
+    } else {
+        Ok(selector.to_string())
+    }
+}
+
+fn exact_match<T>(
+    mut matches: Vec<T>,
+    selector: &str,
+    kind: &str,
+    describe: impl Fn(&T) -> String,
+) -> Result<T, String> {
+    match matches.len() {
+        0 => Err(format!("{kind} not found: {selector}")),
+        1 => Ok(matches.remove(0)),
+        _ => Err(format!(
+            "{kind} selector is ambiguous: {}",
+            matches.iter().map(describe).collect::<Vec<_>>().join(", ")
+        )),
+    }
+}
+
+fn worker_refresh_suffix() -> String {
+    match crate::daemon::refresh_share_worker_checked() {
+        Ok(true) => "; share worker refreshed".to_string(),
+        Ok(false) => "; share worker is not configured".to_string(),
+        Err(error) => format!("; share worker refresh unavailable: {error}"),
+    }
 }
 
 pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, String> {
@@ -100,6 +220,15 @@ fn build_saved_connection(input: RemoteConnectionInput) -> Result<PendingSavedCo
     if key.is_some() && input.protocol != Protocol::Sftp {
         return Err("--key is only supported for sftp connections".into());
     }
+    reject_control_characters("user", &input.user)?;
+    reject_control_characters("root", &input.root)?;
+    reject_control_characters("label", &input.label)?;
+    if let Some(host) = input.host.as_deref() {
+        reject_control_characters("host", host)?;
+    }
+    if let Some(key) = key.as_deref() {
+        reject_control_characters("key", key)?;
+    }
     let auth = match key {
         Some(path) => AuthKind::Key { path },
         None => AuthKind::Password,
@@ -111,10 +240,17 @@ fn build_saved_connection(input: RemoteConnectionInput) -> Result<PendingSavedCo
             .ok_or_else(|| "share root must include a server name".to_string())?,
         _ => required(input.host.unwrap_or_default(), "host")?,
     };
+    let port = input.port.unwrap_or_else(|| input.protocol.default_port());
+    if input.protocol != Protocol::Share && port == 0 {
+        return Err("port must be between 1 and 65535".to_string());
+    }
+    if input.protocol == Protocol::Share && input.port.is_some() {
+        return Err("--port is not supported for Windows UNC shares".to_string());
+    }
     let saved = SavedConnection {
         protocol: input.protocol,
         host,
-        port: input.port.unwrap_or_else(|| input.protocol.default_port()),
+        port,
         user: input.user.trim().to_string(),
         auth,
         root,
@@ -125,6 +261,14 @@ fn build_saved_connection(input: RemoteConnectionInput) -> Result<PendingSavedCo
         saved,
         pending_secret: input.secret,
     })
+}
+
+fn reject_control_characters(field: &str, value: &str) -> Result<(), String> {
+    if value.chars().any(char::is_control) {
+        Err(format!("{field} must not contain control characters"))
+    } else {
+        Ok(())
+    }
 }
 
 fn required(value: String, field: &str) -> Result<String, String> {
@@ -214,7 +358,36 @@ fn default_home() -> String {
 mod tests {
     use crate::creds::{AuthKind, Protocol};
 
-    use super::{build_saved_connection, normalize_root, RemoteConnectionInput};
+    use super::{
+        build_saved_connection, exact_match, normalize_root, read_secret_from,
+        RemoteConnectionInput, MAX_STDIN_SECRET_BYTES,
+    };
+
+    #[test]
+    fn stdin_secret_is_trimmed_and_bounded() {
+        assert_eq!(read_secret_from(&b"secret\r\n"[..]).unwrap(), "secret");
+        let oversized = vec![b'x'; MAX_STDIN_SECRET_BYTES as usize + 1];
+        assert!(read_secret_from(&oversized[..])
+            .unwrap_err()
+            .contains("byte limit"));
+    }
+
+    #[test]
+    fn exact_selectors_reject_missing_and_ambiguous_matches() {
+        assert!(exact_match(Vec::<String>::new(), "x", "item", Clone::clone).is_err());
+        assert_eq!(
+            exact_match(vec!["a".to_string()], "a", "item", Clone::clone).unwrap(),
+            "a"
+        );
+        assert!(exact_match(
+            vec!["a".to_string(), "b".to_string()],
+            "name",
+            "item",
+            Clone::clone
+        )
+        .unwrap_err()
+        .contains("ambiguous"));
+    }
 
     #[test]
     fn remote_builder_applies_defaults() {

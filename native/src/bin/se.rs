@@ -1,7 +1,55 @@
+#[cfg(windows)]
+mod se_path_windows;
+
 fn main() {
-    if std::env::args().any(|arg| arg == "--sync-daemon") {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if is_internal_invocation(&arguments, "--sync-daemon") {
         smart_explorer::daemon::run_daemon();
         return;
     }
+    #[cfg(windows)]
+    if is_internal_invocation(&arguments, "--install-cli-path") {
+        exit_internal(se_path_windows::register());
+    }
+    #[cfg(windows)]
+    if is_internal_invocation(&arguments, "--uninstall-cli-path") {
+        exit_internal(se_path_windows::unregister());
+    }
     std::process::exit(smart_explorer::cli::run());
+}
+
+#[cfg(windows)]
+fn exit_internal(result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("se: Windows CLI path registration failed: {error}");
+            std::process::exit(1)
+        }
+    }
+}
+
+fn is_internal_invocation(arguments: &[std::ffi::OsString], command: &str) -> bool {
+    arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_internal_invocation;
+
+    #[test]
+    fn daemon_mode_requires_the_only_exact_argument() {
+        assert!(is_internal_invocation(
+            &["--sync-daemon".into()],
+            "--sync-daemon"
+        ));
+        assert!(!is_internal_invocation(
+            &["exec".into(), "--sync-daemon".into()],
+            "--sync-daemon"
+        ));
+        assert!(!is_internal_invocation(
+            &["--sync-daemon".into(), "extra".into()],
+            "--sync-daemon"
+        ));
+    }
 }

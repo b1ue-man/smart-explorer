@@ -1,14 +1,24 @@
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::profile_persistence::{ProfileChange, ProfilePersistence};
-use super::profiles::{direct_contact_secret_account, room_secret_account, ShareProfiles};
+use super::profiles::{
+    direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
+};
 use super::types::{DirectContact, DirectGrantState, PeerPresence, RoomProfile};
 
 const PROFILES_FILE: &str = "share_profiles.json";
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const SECRET_BYTES: usize = 32;
+const PROFILES_LOCK_FILE: &str = "share_profiles.lock";
+static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+struct ProfileWriteGuard {
+    _process_guard: MutexGuard<'static, ()>,
+    _file_guard: std::fs::File,
+}
 
 impl ShareProfiles {
     pub fn load_checked(default_home: Option<String>) -> Result<Self, String> {
@@ -19,7 +29,7 @@ impl ShareProfiles {
         Self::load_checked(default_home).unwrap_or_default()
     }
 
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&mut self) -> Result<(), String> {
         self.save_with(&mut SystemProfilePersistence)
     }
 
@@ -84,8 +94,12 @@ impl ProfilePersistence for SystemProfilePersistence {
         load_profiles().map_err(|error| error.to_string())
     }
 
-    fn save_profiles(&mut self, contents: &str) -> Result<(), String> {
-        save_profiles(contents).map_err(|error| error.to_string())
+    fn save_profiles(
+        &mut self,
+        contents: &str,
+        expected: &ProfileRevision,
+    ) -> Result<ProfileRevision, String> {
+        save_profiles(contents, expected).map_err(|error| error.to_string())
     }
 
     fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
@@ -141,9 +155,20 @@ fn load_profiles() -> io::Result<Option<String>> {
         .map_err(|_| invalid("Share profiles are not valid UTF-8"))
 }
 
-fn save_profiles(contents: &str) -> io::Result<()> {
+fn save_profiles(contents: &str, expected: &ProfileRevision) -> io::Result<ProfileRevision> {
     if contents.len() as u64 > MAX_PROFILE_BYTES {
         return Err(invalid("Share profiles exceed their byte budget"));
+    }
+    let _guard = profile_write_guard()?;
+    let current = load_profiles()?
+        .as_deref()
+        .map(ProfileRevision::from_contents)
+        .unwrap_or(ProfileRevision::Missing);
+    if !matches!(expected, ProfileRevision::Untracked) && expected != &current {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Share profiles changed concurrently; reload and retry",
+        ));
     }
     let path = profiles_path();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -192,7 +217,37 @@ fn save_profiles(contents: &str) -> io::Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(staged);
     }
-    result
+    result?;
+    Ok(ProfileRevision::from_contents(contents))
+}
+
+fn profile_write_guard() -> io::Result<ProfileWriteGuard> {
+    let process_guard = match PROFILE_WRITE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let directory = crate::support_dirs::app_data_dir();
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join(PROFILES_LOCK_FILE);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        if !metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Share profile transaction lock is not a regular file",
+            ));
+        }
+    }
+    let file_guard = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file_guard.lock()?;
+    Ok(ProfileWriteGuard {
+        _process_guard: process_guard,
+        _file_guard: file_guard,
+    })
 }
 
 fn profiles_path() -> PathBuf {
