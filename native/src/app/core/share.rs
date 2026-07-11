@@ -5,6 +5,8 @@ use super::*;
 mod drain;
 #[path = "share_helpers.rs"]
 mod helpers;
+#[path = "share_poll_status.rs"]
+mod poll_status;
 
 use helpers::*;
 

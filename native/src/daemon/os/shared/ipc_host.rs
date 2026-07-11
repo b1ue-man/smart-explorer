@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,8 @@ const MAX_SHARE_SERVER_BYTES: u64 = 16 * 1024;
 #[derive(Clone)]
 pub(crate) struct ShareHost {
     pub(super) state: Arc<Mutex<ShareHostState>>,
+    generation: Arc<str>,
+    initialized: Arc<AtomicBool>,
 }
 
 pub(super) struct ShareHostState {
@@ -31,29 +34,19 @@ pub(super) struct ShareHostState {
 }
 
 impl ShareHost {
-    pub(crate) fn new() -> Self {
-        let (identity, identity_error) =
-            match crate::share::ShareIdentity::load_or_create(default_device_name()) {
-                Ok(identity) => (Some(identity), None),
-                Err(error) => (None, Some(error)),
-            };
-        let (profiles, profiles_error) =
-            match crate::share::ShareProfiles::load_checked(Some(default_home())) {
-                Ok(profiles) => (profiles, None),
-                Err(error) => (crate::share::ShareProfiles::default(), Some(error)),
-            };
-        let server = load_share_server().unwrap_or_else(|error| {
-            log(&format!("share server configuration is invalid: {error}"));
-            String::new()
-        });
+    pub(crate) fn new(generation: String) -> Self {
+        // Keep construction free of credential and profile I/O so the daemon
+        // can publish its authenticated Ping endpoint before a contended
+        // identity transaction or slow Windows Credential Manager access.
+        // The daemon calls reload_now immediately after listener publication.
         let state = ShareHostState {
             service: None,
-            identity,
-            identity_error,
-            profiles,
-            profiles_error,
+            identity: None,
+            identity_error: None,
+            profiles: crate::share::ShareProfiles::default(),
+            profiles_error: None,
             suspended: false,
-            server,
+            server: String::new(),
             running_server: String::new(),
             signal_connected: false,
             signal_error: None,
@@ -63,7 +56,21 @@ impl ShareHost {
         };
         ShareHost {
             state: Arc::new(Mutex::new(state)),
+            generation: Arc::from(generation),
+            initialized: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn generation(&self) -> &str {
+        &self.generation
+    }
+
+    pub(crate) fn initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_initialized(&self) {
+        self.initialized.store(true, Ordering::Release);
     }
 
     pub(crate) fn tick(&self) {

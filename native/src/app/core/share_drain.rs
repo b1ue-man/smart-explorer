@@ -131,6 +131,13 @@ impl App {
                 return;
             }
         };
+        if let Some(status) = super::poll_status::after_successful_snapshot(
+            &self.share_status,
+            snapshot.running,
+            snapshot.connected,
+        ) {
+            self.share_status = status.to_string();
+        }
         self.share_next_poll_at = Instant::now()
             + if snapshot.running || self.share_profiles.auto_connect {
                 SHARE_ACTIVE_POLL

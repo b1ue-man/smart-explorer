@@ -4,11 +4,16 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
+const IPC_GENERATION_FILE: &str = "daemon.generation";
 const IPC_TOKEN_FILE: &str = "daemon.token";
 const MAX_TOKEN_BYTES: u64 = 4 * 1024;
 
 fn ipc_addr_path() -> io::Result<PathBuf> {
     Ok(sync_data_directory()?.join(IPC_ADDR_FILE))
+}
+
+fn ipc_generation_path() -> io::Result<PathBuf> {
+    Ok(sync_data_directory()?.join(IPC_GENERATION_FILE))
 }
 
 pub(super) fn clear_ipc_addr() {
@@ -17,14 +22,31 @@ pub(super) fn clear_ipc_addr() {
     }
 }
 
+pub(super) fn clear_ipc_generation() {
+    if let Ok(path) = ipc_generation_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub(super) fn write_ipc_addr(addr: SocketAddr) -> io::Result<()> {
     std::fs::write(ipc_addr_path()?, addr.to_string())
+}
+
+pub(super) fn write_ipc_generation(generation: &str) -> io::Result<()> {
+    std::fs::write(ipc_generation_path()?, generation)
 }
 
 pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
     std::fs::read_to_string(ipc_addr_path().ok()?)
         .ok()
         .and_then(|text| text.trim().parse().ok())
+}
+
+pub(super) fn read_ipc_generation() -> Option<String> {
+    let generation = std::fs::read_to_string(ipc_generation_path().ok()?).ok()?;
+    let generation = generation.trim();
+    (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| generation.to_string())
 }
 
 pub(super) fn load_or_create_token() -> io::Result<String> {

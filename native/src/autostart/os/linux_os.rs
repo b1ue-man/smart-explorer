@@ -88,6 +88,55 @@ fn refresh_enabled_entry(path: &Path, exe: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn daemon_command(
+    exe: &Path,
+    handoff_generation: Option<&str>,
+    retiring_generation: Option<&str>,
+) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("--sync-daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(generation) = handoff_generation {
+        command.env(super::DAEMON_HANDOFF_ENV, generation);
+    } else {
+        command.env_remove(super::DAEMON_HANDOFF_ENV);
+    }
+    if let Some(generation) = retiring_generation {
+        command.env(super::DAEMON_RETIRING_GENERATION_ENV, generation);
+    } else {
+        command.env_remove(super::DAEMON_RETIRING_GENERATION_ENV);
+    }
+
+    // `CommandExt::setsid` is still unstable on the repository's stable Rust
+    // toolchain. `setsid(2)` is async-signal-safe, so it is suitable for the
+    // narrowly scoped post-fork hook required by `pre_exec`.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    command
+}
+
+fn spawn_daemon(
+    exe: &Path,
+    handoff_generation: Option<&str>,
+    retiring_generation: Option<&str>,
+) -> io::Result<()> {
+    daemon_command(exe, handoff_generation, retiring_generation)
+        .spawn()
+        .map(|_| ())
+}
+
 pub fn disable() -> io::Result<()> {
     match std::fs::remove_file(desktop_file_path()) {
         Ok(()) => Ok(()),
@@ -99,13 +148,22 @@ pub fn disable() -> io::Result<()> {
 pub fn spawn_daemon_now() {
     if let Ok(exe) = daemon_exe() {
         let _ = refresh_enabled_entry(&desktop_file_path(), &exe);
-        let _ = std::process::Command::new(exe)
-            .arg("--sync-daemon")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+        let _ = spawn_daemon(&exe, None, None);
     }
+}
+
+/// Spawn a replacement daemon and report executable-resolution or launch
+/// failures. The handoff marker tells the child to wait for the retiring
+/// instance instead of treating the singleton as an ordinary duplicate launch.
+pub fn spawn_daemon_handoff_checked(
+    generation: &str,
+    retiring_generation: Option<&str>,
+) -> io::Result<()> {
+    let exe = daemon_exe()?;
+    // A stale/unwritable optional login entry must not prevent an explicit
+    // terminal or GUI request from restoring the live worker.
+    let _ = refresh_enabled_entry(&desktop_file_path(), &exe);
+    spawn_daemon(&exe, Some(generation), retiring_generation)
 }
 
 #[cfg(test)]
@@ -203,6 +261,50 @@ mod tests {
         assert_eq!(resolved, se);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn handoff_command_marks_only_replacement_children() {
+        let exe = std::path::Path::new("/opt/Smart Explorer/se");
+        let handoff = super::daemon_command(
+            exe,
+            Some("0123456789abcdef0123456789abcdef"),
+            Some("fedcba9876543210fedcba9876543210"),
+        );
+        assert_eq!(handoff.get_program(), exe.as_os_str());
+        assert_eq!(
+            handoff.get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("--sync-daemon")]
+        );
+        assert_eq!(
+            handoff
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new(super::super::DAEMON_HANDOFF_ENV))
+                .map(|(_, value)| value),
+            Some(Some(std::ffi::OsStr::new(
+                "0123456789abcdef0123456789abcdef"
+            )))
+        );
+        assert_eq!(
+            handoff
+                .get_envs()
+                .find(|(name, _)| {
+                    *name == std::ffi::OsStr::new(super::super::DAEMON_RETIRING_GENERATION_ENV)
+                })
+                .map(|(_, value)| value),
+            Some(Some(std::ffi::OsStr::new(
+                "fedcba9876543210fedcba9876543210"
+            )))
+        );
+
+        let ordinary = super::daemon_command(exe, None, None);
+        assert_eq!(
+            ordinary
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new(super::super::DAEMON_HANDOFF_ENV))
+                .map(|(_, value)| value),
+            Some(None)
+        );
     }
 
     #[test]

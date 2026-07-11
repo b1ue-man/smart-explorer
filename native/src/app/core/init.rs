@@ -13,8 +13,8 @@ impl App {
         if crate::autostart::is_enabled() && !post_update_startup_pending {
             if just_updated {
                 // Hand off to a fresh daemon running the new executable.
-                match crate::daemon::request_stop() {
-                    Ok(()) => crate::autostart::spawn_daemon_now(),
+                match crate::daemon::request_daemon_replacement() {
+                    Ok(()) => {}
                     Err(error) => {
                         startup_daemon_error = Some(format!(
                             "Hintergrunddienst konnte beim Update nicht sicher neu gestartet werden: {error}"
@@ -22,11 +22,11 @@ impl App {
                     }
                 }
             } else if !crate::daemon::is_running() {
-                match crate::daemon::clear_stop() {
-                    Ok(()) => crate::autostart::spawn_daemon_now(),
+                match crate::daemon::request_daemon_replacement() {
+                    Ok(()) => {}
                     Err(error) => {
                         startup_daemon_error = Some(format!(
-                            "Hintergrunddienst bleibt gestoppt; Stoppsperre konnte nicht aufgehoben werden: {error}"
+                            "Hintergrunddienst konnte nicht sicher gestartet werden: {error}"
                         ));
                     }
                 }

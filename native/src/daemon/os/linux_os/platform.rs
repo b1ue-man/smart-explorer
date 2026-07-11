@@ -43,18 +43,65 @@ pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()
     File::open(parent)?.sync_all()
 }
 
+pub(crate) fn restore_control_if_absent(source: &Path, destination: &Path) -> io::Result<bool> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let source_c = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let destination_c = std::ffi::CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "target path contains NUL"))?;
+    let renamed = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source_c.as_ptr(),
+            libc::AT_FDCWD,
+            destination_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        return Ok(false);
+    }
+    if !error
+        .raw_os_error()
+        .is_some_and(|code| matches!(code, libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP))
+    {
+        return Err(error);
+    }
+    match std::fs::hard_link(source, destination) {
+        Ok(()) => {
+            std::fs::remove_file(source)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
 pub(crate) fn acquire_daemon_instance_guard(
-    _timeout: std::time::Duration,
+    timeout: std::time::Duration,
 ) -> Option<DaemonInstanceGuard> {
-    match daemon_lock_directory().and_then(|directory| try_acquire_in(&directory)) {
-        Ok(guard) => guard,
-        Err(error) => {
-            super::state::log(&format!("daemon single-instance lock failed: {error}"));
-            None
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match daemon_lock_directory().and_then(|directory| try_acquire_in(&directory)) {
+            Ok(Some(guard)) => return Some(guard),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => return None,
+            Err(error) => {
+                super::state::log(&format!("daemon single-instance lock failed: {error}"));
+                return None;
+            }
         }
     }
 }

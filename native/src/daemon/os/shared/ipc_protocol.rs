@@ -65,6 +65,10 @@ pub(super) enum IpcResponse {
     Pong {
         #[serde(default)]
         version: String,
+        #[serde(default)]
+        generation: String,
+        #[serde(default)]
+        initialized: bool,
     },
     Ok,
     RefreshOk {
@@ -144,7 +148,15 @@ mod tests {
     #[test]
     fn old_unit_pong_deserializes_as_stale_version() {
         match serde_json::from_str::<IpcResponse>(r#"{"t":"pong"}"#).unwrap() {
-            IpcResponse::Pong { version } => assert!(version.is_empty()),
+            IpcResponse::Pong {
+                version,
+                generation,
+                initialized,
+            } => {
+                assert!(version.is_empty());
+                assert!(generation.is_empty());
+                assert!(!initialized);
+            }
             other => panic!("unexpected response: {other:?}"),
         }
     }

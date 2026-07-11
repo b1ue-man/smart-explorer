@@ -3,15 +3,18 @@ use crate::syncjobs::{SyncJob, Trigger};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use super::handoff::{
+    acquire_instance_guard, claim_handoff_after_singleton, discard_stop_after_singleton,
+    stop_requested_checked_for, wait_for_handoff_activation,
+};
 use super::ipc::{start_listener, ShareHost};
 use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::platform;
-use super::state::{
-    cadence_secs, clear_heartbeat, clear_stop, log, now_secs, paused, stop_requested_checked,
-    write_heartbeat,
-};
+use super::state::{cadence_secs, clear_heartbeat, log, now_secs, paused, write_heartbeat};
 
 const FALLBACK_TICK_SECS: u64 = 15;
+const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
+const DAEMON_HANDOFF_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// A cheap signature of a local subtree: (file count, newest mtime ms, total
 /// size). Any add/modify/delete changes at least one component.
@@ -129,11 +132,62 @@ pub(crate) fn wildcard_ci(pat: &str, s: &str) -> bool {
 
 /// The headless loop.
 pub fn run_daemon() {
-    let Some(_instance_guard) = platform::acquire_daemon_instance_guard(Duration::from_secs(20))
-    else {
+    let handoff_generation = std::env::var_os(crate::autostart::DAEMON_HANDOFF_ENV);
+    let retiring_generation = std::env::var_os(crate::autostart::DAEMON_RETIRING_GENERATION_ENV);
+    std::env::remove_var(crate::autostart::DAEMON_HANDOFF_ENV);
+    std::env::remove_var(crate::autostart::DAEMON_RETIRING_GENERATION_ENV);
+    let (generation, handoff) = match handoff_generation {
+        Some(value) => {
+            let Some(value) = value.to_str().filter(|value| valid_generation(value)) else {
+                log("daemon refused invalid handoff generation");
+                return;
+            };
+            (value.to_string(), true)
+        }
+        None => match new_generation() {
+            Ok(generation) => (generation, false),
+            Err(error) => {
+                log(&format!("daemon generation failed: {error}"));
+                return;
+            }
+        },
+    };
+    let retiring_generation = match retiring_generation {
+        Some(value) => {
+            let Some(value) = value.to_str().filter(|value| valid_generation(value)) else {
+                log("daemon refused invalid retiring generation");
+                return;
+            };
+            Some(value.to_string())
+        }
+        None => None,
+    };
+    if handoff && !wait_for_handoff_activation(&generation, HANDOFF_ACTIVATION_TIMEOUT) {
+        return;
+    }
+    let Some(_instance_guard) = acquire_instance_guard(
+        handoff,
+        &generation,
+        retiring_generation.as_deref(),
+        DAEMON_HANDOFF_TIMEOUT,
+    ) else {
         return;
     };
-    if let Err(error) = clear_stop() {
+    if handoff {
+        match claim_handoff_after_singleton(&generation) {
+            Ok(true) => {}
+            Ok(false) => {
+                log("daemon handoff was superseded before singleton acquisition");
+                return;
+            }
+            Err(error) => {
+                log(&format!(
+                    "daemon handoff control could not be verified: {error}"
+                ));
+                return;
+            }
+        }
+    } else if let Err(error) = discard_stop_after_singleton() {
         log(&format!(
             "daemon refused to start: stop control could not be cleared: {error}"
         ));
@@ -141,9 +195,11 @@ pub fn run_daemon() {
     }
     log("daemon started");
     write_heartbeat();
-    let share_host = ShareHost::new();
+    let share_host = ShareHost::new(generation);
     if let Err(e) = start_listener(share_host.clone()) {
         log(&format!("background worker IPC failed: {e}"));
+        clear_heartbeat();
+        return;
     }
     // Publish the lightweight control plane before starting Iroh. A terminal
     // client can now observe the daemon immediately even when relay discovery
@@ -151,6 +207,10 @@ pub fn run_daemon() {
     if let Err(error) = share_host.reload_now() {
         log(&format!("share worker initial load failed: {error}"));
     }
+    // Ping remains available during initialization, but clients only accept
+    // this generation as ready after all synchronous identity/profile loading
+    // has released the Share host state.
+    share_host.mark_initialized();
     let mut job_supervisor = JobSupervisor::new();
     let mut sync_enabled = crate::autostart::is_enabled();
 
@@ -158,7 +218,7 @@ pub fn run_daemon() {
     // work is permitted exclusively after the user enabled background sync.
     let startup_controls = scheduling_controls();
     if sync_enabled && startup_controls.permit_mutation {
-        enqueue_startup_jobs(&mut job_supervisor);
+        enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
     }
 
     // Per-job real-time state and the last-seen drive set.
@@ -168,7 +228,7 @@ pub fn run_daemon() {
 
     loop {
         let controls = scheduling_controls();
-        if stop_requested() {
+        if stop_requested(share_host.generation()) {
             stop_daemon(&mut job_supervisor);
             return;
         }
@@ -181,7 +241,7 @@ pub fn run_daemon() {
             if sync_enabled {
                 log("background sync enabled");
                 if controls.permit_mutation {
-                    enqueue_startup_jobs(&mut job_supervisor);
+                    enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
                 }
             } else {
                 log("background sync disabled; canceling scheduled work");
@@ -198,7 +258,7 @@ pub fn run_daemon() {
             }
         }
         share_host.tick();
-        if stop_requested() {
+        if stop_requested(share_host.generation()) {
             stop_daemon(&mut job_supervisor);
             return;
         }
@@ -208,8 +268,8 @@ pub fn run_daemon() {
         if sync_enabled && controls.permit_mutation {
             // 1) Timer jobs (interval + calendar), gated by active-hours in due().
             for job in configured_jobs.iter().filter(|j| j.due(now)) {
-                enqueue_job(&mut job_supervisor, job);
-                if stop_requested() {
+                enqueue_job(&mut job_supervisor, job, share_host.generation());
+                if stop_requested(share_host.generation()) {
                     break;
                 }
             }
@@ -243,7 +303,7 @@ pub fn run_daemon() {
                         // Unchanged since last tick - run if a pending change has settled.
                         if let Some(&since) = rt_dirty_since.get(&job.id) {
                             if now - since >= job.rt_debounce_secs as i64 {
-                                enqueue_job(&mut job_supervisor, job);
+                                enqueue_job(&mut job_supervisor, job, share_host.generation());
                                 rt_dirty_since.remove(&job.id);
                             }
                         }
@@ -269,7 +329,7 @@ pub fn run_daemon() {
                     }) {
                         if drive_matches(&job.connect_match, d) {
                             log(&format!("device connected → '{}'", job.name));
-                            enqueue_job(&mut job_supervisor, job);
+                            enqueue_job(&mut job_supervisor, job, share_host.generation());
                         }
                     }
                 }
@@ -282,14 +342,14 @@ pub fn run_daemon() {
         let tick = controls.tick_secs;
         let mut slept = 0;
         while slept < tick {
-            if stop_requested() {
+            if stop_requested(share_host.generation()) {
                 break;
             }
             if crate::autostart::is_enabled() != sync_enabled {
                 break;
             }
             std::thread::sleep(Duration::from_secs(2));
-            if stop_requested() {
+            if stop_requested(share_host.generation()) {
                 break;
             }
             let live_controls = scheduling_controls();
@@ -314,15 +374,25 @@ pub fn run_daemon() {
     }
 }
 
-fn enqueue_startup_jobs(supervisor: &mut JobSupervisor) {
+fn valid_generation(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn new_generation() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn enqueue_startup_jobs(supervisor: &mut JobSupervisor, generation: &str) {
     for job in load_configured_jobs()
         .into_iter()
         .filter(|job| job.enabled && job.trigger == Trigger::OnStartup)
     {
-        if stop_requested() || !crate::autostart::is_enabled() {
+        if stop_requested(generation) || !crate::autostart::is_enabled() {
             break;
         }
-        enqueue_job(supervisor, &job);
+        enqueue_job(supervisor, &job, generation);
     }
 }
 
@@ -361,8 +431,8 @@ fn scheduling_controls() -> SchedulingControls {
     }
 }
 
-fn stop_requested() -> bool {
-    match stop_requested_checked() {
+fn stop_requested(generation: &str) -> bool {
+    match stop_requested_checked_for(generation) {
         Ok(requested) => requested,
         Err(error) => {
             log(&format!(
@@ -385,8 +455,8 @@ fn load_configured_jobs() -> Vec<SyncJob> {
     }
 }
 
-fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob) {
-    if stop_requested() {
+fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, generation: &str) {
+    if stop_requested(generation) {
         return;
     }
     match supervisor.enqueue(job) {
@@ -402,9 +472,6 @@ fn stop_daemon(supervisor: &mut JobSupervisor) {
     log("daemon stopping (stop requested or unreadable stop control)");
     for error in supervisor.cancel_and_join() {
         log(&error);
-    }
-    if let Err(error) = clear_stop() {
-        log(&format!("stop control could not be cleared: {error}"));
     }
     clear_heartbeat();
 }

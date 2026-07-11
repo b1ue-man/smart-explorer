@@ -148,11 +148,16 @@ fn apply_update(args: ApplyArgs) -> Result<(), ApplyFailure> {
     wait_for_pid_exit(args.parent_pid, Duration::from_secs(300))?;
     let _instance = instance::acquire(&args.target)?;
     validate_modern_paths(&args, &helper)?;
-    if let Err(e) = stop_target_processes_for_update(&args.target) {
-        if e.needs_elevation {
-            return Err(elevation_refused("Prozessbereinigung").into());
+    // The background daemon can be either the GUI executable or the standalone
+    // terminal companion. Wait for both images before replacing either one;
+    // retrying a locked CLI for only a few seconds is not a safe handoff.
+    for target in [&args.target, &args.cli_target] {
+        if let Err(e) = stop_target_processes_for_update(target) {
+            if e.needs_elevation {
+                return Err(elevation_refused("Prozessbereinigung").into());
+            }
+            return Err(e.msg.into());
         }
-        return Err(e.msg.into());
     }
 
     if let Err(error) = archive_current_app(&args.target, &args.target_sha256, &args.archive) {

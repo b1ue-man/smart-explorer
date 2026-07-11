@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -16,6 +17,7 @@ use crate::support::{
 mod mock_signal;
 
 const CONCURRENT_FIRST_RUNS: usize = 16;
+const CONCURRENT_WORKER_STARTS: usize = 8;
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct PublicIdentity {
@@ -60,6 +62,229 @@ fn healthy_identity_repair_is_refused_before_starting_a_worker() {
     let reloaded = parse_identity(&run_identity(&sandbox, false));
     assert_same_identity(&original, &reloaded);
     assert_exact_identity_secret_records(&sandbox);
+}
+
+#[test]
+fn share_status_coordinates_with_a_starting_daemon_singleton() {
+    let sandbox = Sandbox::new("share-worker-starting-singleton");
+    let _daemon = DaemonStopGuard { sandbox: &sandbox };
+    let _identity = parse_identity(&run_identity(&sandbox, false));
+    let runtime = sandbox.path("runtime");
+    fs::create_dir(&runtime).expect("create isolated daemon runtime directory");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+        .expect("secure isolated daemon runtime directory");
+
+    let lock_path = runtime.join("smart-explorer-sync-daemon.lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("create daemon singleton fixture");
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+        .expect("secure daemon singleton fixture");
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "acquire daemon singleton fixture"
+    );
+
+    let stop = sandbox.app_data_path("sync/daemon.stop");
+    let release = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !stop.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let stop_observed = stop.exists();
+        if stop_observed {
+            thread::sleep(Duration::from_millis(300));
+        }
+        drop(lock_file);
+        stop_observed
+    });
+
+    let mut status_command = sandbox.command();
+    status_command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("SE_SHARE_RELAY_URL", "disabled")
+        .args(["share", "status", "--json"]);
+    let status = run_bounded(&mut status_command, Duration::from_secs(15));
+    assert!(
+        !status.timed_out,
+        "Share status timed out during daemon handoff"
+    );
+    assert_success(&status.output);
+    assert!(
+        !stderr(&status.output).contains("wurde nach dem Neustart nicht bereit"),
+        "Share status reported the generic restart-readiness failure"
+    );
+    serde_json::from_slice::<serde_json::Value>(&status.output.stdout)
+        .expect("Share status stdout must be JSON");
+    assert!(
+        release.join().expect("join daemon singleton fixture"),
+        "Share client did not request a coordinated daemon handoff"
+    );
+
+    let contender = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .expect("open daemon singleton after handoff");
+    let contender_result =
+        unsafe { libc::flock(contender.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    let contender_error = std::io::Error::last_os_error();
+    assert!(
+        contender_result == -1
+            && contender_error
+                .raw_os_error()
+                .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN),
+        "no replacement daemon retained the singleton after a successful status: {contender_error}"
+    );
+}
+
+#[test]
+fn share_status_waits_for_identity_initialization_after_ping_is_published() {
+    let sandbox = Sandbox::new("share-worker-slow-identity-init");
+    let _daemon = DaemonStopGuard { sandbox: &sandbox };
+    let runtime = sandbox.path("runtime");
+    fs::create_dir(&runtime).expect("create isolated daemon runtime directory");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+        .expect("secure isolated daemon runtime directory");
+
+    let lock_directory = sandbox.app_data_path("identity-lock-v1");
+    fs::create_dir_all(&lock_directory).expect("create identity lock directory");
+    fs::set_permissions(&lock_directory, fs::Permissions::from_mode(0o700))
+        .expect("secure identity lock directory");
+    let lock_path = lock_directory.join("transaction.lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("create identity lock fixture");
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+        .expect("secure identity lock fixture");
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "acquire identity lock fixture"
+    );
+
+    let ipc = sandbox.app_data_path("sync/daemon.ipc");
+    let release = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !ipc.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let control_plane_published = ipc.exists();
+        if control_plane_published {
+            thread::sleep(Duration::from_millis(1_200));
+        }
+        drop(lock_file);
+        control_plane_published
+    });
+
+    let mut status_command = sandbox.command();
+    status_command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("SE_SHARE_RELAY_URL", "disabled")
+        .args(["share", "status", "--json"]);
+    let status = run_bounded(&mut status_command, Duration::from_secs(15));
+    assert!(
+        !status.timed_out,
+        "Share status timed out during identity initialization"
+    );
+    assert_success(&status.output);
+    serde_json::from_slice::<serde_json::Value>(&status.output.stdout)
+        .expect("Share status stdout must be JSON");
+    assert!(
+        release.join().expect("join identity lock fixture"),
+        "daemon did not publish authenticated Ping before identity loading"
+    );
+}
+
+#[test]
+fn concurrent_fresh_share_status_commands_converge_on_one_worker() {
+    let sandbox = Sandbox::new("share-worker-concurrent-start");
+    let _daemon = DaemonStopGuard { sandbox: &sandbox };
+    let _identity = parse_identity(&run_identity(&sandbox, false));
+    let runtime = sandbox.path("runtime");
+    fs::create_dir(&runtime).expect("create isolated daemon runtime directory");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+        .expect("secure isolated daemon runtime directory");
+
+    let mut children = Vec::with_capacity(CONCURRENT_WORKER_STARTS);
+    for _ in 0..CONCURRENT_WORKER_STARTS {
+        let mut command = sandbox.command();
+        command
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("SE_SHARE_RELAY_URL", "disabled")
+            .args(["share", "status", "--json"]);
+        children.push(spawn_captured(&mut command));
+    }
+
+    for child in children {
+        let status = collect_bounded(child, Duration::from_secs(35));
+        assert!(!status.timed_out, "concurrent Share status timed out");
+        assert_success(&status.output);
+        serde_json::from_slice::<serde_json::Value>(&status.output.stdout)
+            .expect("concurrent Share status stdout must be JSON");
+        assert!(
+            !stderr(&status.output).contains("wurde nach dem Neustart nicht bereit"),
+            "concurrent Share status rejected the healthy winning worker"
+        );
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let daemon_pids = loop {
+        let pids = sandbox_daemon_pids(&sandbox);
+        if pids.len() <= 1 || Instant::now() >= deadline {
+            break pids;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(
+        daemon_pids.len(),
+        1,
+        "concurrent starts left detached singleton waiters: {daemon_pids:?}"
+    );
+}
+
+#[test]
+fn share_status_supersedes_a_stale_handoff_marker() {
+    let sandbox = Sandbox::new("share-worker-stale-handoff");
+    let _daemon = DaemonStopGuard { sandbox: &sandbox };
+    let _identity = parse_identity(&run_identity(&sandbox, false));
+    let runtime = sandbox.path("runtime");
+    fs::create_dir(&runtime).expect("create isolated daemon runtime directory");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+        .expect("secure isolated daemon runtime directory");
+
+    let sync = sandbox.app_data_path("sync");
+    fs::create_dir_all(&sync).expect("create daemon control directory");
+    fs::set_permissions(&sync, fs::Permissions::from_mode(0o700))
+        .expect("secure daemon control directory");
+    fs::write(
+        sync.join("daemon.stop"),
+        b"handoff:00000000000000000000000000000000",
+    )
+    .expect("write stale handoff marker");
+
+    let mut status_command = sandbox.command();
+    status_command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("SE_SHARE_RELAY_URL", "disabled")
+        .args(["share", "status", "--json"]);
+    let status = run_bounded(&mut status_command, Duration::from_secs(15));
+    assert!(
+        !status.timed_out,
+        "Share status timed out after stale handoff"
+    );
+    assert_success(&status.output);
+    serde_json::from_slice::<serde_json::Value>(&status.output.stdout)
+        .expect("Share status stdout must be JSON");
 }
 
 #[test]
@@ -453,6 +678,43 @@ fn wait_for_readiness(paths: &[PathBuf], timeout: Duration) -> bool {
     false
 }
 
+fn sandbox_daemon_pids(sandbox: &Sandbox) -> Vec<u32> {
+    let expected_data = format!("XDG_DATA_HOME={}", sandbox.path("app-data").display());
+    let mut pids = Vec::new();
+    let Ok(processes) = fs::read_dir("/proc") else {
+        return pids;
+    };
+    for process in processes.flatten() {
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(command) = fs::read(process.path().join("cmdline")) else {
+            continue;
+        };
+        if !command
+            .split(|byte| *byte == 0)
+            .any(|argument| argument == b"--sync-daemon")
+        {
+            continue;
+        }
+        let Ok(environment) = fs::read(process.path().join("environ")) else {
+            continue;
+        };
+        if environment
+            .split(|byte| *byte == 0)
+            .any(|entry| entry == expected_data.as_bytes())
+        {
+            pids.push(pid);
+        }
+    }
+    pids.sort_unstable();
+    pids
+}
+
 struct DaemonStopGuard<'a> {
     sandbox: &'a Sandbox,
 }
@@ -467,6 +729,37 @@ impl Drop for DaemonStopGuard<'_> {
         let heartbeat = self.sandbox.app_data_path("sync/daemon.heartbeat");
         let deadline = Instant::now() + Duration::from_secs(8);
         while heartbeat.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.wait_for_handoff_contenders();
+    }
+}
+
+impl DaemonStopGuard<'_> {
+    fn wait_for_handoff_contenders(&self) {
+        let lock_path = self.sandbox.path("runtime/smart-explorer-sync-daemon.lock");
+        if !lock_path.is_file() {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut quiet_since = None;
+        while Instant::now() < deadline {
+            let acquired = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .ok()
+                .is_some_and(|file| {
+                    (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }) == 0
+                });
+            if acquired {
+                let quiet = quiet_since.get_or_insert_with(Instant::now);
+                if quiet.elapsed() >= Duration::from_millis(500) {
+                    return;
+                }
+            } else {
+                quiet_since = None;
+            }
             thread::sleep(Duration::from_millis(20));
         }
     }

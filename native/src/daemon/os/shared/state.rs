@@ -23,7 +23,7 @@ fn sync_dir() -> std::path::PathBuf {
 fn heartbeat_path() -> std::path::PathBuf {
     sync_dir().join("daemon.heartbeat")
 }
-fn stop_path() -> std::path::PathBuf {
+pub(super) fn stop_path() -> std::path::PathBuf {
     sync_dir().join("daemon.stop")
 }
 fn log_path() -> std::path::PathBuf {
@@ -148,20 +148,6 @@ pub fn read_log_tail(lines: usize) -> String {
 pub fn request_stop() -> io::Result<()> {
     write_control(&stop_path(), "stop")
 }
-pub fn clear_stop() -> io::Result<()> {
-    remove_control(&stop_path())
-}
-pub(crate) fn stop_requested() -> bool {
-    stop_requested_checked().unwrap_or(true)
-}
-
-pub(crate) fn stop_requested_checked() -> io::Result<bool> {
-    match std::fs::symlink_metadata(stop_path()) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
 
 pub(crate) fn log(msg: &str) {
     if std::fs::metadata(log_path()).map(|m| m.len()).unwrap_or(0) > LOG_CAP_BYTES {
@@ -177,7 +163,7 @@ pub(crate) fn log(msg: &str) {
     }
 }
 
-fn read_optional(path: &std::path::Path) -> io::Result<Option<String>> {
+pub(super) fn read_optional(path: &std::path::Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(value) => Ok(Some(value)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -218,7 +204,7 @@ fn invalid_data(label: &str, error: impl std::fmt::Display) -> io::Error {
     )
 }
 
-fn write_control(path: &std::path::Path, value: &str) -> io::Result<()> {
+pub(super) fn write_control(path: &std::path::Path, value: &str) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "control path has no parent"))?;
