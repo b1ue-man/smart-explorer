@@ -356,12 +356,18 @@ mod tests {
         std::fs::write(base.join("package-lock.json"), "{}").unwrap();
         std::fs::write(base.join("a.bin"), b"same").unwrap();
         std::fs::write(base.join("b.bin"), b"same").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(base.join("b.bin"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400))
+            .unwrap();
         std::fs::write(base.join("empty.txt"), b"").unwrap();
         std::fs::write(base.join("node_modules/pkg/cache.js"), b"cached").unwrap();
 
         let opts = ReclaimOptions {
             large_min_bytes: 1,
-            stale_days: 0,
+            stale_days: 1,
             max_items: 50,
             duplicate_min_bytes: 1,
             partial_fingerprint_bytes: 2,
@@ -370,6 +376,7 @@ mod tests {
 
         assert!(report.large_files.iter().any(|item| item.name == "a.bin"));
         assert!(report.stale_files.iter().any(|item| item.name == "b.bin"));
+        assert!(!report.stale_files.iter().any(|item| item.name == "a.bin"));
         assert!(report
             .empty_files
             .iter()
