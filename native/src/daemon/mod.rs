@@ -1,5 +1,6 @@
-//! Headless background sync (#4). Started as `smart_explorer --sync-daemon`
-//! from a per-user logon autostart entry - see `autostart.rs`. It opens no
+//! Headless background sync (#4). Started as the current executable
+//! (`smart_explorer` or standalone `se`) with `--sync-daemon` from a per-user
+//! logon autostart entry - see `autostart`. It opens no
 //! window: it loops on a short tick, runs every *due* saved sync job, reacts to
 //! the event triggers (on-startup, real-time change, device/USB connect), writes
 //! a heartbeat the GUI can read, then sleeps. Because the daemon is the *same
@@ -22,6 +23,8 @@ mod backend_transfer;
 mod backend_tree_send;
 #[path = "os/shared/backend_walk.rs"]
 mod backend_walk;
+#[path = "os/shared/handoff.rs"]
+mod handoff;
 #[path = "os/shared/ipc.rs"]
 mod ipc;
 #[path = "os/shared/ipc_client.rs"]
@@ -63,14 +66,15 @@ mod state;
 
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker_checked, send_share_command, ShareWorkerSnapshot,
+    refresh_share_worker_checked, request_daemon_replacement, send_share_command,
+    ShareWorkerSnapshot,
 };
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
 pub use schedule::run_daemon;
 #[allow(unused_imports)]
 pub use state::{
-    autopause_flags, cadence_secs, clear_stop, is_running, last_heartbeat_age, pause_for_secs,
+    autopause_flags, cadence_secs, is_running, last_heartbeat_age, pause_for_secs,
     pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop, resume,
     set_autopause_flags, set_cadence_secs,
 };

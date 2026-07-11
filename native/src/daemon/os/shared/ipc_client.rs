@@ -3,13 +3,14 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::handoff::{request_handoff, stop_requested_for};
 use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse, ShareWorkerSnapshot,
 };
-use super::ipc_storage::{clear_ipc_addr, read_ipc_addr, read_token};
-use super::state::{clear_heartbeat, clear_stop, request_stop};
+use super::ipc_storage::{read_ipc_addr, read_ipc_generation, read_token};
 
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
+const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(25);
 
 pub fn open_share_backend(
     target: crate::share::PeerOpenTarget,
@@ -61,7 +62,7 @@ pub fn open_share_backend(
                                     return Err(last);
                                 }
                                 restarted_after_agent_error = true;
-                                restart_worker_for_client(true)?;
+                                restart_worker_for_client()?;
                                 std::thread::sleep(Duration::from_millis(750));
                                 continue;
                             }
@@ -75,7 +76,7 @@ pub fn open_share_backend(
             None => {
                 if !restarted_after_missing_ipc {
                     restarted_after_missing_ipc = true;
-                    restart_worker_for_client(false)?;
+                    restart_worker_for_client()?;
                 }
                 std::thread::sleep(Duration::from_millis(750));
             }
@@ -138,12 +139,29 @@ pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
 }
 
 pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
+    let mut last_error = "Background-Worker nicht erreichbar".to_string();
+    for attempt in 0..3 {
+        match drain_share_worker_events_once() {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => last_error = error,
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    Err(last_error)
+}
+
+fn drain_share_worker_events_once() -> Result<ShareWorkerSnapshot, String> {
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
-    set_stream_timeout(&stream, Some(Duration::from_millis(900)));
+    // A periodic refresh may briefly serialize credential/profile loading.
+    // Polling runs off the UI thread, so allow the same bounded response window
+    // as other control-plane commands instead of surfacing a transient EAGAIN.
+    set_stream_timeout(&stream, Some(Duration::from_secs(8)));
     write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
         .map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
@@ -155,45 +173,52 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
 
 pub fn ensure_worker_ready() -> Result<(), String> {
     match probe_worker(Duration::from_millis(700)) {
-        WorkerProbe::Ready => Ok(()),
-        WorkerProbe::Stale => restart_worker_for_client(true),
-        WorkerProbe::Missing => restart_worker_for_client(false),
+        WorkerProbe::Ready { .. } => Ok(()),
+        WorkerProbe::Starting { .. } => {
+            if wait_for_initializing_worker()? {
+                Ok(())
+            } else {
+                restart_worker_for_client()
+            }
+        }
+        WorkerProbe::Retiring => {
+            if wait_for_replacement_worker()? {
+                Ok(())
+            } else {
+                restart_worker_for_client()
+            }
+        }
+        WorkerProbe::Stale | WorkerProbe::Missing => restart_worker_for_client(),
     }
 }
 
-fn restart_worker_for_client(stop_existing: bool) -> Result<(), String> {
+/// Request a version-bound daemon handoff without waiting for Share readiness.
+/// GUI update paths use this after the updated application is already live.
+pub fn request_daemon_replacement() -> Result<(), String> {
+    launch_replacement().map(|_| ())
+}
+
+fn restart_worker_for_client() -> Result<(), String> {
     let _guard = WORKER_RESTART_LOCK
         .lock()
         .map_err(|_| "Background-Worker Neustart ist gesperrt".to_string())?;
     match probe_worker(Duration::from_millis(500)) {
-        WorkerProbe::Ready => return Ok(()),
-        WorkerProbe::Stale => {}
-        WorkerProbe::Missing if stop_existing => {}
-        WorkerProbe::Missing => {}
+        WorkerProbe::Ready { .. } => return Ok(()),
+        WorkerProbe::Starting { .. } if wait_for_initializing_worker()? => return Ok(()),
+        WorkerProbe::Starting { .. } => {}
+        WorkerProbe::Retiring if wait_for_replacement_worker()? => return Ok(()),
+        WorkerProbe::Retiring => {}
+        WorkerProbe::Stale | WorkerProbe::Missing => {}
     }
 
-    if stop_existing {
-        request_stop().map_err(|error| format!("Background-Worker Stop anfordern: {error}"))?;
-        let deadline = Instant::now() + Duration::from_secs(6);
-        while Instant::now() < deadline {
-            if matches!(
-                probe_worker(Duration::from_millis(400)),
-                WorkerProbe::Missing
-            ) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(250));
-        }
-    }
+    let replacement = launch_replacement()?;
 
-    clear_stop().map_err(|error| format!("Background-Worker Stopmarker entfernen: {error}"))?;
-    clear_heartbeat();
-    clear_ipc_addr();
-    crate::autostart::spawn_daemon_now();
-
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WORKER_READY_TIMEOUT;
     while Instant::now() < deadline {
-        if matches!(probe_worker(Duration::from_millis(700)), WorkerProbe::Ready) {
+        if matches!(
+            probe_worker(Duration::from_millis(700)),
+            WorkerProbe::Ready { generation } if replacement.accepts(&generation)
+        ) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -201,9 +226,80 @@ fn restart_worker_for_client(stop_existing: bool) -> Result<(), String> {
     Err("Background-Worker wurde nach dem Neustart nicht bereit".into())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn wait_for_initializing_worker() -> Result<bool, String> {
+    let deadline = Instant::now() + WORKER_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        match probe_worker(Duration::from_millis(700)) {
+            WorkerProbe::Ready { .. } => return Ok(true),
+            WorkerProbe::Starting { .. } => {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            WorkerProbe::Retiring | WorkerProbe::Stale | WorkerProbe::Missing => {
+                return Ok(false);
+            }
+        }
+    }
+    Err("Background-Worker Initialisierung hat das Zeitlimit ueberschritten".into())
+}
+
+fn wait_for_replacement_worker() -> Result<bool, String> {
+    let deadline = Instant::now() + WORKER_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if matches!(
+            probe_worker(Duration::from_millis(700)),
+            WorkerProbe::Ready { .. }
+        ) {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(false)
+}
+
+fn launch_replacement() -> Result<ReplacementLaunch, String> {
+    let retiring_generation = read_ipc_generation();
+    let generation = new_generation()?;
+    // Launch first. The handoff child waits for its generation-specific
+    // activation marker, so a failed CreateProcess/spawn cannot stop or strand
+    // the currently healthy worker.
+    crate::autostart::spawn_daemon_handoff_checked(&generation, retiring_generation.as_deref())
+        .map_err(|error| format!("Background-Worker starten: {error}"))?;
+    request_handoff(&generation)
+        .map_err(|error| format!("Background-Worker Handoff aktivieren: {error}"))?;
+    Ok(ReplacementLaunch {
+        expected_generation: generation,
+        retiring_generation,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplacementLaunch {
+    expected_generation: String,
+    retiring_generation: Option<String>,
+}
+
+impl ReplacementLaunch {
+    fn accepts(&self, generation: &str) -> bool {
+        generation == self.expected_generation
+            || self
+                .retiring_generation
+                .as_deref()
+                .is_none_or(|retiring| generation != retiring)
+    }
+}
+
+fn new_generation() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| format!("Background-Worker Generation: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum WorkerProbe {
-    Ready,
+    Ready { generation: String },
+    Starting { generation: String },
+    Retiring,
     Stale,
     Missing,
 }
@@ -224,12 +320,26 @@ fn probe_worker(timeout: Duration) -> WorkerProbe {
         return WorkerProbe::Missing;
     }
     match read_response(&mut stream) {
-        Ok(IpcResponse::Pong { version }) if worker_version_is_current(&version) => {
-            WorkerProbe::Ready
+        Ok(IpcResponse::Pong {
+            version,
+            generation,
+            initialized,
+        }) if worker_version_is_current(&version) && valid_generation(&generation) => {
+            if initialized && stop_requested_for(&generation) {
+                WorkerProbe::Retiring
+            } else if initialized {
+                WorkerProbe::Ready { generation }
+            } else {
+                WorkerProbe::Starting { generation }
+            }
         }
         Ok(IpcResponse::Pong { .. }) => WorkerProbe::Stale,
         Ok(_) | Err(_) => WorkerProbe::Missing,
     }
+}
+
+fn valid_generation(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn worker_version_is_current(version: &str) -> bool {
@@ -291,12 +401,43 @@ fn unavailable<T>() -> io::Result<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::worker_version_is_current;
+    use super::{worker_version_is_current, ReplacementLaunch};
 
     #[test]
     fn worker_ping_requires_current_version() {
         assert!(worker_version_is_current(env!("CARGO_PKG_VERSION")));
         assert!(!worker_version_is_current(""));
         assert!(!worker_version_is_current("0.0.0"));
+    }
+
+    #[test]
+    fn replacement_accepts_its_requested_generation() {
+        let replacement = ReplacementLaunch {
+            expected_generation: "11111111111111111111111111111111".into(),
+            retiring_generation: Some("00000000000000000000000000000000".into()),
+        };
+
+        assert!(replacement.accepts("11111111111111111111111111111111"));
+    }
+
+    #[test]
+    fn fresh_concurrent_launch_accepts_the_winning_generation() {
+        let replacement = ReplacementLaunch {
+            expected_generation: "11111111111111111111111111111111".into(),
+            retiring_generation: None,
+        };
+
+        assert!(replacement.accepts("22222222222222222222222222222222"));
+    }
+
+    #[test]
+    fn replacement_rejects_the_retiring_generation_but_accepts_another_successor() {
+        let replacement = ReplacementLaunch {
+            expected_generation: "11111111111111111111111111111111".into(),
+            retiring_generation: Some("00000000000000000000000000000000".into()),
+        };
+
+        assert!(!replacement.accepts("00000000000000000000000000000000"));
+        assert!(replacement.accepts("22222222222222222222222222222222"));
     }
 }

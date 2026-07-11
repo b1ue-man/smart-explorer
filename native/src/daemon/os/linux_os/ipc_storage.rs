@@ -6,6 +6,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
+const IPC_GENERATION_FILE: &str = "daemon.generation";
 const SYNC_DIRECTORY: &[u8] = b"sync\0";
 const TOKEN_NAME: &[u8] = b"daemon.token\0";
 const APP_DIRECTORY_MODE: u32 = 0o700;
@@ -16,9 +17,19 @@ fn ipc_addr_path() -> PathBuf {
     app_data_path().join("sync").join(IPC_ADDR_FILE)
 }
 
+fn ipc_generation_path() -> PathBuf {
+    app_data_path().join("sync").join(IPC_GENERATION_FILE)
+}
+
 pub(super) fn clear_ipc_addr() {
     if secure_sync_directory().is_ok() {
         let _ = std::fs::remove_file(ipc_addr_path());
+    }
+}
+
+pub(super) fn clear_ipc_generation() {
+    if secure_sync_directory().is_ok() {
+        let _ = std::fs::remove_file(ipc_generation_path());
     }
 }
 
@@ -27,11 +38,24 @@ pub(super) fn write_ipc_addr(addr: SocketAddr) -> io::Result<()> {
     std::fs::write(ipc_addr_path(), addr.to_string())
 }
 
+pub(super) fn write_ipc_generation(generation: &str) -> io::Result<()> {
+    secure_sync_directory()?;
+    std::fs::write(ipc_generation_path(), generation)
+}
+
 pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
     secure_sync_directory().ok()?;
     std::fs::read_to_string(ipc_addr_path())
         .ok()
         .and_then(|text| text.trim().parse().ok())
+}
+
+pub(super) fn read_ipc_generation() -> Option<String> {
+    secure_sync_directory().ok()?;
+    let generation = std::fs::read_to_string(ipc_generation_path()).ok()?;
+    let generation = generation.trim();
+    (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| generation.to_string())
 }
 
 pub(super) fn load_or_create_token() -> io::Result<String> {

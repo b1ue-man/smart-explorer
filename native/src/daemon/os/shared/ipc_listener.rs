@@ -4,20 +4,31 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::handoff::stop_requested_for;
 use super::ipc_host::ShareHost;
-use super::ipc_storage::{clear_ipc_addr, load_or_create_token, write_ipc_addr};
+use super::ipc_storage::{
+    clear_ipc_addr, clear_ipc_generation, load_or_create_token, write_ipc_addr,
+    write_ipc_generation,
+};
 use super::line::MAX_IPC_LINE;
-use super::state::{log, stop_requested};
+use super::state::log;
 
 const PRE_AUTH_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PRE_AUTH_CONNECTIONS: usize = 16;
 
 pub(crate) fn start_listener(host: ShareHost) -> io::Result<()> {
+    // The singleton is held before this function is called, so any address
+    // left by a crashed/older instance is now safe for the new owner to clear.
+    clear_publication();
     let token = load_or_create_token()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
-    write_ipc_addr(addr)?;
+    write_ipc_generation(host.generation())?;
+    if let Err(error) = write_ipc_addr(addr) {
+        clear_ipc_generation();
+        return Err(error);
+    }
     let limiter = PreAuthLimiter::new(MAX_PRE_AUTH_CONNECTIONS);
 
     let spawned = std::thread::Builder::new()
@@ -25,8 +36,11 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<()> {
         .spawn(move || {
             log(&format!("background worker IPC listening on {addr}"));
             loop {
-                if stop_requested() {
-                    clear_ipc_addr();
+                if stop_requested_for(host.generation()) {
+                    // Leave this generation's publication in place. The next
+                    // singleton owner clears it before publishing, while a
+                    // delayed retiring listener must never erase a successor's
+                    // address or generation sidecar.
                     return;
                 }
                 match listener.accept() {
@@ -71,10 +85,15 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<()> {
     match spawned {
         Ok(_) => Ok(()),
         Err(error) => {
-            clear_ipc_addr();
+            clear_publication();
             Err(error)
         }
     }
+}
+
+fn clear_publication() {
+    clear_ipc_addr();
+    clear_ipc_generation();
 }
 
 pub(super) fn read_pre_auth_line(

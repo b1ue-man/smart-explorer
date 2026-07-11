@@ -60,6 +60,36 @@ pub(crate) fn atomic_replace(
     }
 }
 
+pub(crate) fn restore_control_if_absent(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let ok = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if ok != 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
 pub(crate) fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     metadata.file_attributes()
@@ -70,41 +100,55 @@ pub(crate) fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
 pub(crate) fn acquire_daemon_instance_guard(
     timeout: std::time::Duration,
 ) -> Option<DaemonInstanceGuard> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match try_acquire_daemon_mutex() {
-            Ok(Some(guard)) => return Some(guard),
-            Ok(None) if super::state::stop_requested() && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-            Ok(None) => return None,
-            Err(e) => {
-                super::state::log(&format!("daemon single-instance lock failed: {e}"));
-                return None;
-            }
+    match try_acquire_daemon_mutex(timeout) {
+        Ok(guard) => guard,
+        Err(error) => {
+            super::state::log(&format!("daemon single-instance lock failed: {error}"));
+            None
         }
     }
 }
 
-fn try_acquire_daemon_mutex() -> std::io::Result<Option<DaemonInstanceGuard>> {
+fn try_acquire_daemon_mutex(
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<DaemonInstanceGuard>> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 
     let name: Vec<u16> = std::ffi::OsStr::new(r"Local\SmartExplorerSyncDaemon")
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
     unsafe {
-        let handle = CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr());
+        // Opening an existing named mutex is not ownership. Wait on the mutex
+        // so a replacement can perform a bounded handoff after the old daemon
+        // closes IPC but before its process releases the singleton.
+        let handle = CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr());
         if handle.is_null() {
             return Err(std::io::Error::last_os_error());
         }
-        if GetLastError() == ERROR_ALREADY_EXISTS {
-            CloseHandle(handle);
-            return Ok(None);
+        let milliseconds = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        match WaitForSingleObject(handle, milliseconds) {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Some(DaemonInstanceGuard(handle))),
+            WAIT_TIMEOUT => {
+                CloseHandle(handle);
+                Ok(None)
+            }
+            WAIT_FAILED => {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                Err(error)
+            }
+            unexpected => {
+                CloseHandle(handle);
+                Err(std::io::Error::other(format!(
+                    "unexpected daemon mutex wait result: {unexpected}"
+                )))
+            }
         }
-        Ok(Some(DaemonInstanceGuard(handle)))
     }
 }
 

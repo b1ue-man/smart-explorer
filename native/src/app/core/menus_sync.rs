@@ -190,9 +190,8 @@ impl App {
         {
             if bg {
                 match crate::autostart::enable() {
-                    Ok(_) => match crate::daemon::clear_stop() {
+                    Ok(_) => match crate::daemon::request_daemon_replacement() {
                         Ok(()) => {
-                            crate::autostart::spawn_daemon_now();
                             self.notice = Some((
                                 "✓ Hintergrund-Sync aktiviert".to_string(),
                                 std::time::Instant::now(),
@@ -204,7 +203,7 @@ impl App {
                                 .map(|rollback| format!("; Autostart-Rücknahme: {rollback}"))
                                 .unwrap_or_default();
                             self.error_msg = Some(format!(
-                                    "Hintergrund-Sync bleibt aus: Stoppsperre konnte nicht sicher aufgehoben werden: {error}{rollback}"
+                                    "Hintergrund-Sync bleibt aus: Dienst konnte nicht sicher gestartet werden: {error}{rollback}"
                                 ));
                         }
                     },

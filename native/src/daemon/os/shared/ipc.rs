@@ -5,7 +5,7 @@ use std::time::Instant;
 use super::backend_server::serve_backend;
 pub use super::ipc_client::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker_checked, send_share_command,
+    refresh_share_worker_checked, request_daemon_replacement, send_share_command,
 };
 pub(crate) use super::ipc_host::ShareHost;
 pub(crate) use super::ipc_listener::start_listener;
@@ -31,6 +31,8 @@ pub(super) fn handle_client(
             &mut stream,
             &IpcResponse::Pong {
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                generation: host.generation().to_string(),
+                initialized: host.initialized(),
             },
         ),
         IpcRequest::RefreshShare { .. } => match host.refresh_now() {

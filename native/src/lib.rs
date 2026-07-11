@@ -45,17 +45,17 @@ pub fn run_gui() -> eframe::Result<()> {
     install_panic_logger();
 
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--sync-daemon") {
+        daemon::run_daemon();
+        return Ok(());
+    }
+
     let just_updated = args.iter().any(|a| a == "--updated");
     let startup_ack_pending =
         updater::capture_update_startup_ack(just_updated).unwrap_or_else(|error| panic!("{error}"));
     if !startup_ack_pending {
         updater::cleanup_old_binaries();
         updater::archive_current_version();
-    }
-
-    if args.iter().any(|a| a == "--sync-daemon") {
-        daemon::run_daemon();
-        return Ok(());
     }
 
     #[cfg(windows)]

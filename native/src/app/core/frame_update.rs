@@ -36,8 +36,8 @@ impl eframe::App for App {
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
             self.post_update_daemon_at = None;
-            match crate::daemon::request_stop() {
-                Ok(()) => crate::autostart::spawn_daemon_now(),
+            match crate::daemon::request_daemon_replacement() {
+                Ok(()) => {}
                 Err(error) => {
                     self.error_msg = Some(format!(
                         "Hintergrunddienst konnte nach dem Update nicht sicher neu gestartet werden: {error}"
