@@ -1,6 +1,6 @@
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::io::{self, Read};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 
 use suppaftp::RustlsFtpStream;
 
@@ -12,54 +12,204 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
 /// connection out until its data stream is finalized or aborted; other calls
 /// wait rather than issuing commands into an active transfer's response.
 pub(super) struct FtpConnection {
-    stream: Mutex<Option<RustlsFtpStream>>,
+    state: Mutex<ControlState>,
     available: Condvar,
+    reconnect: FtpReconnect,
+    keepalive: Arc<KeepaliveControl>,
 }
 
+struct ControlState {
+    stream: Option<RustlsFtpStream>,
+    last_activity: Instant,
+    health: ControlHealth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlHealth {
+    Healthy,
+    Suspect,
+}
+
+struct KeepaliveControl {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
+
+pub(super) type FtpReconnect = Arc<dyn Fn() -> io::Result<RustlsFtpStream> + Send + Sync>;
+
+const FTP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const FTP_KEEPALIVE_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl FtpConnection {
-    pub(super) fn new(stream: RustlsFtpStream) -> Self {
-        Self {
-            stream: Mutex::new(Some(stream)),
-            available: Condvar::new(),
-        }
+    pub(super) fn new(stream: RustlsFtpStream, reconnect: FtpReconnect) -> io::Result<Arc<Self>> {
+        Self::new_with_timing(
+            stream,
+            reconnect,
+            FTP_KEEPALIVE_INTERVAL,
+            FTP_KEEPALIVE_IO_TIMEOUT,
+        )
     }
 
-    fn wait_for_stream(&self) -> io::Result<MutexGuard<'_, Option<RustlsFtpStream>>> {
-        let mut slot = self
-            .stream
+    pub(super) fn new_with_timing(
+        stream: RustlsFtpStream,
+        reconnect: FtpReconnect,
+        interval: Duration,
+        io_timeout: Duration,
+    ) -> io::Result<Arc<Self>> {
+        let connection = Arc::new(Self {
+            state: Mutex::new(ControlState {
+                stream: Some(stream),
+                last_activity: Instant::now(),
+                health: ControlHealth::Healthy,
+            }),
+            available: Condvar::new(),
+            reconnect,
+            keepalive: Arc::new(KeepaliveControl {
+                stopped: Mutex::new(false),
+                wake: Condvar::new(),
+            }),
+        });
+        Self::spawn_keepalive(&connection, interval, io_timeout)?;
+        Ok(connection)
+    }
+
+    fn wait_for_stream(&self) -> io::Result<MutexGuard<'_, ControlState>> {
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| io_err("FTP-Verbindung vergiftet"))?;
-        while slot.is_none() {
-            slot = self
+        while state.stream.is_none() {
+            state = self
                 .available
-                .wait(slot)
+                .wait(state)
                 .map_err(|_| io_err("FTP-Verbindung vergiftet"))?;
         }
-        Ok(slot)
+        Ok(state)
     }
 
-    pub(super) fn with_stream<T>(
+    fn reconnect_locked(&self, state: &mut ControlState) -> io::Result<()> {
+        let replacement = (self.reconnect)()?;
+        state.stream = Some(replacement);
+        state.health = ControlHealth::Healthy;
+        state.last_activity = Instant::now();
+        Ok(())
+    }
+
+    fn ensure_healthy(&self, state: &mut ControlState) -> io::Result<()> {
+        if state.health == ControlHealth::Suspect {
+            self.reconnect_locked(state)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn with_stream_mutation<T>(
         &self,
         operation: impl FnOnce(&mut RustlsFtpStream) -> io::Result<T>,
     ) -> io::Result<T> {
-        let mut slot = self.wait_for_stream()?;
-        let stream = slot
-            .as_mut()
-            .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?;
-        operation(stream)
+        let mut state = self.wait_for_stream()?;
+        self.ensure_healthy(&mut state)?;
+        let result = operation(
+            state
+                .stream
+                .as_mut()
+                .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?,
+        );
+        state.last_activity = Instant::now();
+        if result.is_err() {
+            state.health = ControlHealth::Suspect;
+        }
+        drop(state);
+        self.keepalive.wake.notify_all();
+        result
+    }
+
+    pub(super) fn with_stream_read<T>(
+        &self,
+        mut operation: impl FnMut(&mut RustlsFtpStream) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut state = self.wait_for_stream()?;
+        self.ensure_healthy(&mut state)?;
+        let first = operation(
+            state
+                .stream
+                .as_mut()
+                .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?,
+        );
+        let result = match first {
+            Ok(value) => Ok(value),
+            Err(first_error) => {
+                state.health = ControlHealth::Suspect;
+                match self.reconnect_locked(&mut state) {
+                    Ok(()) => operation(
+                        state
+                            .stream
+                            .as_mut()
+                            .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?,
+                    ),
+                    Err(reconnect_error) => Err(io::Error::new(
+                        first_error.kind(),
+                        format!(
+                            "{first_error}; FTP-Wiederverbindung vor sicherem Lese-Retry fehlgeschlagen: {reconnect_error}"
+                        ),
+                    )),
+                }
+            }
+        };
+        state.last_activity = Instant::now();
+        state.health = if result.is_ok() {
+            ControlHealth::Healthy
+        } else {
+            ControlHealth::Suspect
+        };
+        drop(state);
+        self.keepalive.wake.notify_all();
+        result
     }
 
     pub(super) fn open_reader(self: &Arc<Self>, path: &str) -> io::Result<FtpReader> {
-        let mut slot = self.wait_for_stream()?;
-        let data = slot
+        let mut state = self.wait_for_stream()?;
+        self.ensure_healthy(&mut state)?;
+        let data = match state
+            .stream
             .as_mut()
             .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?
             .retr_as_stream(path)
-            .map_err(io_err)?;
-        let control = slot
+            .map_err(io_err)
+        {
+            Ok(data) => data,
+            Err(first_error) => {
+                state.health = ControlHealth::Suspect;
+                self.reconnect_locked(&mut state).map_err(|reconnect_error| {
+                    io::Error::new(
+                        first_error.kind(),
+                        format!(
+                            "{first_error}; FTP-Wiederverbindung vor RETR fehlgeschlagen: {reconnect_error}"
+                        ),
+                    )
+                })?;
+                match state
+                    .stream
+                    .as_mut()
+                    .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?
+                    .retr_as_stream(path)
+                    .map_err(io_err)
+                {
+                    Ok(data) => data,
+                    Err(error) => {
+                        state.health = ControlHealth::Suspect;
+                        state.last_activity = Instant::now();
+                        drop(state);
+                        self.keepalive.wake.notify_all();
+                        return Err(error);
+                    }
+                }
+            }
+        };
+        let control = state
+            .stream
             .take()
             .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?;
-        drop(slot);
+        drop(state);
         Ok(FtpReader {
             owner: self.clone(),
             control: Some(control),
@@ -67,17 +217,126 @@ impl FtpConnection {
         })
     }
 
-    fn return_stream(&self, stream: RustlsFtpStream) {
-        let mut slot = match self.stream.lock() {
-            Ok(slot) => slot,
+    fn return_stream(&self, stream: RustlsFtpStream, healthy: bool) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
-        debug_assert!(slot.is_none(), "FTP control connection returned twice");
-        if slot.is_none() {
-            *slot = Some(stream);
+        debug_assert!(
+            state.stream.is_none(),
+            "FTP control connection returned twice"
+        );
+        if state.stream.is_none() {
+            state.stream = Some(stream);
+            state.last_activity = Instant::now();
+            state.health = if healthy {
+                ControlHealth::Healthy
+            } else {
+                ControlHealth::Suspect
+            };
         }
-        drop(slot);
+        drop(state);
         self.available.notify_one();
+        self.keepalive.wake.notify_all();
+    }
+
+    fn spawn_keepalive(
+        connection: &Arc<Self>,
+        interval: Duration,
+        io_timeout: Duration,
+    ) -> io::Result<()> {
+        let weak = Arc::downgrade(connection);
+        let control = connection.keepalive.clone();
+        std::thread::Builder::new()
+            .name("ftp-keepalive".to_string())
+            .spawn(move || run_keepalive(weak, control, interval, io_timeout))?;
+        Ok(())
+    }
+
+    fn keepalive_once(&self, interval: Duration, io_timeout: Duration) {
+        let Ok(mut state) = self.state.try_lock() else {
+            return;
+        };
+        if state.health == ControlHealth::Healthy && state.last_activity.elapsed() < interval {
+            return;
+        }
+        if state.health == ControlHealth::Suspect {
+            if self.reconnect_locked(&mut state).is_err() {
+                state.last_activity = Instant::now();
+            }
+            return;
+        }
+        let Some(stream) = state.stream.as_mut() else {
+            return;
+        };
+        let previous_read_timeout = stream.get_ref().read_timeout().ok().flatten();
+        let previous_write_timeout = stream.get_ref().write_timeout().ok().flatten();
+        let configured = stream
+            .get_ref()
+            .set_read_timeout(Some(io_timeout))
+            .and_then(|()| stream.get_ref().set_write_timeout(Some(io_timeout)));
+        let ping = configured.and_then(|()| stream.noop().map_err(io_err));
+        let _ = stream.get_ref().set_read_timeout(previous_read_timeout);
+        let _ = stream.get_ref().set_write_timeout(previous_write_timeout);
+        if ping.is_err() {
+            state.health = ControlHealth::Suspect;
+            if self.reconnect_locked(&mut state).is_err() {
+                state.last_activity = Instant::now();
+            }
+            return;
+        }
+        state.health = ControlHealth::Healthy;
+        state.last_activity = Instant::now();
+    }
+
+    fn keepalive_delay(&self, interval: Duration) -> Duration {
+        let Ok(state) = self.state.lock() else {
+            return Duration::ZERO;
+        };
+        if state.stream.is_none() {
+            return interval;
+        }
+        interval.saturating_sub(state.last_activity.elapsed())
+    }
+}
+
+fn run_keepalive(
+    connection: Weak<FtpConnection>,
+    control: Arc<KeepaliveControl>,
+    interval: Duration,
+    io_timeout: Duration,
+) {
+    loop {
+        let delay = match connection.upgrade() {
+            Some(connection) => connection.keepalive_delay(interval),
+            None => return,
+        };
+        let Ok(stopped) = control.stopped.lock() else {
+            return;
+        };
+        let Ok((stopped, wait)) = control.wake.wait_timeout(stopped, delay) else {
+            return;
+        };
+        if *stopped {
+            return;
+        }
+        drop(stopped);
+        if !wait.timed_out() {
+            continue;
+        }
+        let Some(connection) = connection.upgrade() else {
+            return;
+        };
+        connection.keepalive_once(interval, io_timeout);
+    }
+}
+
+impl Drop for FtpConnection {
+    fn drop(&mut self) {
+        if let Ok(mut stopped) = self.keepalive.stopped.lock() {
+            *stopped = true;
+            self.keepalive.wake.notify_all();
+        }
     }
 }
 
@@ -97,7 +356,7 @@ impl FtpReader {
             Some(data) => control.abort(data).map_err(io_err),
             None => Err(io_err("FTP-Datenstrom fehlt")),
         };
-        self.owner.return_stream(control);
+        self.owner.return_stream(control, result.is_ok());
         result
     }
 }
@@ -126,120 +385,5 @@ impl Drop for FtpReader {
         if self.data.is_some() {
             let _ = self.close(false);
         }
-    }
-}
-
-pub(super) trait FtpUpload: Send + Sync {
-    fn upload(&self, path: &str, source: &mut File) -> io::Result<()>;
-}
-
-impl FtpUpload for FtpConnection {
-    fn upload(&self, path: &str, source: &mut File) -> io::Result<()> {
-        self.with_stream(|stream| stream.put_file(path, source).map(|_| ()).map_err(io_err))
-    }
-}
-
-/// A remote writer whose only side-effect boundary is `flush`. Bytes are
-/// staged in an anonymous file, so dropping an unfinished writer only removes
-/// local temporary storage and never starts a remote STOR operation.
-pub(super) struct FtpWriter {
-    uploader: Arc<dyn FtpUpload>,
-    path: String,
-    spool: File,
-    committed: bool,
-}
-
-impl FtpWriter {
-    pub(super) fn new(uploader: Arc<dyn FtpUpload>, path: String) -> io::Result<Self> {
-        Ok(Self {
-            uploader,
-            path,
-            spool: tempfile::tempfile()?,
-            committed: false,
-        })
-    }
-
-    fn commit(&mut self) -> io::Result<()> {
-        if self.committed {
-            return Ok(());
-        }
-        self.spool.flush()?;
-        self.spool.seek(SeekFrom::Start(0))?;
-        let result = self.uploader.upload(&self.path, &mut self.spool);
-        if result.is_ok() {
-            self.committed = true;
-            return Ok(());
-        }
-        self.spool.seek(SeekFrom::End(0))?;
-        result
-    }
-
-    #[cfg(test)]
-    fn spooled_bytes(&self) -> io::Result<u64> {
-        self.spool.metadata().map(|metadata| metadata.len())
-    }
-}
-
-impl Write for FtpWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.committed {
-            return Err(io_err("Upload bereits abgeschlossen"));
-        }
-        self.spool.write(data)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.commit()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-    #[derive(Default)]
-    struct CountingUpload {
-        calls: AtomicUsize,
-        bytes: AtomicU64,
-    }
-
-    impl FtpUpload for CountingUpload {
-        fn upload(&self, _path: &str, source: &mut File) -> io::Result<()> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let copied = io::copy(source, &mut io::sink())?;
-            self.bytes.fetch_add(copied, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn dropping_unflushed_writer_never_uploads() {
-        let upload = Arc::new(CountingUpload::default());
-        {
-            let mut writer = FtpWriter::new(upload.clone(), "/draft".to_string()).unwrap();
-            writer.write_all(b"not committed").unwrap();
-        }
-        assert_eq!(upload.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(upload.bytes.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn large_payload_is_disk_spooled_and_streamed_once() {
-        static CHUNK: [u8; 64 * 1024] = [0x5a; 64 * 1024];
-        const REPEATS: usize = 256;
-        let upload = Arc::new(CountingUpload::default());
-        let mut writer = FtpWriter::new(upload.clone(), "/large".to_string()).unwrap();
-        for _ in 0..REPEATS {
-            writer.write_all(&CHUNK).unwrap();
-        }
-        let expected = (CHUNK.len() * REPEATS) as u64;
-        assert_eq!(writer.spooled_bytes().unwrap(), expected);
-
-        writer.flush().unwrap();
-        writer.flush().unwrap();
-        assert_eq!(upload.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(upload.bytes.load(Ordering::SeqCst), expected);
-        assert!(writer.write_all(b"late").is_err());
     }
 }

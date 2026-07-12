@@ -20,6 +20,15 @@ Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
 prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
 zurück.
 
+**Idle-Verbindungen (ab 0.5.131):** SFTP und der SSH-Agent halten ihre
+authentifizierten Sitzungen aktiv; FTP/FTPS prueft unbenutzte Kontrollkanaele
+mit `NOOP`; Share ueberwacht Signaling und Iroh/QUIC. WebDAV und Drive ersetzen
+stale gepoolte HTTPS-Verbindungen vor sicheren Leseoperationen, waehrend
+UNC/SMB-Leases bis zum letzten Benutzer erhalten bleiben. Verbindungsaufbau und
+echte Inaktivitaet sind begrenzt, aber eine laufende Datenuebertragung wird
+nicht wegen ihrer Gesamtdauer geschlossen. Fehlgeschlagene Schreib-, Loesch-
+oder Umbenennungsoperationen werden dabei niemals blind wiederholt.
+
 **Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
 senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und
 versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
@@ -129,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.130.exe`](release-native/Smart%20Explorer%20Setup%200.5.130.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.131.exe`](release-native/Smart%20Explorer%20Setup%200.5.131.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
@@ -189,6 +198,7 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/explorer-command/` | Separate COM-DLL (`IExplorerCommand`) für das Win11-Modern-Kontextmenü |
 | `native/installer.nsi` | NSIS-Installer-Skript |
 | `native/publish-release-local.ps1` | Standard-Release auf Windows: Windows + Linux isoliert bauen, vollständig prüfen, Feed atomar promoten |
+| `native/publish-feed.sh` | Vollständiger Release auf Linux/WSL: Windows + Linux, Installer, DLL und Share-Server bauen/pruefen, Feed atomar promoten |
 | `native/publish-update.ps1` | Windows-only-Bundle; verlangt `-AllowPartialFeed` sowie getrennte, explizite `-Feed`- und `-ReleaseOutput`-Pfade |
 | `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen; Versions-Commit nur mit passendem Windows-Build-Manifest |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |

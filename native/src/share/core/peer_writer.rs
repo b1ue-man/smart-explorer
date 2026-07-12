@@ -18,21 +18,31 @@ pub(super) fn writer(
         node,
         send: Some(send),
         recv: Some(recv),
-        finished: false,
+        state: WriterState::Open,
     })
+}
+
+enum WriterState {
+    Open,
+    Committed,
+    Failed(io::ErrorKind, String),
 }
 
 struct PeerWriter {
     node: Arc<ShareIrohNode>,
     send: Option<SendStream>,
     recv: Option<RecvStream>,
-    finished: bool,
+    state: WriterState,
 }
 
 impl PeerWriter {
     fn finish(&mut self) -> io::Result<()> {
-        if self.finished {
-            return Ok(());
+        match &self.state {
+            WriterState::Committed => return Ok(()),
+            WriterState::Failed(kind, message) => {
+                return Err(io::Error::new(*kind, message.clone()))
+            }
+            WriterState::Open => {}
         }
         let Some(mut send) = self.send.take() else {
             return Err(eio("Peer-Schreibkanal geschlossen"));
@@ -40,41 +50,73 @@ impl PeerWriter {
         let Some(mut recv) = self.recv.take() else {
             return Err(eio("Peer-Schreibantwort geschlossen"));
         };
-        self.node.block_on(async {
-            send_ctrl(
-                &mut send,
-                &Ctrl::Fs {
-                    req: FsRequest::WriteDone,
-                },
-            )
-            .await?;
-            match recv_resp(&mut recv).await? {
-                FsResponse::Ok => {
-                    send.finish().map_err(eio)?;
-                    Ok(())
+        let result = self
+            .node
+            .block_on(super::io_deadline::run("peer write finish", async {
+                send_ctrl(
+                    &mut send,
+                    &Ctrl::Fs {
+                        req: FsRequest::WriteDone,
+                    },
+                )
+                .await?;
+                match recv_resp(&mut recv).await? {
+                    FsResponse::Ok => {
+                        send.finish().map_err(eio)?;
+                        Ok(())
+                    }
+                    _ => Err(eio("unerwartete Antwort auf Schreib-Ende")),
                 }
-                _ => Err(eio("unerwartete Antwort auf Schreib-Ende")),
+            }));
+        match result {
+            Ok(()) => {
+                self.state = WriterState::Committed;
+                Ok(())
             }
-        })?;
-        self.finished = true;
-        Ok(())
+            Err(error) => {
+                super::io_deadline::abort(&mut send, &mut recv);
+                self.state = WriterState::Failed(error.kind(), error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    fn fail_open_stream(&mut self, error: io::Error) -> io::Error {
+        if let (Some(send), Some(recv)) = (self.send.as_mut(), self.recv.as_mut()) {
+            super::io_deadline::abort(send, recv);
+        }
+        self.send.take();
+        self.recv.take();
+        self.state = WriterState::Failed(error.kind(), error.to_string());
+        error
     }
 }
 
 impl Write for PeerWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.finished {
-            return Err(eio("Peer-Schreibkanal ist bereits abgeschlossen"));
-        }
-        let Some(send) = self.send.as_mut() else {
-            return Err(eio("Peer-Schreibkanal geschlossen"));
-        };
-        self.node.block_on(async {
-            for chunk in buf.chunks(fs::CHUNK) {
-                send_tagged(send, TAG_DATA, chunk).await?;
+        match &self.state {
+            WriterState::Committed => {
+                return Err(eio("Peer-Schreibkanal ist bereits abgeschlossen"))
             }
-            Ok::<(), io::Error>(())
-        })?;
+            WriterState::Failed(kind, message) => {
+                return Err(io::Error::new(*kind, message.clone()))
+            }
+            WriterState::Open => {}
+        }
+        for chunk in buf.chunks(fs::CHUNK) {
+            let result = {
+                let Some(send) = self.send.as_mut() else {
+                    return Err(eio("Peer-Schreibkanal geschlossen"));
+                };
+                self.node.block_on(super::io_deadline::run(
+                    "peer write data chunk",
+                    send_tagged(send, TAG_DATA, chunk),
+                ))
+            };
+            if let Err(error) = result {
+                return Err(self.fail_open_stream(error));
+            }
+        }
         Ok(buf.len())
     }
 
@@ -85,8 +127,7 @@ impl Write for PeerWriter {
 
 impl Drop for PeerWriter {
     fn drop(&mut self) {
-        if !self.finished {
-            self.finished = true;
+        if matches!(self.state, WriterState::Open) {
             // Stream drop/reset makes the host abandon and remove its staged
             // file. Only an explicit flush sends WriteDone and promotes it.
             drop(self.send.take());

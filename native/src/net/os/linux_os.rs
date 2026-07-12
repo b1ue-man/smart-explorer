@@ -11,4 +11,6 @@ pub(super) fn connect_impl(
     ))
 }
 
-pub(super) fn disconnect_impl(_share: &str) {}
+pub(super) fn disconnect_impl(_share: &str) -> io::Result<()> {
+    Ok(())
+}

@@ -1,4 +1,4 @@
-use super::api::{drive_request, parse_json, send_retry, API};
+use super::api::{drive_request, mutation_once, parse_json, MutationRequestError};
 use super::core::cloud_urlenc;
 use super::GDriveBackend;
 use crate::vfs::VfsResult;
@@ -29,10 +29,10 @@ impl GDriveBackend {
         let mut page_token: Option<String> = None;
         let mut seen_tokens = HashSet::new();
         for _ in 0..MAX_QUERY_PAGES {
-            let mut url = format!(
-                "{API}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,md5Checksum,parents,trashed)&pageSize={QUERY_LIMIT}",
+            let mut url = self.api_url(&format!(
+                "files?q={}&fields=nextPageToken,files(id,name,mimeType,size,md5Checksum,parents,trashed)&pageSize={QUERY_LIMIT}",
                 cloud_urlenc(&query)
-            );
+            ));
             if let Some(token) = page_token.as_deref() {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(token)));
             }
@@ -75,7 +75,7 @@ impl GDriveBackend {
         destination_parent_id: &str,
         destination_name: &str,
     ) -> VfsResult<()> {
-        let mut url = format!("{API}/files/{}?fields=id", cloud_urlenc(id));
+        let mut url = self.api_url(&format!("files/{}?fields=id", cloud_urlenc(id)));
         if source_parent_id != destination_parent_id {
             url.push_str(&format!(
                 "&addParents={}&removeParents={}",
@@ -85,19 +85,79 @@ impl GDriveBackend {
         }
         let bearer = format!("Bearer {}", self.bearer()?);
         let payload = serde_json::json!({ "name": destination_name }).to_string();
-        let response = parse_json(send_retry(|| {
-            drive_request(
-                ureq::request("PATCH", &url)
-                    .set("Authorization", &bearer)
-                    .set("Content-Type", "application/json")
-                    .send_string(&payload),
-            )
-        })?)?;
-        if response["id"].as_str() != Some(id) {
-            return Err(invalid("Drive rename returned an unexpected object ID"));
+        let response = mutation_once(drive_request(
+            self.timed_request(ureq::request("PATCH", &url))
+                .set("Authorization", &bearer)
+                .set("Content-Type", "application/json")
+                .send_string(&payload),
+        ));
+        match response {
+            Ok(response) => {
+                let response_state = response
+                    .into_string()
+                    .map_err(super::api::err)
+                    .and_then(parse_json)
+                    .and_then(|json| {
+                        if json["id"].as_str() == Some(id) {
+                            Ok(())
+                        } else {
+                            Err(invalid("Drive rename returned an unexpected object ID"))
+                        }
+                    });
+                if let Err(response_error) = response_state {
+                    if let Err(verify_error) =
+                        self.verify_renamed_id(id, destination_parent_id, destination_name)
+                    {
+                        return Err(ambiguous_rename(id, &response_error, &verify_error));
+                    }
+                }
+            }
+            Err(MutationRequestError::Definite(error)) => return Err(error),
+            Err(MutationRequestError::Ambiguous(send_error)) => {
+                if let Err(verify_error) =
+                    self.verify_renamed_id(id, destination_parent_id, destination_name)
+                {
+                    return Err(ambiguous_rename(id, &send_error, &verify_error));
+                }
+            }
         }
         Ok(())
     }
+
+    fn verify_renamed_id(
+        &self,
+        id: &str,
+        destination_parent_id: &str,
+        destination_name: &str,
+    ) -> VfsResult<()> {
+        let url = self.api_url(&format!(
+            "files/{}?fields=id,name,parents,mimeType,trashed",
+            cloud_urlenc(id)
+        ));
+        let json = self.get_json(&url)?;
+        let expected = json["id"].as_str() == Some(id)
+            && json["name"].as_str() == Some(destination_name)
+            && json["trashed"].as_bool() == Some(false)
+            && json["mimeType"]
+                .as_str()
+                .is_some_and(|mime| !mime.is_empty())
+            && json["parents"].as_array().is_some_and(|parents| {
+                parents.len() == 1 && parents[0].as_str() == Some(destination_parent_id)
+            });
+        if expected {
+            Ok(())
+        } else {
+            Err(invalid(
+                "Drive rename exact ID does not have the expected final name and parent",
+            ))
+        }
+    }
+}
+
+fn ambiguous_rename(id: &str, send: &io::Error, verify: &io::Error) -> io::Error {
+    io::Error::other(format!(
+        "Drive rename for exact ID {id} has ambiguous completion: PATCH response was unavailable or invalid ({send}); exact-ID final-state verification failed ({verify})"
+    ))
 }
 
 fn parse_object(

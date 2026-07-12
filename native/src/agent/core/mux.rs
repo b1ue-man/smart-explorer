@@ -1,10 +1,10 @@
 use crate::agent_proto::{Frame, TRANSFER_FRAME_BACKLOG};
-use crossbeam_channel::{bounded, Receiver, SendTimeoutError, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, SendTimeoutError, Sender};
 use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type RoutedFrame = (u64, Frame);
 type PendingMap = Arc<Mutex<HashMap<u64, Sender<Frame>>>>;
@@ -21,19 +21,54 @@ pub(super) struct Mux {
     pub(super) pending: PendingMap,
     pub(super) closed: Arc<AtomicBool>,
     pub(super) next_id: AtomicU64,
+    activity: Arc<Activity>,
+    stall_timeout: Duration,
+}
+
+pub(super) struct Activity {
+    last: Mutex<Instant>,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Self {
+            last: Mutex::new(Instant::now()),
+        }
+    }
+
+    pub(super) fn touch(&self) {
+        *self
+            .last
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+    }
+
+    fn idle_for(&self) -> Duration {
+        self.last_activity().elapsed()
+    }
+
+    fn last_activity(&self) -> Instant {
+        *self
+            .last
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 impl Mux {
-    pub(super) fn new(
+    pub(super) fn new_with_stall_timeout(
         out: Sender<RoutedFrame>,
         pending: PendingMap,
         closed: Arc<AtomicBool>,
+        stall_timeout: Duration,
     ) -> Self {
         Self {
             out,
             pending,
             closed,
             next_id: AtomicU64::new(1),
+            activity: Arc::new(Activity::new()),
+            stall_timeout,
         }
     }
 
@@ -65,9 +100,53 @@ impl Mux {
                 "agent transport closed",
             ));
         }
-        self.out
-            .send((id, frame))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "agent writer gone"))
+        let mut routed = (id, frame);
+        let mut last_activity = self.activity.last_activity();
+        let mut deadline = Instant::now() + self.stall_timeout;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                self.close();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "agent writer queue stalled",
+                ));
+            }
+            match self.out.send_timeout(routed, deadline - now) {
+                Ok(()) => return Ok(()),
+                Err(SendTimeoutError::Disconnected(_)) => {
+                    self.close();
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "agent writer gone",
+                    ));
+                }
+                Err(SendTimeoutError::Timeout(returned)) => {
+                    routed = returned;
+                    let latest = self.activity.last_activity();
+                    if latest > last_activity {
+                        last_activity = latest;
+                        deadline = latest + self.stall_timeout;
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    pub(super) fn close(&self) {
+        close_transport(&self.closed, &self.pending);
+    }
+
+    pub(super) fn activity(&self) -> Arc<Activity> {
+        self.activity.clone()
+    }
+
+    pub(super) fn idle_for(&self) -> Duration {
+        self.activity.idle_for()
     }
 
     /// One request to one response frame. Registers, sends, waits for the first
@@ -81,6 +160,45 @@ impl Mux {
         })();
         self.unregister(id);
         r
+    }
+
+    pub(super) fn call_inactivity_timeout(
+        &self,
+        req: Frame,
+        timeout: Duration,
+    ) -> io::Result<Frame> {
+        let (id, rx) = self.register();
+        let result = (|| {
+            self.send(id, req)?;
+            let mut last_activity = self.activity.last_activity();
+            let mut deadline = Instant::now() + timeout;
+            loop {
+                let latest = self.activity.last_activity();
+                if latest > last_activity {
+                    last_activity = latest;
+                    deadline = latest + timeout;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "agent response inactivity timeout",
+                    ));
+                }
+                match rx.recv_timeout(deadline - now) {
+                    Ok(frame) => return Ok(frame),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "agent stream closed",
+                        ));
+                    }
+                }
+            }
+        })();
+        self.unregister(id);
+        result
     }
 }
 
@@ -99,9 +217,14 @@ pub(super) fn close_transport(closed: &AtomicBool, pending: &PendingMap) {
     p.clear();
 }
 
-pub(super) fn route_frame(pending: &PendingMap, read: io::Result<Option<(u64, Frame)>>) -> bool {
+pub(super) fn route_frame(
+    pending: &PendingMap,
+    activity: &Activity,
+    read: io::Result<Option<(u64, Frame)>>,
+) -> bool {
     match read {
         Ok(Some((id, frame))) => {
+            activity.touch();
             let tx = pending
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -138,7 +261,7 @@ fn route_with_backpressure(pending: &PendingMap, id: u64, tx: &Sender<Frame>, mu
 
 #[cfg(test)]
 mod tests {
-    use super::{close_transport, make_out_channel, route_frame, Mux};
+    use super::{close_transport, make_out_channel, route_frame, Mux, OUT_BACKLOG};
     use crate::agent_proto::{Frame, TRANSFER_FRAME_BACKLOG};
     use crossbeam_channel::TrySendError;
     use std::collections::HashMap;
@@ -151,7 +274,12 @@ mod tests {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
-        let mux = Mux::new(out, pending.clone(), closed.clone());
+        let mux = Mux::new_with_stall_timeout(
+            out,
+            pending.clone(),
+            closed.clone(),
+            Duration::from_secs(30),
+        );
 
         let (_, existing) = mux.register();
         close_transport(&closed, &pending);
@@ -167,7 +295,8 @@ mod tests {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
-        let mux = Mux::new(out, pending.clone(), closed);
+        let mux =
+            Mux::new_with_stall_timeout(out, pending.clone(), closed, Duration::from_secs(30));
 
         let (id, receiver) = mux.register();
         let sender = pending.lock().unwrap().get(&id).unwrap().clone();
@@ -187,11 +316,29 @@ mod tests {
     }
 
     #[test]
+    fn stalled_writer_queue_times_out_and_disconnects_pending_operations() {
+        let (out, _undrained) = make_out_channel();
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let mux = Mux::new_with_stall_timeout(out, pending, closed, Duration::from_millis(25));
+        let (id, waiting) = mux.register();
+        for _ in 0..OUT_BACKLOG {
+            mux.send(id, Frame::Ok).unwrap();
+        }
+
+        let error = mux.send(id, Frame::Ok).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(mux.is_closed());
+        assert!(waiting.recv().is_err());
+    }
+
+    #[test]
     fn unregister_releases_a_router_waiting_on_backpressure() {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
-        let mux = Mux::new(out, pending.clone(), closed);
+        let mux =
+            Mux::new_with_stall_timeout(out, pending.clone(), closed, Duration::from_secs(30));
         let (id, receiver) = mux.register();
         let sender = pending.lock().unwrap().get(&id).unwrap().clone();
         for _ in 0..TRANSFER_FRAME_BACKLOG {
@@ -200,7 +347,9 @@ mod tests {
         drop(sender);
 
         let routed = pending.clone();
-        let router = std::thread::spawn(move || route_frame(&routed, Ok(Some((id, Frame::Ok)))));
+        let activity = mux.activity();
+        let router =
+            std::thread::spawn(move || route_frame(&routed, &activity, Ok(Some((id, Frame::Ok)))));
         mux.unregister(id);
         assert!(router.join().unwrap());
 

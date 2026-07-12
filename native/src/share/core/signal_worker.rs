@@ -9,6 +9,7 @@ use crossbeam_channel::Receiver;
 use super::backend::ShareIrohNode;
 use super::core::{eio, hmac_proof, now_secs, presence_payload, random_token};
 use super::identity::ShareIdentity;
+use super::keepalive::SIGNAL_MAINTENANCE_POLICY;
 use super::profiles::ShareProfiles;
 use super::signal_commands::{
     run_connected_command, run_offline_command, ConnectedCommandRuntime, OfflineCommandRuntime,
@@ -210,6 +211,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
     }
 
     let mut last_heartbeat = Instant::now();
+    let mut heartbeat_outstanding_since: Option<Instant> = None;
     let mut last_publish = Instant::now();
     let mut last_tracked_send = Instant::now();
     let mut stopped = false;
@@ -250,13 +252,29 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         if stopped {
             break;
         }
-        if last_heartbeat.elapsed() >= Duration::from_secs(20) {
+        let maintenance = SIGNAL_MAINTENANCE_POLICY.due(
+            last_heartbeat.elapsed(),
+            last_publish.elapsed(),
+            last_tracked_send.elapsed(),
+            tracked_direct,
+        );
+        if SIGNAL_MAINTENANCE_POLICY
+            .pong_expired(heartbeat_outstanding_since.map(|started| started.elapsed()))
+        {
+            let _ = runtime.events.send(ShareEvent::Error(
+                "Share-Signaling hat den Keepalive nicht beantwortet; Verbindung wird neu aufgebaut"
+                    .into(),
+            ));
+            break;
+        }
+        if maintenance.heartbeat {
             if send_line(&mut negotiated.connection, &ClientMsg::Heartbeat).is_err() {
                 break;
             }
             last_heartbeat = Instant::now();
+            heartbeat_outstanding_since.get_or_insert(last_heartbeat);
         }
-        if last_publish.elapsed() >= Duration::from_secs(60) {
+        if maintenance.presence_refresh {
             if let Err(error) = publish_all(
                 &mut negotiated.connection,
                 runtime.auth,
@@ -271,7 +289,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             }
             last_publish = Instant::now();
         }
-        if tracked_direct && last_tracked_send.elapsed() >= Duration::from_secs(2) {
+        if maintenance.tracked_outbox {
             if send_pending_tracked(
                 &mut negotiated.connection,
                 runtime.auth,
@@ -286,7 +304,9 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         }
         match negotiated.connection.read_message() {
             Ok(Some(line)) => {
-                dispatch_server_line(line.trim(), tracked_direct, runtime.auth, runtime.events)
+                if dispatch_server_line(line.trim(), tracked_direct, runtime.auth, runtime.events) {
+                    heartbeat_outstanding_since = None;
+                }
             }
             Ok(None) => break,
             Err(error)

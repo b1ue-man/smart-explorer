@@ -29,8 +29,15 @@ impl WebdavUpload for UreqUpload {
         } else {
             request.set("Authorization", auth)
         };
-        request.send(source).map_err(request_err)?;
-        Ok(())
+        let response = request.send(source).map_err(request_err)?;
+        let status = response.status();
+        if (200..300).contains(&status) && status != 207 {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "WebDAV PUT returned unexpected HTTP status {status}"
+            )))
+        }
     }
 }
 
@@ -41,7 +48,13 @@ pub(super) struct WebdavWriter {
     url: String,
     auth: String,
     spool: File,
-    committed: bool,
+    state: UploadState,
+}
+
+enum UploadState {
+    Open,
+    Committed,
+    FailedAmbiguous(String),
 }
 
 impl WebdavWriter {
@@ -51,7 +64,7 @@ impl WebdavWriter {
             url,
             auth,
             spool: tempfile::tempfile()?,
-            committed: false,
+            state: UploadState::Open,
         })
     }
 
@@ -62,13 +75,19 @@ impl WebdavWriter {
             url: "http://unused.test/file".to_string(),
             auth: String::new(),
             spool: tempfile::tempfile()?,
-            committed: false,
+            state: UploadState::Open,
         })
     }
 
     fn commit(&mut self) -> io::Result<()> {
-        if self.committed {
-            return Ok(());
+        match &self.state {
+            UploadState::Committed => return Ok(()),
+            UploadState::FailedAmbiguous(error) => {
+                return Err(io_err(format!(
+                    "WebDAV-Uploadstatus ist nach dem fehlgeschlagenen PUT unklar; der Upload wird nicht automatisch wiederholt: {error}"
+                )))
+            }
+            UploadState::Open => {}
         }
         self.spool.flush()?;
         let length = self.spool.metadata()?.len();
@@ -76,12 +95,17 @@ impl WebdavWriter {
         let result = self
             .uploader
             .upload(&self.url, &self.auth, length, &mut self.spool);
-        if result.is_ok() {
-            self.committed = true;
-            return Ok(());
+        match result {
+            Ok(()) => {
+                self.state = UploadState::Committed;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = UploadState::FailedAmbiguous(error.to_string());
+                self.spool.seek(SeekFrom::End(0))?;
+                Err(error)
+            }
         }
-        self.spool.seek(SeekFrom::End(0))?;
-        result
     }
 
     #[cfg(test)]
@@ -92,10 +116,13 @@ impl WebdavWriter {
 
 impl Write for WebdavWriter {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.committed {
-            return Err(io_err("Upload bereits abgeschlossen"));
+        match &self.state {
+            UploadState::Open => self.spool.write(data),
+            UploadState::Committed => Err(io_err("Upload bereits abgeschlossen")),
+            UploadState::FailedAmbiguous(_) => Err(io_err(
+                "WebDAV-Uploadstatus ist unklar; weitere Daten werden nicht angenommen",
+            )),
         }
-        self.spool.write(data)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -112,6 +139,26 @@ mod tests {
     struct CountingUpload {
         calls: AtomicUsize,
         bytes: AtomicU64,
+    }
+
+    struct FailingUpload {
+        calls: AtomicUsize,
+    }
+
+    impl WebdavUpload for FailingUpload {
+        fn upload(
+            &self,
+            _url: &str,
+            _auth: &str,
+            _length: u64,
+            _source: &mut File,
+        ) -> io::Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "server committed PUT but response was lost",
+            ))
+        }
     }
 
     impl WebdavUpload for CountingUpload {
@@ -157,6 +204,21 @@ mod tests {
         writer.flush().unwrap();
         assert_eq!(upload.calls.load(Ordering::SeqCst), 1);
         assert_eq!(upload.bytes.load(Ordering::SeqCst), expected);
+        assert!(writer.write_all(b"late").is_err());
+    }
+
+    #[test]
+    fn failed_put_is_never_replayed_by_another_flush() {
+        let upload = Arc::new(FailingUpload {
+            calls: AtomicUsize::new(0),
+        });
+        let mut writer = WebdavWriter::with_uploader(upload.clone()).unwrap();
+        writer.write_all(b"payload").unwrap();
+
+        assert!(writer.flush().is_err());
+        let second = writer.flush().unwrap_err();
+        assert!(second.to_string().contains("nicht automatisch wiederholt"));
+        assert_eq!(upload.calls.load(Ordering::SeqCst), 1);
         assert!(writer.write_all(b"late").is_err());
     }
 }

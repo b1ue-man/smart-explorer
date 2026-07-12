@@ -25,6 +25,8 @@ mod changes;
 mod core;
 #[path = "core/dedupe.rs"]
 mod dedupe;
+#[path = "core/folder_create_journal.rs"]
+mod folder_create_journal;
 #[path = "core/metadata.rs"]
 mod metadata;
 #[path = "core/promotion.rs"]
@@ -37,5 +39,14 @@ mod resumable;
 mod state;
 #[path = "core/transfer.rs"]
 mod transfer;
+#[path = "core/trash.rs"]
+mod trash;
+
+#[cfg(test)]
+#[path = "core/mutation_reconcile_tests.rs"]
+mod mutation_reconcile_tests;
+#[cfg(test)]
+#[path = "core/read_retry_tests.rs"]
+mod read_retry_tests;
 
 pub use state::GDriveBackend;

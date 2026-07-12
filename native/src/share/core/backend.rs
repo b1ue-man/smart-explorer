@@ -182,21 +182,27 @@ impl Backend for PeerBackend {
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
-        self.node.block_on(async {
-            send_ctrl(
-                &mut send,
-                &Ctrl::Fs {
-                    req: FsRequest::Write {
-                        path: path.to_string(),
+        let result = self
+            .node
+            .block_on(io_deadline::run("peer write open", async {
+                send_ctrl(
+                    &mut send,
+                    &Ctrl::Fs {
+                        req: FsRequest::Write {
+                            path: path.to_string(),
+                        },
                     },
-                },
-            )
-            .await?;
-            match recv_resp(&mut recv).await? {
-                FsResponse::Ready => Ok(()),
-                _ => Err(eio("unerwartete Antwort auf write")),
-            }
-        })?;
+                )
+                .await?;
+                match recv_resp(&mut recv).await? {
+                    FsResponse::Ready => Ok(()),
+                    _ => Err(eio("unerwartete Antwort auf write")),
+                }
+            }));
+        if result.is_err() {
+            io_deadline::abort(&mut send, &mut recv);
+        }
+        result?;
         Ok(super::peer_writer::writer(self.node.clone(), send, recv))
     }
 

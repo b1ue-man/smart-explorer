@@ -17,6 +17,8 @@ mod mux;
 mod stream;
 #[path = "core/transfer.rs"]
 mod transfer;
+#[path = "core/transport.rs"]
+mod transport;
 
 pub use backend::AgentBackend;
 #[allow(unused_imports)]
@@ -25,6 +27,9 @@ pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact
 #[cfg(test)]
 #[path = "core/error_tests.rs"]
 mod error_tests;
+#[cfg(test)]
+#[path = "core/heartbeat_tests.rs"]
+mod heartbeat_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

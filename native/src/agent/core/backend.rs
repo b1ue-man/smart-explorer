@@ -1,18 +1,19 @@
 use super::metadata::wire_to_vfs;
-use super::mux::{close_transport, make_out_channel, route_frame, Mux};
-use crate::agent_proto::{self, Frame};
+#[cfg(test)]
+use super::transport::HeartbeatPolicy;
+use super::transport::{AgentConnection, AgentReconnect};
+use crate::agent_proto::Frame;
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use crossbeam_channel::Sender;
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct AgentBackend {
     pub(super) inner: BackendHandle,
-    pub(super) mux: Arc<Mux>,
+    pub(super) connection: Arc<AgentConnection>,
     version: String,
 }
 
@@ -27,76 +28,44 @@ impl AgentBackend {
         w: Box<dyn Write + Send>,
         inner: BackendHandle,
     ) -> io::Result<Self> {
-        let (out_tx, out_rx) = make_out_channel();
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let closed = Arc::new(AtomicBool::new(false));
-        let mux = Arc::new(Mux::new(out_tx, pending.clone(), closed.clone()));
+        Self::from_streams_inner((r, w), inner, None)
+    }
 
-        // Writer thread: drain outgoing frames; closing the write half on exit
-        // signals EOF to the agent.
-        let pending_w = pending.clone();
-        let closed_w = closed.clone();
-        std::thread::Builder::new()
-            .name("agent-writer".into())
-            .spawn(move || {
-                let mut w = w;
-                loop {
-                    if closed_w.load(Ordering::Acquire) {
-                        break;
-                    }
-                    match out_rx.recv_timeout(Duration::from_millis(100)) {
-                        Ok((id, frame)) => {
-                            if agent_proto::write_frame(&mut w, id, &frame).is_err() {
-                                break;
-                            }
-                        }
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-                close_transport(&closed_w, &pending_w);
-            })?;
+    pub(super) fn from_streams_with_reconnect(
+        r: Box<dyn Read + Send>,
+        w: Box<dyn Write + Send>,
+        inner: BackendHandle,
+        reconnect: AgentReconnect,
+    ) -> io::Result<Self> {
+        Self::from_streams_inner((r, w), inner, Some(reconnect))
+    }
 
-        // Reader thread: route inbound frames to the waiting op by req_id.
-        let pending_r = pending.clone();
-        let closed_r = closed.clone();
-        if let Err(error) = std::thread::Builder::new()
-            .name("agent-reader".into())
-            .spawn(move || {
-                let mut r = r;
-                loop {
-                    if !route_frame(&pending_r, agent_proto::read_frame(&mut r)) {
-                        break;
-                    }
-                }
-                close_transport(&closed_r, &pending_r);
-            })
-        {
-            close_transport(&closed, &pending);
-            return Err(error);
-        }
+    #[cfg(test)]
+    pub(super) fn from_streams_with_reconnect_and_heartbeat(
+        r: Box<dyn Read + Send>,
+        w: Box<dyn Write + Send>,
+        inner: BackendHandle,
+        reconnect: AgentReconnect,
+        heartbeat: HeartbeatPolicy,
+    ) -> io::Result<Self> {
+        let (connection, version) =
+            AgentConnection::new_with_heartbeat((r, w), Some(reconnect), heartbeat)?;
+        Ok(Self {
+            inner,
+            connection,
+            version,
+        })
+    }
 
-        // Handshake before publishing the backend.
-        let version = match mux.call(Frame::Hello {
-            proto: agent_proto::PROTO_VERSION,
-        })? {
-            Frame::HelloOk { proto, version } if proto == agent_proto::PROTO_VERSION => version,
-            Frame::HelloOk { proto, .. } => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("agent protocol {proto} != {}", agent_proto::PROTO_VERSION),
-                ))
-            }
-            other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unexpected handshake reply: {other:?}"),
-                ))
-            }
-        };
+    fn from_streams_inner(
+        streams: super::transport::AgentStreams,
+        inner: BackendHandle,
+        reconnect: Option<AgentReconnect>,
+    ) -> io::Result<Self> {
+        let (connection, version) = AgentConnection::new(streams, reconnect)?;
         Ok(AgentBackend {
             inner,
-            mux,
+            connection,
             version,
         })
     }
@@ -120,7 +89,10 @@ impl Backend for AgentBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self.mux.call(Frame::ListDir(path.to_string()))? {
+        match self
+            .connection
+            .safe_call(Frame::ListDir(path.to_string()))?
+        {
             Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
             Frame::Err(e) => Err(io::Error::other(e)),
             other => Err(io::Error::new(
@@ -131,7 +103,7 @@ impl Backend for AgentBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        match self.mux.call(Frame::Stat(path.to_string()))? {
+        match self.connection.safe_call(Frame::Stat(path.to_string()))? {
             Frame::Meta(m) => Ok(wire_to_vfs(m)),
             Frame::Err(e) => Err(io::Error::other(e)),
             other => Err(io::Error::new(
@@ -142,7 +114,10 @@ impl Backend for AgentBackend {
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        match self.mux.call(Frame::TryExists(path.to_string()))? {
+        match self
+            .connection
+            .safe_call(Frame::TryExists(path.to_string()))?
+        {
             Frame::Exists(exists) => Ok(exists),
             Frame::Err(error) => Err(io::Error::other(error)),
             other => Err(io::Error::new(
@@ -161,16 +136,17 @@ impl Backend for AgentBackend {
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
     ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
-        let (id, rx) = self.mux.register();
+        let mux = self.connection.mux()?;
+        let (id, rx) = mux.register();
         let result = (|| {
-            self.mux.send(id, Frame::WalkTree(root.to_string()))?;
+            mux.send(id, Frame::WalkTree(root.to_string()))?;
             let mut last = (0u64, 0u64);
             loop {
                 match rx.recv_timeout(Duration::from_millis(250)) {
                     Ok(Frame::Progress { done, total }) => {
                         last = (done, total);
                         if !on_progress(done, total) {
-                            let _ = self.mux.send(id, Frame::Cancel);
+                            let _ = mux.send(id, Frame::Cancel);
                             return Err(io::Error::new(
                                 io::ErrorKind::Interrupted,
                                 "agent tree walk canceled",
@@ -187,7 +163,7 @@ impl Backend for AgentBackend {
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                         if !on_progress(last.0, last.1) {
-                            let _ = self.mux.send(id, Frame::Cancel);
+                            let _ = mux.send(id, Frame::Cancel);
                             return Err(io::Error::new(
                                 io::ErrorKind::Interrupted,
                                 "agent tree walk canceled",
@@ -203,7 +179,7 @@ impl Backend for AgentBackend {
                 }
             }
         })();
-        self.mux.unregister(id);
+        mux.unregister(id);
         result
     }
 
@@ -230,9 +206,10 @@ impl Backend for AgentBackend {
         tx: Sender<crate::vfs::SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let (id, rx) = self.mux.register();
+        let mux = self.connection.mux()?;
+        let (id, rx) = mux.register();
         let result = (|| {
-            self.mux.send(
+            mux.send(
                 id,
                 Frame::Search {
                     root: root.to_string(),
@@ -241,7 +218,7 @@ impl Backend for AgentBackend {
             )?;
             loop {
                 if cancel.load(Ordering::Relaxed) {
-                    let _ = self.mux.send(id, Frame::Cancel);
+                    let _ = mux.send(id, Frame::Cancel);
                     return Err(operation_canceled("agent search canceled"));
                 }
                 match rx.recv_timeout(Duration::from_millis(200)) {
@@ -270,7 +247,7 @@ impl Backend for AgentBackend {
                     Ok(Frame::End) => return Ok(true),
                     Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
                     Ok(other) => {
-                        let _ = self.mux.send(id, Frame::Cancel);
+                        let _ = mux.send(id, Frame::Cancel);
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("unexpected agent search reply: {other:?}"),
@@ -287,9 +264,9 @@ impl Backend for AgentBackend {
             }
         })();
         if result.is_err() {
-            let _ = self.mux.send(id, Frame::Cancel);
+            let _ = mux.send(id, Frame::Cancel);
         }
-        self.mux.unregister(id);
+        mux.unregister(id);
         result
     }
 
@@ -304,9 +281,10 @@ impl Backend for AgentBackend {
         tx: Sender<crate::vfs::HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let (id, rx) = self.mux.register();
+        let mux = self.connection.mux()?;
+        let (id, rx) = mux.register();
         let result = (|| {
-            self.mux.send(
+            mux.send(
                 id,
                 Frame::WalkHashed {
                     root: root.to_string(),
@@ -315,7 +293,7 @@ impl Backend for AgentBackend {
             )?;
             loop {
                 if cancel.load(Ordering::Relaxed) {
-                    let _ = self.mux.send(id, Frame::Cancel);
+                    let _ = mux.send(id, Frame::Cancel);
                     return Err(operation_canceled("agent hash walk canceled"));
                 }
                 match rx.recv_timeout(Duration::from_millis(200)) {
@@ -346,7 +324,7 @@ impl Backend for AgentBackend {
                     Ok(Frame::End) => return Ok(true),
                     Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
                     Ok(other) => {
-                        let _ = self.mux.send(id, Frame::Cancel);
+                        let _ = mux.send(id, Frame::Cancel);
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("unexpected agent hash-walk reply: {other:?}"),
@@ -363,9 +341,9 @@ impl Backend for AgentBackend {
             }
         })();
         if result.is_err() {
-            let _ = self.mux.send(id, Frame::Cancel);
+            let _ = mux.send(id, Frame::Cancel);
         }
-        self.mux.unregister(id);
+        mux.unregister(id);
         result
     }
 
@@ -402,16 +380,20 @@ impl Backend for AgentBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        match self.mux.call(Frame::RenameNoReplace {
+        let (mux, reply) = self.connection.mutation_call(Frame::RenameNoReplace {
             src: src.to_string(),
             dst: dst.to_string(),
-        })? {
+        })?;
+        match reply {
             Frame::Ok => Ok(()),
             Frame::Err(error) => Err(io::Error::other(error)),
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent no-replace reply: {other:?}"),
-            )),
+            other => {
+                self.connection.invalidate(&mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected agent no-replace reply: {other:?}"),
+                ))
+            }
         }
     }
 

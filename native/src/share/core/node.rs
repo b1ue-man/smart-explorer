@@ -11,6 +11,7 @@ use super::core::{eio, hmac_proof, random_token};
 use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
+use super::keepalive::iroh_transport_config;
 use super::session::{
     endpoint_addr, relation_kind_id, relay_url_from_signal, session_key, session_payload,
     transport_label,
@@ -58,6 +59,7 @@ impl ShareIrohNode {
                 .secret_key(identity.iroh_secret.clone())
                 .alpns(vec![ALPN.to_vec()])
                 .relay_mode(relay_mode)
+                .transport_config(iroh_transport_config())
                 .bind()
                 .await
                 .map_err(eio)
@@ -162,24 +164,50 @@ impl ShareIrohNode {
                 .map_err(io_deadline::disconnected)
         })) {
             Ok(streams) => Ok(streams),
-            Err(error) => {
-                if error.kind() == io::ErrorKind::TimedOut {
-                    return Err(error);
-                }
-                if let Ok(mut sessions) = self.sessions.lock() {
-                    sessions.remove(&key);
-                }
-                let epoch = self.session_epoch.load(Ordering::Acquire);
-                let connection = self.connect_session(endpoint, identity)?;
-                self.cache_session(key, connection.clone(), epoch)?;
+            Err(_) => {
+                // open_bi has not sent an operation payload, so replacing even
+                // a blackholed connection timeout is safe and cannot replay a
+                // mutation. Preserve a newer generation installed by another
+                // caller instead of deleting it with the failed cache entry.
+                let replacement = self.replacement_after_open_failure(
+                    &key,
+                    connection.stable_id(),
+                    endpoint,
+                    identity,
+                )?;
                 self.block_on(io_deadline::run("peer stream reopen", async {
-                    connection
+                    replacement
                         .open_bi()
                         .await
                         .map_err(io_deadline::disconnected)
                 }))
             }
         }
+    }
+
+    fn replacement_after_open_failure(
+        &self,
+        key: &str,
+        failed_id: usize,
+        endpoint: &PeerEndpoint,
+        identity: &ShareIdentity,
+    ) -> io::Result<Connection> {
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?;
+            if let Some(current) = sessions.get(key) {
+                if current.stable_id() != failed_id {
+                    return Ok(current.clone());
+                }
+            }
+            sessions.remove(key);
+        }
+        let epoch = self.session_epoch.load(Ordering::Acquire);
+        let connection = self.connect_session(endpoint, identity)?;
+        self.cache_session(key.to_string(), connection.clone(), epoch)?;
+        Ok(connection)
     }
 
     fn cache_session(

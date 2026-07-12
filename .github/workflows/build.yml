@@ -3,9 +3,10 @@ name: build
 # Builds the Windows release on every push using the SAME cross-compile path
 # that is verified locally (ubuntu + mingw-w64 + x86_64-pc-windows-gnu). This is
 # the "build a release for each commit" gate. It publishes a GitHub Release
-# (carrying the exe + the context-menu DLL) on a version tag (v*) OR on a manual
-# `workflow_dispatch` — the latter creates the tag at the dispatched commit, so
-# releases can be cut even where the git host doesn't accept tag pushes.
+# (carrying the Windows/Linux app, updater and CLI payloads plus hashes,
+# installer, install script, context-menu DLL, Share servers, and version
+# marker) on a version tag (v*), manual `workflow_dispatch`, or `release/**`
+# branch. Non-tag triggers create the tag at that exact release commit.
 
 on:
   push:

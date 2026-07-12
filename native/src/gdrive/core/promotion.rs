@@ -150,12 +150,15 @@ impl GDriveBackend {
         context: &MoveContext<'_>,
         staged_object: &DriveObject,
     ) -> VfsResult<()> {
-        self.rename_id(
+        if let Err(error) = self.rename_id(
             &staged_object.id,
             context.source_parent_id,
             context.destination_parent_id,
             context.destination_name,
-        )?;
+        ) {
+            self.invalidate_move_cache(context);
+            return Err(error);
+        }
 
         let reason = match self
             .named_objects(context.destination_parent_id, context.destination_name)
@@ -177,6 +180,7 @@ impl GDriveBackend {
             context.source_parent_id,
             context.source_name,
         ) {
+            self.invalidate_move_cache(context);
             return Err(io::Error::new(
                 rollback.kind(),
                 format!(
@@ -334,6 +338,18 @@ impl GDriveBackend {
         self.forget_path_prefix(source);
         self.persist_path_cache();
         Ok(())
+    }
+
+    fn invalidate_move_cache(&self, context: &MoveContext<'_>) {
+        self.forget_path_prefix(context.source);
+        self.forget_path_prefix(context.destination);
+        let (source_parent, _) = split_parent(context.source);
+        let (destination_parent, _) = split_parent(context.destination);
+        if let Ok(mut listed) = self.listed_guard() {
+            listed.remove(&source_parent);
+            listed.remove(&destination_parent);
+        }
+        self.persist_path_cache();
     }
 }
 

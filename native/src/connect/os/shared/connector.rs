@@ -30,6 +30,23 @@ fn opt(s: &str) -> Option<String> {
     }
 }
 
+fn unc_is_same_or_below(candidate: &str, root: &str) -> bool {
+    let candidate = candidate
+        .trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    let root = root
+        .trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    candidate == root
+        || candidate
+            .strip_prefix(&root)
+            .is_some_and(|rest| rest.starts_with('\\'))
+}
+
 fn label_for(form: &ConnectForm, port: u16) -> String {
     if !form.label.trim().is_empty() {
         return form.label.trim().to_string();
@@ -268,10 +285,17 @@ pub fn open_saved_at(
         let mut form = ConnectForm::from_saved(c);
         form.save = false;
         match do_connect(form, secret) {
-            ConnectResult::Ok(conn) => Ok((
-                Arc::new(crate::vfs::LocalBackend::new(&conn.target)),
-                conn.target,
-            )),
+            ConnectResult::Ok(conn) => {
+                let net = conn
+                    .net
+                    .ok_or_else(|| "Netzlaufwerk-Verbindungslease fehlt".to_string())?;
+                let target = if path.trim().is_empty() {
+                    conn.target
+                } else {
+                    path.to_string()
+                };
+                Ok((Arc::new(crate::net::UncBackend::new(&target, net)), target))
+            }
             ConnectResult::Err(e) => Err(e),
         }
     } else {
@@ -306,6 +330,14 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
         let (_label, backend, _status) = crate::daemon::open_share_backend(target)?;
         return Ok((backend, root));
     }
+    if crate::net::is_unc(endpoint) {
+        let connections = crate::creds::load_connections_checked()?;
+        if let Some(connection) = connections.iter().find(|connection| {
+            !connection.protocol.is_url() && unc_is_same_or_below(endpoint, &connection.root)
+        }) {
+            return open_saved_at(connection, endpoint);
+        }
+    }
     if !is_remote_url(endpoint) {
         return Ok((
             Arc::new(crate::vfs::LocalBackend::new(endpoint)),
@@ -328,4 +360,25 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
                 .to_string()
         })?;
     open_saved_at(c, &path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unc_is_same_or_below;
+
+    #[test]
+    fn unc_saved_root_matching_respects_share_boundary() {
+        assert!(unc_is_same_or_below(
+            r"\\server\share\folder",
+            r"\\SERVER\share"
+        ));
+        assert!(unc_is_same_or_below(
+            "//server/share/folder",
+            r"\\server\share\"
+        ));
+        assert!(!unc_is_same_or_below(
+            r"\\server\share-two\folder",
+            r"\\server\share"
+        ));
+    }
 }

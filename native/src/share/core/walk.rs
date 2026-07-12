@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::{RecvStream, SendStream};
+use tokio::sync::mpsc;
 
 use super::backend::{recv_resp, reply, send_ctrl, PeerBackend};
 use super::core::eio;
@@ -16,6 +17,7 @@ use super::wire::{Ctrl, FsRequest, FsResponse, FsWalkNode};
 
 const CANCEL_POLL: Duration = Duration::from_millis(250);
 const WALK_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const WALK_RESPONSE_BUFFER: usize = 2;
 
 /// Run the PeerBackend's one-stream analytics walk. Every protocol, transport,
 /// cancellation, and validation failure remains an error; `Ok(None)` is
@@ -139,13 +141,37 @@ async fn recv_response_checked(
 /// `fs::list_dir` resolve every directory against the authenticated export
 /// roots, so no client-provided native path reaches a backend directly.
 pub(super) async fn serve_walk(
-    send: &mut SendStream,
+    mut send: SendStream,
     root: String,
     exports: Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<()> {
+    let (responses, mut response_rx) = mpsc::channel(WALK_RESPONSE_BUFFER);
+    let worker = super::blocking::spawn("Share tree walk", move || {
+        walk_worker(root, exports, responses)
+    })
+    .await?;
+    while let Some(response) = response_rx.recv().await {
+        match response {
+            Ok(response) => reply_walk(&mut send, response).await?,
+            Err(error) => {
+                return reply_walk(&mut send, super::fs_error::response(&error)).await;
+            }
+        }
+    }
+    worker.join().await
+}
+
+fn walk_worker(
+    root: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+    responses: mpsc::Sender<io::Result<FsResponse>>,
+) -> io::Result<()> {
     let mut walker = match ServerWalker::new(root, exports) {
         Ok(walker) => walker,
-        Err(error) => return reply_walk(send, super::fs_error::response(&error)).await,
+        Err(error) => {
+            let _ = responses.blocking_send(Err(error));
+            return Ok(());
+        }
     };
     let mut batch = NodeBatch::default();
     let mut totals = WalkTotals::default();
@@ -154,57 +180,60 @@ pub(super) async fn serve_walk(
     loop {
         let event = match walker.next_event() {
             Ok(event) => event,
-            Err(error) => return reply_walk(send, super::fs_error::response(&error)).await,
+            Err(error) => {
+                let _ = responses.blocking_send(Err(error));
+                return Ok(());
+            }
         };
         match event {
             Some(WalkEvent::Node(node)) => {
                 if let Err(error) = totals.observe(&node) {
-                    return reply_walk(send, super::fs_error::response(&error)).await;
+                    let _ = responses.blocking_send(Err(error));
+                    return Ok(());
                 }
                 if let Some(nodes) = batch.push(node) {
-                    send_batch(send, nodes, totals).await?;
+                    if !send_batch(&responses, nodes, totals) {
+                        return Ok(());
+                    }
                     last_send = Instant::now();
                 }
             }
             Some(WalkEvent::Checkpoint) if last_send.elapsed() >= CANCEL_POLL => {
-                send_batch(send, batch.take(), totals).await?;
+                if !send_batch(&responses, batch.take(), totals) {
+                    return Ok(());
+                }
                 last_send = Instant::now();
             }
             Some(WalkEvent::Checkpoint) => {}
             None => {
-                if !batch.is_empty() {
-                    send_batch(send, batch.take(), totals).await?;
+                if !batch.is_empty() && !send_batch(&responses, batch.take(), totals) {
+                    return Ok(());
                 }
-                return reply_walk(
-                    send,
-                    FsResponse::WalkDone {
-                        files: totals.files,
-                        dirs: totals.dirs,
-                        bytes: totals.bytes,
-                        nodes: totals.nodes(),
-                    },
-                )
-                .await;
+                let _ = responses.blocking_send(Ok(FsResponse::WalkDone {
+                    files: totals.files,
+                    dirs: totals.dirs,
+                    bytes: totals.bytes,
+                    nodes: totals.nodes(),
+                }));
+                return Ok(());
             }
         }
     }
 }
 
-async fn send_batch(
-    send: &mut SendStream,
+fn send_batch(
+    responses: &mpsc::Sender<io::Result<FsResponse>>,
     nodes: Vec<FsWalkNode>,
     totals: WalkTotals,
-) -> io::Result<()> {
-    reply_walk(
-        send,
-        FsResponse::WalkBatch {
+) -> bool {
+    responses
+        .blocking_send(Ok(FsResponse::WalkBatch {
             nodes,
             files: totals.files,
             dirs: totals.dirs,
             bytes: totals.bytes,
-        },
-    )
-    .await
+        }))
+        .is_ok()
 }
 
 async fn reply_walk(send: &mut SendStream, response: FsResponse) -> io::Result<()> {

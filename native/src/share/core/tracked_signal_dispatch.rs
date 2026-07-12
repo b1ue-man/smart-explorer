@@ -42,17 +42,22 @@ pub(super) fn dispatch_server_line(
     tracked_direct: bool,
     auth: &Arc<Mutex<ShareAuthState>>,
     events: &crossbeam_channel::Sender<ShareEvent>,
-) {
+) -> bool {
     match parse_tracked_server_message(line) {
-        Ok(Some(message)) if tracked_direct => handle_tracked_server_message(message, auth, events),
+        Ok(Some(message)) if tracked_direct => {
+            handle_tracked_server_message(message, auth, events);
+            false
+        }
         Ok(Some(_)) => {
             let _ = events.send(ShareEvent::Error(
                 "Tracked-Direct-Nachricht ohne ausgehandelte Faehigkeit verworfen".into(),
             ));
+            false
         }
         Ok(None) => handle_server_msg(line, auth, events),
         Err(error) => {
             let _ = events.send(ShareEvent::Error(format!("Server-Nachricht: {error}")));
+            false
         }
     }
 }

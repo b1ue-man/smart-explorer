@@ -10,17 +10,18 @@ pub(super) fn handle_server_msg(
     line: &str,
     auth: &Arc<Mutex<ShareAuthState>>,
     events: &crossbeam_channel::Sender<ShareEvent>,
-) {
+) -> bool {
     if line.is_empty() {
-        return;
+        return false;
     }
     let message: SrvMsg = match serde_json::from_str(line) {
         Ok(message) => message,
         Err(error) => {
             let _ = events.send(ShareEvent::Error(format!("Server-Nachricht: {error}")));
-            return;
+            return false;
         }
     };
+    let pong = matches!(message, SrvMsg::Pong);
     match message {
         SrvMsg::HelloOk { .. } | SrvMsg::Pong => {}
         SrvMsg::DirectAvailable {
@@ -93,6 +94,7 @@ pub(super) fn handle_server_msg(
             let _ = events.send(ShareEvent::Error(format!("{scope}: {msg}")));
         }
     }
+    pong
 }
 
 pub(super) fn verify_local_direct_request(

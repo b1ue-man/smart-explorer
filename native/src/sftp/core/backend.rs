@@ -1,20 +1,19 @@
 use super::config::SftpConfig;
+use super::connection::{SftpConnection, SftpGeneration};
 use super::io_adapters::{BlockingRead, BlockingWrite, SftpReader, SftpWriter};
 use super::io_err;
 use super::metadata::{basename, to_vfs};
-use super::session::{connect_async, Client};
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use russh::client;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::error::Error as SftpError;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+#[derive(Clone)]
 pub struct SftpBackend {
     rt: Arc<Runtime>,
-    // Kept alive so the encrypted connection (and its background task) survive.
-    _session: client::Handle<Client>,
-    sftp: Arc<SftpSession>,
+    connection: Arc<SftpConnection>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -23,20 +22,13 @@ pub struct SftpBackend {
 
 impl SftpBackend {
     pub fn connect(cfg: SftpConfig) -> io::Result<SftpBackend> {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(io_err)?,
-        );
         let url = format!("sftp://{}@{}:{}{}", cfg.user, cfg.host, cfg.port, cfg.root);
         let root = cfg.root.clone();
-        let (session, sftp) = rt.block_on(connect_async(cfg))?;
+        let connection = SftpConnection::connect(cfg)?;
+        let rt = connection.runtime();
         Ok(SftpBackend {
             rt,
-            _session: session,
-            sftp: Arc::new(sftp),
+            connection,
             root,
             url,
         })
@@ -53,9 +45,12 @@ impl SftpBackend {
     /// `mv`/`chmod`, `sha256sum`, cleanup). Opens a fresh exec channel on the
     /// already-authenticated session. See `docs/SSH_AGENT_PLAN.md`.
     pub fn exec_capture(&self, cmd: &str) -> io::Result<String> {
+        let (generation, mut ch) = self.open_session_channel()?;
         self.rt.block_on(async {
-            let mut ch = self._session.channel_open_session().await.map_err(io_err)?;
-            ch.exec(true, cmd).await.map_err(io_err)?;
+            if let Err(error) = ch.exec(true, cmd).await {
+                self.connection.note_ssh_error(&generation, &error);
+                return Err(io_err(error));
+            }
             let mut out = Vec::new();
             loop {
                 match ch.wait().await {
@@ -63,6 +58,13 @@ impl SftpBackend {
                     Some(russh::ChannelMsg::Close) | None => break,
                     _ => {} // ExtendedData (stderr), Eof, ExitStatus, … → ignore
                 }
+            }
+            if generation.session().is_closed() {
+                self.connection.mark_stale(&generation);
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "SSH transport closed while waiting for command output",
+                ));
             }
             Ok::<_, io::Error>(String::from_utf8_lossy(&out).trim().to_string())
         })
@@ -74,9 +76,12 @@ impl SftpBackend {
         &self,
         cmd: &str,
     ) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
+        let (generation, ch) = self.open_session_channel()?;
         let stream = self.rt.block_on(async {
-            let ch = self._session.channel_open_session().await.map_err(io_err)?;
-            ch.exec(false, cmd).await.map_err(io_err)?;
+            if let Err(error) = ch.exec(false, cmd).await {
+                self.connection.note_ssh_error(&generation, &error);
+                return Err(io_err(error));
+            }
             Ok::<_, io::Error>(ch.into_stream())
         })?;
         let (rd, wr) = tokio::io::split(stream);
@@ -89,6 +94,68 @@ impl SftpBackend {
             inner: Some(wr),
         });
         Ok((r, w))
+    }
+
+    fn open_session_channel(
+        &self,
+    ) -> io::Result<(Arc<SftpGeneration>, russh::Channel<client::Msg>)> {
+        let mut generation = self.connection.current()?;
+        for attempt in 0..2 {
+            match self
+                .rt
+                .block_on(generation.session().channel_open_session())
+            {
+                Ok(channel) => return Ok((generation, channel)),
+                Err(error) => {
+                    let dead = self.connection.note_ssh_error(&generation, &error);
+                    if attempt == 0 && dead {
+                        generation = self.connection.current()?;
+                        continue;
+                    }
+                    return Err(io_err(error));
+                }
+            }
+        }
+        unreachable!("bounded SSH channel-open attempts")
+    }
+
+    fn safe_sftp<T>(
+        &self,
+        operation: impl Fn(&SftpGeneration) -> Result<T, SftpError>,
+    ) -> io::Result<T> {
+        self.safe_sftp_on(operation).map(|(_, value)| value)
+    }
+
+    fn safe_sftp_on<T>(
+        &self,
+        operation: impl Fn(&SftpGeneration) -> Result<T, SftpError>,
+    ) -> io::Result<(Arc<SftpGeneration>, T)> {
+        let mut generation = self.connection.current()?;
+        for attempt in 0..2 {
+            match operation(&generation) {
+                Ok(value) => return Ok((generation, value)),
+                Err(error) => {
+                    let dead = self.connection.note_sftp_error(&generation, &error);
+                    if attempt == 0 && dead {
+                        generation = self.connection.current()?;
+                        continue;
+                    }
+                    return Err(io_err(error));
+                }
+            }
+        }
+        unreachable!("bounded SFTP read attempts")
+    }
+
+    fn mutate_sftp<T>(
+        &self,
+        operation: impl FnOnce(&SftpGeneration) -> Result<T, SftpError>,
+    ) -> io::Result<T> {
+        let generation = self.connection.current()?;
+        operation(&generation).map_err(|error| {
+            self.connection.note_sftp_error(&generation, &error);
+            io_err(error)
+        })
     }
 }
 
@@ -106,12 +173,10 @@ impl Backend for SftpBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        let dir = rt
-            .block_on(async move { sftp.read_dir(p).await })
-            .map_err(io_err)?;
+        let dir = self.safe_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().read_dir(path.to_string()))
+        })?;
         let mut out = Vec::new();
         for e in dir {
             let name = e.file_name();
@@ -122,55 +187,57 @@ impl Backend for SftpBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        let meta = rt
-            .block_on(async move { sftp.symlink_metadata(p).await })
-            .map_err(io_err)?;
+        let meta = self.safe_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().symlink_metadata(path.to_string()))
+        })?;
         Ok(to_vfs(basename(path), &meta))
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let path = path.to_string();
-        rt.block_on(async move { sftp.try_exists(path).await })
-            .map_err(io_err)
+        self.safe_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().try_exists(path.to_string()))
+        })
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        let file = rt
-            .block_on(async move { sftp.open(p).await })
-            .map_err(io_err)?;
+        let (generation, file) = self.safe_sftp_on(|generation| {
+            self.rt.block_on(generation.sftp().open(path.to_string()))
+        })?;
         Ok(Box::new(SftpReader {
             rt: self.rt.clone(),
+            connection: self.connection.clone(),
+            generation,
+            path: path.to_string(),
             file,
+            delivered: 0,
+            retried: false,
         }))
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        let file = rt
-            .block_on(async move { sftp.create(p).await })
-            .map_err(io_err)?;
+        let generation = self.connection.current()?;
+        let file = self
+            .rt
+            .block_on(generation.sftp().create(path.to_string()))
+            .map_err(|error| {
+                self.connection.note_sftp_error(&generation, &error);
+                io_err(error)
+            })?;
         Ok(Box::new(SftpWriter {
             rt: self.rt.clone(),
+            connection: self.connection.clone(),
+            generation,
             file: Some(file),
         }))
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let (s, d) = (src.to_string(), dst.to_string());
-        rt.block_on(async move { sftp.rename(s, d).await })
-            .map_err(io_err)
+        self.mutate_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().rename(src.to_string(), dst.to_string()))
+        })
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
@@ -181,46 +248,52 @@ impl Backend for SftpBackend {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        rt.block_on(async move { sftp.remove_file(p).await })
-            .map_err(io_err)
+        self.mutate_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().remove_file(path.to_string()))
+        })
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
-        let p = path.to_string();
-        rt.block_on(async move { sftp.remove_dir(p).await })
-            .map_err(io_err)
+        self.mutate_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().remove_dir(path.to_string()))
+        })
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        let sftp = self.sftp.clone();
-        let rt = self.rt.clone();
+        let generation = self.connection.current()?;
         let absolute = path.starts_with('/');
         let parts: Vec<String> = path
             .split('/')
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
-        rt.block_on(async move {
-            let mut cur = String::new();
-            for part in parts {
-                if cur.is_empty() {
-                    if absolute {
-                        cur.push('/');
-                    }
-                } else {
+        let mut cur = String::new();
+        for part in parts {
+            if cur.is_empty() {
+                if absolute {
                     cur.push('/');
                 }
-                cur.push_str(&part);
-                // ignore "already exists"; final existence is verified below.
-                let _ = sftp.create_dir(cur.clone()).await;
+            } else {
+                cur.push('/');
             }
-            sftp.metadata(cur).await.map(|_| ()).map_err(io_err)
-        })
+            cur.push_str(&part);
+            match self.rt.block_on(generation.sftp().create_dir(cur.clone())) {
+                Ok(()) | Err(SftpError::Status(_)) => {}
+                Err(error) => {
+                    self.connection.note_sftp_error(&generation, &error);
+                    return Err(io_err(error));
+                }
+            }
+        }
+        self.rt
+            .block_on(generation.sftp().metadata(cur))
+            .map(|_| ())
+            .map_err(|error| {
+                self.connection.note_sftp_error(&generation, &error);
+                io_err(error)
+            })
     }
 
     fn parallelism(&self) -> usize {

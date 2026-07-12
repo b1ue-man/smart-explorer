@@ -1,7 +1,9 @@
 use super::backend::AgentBackend;
+use super::transport::AgentReconnect;
 use crate::agent_proto;
 use crate::vfs::BackendHandle;
 use std::io::{self, Write};
+use std::sync::Arc;
 
 /// A bundled agent binary for one server target. The integrity hash is computed
 /// from `bytes` at deploy time.
@@ -85,8 +87,13 @@ pub fn deploy_over_sftp(
         ))?;
     }
 
-    let (r, w) = sftp.open_exec_streams(&format!("{} --serve", sh_quote(&remote)))?;
-    AgentBackend::from_streams(r, w, inner)
+    let serve_command = format!("{} --serve", sh_quote(&remote));
+    let reconnect_sftp = sftp.clone();
+    let reconnect_command = serve_command.clone();
+    let reconnect: AgentReconnect =
+        Arc::new(move || reconnect_sftp.open_exec_streams(&reconnect_command));
+    let (r, w) = sftp.open_exec_streams(&serve_command)?;
+    AgentBackend::from_streams_with_reconnect(r, w, inner, reconnect)
 }
 
 /// Remove a deployed agent from a server.

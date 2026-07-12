@@ -51,11 +51,17 @@ pub(super) fn connect_impl(
     }
 }
 
-pub(super) fn disconnect_impl(share: &str) {
+pub(super) fn disconnect_impl(share: &str) -> io::Result<()> {
     use windows_sys::Win32::NetworkManagement::WNet::WNetCancelConnection2W;
     let name = to_wide(share);
     // force = FALSE (don't drop open handles abruptly).
-    unsafe {
-        let _ = WNetCancelConnection2W(name.as_ptr(), 0, 0);
+    let rc = unsafe { WNetCancelConnection2W(name.as_ptr(), 0, 0) };
+    if rc == 0 || rc == 2250 {
+        // ERROR_NOT_CONNECTED also proves there is no old session to retain.
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "Netzlaufwerk {share}: Trennen fehlgeschlagen (WNet {rc})"
+        )))
     }
 }
