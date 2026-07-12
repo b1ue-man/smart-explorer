@@ -45,6 +45,17 @@ pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::Exit
     std::process::Command::new("cmd").args(["/C", cmd]).status()
 }
 
+/// Convert a host-native local path into the forward-slash form required by
+/// the VFS boundary. Windows does not allow backslashes as filename characters,
+/// so this preserves path identity for drive, UNC, and relative local paths.
+pub(crate) fn normalize_local_backend_path(path: &str) -> Cow<'_, str> {
+    if path.contains('\\') {
+        Cow::Owned(path.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
 pub(crate) fn atomic_replace(
     source: &std::path::Path,
     destination: &std::path::Path,
@@ -191,7 +202,23 @@ fn invalid_test_namespace(error: String) -> std::io::Error {
 
 #[cfg(all(test, debug_assertions))]
 mod tests {
-    use super::daemon_mutex_name_for;
+    use super::{daemon_mutex_name_for, normalize_local_backend_path};
+
+    #[test]
+    fn local_backend_paths_use_forward_slashes() {
+        assert_eq!(
+            normalize_local_backend_path(r"C:\Users\Alice\transfer"),
+            "C:/Users/Alice/transfer"
+        );
+        assert_eq!(
+            normalize_local_backend_path(r"\\server\share\transfer"),
+            "//server/share/transfer"
+        );
+        assert_eq!(
+            normalize_local_backend_path(r"C:relative\transfer"),
+            "C:relative/transfer"
+        );
+    }
 
     #[test]
     fn daemon_mutex_names_are_exact_and_isolated() {

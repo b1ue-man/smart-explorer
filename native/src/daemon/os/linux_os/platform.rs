@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -33,6 +34,10 @@ pub(crate) fn on_metered_network() -> bool {
 
 pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::ExitStatus> {
     std::process::Command::new("sh").args(["-c", cmd]).status()
+}
+
+pub(crate) fn normalize_local_backend_path(path: &str) -> Cow<'_, str> {
+    Cow::Borrowed(path)
 }
 
 pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
@@ -203,7 +208,7 @@ fn validate_lock_file(lock_file: &File) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{try_acquire_in, DAEMON_LOCK_FILE};
+    use super::{normalize_local_backend_path, try_acquire_in, DAEMON_LOCK_FILE};
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     const CHILD_DIRECTORY: &str = "SMART_EXPLORER_TEST_DAEMON_LOCK_DIRECTORY";
@@ -213,6 +218,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         directory
+    }
+
+    #[test]
+    fn local_backend_paths_preserve_valid_backslash_characters() {
+        assert_eq!(
+            normalize_local_backend_path(r"/tmp/name\with-backslash"),
+            r"/tmp/name\with-backslash"
+        );
     }
 
     #[test]

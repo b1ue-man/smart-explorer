@@ -91,16 +91,24 @@ fn validate_directory_entries<'a>(
     directory: &str,
     expected: impl IntoIterator<Item = (&'a str, &'a DestinationState)>,
 ) -> Result<(), String> {
-    let mut expected: HashMap<&str, (&DestinationState, bool)> = expected
-        .into_iter()
-        .map(|(name, state)| (name, (state, false)))
-        .collect();
+    let mut expected_names = HashMap::new();
+    for (requested_name, state) in expected {
+        let name = reported_name(requested_name, state);
+        if expected_names
+            .insert(name, (requested_name, state, false))
+            .is_some()
+        {
+            return Err(format!(
+                "multiple planned destination paths resolve to the same child in {directory}: {name:?}"
+            ));
+        }
+    }
     let listed = backend
         .list_dir(directory)
         .map_err(|error| format!("cannot inspect destination directory {directory}: {error}"))?;
     for child in &listed {
         crate::vfs::validate_child_name(&child.name).map_err(|error| error.to_string())?;
-        let Some((state, seen)) = expected.get_mut(child.name.as_str()) else {
+        let Some((_, state, seen)) = expected_names.get_mut(child.name.as_str()) else {
             continue;
         };
         if *seen {
@@ -119,14 +127,21 @@ fn validate_directory_entries<'a>(
         validate_destination_listing(state, child, directory)?;
         *seen = true;
     }
-    for (name, (state, seen)) in expected {
+    for (_, (requested_name, state, seen)) in expected_names {
         if !seen && !matches!(state, DestinationState::Missing) {
             return Err(format!(
-                "destination child disappeared after preflight: {directory}/{name}"
+                "destination child disappeared after preflight: {directory}/{requested_name}"
             ));
         }
     }
     Ok(())
+}
+
+fn reported_name<'a>(requested_name: &'a str, state: &'a DestinationState) -> &'a str {
+    match state {
+        DestinationState::Directory(metadata) | DestinationState::File(metadata) => &metadata.name,
+        DestinationState::Missing => requested_name,
+    }
 }
 
 fn validate_destination_listing(
@@ -170,4 +185,25 @@ fn leaf_name(path: &str) -> Result<&str, String> {
         .next()
         .filter(|name| !name.is_empty())
         .ok_or_else(|| format!("destination has no safe leaf name: {path}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reported_name, DestinationState};
+    use crate::vfs::VfsMeta;
+
+    #[test]
+    fn existing_destinations_match_the_name_reported_by_the_backend() {
+        let existing = DestinationState::Directory(VfsMeta {
+            name: "runneradmin".to_string(),
+            is_dir: true,
+            ..VfsMeta::default()
+        });
+
+        assert_eq!(reported_name("RUNNER~1", &existing), "runneradmin");
+        assert_eq!(
+            reported_name("RUNNER~1", &DestinationState::Missing),
+            "RUNNER~1"
+        );
+    }
 }

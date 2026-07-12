@@ -96,8 +96,8 @@ impl Backend for LocalBackend {
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let p = local_platform::to_os(path);
         let meta = std::fs::symlink_metadata(&p)?;
-        let name = p
-            .file_name()
+        let name = local_platform::reported_name(&p)
+            .as_deref()
             .map(unicode_name)
             .transpose()?
             .unwrap_or_else(|| path.to_string());
