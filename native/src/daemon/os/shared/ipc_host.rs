@@ -6,6 +6,11 @@ use std::time::{Duration, Instant};
 use super::ipc_protocol::ShareWorkerSnapshot;
 use super::state::log;
 
+#[path = "ipc_host_direct_events.rs"]
+pub(super) mod direct_events;
+#[path = "ipc_host_profile_merge.rs"]
+pub(super) mod profile_merge;
+
 const MAX_SHARE_SERVER_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone)]
@@ -31,6 +36,10 @@ pub(super) struct ShareHostState {
     pub(super) last_reload: Instant,
     pub(super) ui_events: Vec<crate::share::ShareEvent>,
     pub(super) pending_direct_requests: Vec<crate::share::PeerPresence>,
+    /// Baseline for daemon-owned runtime mutations that could not yet be
+    /// durably rebased. Keeping it makes consumed service events retryable.
+    pub(super) pending_profiles_base: Option<crate::share::ShareProfiles>,
+    pub(super) pending_direct_events: Vec<crate::share::DirectSignalEvent>,
 }
 
 impl ShareHost {
@@ -53,6 +62,8 @@ impl ShareHost {
             last_reload: Instant::now() - Duration::from_secs(60),
             ui_events: Vec::new(),
             pending_direct_requests: Vec::new(),
+            pending_profiles_base: None,
+            pending_direct_events: Vec::new(),
         };
         ShareHost {
             state: Arc::new(Mutex::new(state)),
@@ -88,10 +99,16 @@ impl ShareHost {
     }
 
     pub(crate) fn reload_now(&self) -> Result<bool, String> {
+        self.drain_events();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
+        if state.pending_profiles_base.is_some() {
+            return Err(
+                "Share-Status wartet nach einem Speicherfehler auf einen erneuten Commit".into(),
+            );
+        }
         state.last_reload = Instant::now();
         state.server = match load_share_server() {
             Ok(server) => server,
@@ -216,6 +233,8 @@ impl ShareHost {
             .unwrap_or_default();
         ShareWorkerSnapshot {
             events: std::mem::take(&mut state.ui_events),
+            profiles: state.profiles.clone(),
+            profile_revision: state.profiles.storage_revision.clone(),
             pending_direct_requests: state.pending_direct_requests.clone(),
             running,
             connected: state.signal_connected,
@@ -360,6 +379,9 @@ pub(super) fn configure_service(
         direct_grants: profiles.direct_grants.clone(),
         rooms: profiles.rooms.clone(),
         default_direct_exports: profiles.default_direct_exports.clone(),
+    })?;
+    service.cmd(crate::share::ShareCmd::SyncDirectRequests {
+        direct_requests: profiles.direct_requests.clone(),
     })
 }
 
@@ -396,7 +418,7 @@ fn default_device_name() -> String {
         .unwrap_or_else(|_| "Mein Geraet".to_string())
 }
 
-fn default_home() -> String {
+pub(super) fn default_home() -> String {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)

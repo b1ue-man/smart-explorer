@@ -53,6 +53,7 @@ fn iroh_direct_session_transfers_files() {
             updated_at: 1,
         }],
         rooms: Vec::new(),
+        direct_requests: Vec::new(),
         seen_nonces: Default::default(),
         direct_online: true,
     }));
@@ -63,6 +64,7 @@ fn iroh_direct_session_transfers_files() {
         direct_contacts: Vec::new(),
         direct_grants: Vec::new(),
         rooms: Vec::new(),
+        direct_requests: Vec::new(),
         seen_nonces: Default::default(),
         direct_online: true,
     }));

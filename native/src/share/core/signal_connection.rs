@@ -8,8 +8,6 @@ use tungstenite::{
 
 use super::core::eio;
 use super::line::{read_line_limited, MAX_SIGNAL_LINE};
-use super::wire::ClientMsg;
-
 pub(super) enum SignalConnection {
     Tcp {
         label: String,
@@ -82,7 +80,7 @@ impl SignalConnection {
         }
     }
 
-    fn send(&mut self, msg: &ClientMsg) -> io::Result<()> {
+    fn send<T: serde::Serialize>(&mut self, msg: &T) -> io::Result<()> {
         match self {
             Self::Tcp { stream, .. } => {
                 let mut line = serde_json::to_string(msg).map_err(eio)?;
@@ -135,7 +133,10 @@ impl SignalConnection {
     }
 }
 
-pub(super) fn send_line(stream: &mut SignalConnection, msg: &ClientMsg) -> io::Result<()> {
+pub(super) fn send_line<T: serde::Serialize>(
+    stream: &mut SignalConnection,
+    msg: &T,
+) -> io::Result<()> {
     stream.send(msg)
 }
 

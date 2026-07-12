@@ -3,9 +3,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "profile_transaction.rs"]
+mod profile_transaction;
+
 use super::profile_persistence::{ProfileChange, ProfilePersistence};
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
+    SHARE_PROFILE_VERSION,
 };
 use super::types::{DirectContact, DirectGrantState, PeerPresence, RoomProfile};
 
@@ -35,6 +39,28 @@ impl ShareProfiles {
 
     pub fn persist_replacement(&mut self, candidate: ShareProfiles) -> Result<(), String> {
         self.persist_replacement_with(candidate, &mut SystemProfilePersistence)
+    }
+
+    /// Reapply an idempotent, field-level mutation to the latest persisted
+    /// profile and return the canonical profile committed by this transaction.
+    ///
+    /// Another process can win the optimistic compare-and-swap between load
+    /// and save. In that case `mutation` runs again against the newer profile,
+    /// so it must not perform external side effects or depend on being called
+    /// exactly once. Mutation and precondition errors are returned immediately.
+    pub fn mutate_persisted<F>(
+        default_home: Option<String>,
+        mutation: F,
+    ) -> Result<ShareProfiles, String>
+    where
+        F: FnMut(&mut ShareProfiles) -> Result<(), String>,
+    {
+        profile_transaction::run(
+            || Self::load_checked(default_home.clone()),
+            mutation,
+            commit_transaction_candidate,
+        )
+        .map_err(|error| error.to_string())
     }
 
     pub fn add_direct_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
@@ -113,6 +139,27 @@ impl ProfilePersistence for SystemProfilePersistence {
 
     fn delete_secret(&mut self, account: &str) -> Result<(), String> {
         crate::creds::delete_secret_checked(account)
+    }
+}
+
+fn commit_transaction_candidate(
+    candidate: &mut ShareProfiles,
+) -> Result<(), profile_transaction::CommitError> {
+    candidate.schema_version = SHARE_PROFILE_VERSION;
+    let contents = serde_json::to_string_pretty(candidate).map_err(|error| {
+        profile_transaction::CommitError::Fatal(format!("Share-Profile kodieren: {error}"))
+    })?;
+    match save_profiles(&contents, &candidate.storage_revision) {
+        Ok(revision) => {
+            candidate.storage_revision = revision;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(profile_transaction::CommitError::Conflict)
+        }
+        Err(error) => Err(profile_transaction::CommitError::Fatal(format!(
+            "Share-Profile speichern: {error}"
+        ))),
     }
 }
 

@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
+use super::{direct_ledger::DirectRequestEntry, direct_signal_event::DirectSignalEvent};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShareScope {
@@ -92,7 +93,7 @@ pub enum DirectGrantState {
     Ignored,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectGrant {
     pub device_id: String,
     pub device_name: String,
@@ -104,7 +105,7 @@ pub struct DirectGrant {
     pub updated_at: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerPresence {
     pub kind: String,
     pub relation_id: String,
@@ -122,7 +123,7 @@ pub struct PeerPresence {
     pub proof: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectContact {
     pub id: String,
     pub display_name: String,
@@ -151,7 +152,7 @@ pub struct DirectContact {
     pub accepted_public_key: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomMember {
     pub device_id: String,
     pub device_name: String,
@@ -171,7 +172,7 @@ pub struct RoomMember {
     pub presence: Option<PeerPresence>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomProfile {
     pub id: String,
     pub name: String,
@@ -303,6 +304,9 @@ pub enum ShareCmd {
         rooms: Vec<RoomProfile>,
         default_direct_exports: ShareExportConfig,
     },
+    SyncDirectRequests {
+        direct_requests: Vec<DirectRequestEntry>,
+    },
     Refresh,
     Stop,
     SetDirectOnline {
@@ -327,6 +331,7 @@ pub enum ShareEvent {
     Error(String),
     ServerConnected,
     ServerDisconnected(String),
+    DirectSignal(DirectSignalEvent),
     DirectAvailable {
         lookup_id: String,
         presence: PeerPresence,
@@ -375,6 +380,7 @@ pub(crate) struct ShareAuthState {
     pub(crate) direct_contacts: Vec<DirectContact>,
     pub(crate) direct_grants: Vec<DirectGrant>,
     pub(crate) rooms: Vec<RoomProfile>,
+    pub(crate) direct_requests: Vec<DirectRequestEntry>,
     pub(crate) seen_nonces: HashSet<String>,
     pub(crate) direct_online: bool,
 }

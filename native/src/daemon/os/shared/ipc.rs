@@ -45,7 +45,12 @@ pub(super) fn handle_client(
         },
         IpcRequest::DrainShareEvents { .. } => {
             let snapshot = host.drain_for_ui();
-            write_response(&mut stream, &IpcResponse::ShareEvents { snapshot })
+            write_response(
+                &mut stream,
+                &IpcResponse::ShareEvents {
+                    snapshot: Box::new(snapshot),
+                },
+            )
         }
         IpcRequest::OpenShare { target, .. } => match host.open_share(target) {
             Ok((label, backend, status)) => {

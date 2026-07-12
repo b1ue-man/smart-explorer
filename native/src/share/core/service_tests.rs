@@ -12,10 +12,13 @@ use super::types::ShareAuthState;
 use super::types::{
     DirectAccessState, DirectContact, DirectGrant, RoomProfile, ShareCmd, ShareStatus,
 };
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{bounded, unbounded};
 use std::collections::HashSet;
+use std::io::{BufRead, Write};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[test]
 fn nonce_cache_detects_replay() {
@@ -79,6 +82,65 @@ fn configure_requires_worker_ack_before_reporting_success() {
         .is_err());
     assert!(svc.auth.lock().unwrap().direct_contacts.is_empty());
     assert!(svc.auth.lock().unwrap().rooms.is_empty());
+}
+
+#[test]
+fn local_commands_are_acknowledged_while_server_hello_is_stalled() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let server = listener.local_addr().unwrap().to_string();
+    let (hello_seen_tx, hello_seen_rx) = bounded(1);
+    let (release_tx, release_rx) = bounded(1);
+    let server_thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut hello = String::new();
+        reader.read_line(&mut hello).unwrap();
+        assert!(hello.contains(r#""t":"hello""#));
+        hello_seen_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        let _ = stream.write_all(
+            br#"{"t":"hello_ok","capabilities":["tracked_direct_v1"]}
+"#,
+        );
+        let _ = stream.flush();
+    });
+
+    let identity = test_identity("offline-device", "Offline Device", "offline-lookup");
+    let service = ShareService::start(server, identity, crate::share::ShareProfiles::default())
+        .expect("test ShareService starts");
+    hello_seen_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker sent Hello");
+
+    let exports = ShareExportConfig {
+        include_connections: true,
+        ..Default::default()
+    };
+    let started = Instant::now();
+    service
+        .cmd(ShareCmd::Configure {
+            direct: Vec::new(),
+            direct_grants: Vec::new(),
+            rooms: Vec::new(),
+            default_direct_exports: exports.clone(),
+        })
+        .expect("Configure is a local ACK during handshake");
+    service
+        .cmd(ShareCmd::SyncDirectRequests {
+            direct_requests: Vec::new(),
+        })
+        .expect("lifecycle sync is a local ACK during handshake");
+    service
+        .cmd(ShareCmd::Refresh)
+        .expect("Refresh intent is acknowledged during handshake");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(service.auth.lock().unwrap().default_direct_exports, exports);
+    service
+        .cmd(ShareCmd::Stop)
+        .expect("Stop is acknowledged during handshake");
+
+    release_tx.send(()).unwrap();
+    server_thread.join().unwrap();
 }
 
 #[test]
@@ -247,6 +309,7 @@ fn test_service() -> ShareService {
         direct_contacts: Vec::new(),
         direct_grants: Vec::<DirectGrant>::new(),
         rooms: Vec::new(),
+        direct_requests: Vec::new(),
         seen_nonces: HashSet::new(),
         direct_online: true,
     }));

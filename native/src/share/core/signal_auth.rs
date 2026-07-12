@@ -22,7 +22,7 @@ pub(super) fn handle_server_msg(
         }
     };
     match message {
-        SrvMsg::HelloOk | SrvMsg::Pong => {}
+        SrvMsg::HelloOk { .. } | SrvMsg::Pong => {}
         SrvMsg::DirectAvailable {
             lookup_id,
             presence,

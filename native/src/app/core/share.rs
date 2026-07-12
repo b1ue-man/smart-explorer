@@ -5,8 +5,14 @@ use super::*;
 mod drain;
 #[path = "share_helpers.rs"]
 mod helpers;
+#[path = "share_lifecycle_ui.rs"]
+mod lifecycle_ui;
 #[path = "share_poll_status.rs"]
 mod poll_status;
+#[path = "share_profile_edits.rs"]
+mod profile_edits;
+#[path = "share_lifecycle_view.rs"]
+mod share_lifecycle_view;
 
 use helpers::*;
 
@@ -67,12 +73,17 @@ impl App {
             return false;
         }
         if !self.share_profiles.auto_connect {
-            let mut candidate = self.share_profiles.clone();
-            candidate.auto_connect = true;
-            if let Err(error) = self.share_profiles.persist_replacement(candidate) {
-                self.share_status = format!("Share-Profile nicht gespeichert: {error}");
-                self.error_msg = Some(self.share_status.clone());
-                return false;
+            let default_home = dirs_home().to_string_lossy().replace('\\', "/");
+            match crate::share::ShareProfiles::mutate_persisted(Some(default_home), |profiles| {
+                profiles.auto_connect = true;
+                Ok(())
+            }) {
+                Ok(committed) => self.share_profiles = committed,
+                Err(error) => {
+                    self.share_status = format!("Share-Profile nicht gespeichert: {error}");
+                    self.error_msg = Some(self.share_status.clone());
+                    return false;
+                }
             }
         }
         match crate::daemon::refresh_share_worker_checked() {
@@ -95,12 +106,17 @@ impl App {
 
     pub(in crate::app) fn share_cmd(&mut self, c: crate::share::ShareCmd) -> bool {
         if matches!(&c, crate::share::ShareCmd::Stop) {
-            let mut candidate = self.share_profiles.clone();
-            candidate.auto_connect = false;
-            if let Err(error) = self.share_profiles.persist_replacement(candidate) {
-                self.share_status = format!("Trennen nicht gespeichert: {error}");
-                self.error_msg = Some(self.share_status.clone());
-                return false;
+            let default_home = dirs_home().to_string_lossy().replace('\\', "/");
+            match crate::share::ShareProfiles::mutate_persisted(Some(default_home), |profiles| {
+                profiles.auto_connect = false;
+                Ok(())
+            }) {
+                Ok(committed) => self.share_profiles = committed,
+                Err(error) => {
+                    self.share_status = format!("Trennen nicht gespeichert: {error}");
+                    self.error_msg = Some(self.share_status.clone());
+                    return false;
+                }
             }
             if let Err(error) = crate::daemon::send_share_command(c) {
                 self.share_status = format!("Share-Worker Stop fehlgeschlagen: {error}");
@@ -144,29 +160,22 @@ impl App {
         }
     }
 
-    fn save_share_profiles(&mut self) -> bool {
-        if let Err(error) = self.share_profiles.save() {
-            self.error_msg = Some(format!("Share-Profile speichern: {error}"));
-            return false;
-        }
-        self.configure_share_service()
-    }
-
     fn commit_share_profiles(&mut self, previous: crate::share::ShareProfiles) -> bool {
-        let candidate = std::mem::replace(&mut self.share_profiles, previous);
-        if let Err(error) = self.share_profiles.persist_replacement(candidate) {
-            self.error_msg = Some(format!("Share-Profile speichern: {error}"));
-            return false;
+        let edited = std::mem::replace(&mut self.share_profiles, previous.clone());
+        let default_home = dirs_home().to_string_lossy().replace('\\', "/");
+        match crate::share::ShareProfiles::mutate_persisted(Some(default_home), |latest| {
+            profile_edits::merge_user_edits(latest, &previous, &edited);
+            Ok(())
+        }) {
+            Ok(committed) => {
+                self.share_profiles = committed;
+                self.configure_share_service()
+            }
+            Err(error) => {
+                self.error_msg = Some(format!("Share-Profile speichern: {error}"));
+                false
+            }
         }
-        self.configure_share_service()
-    }
-
-    fn persist_share_profiles_only(&mut self) -> bool {
-        if let Err(error) = self.share_profiles.save() {
-            self.error_msg = Some(format!("Share-Profile speichern: {error}"));
-            return false;
-        }
-        true
     }
 
     fn append_share_diag(&mut self, line: impl AsRef<str>) {
@@ -239,7 +248,6 @@ impl App {
                         "Warte auf Freigabe am anderen Geraet".to_string(),
                         std::time::Instant::now(),
                     ));
-                    let _ = self.save_share_profiles();
                     return;
                 }
             }
@@ -262,7 +270,6 @@ impl App {
                 self.append_share_diag(message);
                 self.share_opening = None;
                 self.share_opening_origin = None;
-                let _ = self.persist_share_profiles_only();
             }
         }
     }
@@ -451,13 +458,10 @@ impl App {
     }
 
     fn ui_share_direct(&mut self, ui: &mut egui::Ui) {
-        let local_identity = self.share_identity.as_ref().map(|identity| {
-            (
-                identity.direct_code(),
-                identity.fingerprint.clone(),
-                identity.direct_lookup_id.clone(),
-            )
-        });
+        let local_identity = self
+            .share_identity
+            .as_ref()
+            .map(|identity| (identity.direct_code(), identity.fingerprint.clone()));
         ui.label(
             RichText::new("DIESES GERAET")
                 .small()
@@ -465,7 +469,7 @@ impl App {
         );
         ui.horizontal_wrapped(|ui| {
             ui.label("Direkt-Code:");
-            if let Some((direct_code, fingerprint, _)) = &local_identity {
+            if let Some((direct_code, fingerprint)) = &local_identity {
                 share_value_field(ui, direct_code);
                 if ui.button("Code kopieren").clicked() {
                     ui.ctx().copy_text(direct_code.clone());
@@ -558,111 +562,8 @@ impl App {
             });
         }
 
-        if !self.share_direct_requests.is_empty() {
-            ui.separator();
-            ui.label(
-                RichText::new("ANFRAGEN AN DIESES GERAET")
-                    .small()
-                    .color(Color32::from_gray(140)),
-            );
-            let mut remove_request: Option<String> = None;
-            let requests = self.share_direct_requests.clone();
-            for req in requests {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::Label::new(format!(
-                            "{} moechte deinen Direkt-Code nutzen",
-                            req.device_name
-                        ))
-                        .wrap(),
-                    );
-                    share_value_field(ui, &req.fingerprint);
-                    if ui.button("Freigaben waehlen").clicked() {
-                        self.share_export_scope = 0;
-                        self.share_export_target_id.clear();
-                        self.share_tab = 2;
-                    }
-                    if ui.button("Freigeben").clicked() {
-                        let lookup_id = local_identity
-                            .as_ref()
-                            .map(|(_, _, lookup_id)| lookup_id.clone());
-                        match lookup_id {
-                            None => {
-                                self.error_msg = Some("Share-Identitaet nicht verfuegbar".into());
-                            }
-                            Some(lookup_id) => {
-                                match self.share_profiles.set_direct_grant_persisted(
-                                    &req,
-                                    crate::share::DirectGrantState::Accepted,
-                                ) {
-                                    Err(error) => {
-                                        self.error_msg =
-                                            Some(format!("Freigabe nicht gespeichert: {error}"));
-                                    }
-                                    Ok(()) => {
-                                        let delivered = self.share_cmd(
-                                            crate::share::ShareCmd::AnswerDirectRequest {
-                                                lookup_id,
-                                                presence: req.clone(),
-                                                accepted: true,
-                                            },
-                                        );
-                                        if delivered {
-                                            let _ = self.share_cmd(
-                                                crate::share::ShareCmd::SetDirectOnline {
-                                                    online: true,
-                                                },
-                                            );
-                                            remove_request = Some(req.device_id.clone());
-                                            self.notice = Some((
-                                                format!("Freigabe fuer {} aktiv", req.device_name),
-                                                std::time::Instant::now(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if ui.button("Ignorieren").clicked() {
-                        let lookup_id = local_identity
-                            .as_ref()
-                            .map(|(_, _, lookup_id)| lookup_id.clone());
-                        match lookup_id {
-                            None => {
-                                self.error_msg = Some("Share-Identitaet nicht verfuegbar".into());
-                            }
-                            Some(lookup_id) => {
-                                match self.share_profiles.set_direct_grant_persisted(
-                                    &req,
-                                    crate::share::DirectGrantState::Ignored,
-                                ) {
-                                    Err(error) => {
-                                        self.error_msg =
-                                            Some(format!("Ignorieren nicht gespeichert: {error}"));
-                                    }
-                                    Ok(()) => {
-                                        if self.share_cmd(
-                                            crate::share::ShareCmd::AnswerDirectRequest {
-                                                lookup_id,
-                                                presence: req.clone(),
-                                                accepted: false,
-                                            },
-                                        ) {
-                                            remove_request = Some(req.device_id.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-            if let Some(device_id) = remove_request {
-                self.share_direct_requests
-                    .retain(|p| p.device_id != device_id);
-            }
-        }
+        ui.separator();
+        lifecycle_ui::ui_lifecycle(self, ui);
 
         ui.separator();
         ui.label(
@@ -696,18 +597,7 @@ impl App {
                     Ok(id) => {
                         self.share_direct_code_input.clear();
                         self.share_direct_name_input.clear();
-                        if self.share_cmd(crate::share::ShareCmd::RequestDirect { contact_id: id })
-                        {
-                            self.notice = Some((
-                                "Direktgeraet gespeichert, Anfrage zugestellt".to_string(),
-                                std::time::Instant::now(),
-                            ));
-                        } else {
-                            self.notice = Some((
-                                "Direktgeraet gespeichert; Anfrage nicht zugestellt".to_string(),
-                                std::time::Instant::now(),
-                            ));
-                        }
+                        let _ = lifecycle_ui::queue_contact(self, &id);
                     }
                     Err(e) => self.error_msg = Some(e),
                 }
@@ -746,11 +636,13 @@ impl App {
                         contact_id: c.id.clone(),
                     });
                 }
-                if ui.button("Anfrage erneut senden").clicked() {
-                    c.access_state = crate::share::DirectAccessState::Pending;
-                    c.request_sent_at = Some(crate::share::core_now_secs());
-                    c.status = crate::share::ShareStatus::WaitingForAccess;
-                    changed = true;
+                if ui
+                    .add_enabled(
+                        c.access_state != crate::share::DirectAccessState::Accepted,
+                        egui::Button::new("Anfrage senden / erneut versuchen"),
+                    )
+                    .clicked()
+                {
                     request_direct = Some(c.id.clone());
                 }
                 if ui.checkbox(&mut c.auto_connect, "Auto").changed() {
@@ -815,7 +707,7 @@ impl App {
             }
         }
         if let Some(contact_id) = request_direct.filter(|_| persisted) {
-            let _ = self.share_cmd(crate::share::ShareCmd::RequestDirect { contact_id });
+            let _ = lifecycle_ui::queue_contact(self, &contact_id);
         }
         if let Some(target) = open_target {
             self.open_share_target(target);

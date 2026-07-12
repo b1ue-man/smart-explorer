@@ -74,7 +74,6 @@ impl App {
             self.share_open_rx = None;
             self.share_opening = None;
             self.share_opening_origin = None;
-            let _ = self.persist_share_profiles_only();
         }
 
         let mut poll_result = None;
@@ -138,6 +137,11 @@ impl App {
         ) {
             self.share_status = status.to_string();
         }
+        // The daemon is the sole owner of runtime Share state. Replacing this
+        // cache prevents GUI event replay from writing an older profile over a
+        // concurrently persisted request, receipt, decision, or presence.
+        self.share_profiles = snapshot.profiles;
+        self.share_profiles.storage_revision = snapshot.profile_revision;
         self.share_next_poll_at = Instant::now()
             + if snapshot.running || self.share_profiles.auto_connect {
                 SHARE_ACTIVE_POLL
@@ -147,25 +151,16 @@ impl App {
         self.share_worker_running = snapshot.running;
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
-        for presence in snapshot.pending_direct_requests {
-            if self.share_profiles.grant_for(&presence.device_id).is_none()
-                && !self
-                    .share_direct_requests
-                    .iter()
-                    .any(|p| p.device_id == presence.device_id)
-            {
-                self.share_direct_requests.push(presence);
-                self.show_share = true;
-                self.share_tab = 0;
-            }
+        self.share_direct_requests = snapshot
+            .pending_direct_requests
+            .into_iter()
+            .filter(|presence| self.share_profiles.grant_for(&presence.device_id).is_none())
+            .collect();
+        if !self.share_direct_requests.is_empty() {
+            self.show_share = true;
+            self.share_tab = 0;
         }
         let events: Vec<crate::share::ShareEvent> = snapshot.events;
-        let mut changed = false;
-        let previous_profiles = self.share_profiles.clone();
-        let local_device_id = self
-            .share_identity
-            .as_ref()
-            .map(|identity| identity.device_id.clone());
         let mut auto_open_target: Option<crate::share::PeerOpenTarget> = None;
         let can_auto_open = self.share_can_auto_open();
         for ev in events {
@@ -194,111 +189,101 @@ impl App {
                     self.share_status = format!("Share-Server getrennt: {}", e);
                     self.append_share_diag(format!("Server getrennt: {e}"));
                 }
+                E::DirectSignal(signal) => {
+                    use crate::share::DirectSignalEvent as S;
+                    match signal {
+                        S::RequestReceived {
+                            request,
+                            received_at,
+                        } => {
+                            self.show_share = true;
+                            self.share_tab = 0;
+                            self.share_status = format!(
+                                "Getrackte Anfrage {} von {} empfangen",
+                                request.request_id, request.requester.device_name
+                            );
+                            self.append_share_diag(format!(
+                                "Tracked request received: id={}, peer={}, at={received_at}",
+                                request.request_id, request.requester.device_id
+                            ));
+                        }
+                        S::RequestReceiptReceived {
+                            receipt,
+                            received_at,
+                        } => self.append_share_diag(format!(
+                            "Tracked request peer-received: id={}, at={received_at}",
+                            receipt.request_id
+                        )),
+                        S::DecisionReceived {
+                            decision,
+                            received_at,
+                        } => {
+                            self.show_share = true;
+                            self.share_tab = 0;
+                            self.append_share_diag(format!(
+                                "Tracked decision received: id={}, decision={}, revision={}, at={received_at}",
+                                decision.request_id,
+                                decision.decision.code(),
+                                decision.decision_revision
+                            ));
+                        }
+                        S::DecisionReceiptReceived {
+                            receipt,
+                            received_at,
+                        } => self.append_share_diag(format!(
+                            "Tracked decision peer-received: id={}, revision={}, at={received_at}",
+                            receipt.request_id, receipt.decision_revision
+                        )),
+                        S::EnvelopeAttempted {
+                            request_id,
+                            envelope,
+                            attempt_count,
+                            at,
+                            failure,
+                        } => self.append_share_diag(format!(
+                            "Tracked send: id={request_id}, envelope={envelope:?}, attempt={attempt_count}, at={at}, error={failure:?}"
+                        )),
+                        S::RelayAcknowledged {
+                            request_id,
+                            envelope,
+                            outcome,
+                            at,
+                        } => self.append_share_diag(format!(
+                            "Tracked relay ACK (not peer receipt): id={request_id}, envelope={envelope:?}, outcome={outcome:?}, at={at}"
+                        )),
+                    }
+                }
                 E::DirectAvailable {
                     lookup_id,
                     presence,
                 } => {
-                    if let Some(c) = self
+                    if let Some(contact) = self
                         .share_profiles
                         .direct_contacts
-                        .iter_mut()
-                        .find(|c| c.lookup_id == lookup_id)
+                        .iter()
+                        .find(|contact| contact.lookup_id == lookup_id)
                     {
-                        if !c.expected_node_id.trim().is_empty()
-                            && c.expected_node_id != presence.node_id
-                        {
-                            c.status = crate::share::ShareStatus::IdentityConflict;
-                            c.last_error = Some("Iroh NodeId passt nicht zum Code".into());
-                            changed = true;
-                            continue;
-                        }
-                        if c.expected_node_id.trim().is_empty() {
-                            c.expected_node_id = presence.node_id.clone();
-                        }
-                        c.remote_device_id = Some(presence.device_id.clone());
-                        c.remote_public_key = Some(presence.public_key.clone());
-                        c.display_name = if c.display_name.trim().is_empty() {
-                            presence.device_name.clone()
-                        } else {
-                            c.display_name.clone()
-                        };
-                        c.last_seen = Some(crate::share::core_now_secs());
-                        c.status = if c.access_state == crate::share::DirectAccessState::Accepted {
-                            crate::share::ShareStatus::Available
-                        } else {
-                            crate::share::ShareStatus::WaitingForAccess
-                        };
-                        c.last_error = None;
-                        c.presence = Some(presence);
-                        if c.auto_open
-                            && c.access_state == crate::share::DirectAccessState::Accepted
+                        if contact.auto_open
+                            && contact.access_state == crate::share::DirectAccessState::Accepted
                             && can_auto_open
                         {
                             auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
-                                contact_id: c.id.clone(),
+                                contact_id: contact.id.clone(),
                             });
                         }
-                        changed = true;
                     }
+                    self.append_share_diag(format!(
+                        "Direct online: lookup={lookup_id}, device={}\n",
+                        presence.device_name
+                    ));
                 }
                 E::DirectOffline { lookup_id } => {
-                    if let Some(c) = self
-                        .share_profiles
-                        .direct_contacts
-                        .iter_mut()
-                        .find(|c| c.lookup_id == lookup_id)
-                    {
-                        c.status = crate::share::ShareStatus::Offline;
-                        c.presence = None;
-                        changed = true;
-                    }
+                    self.append_share_diag(format!("Direct offline: lookup={lookup_id}\n"))
                 }
                 E::DirectAccessRequest {
                     lookup_id,
                     presence,
                 } => {
-                    match self.share_profiles.grant_for(&presence.device_id) {
-                        Some(g)
-                            if g.public_key == presence.public_key
-                                && g.node_id == presence.node_id
-                                && g.state == crate::share::DirectGrantState::Accepted =>
-                        {
-                            let _ = self.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
-                                lookup_id,
-                                presence,
-                                accepted: true,
-                            });
-                            continue;
-                        }
-                        Some(g)
-                            if g.public_key == presence.public_key
-                                && g.node_id == presence.node_id
-                                && g.state == crate::share::DirectGrantState::Ignored =>
-                        {
-                            continue;
-                        }
-                        Some(_) => {
-                            self.append_share_diag(format!(
-                                "Direct-Anfrage Identitaetskonflikt: {} / {}\n",
-                                presence.device_name, presence.device_id
-                            ));
-                            continue;
-                        }
-                        None => {}
-                    }
-                    if !self
-                        .share_direct_requests
-                        .iter()
-                        .any(|p| p.device_id == presence.device_id)
-                    {
-                        self.share_direct_requests.push(presence.clone());
-                    } else if let Some(existing) = self
-                        .share_direct_requests
-                        .iter_mut()
-                        .find(|p| p.device_id == presence.device_id)
-                    {
-                        *existing = presence.clone();
-                    }
                     self.show_share = true;
                     self.share_tab = 0;
                     self.share_status = format!(
@@ -314,111 +299,20 @@ impl App {
                     lookup_id,
                     requester_device_id,
                     accepted,
-                    presence,
+                    presence: _,
                     msg,
                 } => {
-                    if local_device_id.as_deref() != Some(requester_device_id.as_str()) {
-                        continue;
-                    }
-                    if let Some(c) = self
-                        .share_profiles
-                        .direct_contacts
-                        .iter_mut()
-                        .find(|c| c.lookup_id == lookup_id)
-                    {
-                        if accepted {
-                            c.access_state = crate::share::DirectAccessState::Accepted;
-                            c.accepted_at = Some(crate::share::core_now_secs());
-                            if let Some(p) = presence.clone() {
-                                if !c.expected_node_id.trim().is_empty()
-                                    && c.expected_node_id != p.node_id
-                                {
-                                    c.access_state =
-                                        crate::share::DirectAccessState::IdentityConflict;
-                                    c.status = crate::share::ShareStatus::IdentityConflict;
-                                    c.last_error = Some("Iroh NodeId passt nicht zum Code".into());
-                                    changed = true;
-                                    continue;
-                                }
-                                if c.expected_node_id.trim().is_empty() {
-                                    c.expected_node_id = p.node_id.clone();
-                                }
-                                c.remote_device_id = Some(p.device_id.clone());
-                                c.remote_public_key = Some(p.public_key.clone());
-                                c.accepted_public_key = Some(p.public_key.clone());
-                                c.presence = Some(p);
-                            }
-                            c.status = crate::share::ShareStatus::Available;
-                            c.last_error = None;
-                            changed = true;
-                            if c.auto_open && can_auto_open {
-                                auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
-                                    contact_id: c.id.clone(),
-                                });
-                            }
-                        } else {
-                            c.access_state = crate::share::DirectAccessState::Ignored;
-                            c.status = crate::share::ShareStatus::Failed(
-                                msg.unwrap_or_else(|| "Freigabe abgelehnt".into()),
-                            );
-                            changed = true;
-                        }
-                    }
+                    let outcome = if accepted {
+                        "accepted".to_string()
+                    } else {
+                        msg.unwrap_or_else(|| "rejected".to_string())
+                    };
+                    self.append_share_diag(format!(
+                        "Direct decision: lookup={lookup_id}, requester={requester_device_id}, {outcome}\n"
+                    ));
                 }
-                E::RoomRoster { room_id, members } => {
-                    if let Some(r) = self
-                        .share_profiles
-                        .rooms
-                        .iter_mut()
-                        .find(|r| r.room_id == room_id)
-                    {
-                        r.status = crate::share::ShareStatus::Available;
-                        r.last_seen = Some(crate::share::core_now_secs());
-                        for p in members {
-                            if local_device_id
-                                .as_deref()
-                                .is_some_and(|device_id| device_id != p.device_id)
-                            {
-                                upsert_room_member(r, p);
-                            }
-                        }
-                        changed = true;
-                    }
-                }
-                E::RoomJoined { room_id, presence } => {
-                    if let Some(r) = self
-                        .share_profiles
-                        .rooms
-                        .iter_mut()
-                        .find(|r| r.room_id == room_id)
-                    {
-                        if local_device_id
-                            .as_deref()
-                            .is_some_and(|device_id| device_id != presence.device_id)
-                        {
-                            upsert_room_member(r, presence);
-                            changed = true;
-                        }
-                    }
-                }
-                E::RoomLeft { room_id, device_id } => {
-                    if let Some(r) = self
-                        .share_profiles
-                        .rooms
-                        .iter_mut()
-                        .find(|r| r.room_id == room_id)
-                    {
-                        if let Some(m) = r.members.iter_mut().find(|m| m.device_id == device_id) {
-                            m.status = crate::share::ShareStatus::Offline;
-                            m.presence = None;
-                            changed = true;
-                        }
-                    }
-                }
+                E::RoomRoster { .. } | E::RoomJoined { .. } | E::RoomLeft { .. } => {}
             }
-        }
-        if changed {
-            let _ = self.commit_share_profiles(previous_profiles);
         }
         if let Some(target) = auto_open_target {
             self.open_share_target(target);

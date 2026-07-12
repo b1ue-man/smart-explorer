@@ -8,6 +8,12 @@ use super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShareWorkerSnapshot {
     pub events: Vec<crate::share::ShareEvent>,
+    /// Canonical daemon-owned profile state. Consumers must replace stale
+    /// cached copies instead of replaying worker events as profile writes.
+    #[serde(default)]
+    pub profiles: crate::share::ShareProfiles,
+    #[serde(default)]
+    pub(crate) profile_revision: crate::share::ProfileRevision,
     pub pending_direct_requests: Vec<crate::share::PeerPresence>,
     pub running: bool,
     #[serde(default)]
@@ -79,7 +85,7 @@ pub(super) enum IpcResponse {
         status: crate::share::ShareStatus,
     },
     ShareEvents {
-        snapshot: ShareWorkerSnapshot,
+        snapshot: Box<ShareWorkerSnapshot>,
     },
     ExecResult {
         result: crate::share::ExecResult,
@@ -120,7 +126,7 @@ fn eio<E: std::fmt::Display>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_response, IpcRequest, IpcResponse};
+    use super::{read_response, IpcRequest, IpcResponse, ShareWorkerSnapshot};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
@@ -143,6 +149,20 @@ mod tests {
         client.read_exact(&mut rest).unwrap();
         assert_eq!(&rest, b"AGENT");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn share_snapshot_carries_the_profile_cas_revision() {
+        let snapshot = ShareWorkerSnapshot {
+            profile_revision: crate::share::ProfileRevision::Digest([7; 32]),
+            ..ShareWorkerSnapshot::default()
+        };
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: ShareWorkerSnapshot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.profile_revision,
+            crate::share::ProfileRevision::Digest([7; 32])
+        );
     }
 
     #[test]
