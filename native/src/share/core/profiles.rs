@@ -2,14 +2,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::core::{hex, hex_decode, public_fingerprint, random_bytes, random_hex_token};
+use super::direct_ledger::DirectRequestEntry;
 use super::fs::ShareExportConfig;
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
-pub(super) const SHARE_PROFILE_VERSION: u32 = 3;
+pub(super) const SHARE_PROFILE_VERSION: u32 = 4;
+pub(super) const PREVIOUS_SHARE_PROFILE_VERSION: u32 = 3;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum ProfileRevision {
     #[default]
     Untracked,
@@ -38,6 +40,8 @@ pub struct ShareProfiles {
     #[serde(default)]
     pub direct_grants: Vec<DirectGrant>,
     #[serde(default)]
+    pub direct_requests: Vec<DirectRequestEntry>,
+    #[serde(default)]
     pub rooms: Vec<RoomProfile>,
 }
 
@@ -50,6 +54,7 @@ impl Default for ShareProfiles {
             default_direct_exports: ShareExportConfig::default(),
             direct_contacts: Vec::new(),
             direct_grants: Vec::new(),
+            direct_requests: Vec::new(),
             rooms: Vec::new(),
         }
     }

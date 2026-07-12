@@ -11,10 +11,17 @@ impl ShareHost {
             return;
         };
         let events: Vec<_> = service.events.try_iter().collect();
-        if events.is_empty() {
+        let retrying_profile_commit = state.pending_profiles_base.is_some();
+        let retrying_direct_events = !state.pending_direct_events.is_empty();
+        if events.is_empty() && !retrying_profile_commit && !retrying_direct_events {
             return;
         }
+        let mut direct_events = std::mem::take(&mut state.pending_direct_events);
         let previous_profiles = state.profiles.clone();
+        let commit_base = state
+            .pending_profiles_base
+            .take()
+            .unwrap_or_else(|| previous_profiles.clone());
         let mut changed = false;
         let mut answers = Vec::new();
         for event in events {
@@ -35,6 +42,10 @@ impl ShareHost {
                     log(&format!("share signaling disconnected: {error}"));
                     state.signal_connected = false;
                     state.signal_error = Some(error);
+                }
+                Event::DirectSignal(event) => {
+                    direct_events.push(event);
+                    ui_event = None;
                 }
                 Event::DirectAvailable {
                     lookup_id,
@@ -238,21 +249,80 @@ impl ShareHost {
                 }
             }
         }
-        if changed {
-            if let Err(error) = state.profiles.save() {
-                state.profiles = previous_profiles;
-                state
-                    .ui_events
-                    .push(crate::share::ShareEvent::Error(format!(
-                        "Share-Status konnte nicht gespeichert werden: {error}"
-                    )));
-            } else if let Some(service) = &state.service {
-                if let Err(error) = configure_service(service, &state.profiles) {
+        if changed || retrying_profile_commit {
+            let worker_profiles = state.profiles.clone();
+            match crate::share::ShareProfiles::mutate_persisted(
+                Some(super::ipc_host::default_home()),
+                |latest| {
+                    super::ipc_host::profile_merge::merge_worker_updates(
+                        latest,
+                        &commit_base,
+                        &worker_profiles,
+                    );
+                    Ok(())
+                },
+            ) {
+                Err(error) => {
+                    state.pending_profiles_base = Some(commit_base);
+                    state.last_reload = std::time::Instant::now();
                     state
                         .ui_events
                         .push(crate::share::ShareEvent::Error(format!(
-                            "Share-Konfiguration konnte nicht zugestellt werden: {error}"
+                            "Share-Status konnte nicht gespeichert werden; Wiederholung vorgemerkt: {error}"
                         )));
+                }
+                Ok(committed) => {
+                    state.profiles = committed;
+                    state.pending_profiles_base = None;
+                }
+            }
+            if state.pending_profiles_base.is_none() {
+                if let Some(service) = &state.service {
+                    if let Err(error) = configure_service(service, &state.profiles) {
+                        state
+                            .ui_events
+                            .push(crate::share::ShareEvent::Error(format!(
+                                "Share-Konfiguration konnte nicht zugestellt werden: {error}"
+                            )));
+                    }
+                }
+            }
+        }
+        if state.pending_profiles_base.is_some() && !direct_events.is_empty() {
+            state.pending_direct_events = direct_events;
+            direct_events = Vec::new();
+        }
+        if !direct_events.is_empty() {
+            let identity = state.identity.clone();
+            match identity {
+                None => {
+                    state.pending_direct_events = direct_events;
+                    state.ui_events.push(crate::share::ShareEvent::Error(
+                        "Direkt-Anfrage wartet auf die lokale Share-Identitaet".into(),
+                    ));
+                }
+                Some(identity) => {
+                    match super::ipc_host::direct_events::persist_all(&identity, &direct_events) {
+                        Ok(committed) => {
+                            state.profiles = committed;
+                            if let Some(service) = &state.service {
+                                if let Err(error) = configure_service(service, &state.profiles) {
+                                    state
+                                        .ui_events
+                                        .push(crate::share::ShareEvent::Error(format!(
+                                    "Direkt-Lifecycle konnte nicht zugestellt werden: {error}"
+                                )));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            state.pending_direct_events = direct_events;
+                            state.last_reload = std::time::Instant::now();
+                            state.ui_events.push(crate::share::ShareEvent::Error(format!(
+                            "Direkt-Lifecycle konnte nicht gespeichert werden; Wiederholung vorgemerkt: {error}"
+                        )));
+                        }
+                    }
                 }
             }
         }

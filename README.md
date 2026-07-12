@@ -51,12 +51,26 @@ Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
 example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
 speichert eine UNC-Verbindung, `se connections add-peer --code SE-D3-... --name
-Laptop` reiht die normale Freigabeanfrage ueber den Share-Worker ein, und `se connections add-room --code
-SE-R3-... --name Team` tritt einem Raum bei. Entfernen geht mit
-`se connections remove`, `remove-peer` und `remove-room`. Headless Share lässt
-sich über `se share configure`, `identity`, `status`, `request`, `export`,
-`room` und `worker` vollständig verwalten; `status` unterscheidet dabei einen
-laufenden Worker von einer tatsächlich verbundenen Signaling-Sitzung.
+Laptop` speichert eine getrackte Freigabeanfrage mit stabiler Request-ID und
+reiht sie ueber den Share-Worker ein, und `se connections add-room --code
+SE-R3-... --name Team` tritt einem Raum bei. `queued` bedeutet dabei nur lokal
+dauerhaft vorgemerkt; auch eine Relay-Meldung `forwarded` bestaetigt noch keinen
+Peer-Empfang. Erst der signierte Request-Receipt des Zielgeraets meldet
+`received`. Entscheidung (`pending`/`accepted`/`rejected`/`revoked`), aktive
+Autorisierung und aktuelle Verbindung werden getrennt angezeigt.
+
+Offene und abgeschlossene Anfragen lassen sich mit `se share request list`,
+`show`, `accept`, `reject` und `retry` verwalten. `retry` verwendet dieselbe
+Request-ID. Aktive Freigaben zeigt `se share grants list`; `se share grants
+revoke` widerruft eine getrackte Autorisierung. In der GUI stehen dieselben
+Informationen unter **Teilen** getrennt als eingehende, ausgehende und
+autorisierte Geraete bereit, inklusive Fingerprint-Bestaetigung und Widerruf.
+Entfernen geht mit `se connections remove`, `remove-peer` und `remove-room`.
+Headless Share laesst sich ueber `se share configure`, `identity`, `status`,
+`request`, `grants`, `export`, `room` und `worker` vollstaendig verwalten;
+`status` unterscheidet dabei einen laufenden Worker von einer tatsaechlich
+verbundenen Signaling-Sitzung. Das vollstaendige Protokoll und die
+Statusbedeutungen stehen in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md).
 Hat eine alte Linux-Version Identitätsmetadaten ohne dauerhaft gespeicherte
 Secrets hinterlassen, nennt der CLI den gezielten Reparaturbefehl
 `se share identity --repair`. Er läuft nur bei tatsächlich fehlendem
@@ -97,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.126.exe`](release-native/Smart%20Explorer%20Setup%200.5.126.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.127.exe`](release-native/Smart%20Explorer%20Setup%200.5.127.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer

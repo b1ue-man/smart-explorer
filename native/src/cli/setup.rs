@@ -2,6 +2,10 @@ use std::io::Read;
 
 use crate::creds::{AuthKind, Protocol, SavedConnection};
 
+#[path = "setup/share_peer.rs"]
+mod share_peer;
+pub(crate) use share_peer::add_peer;
+
 pub(crate) struct RemoteConnectionInput {
     pub(crate) protocol: Protocol,
     pub(crate) host: Option<String>,
@@ -153,51 +157,10 @@ fn worker_refresh_suffix() -> String {
     }
 }
 
-pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, String> {
-    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
-        .map_err(|error| format!("share profile laden: {error}"))?;
-    let existing = profiles.direct_contact_id_from_code(code)?;
-    let (contact_id, created, request_needed) = match existing {
-        Some(id) => {
-            let request_needed = prepare_direct_request(&mut profiles, &id)?;
-            (id, false, request_needed)
-        }
-        None => {
-            let id = profiles.add_direct_from_code(code, name)?;
-            let request_needed = prepare_direct_request(&mut profiles, &id)?;
-            (id, true, request_needed)
-        }
-    };
-    profiles
-        .save()
-        .map_err(|e| format!("share profile speichern: {e}"))?;
-    if request {
-        ensure_share_worker_running().map_err(|e| {
-            format!("saved peer contact {contact_id}, but access request was not queued: {e}")
-        })?;
-        let action = if created { "Saved" } else { "Updated" };
-        if !request_needed {
-            return Ok(format!(
-                "{action} peer contact {contact_id}; already accepted, share worker configured"
-            ));
-        }
-        return Ok(format!(
-            "{action} peer contact {contact_id}; access request queued through the share worker"
-        ));
-    }
-    let action = if created { "Saved" } else { "Updated" };
-    Ok(format!(
-        "{action} peer contact {contact_id}; request not queued (--no-request)"
-    ))
-}
-
 pub(crate) fn add_room(code: &str, name: &str) -> Result<String, String> {
     let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
         .map_err(|error| format!("share profile laden: {error}"))?;
     let room_id = profiles.add_room_from_code(code, name)?;
-    profiles
-        .save()
-        .map_err(|e| format!("share profile speichern: {e}"))?;
     ensure_share_worker_running()
         .map_err(|e| format!("saved room {room_id}, but share worker was not configured: {e}"))?;
     Ok(format!("Saved room {room_id}; share worker configured"))
@@ -306,26 +269,6 @@ fn normalize_share_root(root: &str) -> Result<String, String> {
         return Err("share root must be a UNC path like \\\\server\\share".into());
     }
     Ok(root)
-}
-
-fn prepare_direct_request(
-    profiles: &mut crate::share::ShareProfiles,
-    contact_id: &str,
-) -> Result<bool, String> {
-    let contact = profiles
-        .direct_contacts
-        .iter_mut()
-        .find(|c| c.id == contact_id)
-        .ok_or_else(|| format!("peer contact not found: {contact_id}"))?;
-    contact.auto_connect = true;
-    contact.auto_open = false;
-    if contact.access_state == crate::share::DirectAccessState::Accepted {
-        return Ok(false);
-    }
-    contact.status = crate::share::ShareStatus::WaitingForAccess;
-    contact.access_state = crate::share::DirectAccessState::Pending;
-    contact.request_sent_at = Some(crate::share::core_now_secs());
-    Ok(true)
 }
 
 fn ensure_share_worker_running() -> Result<(), String> {

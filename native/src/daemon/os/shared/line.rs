@@ -1,7 +1,10 @@
 use std::io::{self, Read};
 use std::net::TcpStream;
 
-pub(super) const MAX_IPC_LINE: usize = 256 * 1024;
+// A Share snapshot can include the bounded 1 MiB profile plus event and
+// transport metadata. Keep a hard local-IPC ceiling while allowing the daemon
+// to return every durable request state in one authoritative snapshot.
+pub(super) const MAX_IPC_LINE: usize = 2 * 1024 * 1024;
 
 pub(super) fn read_line_limited_from_stream(
     stream: &mut TcpStream,

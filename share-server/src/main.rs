@@ -17,10 +17,12 @@ use std::time::{Duration, Instant};
 use tungstenite::{accept, Error as WsError, Message, WebSocket};
 
 mod line;
+mod tracked_direct;
+#[cfg(test)]
+mod tracked_direct_tests;
 use line::{read_line_limited, read_line_limited_from_stream, MAX_JSON_LINE};
 
 const MAX_ROOM: usize = 64;
-const MAX_WATCHES: usize = 256;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PeerPresence {
@@ -53,6 +55,8 @@ enum In {
         lan: Vec<String>,
         public_key: String,
         fingerprint: String,
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
     PublishDirect {
         presence: PeerPresence,
@@ -74,6 +78,18 @@ enum In {
         presence: Option<PeerPresence>,
         msg: Option<String>,
     },
+    SubmitDirectRequest {
+        request: tracked_direct::SignedDirectRequest,
+    },
+    SubmitDirectRequestReceipt {
+        receipt: tracked_direct::SignedDirectRequestReceipt,
+    },
+    SubmitDirectDecision {
+        decision: tracked_direct::SignedDirectDecision,
+    },
+    SubmitDirectDecisionReceipt {
+        receipt: tracked_direct::SignedDirectDecisionReceipt,
+    },
     UnwatchDirect {
         lookup_id: String,
     },
@@ -90,7 +106,10 @@ enum In {
 #[derive(Serialize, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum Out {
-    HelloOk,
+    HelloOk {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
+    },
     DirectAvailable {
         lookup_id: String,
         presence: PeerPresence,
@@ -108,6 +127,23 @@ enum Out {
         accepted: bool,
         presence: Option<PeerPresence>,
         msg: Option<String>,
+    },
+    DirectRequest {
+        request: tracked_direct::SignedDirectRequest,
+    },
+    DirectRequestReceipt {
+        receipt: tracked_direct::SignedDirectRequestReceipt,
+    },
+    DirectDecision {
+        decision: tracked_direct::SignedDirectDecision,
+    },
+    DirectDecisionReceipt {
+        receipt: tracked_direct::SignedDirectDecisionReceipt,
+    },
+    DirectRouteAck {
+        request_id: String,
+        route: tracked_direct::DirectRoute,
+        outcome: tracked_direct::DirectRouteOutcome,
     },
     RoomRoster {
         room_id: String,
@@ -134,6 +170,7 @@ type Writer = Sender<Out>;
 struct Client {
     writer: Writer,
     device_id: String,
+    capabilities: HashSet<String>,
     direct_lookup_ids: HashSet<String>,
     watched_lookup_ids: HashSet<String>,
     rooms: HashSet<String>,
@@ -285,6 +322,7 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
         lan: _,
         public_key: _,
         fingerprint: _,
+        capabilities,
     } = hello
     else {
         send(
@@ -307,23 +345,14 @@ fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resul
         return Ok(());
     }
 
-    let id = {
-        let mut st = lock_state(&state);
-        st.next_id += 1;
-        let id = st.next_id;
-        st.clients.insert(
-            id,
-            Client {
-                writer: writer.clone(),
-                device_id: device_id.clone(),
-                direct_lookup_ids: HashSet::new(),
-                watched_lookup_ids: HashSet::new(),
-                rooms: HashSet::new(),
-            },
-        );
-        id
-    };
-    send(&writer, &Out::HelloOk);
+    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
+    let id = register_client(&state, writer.clone(), device_id, capabilities.clone());
+    send(
+        &writer,
+        &Out::HelloOk {
+            capabilities: tracked_direct::capability_list(&capabilities),
+        },
+    );
 
     loop {
         line.clear();
@@ -365,6 +394,7 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
         lan: _,
         public_key: _,
         fingerprint: _,
+        capabilities,
     } = hello
     else {
         send(
@@ -389,23 +419,36 @@ fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()>
         return Ok(());
     }
 
-    let id = register_client(&state, writer.clone(), device_id);
-    send(&writer, &Out::HelloOk);
+    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
+    let id = register_client(&state, writer.clone(), device_id, capabilities.clone());
+    send(
+        &writer,
+        &Out::HelloOk {
+            capabilities: tracked_direct::capability_list(&capabilities),
+        },
+    );
 
-    loop {
-        flush_ws_out(&mut ws, &out_rx)?;
+    let result = loop {
+        if let Err(error) = flush_ws_out(&mut ws, &out_rx) {
+            break Err(error);
+        }
         match read_ws_json(&mut ws, &out_rx, Duration::from_millis(500)) {
             Ok(Some(msg)) => dispatch(id, &writer, msg, &state),
-            Ok(None) => break,
+            Ok(None) => break Ok(()),
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
-            Err(e) => return Err(e),
+            Err(e) => break Err(e),
         }
-    }
+    };
     cleanup(id, &state);
-    Ok(())
+    result
 }
 
-fn register_client(state: &Arc<Mutex<State>>, writer: Writer, device_id: String) -> u64 {
+fn register_client(
+    state: &Arc<Mutex<State>>,
+    writer: Writer,
+    device_id: String,
+    capabilities: HashSet<String>,
+) -> u64 {
     let mut st = lock_state(state);
     st.next_id += 1;
     let id = st.next_id;
@@ -414,6 +457,7 @@ fn register_client(state: &Arc<Mutex<State>>, writer: Writer, device_id: String)
         Client {
             writer,
             device_id,
+            capabilities,
             direct_lookup_ids: HashSet::new(),
             watched_lookup_ids: HashSet::new(),
             rooms: HashSet::new(),
@@ -463,6 +507,7 @@ fn read_ws_json(
         flush_ws_out(ws, out_rx)?;
         match ws.read() {
             Ok(Message::Text(text)) => {
+                ensure_ws_payload_limit(text.len())?;
                 let text = text.trim();
                 if text.is_empty() {
                     continue;
@@ -473,6 +518,7 @@ fn read_ws_json(
                 }
             }
             Ok(Message::Binary(bytes)) => {
+                ensure_ws_payload_limit(bytes.len())?;
                 let text = String::from_utf8(bytes).map_err(io_other)?;
                 let text = text.trim();
                 if text.is_empty() {
@@ -503,6 +549,17 @@ fn read_ws_json(
     }
 }
 
+fn ensure_ws_payload_limit(len: usize) -> io::Result<()> {
+    if len > MAX_JSON_LINE {
+        Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "json line too large",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn ws_to_io(err: WsError) -> io::Error {
     match err {
         WsError::Io(e) => e,
@@ -516,20 +573,20 @@ fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
-        In::PublishDirect { presence } => publish_direct(id, presence, state),
-        In::UnpublishDirect { lookup_id } => unpublish_direct(id, &lookup_id, state),
-        In::WatchDirect { lookup_id } => watch_direct(id, writer, &lookup_id, state),
+        In::PublishDirect { presence } => tracked_direct::publish(id, presence, state),
+        In::UnpublishDirect { lookup_id } => tracked_direct::unpublish(id, &lookup_id, state),
+        In::WatchDirect { lookup_id } => tracked_direct::watch(id, writer, &lookup_id, state),
         In::RequestDirect {
             lookup_id,
             presence,
-        } => request_direct(writer, &lookup_id, presence, state),
+        } => tracked_direct::request_legacy(writer, &lookup_id, presence, state),
         In::DirectAccessAccepted {
             lookup_id,
             requester_device_id,
             accepted,
             presence,
             msg,
-        } => direct_access_accepted(
+        } => tracked_direct::decision_legacy(
             &lookup_id,
             &requester_device_id,
             accepted,
@@ -537,138 +594,23 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             msg,
             state,
         ),
-        In::UnwatchDirect { lookup_id } => {
-            let mut st = lock_state(state);
-            if let Some(c) = st.clients.get_mut(&id) {
-                c.watched_lookup_ids.remove(&lookup_id);
-            }
-            if let Some(w) = st.watchers.get_mut(&lookup_id) {
-                w.remove(&id);
-            }
+        In::SubmitDirectRequest { request } => {
+            tracked_direct::route_request(id, writer, request, state)
         }
+        In::SubmitDirectRequestReceipt { receipt } => {
+            tracked_direct::route_request_receipt(id, writer, receipt, state)
+        }
+        In::SubmitDirectDecision { decision } => {
+            tracked_direct::route_decision(id, writer, decision, state)
+        }
+        In::SubmitDirectDecisionReceipt { receipt } => {
+            tracked_direct::route_decision_receipt(id, writer, receipt, state)
+        }
+        In::UnwatchDirect { lookup_id } => tracked_direct::unwatch(id, &lookup_id, state),
         In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
         In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
         In::Heartbeat => send(writer, &Out::Pong),
         In::Hello { .. } => {}
-    }
-}
-
-fn request_direct(
-    writer: &Writer,
-    lookup_id: &str,
-    presence: PeerPresence,
-    state: &Arc<Mutex<State>>,
-) {
-    let target = {
-        let st = lock_state(state);
-        st.direct
-            .get(lookup_id)
-            .and_then(|(owner_id, _)| st.clients.get(owner_id).map(|c| c.writer.clone()))
-    };
-    if let Some(target) = target {
-        send(
-            &target,
-            &Out::DirectAccessRequest {
-                lookup_id: lookup_id.to_string(),
-                presence,
-            },
-        );
-    } else {
-        send(
-            writer,
-            &Out::Error {
-                scope: "direct".into(),
-                msg: "Direktgeraet nicht online".into(),
-            },
-        );
-    }
-}
-
-fn direct_access_accepted(
-    lookup_id: &str,
-    requester_device_id: &str,
-    accepted: bool,
-    presence: Option<PeerPresence>,
-    msg: Option<String>,
-    state: &Arc<Mutex<State>>,
-) {
-    let targets = writers_by_device(requester_device_id, state);
-    for target in targets {
-        send(
-            &target,
-            &Out::DirectAccessAccepted {
-                lookup_id: lookup_id.to_string(),
-                requester_device_id: requester_device_id.to_string(),
-                accepted,
-                presence: presence.clone(),
-                msg: msg.clone(),
-            },
-        );
-    }
-}
-
-fn publish_direct(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>) {
-    let lookup_id = presence.relation_id.clone();
-    let watchers = {
-        let mut st = lock_state(state);
-        st.direct.insert(lookup_id.clone(), (id, presence.clone()));
-        if let Some(c) = st.clients.get_mut(&id) {
-            c.direct_lookup_ids.insert(lookup_id.clone());
-        }
-        st.watchers.get(&lookup_id).cloned().unwrap_or_default()
-    };
-    notify_direct_available(&lookup_id, &presence, watchers, state);
-}
-
-fn unpublish_direct(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    let watchers = {
-        let mut st = lock_state(state);
-        if st.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id) {
-            st.direct.remove(lookup_id);
-        }
-        if let Some(c) = st.clients.get_mut(&id) {
-            c.direct_lookup_ids.remove(lookup_id);
-        }
-        st.watchers.get(lookup_id).cloned().unwrap_or_default()
-    };
-    notify_direct_offline(lookup_id, watchers, state);
-}
-
-fn watch_direct(id: u64, writer: &Writer, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    let current = {
-        let mut st = lock_state(state);
-        if st
-            .clients
-            .get(&id)
-            .map(|c| c.watched_lookup_ids.len() >= MAX_WATCHES)
-            .unwrap_or(false)
-        {
-            send(
-                writer,
-                &Out::Error {
-                    scope: "direct".into(),
-                    msg: "too many watches".into(),
-                },
-            );
-            return;
-        }
-        st.watchers
-            .entry(lookup_id.to_string())
-            .or_default()
-            .insert(id);
-        if let Some(c) = st.clients.get_mut(&id) {
-            c.watched_lookup_ids.insert(lookup_id.to_string());
-        }
-        st.direct.get(lookup_id).map(|(_, p)| p.clone())
-    };
-    if let Some(presence) = current {
-        send(
-            writer,
-            &Out::DirectAvailable {
-                lookup_id: lookup_id.to_string(),
-                presence,
-            },
-        );
     }
 }
 
@@ -779,7 +721,7 @@ fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         )
     };
     for lookup in directs {
-        unpublish_direct(id, &lookup, state);
+        tracked_direct::unpublish(id, &lookup, state);
     }
     for lookup in watched {
         let mut st = lock_state(state);
@@ -790,52 +732,6 @@ fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
     for room in rooms {
         leave_room(id, &room, state);
     }
-}
-
-fn notify_direct_available(
-    lookup_id: &str,
-    presence: &PeerPresence,
-    watchers: HashSet<u64>,
-    state: &Arc<Mutex<State>>,
-) {
-    let writers = writers_for(watchers, state);
-    for w in writers {
-        send(
-            &w,
-            &Out::DirectAvailable {
-                lookup_id: lookup_id.to_string(),
-                presence: presence.clone(),
-            },
-        );
-    }
-}
-
-fn notify_direct_offline(lookup_id: &str, watchers: HashSet<u64>, state: &Arc<Mutex<State>>) {
-    let writers = writers_for(watchers, state);
-    for w in writers {
-        send(
-            &w,
-            &Out::DirectOffline {
-                lookup_id: lookup_id.to_string(),
-            },
-        );
-    }
-}
-
-fn writers_for(ids: HashSet<u64>, state: &Arc<Mutex<State>>) -> Vec<Writer> {
-    let st = lock_state(state);
-    ids.into_iter()
-        .filter_map(|id| st.clients.get(&id).map(|c| c.writer.clone()))
-        .collect()
-}
-
-fn writers_by_device(device_id: &str, state: &Arc<Mutex<State>>) -> Vec<Writer> {
-    let st = lock_state(state);
-    st.clients
-        .values()
-        .filter(|c| c.device_id == device_id)
-        .map(|c| c.writer.clone())
-        .collect()
 }
 
 #[cfg(test)]
@@ -918,6 +814,7 @@ mod tests {
             Client {
                 writer: owner_tx,
                 device_id: "owner".into(),
+                capabilities: HashSet::new(),
                 direct_lookup_ids: HashSet::from(["lookup".into()]),
                 watched_lookup_ids: HashSet::new(),
                 rooms: HashSet::new(),
@@ -928,6 +825,7 @@ mod tests {
             Client {
                 writer: requester_tx.clone(),
                 device_id: "requester".into(),
+                capabilities: HashSet::new(),
                 direct_lookup_ids: HashSet::new(),
                 watched_lookup_ids: HashSet::new(),
                 rooms: HashSet::new(),
@@ -937,7 +835,7 @@ mod tests {
             .direct
             .insert("lookup".into(), (1, presence("direct", "lookup", "owner")));
         let state = Arc::new(Mutex::new(state));
-        request_direct(
+        tracked_direct::request_legacy(
             &requester_tx,
             "lookup",
             presence("direct", "lookup", "requester"),
@@ -965,13 +863,14 @@ mod tests {
             Client {
                 writer: requester_tx,
                 device_id: "requester".into(),
+                capabilities: HashSet::new(),
                 direct_lookup_ids: HashSet::new(),
                 watched_lookup_ids: HashSet::new(),
                 rooms: HashSet::new(),
             },
         );
         let state = Arc::new(Mutex::new(state));
-        direct_access_accepted(
+        tracked_direct::decision_legacy(
             "lookup",
             "requester",
             true,
@@ -1035,5 +934,36 @@ mod tests {
 
         ws.close(None).unwrap();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_oversized_payload_is_rejected_and_client_is_cleaned_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(State::default()));
+        let server_state = state.clone();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle(stream, server_state)
+        });
+
+        let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
+        ws.send(Message::Text(
+            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":[],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&ws.read().unwrap().into_text().unwrap())
+                .unwrap()["t"],
+            "hello_ok"
+        );
+
+        ws.send(Message::Text("x".repeat(MAX_JSON_LINE + 1)))
+            .unwrap();
+        drop(ws);
+
+        let error = handle.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(lock_state(&state).clients.is_empty());
     }
 }

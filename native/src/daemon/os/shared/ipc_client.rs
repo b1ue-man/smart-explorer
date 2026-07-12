@@ -165,7 +165,7 @@ fn drain_share_worker_events_once() -> Result<ShareWorkerSnapshot, String> {
     write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
         .map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
-        IpcResponse::ShareEvents { snapshot } => Ok(snapshot),
+        IpcResponse::ShareEvents { snapshot } => Ok(*snapshot),
         IpcResponse::Err { msg } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }

@@ -18,7 +18,36 @@ permissions:
   contents: write
 
 jobs:
+  windows-native-tests:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native
+    env:
+      CARGO_BUILD_JOBS: 2
+      SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Native Windows library tests
+        run: cargo test --lib --no-fail-fast -- --test-threads=1
+
+      - name: Native Windows standalone se tests
+        run: cargo test --test se_cli --no-fail-fast -- --test-threads=1
+
+      - name: Native Windows Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   windows-gnu:
+    needs: windows-native-tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -103,6 +132,11 @@ jobs:
           cargo check
           cargo check --target x86_64-pc-windows-gnu
           cargo test --no-run
+          cargo build
+
+      - name: End-to-end tracked Share lifecycle
+        working-directory: .
+        run: native/test-share-lifecycle-e2e.sh
 
       - name: Release build
         run: |

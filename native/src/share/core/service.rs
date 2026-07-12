@@ -176,6 +176,7 @@ impl ShareService {
             direct_contacts: profiles.direct_contacts.clone(),
             direct_grants: profiles.direct_grants.clone(),
             rooms: profiles.rooms.clone(),
+            direct_requests: profiles.direct_requests.clone(),
             seen_nonces: HashSet::new(),
             direct_online: true,
         }));

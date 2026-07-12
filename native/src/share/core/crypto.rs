@@ -128,6 +128,10 @@ pub(crate) fn public_fingerprint(public_key: &[u8]) -> String {
     hex(&digest[..16])
 }
 
+pub(crate) fn sha256_b64(payload: &[u8]) -> String {
+    b64(&Sha256::digest(payload))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn presence_payload(
     kind: &str,
@@ -149,20 +153,47 @@ pub(crate) fn presence_payload(
 }
 
 pub(crate) fn hmac_proof(secret: &[u8], payload: &str) -> String {
+    hmac_proof_bytes(secret, payload.as_bytes())
+}
+
+pub(crate) fn hmac_proof_bytes(secret: &[u8], payload: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("hmac accepts arbitrary key length");
-    mac.update(payload.as_bytes());
+    mac.update(payload);
     b64(&mac.finalize().into_bytes())
 }
 
 pub(crate) fn verify_hmac(secret: &[u8], payload: &str, proof: &str) -> bool {
+    verify_hmac_bytes(secret, payload.as_bytes(), proof)
+}
+
+pub(crate) fn verify_hmac_bytes(secret: &[u8], payload: &[u8], proof: &str) -> bool {
     let Ok(expected) = b64_decode(proof) else {
         return false;
     };
     let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
         return false;
     };
-    mac.update(payload.as_bytes());
+    mac.update(payload);
     mac.verify_slice(&expected).is_ok()
+}
+
+pub(crate) fn iroh_signature(secret: &iroh::SecretKey, payload: &[u8]) -> String {
+    b64(&secret.sign(payload).to_bytes())
+}
+
+pub(crate) fn verify_iroh_signature(public_key: &str, payload: &[u8], signature: &str) -> bool {
+    let Ok(public_key) = public_key.parse::<iroh::PublicKey>() else {
+        return false;
+    };
+    let Ok(bytes) = b64_decode(signature) else {
+        return false;
+    };
+    let Ok(bytes) = <[u8; iroh::Signature::LENGTH]>::try_from(bytes.as_slice()) else {
+        return false;
+    };
+    public_key
+        .verify(payload, &iroh::Signature::from_bytes(&bytes))
+        .is_ok()
 }
 
 #[cfg(test)]

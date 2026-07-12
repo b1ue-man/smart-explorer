@@ -94,10 +94,14 @@ Before cutting a release on a workstation, the fast environment check is:
 ```
 
 `build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
-`x86_64-pc-windows-gnu`, the verified cross-compile): format check, dependency
-audit, Windows-target check, all-target host tests (including built-`se`
-headless subprocess tests), Windows test-harness compile, clippy,
-static-musl `se-agent` builds, COM DLL check/build, share-server checks/builds,
+`x86_64-pc-windows-gnu`, the verified cross-compile, plus a native Windows
+runner): format check, dependency audit, Windows-target check, native Windows
+library and standalone-`se` tests, all-target host tests (including built-`se`
+headless subprocess tests), Windows test-harness compile, clippy, static-musl
+`se-agent` builds, COM DLL check/build, and share-server checks/builds. It also
+runs the real two-client tracked Share lifecycle against `se-share-server`,
+covering offline delivery/retry, daemon restarts, signed acceptance receipts,
+operational authorization, revoke, and post-revoke denial. CI then performs the
 Windows + Linux release builds including the `se` terminal companion, installer
 build (NSIS), artifact upload, and Release publication. Before publishing it
 **fails the release if the committed feed version, Windows build manifest,

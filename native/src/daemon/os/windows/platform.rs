@@ -1,3 +1,16 @@
+use std::borrow::Cow;
+
+#[cfg(debug_assertions)]
+// The Credential Manager adapter includes this debug-only parser as well; one
+// source keeps both isolated resource names on the same validation contract.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../../windows_test_namespace.rs"]
+mod test_namespace;
+
+const DAEMON_MUTEX_NAME: &str = r"Local\SmartExplorerSyncDaemon";
+#[cfg(debug_assertions)]
+const TEST_MUTEX_SEPARATOR: &str = ".Test.";
+
 #[derive(Clone)]
 pub struct DriveInfo {
     pub letter: String,
@@ -118,7 +131,8 @@ fn try_acquire_daemon_mutex(
     };
     use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 
-    let name: Vec<u16> = std::ffi::OsStr::new(r"Local\SmartExplorerSyncDaemon")
+    let mutex_name = daemon_mutex_name()?;
+    let name: Vec<u16> = std::ffi::OsStr::new(mutex_name.as_ref())
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
@@ -149,6 +163,51 @@ fn try_acquire_daemon_mutex(
                 )))
             }
         }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn daemon_mutex_name() -> std::io::Result<Cow<'static, str>> {
+    Ok(Cow::Borrowed(DAEMON_MUTEX_NAME))
+}
+
+#[cfg(debug_assertions)]
+fn daemon_mutex_name() -> std::io::Result<Cow<'static, str>> {
+    let namespace = test_namespace::from_env().map_err(invalid_test_namespace)?;
+    daemon_mutex_name_for(namespace.as_deref())
+        .map(Cow::Owned)
+        .map_err(invalid_test_namespace)
+}
+
+#[cfg(debug_assertions)]
+fn daemon_mutex_name_for(namespace: Option<&str>) -> Result<String, String> {
+    test_namespace::qualify(DAEMON_MUTEX_NAME, TEST_MUTEX_SEPARATOR, namespace)
+}
+
+#[cfg(debug_assertions)]
+fn invalid_test_namespace(error: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::daemon_mutex_name_for;
+
+    #[test]
+    fn daemon_mutex_names_are_exact_and_isolated() {
+        assert_eq!(
+            daemon_mutex_name_for(None).unwrap(),
+            r"Local\SmartExplorerSyncDaemon"
+        );
+        assert_eq!(
+            daemon_mutex_name_for(Some("device_B2")).unwrap(),
+            r"Local\SmartExplorerSyncDaemon.Test.device_B2"
+        );
+    }
+
+    #[test]
+    fn daemon_mutex_rejects_an_unsafe_namespace() {
+        assert!(daemon_mutex_name_for(Some(r"device\B")).is_err());
     }
 }
 

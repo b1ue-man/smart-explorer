@@ -7,5 +7,8 @@ mod process;
 #[cfg(target_os = "linux")]
 #[path = "se_cli/share.rs"]
 mod share;
+#[cfg(windows)]
+#[path = "se_cli/share_windows.rs"]
+mod share_windows;
 #[path = "se_cli/support.rs"]
 mod support;

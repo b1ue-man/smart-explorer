@@ -17,46 +17,6 @@ pub(super) fn share_input_width(ui: &egui::Ui, preferred: f32) -> f32 {
     preferred.min(available).max(64.0)
 }
 
-pub(super) fn upsert_room_member(
-    room: &mut crate::share::RoomProfile,
-    presence: crate::share::PeerPresence,
-) {
-    if let Some(member) = room
-        .members
-        .iter_mut()
-        .find(|member| member.device_id == presence.device_id)
-    {
-        if member.public_key != presence.public_key
-            || (!member.node_id.is_empty() && member.node_id != presence.node_id)
-        {
-            member.status = crate::share::ShareStatus::IdentityConflict;
-            return;
-        }
-        member.device_name = presence.device_name.clone();
-        member.fingerprint = presence.fingerprint.clone();
-        member.candidates = presence.candidates.clone();
-        member.node_id = presence.node_id.clone();
-        member.relay_url = presence.relay_url.clone();
-        member.last_seen = Some(crate::share::core_now_secs());
-        member.status = crate::share::ShareStatus::Available;
-        member.presence = Some(presence);
-    } else {
-        room.members.push(crate::share::RoomMember {
-            device_id: presence.device_id.clone(),
-            device_name: presence.device_name.clone(),
-            fingerprint: presence.fingerprint.clone(),
-            public_key: presence.public_key.clone(),
-            node_id: presence.node_id.clone(),
-            relay_url: presence.relay_url.clone(),
-            candidates: presence.candidates.clone(),
-            last_seen: Some(crate::share::core_now_secs()),
-            status: crate::share::ShareStatus::Available,
-            blocked: false,
-            presence: Some(presence),
-        });
-    }
-}
-
 pub(super) fn selected_room_label(app: &App) -> String {
     app.share_profiles
         .rooms

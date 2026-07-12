@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+use super::direct_protocol::{
+    DirectRequestId, SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
+    SignedDirectRequestReceipt,
+};
 use super::types::{ExecRequest, ExecResult, PeerPresence};
+
+pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -13,6 +19,8 @@ pub(crate) enum ClientMsg {
         lan: Vec<String>,
         public_key: String,
         fingerprint: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     PublishDirect {
         presence: PeerPresence,
@@ -50,7 +58,10 @@ pub(crate) enum ClientMsg {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub(crate) enum SrvMsg {
-    HelloOk,
+    HelloOk {
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
     DirectAvailable {
         lookup_id: String,
         presence: PeerPresence,
@@ -86,6 +97,58 @@ pub(crate) enum SrvMsg {
         msg: String,
     },
     Pong,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub(crate) enum TrackedDirectClientMsg {
+    #[serde(rename = "submit_direct_request")]
+    Request { request: SignedDirectRequest },
+    #[serde(rename = "submit_direct_request_receipt")]
+    RequestReceipt { receipt: SignedDirectRequestReceipt },
+    #[serde(rename = "submit_direct_decision")]
+    Decision { decision: SignedDirectDecision },
+    #[serde(rename = "submit_direct_decision_receipt")]
+    DecisionReceipt {
+        receipt: SignedDirectDecisionReceipt,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub(crate) enum TrackedDirectServerMsg {
+    #[serde(rename = "direct_request")]
+    Request { request: SignedDirectRequest },
+    #[serde(rename = "direct_request_receipt")]
+    RequestReceipt { receipt: SignedDirectRequestReceipt },
+    #[serde(rename = "direct_decision")]
+    Decision { decision: SignedDirectDecision },
+    #[serde(rename = "direct_decision_receipt")]
+    DecisionReceipt {
+        receipt: SignedDirectDecisionReceipt,
+    },
+    #[serde(rename = "direct_route_ack")]
+    RouteAck {
+        request_id: DirectRequestId,
+        route: DirectRoute,
+        outcome: DirectRouteOutcome,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DirectRoute {
+    Request,
+    RequestReceipt,
+    Decision,
+    DecisionReceipt,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DirectRouteOutcome {
+    Forwarded,
+    TargetOffline,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

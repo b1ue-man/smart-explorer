@@ -2,7 +2,7 @@ use super::core::{b64, random_token};
 use super::fs::SharedRoot;
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
-    ShareProfiles, SHARE_PROFILE_VERSION,
+    ShareProfiles, PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -33,12 +33,23 @@ impl ShareProfiles {
             None => (ShareProfiles::default(), ProfileRevision::Missing),
         };
         profiles.storage_revision = revision;
-        if profiles.schema_version != SHARE_PROFILE_VERSION {
-            return Err(format!(
-                "Nicht unterstuetzte Share-Profilversion {} (erwartet {})",
-                profiles.schema_version, SHARE_PROFILE_VERSION
-            ));
+        match profiles.schema_version {
+            SHARE_PROFILE_VERSION => {}
+            PREVIOUS_SHARE_PROFILE_VERSION => {
+                // V3 had no tracked request ledger. Existing contacts and grants
+                // remain intact; the worker can create new signed V4 requests for
+                // legacy pending contacts once the identity is available.
+                profiles.schema_version = SHARE_PROFILE_VERSION;
+            }
+            version => {
+                return Err(format!(
+                    "Nicht unterstuetzte Share-Profilversion {version} (erwartet {PREVIOUS_SHARE_PROFILE_VERSION} oder {SHARE_PROFILE_VERSION})"
+                ));
+            }
         }
+        profiles
+            .validate_direct_ledger()
+            .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
         // Home is a first-run default only. Once a profile file exists, an
         // empty export list is an explicit deny-all configuration and must not
         // silently re-expose the user's home directory.
@@ -161,6 +172,9 @@ impl ShareProfiles {
         candidate
             .direct_contacts
             .retain(|contact| contact.id != contact_id);
+        candidate
+            .direct_requests
+            .retain(|request| request.contact_id.as_deref() != Some(contact_id));
         candidate.save_with(storage)?;
         *self = candidate;
         let cleanup_warning = storage
@@ -264,7 +278,7 @@ pub(super) trait ProfilePersistence {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{ProfilePersistence, ProfileRevision, ShareProfiles};
+    use super::{ProfilePersistence, ProfileRevision, ShareProfiles, SHARE_PROFILE_VERSION};
 
     #[derive(Default)]
     struct FakePersistence {
@@ -374,5 +388,45 @@ mod tests {
         assert!(error.contains("concurrently"));
         let current = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
         assert!(!current.auto_connect);
+    }
+
+    #[test]
+    fn v3_profiles_migrate_to_v4_without_losing_existing_configuration() {
+        let legacy = ShareProfiles {
+            auto_connect: false,
+            ..ShareProfiles::default()
+        };
+        let mut value = serde_json::to_value(&legacy).unwrap();
+        value["schema_version"] = serde_json::json!(3);
+        value.as_object_mut().unwrap().remove("direct_requests");
+        let mut storage = FakePersistence {
+            profiles: Some(serde_json::to_string_pretty(&value).unwrap()),
+            ..FakePersistence::default()
+        };
+
+        let mut migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
+        assert_eq!(migrated.schema_version, SHARE_PROFILE_VERSION);
+        assert!(!migrated.auto_connect);
+        assert!(migrated.direct_requests.is_empty());
+
+        migrated.save_with(&mut storage).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_str(storage.profiles.as_deref().unwrap()).unwrap();
+        assert_eq!(persisted["schema_version"], SHARE_PROFILE_VERSION);
+        assert_eq!(persisted["direct_requests"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn profile_versions_older_than_v3_and_newer_than_v4_fail_closed() {
+        for version in [2, SHARE_PROFILE_VERSION + 1] {
+            let mut value = serde_json::to_value(ShareProfiles::default()).unwrap();
+            value["schema_version"] = serde_json::json!(version);
+            let mut storage = FakePersistence {
+                profiles: Some(serde_json::to_string(&value).unwrap()),
+                ..FakePersistence::default()
+            };
+            let error = ShareProfiles::load_checked_with(None, &mut storage).unwrap_err();
+            assert!(error.contains("Nicht unterstuetzte Share-Profilversion"));
+        }
     }
 }
