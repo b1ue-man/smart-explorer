@@ -720,9 +720,9 @@
     "semantic_hash": "2dc57241097f002c6368393323507246"
   },
   "autostart/os/windows.rs": {
-    "mtime": 1783805387.5849597,
-    "ast_hash": "7522b9b4f625a38630c31239ac2bf945",
-    "semantic_hash": "7522b9b4f625a38630c31239ac2bf945"
+    "mtime": 1783834954.8730056,
+    "ast_hash": "cbc2a5f1fb30cb9eed76cfec594eb80c",
+    "semantic_hash": "cbc2a5f1fb30cb9eed76cfec594eb80c"
   },
   "bin/bench.rs": {
     "mtime": 1783631269.9465973,

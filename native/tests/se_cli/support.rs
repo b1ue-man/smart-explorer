@@ -2,6 +2,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::io::Write;
+#[cfg(windows)]
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -114,7 +116,20 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> BoundedOu
     collect_bounded(child, timeout)
 }
 
-pub(crate) fn collect_bounded(mut child: Child, timeout: Duration) -> BoundedOutput {
+pub(crate) fn collect_bounded(child: Child, timeout: Duration) -> BoundedOutput {
+    #[cfg(windows)]
+    {
+        collect_bounded_windows(child, timeout)
+    }
+
+    #[cfg(not(windows))]
+    {
+        collect_bounded_portable(child, timeout)
+    }
+}
+
+#[cfg(not(windows))]
+fn collect_bounded_portable(mut child: Child, timeout: Duration) -> BoundedOutput {
     let deadline = Instant::now() + timeout;
     loop {
         if child
@@ -139,6 +154,140 @@ pub(crate) fn collect_bounded(mut child: Child, timeout: Duration) -> BoundedOut
             };
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(windows)]
+fn collect_bounded_windows(mut child: Child, timeout: Duration) -> BoundedOutput {
+    use std::os::windows::io::AsRawHandle;
+
+    const PIPE_CLOSE_GRACE: Duration = Duration::from_millis(250);
+    const KILL_GRACE: Duration = Duration::from_secs(5);
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("bounded se stdout must be piped");
+    let mut stderr = child
+        .stderr
+        .take()
+        .expect("bounded se stderr must be piped");
+    let stdout_handle = stdout.as_raw_handle();
+    let stderr_handle = stderr.as_raw_handle();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let deadline = Instant::now() + timeout;
+    let mut status = None;
+    let mut exited_at = None;
+    let mut timed_out = false;
+    let mut kill_deadline = None;
+
+    loop {
+        if stdout_open {
+            stdout_open = drain_windows_pipe(&mut stdout, stdout_handle, &mut stdout_bytes)
+                .expect("drain bounded se stdout");
+        }
+        if stderr_open {
+            stderr_open = drain_windows_pipe(&mut stderr, stderr_handle, &mut stderr_bytes)
+                .expect("drain bounded se stderr");
+        }
+
+        if status.is_none() {
+            status = child.try_wait().expect("poll bounded se subprocess");
+            if status.is_some() {
+                exited_at = Some(Instant::now());
+            }
+        }
+
+        if let Some(exit_status) = status {
+            if !stdout_open && !stderr_open {
+                return BoundedOutput {
+                    output: Output {
+                        status: exit_status,
+                        stdout: stdout_bytes,
+                        stderr: stderr_bytes,
+                    },
+                    timed_out,
+                };
+            }
+            if exited_at.is_some_and(|exited| exited.elapsed() >= PIPE_CLOSE_GRACE) {
+                // The direct child is gone, so an open pipe can only be held by
+                // another process. Return the complete direct-child output and
+                // flag the bounded run instead of blocking forever on pipe EOF.
+                return BoundedOutput {
+                    output: Output {
+                        status: exit_status,
+                        stdout: stdout_bytes,
+                        stderr: stderr_bytes,
+                    },
+                    timed_out: true,
+                };
+            }
+        } else if Instant::now() >= deadline && !timed_out {
+            child.kill().expect("terminate timed-out se subprocess");
+            timed_out = true;
+            kill_deadline = Some(Instant::now() + KILL_GRACE);
+        }
+
+        if status.is_none() && kill_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            panic!("terminated se subprocess did not exit within the cleanup deadline");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(windows)]
+fn drain_windows_pipe<T: Read>(
+    pipe: &mut T,
+    handle: std::os::windows::io::RawHandle,
+    output: &mut Vec<u8>,
+) -> io::Result<bool> {
+    const MAX_DRAIN_PER_POLL: usize = 64 * 1024;
+    let mut drained = 0usize;
+    while drained < MAX_DRAIN_PER_POLL {
+        let Some(available) = windows_pipe_available(handle)? else {
+            return Ok(false);
+        };
+        if available == 0 {
+            return Ok(true);
+        }
+        let mut buffer = [0u8; 8192];
+        let wanted = available.min(buffer.len());
+        let read = pipe.read(&mut buffer[..wanted])?;
+        if read == 0 {
+            return Ok(false);
+        }
+        output.extend_from_slice(&buffer[..read]);
+        drained = drained.saturating_add(read);
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn windows_pipe_available(handle: std::os::windows::io::RawHandle) -> io::Result<Option<usize>> {
+    use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA};
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+    let mut available = 0u32;
+    let peeked = unsafe {
+        PeekNamedPipe(
+            handle,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if peeked != 0 {
+        return Ok(Some(available as usize));
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32 => Ok(None),
+        _ => Err(error),
     }
 }
 
