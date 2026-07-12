@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn local_attrs(_meta: &std::fs::Metadata) -> (bool, bool) {
     (false, false)
@@ -10,6 +11,10 @@ pub(crate) fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
 
 pub(crate) fn to_os(path: &str) -> PathBuf {
     PathBuf::from(path)
+}
+
+pub(crate) fn reported_name(path: &Path) -> Option<OsString> {
+    path.file_name().map(OsString::from)
 }
 
 pub(crate) fn remove_file_like(path: &std::path::Path) -> std::io::Result<()> {

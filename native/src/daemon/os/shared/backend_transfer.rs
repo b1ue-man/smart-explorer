@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -26,6 +27,8 @@ pub(super) fn handle_put_tree_backend(
     inbound: &Receiver<Frame>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    let root = canonical_backend_root(backend, root);
+    let root = root.as_ref();
     validate_backend_destination(backend, root)?;
     let mut receiver = BufferedTreeReceiver::create("daemon-tree", id)?;
     loop {
@@ -57,6 +60,14 @@ pub(super) fn handle_put_tree_backend(
     }
     publish_backend_tree(backend, root, receiver.finish()?)?;
     emit(sink, id, &Frame::Ok)
+}
+
+pub(super) fn canonical_backend_root<'a>(backend: &BackendHandle, root: &'a str) -> Cow<'a, str> {
+    if backend.is_local() {
+        super::platform::normalize_local_backend_path(root)
+    } else {
+        Cow::Borrowed(root)
+    }
 }
 
 fn publish_backend_tree(
@@ -171,10 +182,11 @@ fn validate_backend_file_destination(backend: &BackendHandle, path: &str) -> io:
 fn backend_ancestors(path: &str) -> io::Result<Vec<String>> {
     let unc = path.starts_with("//") && !path.starts_with("///");
     let absolute = path.starts_with('/') && !unc;
-    let drive_absolute = path.as_bytes().get(1) == Some(&b':')
-        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-        && path.as_bytes().get(2) == Some(&b'/');
-    if path.as_bytes().get(1) == Some(&b':') && !drive_absolute {
+    let bytes = path.as_bytes();
+    let drive_prefixed =
+        bytes.get(1) == Some(&b':') && bytes.first().is_some_and(u8::is_ascii_alphabetic);
+    let drive_absolute = drive_prefixed && bytes.get(2) == Some(&b'/');
+    if drive_prefixed && !drive_absolute {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "daemon tree destination uses a drive-relative path",
@@ -218,7 +230,7 @@ fn backend_ancestors(path: &str) -> io::Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_put_tree_backend, Sink};
+    use super::{backend_ancestors, handle_put_tree_backend, Sink};
     use crate::agent_proto::Frame;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::channel;
@@ -251,6 +263,32 @@ mod tests {
                 .to_string_lossy()
                 .contains(".se-daemon-tree-")
         })
+    }
+
+    #[test]
+    fn destination_ancestors_accept_canonical_windows_absolute_paths() {
+        assert_eq!(
+            backend_ancestors("C:/Users/Alice/transfer").unwrap(),
+            [
+                "C:/",
+                "C:/Users",
+                "C:/Users/Alice",
+                "C:/Users/Alice/transfer"
+            ]
+        );
+        assert_eq!(
+            backend_ancestors("//server/share/transfer").unwrap(),
+            ["//server/share", "//server/share/transfer"]
+        );
+    }
+
+    #[test]
+    fn destination_ancestors_keep_rejecting_ambiguous_backslashes() {
+        assert!(backend_ancestors(r"C:relative\file").is_err());
+        assert!(backend_ancestors(r"C:\absolute\file").is_err());
+        assert!(backend_ancestors(r"\\server\share\file").is_err());
+        assert!(backend_ancestors(r"/unix/name\with-backslash").is_err());
+        assert!(backend_ancestors("C:/safe/../escape").is_err());
     }
 
     #[test]

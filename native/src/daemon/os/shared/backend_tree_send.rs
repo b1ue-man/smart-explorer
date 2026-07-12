@@ -6,7 +6,7 @@ use crate::agent_proto::{Frame, TreeManifestValidator, ValidatedRelativePath, CH
 use crate::vfs::{BackendHandle, VfsMeta};
 
 use super::backend_server::{emit, Sink};
-use super::backend_transfer::validate_backend_destination;
+use super::backend_transfer::{canonical_backend_root, validate_backend_destination};
 
 struct SourceEntry {
     relative: ValidatedRelativePath,
@@ -20,6 +20,8 @@ pub(super) fn handle_get_tree_backend(
     root: &str,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    let root = canonical_backend_root(backend, root);
+    let root = root.as_ref();
     let entries = collect_source(backend, root, cancel)?;
     let mut buffer = vec![0u8; CHUNK];
     for entry in entries {
