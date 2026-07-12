@@ -9,6 +9,8 @@ mod grants;
 mod identity_command;
 #[path = "share/lifecycle_output.rs"]
 mod lifecycle_output;
+#[path = "share/request_selection.rs"]
+mod request_selection;
 #[path = "share/requests.rs"]
 mod requests;
 #[path = "share/status.rs"]
@@ -19,7 +21,7 @@ const MAX_SERVER_BYTES: usize = 16 * 1024;
 #[derive(Args)]
 pub(super) struct ShareArgs {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -78,16 +80,17 @@ enum WorkerCommand {
 
 pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
     match args.command {
-        Command::Configure(args) => configure(args)?,
-        Command::Identity(args) => identity_command::run(args)?,
-        Command::Status(args) => status::run(args)?,
-        Command::Request(args) => requests::run(args)?,
-        Command::Grants(args) => grants::run(args)?,
-        Command::Export(args) => exports::run(args)?,
-        Command::Room(args) => match args.command {
+        None => status::run(status::StatusArgs::default())?,
+        Some(Command::Configure(args)) => configure(args)?,
+        Some(Command::Identity(args)) => identity_command::run(args)?,
+        Some(Command::Status(args)) => status::run(args)?,
+        Some(Command::Request(args)) => requests::run(args)?,
+        Some(Command::Grants(args)) => grants::run(args)?,
+        Some(Command::Export(args)) => exports::run(args)?,
+        Some(Command::Room(args)) => match args.command {
             RoomCommand::Create { name } => create_room(&name)?,
         },
-        Command::Worker(args) => worker(args.command)?,
+        Some(Command::Worker(args)) => worker(args.command)?,
     }
     Ok(0)
 }
@@ -116,8 +119,11 @@ fn configure(args: ConfigureArgs) -> Result<(), String> {
 
 fn create_room(name: &str) -> Result<(), String> {
     let code = crate::share::ShareProfiles::new_room_code()?;
-    let mut profiles = checked_profiles()?;
-    let id = profiles.add_room_from_code(&code, name)?;
+    let (_profiles, id) = crate::share::ShareProfiles::add_room_from_code_persisted(
+        Some(default_home()),
+        &code,
+        name,
+    )?;
     println!("room_id\t{id}");
     println!("room_code\t{code}");
     println!("worker\t{}", refresh_note().trim_start_matches("; "));
@@ -237,6 +243,8 @@ mod tests {
 
     #[test]
     fn parses_durable_request_lifecycle_commands() {
+        assert!(Cli::try_parse_from(["se", "share", "request"]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share", "request", "accept"]).is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "list", "--json"]).is_ok());
         assert!(
             Cli::try_parse_from(["se", "share", "request", "show", REQUEST_ID, "--json"]).is_ok()
@@ -254,10 +262,13 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "retry", REQUEST_ID]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share", "request", "delete", REQUEST_ID]).is_ok());
     }
 
     #[test]
     fn parses_grant_management_commands() {
+        assert!(Cli::try_parse_from(["se", "share", "grants"]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share", "grants", "revoke"]).is_ok());
         assert!(Cli::try_parse_from(["se", "share", "grants", "list", "--json"]).is_ok());
         assert!(Cli::try_parse_from([
             "se",

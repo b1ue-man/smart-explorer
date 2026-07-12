@@ -19,6 +19,7 @@ pub(super) struct RequestView {
     pub facts: Vec<LifecycleFact>,
     pub can_decide: bool,
     pub can_retry: bool,
+    pub can_delete: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -98,8 +99,10 @@ pub(super) fn request_views(
             decision: entry.record.decision.state,
             facts,
             can_decide: entry.direction == DirectRequestDirection::Incoming
-                && entry.record.decision.state == DirectDecisionState::Pending,
+                && entry.record.decision.state == DirectDecisionState::Pending
+                && entry.record.request.expires_at >= now,
             can_retry: !entry.pending_outboxes(now).is_empty(),
+            can_delete: entry.removable_from_history(now),
         };
         match entry.direction {
             DirectRequestDirection::Incoming => incoming.push(view),
@@ -358,85 +361,5 @@ fn created_at(profiles: &ShareProfiles, request_id: &DirectRequestId) -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{decision_label, request_views, timestamp, transport_state};
-    use crate::share::{
-        DirectDecisionState, DirectFailure, DirectPeerIdentity, DirectRelayOutcome,
-        DirectRequestDirection, DirectRequestEntry, DirectRequestId, DirectRequestRecord,
-        DirectRequestRetries, DirectRetryState, ShareProfiles, SignedDirectRequest,
-    };
-
-    #[test]
-    fn local_transport_never_calls_relay_forwarding_peer_received() {
-        let mut retry = DirectRetryState::default();
-        assert!(transport_state(&retry).starts_with("queued"));
-        retry.attempt_count = 1;
-        retry.last_attempt_at = Some(10);
-        assert!(transport_state(&retry).starts_with("sent"));
-        retry.relay_outcome = Some(DirectRelayOutcome::Forwarded);
-        let label = transport_state(&retry);
-        assert!(label.starts_with("relay_forwarded"));
-        assert!(label.contains("nicht bestaetigt"));
-        retry.last_error = Some(DirectFailure {
-            code: "offline".into(),
-            message: "peer offline".into(),
-        });
-        assert!(retry.last_error.is_some());
-    }
-
-    #[test]
-    fn decision_and_timestamp_labels_are_stable() {
-        assert_eq!(decision_label(DirectDecisionState::Accepted), "accepted");
-        assert_eq!(decision_label(DirectDecisionState::Revoked), "revoked");
-        assert_eq!(timestamp(0), "1970-01-01 00:00:00 UTC");
-    }
-
-    #[test]
-    fn outgoing_projection_separates_relay_forwarding_from_peer_receipt() {
-        let requester_key = iroh::SecretKey::from_bytes(&[21; 32]);
-        let target_key = iroh::SecretKey::from_bytes(&[22; 32]);
-        let target = DirectPeerIdentity::from_secret("target", "Target", &target_key);
-        let request = SignedDirectRequest::sign_with_nonce(
-            DirectRequestId::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-            "lookup-target",
-            DirectPeerIdentity::from_secret("requester", "Requester", &requester_key),
-            DirectPeerIdentity::pinned_target(target.node_id.clone(), target.fingerprint.clone()),
-            100,
-            1_000,
-            "nonce",
-            None,
-            &[42; 32],
-            &requester_key,
-        )
-        .unwrap();
-        let mut entry = DirectRequestEntry {
-            direction: DirectRequestDirection::Outgoing,
-            contact_id: Some("missing-contact".into()),
-            local_lookup_id: None,
-            record: DirectRequestRecord::new(request),
-            request_receipt: None,
-            decision: None,
-            decision_receipt: None,
-            retries: DirectRequestRetries::default(),
-        };
-        entry.retries.request.attempt_count = 1;
-        entry.retries.request.relay_outcome = Some(DirectRelayOutcome::Forwarded);
-        let mut profiles = ShareProfiles::default();
-        profiles.direct_requests.push(entry);
-
-        let (_, outgoing) = request_views(&profiles, 200);
-        let facts = &outgoing[0].facts;
-        assert!(facts
-            .iter()
-            .find(|fact| fact.label == "Lokaler Versand Anfrage")
-            .unwrap()
-            .value
-            .starts_with("relay_forwarded"));
-        assert!(facts
-            .iter()
-            .find(|fact| fact.label == "Peer-Empfang Anfrage")
-            .unwrap()
-            .value
-            .starts_with("unconfirmed"));
-    }
-}
+#[path = "share_lifecycle_view_tests.rs"]
+mod tests;

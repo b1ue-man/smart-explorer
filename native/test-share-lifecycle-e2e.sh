@@ -128,9 +128,7 @@ server_pid=$!
 sleep 0.5
 kill -0 "$server_pid"
 
-identity_a="$(run_client "$client_a" share identity --json)"
 identity_b="$(run_client "$client_b" share identity --json)"
-fingerprint_a="$(jq -er '.fingerprint' <<<"$identity_a")"
 direct_code_b="$(jq -er '.direct_code' <<<"$identity_b")"
 
 # Queue while the target is offline. The requester must report relay state,
@@ -147,7 +145,16 @@ run_client "$client_b" share configure --server "127.0.0.1:$signal_port" >/dev/n
 retry="$(run_client "$client_a" share request retry "$request_id" --json)"
 jq -e --arg id "$request_id" '.request.request_id == $id' >/dev/null <<<"$retry"
 incoming="$(wait_request_state "$client_b" "$request_id" '.direction == "incoming" and .delivery.state == "received"')"
-jq -e --arg fp "$fingerprint_a" '.peer.fingerprint == $fp and .decision.state == "pending"' >/dev/null <<<"$incoming"
+jq -e '.peer.fingerprint and .decision.state == "pending"' >/dev/null <<<"$incoming"
+
+# The target discovers everything it needs from one bare inbox command. No
+# request ID, device ID, or fingerprint is supplied out of band.
+inbox="$(run_client "$client_b" share request)"
+inbox_request_id="$(awk -F '\t' '$1 == "pending_request" { print $2 }' <<<"$inbox")"
+[[ "$inbox_request_id" == "$request_id" ]]
+grep -Fqx $'pending_requests\t1' <<<"$inbox"
+grep -F $'delivery=received\tdecision=pending\tauthorization=inactive' >/dev/null <<<"$inbox"
+grep -Fqx $'next\tse share request accept' <<<"$inbox"
 
 # Pending inbox survives a full target daemon restart.
 stop_daemon "$client_b"
@@ -157,19 +164,19 @@ wait_request_state "$client_b" "$request_id" '.direction == "incoming" and .deci
 # The requester is offline while B accepts. B retains and retries the signed
 # decision; A applies it after restart and returns a signed decision receipt.
 stop_daemon "$client_a"
-accepted="$(run_client "$client_b" share request accept "$request_id" --fingerprint "$fingerprint_a" --json)"
+accepted="$(run_client "$client_b" share request accept --json)"
 jq -e '.request.decision.state == "accepted" and .request.authorization.active == true' >/dev/null <<<"$accepted"
 run_client "$client_a" share status --json >/dev/null
 wait_request_state "$client_a" "$request_id" '.decision.state == "accepted" and .authorization.active == true' >/dev/null
 wait_request_state "$client_b" "$request_id" '.decision_delivery.state == "received" and .peer_receipt.decision.state == "received"' >/dev/null
 
-grants="$(run_client "$client_b" share grants list --json)"
+grants="$(run_client "$client_b" share grants --json)"
 jq -e '.grants | any(.authorization.active == true)' >/dev/null <<<"$grants"
 
 # An accepted authorization is operational, not merely a UI flag.
 run_client "$client_a" ls "share://direct/$contact_id/" >/dev/null
 
-revoked="$(run_client "$client_b" share grants revoke "$request_id" --fingerprint "$fingerprint_a" --json)"
+revoked="$(run_client "$client_b" share grants revoke --json)"
 jq -e '.request.decision.state == "revoked" and .request.authorization.active == false' >/dev/null <<<"$revoked"
 wait_request_state "$client_a" "$request_id" '.decision.state == "revoked" and .authorization.active == false' >/dev/null
 
@@ -177,5 +184,12 @@ if run_client "$client_a" ls "share://direct/$contact_id/" >/dev/null 2>&1; then
   echo "revoked direct authorization still allowed file access" >&2
   exit 1
 fi
+
+# Peer removal consumes the canonical selector emitted by the CLI itself.
+connections="$(run_client "$client_a" connections list --json)"
+peer_selector="$(jq -er '.[] | select(.kind == "direct") | .selector' <<<"$connections")"
+run_client "$client_a" connections remove-peer "$peer_selector" >/dev/null
+after_remove="$(run_client "$client_a" connections list --json)"
+jq -e 'all(.[]; .kind != "direct")' >/dev/null <<<"$after_remove"
 
 echo "tracked Share lifecycle E2E passed: $request_id"

@@ -455,9 +455,9 @@
     "semantic_hash": "939818e4b7c21c8ba73b2c9e76bb3075"
   },
   "app/core/share.rs": {
-    "mtime": 1783818603.7808952,
-    "ast_hash": "1efb5434cc2d8721d38cef544bf59809",
-    "semantic_hash": "1efb5434cc2d8721d38cef544bf59809"
+    "mtime": 1783853990.4488156,
+    "ast_hash": "41048c3092a34fc91bab422ccda25c17",
+    "semantic_hash": "41048c3092a34fc91bab422ccda25c17"
   },
   "app/core/share_drain.rs": {
     "mtime": 1783818473.5075738,
@@ -470,14 +470,19 @@
     "semantic_hash": "8ceabdc60a338faf4f2333aad831388b"
   },
   "app/core/share_lifecycle_ui.rs": {
-    "mtime": 1783818467.0064104,
-    "ast_hash": "2d7919a5ea21be45327d452f6185cf38",
-    "semantic_hash": "2d7919a5ea21be45327d452f6185cf38"
+    "mtime": 1783853712.127048,
+    "ast_hash": "8cfaa81e689abbf9175ee0a0d7b9d97b",
+    "semantic_hash": "8cfaa81e689abbf9175ee0a0d7b9d97b"
   },
   "app/core/share_lifecycle_view.rs": {
-    "mtime": 1783818407.878922,
-    "ast_hash": "65cef4f4a704c824bfb0264cfb559409",
-    "semantic_hash": "65cef4f4a704c824bfb0264cfb559409"
+    "mtime": 1783854851.5500753,
+    "ast_hash": "23b822511b95e7acd2bf67fa5ea27811",
+    "semantic_hash": "23b822511b95e7acd2bf67fa5ea27811"
+  },
+  "app/core/share_lifecycle_view_tests.rs": {
+    "mtime": 1783854880.6147966,
+    "ast_hash": "547ae6a6a613f418a019b701e2c901c8",
+    "semantic_hash": "547ae6a6a613f418a019b701e2c901c8"
   },
   "app/core/share_poll_status.rs": {
     "mtime": 1783800482.0814419,
@@ -1004,10 +1009,20 @@
     "ast_hash": "b4a058608e21624b4ebecc2457e2fc1b",
     "semantic_hash": "b4a058608e21624b4ebecc2457e2fc1b"
   },
+  "cli/completions.rs": {
+    "mtime": 1783855115.9936435,
+    "ast_hash": "3d7855e63d7b460f00f9cf6e988e5e3b",
+    "semantic_hash": "3d7855e63d7b460f00f9cf6e988e5e3b"
+  },
   "cli/connections.rs": {
-    "mtime": 1783722905.8643277,
-    "ast_hash": "5ae2fe9975e901e2c7435520e2a943a3",
-    "semantic_hash": "5ae2fe9975e901e2c7435520e2a943a3"
+    "mtime": 1783855405.0848317,
+    "ast_hash": "12e42ae8a8e0ed60cfe716125699bed7",
+    "semantic_hash": "12e42ae8a8e0ed60cfe716125699bed7"
+  },
+  "cli/connections/output.rs": {
+    "mtime": 1783854158.9869494,
+    "ast_hash": "12678d00be3bd338d0448ef03f035e85",
+    "semantic_hash": "12678d00be3bd338d0448ef03f035e85"
   },
   "cli/doctor.rs": {
     "mtime": 1783723775.2286792,
@@ -1015,9 +1030,9 @@
     "semantic_hash": "df29a22459fe39a8d9772e3684bfa580"
   },
   "cli/mod.rs": {
-    "mtime": 1783722905.8653276,
-    "ast_hash": "fb30be2a89acf7928f577f1f1b5b54a2",
-    "semantic_hash": "fb30be2a89acf7928f577f1f1b5b54a2"
+    "mtime": 1783854158.9929495,
+    "ast_hash": "736c4c38e5d10a00061c1da3e652ae1b",
+    "semantic_hash": "736c4c38e5d10a00061c1da3e652ae1b"
   },
   "cli/ops.rs": {
     "mtime": 1783657428.0118697,
@@ -1055,19 +1070,19 @@
     "semantic_hash": "06e81358317358ca11fc2afe79ab5c99"
   },
   "cli/setup.rs": {
-    "mtime": 1783818590.1775115,
-    "ast_hash": "efac0512d73f40a3cc05cdb0f308b251",
-    "semantic_hash": "efac0512d73f40a3cc05cdb0f308b251"
+    "mtime": 1783854669.0485485,
+    "ast_hash": "283ac6460537d4cd4ab0d47012c84e94",
+    "semantic_hash": "283ac6460537d4cd4ab0d47012c84e94"
   },
   "cli/setup/share_peer.rs": {
-    "mtime": 1783818604.0589035,
-    "ast_hash": "28fa3bf4adcd7e52bfc19e1028c0c2b8",
-    "semantic_hash": "28fa3bf4adcd7e52bfc19e1028c0c2b8"
+    "mtime": 1783853975.7594564,
+    "ast_hash": "e116977d9094469edf5e1c317e94fa39",
+    "semantic_hash": "e116977d9094469edf5e1c317e94fa39"
   },
   "cli/share.rs": {
-    "mtime": 1783818604.0929043,
-    "ast_hash": "f6a1b9ed57c9d8e0e05d135f78fd3568",
-    "semantic_hash": "f6a1b9ed57c9d8e0e05d135f78fd3568"
+    "mtime": 1783854159.0339506,
+    "ast_hash": "335fc4942a3bcec47646aa744e63d87b",
+    "semantic_hash": "335fc4942a3bcec47646aa744e63d87b"
   },
   "cli/share/exports.rs": {
     "mtime": 1783819282.0685394,
@@ -1075,9 +1090,9 @@
     "semantic_hash": "f4c2c65419cd51dad4841b6a5ad9d706"
   },
   "cli/share/grants.rs": {
-    "mtime": 1783818595.2426476,
-    "ast_hash": "c5c1676d8f09bef67ad2fdaf64067ff7",
-    "semantic_hash": "c5c1676d8f09bef67ad2fdaf64067ff7"
+    "mtime": 1783855390.6934738,
+    "ast_hash": "3163ec6517df9e9af60265aec45c1e99",
+    "semantic_hash": "3163ec6517df9e9af60265aec45c1e99"
   },
   "cli/share/identity_command.rs": {
     "mtime": 1783788164.4608088,
@@ -1089,15 +1104,20 @@
     "ast_hash": "40e93ee320bd27a4880b97e1812a4278",
     "semantic_hash": "40e93ee320bd27a4880b97e1812a4278"
   },
+  "cli/share/request_selection.rs": {
+    "mtime": 1783854159.0269504,
+    "ast_hash": "b2ba179db96cbf60efc8e0d441571d08",
+    "semantic_hash": "b2ba179db96cbf60efc8e0d441571d08"
+  },
   "cli/share/requests.rs": {
-    "mtime": 1783818604.0869043,
-    "ast_hash": "33e75da2b17f571378e5b492b26831c2",
-    "semantic_hash": "33e75da2b17f571378e5b492b26831c2"
+    "mtime": 1783855390.692474,
+    "ast_hash": "b1e615e7f907c6706c729849121ceb5d",
+    "semantic_hash": "b1e615e7f907c6706c729849121ceb5d"
   },
   "cli/share/status.rs": {
-    "mtime": 1783818604.0899043,
-    "ast_hash": "acf12bbdd024aea4d9dc0d766cdabc44",
-    "semantic_hash": "acf12bbdd024aea4d9dc0d766cdabc44"
+    "mtime": 1783853458.3779788,
+    "ast_hash": "3a037fc4fed2ddd326a774362d0f54e9",
+    "semantic_hash": "3a037fc4fed2ddd326a774362d0f54e9"
   },
   "cli/target.rs": {
     "mtime": 1783722118.047444,
@@ -1375,9 +1395,9 @@
     "semantic_hash": "5f42c975d5d2fadb413a25838cd1ba7c"
   },
   "daemon/os/shared/ipc.rs": {
-    "mtime": 1783817792.1524515,
-    "ast_hash": "1f5c791c79c9c71f7f74f4650a2ce7cc",
-    "semantic_hash": "1f5c791c79c9c71f7f74f4650a2ce7cc"
+    "mtime": 1783853855.8115308,
+    "ast_hash": "d4216389565764c8f3e7d7b7f20e102c",
+    "semantic_hash": "d4216389565764c8f3e7d7b7f20e102c"
   },
   "daemon/os/shared/ipc_client.rs": {
     "mtime": 1783817792.1524515,
@@ -1410,9 +1430,9 @@
     "semantic_hash": "051e3b4a3c540db32c987cfd34ec0830"
   },
   "daemon/os/shared/ipc_protocol.rs": {
-    "mtime": 1783818540.7772675,
-    "ast_hash": "305d0fc0e196ecf59d25f763db05368e",
-    "semantic_hash": "305d0fc0e196ecf59d25f763db05368e"
+    "mtime": 1783855222.9503024,
+    "ast_hash": "f853bda8e06d52fcaeb630084a401a7b",
+    "semantic_hash": "f853bda8e06d52fcaeb630084a401a7b"
   },
   "daemon/os/shared/job.rs": {
     "mtime": 1783654629.2099938,
@@ -1860,9 +1880,9 @@
     "semantic_hash": "446cf7e57e1315969170bfae554b9d82"
   },
   "share/core/direct_ledger.rs": {
-    "mtime": 1783818117.2936132,
-    "ast_hash": "ca3b3d131c6937f0c782019d369e02d0",
-    "semantic_hash": "ca3b3d131c6937f0c782019d369e02d0"
+    "mtime": 1783853688.3484745,
+    "ast_hash": "53d18a0d50a55d3ae9b6430f1254f396",
+    "semantic_hash": "53d18a0d50a55d3ae9b6430f1254f396"
   },
   "share/core/direct_ledger_mutations.rs": {
     "mtime": 1783817575.4940298,
@@ -1880,9 +1900,9 @@
     "semantic_hash": "cf691d0e344d2f7f4ed67d568d7e20df"
   },
   "share/core/direct_ledger_tests.rs": {
-    "mtime": 1783817563.0317185,
-    "ast_hash": "fbe75856ef21eac0d5327c5a9a09788b",
-    "semantic_hash": "fbe75856ef21eac0d5327c5a9a09788b"
+    "mtime": 1783854391.776687,
+    "ast_hash": "990f1d6319f15f9bda8ce76f6f2792c1",
+    "semantic_hash": "990f1d6319f15f9bda8ce76f6f2792c1"
   },
   "share/core/direct_ledger_validation.rs": {
     "mtime": 1783817452.2829554,
@@ -2105,9 +2125,9 @@
     "semantic_hash": "b0861fd5586e8530407abfee6f49d199"
   },
   "share/mod.rs": {
-    "mtime": 1783819461.153265,
-    "ast_hash": "767cac5dcfd7120ace7b85da3a718a2b",
-    "semantic_hash": "767cac5dcfd7120ace7b85da3a718a2b"
+    "mtime": 1783854159.3739588,
+    "ast_hash": "e73b4b08b2b7115b4f41a4a7bbfaf06a",
+    "semantic_hash": "e73b4b08b2b7115b4f41a4a7bbfaf06a"
   },
   "share/os/linux_os/identity_lock.rs": {
     "mtime": 1783787969.0779774,
@@ -2120,14 +2140,19 @@
     "semantic_hash": "1977d4cf8e682648f9a35660a134a7ad"
   },
   "share/os/shared/direct_actions.rs": {
-    "mtime": 1783818487.4839258,
-    "ast_hash": "62eb647c031a97e2800616239edcd3fe",
-    "semantic_hash": "62eb647c031a97e2800616239edcd3fe"
+    "mtime": 1783853676.341185,
+    "ast_hash": "de0b9a4041c66f7b146e7369f168b522",
+    "semantic_hash": "de0b9a4041c66f7b146e7369f168b522"
   },
   "share/os/shared/identity_store.rs": {
     "mtime": 1783787969.0759776,
     "ast_hash": "8484fb9cec2475015f53faad1dfd0f8d",
     "semantic_hash": "8484fb9cec2475015f53faad1dfd0f8d"
+  },
+  "share/os/shared/profile_operations.rs": {
+    "mtime": 1783854159.3859591,
+    "ast_hash": "448b5b71e42dc0fcbb698ab14e7e7517",
+    "semantic_hash": "448b5b71e42dc0fcbb698ab14e7e7517"
   },
   "share/os/shared/profile_store.rs": {
     "mtime": 1783815356.5087786,

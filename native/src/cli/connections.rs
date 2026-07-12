@@ -1,6 +1,10 @@
 use clap::{ArgAction, Args, Subcommand, ValueEnum};
+use clap_complete::ArgValueCandidates;
 
 use super::setup;
+
+#[path = "connections/output.rs"]
+mod output;
 
 const CONNECTIONS_HELP: &str = "\
 Manage the same saved remotes and Smart Explorer Share contacts used by the GUI.
@@ -46,7 +50,7 @@ to join it using the existing Smart Explorer share profile store.";
 #[command(about = "Manage saved remotes and Share contacts", long_about = CONNECTIONS_HELP)]
 pub(super) struct ConnectionsArgs {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -70,8 +74,8 @@ enum Command {
     AddRoom(RoomAddArgs),
     #[command(about = "Remove one saved remote by exact label or account")]
     Remove(SelectorArgs),
-    #[command(about = "Remove one Share peer by exact name or id")]
-    RemovePeer(SelectorArgs),
+    #[command(about = "Remove a Share peer by a listed selector; auto-selects the only peer")]
+    RemovePeer(PeerSelectorArgs),
     #[command(about = "Remove one Share room by exact name or id")]
     RemoveRoom(SelectorArgs),
 }
@@ -171,17 +175,34 @@ struct RoomAddArgs {
 
 #[derive(Args)]
 struct SelectorArgs {
-    #[arg(help = "Exact saved label, account, name, or id")]
+    #[arg(
+        allow_hyphen_values = true,
+        help = "Exact saved label, account, name, or id"
+    )]
     selector: String,
+}
+
+#[derive(Args)]
+struct PeerSelectorArgs {
+    #[arg(
+        allow_hyphen_values = true,
+        help = "Optional id, endpoint, name, device id, fingerprint, or prefix shown by connections list",
+        add = ArgValueCandidates::new(crate::cli::completions::peer_candidates)
+    )]
+    selector: Option<String>,
 }
 
 pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
     match args.command {
-        Command::List { json } => {
-            print_connections(json)?;
+        None => {
+            output::print_connections(false)?;
             Ok(0)
         }
-        Command::Add(args) => {
+        Some(Command::List { json }) => {
+            output::print_connections(json)?;
+            Ok(0)
+        }
+        Some(Command::Add(args)) => {
             let secret = if args.password_stdin {
                 Some(setup::read_stdin_secret()?)
             } else {
@@ -201,159 +222,29 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             println!("{saved}");
             Ok(0)
         }
-        Command::AddPeer(args) => {
+        Some(Command::AddPeer(args)) => {
             let msg = setup::add_peer(&args.code, &args.name, args.request)?;
             println!("{msg}");
             Ok(0)
         }
-        Command::AddRoom(args) => {
+        Some(Command::AddRoom(args)) => {
             let msg = setup::add_room(&args.code, &args.name)?;
             println!("{msg}");
             Ok(0)
         }
-        Command::Remove(args) => {
+        Some(Command::Remove(args)) => {
             println!("{}", setup::remove_remote(&args.selector)?);
             Ok(0)
         }
-        Command::RemovePeer(args) => {
-            println!("{}", setup::remove_peer(&args.selector)?);
+        Some(Command::RemovePeer(args)) => {
+            println!("{}", setup::remove_peer(args.selector.as_deref())?);
             Ok(0)
         }
-        Command::RemoveRoom(args) => {
+        Some(Command::RemoveRoom(args)) => {
             println!("{}", setup::remove_room(&args.selector)?);
             Ok(0)
         }
     }
-}
-
-fn print_connections(json: bool) -> Result<(), String> {
-    let conns = crate::creds::load_connections_checked()?;
-    let profiles = crate::share::ShareProfiles::load_checked(None)
-        .map_err(|error| format!("share profiles: {error}"))?;
-    if json {
-        let rows: Vec<_> = conns
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "label": c.display(),
-                    "account": c.account(),
-                    "protocol": c.protocol.as_str(),
-                    "host": c.host,
-                    "port": c.port,
-                    "user": c.user,
-                    "root": c.root,
-                    "use_agent": c.use_agent,
-                })
-            })
-            .chain(share_connection_rows_json(profiles))
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
-        );
-        return Ok(());
-    }
-    for c in conns {
-        println!(
-            "{}\t{}\t{}\t{}",
-            c.display(),
-            c.protocol.as_str(),
-            c.to_target(),
-            if c.use_agent { "agent" } else { "" }
-        );
-    }
-    for line in share_connection_rows_text(profiles) {
-        println!("{line}");
-    }
-    Ok(())
-}
-
-fn share_connection_rows_json(
-    profiles: crate::share::ShareProfiles,
-) -> impl Iterator<Item = serde_json::Value> {
-    let direct = profiles.direct_contacts.into_iter().map(|c| {
-        let endpoint = crate::share::PeerOpenTarget::Direct {
-            contact_id: c.id.clone(),
-        }
-        .endpoint_prefix();
-        serde_json::json!({
-            "label": c.display_name,
-            "account": endpoint,
-            "protocol": "share",
-            "kind": "direct",
-            "status": c.status.label(),
-            "access_state": c.access_state.label(),
-        })
-    });
-    let rooms = profiles.rooms.into_iter().flat_map(|room| {
-        if room.members.is_empty() {
-            return vec![serde_json::json!({
-                "label": room.name,
-                "account": format!("share://room/{}", room.id),
-                "protocol": "share",
-                "kind": "room",
-                "status": room.status.label(),
-            })];
-        }
-        room.members
-            .into_iter()
-            .map(|member| {
-                let endpoint = crate::share::PeerOpenTarget::RoomDevice {
-                    room_id: room.id.clone(),
-                    device_id: member.device_id.clone(),
-                }
-                .endpoint_prefix();
-                serde_json::json!({
-                    "label": format!("{}/{}", room.name, member.device_name),
-                    "account": endpoint,
-                    "protocol": "share",
-                    "kind": "room-member",
-                    "status": member.status.label(),
-                    "blocked": member.blocked,
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    direct.chain(rooms)
-}
-
-fn share_connection_rows_text(profiles: crate::share::ShareProfiles) -> Vec<String> {
-    let mut rows = Vec::new();
-    for c in profiles.direct_contacts {
-        let endpoint = crate::share::PeerOpenTarget::Direct { contact_id: c.id }.endpoint_prefix();
-        rows.push(format!(
-            "{}\tshare\t{}\t{}",
-            c.display_name,
-            endpoint,
-            c.access_state.label()
-        ));
-    }
-    for room in profiles.rooms {
-        if room.members.is_empty() {
-            rows.push(format!(
-                "{}\tshare-room\tshare://room/{}\t{}",
-                room.name,
-                room.id,
-                room.status.label()
-            ));
-            continue;
-        }
-        for member in room.members {
-            let endpoint = crate::share::PeerOpenTarget::RoomDevice {
-                room_id: room.id.clone(),
-                device_id: member.device_id,
-            }
-            .endpoint_prefix();
-            rows.push(format!(
-                "{}/{}\tshare\t{}\t{}",
-                room.name,
-                member.device_name,
-                endpoint,
-                member.status.label()
-            ));
-        }
-    }
-    rows
 }
 
 #[cfg(test)]
@@ -364,10 +255,16 @@ mod tests {
 
     #[test]
     fn parses_connections_list_json() {
+        let cli = Cli::parse_from(["se", "connections"]);
+        match cli.command {
+            RootCommand::Connections(args) => assert!(args.command.is_none()),
+            _ => panic!("wrong command"),
+        }
+
         let cli = Cli::parse_from(["se", "connections", "list", "--json"]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::List { json } => assert!(json),
+                Some(super::Command::List { json }) => assert!(json),
                 _ => panic!("wrong command"),
             },
             _ => panic!("wrong command"),
@@ -376,7 +273,29 @@ mod tests {
         let cli = Cli::parse_from(["se", "connections", "remove-peer", "Laptop"]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::RemovePeer(args) => assert_eq!(args.selector, "Laptop"),
+                Some(super::Command::RemovePeer(args)) => {
+                    assert_eq!(args.selector.as_deref(), Some("Laptop"))
+                }
+                _ => panic!("wrong command"),
+            },
+            _ => panic!("wrong command"),
+        }
+
+        let cli = Cli::parse_from(["se", "connections", "remove-peer"]);
+        match cli.command {
+            RootCommand::Connections(args) => match args.command {
+                Some(super::Command::RemovePeer(args)) => assert!(args.selector.is_none()),
+                _ => panic!("wrong command"),
+            },
+            _ => panic!("wrong command"),
+        }
+
+        let cli = Cli::parse_from(["se", "connections", "remove-peer", "-peer-id"]);
+        match cli.command {
+            RootCommand::Connections(args) => match args.command {
+                Some(super::Command::RemovePeer(args)) => {
+                    assert_eq!(args.selector.as_deref(), Some("-peer-id"))
+                }
                 _ => panic!("wrong command"),
             },
             _ => panic!("wrong command"),
@@ -402,7 +321,7 @@ mod tests {
         ]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::Add(args) => {
+                Some(super::Command::Add(args)) => {
                     assert!(matches!(args.protocol, super::ConnectionProtocolArg::Sftp));
                     assert_eq!(args.host.as_deref(), Some("example.com"));
                     assert_eq!(args.user, "alice");
@@ -430,7 +349,7 @@ mod tests {
         ]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::Add(args) => {
+                Some(super::Command::Add(args)) => {
                     assert!(matches!(args.protocol, super::ConnectionProtocolArg::Share));
                     assert!(args.host.is_none());
                     assert_eq!(args.root, r"\\srv\pub");
@@ -454,7 +373,7 @@ mod tests {
         ]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::AddPeer(args) => {
+                Some(super::Command::AddPeer(args)) => {
                     assert_eq!(args.name, "Laptop");
                     assert!(args.request);
                 }
@@ -473,7 +392,7 @@ mod tests {
         ]);
         match cli.command {
             RootCommand::Connections(args) => match args.command {
-                super::Command::AddPeer(args) => assert!(!args.request),
+                Some(super::Command::AddPeer(args)) => assert!(!args.request),
                 _ => panic!("wrong command"),
             },
             _ => panic!("wrong command"),

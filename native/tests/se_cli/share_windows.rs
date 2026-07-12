@@ -32,6 +32,28 @@ fn windows_terminal_identity_and_worker_status_are_standalone() {
         serde_json::from_slice(&status.output.stdout).expect("Share status must be JSON");
     assert!(value["running"].is_boolean());
     assert!(value["connected"].is_boolean());
+
+    let mut inbox_command = sandbox.command();
+    inbox_command
+        .env("SMART_EXPLORER_E2E_TEST_NAMESPACE", TEST_NAMESPACE)
+        .args(["share", "request", "--json"]);
+    let inbox = run_bounded(&mut inbox_command, Duration::from_secs(30));
+    assert!(!inbox.timed_out, "standalone Share inbox timed out");
+    assert_success(&inbox.output);
+    let inbox: serde_json::Value =
+        serde_json::from_slice(&inbox.output.stdout).expect("Share inbox must be JSON");
+    assert_eq!(inbox["count"], 0);
+
+    let completions = run_bounded(
+        sandbox.command().args(["completions", "powershell"]),
+        Duration::from_secs(10),
+    );
+    assert!(
+        !completions.timed_out,
+        "PowerShell completion generation timed out"
+    );
+    assert_success(&completions.output);
+    assert!(String::from_utf8_lossy(&completions.output.stdout).contains("COMPLETE"));
 }
 
 fn identity(sandbox: &Sandbox) -> serde_json::Value {

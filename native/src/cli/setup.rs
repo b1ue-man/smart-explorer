@@ -76,20 +76,42 @@ pub(crate) fn remove_remote(selector: &str) -> Result<String, String> {
     Ok(format!("Removed saved connection {account}"))
 }
 
-pub(crate) fn remove_peer(selector: &str) -> Result<String, String> {
-    let selector = required_selector(selector)?;
-    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+pub(crate) fn remove_peer(selector: Option<&str>) -> Result<String, String> {
+    let selector = selector.map(str::trim).filter(|value| !value.is_empty());
+    let profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
         .map_err(|error| format!("share profile laden: {error}"))?;
     let matches = profiles
         .direct_contacts
         .iter()
-        .filter(|contact| contact.id == selector || contact.display_name == selector)
+        .filter(|contact| selector.is_none_or(|value| peer_selector_matches(contact, value)))
         .cloned()
         .collect::<Vec<_>>();
-    let contact = exact_match(matches, &selector, "peer", |contact| contact.id.clone())?;
-    let change = profiles
-        .remove_direct_contact(&contact.id)
-        .map_err(|error| format!("remove peer {}: {error}", contact.id))?;
+    let contact = match matches.as_slice() {
+        [] => {
+            return Err(match selector {
+                Some(value) => format!(
+                    "peer not found: {value}; run `se connections list` to see valid selector=<id> values"
+                ),
+                None => "no Share peers to remove; `se connections list` shows saved peers"
+                    .to_string(),
+            })
+        }
+        [contact] => contact.clone(),
+        many => {
+            return Err(format!(
+                "peer selector is ambiguous; choose one selector from `se connections list`: {}",
+                many.iter()
+                    .map(|contact| contact.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    };
+    let (_committed, change) = crate::share::ShareProfiles::remove_direct_contact_persisted(
+        Some(default_home()),
+        &contact.id,
+    )
+    .map_err(|error| format!("remove peer {}: {error}", contact.id))?;
     if let Some(warning) = change.cleanup_warning {
         return Err(format!("removed peer {}, but {warning}", contact.id));
     }
@@ -100,9 +122,30 @@ pub(crate) fn remove_peer(selector: &str) -> Result<String, String> {
     ))
 }
 
+fn peer_selector_matches(contact: &crate::share::DirectContact, selector: &str) -> bool {
+    let endpoint = format!("share://direct/{}", contact.id);
+    contact.display_name.eq_ignore_ascii_case(selector)
+        || exact_or_prefix(selector, &contact.id)
+        || endpoint.eq_ignore_ascii_case(selector.trim_end_matches('/'))
+        || exact_or_prefix(selector, &contact.expected_fingerprint)
+        || exact_or_prefix(selector, &contact.expected_node_id)
+        || contact
+            .remote_device_id
+            .as_deref()
+            .is_some_and(|device_id| exact_or_prefix(selector, device_id))
+}
+
+fn exact_or_prefix(selector: &str, candidate: &str) -> bool {
+    candidate.eq_ignore_ascii_case(selector)
+        || (selector.len() >= 4
+            && candidate
+                .to_ascii_lowercase()
+                .starts_with(&selector.to_ascii_lowercase()))
+}
+
 pub(crate) fn remove_room(selector: &str) -> Result<String, String> {
     let selector = required_selector(selector)?;
-    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+    let profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
         .map_err(|error| format!("share profile laden: {error}"))?;
     let matches = profiles
         .rooms
@@ -111,9 +154,9 @@ pub(crate) fn remove_room(selector: &str) -> Result<String, String> {
         .cloned()
         .collect::<Vec<_>>();
     let room = exact_match(matches, &selector, "room", |room| room.id.clone())?;
-    let change = profiles
-        .remove_room(&room.id)
-        .map_err(|error| format!("remove room {}: {error}", room.id))?;
+    let (_committed, change) =
+        crate::share::ShareProfiles::remove_room_persisted(Some(default_home()), &room.id)
+            .map_err(|error| format!("remove room {}: {error}", room.id))?;
     if let Some(warning) = change.cleanup_warning {
         return Err(format!("removed room {}, but {warning}", room.id));
     }
@@ -150,6 +193,9 @@ fn exact_match<T>(
 }
 
 fn worker_refresh_suffix() -> String {
+    if !crate::support_dirs::app_data_file("share_server.txt").is_file() {
+        return "; share worker inactive (no server configured)".to_string();
+    }
     match crate::daemon::refresh_share_worker_checked() {
         Ok(true) => "; share worker refreshed".to_string(),
         Ok(false) => "; share worker is not configured".to_string(),
@@ -158,9 +204,11 @@ fn worker_refresh_suffix() -> String {
 }
 
 pub(crate) fn add_room(code: &str, name: &str) -> Result<String, String> {
-    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
-        .map_err(|error| format!("share profile laden: {error}"))?;
-    let room_id = profiles.add_room_from_code(code, name)?;
+    let (_profiles, room_id) = crate::share::ShareProfiles::add_room_from_code_persisted(
+        Some(default_home()),
+        code,
+        name,
+    )?;
     ensure_share_worker_running()
         .map_err(|e| format!("saved room {room_id}, but share worker was not configured: {e}"))?;
     Ok(format!("Saved room {room_id}; share worker configured"))

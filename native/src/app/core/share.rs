@@ -590,11 +590,13 @@ impl App {
                 ));
             }
             if ui.button("Hinzufuegen").clicked() {
-                match self.share_profiles.add_direct_from_code(
+                match crate::share::ShareProfiles::add_direct_from_code_persisted(
+                    Some(dirs_home().to_string_lossy().replace('\\', "/")),
                     &self.share_direct_code_input,
                     &self.share_direct_name_input,
                 ) {
-                    Ok(id) => {
+                    Ok((profiles, id)) => {
+                        self.share_profiles = profiles;
                         self.share_direct_code_input.clear();
                         self.share_direct_name_input.clear();
                         let _ = lifecycle_ui::queue_contact(self, &id);
@@ -692,8 +694,12 @@ impl App {
         }
         let persisted = !changed || self.commit_share_profiles(previous_profiles);
         if let Some(id) = remove.filter(|_| persisted) {
-            match self.share_profiles.remove_direct_contact(&id) {
-                Ok(change) => {
+            match crate::share::ShareProfiles::remove_direct_contact_persisted(
+                Some(dirs_home().to_string_lossy().replace('\\', "/")),
+                &id,
+            ) {
+                Ok((profiles, change)) => {
+                    self.share_profiles = profiles;
                     if let Some(warning) = change.cleanup_warning {
                         self.error_msg = Some(warning);
                     }
@@ -742,11 +748,13 @@ impl App {
                 ui.ctx().copy_text(self.share_room_draft_code.clone());
             }
             if ui.button("Raum erstellen").clicked() {
-                match self.share_profiles.add_room_from_code(
+                match crate::share::ShareProfiles::add_room_from_code_persisted(
+                    Some(dirs_home().to_string_lossy().replace('\\', "/")),
                     &self.share_room_draft_code,
                     &self.share_room_create_name_input,
                 ) {
-                    Ok(_) => {
+                    Ok((profiles, _)) => {
+                        self.share_profiles = profiles;
                         self.generate_room_draft_code();
                         let _ = self.configure_share_service();
                     }
@@ -783,11 +791,13 @@ impl App {
                 ));
             }
             if ui.button("Beitreten").clicked() {
-                match self
-                    .share_profiles
-                    .add_room_from_code(&self.share_room_code_input, &self.share_room_name_input)
-                {
-                    Ok(_) => {
+                match crate::share::ShareProfiles::add_room_from_code_persisted(
+                    Some(dirs_home().to_string_lossy().replace('\\', "/")),
+                    &self.share_room_code_input,
+                    &self.share_room_name_input,
+                ) {
+                    Ok((profiles, _)) => {
+                        self.share_profiles = profiles;
                         self.share_room_code_input.clear();
                         self.share_room_name_input.clear();
                         let _ = self.configure_share_service();
@@ -921,8 +931,12 @@ impl App {
             let _ = self.share_cmd(crate::share::ShareCmd::LeaveRoom { room_id });
         }
         if let Some(id) = remove_room.filter(|_| persisted) {
-            match self.share_profiles.remove_room(&id) {
-                Ok(change) => {
+            match crate::share::ShareProfiles::remove_room_persisted(
+                Some(dirs_home().to_string_lossy().replace('\\', "/")),
+                &id,
+            ) {
+                Ok((profiles, change)) => {
+                    self.share_profiles = profiles;
                     if let Some(warning) = change.cleanup_warning {
                         self.error_msg = Some(warning);
                     }

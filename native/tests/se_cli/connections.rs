@@ -19,6 +19,68 @@ use crate::support::{
 use crate::support::{assert_output_omits, run_bounded, run_with_stdin_bounded};
 
 #[test]
+fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
+    let source = Sandbox::new("peer-selector-source");
+    let target = Sandbox::new("peer-selector-target");
+    let identity = run(source.command().args(["share", "identity", "--json"]));
+    assert_success(&identity);
+    let identity: serde_json::Value =
+        serde_json::from_slice(&identity.stdout).expect("identity JSON must parse");
+    let direct_code = identity["direct_code"]
+        .as_str()
+        .expect("identity must emit a direct code")
+        .to_string();
+
+    for field in ["selector", "account", "fingerprint"] {
+        let added = run(target.command().args([
+            "connections",
+            "add-peer",
+            "--code",
+            &direct_code,
+            "--no-request",
+        ]));
+        assert_success(&added);
+        let listed = run(target.command().args(["connections", "list", "--json"]));
+        assert_success(&listed);
+        let rows: serde_json::Value =
+            serde_json::from_slice(&listed.stdout).expect("connections JSON must parse");
+        let peer = rows
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["kind"] == "direct"))
+            .expect("list must emit the added direct peer");
+        let selector = peer[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("direct peer row must emit {field}"))
+            .to_string();
+
+        let removed = run(target
+            .command()
+            .args(["connections", "remove-peer", &selector]));
+        assert_success(&removed);
+    }
+
+    let added = run(target.command().args([
+        "connections",
+        "add-peer",
+        "--code",
+        &direct_code,
+        "--no-request",
+    ]));
+    assert_success(&added);
+    let removed = run(target.command().args(["connections", "remove-peer"]));
+    assert_success(&removed);
+    let final_list = run(target.command().args(["connections", "list", "--json"]));
+    assert_success(&final_list);
+    let rows: serde_json::Value =
+        serde_json::from_slice(&final_list.stdout).expect("final connections JSON must parse");
+    assert!(rows
+        .as_array()
+        .expect("connections JSON must be an array")
+        .iter()
+        .all(|row| row["kind"] != "direct"));
+}
+
+#[test]
 fn saved_connections_persist_across_processes_and_sandboxes_are_isolated() {
     let sandbox = Sandbox::new("connection-persistence");
     let isolated = Sandbox::new("connection-isolation");

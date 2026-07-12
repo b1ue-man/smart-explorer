@@ -318,6 +318,43 @@ fn incoming_decision_outbox_survives_accept_and_newer_revoke() {
 }
 
 #[test]
+fn history_deletion_waits_for_terminal_peer_delivery() {
+    let request = request(None);
+    let mut profiles = ShareProfiles::default();
+    profiles
+        .record_incoming_direct_request("lookup-a", request.clone(), 110)
+        .unwrap();
+    profiles
+        .record_direct_request_receipt(request_receipt(&request))
+        .unwrap();
+    profiles
+        .record_direct_relay_ack(
+            &request.request_id,
+            DirectEnvelopeKind::RequestReceipt,
+            DirectRelayOutcome::Forwarded,
+            121,
+        )
+        .unwrap();
+
+    let rejected = decision(&request, DirectDecisionKind::Rejected, 1, 130);
+    profiles
+        .record_direct_decision(rejected.clone(), 130)
+        .unwrap();
+    assert!(!profiles
+        .direct_request(&request.request_id)
+        .unwrap()
+        .removable_from_history(131));
+
+    profiles
+        .record_direct_decision_receipt(decision_receipt(&rejected, 140))
+        .unwrap();
+    assert!(profiles
+        .direct_request(&request.request_id)
+        .unwrap()
+        .removable_from_history(141));
+}
+
+#[test]
 fn retry_and_relay_updates_are_absolute_monotonic_and_idempotent() {
     let request = request(None);
     let mut profiles = outgoing_profiles(&request);

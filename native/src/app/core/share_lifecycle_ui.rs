@@ -12,6 +12,9 @@ enum LifecycleAction {
     Retry {
         request_id: crate::share::DirectRequestId,
     },
+    DeleteHistory {
+        request_id: crate::share::DirectRequestId,
+    },
     Revoke {
         request_id: crate::share::DirectRequestId,
         fingerprint: String,
@@ -29,16 +32,37 @@ enum LifecycleAction {
 pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
     let now = crate::share::core_now_secs();
     let (incoming, outgoing) = request_views(&app.share_profiles, now);
+    let pending_incoming = incoming
+        .iter()
+        .filter(|request| request.can_decide)
+        .collect::<Vec<_>>();
+    let incoming_history = incoming
+        .iter()
+        .filter(|request| !request.can_decide)
+        .collect::<Vec<_>>();
     let authorized = authorized_device_views(&app.share_profiles);
     let mut action = None;
 
     section_heading(ui, "EINGEHENDE ANFRAGEN");
-    if incoming.is_empty() {
+    if pending_incoming.is_empty() {
         ui.label("Keine getrackten eingehenden Anfragen.");
     } else {
-        for request in &incoming {
+        for request in pending_incoming {
             request_card(ui, request, true, &mut action);
         }
+    }
+
+    if !incoming_history.is_empty() {
+        egui::CollapsingHeader::new(format!(
+            "ABGESCHLOSSENE EINGEHENDE ANFRAGEN ({})",
+            incoming_history.len()
+        ))
+        .default_open(false)
+        .show(ui, |ui| {
+            for request in incoming_history {
+                request_card(ui, request, true, &mut action);
+            }
+        });
     }
 
     ui.separator();
@@ -167,10 +191,7 @@ fn request_card(
                         decision: crate::share::DirectDecisionKind::Accepted,
                     });
                 }
-                if ui
-                    .add_enabled(confirmed, egui::Button::new("Ablehnen"))
-                    .clicked()
-                {
+                if ui.button("Loeschen / ablehnen").clicked() {
                     *action = Some(LifecycleAction::Decide {
                         request_id: request.request_id.clone(),
                         fingerprint: request.fingerprint.clone(),
@@ -181,6 +202,12 @@ fn request_card(
                     *action = Some(LifecycleAction::SelectExports);
                 }
             });
+        } else if request.can_delete {
+            if ui.button("Aus Verlauf loeschen").clicked() {
+                *action = Some(LifecycleAction::DeleteHistory {
+                    request_id: request.request_id.clone(),
+                });
+            }
         } else if !incoming
             && request.can_retry
             && ui
@@ -272,10 +299,7 @@ fn legacy_requests(app: &App, ui: &mut egui::Ui, action: &mut Option<LifecycleAc
                         accepted: true,
                     });
                 }
-                if ui
-                    .add_enabled(confirmed, egui::Button::new("Legacy ablehnen"))
-                    .clicked()
-                {
+                if ui.button("Legacy loeschen / ablehnen").clicked() {
                     *action = Some(LifecycleAction::LegacyDecision {
                         presence: Box::new(presence.clone()),
                         accepted: false,
@@ -294,6 +318,7 @@ fn perform_action(app: &mut App, action: LifecycleAction) {
             decision,
         } => decide(app, request_id, fingerprint, decision),
         LifecycleAction::Retry { request_id } => retry(app, request_id),
+        LifecycleAction::DeleteHistory { request_id } => delete_history(app, request_id),
         LifecycleAction::Revoke {
             request_id,
             fingerprint,
@@ -362,6 +387,17 @@ fn retry(app: &mut App, request_id: crate::share::DirectRequestId) {
         }
         Err(error) => {
             app.error_msg = Some(format!("Direkt-Anfrage nicht erneut vorgemerkt: {error}"));
+        }
+    }
+}
+
+fn delete_history(app: &mut App, request_id: crate::share::DirectRequestId) {
+    match crate::share::delete_direct_request_history(Some(default_home()), &request_id) {
+        Ok(()) => {
+            let _ = refresh_after_action(app, format!("Anfrage {request_id} geloescht"));
+        }
+        Err(error) => {
+            app.error_msg = Some(format!("Anfrage nicht geloescht: {error}"));
         }
     }
 }

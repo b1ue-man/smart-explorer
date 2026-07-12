@@ -110,8 +110,10 @@ visible as legacy/unconfirmed because they cannot prove all lifecycle states.
 The GUI's **Teilen** view shows three durable sections:
 
 - **Eingehende Anfragen**: request ID, requester identity, fingerprint,
-  transport/receipt state, decision, authorization, and actions to accept or
-  reject after explicitly confirming the displayed fingerprint.
+  transport/receipt state, decision, authorization, and actions to accept after
+  explicitly confirming the displayed fingerprint or to delete/reject without
+  an unrelated confirmation hurdle. Completed entries move into a collapsed
+  history and can be removed once no peer delivery remains pending.
 - **Ausgehende Anfragen**: the same lifecycle state from the requester side and
   a retry action that reuses the request ID.
 - **Autorisierte Geraete**: active grants and connectivity, with signed revoke
@@ -121,23 +123,28 @@ The GUI's **Teilen** view shows three durable sections:
 The terminal exposes the same ledger:
 
 ```text
-se share request list [--json]
-se share request show <request-id> [--json]
-se share request accept <request-id> --fingerprint <fingerprint> [--message <text>] [--json]
-se share request reject <request-id> --fingerprint <fingerprint> [--message <text>] [--json]
-se share request retry <request-id> [--json]
-se share grants list [--json]
-se share grants revoke <request-id> --fingerprint <fingerprint> [--message <text>] [--json]
+se share request [--json]
+se share request show [<selector>] [--json]
+se share request accept [<selector>] [--fingerprint <assertion>] [--message <text>] [--json]
+se share request reject [<selector>] [--fingerprint <assertion>] [--message <text>] [--json]
+se share request retry [<selector>] [--json]
+se share request delete [<selector>] [--json]
+se share grants [--json]
+se share grants revoke [<selector>] [--fingerprint <assertion>] [--message <text>] [--json]
 se share status [--json]
+se completions bash|zsh|fish|elvish|powershell
 ```
 
-`request list/show` and `status` report delivery, relay result, peer receipts,
-decision and revision, retry attempts/errors, authorization, and connectivity
-separately. Fingerprint arguments must exactly match the identity shown by
-`list`/`show`; this prevents an acceptance or revocation from silently applying
-to a different key. Profile mutations use bounded compare-and-swap retries, so
-normal concurrent GUI/worker updates are rebased instead of overwriting each
-other.
+Bare `request`, `grants`, and `connections` commands list the corresponding
+objects and expose selectors accepted by their action commands. If exactly one
+request or active grant is actionable, `accept`, `reject`, or `revoke`
+auto-selects it. With multiple matches the command prints the exact usable
+selectors instead of requiring hidden data. Optional fingerprint arguments are
+additional assertions against the signed stored identity, never required input.
+Request/status output reports delivery, relay result, peer receipts, decision
+and revision, retry attempts/errors, authorization, and connectivity separately.
+Profile mutations use bounded compare-and-swap retries, so normal concurrent
+GUI/worker updates are rebased instead of overwriting each other.
 
 The accepted direct code authorizes the owner's `Standard Direkt` export scope.
 That scope is visible next to the code and can be changed before accepting or

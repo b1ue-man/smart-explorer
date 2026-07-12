@@ -2,7 +2,7 @@ use clap::Args;
 
 use super::{grants, lifecycle_output};
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub(super) struct StatusArgs {
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
