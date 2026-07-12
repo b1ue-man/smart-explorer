@@ -1,5 +1,6 @@
 use super::backend::AgentBackend;
 use super::mux::Mux;
+use super::transport::AgentConnection;
 use crate::agent_proto::{Frame, CHUNK};
 use crossbeam_channel::Receiver;
 use std::io::{self, Read, Write};
@@ -71,42 +72,73 @@ impl Drop for AgentReadStream {
 
 /// `std::io::Write` over a streamed `Write` op.
 struct AgentWriteStream {
+    connection: Arc<AgentConnection>,
     mux: Arc<Mux>,
     id: u64,
     rx: Receiver<Frame>,
-    finished: bool,
+    state: WriteState,
+}
+
+enum WriteState {
+    Open,
+    Committed,
+    Failed {
+        kind: io::ErrorKind,
+        message: String,
+    },
 }
 
 impl AgentWriteStream {
     fn finish(&mut self) -> io::Result<()> {
-        if self.finished {
-            return Ok(());
+        match &self.state {
+            WriteState::Committed => return Ok(()),
+            WriteState::Failed { kind, message } => {
+                return Err(io::Error::new(*kind, message.clone()))
+            }
+            WriteState::Open => {}
         }
-        self.finished = true;
         if let Err(error) = self.mux.send(self.id, Frame::End) {
             self.mux.unregister(self.id);
+            self.remember_failure(&error);
             return Err(error);
         }
-        let r = match self.rx.recv() {
+        let result = match self.rx.recv() {
             Ok(Frame::Ok) => Ok(()),
             Ok(Frame::Err(e)) => Err(io::Error::other(e)),
-            Ok(other) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent write-stream reply: {other:?}"),
-            )),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "agent write stream closed",
-            )),
+            Ok(other) => {
+                self.connection.invalidate(&self.mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected agent write-stream reply: {other:?}"),
+                ))
+            }
+            Err(_) => {
+                self.connection.invalidate(&self.mux);
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "agent write stream closed",
+                ))
+            }
         };
         self.mux.unregister(self.id);
-        r
+        match &result {
+            Ok(()) => self.state = WriteState::Committed,
+            Err(error) => self.remember_failure(error),
+        }
+        result
+    }
+
+    fn remember_failure(&mut self, error: &io::Error) {
+        self.state = WriteState::Failed {
+            kind: error.kind(),
+            message: error.to_string(),
+        };
     }
 }
 
 impl Write for AgentWriteStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.finished {
+        if !matches!(self.state, WriteState::Open) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "agent write stream already closed",
@@ -125,8 +157,7 @@ impl Write for AgentWriteStream {
 
 impl Drop for AgentWriteStream {
     fn drop(&mut self) {
-        if !self.finished {
-            self.finished = true;
+        if matches!(self.state, WriteState::Open) {
             // Dropping a writer is an abort, not an implicit commit. Wake the
             // server-side receiver after setting cancellation so it removes
             // its staged file instead of promoting a partial upload.
@@ -141,51 +172,44 @@ impl AgentBackend {
     /// Begin a streamed read of `path`. Protocol-v6 makes this mandatory, so
     /// every transport, protocol, or remote failure is returned to the caller.
     pub(super) fn agent_open_read(&self, path: &str) -> io::Result<Box<dyn Read + Send>> {
-        let (id, rx) = self.mux.register();
-        if let Err(error) = self.mux.send(
-            id,
-            Frame::Read {
-                path: path.to_string(),
-                offset: 0,
-                len: 0,
-            },
-        ) {
-            self.mux.unregister(id);
-            return Err(error);
-        }
-        let result = match rx.recv() {
-            Ok(Frame::Data(d)) if d.len() <= CHUNK => Ok(Box::new(AgentReadStream {
-                mux: self.mux.clone(),
-                id,
-                rx,
+        let opened = self
+            .connection
+            .retry_safe(|mux| open_read_once(mux, path))?;
+        let result = match opened.first {
+            Frame::Data(d) if d.len() <= CHUNK => Ok(Box::new(AgentReadStream {
+                mux: opened.mux.clone(),
+                id: opened.id,
+                rx: opened.rx,
                 buf: d,
                 pos: 0,
                 done: false,
             }) as Box<dyn Read + Send>),
-            Ok(Frame::Data(_)) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "agent read frame exceeds the protocol chunk limit",
-            )),
-            Ok(Frame::End) => Ok(Box::new(AgentReadStream {
-                mux: self.mux.clone(),
-                id,
-                rx,
+            Frame::Data(_) => {
+                self.connection.invalidate(&opened.mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "agent read frame exceeds the protocol chunk limit",
+                ))
+            }
+            Frame::End => Ok(Box::new(AgentReadStream {
+                mux: opened.mux.clone(),
+                id: opened.id,
+                rx: opened.rx,
                 buf: Vec::new(),
                 pos: 0,
                 done: true,
             }) as Box<dyn Read + Send>),
-            Ok(Frame::Err(error)) => Err(io::Error::other(error)),
-            Ok(other) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent reply to read: {other:?}"),
-            )),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "agent read stream closed before opening",
-            )),
+            Frame::Err(error) => Err(io::Error::other(error)),
+            other => {
+                self.connection.invalidate(&opened.mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected agent reply to read: {other:?}"),
+                ))
+            }
         };
         if result.is_err() {
-            self.mux.unregister(id);
+            opened.mux.unregister(opened.id);
         }
         result
     }
@@ -193,33 +217,76 @@ impl AgentBackend {
     /// Begin a streamed write of `path`. Protocol-v6 makes this mandatory, so
     /// every transport, protocol, or remote failure is returned to the caller.
     pub(super) fn agent_open_write(&self, path: &str) -> io::Result<Box<dyn Write + Send>> {
-        let (id, rx) = self.mux.register();
-        if let Err(error) = self.mux.send(id, Frame::Write(path.to_string())) {
-            self.mux.unregister(id);
+        let mux = self.connection.mutation_mux()?;
+        let (id, rx) = mux.register();
+        if let Err(error) = mux.send(id, Frame::Write(path.to_string())) {
+            mux.unregister(id);
             return Err(error);
         }
         let result = match rx.recv() {
             Ok(Frame::Progress { .. }) => Ok(Box::new(AgentWriteStream {
-                mux: self.mux.clone(),
+                connection: self.connection.clone(),
+                mux: mux.clone(),
                 id,
                 rx,
-                finished: false,
+                state: WriteState::Open,
             }) as Box<dyn Write + Send>),
             Ok(Frame::Err(error)) => Err(io::Error::other(error)),
-            Ok(other) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent reply to write: {other:?}"),
-            )),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "agent write stream closed before opening",
-            )),
+            Ok(other) => {
+                self.connection.invalidate(&mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected agent reply to write: {other:?}"),
+                ))
+            }
+            Err(_) => {
+                self.connection.invalidate(&mux);
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "agent write stream closed before opening",
+                ))
+            }
         };
         if result.is_err() {
-            self.mux.unregister(id);
+            mux.unregister(id);
         }
         result
     }
+}
+
+struct ReadOpening {
+    mux: Arc<Mux>,
+    id: u64,
+    rx: Receiver<Frame>,
+    first: Frame,
+}
+
+fn open_read_once(mux: &Arc<Mux>, path: &str) -> io::Result<ReadOpening> {
+    let (id, rx) = mux.register();
+    if let Err(error) = mux.send(
+        id,
+        Frame::Read {
+            path: path.to_string(),
+            offset: 0,
+            len: 0,
+        },
+    ) {
+        mux.unregister(id);
+        return Err(error);
+    }
+    let first = rx.recv().map_err(|_| {
+        mux.unregister(id);
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "agent read stream closed before opening",
+        )
+    })?;
+    Ok(ReadOpening {
+        mux: mux.clone(),
+        id,
+        rx,
+        first,
+    })
 }
 
 #[cfg(test)]

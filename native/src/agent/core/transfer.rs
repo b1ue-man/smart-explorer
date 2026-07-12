@@ -10,23 +10,28 @@ impl AgentBackend {
     /// has handshaken, a missing or malformed reply is an ambiguous remote
     /// completion and must never be retried through the wrapped backend.
     pub(super) fn agent_unit_op(&self, req: Frame) -> io::Result<()> {
-        match self.mux.call(req)? {
+        let (mux, reply) = self.connection.mutation_call(req)?;
+        match reply {
             Frame::Ok => Ok(()),
             Frame::Err(e) => Err(io::Error::other(e)),
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent mutation reply: {other:?}"),
-            )),
+            other => {
+                self.connection.invalidate(&mux);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected agent mutation reply: {other:?}"),
+                ))
+            }
         }
     }
 
     /// Stream an entire remote subtree (`root`) down into local `dst`.
     pub(super) fn agent_get_tree(&self, root: &str, dst: &Path) -> io::Result<u64> {
         agent_proto::validate_destination_root(dst)?;
-        let (id, rx) = self.mux.register();
+        let mux = self.connection.mux()?;
+        let (id, rx) = mux.register();
         let r = (|| {
             let mut receiver = BufferedTreeReceiver::create("download", id)?;
-            self.mux.send(id, Frame::GetTree(root.to_string()))?;
+            mux.send(id, Frame::GetTree(root.to_string()))?;
             loop {
                 match rx.recv() {
                     Ok(frame @ Frame::TreeEntry { .. }) | Ok(frame @ Frame::Data(_)) => {
@@ -54,39 +59,46 @@ impl AgentBackend {
             receiver.finish()?.publish_local(dst, "download", id)
         })();
         if r.is_err() {
-            let _ = self.mux.send(id, Frame::Cancel);
+            let _ = mux.send(id, Frame::Cancel);
         }
-        self.mux.unregister(id);
+        mux.unregister(id);
         r
     }
 
     /// Stream an entire local subtree (`src`) up into remote `root`.
     pub(super) fn agent_put_tree(&self, src: &Path, root: &str) -> io::Result<u64> {
         let entries = agent_proto::collect_local_tree(src, &AtomicBool::new(false))?;
-        let (id, rx) = self.mux.register();
+        let mux = self.connection.mutation_mux()?;
+        let (id, rx) = mux.register();
         let r = (|| {
-            self.mux.send(id, Frame::PutTree(root.to_string()))?;
+            mux.send(id, Frame::PutTree(root.to_string()))?;
             let mut files = 0u64;
-            if let Err(error) = send_tree_manifest(&self.mux, id, src, &entries, &mut files) {
-                let _ = self.mux.send(id, Frame::Cancel);
-                let _ = self.mux.send(id, Frame::End);
+            if let Err(error) = send_tree_manifest(&mux, id, src, &entries, &mut files) {
+                let _ = mux.send(id, Frame::Cancel);
+                let _ = mux.send(id, Frame::End);
                 return Err(error);
             }
-            self.mux.send(id, Frame::End)?;
+            mux.send(id, Frame::End)?;
             match rx.recv() {
                 Ok(Frame::Ok) => Ok(files),
                 Ok(Frame::Err(e)) => Err(io::Error::other(e)),
-                Ok(other) => Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unexpected agent put-tree reply: {other:?}"),
-                )),
+                Ok(other) => {
+                    self.connection.invalidate(&mux);
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unexpected agent put-tree reply: {other:?}"),
+                    ))
+                }
                 Err(_) => Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "agent put-tree closed",
                 )),
             }
         })();
-        self.mux.unregister(id);
+        if r.is_err() && mux.is_closed() {
+            self.connection.invalidate(&mux);
+        }
+        mux.unregister(id);
         r
     }
 }

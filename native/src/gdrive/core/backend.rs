@@ -144,8 +144,14 @@ impl Backend for GDriveBackend {
             format!("{}/files/{}?alt=media", API, id)
         };
         let bearer = format!("Bearer {}", auth);
-        let resp =
-            open_stream(|| drive_request(ureq::get(&url).set("Authorization", &bearer).call()))?;
+        let resp = open_stream(|| {
+            drive_request(
+                self.stream_agent
+                    .get(&url)
+                    .set("Authorization", &bearer)
+                    .call(),
+            )
+        })?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -162,8 +168,14 @@ impl Backend for GDriveBackend {
             format!("{}/files/{}?alt=media", API, id)
         };
         let bearer = format!("Bearer {}", auth);
-        let resp =
-            open_stream(|| drive_request(ureq::get(&url).set("Authorization", &bearer).call()))?;
+        let resp = open_stream(|| {
+            drive_request(
+                self.stream_agent
+                    .get(&url)
+                    .set("Authorization", &bearer)
+                    .call(),
+            )
+        })?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -206,11 +218,7 @@ impl Backend for GDriveBackend {
 
     fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
         match id {
-            Some(i) if !i.is_empty() => {
-                self.trash_id(i)?;
-                self.forget_path_prefix(path);
-                Ok(())
-            }
+            Some(i) if !i.is_empty() => self.trash_path_id(path, i),
             _ => self.trash(path),
         }
     }

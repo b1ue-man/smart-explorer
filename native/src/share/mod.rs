@@ -8,6 +8,8 @@
 mod authorization_policy;
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/blocking.rs"]
+mod blocking;
 #[path = "core/crypto.rs"]
 mod core;
 #[path = "os/shared/direct_actions.rs"]
@@ -52,6 +54,8 @@ mod identity_lock;
 mod identity_store;
 #[path = "core/io_deadline.rs"]
 mod io_deadline;
+#[path = "core/keepalive.rs"]
+mod keepalive;
 #[path = "core/line.rs"]
 mod line;
 #[path = "core/node.rs"]
@@ -70,6 +74,8 @@ mod profile_store;
 mod profiles;
 #[path = "core/server.rs"]
 mod server;
+#[path = "core/server_transfer.rs"]
+mod server_transfer;
 #[path = "core/service.rs"]
 mod service;
 #[path = "core/session.rs"]

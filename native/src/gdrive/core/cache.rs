@@ -138,9 +138,16 @@ impl GDriveBackend {
     }
 
     pub(super) fn persist_path_cache(&self) {
-        if let (Ok(ids), Ok(mimes)) = (self.ids_guard(), self.mimes_guard()) {
-            let _ = save_to_path(&cache_path(), &ids, &mimes);
+        let _ = self.persist_path_cache_checked();
+    }
+
+    pub(super) fn persist_path_cache_checked(&self) -> io::Result<()> {
+        if !self.persist_cache {
+            return Ok(());
         }
+        let ids = self.ids_guard()?;
+        let mimes = self.mimes_guard()?;
+        save_to_path(&cache_path(), &ids, &mimes)
     }
 }
 

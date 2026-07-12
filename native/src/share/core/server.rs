@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,7 +6,7 @@ use std::time::Duration;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 
 use super::core::eio;
-use super::framing::{recv_ctrl, recv_tagged, reply, reply_err, send_ctrl, send_tagged, TAG_DATA};
+use super::framing::{recv_ctrl, reply, reply_err, send_ctrl};
 use super::fs::{self, ShareExportConfig};
 use super::node::ShareIrohNode;
 use super::session::{authenticate_incoming_session, IncomingSession};
@@ -107,66 +107,93 @@ async fn handle_peer_stream(
         _ => return Err(eio("Dateioperation erwartet")),
     };
     match req {
-        FsRequest::ListDir { path } => match fs::list_dir(&path, &exports) {
+        FsRequest::ListDir { path } => match blocking_fs("Share list directory", move || {
+            fs::list_dir(&path, &exports)
+        })
+        .await
+        {
             Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
             Err(error) => reply_err(&mut send, error).await,
         },
-        FsRequest::Stat { path } => match fs::stat(&path, &exports) {
-            Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
-        FsRequest::WalkTree { path } => super::walk::serve_walk(&mut send, path, exports).await,
-        FsRequest::Read { path } => read_file(&mut send, &path, &exports).await,
-        FsRequest::Write { path } => write_file(&mut send, &mut recv, &path, &exports).await,
+        FsRequest::Stat { path } => {
+            match blocking_fs("Share stat", move || fs::stat(&path, &exports)).await {
+                Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
+        FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, exports).await,
+        FsRequest::Read { path } => super::server_transfer::read_file(send, path, exports).await,
+        FsRequest::Write { path } => {
+            super::server_transfer::write_file(send, recv, path, exports).await
+        }
         FsRequest::MkdirAll { path } => {
-            simple(&mut send, &path, &exports, |target| {
-                target.backend.mkdir_all(&target.path)
-            })
+            simple(
+                &mut send,
+                path,
+                exports,
+                "Share create directory",
+                |target| target.backend.mkdir_all(&target.path),
+            )
             .await
         }
-        FsRequest::Rename { src, dst } => match fs::rename(&src, &dst, &exports, false) {
+        FsRequest::Rename { src, dst } => match blocking_fs("Share rename", move || {
+            fs::rename(&src, &dst, &exports, false)
+        })
+        .await
+        {
             Ok(()) => reply(&mut send, FsResponse::Ok).await,
             Err(error) => reply_err(&mut send, error).await,
         },
-        FsRequest::RenameNoReplace { src, dst } => match fs::rename(&src, &dst, &exports, true) {
-            Ok(()) => reply(&mut send, FsResponse::Ok).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
+        FsRequest::RenameNoReplace { src, dst } => {
+            match blocking_fs("Share no-replace rename", move || {
+                fs::rename(&src, &dst, &exports, true)
+            })
+            .await
+            {
+                Ok(()) => reply(&mut send, FsResponse::Ok).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
         FsRequest::PromoteStaged {
             staged,
             destination,
-        } => match fs::promote_staged(&staged, &destination, &exports) {
+        } => match blocking_fs("Share promote staged file", move || {
+            fs::promote_staged(&staged, &destination, &exports)
+        })
+        .await
+        {
             Ok(()) => reply(&mut send, FsResponse::Ok).await,
             Err(error) => reply_err(&mut send, error).await,
         },
         FsRequest::CopyFile { src, dst } => {
-            match (fs::resolve(&src, &exports), fs::resolve(&dst, &exports)) {
-                (Ok(source), Ok(destination)) if source.mount_key == destination.mount_key => {
-                    match source.backend.copy_file(&source.path, &destination.path) {
-                        Ok(size) => reply(&mut send, FsResponse::Data { size }).await,
-                        Err(error) => reply_err(&mut send, error).await,
-                    }
+            let result = blocking_fs("Share copy file", move || {
+                let source = fs::resolve(&src, &exports)?;
+                let destination = fs::resolve(&dst, &exports)?;
+                if source.mount_key != destination.mount_key {
+                    return Err(eio("Quelle und Ziel liegen nicht auf derselben Freigabe"));
                 }
-                (Ok(_), Ok(_)) => {
-                    reply_err(
-                        &mut send,
-                        eio("Quelle und Ziel liegen nicht auf derselben Freigabe"),
-                    )
-                    .await
-                }
-                (Err(error), _) | (_, Err(error)) => reply_err(&mut send, error).await,
+                source.backend.copy_file(&source.path, &destination.path)
+            })
+            .await;
+            match result {
+                Ok(size) => reply(&mut send, FsResponse::Data { size }).await,
+                Err(error) => reply_err(&mut send, error).await,
             }
         }
         FsRequest::RemoveFile { path } => {
-            simple(&mut send, &path, &exports, |target| {
+            simple(&mut send, path, exports, "Share remove file", |target| {
                 target.backend.remove_file(&target.path)
             })
             .await
         }
         FsRequest::RemoveDir { path } => {
-            simple(&mut send, &path, &exports, |target| {
-                fs::remove_dir_recursive(&*target.backend, &target.path)
-            })
+            simple(
+                &mut send,
+                path,
+                exports,
+                "Share remove directory",
+                |target| fs::remove_dir_recursive(&*target.backend, &target.path),
+            )
             .await
         }
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
@@ -205,109 +232,28 @@ async fn handle_exec_stream(
 
 async fn simple<F>(
     send: &mut SendStream,
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
+    path: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+    label: &'static str,
     operation: F,
 ) -> io::Result<()>
 where
-    F: FnOnce(fs::ResolvedTarget) -> io::Result<()>,
+    F: FnOnce(fs::ResolvedTarget) -> io::Result<()> + Send + 'static,
 {
-    match fs::resolve(path, exports).and_then(operation) {
+    match blocking_fs(label, move || {
+        fs::resolve(&path, &exports).and_then(operation)
+    })
+    .await
+    {
         Ok(()) => reply(send, FsResponse::Ok).await,
         Err(error) => reply_err(send, error).await,
     }
 }
 
-async fn read_file(
-    send: &mut SendStream,
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<()> {
-    let target = match fs::resolve(path, exports) {
-        Ok(target) => target,
-        Err(error) => return reply_err(send, error).await,
-    };
-    let size = match target.backend.stat(&target.path) {
-        Ok(metadata) if !metadata.is_dir => metadata.size,
-        Ok(_) => return reply_err(send, eio("Ordner kann nicht als Datei gelesen werden")).await,
-        Err(error) => return reply_err(send, error).await,
-    };
-    let mut reader = match target.backend.open_read(&target.path) {
-        Ok(reader) => reader,
-        Err(error) => return reply_err(send, error).await,
-    };
-    reply(send, FsResponse::Data { size }).await?;
-    let mut buffer = vec![0u8; fs::CHUNK];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        send_tagged(send, TAG_DATA, &buffer[..read]).await?;
-    }
-    Ok(())
-}
-
-async fn write_file(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<()> {
-    let target = match fs::resolve(path, exports) {
-        Ok(target) => target,
-        Err(error) => return reply_err(send, error).await,
-    };
-    let staging = match crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer") {
-        Ok(path) => path,
-        Err(error) => return reply_err(send, error).await,
-    };
-    let mut writer = match target.backend.open_write(&staging) {
-        Ok(writer) => Some(writer),
-        Err(error) => return reply_err(send, error).await,
-    };
-    reply(send, FsResponse::Ready).await?;
-    let result = loop {
-        let (tag, payload) = match recv_tagged(recv).await {
-            Ok(frame) => frame,
-            Err(error) => break Err(error),
-        };
-        if tag == TAG_DATA {
-            let Some(output) = writer.as_mut() else {
-                break Err(eio("Schreibkanal ist geschlossen"));
-            };
-            if let Err(error) = output.write_all(&payload) {
-                break Err(error);
-            }
-            continue;
-        }
-        if tag != super::framing::TAG_CTRL {
-            break Err(eio("unerwarteter Frame beim Schreiben"));
-        }
-        match serde_json::from_slice::<Ctrl>(&payload).map_err(eio) {
-            Ok(Ctrl::Fs {
-                req: FsRequest::WriteDone,
-            }) => {
-                let Some(mut output) = writer.take() else {
-                    break Err(eio("Schreibkanal ist geschlossen"));
-                };
-                if let Err(error) = output.flush() {
-                    break Err(error);
-                }
-                drop(output);
-                break crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path);
-            }
-            Ok(_) => break Err(eio("unerwartete Steuernachricht beim Schreiben")),
-            Err(error) => break Err(error),
-        }
-    };
-    match result {
-        Ok(()) => reply(send, FsResponse::Ok).await,
-        Err(error) => {
-            let message = error.to_string();
-            drop(writer.take());
-            let _ = target.backend.remove_file(&staging);
-            reply_err(send, eio(message)).await
-        }
-    }
+async fn blocking_fs<T, F>(label: &'static str, operation: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    super::blocking::run(label, operation).await
 }

@@ -5,6 +5,10 @@ use russh::client;
 use russh_sftp::client::SftpSession;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
+
+const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const SSH_KEEPALIVE_MAX_MISSED: usize = 3;
 
 pub(super) struct Client {
     host: String,
@@ -44,9 +48,9 @@ impl client::Handler for Client {
 }
 
 pub(super) async fn connect_async(
-    cfg: SftpConfig,
+    cfg: &SftpConfig,
 ) -> io::Result<(client::Handle<Client>, SftpSession)> {
-    let config = Arc::new(client::Config::default());
+    let config = Arc::new(client_config());
     let host_key_error = Arc::new(std::sync::Mutex::new(None));
     let handler = Client {
         host: cfg.host.clone(),
@@ -104,4 +108,26 @@ pub(super) async fn connect_async(
         .await
         .map_err(io_err)?;
     Ok((session, sftp))
+}
+
+fn client_config() -> client::Config {
+    client::Config {
+        keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
+        keepalive_max: SSH_KEEPALIVE_MAX_MISSED,
+        ..client::Config::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_config_enables_bounded_keepalives() {
+        let config = client_config();
+
+        assert_eq!(config.keepalive_interval, Some(Duration::from_secs(15)));
+        assert_eq!(config.keepalive_max, 3);
+        assert_eq!(config.inactivity_timeout, None);
+    }
 }

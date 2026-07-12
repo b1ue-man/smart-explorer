@@ -183,7 +183,17 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+const CLOUD_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+
 fn post_token(url: &str, form: &[(&str, &str)]) -> Result<Tokens, String> {
+    post_token_with_timeout(url, form, CLOUD_HTTP_TIMEOUT)
+}
+
+fn post_token_with_timeout(
+    url: &str,
+    form: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<Tokens, String> {
     // Skip empty fields: a public PKCE client has no secret, and sending
     // `client_secret=` makes Google answer 400 invalid_client.
     let body: String = form
@@ -193,6 +203,7 @@ fn post_token(url: &str, form: &[(&str, &str)]) -> Result<Tokens, String> {
         .collect::<Vec<_>>()
         .join("&");
     let text = match ureq::post(url)
+        .timeout(timeout)
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&body)
     {
@@ -386,6 +397,29 @@ mod tests {
         assert!(u.contains("state=STATE"));
         assert!(u.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A1234"));
         assert!(u.contains("access_type=offline"));
+    }
+
+    #[test]
+    fn token_exchange_has_a_bounded_response_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            drop(stream);
+        });
+
+        let started = std::time::Instant::now();
+        let error = post_token_with_timeout(
+            &url,
+            &[("grant_type", "refresh_token")],
+            Duration::from_millis(30),
+        )
+        .err()
+        .expect("blackholed token exchange must time out");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!error.is_empty());
+        server.join().unwrap();
     }
 
     #[test]

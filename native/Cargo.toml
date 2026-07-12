@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.130"
+version = "0.5.131"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -35,7 +35,7 @@ russh-sftp = "2"
 # Multi-thread runtime: a worker thread drives russh's background connection
 # task continuously, so the blocking Backend bridge (rt.block_on per op) is
 # robust without an always-running dedicated thread. See sftp.rs.
-tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "io-util", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time"] }
 # FTP/FTPS backend (ftp.rs). Blocking FtpStream (no runtime). rustls (NOT
 # native-tls) to avoid schannel/OpenSSL FFI on GNU. See docs/GOTCHAS.md.
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
@@ -75,6 +75,10 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 # servers. Keep the default ring-backed TLS stack; do not enable aws-lc.
 iroh = { version = "1.0.0", default-features = true }
 hmac = "0.12"
+# Signaling and FTP host lookup use Hickory's async system-config resolver
+# behind explicit deadlines instead of uncancellable libc getaddrinfo. Iroh
+# already brings this pure-Rust version into the Windows/Linux build graph.
+hickory-resolver = "0.26"
 # Share-Server signaling fallback: WebSocket over HTTPS-friendly WSS. Keep
 # default-features off so TLS stays on rustls/webpki and avoids native TLS.
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }

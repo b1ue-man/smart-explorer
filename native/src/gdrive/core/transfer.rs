@@ -1,4 +1,4 @@
-use super::api::{drive_request, open_stream, API, UPLOAD};
+use super::api::{drive_request, open_once, parse_generated_id, API, UPLOAD};
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::resumable::{self, Completion, REQUEST_TIMEOUT};
 use super::GDriveBackend;
@@ -164,7 +164,7 @@ impl GDriveBackend {
     }
 
     fn generate_upload_id(&self) -> VfsResult<String> {
-        let url = format!("{API}/files/generateIds?count=1&space=drive&type=files");
+        let url = self.api_url("files/generateIds?count=1&space=drive&type=files");
         parse_generated_id(&self.get_json(&url)?)
     }
 
@@ -222,58 +222,21 @@ impl GDriveBackend {
         self.persist_path_cache();
         Ok(())
     }
-
-    pub(super) fn trash(&self, path: &str) -> VfsResult<()> {
-        let key = norm(path);
-        let _path_guard = self.upload_path_guard(&key)?;
-        // An aborted create may not have entered the path cache. Prefer its
-        // pre-generated ID so cleanup never resolves a racing same-name object.
-        let pending_id = self.pending_upload_ids_guard()?.get(&key).cloned();
-        let id = match pending_id.as_ref() {
-            Some(id) => id.clone(),
-            None => self.resolve(&key)?,
-        };
-        self.trash_id(&id)?;
-        if pending_id.is_some() {
-            self.pending_upload_ids_guard()?.remove(&key);
-        }
-        self.forget_path_prefix(&key);
-        Ok(())
-    }
-
-    /// Trash one file by its exact id (targets a specific duplicate-named file).
-    pub(super) fn trash_id(&self, id: &str) -> VfsResult<()> {
-        let auth = self.bearer()?;
-        let bearer = format!("Bearer {auth}");
-        let url = format!("{API}/files/{}", cloud_urlenc(id));
-        let payload = serde_json::json!({ "trashed": true }).to_string();
-        open_stream(|| {
-            drive_request(
-                ureq::request("PATCH", &url)
-                    .set("Authorization", &bearer)
-                    .set("Content-Type", "application/json")
-                    .send_string(&payload),
-            )
-        })?;
-        Ok(())
-    }
 }
 
 fn initiate(method: &str, url: &str, bearer: &str, size: u64, metadata: &str) -> VfsResult<String> {
     let agent = ureq::AgentBuilder::new().redirects(0).build();
     let size = size.to_string();
-    let response = open_stream(|| {
-        drive_request(
-            agent
-                .request(method, url)
-                .timeout(REQUEST_TIMEOUT)
-                .set("Authorization", bearer)
-                .set("Content-Type", "application/json; charset=UTF-8")
-                .set("X-Upload-Content-Type", "application/octet-stream")
-                .set("X-Upload-Content-Length", &size)
-                .send_string(metadata),
-        )
-    })?;
+    let response = open_once(drive_request(
+        agent
+            .request(method, url)
+            .timeout(REQUEST_TIMEOUT)
+            .set("Authorization", bearer)
+            .set("Content-Type", "application/json; charset=UTF-8")
+            .set("X-Upload-Content-Type", "application/octet-stream")
+            .set("X-Upload-Content-Length", &size)
+            .send_string(metadata),
+    ))?;
     initiation_location(response)
 }
 
@@ -292,21 +255,6 @@ fn initiation_location(response: ureq::Response) -> VfsResult<String> {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Drive resumable initiation has no Location header",
-            )
-        })
-}
-
-fn parse_generated_id(json: &serde_json::Value) -> VfsResult<String> {
-    json["ids"]
-        .as_array()
-        .and_then(|ids| ids.first())
-        .and_then(serde_json::Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Drive generateIds response has no usable id",
             )
         })
 }

@@ -25,7 +25,11 @@ impl GDriveBackend {
         let auth = self.bearer()?;
         let bearer = format!("Bearer {}", auth);
         parse_json(send_retry(|| {
-            drive_request(ureq::get(url).set("Authorization", &bearer).call())
+            drive_request(
+                self.timed_request(ureq::get(url))
+                    .set("Authorization", &bearer)
+                    .call(),
+            )
         })?)
     }
 }

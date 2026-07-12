@@ -1,3 +1,4 @@
+use super::connection::{SftpConnection, SftpGeneration};
 use super::io_err;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -74,18 +75,51 @@ impl<W: tokio::io::AsyncWrite + Unpin + Send> Drop for BlockingWrite<W> {
 
 pub(super) struct SftpReader {
     pub(super) rt: Arc<Runtime>,
+    pub(super) connection: Arc<SftpConnection>,
+    pub(super) generation: Arc<SftpGeneration>,
+    pub(super) path: String,
     pub(super) file: russh_sftp::client::fs::File,
+    pub(super) delivered: u64,
+    pub(super) retried: bool,
 }
 
 impl Read for SftpReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let rt = self.rt.clone();
-        rt.block_on(async { self.file.read(buf).await })
+        loop {
+            let result = self.rt.block_on(async { self.file.read(buf).await });
+            match result {
+                Ok(read) => {
+                    self.delivered = self.delivered.saturating_add(read as u64);
+                    return Ok(read);
+                }
+                Err(error) => {
+                    let dead = self.connection.note_io_error(&self.generation, &error);
+                    if !dead || self.delivered != 0 || self.retried {
+                        return Err(error);
+                    }
+                    self.retried = true;
+                    let generation = self.connection.current()?;
+                    let opened = self.rt.block_on(generation.sftp().open(self.path.clone()));
+                    match opened {
+                        Ok(file) => {
+                            self.generation = generation;
+                            self.file = file;
+                        }
+                        Err(error) => {
+                            self.connection.note_sftp_error(&generation, &error);
+                            return Err(io_err(error));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 pub(super) struct SftpWriter {
     pub(super) rt: Arc<Runtime>,
+    pub(super) connection: Arc<SftpConnection>,
+    pub(super) generation: Arc<SftpGeneration>,
     pub(super) file: Option<russh_sftp::client::fs::File>,
 }
 
@@ -96,7 +130,11 @@ impl Write for SftpWriter {
             .file
             .as_mut()
             .ok_or_else(|| io_err("Datei geschlossen"))?;
-        rt.block_on(async { file.write(buf).await })
+        let result = rt.block_on(async { file.write(buf).await });
+        if let Err(error) = &result {
+            self.connection.note_io_error(&self.generation, error);
+        }
+        result
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -105,7 +143,11 @@ impl Write for SftpWriter {
             .file
             .as_mut()
             .ok_or_else(|| io_err("Datei geschlossen"))?;
-        rt.block_on(async { file.flush().await })
+        let result = rt.block_on(async { file.flush().await });
+        if let Err(error) = &result {
+            self.connection.note_io_error(&self.generation, error);
+        }
+        result
     }
 }
 
@@ -115,7 +157,10 @@ impl Drop for SftpWriter {
         // flush). Best-effort.
         if let Some(mut file) = self.file.take() {
             let rt = self.rt.clone();
-            let _ = rt.block_on(async { file.shutdown().await });
+            let result = rt.block_on(async { file.shutdown().await });
+            if let Err(error) = &result {
+                self.connection.note_io_error(&self.generation, error);
+            }
         }
     }
 }

@@ -1,0 +1,290 @@
+use std::io::{self, Read, Write};
+use std::sync::{Arc, Mutex};
+
+use iroh::endpoint::{RecvStream, SendStream};
+use tokio::sync::{mpsc, oneshot};
+
+use super::blocking;
+use super::core::eio;
+use super::framing::{recv_tagged, reply, reply_err, send_tagged, TAG_DATA};
+use super::fs::{self, ShareExportConfig};
+use super::wire::{Ctrl, FsRequest, FsResponse};
+
+const STREAM_BUFFER_CHUNKS: usize = 2;
+
+pub(super) async fn read_file(
+    mut send: SendStream,
+    path: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+) -> io::Result<()> {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
+    let worker = blocking::spawn("Share read", move || {
+        read_worker(path, exports, ready_tx, data_tx)
+    })
+    .await?;
+
+    let size = match ready_rx.await {
+        Ok(Ok(size)) => size,
+        Ok(Err(error)) => return reply_err(&mut send, error).await,
+        Err(_) => return Err(worker.join().await.unwrap_err_or_worker_exit("Share read")),
+    };
+    reply(&mut send, FsResponse::Data { size }).await?;
+    while let Some(chunk) = data_rx.recv().await {
+        send_tagged(&mut send, TAG_DATA, &chunk?).await?;
+    }
+    worker.join().await
+}
+
+fn read_worker(
+    path: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+    ready: oneshot::Sender<io::Result<u64>>,
+    chunks: mpsc::Sender<io::Result<Vec<u8>>>,
+) -> io::Result<()> {
+    let target = match fs::resolve(&path, &exports) {
+        Ok(target) => target,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    let size = match target.backend.stat(&target.path) {
+        Ok(metadata) if !metadata.is_dir => metadata.size,
+        Ok(_) => {
+            let _ = ready.send(Err(eio("Ordner kann nicht als Datei gelesen werden")));
+            return Ok(());
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    let mut reader = match target.backend.open_read(&target.path) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    if ready.send(Ok(size)).is_err() {
+        return Ok(());
+    }
+    loop {
+        let mut buffer = vec![0u8; fs::CHUNK];
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) => {
+                let _ = chunks.blocking_send(Err(error));
+                return Ok(());
+            }
+        };
+        if read == 0 {
+            return Ok(());
+        }
+        buffer.truncate(read);
+        if chunks.blocking_send(Ok(buffer)).is_err() {
+            return Ok(());
+        }
+    }
+}
+
+pub(super) async fn write_file(
+    mut send: SendStream,
+    mut recv: RecvStream,
+    path: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+) -> io::Result<()> {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
+    let (done_tx, done_rx) = oneshot::channel();
+    let worker = blocking::spawn("Share staged write", move || {
+        write_worker(path, exports, ready_tx, command_rx, done_tx)
+    })
+    .await?;
+
+    match ready_rx.await {
+        Ok(Ok(())) => reply(&mut send, FsResponse::Ready).await?,
+        Ok(Err(error)) => return reply_err(&mut send, error).await,
+        Err(_) => {
+            return Err(worker
+                .join()
+                .await
+                .unwrap_err_or_worker_exit("Share staged write"))
+        }
+    }
+
+    let mut done_rx = Some(done_rx);
+    let mut worker = Some(worker);
+    loop {
+        let (tag, payload) = match recv_tagged(&mut recv).await {
+            Ok(frame) => frame,
+            Err(error) => {
+                drop(command_tx);
+                await_write_cleanup(&mut done_rx, &mut worker).await;
+                return Err(error);
+            }
+        };
+        if tag == TAG_DATA {
+            if command_tx.send(WriteCommand::Data(payload)).await.is_err() {
+                let error = await_write_error(&mut done_rx, &mut worker).await;
+                return reply_err(&mut send, error).await;
+            }
+            continue;
+        }
+        if tag != super::framing::TAG_CTRL {
+            drop(command_tx);
+            await_write_cleanup(&mut done_rx, &mut worker).await;
+            return reply_err(&mut send, eio("unerwarteter Frame beim Schreiben")).await;
+        }
+        match serde_json::from_slice::<Ctrl>(&payload).map_err(eio) {
+            Ok(Ctrl::Fs {
+                req: FsRequest::WriteDone,
+            }) => {
+                if command_tx.send(WriteCommand::Finish).await.is_err() {
+                    let error = await_write_error(&mut done_rx, &mut worker).await;
+                    return reply_err(&mut send, error).await;
+                }
+                drop(command_tx);
+                return match await_write_result(&mut done_rx, &mut worker).await {
+                    Ok(()) => reply(&mut send, FsResponse::Ok).await,
+                    Err(error) => reply_err(&mut send, error).await,
+                };
+            }
+            Ok(_) => {
+                drop(command_tx);
+                await_write_cleanup(&mut done_rx, &mut worker).await;
+                return reply_err(&mut send, eio("unerwartete Steuernachricht beim Schreiben"))
+                    .await;
+            }
+            Err(error) => {
+                drop(command_tx);
+                await_write_cleanup(&mut done_rx, &mut worker).await;
+                return reply_err(&mut send, error).await;
+            }
+        }
+    }
+}
+
+enum WriteCommand {
+    Data(Vec<u8>),
+    Finish,
+}
+
+fn write_worker(
+    path: String,
+    exports: Arc<Mutex<ShareExportConfig>>,
+    ready: oneshot::Sender<io::Result<()>>,
+    mut commands: mpsc::Receiver<WriteCommand>,
+    done: oneshot::Sender<io::Result<()>>,
+) -> io::Result<()> {
+    let target = match fs::resolve(&path, &exports) {
+        Ok(target) => target,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    let staging = match crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer") {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    let writer = match target.backend.open_write(&staging) {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = target.backend.remove_file(&staging);
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    if ready.send(Ok(())).is_err() {
+        drop(writer);
+        let _ = target.backend.remove_file(&staging);
+        return Ok(());
+    }
+
+    let mut writer = Some(writer);
+    let result = loop {
+        match commands.blocking_recv() {
+            Some(WriteCommand::Data(payload)) => {
+                let Some(output) = writer.as_mut() else {
+                    break Err(eio("Schreibkanal ist geschlossen"));
+                };
+                if let Err(error) = output.write_all(&payload) {
+                    break Err(error);
+                }
+            }
+            Some(WriteCommand::Finish) => {
+                let Some(mut output) = writer.take() else {
+                    break Err(eio("Schreibkanal ist geschlossen"));
+                };
+                if let Err(error) = output.flush() {
+                    break Err(error);
+                }
+                drop(output);
+                break crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path);
+            }
+            None => {
+                break Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "peer write canceled",
+                ))
+            }
+        }
+    };
+    if result.is_err() {
+        drop(writer.take());
+        let _ = target.backend.remove_file(&staging);
+    }
+    let _ = done.send(result);
+    Ok(())
+}
+
+async fn await_write_result(
+    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    worker: &mut Option<blocking::BlockingTask<()>>,
+) -> io::Result<()> {
+    let result = match done.take() {
+        Some(done) => done
+            .await
+            .unwrap_or_else(|_| Err(eio("Share write worker exited"))),
+        None => Err(eio("Share write result is missing")),
+    };
+    if let Some(worker) = worker.take() {
+        worker.join().await?;
+    }
+    result
+}
+
+async fn await_write_cleanup(
+    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    worker: &mut Option<blocking::BlockingTask<()>>,
+) {
+    let _ = await_write_result(done, worker).await;
+}
+
+async fn await_write_error(
+    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    worker: &mut Option<blocking::BlockingTask<()>>,
+) -> io::Error {
+    match await_write_result(done, worker).await {
+        Ok(()) => eio("Share write worker stopped before accepting the command"),
+        Err(error) => error,
+    }
+}
+
+trait WorkerExit<T> {
+    fn unwrap_err_or_worker_exit(self, operation: &str) -> io::Error;
+}
+
+impl<T> WorkerExit<T> for io::Result<T> {
+    fn unwrap_err_or_worker_exit(self, operation: &str) -> io::Error {
+        match self {
+            Ok(_) => eio(format!("{operation} worker exited without a result")),
+            Err(error) => error,
+        }
+    }
+}

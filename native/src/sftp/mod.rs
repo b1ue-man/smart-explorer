@@ -15,6 +15,8 @@
 mod backend;
 #[path = "core/config.rs"]
 mod config;
+#[path = "core/connection.rs"]
+mod connection;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/io_adapters.rs"]

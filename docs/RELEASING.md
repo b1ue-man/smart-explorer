@@ -56,8 +56,12 @@ user can pull updates.
      `-Feed` path, and an explicit isolated `-ReleaseOutput` outside both the
      feed and the shared `release-native/` root; it always refuses to write the
      shared feed/artifacts.
-   - Older all-in-one Linux/WSL cross path: `native/publish-feed.sh`, when that
-     host already has the Windows GNU and NSIS dependencies installed.
+   - Complete Linux/WSL cross-build path: `native/publish-feed.sh`, when that
+     host has the Windows GNU and NSIS dependencies installed. It builds the
+     same complete Windows/Linux feed, portable files, context-menu DLL, Share
+     servers, and installer, verifies them in staging, and writes
+     `version.txt` last. This is the supported full-release path on a Linux
+     release host.
 3. **Commit** `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
    smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
    se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
@@ -73,9 +77,12 @@ user can pull updates.
      ```
      git tag vX.Y.Z && git push origin vX.Y.Z
      ```
+   - If tag push is unavailable but GitHub Actions dispatch is authorized, run
+     `build.yml` with `workflow_dispatch` at the exact release commit. The
+     workflow creates `vX.Y.Z` from `Cargo.toml` and publishes that release.
    - Where the git host rejects tag pushes (e.g. some sandboxes), push a release
-     branch instead — CI releases on `release/**`, creating the tag from
-     `Cargo.toml`'s version:
+     branch as the final fallback — CI releases on `release/**`, creating the
+     tag from `Cargo.toml`'s version:
      ```
      git push origin <branch>:release/vX.Y.Z
      ```

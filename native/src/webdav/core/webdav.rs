@@ -32,7 +32,8 @@ fn request_err(error: ureq::Error) -> io::Error {
     io::Error::new(kind, error.to_string())
 }
 
-const TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const IO_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct WebdavConfig {
     pub https: bool,
@@ -47,7 +48,11 @@ pub struct WebdavBackend {
     base: String, // scheme://host:port
     root: String, // forward-slash path
     auth: String, // "Basic ..." (empty = none)
+    /// Pooled agent for idempotent reads; ureq replaces stale pooled sockets.
     agent: ureq::Agent,
+    /// Unpooled agent for mutations so ureq cannot replay a DELETE from a stale
+    /// recycled connection after an ambiguous response loss.
+    mutation_agent: ureq::Agent,
     /// Display label, consumed by the connect-UI step.
     #[allow(dead_code)]
     url: String,
@@ -66,7 +71,18 @@ impl WebdavBackend {
                 STANDARD.encode(format!("{}:{}", cfg.user, cfg.password))
             )
         };
-        let agent = ureq::AgentBuilder::new().timeout(TIMEOUT).build();
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_read(IO_INACTIVITY_TIMEOUT)
+            .timeout_write(IO_INACTIVITY_TIMEOUT)
+            .build();
+        let mutation_agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_read(IO_INACTIVITY_TIMEOUT)
+            .timeout_write(IO_INACTIVITY_TIMEOUT)
+            .redirects(0)
+            .max_idle_connections(0)
+            .build();
         let root = if cfg.root.trim().is_empty() {
             "/".to_string()
         } else {
@@ -79,6 +95,7 @@ impl WebdavBackend {
             root: root.clone(),
             auth,
             agent,
+            mutation_agent,
             identity,
         };
         // Validate credentials / reachability up front.
@@ -108,24 +125,44 @@ impl WebdavBackend {
         // checksum-mode sync can compare without downloading. Plain WebDAV servers
         // ignore the oc:* prop.
         let body = r#"<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:" xmlns:oc="http://owncloud.org/ns"><prop><resourcetype/><getcontentlength/><getlastmodified/><oc:checksums/></prop></propfind>"#;
-        let req = self
-            .agent
-            .request("PROPFIND", &self.url_for(path))
-            .set("Depth", depth)
-            .set("Content-Type", "application/xml");
-        let req = self.auth_req(req);
-        // 207 Multi-Status is a 2xx, so ureq returns Ok.
-        req.send_string(body)
-            .map_err(request_err)?
-            .into_string()
-            .map_err(io_err)
+        for attempt in 0..2 {
+            let req = self
+                .agent
+                .request("PROPFIND", &self.url_for(path))
+                .set("Depth", depth)
+                .set("Content-Type", "application/xml");
+            let req = self.auth_req(req);
+            match req.send_string(body) {
+                Ok(response) => match response.into_string() {
+                    Ok(body) => return Ok(body),
+                    Err(_) if attempt == 0 => continue,
+                    Err(error) => return Err(error),
+                },
+                Err(ureq::Error::Transport(_)) if attempt == 0 => continue,
+                Err(error) => return Err(request_err(error)),
+            }
+        }
+        Err(io::Error::other("WebDAV PROPFIND retry exhausted"))
+    }
+
+    fn get(&self, path: &str) -> io::Result<ureq::Response> {
+        for attempt in 0..2 {
+            let request = self.auth_req(self.agent.get(&self.url_for(path)));
+            match request.call() {
+                Ok(response) => return Ok(response),
+                Err(ureq::Error::Transport(_)) if attempt == 0 => continue,
+                Err(error) => return Err(request_err(error)),
+            }
+        }
+        Err(io::Error::other("WebDAV GET retry exhausted"))
     }
 
     fn mutation(&self, request: ureq::Request, operation: &str) -> io::Result<ureq::Response> {
         let response = self.auth_req(request).call().map_err(request_err)?;
-        if response.status() == 207 {
+        let status = response.status();
+        if !(200..300).contains(&status) || status == 207 {
             return Err(io::Error::other(format!(
-                "WebDAV {operation} returned a partial Multi-Status response"
+                "WebDAV {operation} returned unexpected HTTP status {status}"
             )));
         }
         Ok(response)
@@ -188,16 +225,17 @@ impl Backend for WebdavBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let resp = self
-            .auth_req(self.agent.get(&self.url_for(path)))
-            .call()
-            .map_err(request_err)?;
+        // Retrying is safe only until a response body is handed to the caller:
+        // no file bytes have been observed and GET itself is idempotent. A
+        // failure while the returned reader is in use remains visible instead
+        // of silently restarting a possibly changed object.
+        let resp = self.get(path)?;
         Ok(Box::new(resp.into_reader()))
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(WebdavWriter::new(
-            self.agent.clone(),
+            self.mutation_agent.clone(),
             self.url_for(path),
             self.auth.clone(),
         )?))
@@ -207,7 +245,7 @@ impl Backend for WebdavBackend {
         let staged = crate::vfs::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
             self.mutation(
-                self.agent
+                self.mutation_agent
                     .request("COPY", &self.url_for(src))
                     .set("Destination", &self.url_for(&staged))
                     .set("Overwrite", "F"),
@@ -225,7 +263,7 @@ impl Backend for WebdavBackend {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.mutation(
-            self.agent
+            self.mutation_agent
                 .request("MOVE", &self.url_for(src))
                 .set("Destination", &self.url_for(dst))
                 .set("Overwrite", "T"),
@@ -236,7 +274,7 @@ impl Backend for WebdavBackend {
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.mutation(
-            self.agent
+            self.mutation_agent
                 .request("MOVE", &self.url_for(src))
                 .set("Destination", &self.url_for(dst))
                 .set("Overwrite", "F"),
@@ -246,7 +284,10 @@ impl Backend for WebdavBackend {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.mutation(self.agent.request("DELETE", &self.url_for(path)), "DELETE")?;
+        self.mutation(
+            self.mutation_agent.request("DELETE", &self.url_for(path)),
+            "DELETE",
+        )?;
         Ok(())
     }
 
@@ -268,14 +309,16 @@ impl Backend for WebdavBackend {
             }
             cur.push_str(part);
             match self
-                .auth_req(self.agent.request("MKCOL", &self.url_for(&cur)))
+                .auth_req(self.mutation_agent.request("MKCOL", &self.url_for(&cur)))
                 .call()
             {
-                Ok(response) if response.status() != 207 => {}
-                Ok(_) => {
-                    return Err(io::Error::other(
-                        "WebDAV MKCOL returned a partial Multi-Status response",
-                    ));
+                Ok(response)
+                    if (200..300).contains(&response.status()) && response.status() != 207 => {}
+                Ok(response) => {
+                    return Err(io::Error::other(format!(
+                        "WebDAV MKCOL returned unexpected HTTP status {}",
+                        response.status()
+                    )));
                 }
                 Err(ureq::Error::Status(405, _)) => {
                     let metadata = self.stat(&cur)?;
@@ -310,3 +353,7 @@ impl Backend for WebdavBackend {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod connection_tests;

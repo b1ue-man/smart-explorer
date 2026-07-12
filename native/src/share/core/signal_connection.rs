@@ -1,13 +1,19 @@
 use std::io::{self, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use tungstenite::{
-    connect as ws_connect, stream::MaybeTlsStream, Error as WsError, Message, WebSocket,
+    client::IntoClientRequest, client_tls, stream::MaybeTlsStream, Error as WsError, Message,
+    WebSocket,
 };
 
 use super::core::eio;
 use super::line::{read_line_limited, MAX_SIGNAL_LINE};
+
+const SIGNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SIGNAL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
+const SIGNAL_READ_POLL: Duration = Duration::from_millis(500);
+const SIGNAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) enum SignalConnection {
     Tcp {
         label: String,
@@ -54,9 +60,15 @@ impl SignalConnection {
     }
 
     fn connect_tcp(addr: &str) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr)?;
+        let authority: tungstenite::http::uri::Authority = addr
+            .parse()
+            .map_err(|error| eio(format!("ungueltige Share-Server-Adresse: {error}")))?;
+        let stream = connect_resolved(resolve_host(
+            authority.host(),
+            authority.port_u16().unwrap_or(51820),
+        )?)?;
         let _ = stream.set_nodelay(true);
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        set_tcp_timeouts(&stream, SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
         let reader = io::BufReader::new(stream.try_clone()?);
         Ok(Self::Tcp {
             label: format!("tcp://{addr}"),
@@ -66,8 +78,26 @@ impl SignalConnection {
     }
 
     fn connect_ws(url: &str) -> io::Result<Self> {
-        let (mut socket, _) = ws_connect(url).map_err(ws_to_io)?;
-        set_ws_timeout(socket.get_mut(), Duration::from_millis(500));
+        let request = url.into_client_request().map_err(ws_to_io)?;
+        let uri = request.uri();
+        let host = uri
+            .host()
+            .ok_or_else(|| eio("Share-WebSocket-Host fehlt"))?;
+        let host = host
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(host);
+        let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+            Some("ws") => 80,
+            Some("wss") => 443,
+            _ => return Err(eio("unbekanntes Share-WebSocket-Schema")),
+        });
+        let stream = connect_resolved(resolve_host(host, port)?)?;
+        let _ = stream.set_nodelay(true);
+        // These socket deadlines also bound the TLS and WebSocket handshakes.
+        set_tcp_timeouts(&stream, SIGNAL_CONNECT_TIMEOUT, SIGNAL_CONNECT_TIMEOUT);
+        let (mut socket, _) = client_tls(request, stream).map_err(eio)?;
+        set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
         Ok(Self::WebSocket {
             label: url.to_string(),
             socket: Box::new(socket),
@@ -169,15 +199,61 @@ pub(super) fn normalize_tcp_addr(addr: &str) -> String {
     }
 }
 
-fn set_ws_timeout(stream: &mut MaybeTlsStream<TcpStream>, timeout: Duration) {
+fn connect_resolved(addresses: impl IntoIterator<Item = SocketAddr>) -> io::Result<TcpStream> {
+    let mut last_error = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, SIGNAL_CONNECT_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| eio("Share-Server hat keine erreichbare Adresse")))
+}
+
+fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(eio)?;
+    let resolver = hickory_resolver::Resolver::builder_tokio()
+        .map_err(eio)?
+        .build()
+        .map_err(eio)?;
+    let lookup = runtime.block_on(async {
+        tokio::time::timeout(SIGNAL_DNS_TIMEOUT, resolver.lookup_ip(host))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "Share-Server DNS lookup timed out")
+            })?
+            .map_err(eio)
+    })?;
+    let addresses: Vec<_> = lookup.iter().map(|ip| SocketAddr::new(ip, port)).collect();
+    if addresses.is_empty() {
+        Err(eio("Share-Server DNS lieferte keine Adresse"))
+    } else {
+        Ok(addresses)
+    }
+}
+
+fn set_tcp_timeouts(stream: &TcpStream, read: Duration, write: Duration) {
+    let _ = stream.set_read_timeout(Some(read));
+    let _ = stream.set_write_timeout(Some(write));
+}
+
+fn set_ws_timeouts(stream: &mut MaybeTlsStream<TcpStream>, read: Duration, write: Duration) {
     match stream {
         MaybeTlsStream::Plain(tcp) => {
-            let _ = tcp.set_read_timeout(Some(timeout));
-            let _ = tcp.set_write_timeout(Some(timeout));
+            set_tcp_timeouts(tcp, read, write);
         }
         MaybeTlsStream::Rustls(tls) => {
-            let _ = tls.sock.set_read_timeout(Some(timeout));
-            let _ = tls.sock.set_write_timeout(Some(timeout));
+            set_tcp_timeouts(&tls.sock, read, write);
         }
         #[allow(unreachable_patterns)]
         _ => {}
@@ -188,5 +264,25 @@ fn ws_to_io(error: WsError) -> io::Error {
     match error {
         WsError::Io(error) => error,
         other => eio(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_signal_hosts_bypass_dns_and_preserve_port() {
+        assert_eq!(
+            resolve_host("127.0.0.1", 51820).unwrap(),
+            vec!["127.0.0.1:51820".parse().unwrap()]
+        );
+        assert_eq!(
+            resolve_host("[::1]", 51821).unwrap(),
+            vec!["[::1]:51821".parse().unwrap()]
+        );
+        assert!(!SIGNAL_DNS_TIMEOUT.is_zero());
+        assert!(!SIGNAL_CONNECT_TIMEOUT.is_zero());
+        assert!(SIGNAL_WRITE_TIMEOUT > SIGNAL_READ_POLL);
     }
 }

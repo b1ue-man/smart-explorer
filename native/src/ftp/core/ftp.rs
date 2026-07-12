@@ -14,10 +14,15 @@ use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use suppaftp::types::FileType;
-use suppaftp::{RustlsConnector, RustlsFtpStream};
 
-use super::io_adapters::{FtpConnection, FtpWriter};
+use super::connection::{connect_stream, parse_ftp_url};
+use super::io_adapters::FtpConnection;
+use super::writer::FtpWriter;
+
+#[cfg(test)]
+use super::connection::FtpUrl;
+#[cfg(test)]
+use std::time::Duration;
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
@@ -87,114 +92,6 @@ fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
 
 // ── URL ──────────────────────────────────────────────────────────────────────
 
-struct FtpUrl {
-    secure: bool,
-    user: String,
-    password: String,
-    host: String,
-    port: u16,
-    root: String,
-}
-
-fn decode_userinfo(value: &str) -> io::Result<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        if index + 2 >= bytes.len() {
-            return Err(io_err(
-                "unvollstaendige Prozentkodierung in FTP-Zugangsdaten",
-            ));
-        }
-        let high = hex_nibble(bytes[index + 1])
-            .ok_or_else(|| io_err("ungueltige Prozentkodierung in FTP-Zugangsdaten"))?;
-        let low = hex_nibble(bytes[index + 2])
-            .ok_or_else(|| io_err("ungueltige Prozentkodierung in FTP-Zugangsdaten"))?;
-        decoded.push((high << 4) | low);
-        index += 3;
-    }
-    String::from_utf8(decoded).map_err(|_| io_err("FTP-Zugangsdaten sind nicht gueltiges UTF-8"))
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
-    let u = url.trim();
-    let (secure, rest) = if let Some(r) = u.strip_prefix("ftps://") {
-        (true, r)
-    } else if let Some(r) = u.strip_prefix("ftp://") {
-        (false, r)
-    } else {
-        return Err(io_err("kein ftp(s)://-URL"));
-    };
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, "/"),
-    };
-    let root = if path.is_empty() {
-        "/".to_string()
-    } else {
-        path.to_string()
-    };
-    let (userinfo, hostport) = match authority.rfind('@') {
-        Some(i) => (Some(&authority[..i]), &authority[i + 1..]),
-        None => (None, authority),
-    };
-    let (user, password) = match userinfo {
-        Some(ui) => match ui.find(':') {
-            Some(j) => (decode_userinfo(&ui[..j])?, decode_userinfo(&ui[j + 1..])?),
-            None => (decode_userinfo(ui)?, String::new()),
-        },
-        // Bare ftp://host → anonymous login (the standard FTP convention).
-        None => ("anonymous".to_string(), "anonymous@example.com".to_string()),
-    };
-    let (host, port) = match hostport.rfind(':') {
-        Some(k) => {
-            let p = hostport[k + 1..]
-                .parse::<u16>()
-                .map_err(|_| io_err("ungültiger FTP-Port"))?;
-            (hostport[..k].to_string(), p)
-        }
-        None => (hostport.to_string(), 21),
-    };
-    if host.is_empty() {
-        return Err(io_err("FTP-Host fehlt"));
-    }
-    Ok(FtpUrl {
-        secure,
-        user,
-        password,
-        host,
-        port,
-        root,
-    })
-}
-
-fn rustls_client_config() -> Arc<rustls::ClientConfig> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("ring provider supports default protocol versions")
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    Arc::new(cfg)
-}
-
 // ── backend ──────────────────────────────────────────────────────────────────
 
 pub struct FtpBackend {
@@ -209,14 +106,7 @@ pub struct FtpBackend {
 /// so (unlike SFTP) a bare URL connects without a credential dialog.
 pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
     let u = parse_ftp_url(url)?;
-    let mut ftp = RustlsFtpStream::connect((u.host.as_str(), u.port)).map_err(io_err)?;
-    if u.secure {
-        let connector = RustlsConnector::from(rustls_client_config());
-        ftp = ftp.into_secure(connector, &u.host).map_err(io_err)?;
-    }
-    ftp.login(&u.user, &u.password).map_err(io_err)?;
-    // Binary mode — ASCII mode would corrupt non-text transfers.
-    ftp.transfer_type(FileType::Binary).map_err(io_err)?;
+    let ftp = connect_stream(&u)?;
     let url = format!(
         "{}://{}@{}:{}{}",
         if u.secure { "ftps" } else { "ftp" },
@@ -225,8 +115,10 @@ pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
         u.port,
         u.root
     );
+    let reconnect_config = u.clone();
+    let reconnect = Arc::new(move || connect_stream(&reconnect_config));
     Ok(FtpBackend {
-        conn: Arc::new(FtpConnection::new(ftp)),
+        conn: FtpConnection::new(ftp, reconnect)?,
         root: u.root,
         url,
     })
@@ -246,7 +138,7 @@ impl Backend for FtpBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let lines = self
             .conn
-            .with_stream(|stream| stream.list(Some(path)).map_err(io_err))?;
+            .with_stream_read(|stream| stream.list(Some(path)).map_err(io_err))?;
         lines
             .into_iter()
             .map(|line| parse_list_line(&line))
@@ -285,23 +177,23 @@ impl Backend for FtpBackend {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.conn
-            .with_stream(|stream| stream.rename(src, dst).map_err(io_err))
+            .with_stream_mutation(|stream| stream.rename(src, dst).map_err(io_err))
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         self.conn
-            .with_stream(|stream| stream.rm(path).map_err(io_err))
+            .with_stream_mutation(|stream| stream.rm(path).map_err(io_err))
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
         self.conn
-            .with_stream(|stream| stream.rmdir(path).map_err(io_err))
+            .with_stream_mutation(|stream| stream.rmdir(path).map_err(io_err))
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         let absolute = path.starts_with('/');
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        self.conn.with_stream(|stream| {
+        self.conn.with_stream_mutation(|stream| {
             let original = stream.pwd().map_err(io_err)?;
             let mut cur = String::new();
             for part in parts {
@@ -334,6 +226,81 @@ impl Backend for FtpBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+
+    fn reply(stream: &mut TcpStream, line: &str) {
+        stream.write_all(line.as_bytes()).unwrap();
+        stream.write_all(b"\r\n").unwrap();
+        stream.flush().unwrap();
+    }
+
+    fn serve_control_connection(
+        mut stream: TcpStream,
+        generation: usize,
+        kept_alive: &mpsc::Sender<()>,
+    ) {
+        reply(&mut stream, "220 test ready");
+        let reader_stream = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(reader_stream);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let command = line.trim_end_matches(['\r', '\n']);
+            match command.split_whitespace().next().unwrap_or_default() {
+                "USER" => reply(&mut stream, "331 password required"),
+                "PASS" => reply(&mut stream, "230 logged in"),
+                "TYPE" => reply(&mut stream, "200 binary"),
+                "NOOP" if generation == 0 => {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return;
+                }
+                "NOOP" => {
+                    reply(&mut stream, "200 alive");
+                    let _ = kept_alive.send(());
+                }
+                "PWD" => reply(&mut stream, "257 \"/\" is current directory"),
+                "QUIT" => {
+                    reply(&mut stream, "221 bye");
+                    return;
+                }
+                _ => reply(&mut stream, "500 unsupported"),
+            }
+        }
+    }
+
+    fn serve_suspect_connection(mut stream: TcpStream, generation: usize, mutations: &AtomicUsize) {
+        reply(&mut stream, "220 test ready");
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            match line
+                .trim_end_matches(['\r', '\n'])
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+            {
+                "USER" => reply(&mut stream, "331 password required"),
+                "PASS" => reply(&mut stream, "230 logged in"),
+                "TYPE" => reply(&mut stream, "200 binary"),
+                "DELE" if generation == 0 => {
+                    mutations.fetch_add(1, Ordering::SeqCst);
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return;
+                }
+                "PWD" => reply(&mut stream, "257 \"/\" is current directory"),
+                _ => reply(&mut stream, "500 unsupported"),
+            }
+        }
+    }
 
     #[test]
     fn url_plain_with_creds() {
@@ -405,8 +372,102 @@ mod tests {
     }
 
     #[test]
-    fn rustls_config_builds_with_ring() {
-        // Constructing the FTPS client config must not panic (ring provider).
-        let _ = rustls_client_config();
+    fn idle_ftp_control_channel_is_pinged_and_reconnected() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let server_accepts = accepts.clone();
+        let (kept_alive_tx, kept_alive_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for generation in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                server_accepts.fetch_add(1, Ordering::SeqCst);
+                serve_control_connection(stream, generation, &kept_alive_tx);
+            }
+        });
+        let config = FtpUrl {
+            secure: false,
+            user: "test".to_string(),
+            password: "secret".to_string(),
+            host: address.ip().to_string(),
+            port: address.port(),
+            root: "/".to_string(),
+        };
+        let stream = connect_stream(&config).unwrap();
+        assert_eq!(
+            stream.get_ref().read_timeout().unwrap(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            stream.get_ref().write_timeout().unwrap(),
+            Some(Duration::from_secs(60))
+        );
+        let reconnect_config = config.clone();
+        let reconnect: super::super::io_adapters::FtpReconnect =
+            Arc::new(move || connect_stream(&reconnect_config));
+        let connection = FtpConnection::new_with_timing(
+            stream,
+            reconnect,
+            Duration::from_millis(20),
+            Duration::from_millis(200),
+        )
+        .unwrap();
+
+        kept_alive_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("replacement connection must receive NOOP");
+        assert_eq!(accepts.load(Ordering::SeqCst), 2);
+        let pwd = connection
+            .with_stream_read(|stream| stream.pwd().map_err(io_err))
+            .unwrap();
+        assert_eq!(pwd, "/");
+
+        drop(connection);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn ambiguous_mutation_marks_channel_suspect_and_next_read_reconnects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let server_mutations = mutations.clone();
+        let server = thread::spawn(move || {
+            for generation in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                serve_suspect_connection(stream, generation, &server_mutations);
+            }
+        });
+        let config = FtpUrl {
+            secure: false,
+            user: "test".to_string(),
+            password: "secret".to_string(),
+            host: address.ip().to_string(),
+            port: address.port(),
+            root: "/".to_string(),
+        };
+        let stream = connect_stream(&config).unwrap();
+        let reconnect_config = config.clone();
+        let reconnect: super::super::io_adapters::FtpReconnect =
+            Arc::new(move || connect_stream(&reconnect_config));
+        let connection = FtpConnection::new_with_timing(
+            stream,
+            reconnect,
+            Duration::from_secs(60),
+            Duration::from_millis(200),
+        )
+        .unwrap();
+
+        assert!(connection
+            .with_stream_mutation(|stream| stream.rm("/committed").map_err(io_err))
+            .is_err());
+        let pwd = connection
+            .with_stream_read(|stream| stream.pwd().map_err(io_err))
+            .unwrap();
+        assert_eq!(pwd, "/");
+        assert_eq!(mutations.load(Ordering::SeqCst), 1);
+
+        drop(connection);
+        server.join().unwrap();
     }
 }
