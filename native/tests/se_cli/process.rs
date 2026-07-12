@@ -17,6 +17,19 @@ fn version_reports_the_package_version_without_gui_state() {
 }
 
 #[test]
+fn shell_completion_setup_is_generated_without_gui_state() {
+    let sandbox = Sandbox::new("completions");
+    for shell in ["bash", "powershell"] {
+        let output = run(sandbox.command().args(["completions", shell]));
+        assert_success(&output);
+        assert!(output.stderr.is_empty());
+        let script = stdout(&output);
+        assert!(script.contains("COMPLETE"));
+        assert!(script.contains("se"));
+    }
+}
+
+#[test]
 fn doctor_json_reports_the_executable_and_isolated_state_paths() {
     let sandbox = Sandbox::new("doctor");
     let output = run(sandbox.command().args(["doctor", "--json"]));

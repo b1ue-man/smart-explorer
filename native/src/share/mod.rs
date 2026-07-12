@@ -60,6 +60,8 @@ mod node;
 mod peer_read;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
+#[path = "os/shared/profile_operations.rs"]
+mod profile_operations;
 #[path = "core/profile_persistence.rs"]
 mod profile_persistence;
 #[path = "os/shared/profile_store.rs"]
@@ -110,8 +112,8 @@ mod walk_assembly;
 mod wire;
 
 pub use self::direct_actions::{
-    decide_direct_request, queue_direct_request_for_contact, retry_direct_request_now,
-    DirectRequestAction,
+    decide_direct_request, delete_direct_request_history, queue_direct_request_for_contact,
+    retry_direct_request_now, DirectRequestAction,
 };
 pub use self::direct_ledger::{
     DirectEnvelopeKind, DirectLedgerError, DirectRelayOutcome, DirectRequestDirection,
@@ -136,8 +138,8 @@ pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;
 pub use self::types::{
-    DirectAccessState, DirectContact, DirectGrantState, ExecRequest, ExecResult, PeerOpenTarget,
-    PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent, ShareStatus,
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecRequest, ExecResult,
+    PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {

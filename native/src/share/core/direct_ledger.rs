@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use super::direct_lifecycle::{
-    DirectDeliveryState, DirectFailure, DirectLifecycleEvent, DirectRequestRecord,
+    DirectDecisionState, DirectDeliveryState, DirectFailure, DirectLifecycleEvent,
+    DirectRequestRecord,
 };
 use super::direct_lifecycle_error::DirectLifecycleError;
 use super::direct_protocol::{
@@ -221,6 +222,20 @@ impl DirectRequestEntry {
             }
         }
         pending
+    }
+
+    /// History is removable only after every required peer-facing envelope is
+    /// finished and the decision can no longer represent active authorization.
+    pub fn removable_from_history(&self, now: i64) -> bool {
+        self.pending_outboxes(now).is_empty()
+            && (matches!(
+                self.record.decision.state,
+                DirectDecisionState::Rejected
+                    | DirectDecisionState::Revoked
+                    | DirectDecisionState::Failed
+                    | DirectDecisionState::Expired
+            ) || (self.record.decision.state == DirectDecisionState::Pending
+                && self.record.request.expires_at < now))
     }
 
     pub(super) fn retry_mut(&mut self, kind: DirectEnvelopeKind) -> &mut DirectRetryState {

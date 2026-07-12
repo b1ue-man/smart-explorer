@@ -11,7 +11,7 @@ pub(crate) use super::ipc_host::ShareHost;
 pub(crate) use super::ipc_listener::start_listener;
 use super::ipc_listener::{clear_pre_auth_deadline, read_pre_auth_line, PreAuthPermit};
 pub use super::ipc_protocol::ShareWorkerSnapshot;
-use super::ipc_protocol::{write_response, IpcRequest, IpcResponse};
+use super::ipc_protocol::{bound_snapshot_for_ipc, write_response, IpcRequest, IpcResponse};
 
 pub(super) fn handle_client(
     mut stream: TcpStream,
@@ -44,7 +44,7 @@ pub(super) fn handle_client(
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
         IpcRequest::DrainShareEvents { .. } => {
-            let snapshot = host.drain_for_ui();
+            let snapshot = bound_snapshot_for_ipc(host.drain_for_ui());
             write_response(
                 &mut stream,
                 &IpcResponse::ShareEvents {

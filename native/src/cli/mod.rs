@@ -1,3 +1,4 @@
+mod completions;
 mod connections;
 mod doctor;
 mod ops;
@@ -22,7 +23,7 @@ mod tree_preflight_tests;
 mod tree_remove;
 mod tree_spool;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Write};
 
 const CLI_HELP: &str = "\
@@ -43,7 +44,8 @@ Examples:
   se get @prod:/srv/report.txt .\\report.txt
   se cp -r @prod:/exports share://direct/peer-id/Drop
   se doctor --json
-  se share status --json";
+  se share status --json
+  source <(se completions bash)";
 
 #[derive(Parser)]
 #[command(
@@ -66,6 +68,8 @@ enum Command {
     Share(share::ShareArgs),
     #[command(about = "Manage saved remotes and Share contacts")]
     Connections(connections::ConnectionsArgs),
+    #[command(about = "Generate live shell completion setup")]
+    Completions(completions::CompletionsArgs),
     #[command(about = "List a directory")]
     Ls(PathArg),
     #[command(about = "Show file or directory metadata")]
@@ -183,6 +187,12 @@ struct ExecArgs {
 }
 
 pub fn run() -> i32 {
+    // Completion registration and callbacks must run before argument parsing or
+    // any other stdout output. The generated shell integration invokes this
+    // same binary with COMPLETE=<shell> for live selector candidates.
+    clap_complete::CompleteEnv::with_factory(Cli::command)
+        .bin("se")
+        .complete();
     match run_inner(Cli::parse()) {
         Ok(code) => code,
         Err(e) => {
@@ -197,6 +207,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Doctor(args) => doctor::run(args),
         Command::Share(args) => share::run(args),
         Command::Connections(args) => connections::run(args),
+        Command::Completions(args) => completions::run(args),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
             ops::list(&t)?;
@@ -338,6 +349,7 @@ mod tests {
     #[test]
     fn parses_doctor_and_headless_share_commands() {
         assert!(Cli::try_parse_from(["se", "doctor", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share"]).is_ok());
         assert!(Cli::try_parse_from([
             "se",
             "share",

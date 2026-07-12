@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.129"
+version = "0.5.130"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -19,6 +19,9 @@ regex = "1"
 globset = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
+# Dynamic completion lets `se` complete live Share request/grant/peer selectors
+# instead of only static command names. It is pure Rust on every release target.
+clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
 trash = "5"
 # Blocking HTTP client for the git/HTTPS update feed (updater.rs). `tls` pulls
 # rustls backed by **ring** (verified: no aws-lc-sys in the tree) + bundled

@@ -12,7 +12,12 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, 
     let (contact_id, created) = match existing {
         Some(id) => (id, false),
         None => {
-            let id = profiles.add_direct_from_code(code, name)?;
+            let (committed, id) = crate::share::ShareProfiles::add_direct_from_code_persisted(
+                Some(default_home()),
+                code,
+                name,
+            )?;
+            profiles = committed;
             (id, true)
         }
     };

@@ -5,6 +5,11 @@ use std::time::Duration;
 
 use super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
 
+const MAX_EVENT_BYTES: usize = 384 * 1024;
+const MAX_LEGACY_REQUEST_BYTES: usize = 256 * 1024;
+const MAX_CANDIDATE_BYTES: usize = 128 * 1024;
+const MAX_STATUS_TEXT_BYTES: usize = 16 * 1024;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShareWorkerSnapshot {
     pub events: Vec<crate::share::ShareEvent>,
@@ -98,8 +103,86 @@ pub(super) enum IpcResponse {
 pub(super) fn write_response(stream: &mut TcpStream, response: &IpcResponse) -> io::Result<()> {
     let mut line = serde_json::to_string(response).map_err(eio)?;
     line.push('\n');
+    if line.len() > MAX_IPC_LINE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ipc response exceeds line budget",
+        ));
+    }
     stream.write_all(line.as_bytes())?;
     stream.flush()
+}
+
+pub(super) fn bound_snapshot_for_ipc(mut snapshot: ShareWorkerSnapshot) -> ShareWorkerSnapshot {
+    let dropped_events = retain_newest_with_budget(&mut snapshot.events, MAX_EVENT_BYTES);
+    let dropped_legacy = retain_newest_with_budget(
+        &mut snapshot.pending_direct_requests,
+        MAX_LEGACY_REQUEST_BYTES,
+    );
+    let dropped_candidates =
+        retain_newest_with_budget(&mut snapshot.candidates, MAX_CANDIDATE_BYTES);
+    if let Some(error) = &mut snapshot.last_error {
+        truncate_utf8(error, MAX_STATUS_TEXT_BYTES);
+    }
+    truncate_utf8(&mut snapshot.relay_url, MAX_STATUS_TEXT_BYTES);
+
+    if dropped_events + dropped_legacy + dropped_candidates > 0 {
+        snapshot.events.push(crate::share::ShareEvent::Error(format!(
+            "Share status truncated transient backlog: events={dropped_events}, legacy_requests={dropped_legacy}, candidates={dropped_candidates}; durable request/profile state is complete"
+        )));
+    }
+
+    while encoded_response_len(&snapshot) > MAX_IPC_LINE {
+        if !snapshot.events.is_empty() {
+            snapshot.events.remove(0);
+            continue;
+        }
+        if snapshot.candidates.pop().is_some() {
+            continue;
+        }
+        if snapshot.pending_direct_requests.pop().is_some() {
+            continue;
+        }
+        break;
+    }
+    snapshot
+}
+
+fn retain_newest_with_budget<T: Serialize>(values: &mut Vec<T>, budget: usize) -> usize {
+    let original_len = values.len();
+    let mut used = 2usize;
+    let mut kept = Vec::new();
+    for value in std::mem::take(values).into_iter().rev() {
+        let bytes = serde_json::to_vec(&value)
+            .map(|encoded| encoded.len().saturating_add(1))
+            .unwrap_or(budget.saturating_add(1));
+        if used.saturating_add(bytes) <= budget {
+            used += bytes;
+            kept.push(value);
+        }
+    }
+    kept.reverse();
+    *values = kept;
+    original_len.saturating_sub(values.len())
+}
+
+fn encoded_response_len(snapshot: &ShareWorkerSnapshot) -> usize {
+    serde_json::to_vec(&IpcResponse::ShareEvents {
+        snapshot: Box::new(snapshot.clone()),
+    })
+    .map(|encoded| encoded.len().saturating_add(1))
+    .unwrap_or(usize::MAX)
+}
+
+fn truncate_utf8(value: &mut String, max: usize) {
+    if value.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
 }
 
 pub(super) fn set_stream_timeout(stream: &TcpStream, timeout: Option<Duration>) {
@@ -126,7 +209,10 @@ fn eio<E: std::fmt::Display>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_response, IpcRequest, IpcResponse, ShareWorkerSnapshot};
+    use super::{
+        bound_snapshot_for_ipc, encoded_response_len, read_response, IpcRequest, IpcResponse,
+        ShareWorkerSnapshot, MAX_IPC_LINE,
+    };
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
@@ -163,6 +249,36 @@ mod tests {
             decoded.profile_revision,
             crate::share::ProfileRevision::Digest([7; 32])
         );
+    }
+
+    #[test]
+    fn maximum_profile_and_event_backlog_fit_one_ipc_response() {
+        let mut snapshot = ShareWorkerSnapshot::default();
+        for index in 0..210 {
+            snapshot
+                .profiles
+                .default_direct_exports
+                .roots
+                .push(crate::share::SharedRoot {
+                    label: format!("root-{index}"),
+                    path: format!("/{}", "x".repeat(4096)),
+                });
+        }
+        snapshot.events = (0..512)
+            .map(|index| {
+                crate::share::ShareEvent::Status(format!("event-{index}-{}", "y".repeat(4096)))
+            })
+            .collect();
+        assert!(encoded_response_len(&snapshot) > MAX_IPC_LINE);
+
+        let bounded = bound_snapshot_for_ipc(snapshot);
+
+        assert!(encoded_response_len(&bounded) <= MAX_IPC_LINE);
+        assert_eq!(bounded.profiles.default_direct_exports.roots.len(), 210);
+        assert!(bounded.events.iter().any(|event| matches!(
+            event,
+            crate::share::ShareEvent::Error(message) if message.contains("truncated transient backlog")
+        )));
     }
 
     #[test]

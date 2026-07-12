@@ -169,6 +169,28 @@ pub fn retry_direct_request_now(
         .ok_or_else(|| format!("persisted direct request is missing: {request_id}"))
 }
 
+pub fn delete_direct_request_history(
+    default_home: Option<String>,
+    request_id: &DirectRequestId,
+) -> Result<(), String> {
+    let now = super::core::now_secs();
+    ShareProfiles::mutate_persisted(default_home, |profiles| {
+        let entry = profiles
+            .direct_request(request_id)
+            .ok_or_else(|| format!("direct request not found: {request_id}"))?;
+        if !entry.removable_from_history(now) {
+            return Err(format!(
+                "direct request cannot be deleted while pending, active, or awaiting peer delivery: {request_id}"
+            ));
+        }
+        profiles
+            .direct_requests
+            .retain(|entry| entry.record.request.request_id != *request_id);
+        Ok(())
+    })?;
+    Ok(())
+}
+
 fn reusable_request_id(
     profiles: &ShareProfiles,
     contact_id: &str,

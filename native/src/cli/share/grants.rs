@@ -1,43 +1,45 @@
 use clap::{Args, Subcommand};
+use clap_complete::ArgValueCandidates;
 
 use super::lifecycle_output;
 
 #[derive(Args)]
+#[command(long_about = "Inspect and revoke direct authorization grants.\n\n\
+With no subcommand, this lists every grant and its active/inactive state.\n\
+`revoke` needs no selector when exactly one authorization is active.")]
 pub(super) struct GrantsArgs {
+    #[arg(long, global = true, help = "Print machine-readable JSON")]
+    json: bool,
     #[command(subcommand)]
-    command: GrantsCommand,
+    command: Option<GrantsCommand>,
 }
 
 #[derive(Subcommand)]
 enum GrantsCommand {
     #[command(about = "List local direct authorization grants and linked requests")]
-    List(JsonArgs),
-    #[command(about = "Sign and persist a revisioned grant revocation")]
+    List,
+    #[command(about = "Revoke an authorization; auto-selects the only active grant")]
     Revoke(RevokeArgs),
 }
 
 #[derive(Args)]
-struct JsonArgs {
-    #[arg(long, help = "Print machine-readable JSON")]
-    json: bool,
-}
-
-#[derive(Args)]
 struct RevokeArgs {
-    #[arg(help = "Accepted incoming request UUID or exact requester device ID")]
-    selector: String,
-    #[arg(long, help = "Exact requester fingerprint shown by grants list")]
-    fingerprint: String,
+    #[arg(
+        allow_hyphen_values = true,
+        help = "Optional request/device/name/fingerprint selector; omit when only one grant is active",
+        add = ArgValueCandidates::new(crate::cli::completions::active_grant_candidates)
+    )]
+    selector: Option<String>,
+    #[arg(long, help = "Optional extra fingerprint assertion")]
+    fingerprint: Option<String>,
     #[arg(long, help = "Optional signed revocation message")]
     message: Option<String>,
-    #[arg(long, help = "Print machine-readable JSON")]
-    json: bool,
 }
 
 pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
     match args.command {
-        GrantsCommand::List(args) => list(args.json),
-        GrantsCommand::Revoke(args) => revoke(args),
+        None | Some(GrantsCommand::List) => list(args.json),
+        Some(GrantsCommand::Revoke(command)) => revoke(command, args.json),
     }
 }
 
@@ -50,6 +52,7 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                 .map(|entry| lifecycle_output::request_value(entry, profiles))
                 .collect::<Vec<_>>();
             serde_json::json!({
+                "selector": grant.device_id,
                 "device_id": grant.device_id,
                 "device_name": grant.device_name,
                 "node_id": grant.node_id,
@@ -128,47 +131,47 @@ fn list(json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn revoke(args: RevokeArgs) -> Result<(), String> {
+fn revoke(args: RevokeArgs, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let mut matches = profiles
-        .direct_requests
+    let matches = profiles
+        .direct_grants
         .iter()
-        .filter(|entry| {
-            entry.direction == crate::share::DirectRequestDirection::Incoming
-                && entry.decision.as_ref().is_some_and(|decision| {
-                    decision.decision == crate::share::DirectDecisionKind::Accepted
-                })
-                && (entry.record.request.request_id.as_str() == args.selector.trim()
-                    || entry.record.request.requester.device_id == args.selector.trim())
+        .filter(|grant| grant.state == crate::share::DirectGrantState::Accepted)
+        .filter(|grant| {
+            args.selector
+                .as_deref()
+                .is_none_or(|selector| grant_selector_matches(&profiles, grant, selector.trim()))
         })
-        .cloned()
         .collect::<Vec<_>>();
-    if matches.is_empty() {
-        if let Some(grant) = profiles.direct_grants.iter().find(|grant| {
-            grant.device_id == args.selector.trim()
-                && grant.state == crate::share::DirectGrantState::Accepted
-        }) {
-            return revoke_legacy(
-                &args,
-                grant.device_id.clone(),
-                grant.public_key.clone(),
-                grant.fingerprint.clone(),
-            );
+    let grant = match matches.as_slice() {
+        [] => {
+            return Err(match args.selector.as_deref() {
+                Some(selector) => format!(
+                "active grant not found: {selector}; run `se share grants` to list valid selectors"
+            ),
+                None => "no active grants; `se share grants` shows accepted and inactive grants"
+                    .to_string(),
+            })
         }
-    }
-    let entry = match matches.len() {
-        0 => return Err(format!("active tracked grant not found: {}", args.selector)),
-        1 => matches.remove(0),
+        [grant] => *grant,
         _ => {
             return Err(format!(
-                "grant selector is ambiguous; use a request UUID: {}",
+                "multiple active grants; choose one selector shown by `se share grants`: {}",
                 matches
                     .iter()
-                    .map(|entry| entry.record.request.request_id.as_str())
+                    .map(|grant| grant.device_id.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
         }
+    };
+    super::request_selection::verify_optional_fingerprint(
+        args.fingerprint.as_deref(),
+        &grant.fingerprint,
+        &grant.device_id,
+    )?;
+    let Some(entry) = latest_accepted_request(&profiles, &grant.device_id) else {
+        return revoke_legacy(grant, json);
     };
     let request_id = entry.record.request.request_id.clone();
     let identity = super::identity_command::load_with_repair_hint()?;
@@ -176,7 +179,7 @@ fn revoke(args: RevokeArgs) -> Result<(), String> {
         Some(super::default_home()),
         &identity,
         &request_id,
-        &args.fingerprint,
+        &grant.fingerprint,
         crate::share::DirectDecisionKind::Revoked,
         args.message,
     )?;
@@ -186,7 +189,7 @@ fn revoke(args: RevokeArgs) -> Result<(), String> {
         .direct_request(&request_id)
         .cloned()
         .unwrap_or(persisted);
-    if args.json {
+    if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -209,18 +212,9 @@ fn revoke(args: RevokeArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn revoke_legacy(
-    args: &RevokeArgs,
-    device_id: String,
-    public_key: String,
-    fingerprint: String,
-) -> Result<(), String> {
-    if !fingerprint.eq_ignore_ascii_case(args.fingerprint.trim()) {
-        return Err(format!(
-            "fingerprint mismatch for {}: expected {}",
-            device_id, fingerprint
-        ));
-    }
+fn revoke_legacy(grant: &crate::share::DirectGrant, json: bool) -> Result<(), String> {
+    let device_id = grant.device_id.clone();
+    let public_key = grant.public_key.clone();
     let now = crate::share::core_now_secs();
     let committed =
         crate::share::ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
@@ -239,7 +233,7 @@ fn revoke_legacy(
         .find(|current| current.device_id == device_id)
         .ok_or_else(|| format!("persisted legacy grant is missing: {device_id}"))?;
     let (worker_state, worker_error) = worker_refresh();
-    if args.json {
+    if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -264,6 +258,35 @@ fn revoke_legacy(
         }
     }
     Ok(())
+}
+
+fn latest_accepted_request<'a>(
+    profiles: &'a crate::share::ShareProfiles,
+    device_id: &'a str,
+) -> Option<&'a crate::share::DirectRequestEntry> {
+    related_requests(profiles, device_id)
+        .filter(|entry| entry.record.decision.state == crate::share::DirectDecisionState::Accepted)
+        .max_by_key(|entry| entry.record.decision.changed_at)
+}
+
+fn grant_selector_matches(
+    profiles: &crate::share::ShareProfiles,
+    grant: &crate::share::DirectGrant,
+    selector: &str,
+) -> bool {
+    grant.device_name.eq_ignore_ascii_case(selector)
+        || exact_or_prefix(selector, &grant.device_id)
+        || exact_or_prefix(selector, &grant.fingerprint)
+        || related_requests(profiles, &grant.device_id)
+            .any(|entry| exact_or_prefix(selector, entry.record.request.request_id.as_str()))
+}
+
+fn exact_or_prefix(selector: &str, candidate: &str) -> bool {
+    candidate.eq_ignore_ascii_case(selector)
+        || (selector.len() >= 4
+            && candidate
+                .to_ascii_lowercase()
+                .starts_with(&selector.to_ascii_lowercase()))
 }
 
 fn related_requests<'a>(

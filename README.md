@@ -59,13 +59,31 @@ Peer-Empfang. Erst der signierte Request-Receipt des Zielgeraets meldet
 `received`. Entscheidung (`pending`/`accepted`/`rejected`/`revoked`), aktive
 Autorisierung und aktuelle Verbindung werden getrennt angezeigt.
 
-Offene und abgeschlossene Anfragen lassen sich mit `se share request list`,
-`show`, `accept`, `reject` und `retry` verwalten. `retry` verwendet dieselbe
-Request-ID. Aktive Freigaben zeigt `se share grants list`; `se share grants
-revoke` widerruft eine getrackte Autorisierung. In der GUI stehen dieselben
-Informationen unter **Teilen** getrennt als eingehende, ausgehende und
-autorisierte Geraete bereit, inklusive Fingerprint-Bestaetigung und Widerruf.
-Entfernen geht mit `se connections remove`, `remove-peer` und `remove-room`.
+`se share request` zeigt ohne weitere Argumente die offene Inbox samt
+Request-ID, Geraet, Fingerprint, Empfangs-, Entscheidungs- und
+Autorisierungsstatus. Ist genau eine Anfrage offen, akzeptiert oder verwirft
+`se share request accept` beziehungsweise `reject` sie ohne versteckte IDs oder
+erneute Fingerprint-Eingabe; bei mehreren Anfragen nennt die Inbox direkt die
+gueltigen Befehle. `list`, `show`, `retry` und `delete` verwalten den
+vollstaendigen Verlauf, wobei `delete` erst nach Abschluss notwendiger
+Peer-Zustellungen freigegeben wird. `se share grants` zeigt ohne Unterbefehl
+aktive und inaktive Autorisierungen; `se share grants revoke` waehlt die einzige
+aktive Freigabe automatisch. In der GUI trennt **Teilen** offene Anfragen vom
+eingeklappten Verlauf. **Loeschen / ablehnen** entfernt eine offene Anfrage aus
+der Inbox und benachrichtigt den Peer; abgeschlossener Verlauf wird loeschbar,
+sobald die signierte Zustellung beendet ist.
+
+`se connections` listet ohne Unterbefehl alle Ziele. Jede Share-Zeile nennt
+explizit `selector=<id>`; `remove-peer` akzeptiert genau diese ID, den ebenfalls
+ausgegebenen `share://direct/...`-Endpunkt, Name, Geraete-ID oder Fingerprint
+und waehlt bei nur einem Peer auch ohne Argument eindeutig aus. Dynamische
+Vervollstaendigung fuer Befehle und aktuelle Request-/Grant-/Peer-Selektoren
+liefert `se completions bash|zsh|fish|elvish|powershell`, zum Beispiel
+`source <(se completions bash)` oder in PowerShell
+`se completions powershell | Out-String | Invoke-Expression`.
+
+Andere Verbindungen und Raeume entfernt `se connections remove` beziehungsweise
+`remove-room`.
 Headless Share laesst sich ueber `se share configure`, `identity`, `status`,
 `request`, `grants`, `export`, `room` und `worker` vollstaendig verwalten;
 `status` unterscheidet dabei einen laufenden Worker von einer tatsaechlich
@@ -111,7 +129,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.129.exe`](release-native/Smart%20Explorer%20Setup%200.5.129.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.130.exe`](release-native/Smart%20Explorer%20Setup%200.5.130.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
