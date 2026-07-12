@@ -9,6 +9,7 @@ const TEST_NAMESPACE: &str = "standalone_cli";
 #[test]
 fn windows_terminal_identity_and_worker_status_are_standalone() {
     let sandbox = Sandbox::new("share-windows-standalone");
+    let _daemon = DaemonStopGuard { sandbox: &sandbox };
 
     let first = identity(&sandbox);
     let second = identity(&sandbox);
@@ -31,8 +32,6 @@ fn windows_terminal_identity_and_worker_status_are_standalone() {
         serde_json::from_slice(&status.output.stdout).expect("Share status must be JSON");
     assert!(value["running"].is_boolean());
     assert!(value["connected"].is_boolean());
-
-    stop_daemon(&sandbox);
 }
 
 fn identity(sandbox: &Sandbox) -> serde_json::Value {
@@ -56,5 +55,15 @@ fn stop_daemon(sandbox: &Sandbox) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while heartbeat.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+struct DaemonStopGuard<'a> {
+    sandbox: &'a Sandbox,
+}
+
+impl Drop for DaemonStopGuard<'_> {
+    fn drop(&mut self) {
+        stop_daemon(self.sandbox);
     }
 }

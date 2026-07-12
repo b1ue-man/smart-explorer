@@ -96,9 +96,45 @@ fn spawn_daemon(
     handoff_generation: Option<&str>,
     retiring_generation: Option<&str>,
 ) -> std::io::Result<()> {
+    clear_standard_handle_inheritance()?;
     daemon_command(exe, handoff_generation, retiring_generation)
         .spawn()
         .map(|_| ())
+}
+
+/// A terminal caller may itself have inherited stdout/stderr pipe handles from
+/// an automation host. Rust's Windows process launcher inherits every handle
+/// whose `HANDLE_FLAG_INHERIT` bit remains set, even when the child's selected
+/// standard streams are redirected to NUL. Clear that bit before launching the
+/// long-lived daemon so an exited `se` process cannot leave its caller waiting
+/// forever for pipe EOF.
+fn clear_standard_handle_inheritance() -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        clear_handle_inheritance(handle)?;
+    }
+    Ok(())
+}
+
+fn clear_handle_inheritance(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{
+        SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    };
+
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Ok(());
+    }
+    let changed = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+    if changed == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 /// Is the daemon registered to start at logon?
@@ -159,6 +195,8 @@ pub fn spawn_daemon_handoff_checked(
 
 #[cfg(test)]
 mod tests {
+    use std::os::windows::io::AsRawHandle;
+
     #[test]
     fn se_uses_its_own_executable_even_with_a_gui_sibling() {
         let dir = std::env::temp_dir().join(format!(
@@ -222,6 +260,25 @@ mod tests {
                 .map(|(_, value)| value),
             Some(None)
         );
+    }
+
+    #[test]
+    fn daemon_spawn_guard_clears_handle_inheritance() {
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, SetHandleInformation, HANDLE_FLAG_INHERIT,
+        };
+
+        let file = tempfile::tempfile().unwrap();
+        let handle = file.as_raw_handle();
+        assert_ne!(
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+            0
+        );
+
+        super::clear_handle_inheritance(handle).unwrap();
+        let mut flags = 0;
+        assert_ne!(unsafe { GetHandleInformation(handle, &mut flags) }, 0);
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
     }
 
     #[test]
