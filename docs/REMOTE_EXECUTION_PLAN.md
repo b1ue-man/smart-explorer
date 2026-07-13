@@ -564,8 +564,10 @@ Use a committed test helper with `tree`, `root-exits-first`, `ignore-stop`,
 - every normal descendant reports `IsProcessInJob=true`;
 - root exit, timeout, Cancel, QUIC reset, worker Stop, and forced worker death
   leave no helper PIDs;
-- an outer compatible Job tests nesting; an incompatible Job fails before user
-  code;
+- an outer compatible Job tests nesting, including inside a runner-owned
+  ambient Job; a UI-restricted incompatible Job is rejected before user code,
+  either by the isolated helper path or by the exact production launcher under
+  a locked ambient Job;
 - `CREATE_BREAKAWAY_FROM_JOB` cannot escape;
 - the child inherits only its three stdio handles;
 - worker crash proves kernel kill-on-close rather than cooperative cleanup.
@@ -656,16 +658,14 @@ This is a native security feature and follows the complete native release path:
    hashes, and post-publication Linux CLI reinstall verification. Published
    cross-OS/update-path certification is tracked separately as M11.
 
-The locally installed `se 0.5.134` is byte-identical to the verified static feed
-payload (`SHA-256 333507554920ff447122028850cd7805729a5f2d9b4dbaa38a2a0872bd3e47b4`),
-completed the four-profile Linux gate with the release Share server (run
-`4664535d-bc45-414f-8d9f-1219bf9f631f`), and exposes Exec in Help. A platform
-that cannot provide its containment provider reports that specific
-prerequisite and starts no payload.
+The release gate verifies the static feed `se` byte-for-byte before publication,
+then reinstalls and rechecks the published Linux payload. The installed CLI must
+expose Exec in Help. A platform that cannot provide its containment provider
+reports that specific prerequisite and starts no payload.
 
 ## 16. Primary references
 
-Checked on 2026-07-12:
+Checked on 2026-07-13:
 
 - [Iroh 1.0 README: public-key TLS identity, mutual authentication, encrypted relay traffic](https://github.com/n0-computer/iroh/blob/v1.0.1/README.md)
 - [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)

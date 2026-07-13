@@ -17,8 +17,17 @@ pub(super) struct SuspendedTestHost {
     pub(super) thread: OwnedHandle,
 }
 
-pub(super) fn launch_isolated_suspended_test_host(mode: &str) -> io::Result<SuspendedTestHost> {
-    let child = launch_suspended_test_host(mode, 0)?;
+pub(super) enum IsolationOutcome {
+    Isolated(SuspendedTestHost),
+    AmbientLocked,
+}
+
+pub(super) fn launch_suspended_test_host(mode: &str) -> io::Result<SuspendedTestHost> {
+    launch_suspended_test_host_with_flags(mode, 0)
+}
+
+pub(super) fn launch_isolated_suspended_test_host(mode: &str) -> io::Result<IsolationOutcome> {
+    let child = launch_suspended_test_host(mode)?;
     let inherited_job = match process_is_in_any_job(&child.process) {
         Ok(inherited_job) => inherited_job,
         Err(error) => {
@@ -30,25 +39,35 @@ pub(super) fn launch_isolated_suspended_test_host(mode: &str) -> io::Result<Susp
         }
     };
     if !inherited_job {
-        return Ok(child);
+        return Ok(IsolationOutcome::Isolated(child));
     }
-    terminate_process_and_wait(&child.process, "ambient-Job test host")?;
 
-    let child = launch_suspended_test_host(mode, CREATE_BREAKAWAY_FROM_JOB).map_err(|error| {
-        if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "ambient runner Job forbids CREATE_BREAKAWAY_FROM_JOB; isolated nested-Job evidence is unavailable",
-            )
-        } else {
-            error
+    let isolated = match launch_suspended_test_host_with_flags(mode, CREATE_BREAKAWAY_FROM_JOB) {
+        Ok(isolated) => isolated,
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
+            terminate_process_and_wait(&child.process, "ambient-Job test host")?;
+            return Ok(IsolationOutcome::AmbientLocked);
         }
-    })?;
-    let still_in_job = match process_is_in_any_job(&child.process) {
-        Ok(still_in_job) => still_in_job,
         Err(error) => {
             return Err(terminate_process_after_error(
                 &child.process,
+                error,
+                "ambient-Job test host",
+            ));
+        }
+    };
+    if let Err(error) = terminate_process_and_wait(&child.process, "ambient-Job test host") {
+        return Err(terminate_process_after_error(
+            &isolated.process,
+            error,
+            "isolated breakaway test host",
+        ));
+    }
+    let still_in_job = match process_is_in_any_job(&isolated.process) {
+        Ok(still_in_job) => still_in_job,
+        Err(error) => {
+            return Err(terminate_process_after_error(
+                &isolated.process,
                 error,
                 "breakaway Job membership query",
             ));
@@ -56,17 +75,20 @@ pub(super) fn launch_isolated_suspended_test_host(mode: &str) -> io::Result<Susp
     };
     if still_in_job {
         return Err(terminate_process_after_error(
-            &child.process,
+            &isolated.process,
             io::Error::other(
                 "CREATE_BREAKAWAY_FROM_JOB left the suspended test host in an ambient Job",
             ),
             "non-isolated breakaway test host",
         ));
     }
-    Ok(child)
+    Ok(IsolationOutcome::Isolated(isolated))
 }
 
-fn launch_suspended_test_host(mode: &str, extra_flags: u32) -> io::Result<SuspendedTestHost> {
+fn launch_suspended_test_host_with_flags(
+    mode: &str,
+    extra_flags: u32,
+) -> io::Result<SuspendedTestHost> {
     let executable = std::env::current_exe()?;
     let executable_wide: Vec<u16> = executable
         .as_os_str()
