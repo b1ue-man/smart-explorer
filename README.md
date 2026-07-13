@@ -52,7 +52,7 @@ Datenträger. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
-Execution ist ab 0.5.133 als separate, standardmaessig deaktivierte
+Execution ist ab 0.5.134 als separate, standardmaessig deaktivierte
 Geraeteberechtigung verfuegbar. `se share grants exec` zeigt die exakten
 Identitaeten, `enable --yes` erlaubt einem Geraet die vollstaendige Shell-Autoritaet
 des Smart-Explorer-Benutzers und `disable` entzieht sie wieder und beendet dessen
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.133.exe`](release-native/Smart%20Explorer%20Setup%200.5.133.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.134.exe`](release-native/Smart%20Explorer%20Setup%200.5.134.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer

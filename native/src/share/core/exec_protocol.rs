@@ -7,7 +7,7 @@ use super::exec_types::{
     EXEC_PROTOCOL_VERSION, MAX_EXEC_DATA_BYTES, MAX_EXEC_START_BYTES,
 };
 
-pub(crate) const EXEC_ALPN: &[u8] = b"smart-explorer/share-exec/1";
+pub(crate) const EXEC_ALPN: &[u8] = b"smart-explorer/share-exec/2";
 const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
 const HEADER_BYTES: usize = 5;
 
@@ -19,11 +19,15 @@ const START: u8 = 16;
 const STDIN: u8 = 17;
 const STDIN_EOF: u8 = 18;
 const CANCEL: u8 = 19;
+const PING: u8 = 20;
+const RESULT_ACK: u8 = 21;
 const STARTED: u8 = 32;
 const STDOUT: u8 = 33;
 const STDERR: u8 = 34;
 const TERMINAL: u8 = 35;
 const EXEC_ERROR: u8 = 36;
+const PONG: u8 = 37;
+const RESULT_ACKNOWLEDGED: u8 = 38;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ExecServerHello {
@@ -89,6 +93,8 @@ pub(crate) enum ClientFrame {
     Stdin { exec_id: ExecId, data: Vec<u8> },
     StdinEof { exec_id: ExecId },
     Cancel { exec_id: ExecId },
+    Ping { exec_id: ExecId, sequence: u64 },
+    ResultAck { exec_id: ExecId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +104,8 @@ pub(crate) enum ServerFrame {
     Stderr { exec_id: ExecId, data: Vec<u8> },
     Terminal(ExecTerminal),
     Error(ExecWireError),
+    Pong { exec_id: ExecId, sequence: u64 },
+    ResultAcknowledged { exec_id: ExecId },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -126,6 +134,20 @@ impl ServerProtocolState {
             (Self::Running | Self::StdinClosed, ClientFrame::Cancel { .. }) => {
                 *self = Self::Cancelling
             }
+            (Self::Running | Self::StdinClosed | Self::Cancelling, ClientFrame::Ping { .. }) => {}
+            // Frames written before the peer observed Terminal can still be
+            // queued ahead of ResultAck on the ordered client stream. They no
+            // longer affect the finished job, but must be drained so the
+            // acknowledgement can close the terminal-result handshake.
+            (Self::Terminal, ClientFrame::Stdin { data, .. })
+                if data.len() <= MAX_EXEC_DATA_BYTES => {}
+            (
+                Self::Terminal,
+                ClientFrame::StdinEof { .. }
+                | ClientFrame::Cancel { .. }
+                | ClientFrame::Ping { .. }
+                | ClientFrame::ResultAck { .. },
+            ) => {}
             (_, ClientFrame::Stdin { data, .. }) if data.len() > MAX_EXEC_DATA_BYTES => {
                 return Err(invalid("exec stdin chunk exceeds 64 KiB"));
             }
@@ -202,6 +224,10 @@ pub(crate) async fn send_client_frame<W: AsyncWrite + Unpin>(
         ClientFrame::Stdin { exec_id, data } => send_data(writer, STDIN, exec_id, data).await,
         ClientFrame::StdinEof { exec_id } => send_json(writer, STDIN_EOF, exec_id, 128).await,
         ClientFrame::Cancel { exec_id } => send_json(writer, CANCEL, exec_id, 128).await,
+        ClientFrame::Ping { exec_id, sequence } => {
+            send_json(writer, PING, &(exec_id, sequence), 256).await
+        }
+        ClientFrame::ResultAck { exec_id } => send_json(writer, RESULT_ACK, exec_id, 128).await,
     }
 }
 
@@ -225,6 +251,13 @@ pub(crate) async fn recv_client_frame<R: AsyncRead + Unpin>(
         CANCEL => Ok(ClientFrame::Cancel {
             exec_id: decode(&payload)?,
         }),
+        PING => {
+            let (exec_id, sequence) = decode(&payload)?;
+            Ok(ClientFrame::Ping { exec_id, sequence })
+        }
+        RESULT_ACK => Ok(ClientFrame::ResultAck {
+            exec_id: decode(&payload)?,
+        }),
         _ => Err(invalid("unknown exec client frame")),
     }
 }
@@ -242,6 +275,12 @@ pub(crate) async fn send_server_frame<W: AsyncWrite + Unpin>(
         }
         ServerFrame::Error(error) => {
             send_json(writer, EXEC_ERROR, error, MAX_HANDSHAKE_BYTES).await
+        }
+        ServerFrame::Pong { exec_id, sequence } => {
+            send_json(writer, PONG, &(exec_id, sequence), 256).await
+        }
+        ServerFrame::ResultAcknowledged { exec_id } => {
+            send_json(writer, RESULT_ACKNOWLEDGED, exec_id, 128).await
         }
     }
 }
@@ -265,6 +304,13 @@ pub(crate) async fn recv_server_frame<R: AsyncRead + Unpin>(
         }
         TERMINAL => Ok(ServerFrame::Terminal(decode(&payload)?)),
         EXEC_ERROR => Ok(ServerFrame::Error(decode(&payload)?)),
+        PONG => {
+            let (exec_id, sequence) = decode(&payload)?;
+            Ok(ServerFrame::Pong { exec_id, sequence })
+        }
+        RESULT_ACKNOWLEDGED => Ok(ServerFrame::ResultAcknowledged {
+            exec_id: decode(&payload)?,
+        }),
         _ => Err(invalid("unknown exec server frame")),
     }
 }
@@ -353,115 +399,5 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::share::exec_types::{ExecCommand, ExecTerminalKind};
-    use std::collections::BTreeMap;
-
-    fn id() -> ExecId {
-        ExecId::parse("ab".repeat(16)).unwrap()
-    }
-
-    fn start() -> ExecStart {
-        ExecStart {
-            exec_id: id(),
-            command: ExecCommand::Shell {
-                command: "printf x".into(),
-            },
-            cwd: None,
-            env: BTreeMap::new(),
-            timeout_ms: None,
-            max_output_bytes: None,
-        }
-    }
-
-    #[test]
-    fn binary_chunks_round_trip_without_base64_or_utf8_assumptions() {
-        run(async {
-            let frame = ServerFrame::Stdout {
-                exec_id: id(),
-                data: vec![0, 0xff, b'\n'],
-            };
-            let (mut tx, mut rx) = tokio::io::duplex(256);
-            send_server_frame(&mut tx, &frame).await.unwrap();
-            assert_eq!(recv_server_frame(&mut rx).await.unwrap(), frame);
-        });
-    }
-
-    #[test]
-    fn oversized_chunk_is_rejected_before_allocation_or_write() {
-        run(async {
-            let (mut tx, _rx) = tokio::io::duplex(8);
-            let error = send_client_frame(
-                &mut tx,
-                &ClientFrame::Stdin {
-                    exec_id: id(),
-                    data: vec![0; MAX_EXEC_DATA_BYTES + 1],
-                },
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        });
-    }
-
-    #[test]
-    fn server_state_rejects_reordered_or_digest_mismatched_frames() {
-        let mut state = ServerProtocolState::default();
-        assert!(state
-            .accept(&ClientFrame::Stdin {
-                exec_id: id(),
-                data: vec![1]
-            })
-            .is_err());
-        let request = start();
-        assert!(state
-            .accept(&ClientFrame::Start {
-                start: request.clone(),
-                digest: "wrong".into()
-            })
-            .is_err());
-        state
-            .accept(&ClientFrame::Start {
-                digest: request.digest().unwrap(),
-                start: request,
-            })
-            .unwrap();
-        state
-            .accept(&ClientFrame::StdinEof { exec_id: id() })
-            .unwrap();
-        assert!(state
-            .accept(&ClientFrame::Stdin {
-                exec_id: id(),
-                data: vec![1]
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn terminal_status_round_trips_distinctly() {
-        run(async {
-            let frame = ServerFrame::Terminal(ExecTerminal {
-                exec_id: id(),
-                kind: ExecTerminalKind::TimedOut,
-                exit_code: None,
-                signal: None,
-                message: None,
-                stdout_bytes: 1,
-                stderr_bytes: 2,
-                output_truncated: false,
-            });
-            let (mut tx, mut rx) = tokio::io::duplex(512);
-            send_server_frame(&mut tx, &frame).await.unwrap();
-            assert_eq!(recv_server_frame(&mut rx).await.unwrap(), frame);
-        });
-    }
-
-    fn run<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
-}
+#[path = "exec_protocol_tests.rs"]
+mod tests;

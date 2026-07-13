@@ -35,6 +35,19 @@ where
     })?
 }
 
+pub(super) async fn run_until<T, F>(
+    deadline: tokio::time::Instant,
+    timeout_message: &'static str,
+    future: F,
+) -> io::Result<T>
+where
+    F: Future<Output = io::Result<T>>,
+{
+    tokio::time::timeout_at(deadline, future)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, timeout_message))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +76,15 @@ mod tests {
 
         let error = disconnected("peer closed");
         assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+
+        let error = runtime
+            .block_on(run_until(
+                tokio::time::Instant::now() + Duration::from_millis(1),
+                "absolute timeout",
+                std::future::pending::<io::Result<()>>(),
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.to_string(), "absolute timeout");
     }
 }

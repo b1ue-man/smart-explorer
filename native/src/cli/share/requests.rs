@@ -105,6 +105,7 @@ fn inbox(json: bool) -> Result<(), String> {
         Err(error) => (Vec::new(), Some(error)),
     };
     let count = tracked.len() + legacy.len();
+    let history_count = profiles.direct_requests.len();
     if json {
         let requests = tracked
             .iter()
@@ -119,12 +120,15 @@ fn inbox(json: bool) -> Result<(), String> {
                 "legacy_requests": legacy_requests,
                 "worker_error": worker_error,
                 "next_command": (count == 1).then_some("se share request accept"),
+                "history_count": history_count,
+                "history_command": "se share request list",
             }))
             .map_err(|error| error.to_string())?
         );
         return Ok(());
     }
     println!("pending_requests\t{count}");
+    println!("request_history\t{history_count}");
     for entry in &tracked {
         let request = &entry.record.request;
         println!(
@@ -161,6 +165,7 @@ fn inbox(json: bool) -> Result<(), String> {
             );
         }
     }
+    println!("history\tse share request list");
     if let Some(error) = worker_error {
         println!("worker_error\t{}", clean(&error));
     }

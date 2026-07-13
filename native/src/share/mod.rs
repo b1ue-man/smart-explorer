@@ -10,6 +10,8 @@ mod authorization_policy;
 mod backend;
 #[path = "core/blocking.rs"]
 mod blocking;
+#[path = "core/connection_events.rs"]
+mod connection_events;
 #[path = "core/crypto.rs"]
 mod core;
 #[path = "os/shared/direct_actions.rs"]
@@ -44,8 +46,14 @@ mod exec;
 mod exec_auth;
 #[path = "core/exec_client.rs"]
 mod exec_client;
+#[path = "core/exec_client_active.rs"]
+mod exec_client_active;
+#[path = "core/exec_frame_reader.rs"]
+mod exec_frame_reader;
 #[path = "core/exec_grant_runtime.rs"]
 mod exec_grant_runtime;
+#[path = "core/exec_heartbeat.rs"]
+mod exec_heartbeat;
 #[path = "core/exec_job.rs"]
 mod exec_job;
 #[path = "core/exec_platform.rs"]

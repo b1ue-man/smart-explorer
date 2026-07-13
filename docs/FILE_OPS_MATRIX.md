@@ -74,7 +74,7 @@ full endpoints, local paths, or saved-connection shorthand:
 | `se mv` | rename when possible, else copy+delete | ✅ | ✅ | ✅ |
 | `se rm` | `remove_file` / recursive child walk + `remove_dir` | ✅ `--force`; roots also require `--no-preserve-root` | ✅ `--force`; configured roots also require `--no-preserve-root` | ✅ `--force`; virtual roots also require `--no-preserve-root` |
 | `se search` | backend search, fallback traversal | ✅ | ✅ | ✅ |
-| `se exec` | immediate fail-closed CLI rejection | n/a | ❌ SFTP-agent execution out of scope | ❌ runtime-disabled until full process-tree containment is available on every supported OS |
+| `se exec` | authenticated local daemon IPC -> separate Share Exec ALPN | n/a | ❌ SFTP-agent execution out of scope | ✅ for an explicitly Exec-enabled exact peer when the native containment provider is available |
 
 ## D. Current caveats
 
@@ -96,12 +96,15 @@ full endpoints, local paths, or saved-connection shorthand:
    default-direct or room export policy enables them. Peer-share connections are
    not persisted as nested exports and therefore cannot recurse back into Share
    sessions.
-4. **Peer remote execution fails closed.** The receiver validates and clamps the
-   request, applies one `allow_exec` permission for both argv and shell modes,
-   and enforces global/per-peer admission before blocking work. Execution then
-   returns unsupported until every supported OS can contain and tear down the
-   complete descendant process tree. Submitted commands are never retried after
-   an ambiguous transport error.
+4. **Peer remote execution is exact-device, default-deny, and unrestricted once
+   enabled.** Accepting file access does not grant Exec. The receiver verifies
+   the authenticated device, current grant revision, capability, request digest,
+   and admission lease before releasing the native launch barrier. Windows uses
+   a kill-on-close Job Object and Linux a transient systemd cgroup; if that
+   provider is unavailable, no payload starts. Both argv and shell modes have
+   the full authority of the Smart Explorer worker's OS user, without command
+   filters. Starts remain at-most-once and are never retried after an ambiguous
+   transport error.
 5. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
    are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
    large folders therefore need enough local temp space before the drop/paste.

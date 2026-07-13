@@ -1,4 +1,117 @@
-pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, String> {
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct PeerAddOutput {
+    action: &'static str,
+    contact_id: String,
+    selector: String,
+    endpoint: String,
+    request_action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization: Option<AuthorizationOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connectivity: Option<StateOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_refresh: Option<WorkerRefreshOutput>,
+    #[serde(skip)]
+    text_lifecycle: Option<TextLifecycle>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct StateOutput {
+    state: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AuthorizationOutput {
+    state: &'static str,
+    active: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct WorkerRefreshOutput {
+    state: &'static str,
+    error: Option<String>,
+}
+
+#[derive(Debug)]
+struct TextLifecycle {
+    direction: &'static str,
+    delivery: &'static str,
+    relay: &'static str,
+    peer_receipt: &'static str,
+    decision: &'static str,
+    decision_delivery: &'static str,
+    authorization: &'static str,
+    connectivity: &'static str,
+}
+
+impl PeerAddOutput {
+    fn new(action: &'static str, contact_id: String, request_action: &'static str) -> Self {
+        let endpoint = crate::share::PeerOpenTarget::Direct {
+            contact_id: contact_id.clone(),
+        }
+        .endpoint_prefix();
+        Self {
+            action,
+            selector: contact_id.clone(),
+            contact_id,
+            endpoint,
+            request_action,
+            request_id: None,
+            request: None,
+            authorization: None,
+            connectivity: None,
+            worker_refresh: None,
+            text_lifecycle: None,
+        }
+    }
+
+    pub(crate) fn render(&self, json: bool) -> Result<String, String> {
+        if json {
+            return serde_json::to_string_pretty(self).map_err(|error| error.to_string());
+        }
+        let action = match self.action {
+            "saved" => "Saved",
+            _ => "Updated",
+        };
+        let prefix = format!(
+            "{action} peer contact {}; selector={}; endpoint={}",
+            self.contact_id, self.selector, self.endpoint
+        );
+        match self.request_action {
+            "not_created" => Ok(format!("{prefix}; request_action=not_created; reason=--no-request")),
+            "not_needed" => Ok(format!(
+                "{prefix}; request_action=not_needed; authorization={}; connectivity={}; worker_refresh={}{}",
+                self.authorization.as_ref().map(|value| value.state).unwrap_or("inactive"),
+                self.connectivity.as_ref().map(|value| value.state).unwrap_or("unknown"),
+                self.worker_refresh.as_ref().map(|value| value.state).unwrap_or("unknown"),
+                worker_error_suffix(self.worker_refresh.as_ref().and_then(|value| value.error.as_deref())),
+            )),
+            request_action => {
+                let lifecycle = self.text_lifecycle.as_ref();
+                Ok(format!(
+                    "{prefix}; request_id={}; request_action={request_action}; direction={}; delivery={}; relay={}; peer_receipt={}; decision={}; decision_delivery={}; authorization={}; connectivity={}; worker_refresh={}{}",
+                    self.request_id.as_deref().unwrap_or("-"),
+                    lifecycle.map(|value| value.direction).unwrap_or("outgoing"),
+                    lifecycle.map(|value| value.delivery).unwrap_or("unconfirmed"),
+                    lifecycle.map(|value| value.relay).unwrap_or("unconfirmed"),
+                    lifecycle.map(|value| value.peer_receipt).unwrap_or("unconfirmed"),
+                    lifecycle.map(|value| value.decision).unwrap_or("pending"),
+                    lifecycle.map(|value| value.decision_delivery).unwrap_or("not_started"),
+                    lifecycle.map(|value| value.authorization).unwrap_or("inactive"),
+                    lifecycle.map(|value| value.connectivity).unwrap_or("waiting_for_access"),
+                    self.worker_refresh.as_ref().map(|value| value.state).unwrap_or("unknown"),
+                    worker_error_suffix(self.worker_refresh.as_ref().and_then(|value| value.error.as_deref())),
+                ))
+            }
+        }
+    }
+}
+
+pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<PeerAddOutput, String> {
     let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
         .map_err(|error| format!("share profile laden: {error}"))?;
     let existing = profiles.direct_contact_id_from_code(code)?;
@@ -21,11 +134,9 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, 
             (id, true)
         }
     };
-    let action = if created { "Saved" } else { "Updated" };
+    let action = if created { "saved" } else { "updated" };
     if !request {
-        return Ok(format!(
-            "{action} peer contact {contact_id}; request=not_created (--no-request)"
-        ));
+        return Ok(PeerAddOutput::new(action, contact_id, "not_created"));
     }
     let contact = profiles
         .direct_contacts
@@ -34,12 +145,19 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, 
         .ok_or_else(|| format!("saved peer contact disappeared: {contact_id}"))?;
     if contact.access_state == crate::share::DirectAccessState::Accepted {
         let (worker, error) = refresh_worker_state();
-        return Ok(format!(
-            "{action} peer contact {contact_id}; request=not_needed; authorization=active; connectivity={}; worker_refresh={}{}",
-            share_status_code(&contact.status),
-            worker,
-            worker_error_suffix(error.as_deref()),
-        ));
+        let mut output = PeerAddOutput::new(action, contact_id, "not_needed");
+        output.authorization = Some(AuthorizationOutput {
+            state: "active",
+            active: true,
+        });
+        output.connectivity = Some(StateOutput {
+            state: share_status_code(&contact.status),
+        });
+        output.worker_refresh = Some(WorkerRefreshOutput {
+            state: worker,
+            error,
+        });
+        return Ok(output);
     }
     let identity = match identity.take() {
         Some(identity) => identity,
@@ -89,20 +207,39 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<String, 
         .relay_outcome
         .map(relay_outcome_code)
         .unwrap_or("unconfirmed");
-    Ok(format!(
-        "{action} peer contact {contact_id}; request_id={}; request_action={}; direction=outgoing; delivery={}; relay={}; peer_receipt={}; decision={}; decision_delivery={}; authorization={}; connectivity={}; worker_refresh={}{}",
-        entry.record.request.request_id,
-        if request_action.created { "created" } else { "reused" },
-        entry.record.delivery.state.code(),
+    let mut output = PeerAddOutput::new(
+        action,
+        contact_id,
+        if request_action.created {
+            "created"
+        } else {
+            "reused"
+        },
+    );
+    output.request_id = Some(entry.record.request.request_id.to_string());
+    output.request = Some(crate::cli::share::lifecycle_output::request_value(
+        entry,
+        latest_profiles.as_ref().unwrap_or(&profiles),
+    ));
+    output.worker_refresh = Some(WorkerRefreshOutput {
+        state: worker,
+        error,
+    });
+    output.text_lifecycle = Some(TextLifecycle {
+        direction: "outgoing",
+        delivery: entry.record.delivery.state.code(),
         relay,
-        if entry.request_receipt.is_some() { "received" } else { "unconfirmed" },
-        entry.record.decision.state.code(),
-        entry.record.decision_delivery.state.code(),
+        peer_receipt: if entry.request_receipt.is_some() {
+            "received"
+        } else {
+            "unconfirmed"
+        },
+        decision: entry.record.decision.state.code(),
+        decision_delivery: entry.record.decision_delivery.state.code(),
         authorization,
         connectivity,
-        worker,
-        worker_error_suffix(error.as_deref()),
-    ))
+    });
+    Ok(output)
 }
 
 fn refresh_worker_state() -> (&'static str, Option<String>) {
@@ -167,4 +304,52 @@ fn load_identity() -> Result<crate::share::ShareIdentity, String> {
             error
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PeerAddOutput, TextLifecycle, WorkerRefreshOutput};
+
+    #[test]
+    fn add_output_exposes_copyable_selector_endpoint_and_request_id() {
+        let mut output = PeerAddOutput::new("saved", "contact-a".into(), "created");
+        output.request_id = Some("request-a".into());
+        output.request = Some(serde_json::json!({
+            "request_id": "request-a",
+            "direction": "outgoing",
+            "delivery": {"state": "queued"},
+            "relay": {"outcome": null},
+            "peer_receipt": {"request": {"state": "unconfirmed"}},
+            "decision": {"state": "pending"},
+            "authorization": {"state": "inactive", "active": false},
+        }));
+        output.worker_refresh = Some(WorkerRefreshOutput {
+            state: "refreshed",
+            error: None,
+        });
+        output.text_lifecycle = Some(TextLifecycle {
+            direction: "outgoing",
+            delivery: "queued",
+            relay: "unconfirmed",
+            peer_receipt: "unconfirmed",
+            decision: "pending",
+            decision_delivery: "not_started",
+            authorization: "inactive",
+            connectivity: "waiting_for_access",
+        });
+
+        let text = output.render(false).unwrap();
+        assert!(text.contains("selector=contact-a"));
+        assert!(text.contains("endpoint=share://direct/contact-a"));
+        assert!(text.contains("request_id=request-a"));
+
+        let json: serde_json::Value = serde_json::from_str(&output.render(true).unwrap()).unwrap();
+        assert_eq!(json["selector"], "contact-a");
+        assert_eq!(json["endpoint"], "share://direct/contact-a");
+        assert_eq!(json["request_id"], "request-a");
+        assert_eq!(json["request"]["delivery"]["state"], "queued");
+        assert_eq!(json["request"]["decision"]["state"], "pending");
+        assert_eq!(json["request"]["authorization"]["active"], false);
+        assert_eq!(json["worker_refresh"]["state"], "refreshed");
+    }
 }

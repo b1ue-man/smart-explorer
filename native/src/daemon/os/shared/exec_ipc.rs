@@ -11,6 +11,7 @@ use super::ipc_protocol::{
 
 const MAX_DATA_BYTES: usize = 64 * 1024;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
+const LOCAL_EVENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const INPUT_STDIN: u8 = 1;
 const INPUT_EOF: u8 = 2;
@@ -366,10 +367,50 @@ fn write_frame(stream: &mut TcpStream, tag: u8, payload: &[u8]) -> io::Result<()
         return Err(invalid("local Exec frame exceeds its byte limit"));
     }
     let size = u32::try_from(payload.len()).map_err(|_| invalid("local Exec frame overflow"))?;
-    stream.write_all(&[tag])?;
-    stream.write_all(&size.to_be_bytes())?;
-    stream.write_all(payload)?;
+    let mut header = [0u8; 5];
+    header[0] = tag;
+    header[1..].copy_from_slice(&size.to_be_bytes());
+    let deadline = Instant::now() + LOCAL_EVENT_WRITE_TIMEOUT;
+    write_all_with_deadline(stream, &header, deadline, |stream, remaining| {
+        stream.set_write_timeout(Some(remaining))
+    })?;
+    write_all_with_deadline(stream, payload, deadline, |stream, remaining| {
+        stream.set_write_timeout(Some(remaining))
+    })?;
+    let remaining = remaining_write_time(deadline)?;
+    stream.set_write_timeout(Some(remaining))?;
     stream.flush()
+}
+
+fn write_all_with_deadline<W: Write>(
+    writer: &mut W,
+    mut bytes: &[u8],
+    deadline: Instant,
+    mut prepare_write: impl FnMut(&W, Duration) -> io::Result<()>,
+) -> io::Result<()> {
+    while !bytes.is_empty() {
+        let remaining = remaining_write_time(deadline)?;
+        prepare_write(writer, remaining)?;
+        match writer.write(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write local Exec frame",
+                ))
+            }
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn remaining_write_time(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "local Exec frame write timed out"))
 }
 
 fn read_frame(stream: &mut TcpStream, limit: usize) -> io::Result<(u8, Vec<u8>)> {
@@ -393,38 +434,5 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{read_frame, write_frame, INPUT_STDIN, MAX_DATA_BYTES};
-    use std::io::Write;
-    use std::net::{TcpListener, TcpStream};
-
-    fn pair() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let address = listener.local_addr().unwrap();
-        let client = TcpStream::connect(address).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        (client, server)
-    }
-
-    #[test]
-    fn local_exec_frames_preserve_arbitrary_binary_data() {
-        let (mut client, mut server) = pair();
-        let payload = vec![0, 1, 0xff, b'\n', 0, 0x80];
-        write_frame(&mut client, INPUT_STDIN, &payload).unwrap();
-        assert_eq!(
-            read_frame(&mut server, MAX_DATA_BYTES).unwrap(),
-            (INPUT_STDIN, payload)
-        );
-    }
-
-    #[test]
-    fn oversized_local_exec_frame_is_rejected_before_payload_read() {
-        let (mut client, mut server) = pair();
-        client.write_all(&[INPUT_STDIN]).unwrap();
-        client
-            .write_all(&((MAX_DATA_BYTES as u32) + 1).to_be_bytes())
-            .unwrap();
-        let error = read_frame(&mut server, MAX_DATA_BYTES).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-    }
-}
+#[path = "exec_ipc_tests.rs"]
+mod tests;

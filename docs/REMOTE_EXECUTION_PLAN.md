@@ -1,6 +1,6 @@
 # Secure peer remote execution — implementation and validation record
 
-Status: **implemented for 0.5.133**. Exec remains fail-closed until one exact
+Status: **implemented for 0.5.134**. Exec remains fail-closed until one exact
 device grant is explicitly enabled and the host containment provider is
 available.
 
@@ -43,9 +43,10 @@ The implementation is accepted only when all of these are true:
 9. The CLI is self-discovering: missing selectors show the available choices,
    selectors have live completion, and both peers can inspect active and recent
    execution state.
-10. Release validation exercises the installed Windows and Linux artifacts in
-    both directions, using only values discovered by earlier CLI commands in
-    the same test run.
+10. Release validation exercises installed Linux and Windows artifacts through
+    isolated same-platform native gates, using only values discovered by earlier
+    CLI commands in the same test run. Published Windows-to-Linux certification
+    remains the separate M11 gate.
 
 ## 2. Explicit trust contract
 
@@ -73,9 +74,9 @@ as Task Scheduler, WMI, a service manager, Docker, or `systemd-run` to start
 unrelated work. Preventing that would require a sandbox or reduced account and
 would contradict this feature's unrestricted-user-shell contract.
 
-## 3. Pre-implementation audit (resolved in 0.5.133)
+## 3. Pre-implementation audit (resolved in 0.5.134)
 
-The pre-0.5.133 data plane was a sound base:
+The pre-0.5.134 data plane was a sound base:
 
 - Iroh authenticates the remote EndpointId as its TLS public-key identity and
   encrypts traffic end to end, including over a relay.
@@ -92,7 +93,7 @@ The pre-0.5.133 data plane was a sound base:
 - current Exec submission is deliberately at-most-once; the caller does not
   retry after an ambiguous transport failure.
 
-The following gaps blocked the old batch stub. 0.5.133 resolves them with the
+The following gaps blocked the old batch stub. 0.5.134 resolves them with the
 modules and validation gates recorded below rather than enabling that stub:
 
 - `ShareExportConfig.allow_exec` applies to every accepted direct peer, or to
@@ -191,9 +192,10 @@ confirmed empty, not merely until the root process exits.
 
 ### 5.1 ALPN and handshake
 
-Keep the filesystem data plane on `smart-explorer/share-fs/3`. Add an accepted
-ALPN such as `smart-explorer/share-exec/1` for Exec only. Filesystem clients keep
-working across a rolling upgrade; Exec never falls back to v3.
+Keep the filesystem data plane on `smart-explorer/share-fs/3`. Exec uses the
+accepted ALPN `smart-explorer/share-exec/2` only. Filesystem clients keep
+working across a rolling upgrade; Exec never falls back to the filesystem ALPN
+or the superseded Exec v1 protocol.
 
 The Exec connection uses a fresh challenge-response handshake:
 
@@ -201,7 +203,7 @@ The Exec connection uses a fresh challenge-response handshake:
    EndpointId.
 2. The server sends a cryptographically random challenge and protocol limits.
 3. The client returns its relation/device identity, a fresh client nonce,
-   `exec_stream_v1`, and an HMAC over the complete transcript: ALPN, both
+   `exec_stream_v2`, and an HMAC over the complete transcript: ALPN, both
    nonces, relation, both device IDs, both NodeIds, and both endpoint roles.
 4. The server checks the TLS EndpointId, identity pins, relation proof, current
    base grant, and per-device Exec policy.
@@ -220,8 +222,13 @@ client -> Start
 server -> Started
 client -> StdinChunk* -> StdinEof
 client -> Cancel                         (at any time)
+client -> Ping*                          (authenticated idle liveness)
+server -> Pong*                          (matching Exec ID and sequence)
 server -> StdoutChunk* / StderrChunk*
-server -> Finished | Cancelled | TimedOut | Revoked | Error
+server -> Terminal(Exited | Failed | TimedOut | Cancelled | Revoked | Disconnected)
+server -> Error                           (protocol/provider rejection)
+client -> ResultAck
+server -> ResultAcknowledged
 ```
 
 Requirements:
@@ -234,11 +241,22 @@ Requirements:
 - stdin/stdout/stderr chunks are raw binary, at most 64 KiB, not JSON arrays or
   Base64;
 - each direction uses fixed-memory bounded queues and transport backpressure;
+- authenticated Ping/Pong runs every 5 seconds, declares a silent peer failed
+  after 20 seconds, and bounds every frame write to 10 seconds;
 - EOF, Cancel, stream reset, and transport loss are distinct protocol events;
 - malformed order, unknown IDs, oversized frames, and extra terminal frames
   close the stream and cancel any admitted job;
 - `Started` is sent only after containment and the authorization launch commit;
-- a terminal success is sent only after `confirm_empty`.
+- a terminal success is sent only after `confirm_empty`;
+- neither endpoint treats a terminal result as delivered until the
+  `ResultAck`/`ResultAcknowledged` exchange completes.
+
+With the default heartbeat policy, the server allows 35 seconds for ResultAck:
+the 20-second peer window, a 10-second bounded write, and one 5-second heartbeat
+interval of strict scheduling slack. The client then allows 50 seconds through
+ResultAcknowledged, adding the server's bounded confirmation write and another
+full interval. Both budgets are derived from the shared policy so they cannot
+silently meet at the same timeout boundary.
 
 Handshake and control frames get operation-specific small limits (for example
 64 KiB handshake and 128 KiB Start). The existing 16 MiB generic frame limit is
@@ -431,8 +449,9 @@ the full output. Local IPC never retries Start after handoff.
 ## 11. Remote connection keepalive companion requirement
 
 Implementation status: **base backend liveness delivered in 0.5.131; Exec
-enabled in 0.5.133**. Exec reuses the same Iroh keepalive policy and adds
-bounded failed-peer detection without closing a healthy idle session.
+hardened and enabled in 0.5.134**. Exec reuses the same Iroh keepalive policy,
+adds authenticated application Ping/Pong frames with bounded failed-peer
+detection, and acknowledges the terminal result before either endpoint closes.
 
 Idle connections must remain usable independently of Exec. The user-visible
 contract is: after an arbitrary idle period, the next operation either uses the
@@ -509,12 +528,17 @@ documented in `Cargo.toml`/`docs/GOTCHAS.md` with its cross-compile impact.
 - permission for peer A never authorizes peer B or a changed key/NodeId;
 - a room member needs its own explicit Exec policy;
 - replayed challenge/hello/start frames fail or deduplicate without execution;
-- v3, absent `exec_stream_v1`, capability stripping, and ALPN downgrade fail;
+- filesystem v3, Exec v1, absent `exec_stream_v2`, capability stripping, and
+  ALPN downgrade fail;
 - revoke in every point of the prepare/start barrier either prevents start or
   kills the registered containment;
 - stale decisions and profile-CAS conflicts cannot lower the policy revision;
 - malformed/slow/oversized handshakes and output consumers stay within fixed
   memory, task, and queue budgets;
+- externally triggered FS/Exec handshake and stream errors use fixed diagnostic
+  categories, bounded detail, a bounded service queue, and coalesced summaries;
+  attacker-controlled error strings cannot create keys or queue entries without
+  bound;
 - signaling/relay message injection changes at most availability/status, never
   Exec authorization.
 
@@ -561,17 +585,21 @@ Under cgroup v2/systemd:
 
 ### 13.5 End-to-end and UX tests
 
-- two isolated real workers establish identities and grants using only CLI
-  output from that test run;
+- four isolated real worker profiles establish identities, requests, and grants
+  using only CLI output from that test run;
 - no hidden fixture ID, fingerprint, request ID, or peer ID is injected;
 - no-argument commands list/auto-select correctly and completions return live
   grant/peer/exec selectors on every supported shell;
 - status is visible and consistent on requester and target for every state;
-- installed Linux candidates execute the full two-profile argv, shell, binary
-  I/O, nonzero exit, long-running, Cancel, revoke, and worker-crash suite;
-- native Windows CI runs two isolated Share endpoints through the same protocol
-  and real Windows provider, including remote `cmd.exe`, nonzero exit, disable,
-  denial, signed revoke, receipt, and context-free history deletion;
+- installed Linux candidates execute the full multi-profile request
+  receive/accept/reject/delete-persistence suite plus argv, shell, binary I/O,
+  nonzero exit, healthy idle, Cancel, revoke, and worker-crash coverage;
+- native Windows CI runs four isolated Share profiles through the same protocol
+  and real Windows provider twice: first with native test binaries, then with
+  the exact staged Windows GNU `se.exe` and `se-share-server.exe` bytes that the
+  feed/installer ships. Coverage includes remote `cmd.exe`, nonzero exit,
+  healthy idle, hard worker crashes, disable, denial, signed revoke, receipts,
+  reject, and context-free pending/history deletion;
 - published Windows <-> Linux candidates and the old-version update path remain
   the separate M11 interoperability certification rather than being inferred
   from cross-compilation;
@@ -579,16 +607,18 @@ Under cgroup v2/systemd:
 
 ## 14. Implementation milestones and validation gates
 
-M0–M9 are implemented in 0.5.133. M10 shipped in 0.5.131. The static Linux
-release-feed `se` and release Share server are locally green with two isolated
-profiles; the run obtains the invite, request, peer, grant, and Exec IDs only
-from earlier CLI output. It covers binary stdin/stdout, stderr, exit 7, explicit
-output truncation, timeout, target-side Cancel, local CLI death, target-worker
-`SIGKILL`, cgroup/socket cleanup, permission revoke, and post-revoke start
-denial. Native Windows CI runs both the real Job-Object
-provider self-test (including root-exits-first and empty containment) and a
-two-isolated-profile Share/Exec lifecycle with remote `cmd.exe`; the GNU target
-compile additionally verifies the full Windows CLI/provider surface.
+M0–M9 are implemented in 0.5.134. M10 shipped in 0.5.131. The static Linux
+release-feed `se` and release Share server pass locally with four isolated
+profiles; the run obtains the invite, request, peer, grant, path, and Exec IDs
+only from earlier CLI output. It covers request
+receive/accept/reject/delete persistence, binary stdin/stdout, stderr, exit 7,
+healthy idle, explicit output truncation, timeout, target-side Cancel, local CLI
+death, target-worker `SIGKILL`, cgroup/socket cleanup, permission revoke, and
+post-revoke start denial. Native Windows CI must pass the real Job-Object
+provider self-test (including root-exits-first and empty containment), the
+four-profile Share/Exec lifecycle with remote `cmd.exe`, and a second lifecycle
+run using the exact staged Windows GNU release CLI/server. GitHub publication
+depends on that release-binary run rather than only on cross-compilation.
 
 | Milestone | Functional result | Primary files | Validation signal |
 |---|---|---|---|
@@ -601,12 +631,12 @@ compile additionally verifies the full Windows CLI/provider surface.
 | M6 — Windows provider | No Windows payload code runs outside a kill-on-close Job | `share/os/windows/exec.rs`, Cargo features, helper fixture | native Windows process-tree, handle, crash, and nested-Job suite passes |
 | M7 — Linux provider | Every payload runs in a transient systemd cgroup with independent cleanup | Linux exec/supervisor, target-specific D-Bus dependency | cgroup tree, crash, unavailable-provider, and `RuntimeMaxSec` suite passes |
 | M8 — policy cancellation/UI | Revoke, worker refresh/stop, and GUI/CLI Cancel terminate matching active jobs and show history | registry integration, signal commands, app UI | race stress tests and state parity on both endpoints pass |
-| M9 — outside-DoS hardening | Pre-auth work, frames, queues, and server writers are bounded | node/framing/server and share-server | Slowloris/connection flood/oversize tests pass under memory/task assertions |
+| M9 — outside-DoS hardening | Pre-auth work, frames, queues, server writers, idle-peer detection, and terminal-result acknowledgement are bounded | node/framing/server and share-server | Slowloris/connection flood/oversize, heartbeat-timeout, and terminal-handshake tests pass under memory/task assertions |
 | M10 — all-backend keepalive ✅ 0.5.131 | Stateful remotes survive idle through protocol heartbeats or safe fresh connections; request-based backends avoid artificial traffic | SFTP, FTP/FTPS, WebDAV/Drive, Share, UNC | deterministic stale-connection/non-replay tests, host suite, Windows cross-check, and full release builds pass; credentialed live-server smokes remain environment-gated |
 | M11 — published cross-OS certification | Published candidates work Windows <-> Linux and across an old-version update from a context-free CLI run | release interoperability lab | fresh install and update-path matrix passes with orphan-PID checks; same-OS native gates do not claim this result |
 
 No later milestone may paper over a failed earlier security gate. In particular,
-the CLI stays disabled until both M6 and M7 pass on their native platforms and
+the CLI may be enabled only after both M6 and M7 pass on their native platforms and
 the release matrix proves that the corresponding artifacts contain those
 providers.
 
@@ -618,18 +648,20 @@ This is a native security feature and follows the complete native release path:
    and Windows target compilation;
 2. native Windows containment tests and Linux systemd/cgroup tests;
 3. Share direct and relay E2E, including negative authorization tests;
-4. installed Linux two-profile CLI validation plus native Windows two-profile
-   CLI/Exec and Job-Object gates, always using IDs discovered during the run;
+4. installed Linux multi-profile CLI validation plus native Windows
+   multi-profile CLI/Exec and Job-Object gates, including the exact staged
+   Windows GNU CLI/server bytes and always using IDs discovered during the run;
 5. patch-version bump and full local Windows/Linux feed build;
 6. matching commit on `main`, tag, GitHub Release, all expected artifacts and
    hashes, and post-publication Linux CLI reinstall verification. Published
    cross-OS/update-path certification is tracked separately as M11.
 
-The locally installed `se 0.5.133` is byte-identical to the verified static feed
-payload (`SHA-256 badfa1f0f247bb14c0d17deace975bcdadba6bedc7823303ec36ec9d1af70e17`),
-completed the two-profile Linux gate with the release Share server, and exposes
-Exec in Help. A platform that cannot provide its containment provider reports
-that specific prerequisite and starts no payload.
+The locally installed `se 0.5.134` is byte-identical to the verified static feed
+payload (`SHA-256 333507554920ff447122028850cd7805729a5f2d9b4dbaa38a2a0872bd3e47b4`),
+completed the four-profile Linux gate with the release Share server (run
+`4664535d-bc45-414f-8d9f-1219bf9f631f`), and exposes Exec in Help. A platform
+that cannot provide its containment provider reports that specific
+prerequisite and starts no payload.
 
 ## 16. Primary references
 

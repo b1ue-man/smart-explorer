@@ -186,7 +186,7 @@ fn validate_common(
 
 pub(crate) fn transcript(server: &ExecServerHello, client: &ExecClientHello) -> String {
     format!(
-        "smart-explorer/share-exec/v1|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|client-to-server|{}",
+        "smart-explorer/share-exec/v2|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|client-to-server|{}",
         server.challenge,
         client.client_nonce,
         client.relation_kind,

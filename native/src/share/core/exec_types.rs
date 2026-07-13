@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
-pub(crate) const EXEC_PROTOCOL_VERSION: u16 = 1;
-pub(crate) const EXEC_CAPABILITY: &str = "exec_stream_v1";
+pub(crate) const EXEC_PROTOCOL_VERSION: u16 = 2;
+pub(crate) const EXEC_CAPABILITY: &str = "exec_stream_v2";
 pub(crate) const MAX_EXEC_START_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_EXEC_DATA_BYTES: usize = 64 * 1024;
 

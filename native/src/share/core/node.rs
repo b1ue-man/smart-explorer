@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream, VarInt};
 use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::{eio, hmac_proof, random_token};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecRegistry, ExecRegistryLimits};
@@ -34,7 +35,7 @@ pub(crate) struct ShareIrohNode {
     session_epoch: AtomicU64,
     incoming_sessions: Mutex<HashMap<u64, Connection>>,
     next_incoming_session: AtomicU64,
-    accept_errors: Mutex<HashMap<String, (Instant, u32)>>,
+    connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
     handshake_slots: Arc<Semaphore>,
     relay_url: String,
@@ -79,7 +80,7 @@ impl ShareIrohNode {
             session_epoch: AtomicU64::new(0),
             incoming_sessions: Mutex::new(HashMap::new()),
             next_incoming_session: AtomicU64::new(0),
-            accept_errors: Mutex::new(HashMap::new()),
+            connection_events: ConnectionEventReporter::default(),
             exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             relay_url,
@@ -363,42 +364,27 @@ impl ShareIrohNode {
                 tokio::spawn(async move {
                     match incoming.await {
                         Ok(connection) => {
+                            let error_kind = match connection.alpn() {
+                                ALPN => ConnectionErrorKind::FsConnection,
+                                EXEC_ALPN => ConnectionErrorKind::ExecConnection,
+                                _ => ConnectionErrorKind::Accept,
+                            };
                             if let Err(error) =
                                 dispatch_connection(node.clone(), connection, permit).await
                             {
-                                let _ = node
-                                    .ev
-                                    .send(ShareEvent::Error(format!("Iroh-Peer: {error}")));
+                                node.emit_connection_error(error_kind, error.to_string());
                             }
                         }
-                        Err(error) => node.emit_accept_error(error.to_string()),
+                        Err(error) => node
+                            .emit_connection_error(ConnectionErrorKind::Accept, error.to_string()),
                     }
                 });
             }
         });
     }
 
-    fn emit_accept_error(&self, message: String) {
-        let mut send = Some(format!("Iroh-Accept: {message}"));
-        if let Ok(mut seen) = self.accept_errors.lock() {
-            let now = Instant::now();
-            let entry = seen.entry(message.clone()).or_insert((now, 0));
-            entry.1 = entry.1.saturating_add(1);
-            if entry.1 > 1 && entry.0.elapsed() < Duration::from_secs(30) {
-                send = None;
-            } else if entry.1 > 1 {
-                send = Some(format!(
-                    "Iroh-Accept: {message} ({} Wiederholungen in 30s)",
-                    entry.1
-                ));
-                *entry = (now, 1);
-            } else {
-                entry.0 = now;
-            }
-        }
-        if let Some(message) = send {
-            let _ = self.ev.send(ShareEvent::Error(message));
-        }
+    pub(super) fn emit_connection_error(&self, kind: ConnectionErrorKind, message: String) {
+        self.connection_events.report(kind, message, &self.ev);
     }
 }
 
