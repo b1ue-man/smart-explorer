@@ -104,9 +104,14 @@ test or checkpoint; disposable and targeted test builds belong in step 1.
    `publish_release=false`. This does not rebuild or publish a release. It
    validates and temporarily stages the 18 committed assets, then runs the
    committed Linux and Windows GNU `se`/Share-server bytes through their exact
-   platform E2E. Fix failures on the same intended version and repeat only the
-   failed build stage or verification; do not create a tag until this run is
-   green.
+   platform E2E. The Linux gate also runs the SHA-256-pinned published v0.5.126
+   CLI through the mixed-version Share lifecycle. The Windows consumer
+   byte-compares all 18 downloaded files with
+   the same checkout's committed sources. On publication paths, the publication
+   consumer repeats that comparison and reruns all six payload SHA-256 files
+   before it may create the tag or upload a Release. Fix failures on the same
+   intended version and repeat only the failed build stage or verification; do
+   not create a tag until this run is green.
    If workflow dispatch is technically unavailable, push the same main commit
    to the version-bound verification branch instead:
    ```
@@ -200,9 +205,18 @@ Windows/feed byte equality, installer and all ancillary assets directly from
 the exact commit. It also starts the committed GNU/glibc Linux GUI under Xvfb,
 checks the static headless Linux payloads and DLL exports, stages exactly those
 committed bytes, runs the committed static Linux `se` and Share server through
-the full Share/Exec lifecycle, and uploads them for the native-Windows GNU `se.exe` and
-`se-share-server.exe` lifecycle E2E. Publication is a separate dependent job
-and cannot start before that exact-binary gate succeeds. Published
+the full Share/Exec lifecycle, and uploads them for the native-Windows GNU
+`se.exe` and `se-share-server.exe` lifecycle E2E. The Windows gate pairs that
+exact release `se.exe` with a same-commit debug peer fixture, then runs the full
+lifecycle twice so the exact candidate is once requester A and once the primary
+accepted target B. Only debug peers receive per-profile test namespaces; the
+release candidate never receives one, and the disposable peer fixture is never a
+published asset. Publication is a separate dependent job and cannot start
+before that exact-binary gate succeeds. Both the Windows E2E consumer and the
+publication consumer fail if any downloaded candidate byte differs from the
+same commit or if the candidate contains anything other than the 18 mapped
+assets. The publication consumer also fails if any downloaded feed payload does
+not match its committed SHA-256 file. Published
 app/updater/`se` payloads, hashes, and `version.txt` are therefore byte-identical
 to the auto-update feed; the installer, script, DLL, and Share servers are the
 same verified committed ancillary artifacts. The publication action treats any

@@ -64,10 +64,23 @@ jobs:
 
       - name: Native Windows Share and Exec CLI E2E
         shell: powershell
-        run: .\test-share-lifecycle-e2e-windows.ps1
+        run: |
+          $se = (Resolve-Path ".\target\debug\se.exe").Path
+          .\test-share-lifecycle-e2e-windows.ps1 `
+            -SeBinary $se `
+            -PeerSeBinary $se `
+            -ExactCandidateRole A
 
       - name: Native Windows Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Upload Windows debug peer fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-explorer-windows-debug-peer
+          path: native/target/debug/se.exe
+          if-no-files-found: error
+          retention-days: 1
 
   windows-gnu:
     needs: windows-native-tests
@@ -345,6 +358,23 @@ jobs:
           SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions_linux_release
         run: native/test-share-lifecycle-e2e.sh
 
+      - name: Exact committed Linux mixed-version Share E2E
+        working-directory: .
+        env:
+          SMART_EXPLORER_SE_BINARY: ${{ github.workspace }}/release-native/update-feed/se
+          SMART_EXPLORER_SHARE_SERVER_BINARY: ${{ github.workspace }}/release-native/share-server/se-share-server-linux
+        run: |
+          legacy="$RUNNER_TEMP/se-0.5.126"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output "$legacy" \
+            https://github.com/b1ue-man/smart-explorer/releases/download/v0.5.126/se
+          printf '%s  %s\n' \
+            c0868ff4609dc9a134fa96a7aadeb5e8612adc4546a661a85e1c11879936c573 \
+            "$legacy" | sha256sum --check --strict
+          chmod 0755 "$legacy"
+          SMART_EXPLORER_LEGACY_SE_BINARY="$legacy" \
+            native/test-share-mixed-version-e2e.sh
+
       - name: Upload exact staged release candidate
         uses: actions/upload-artifact@v4
         with:
@@ -352,7 +382,7 @@ jobs:
           path: native/out
 
   windows-gnu-release-e2e:
-    needs: release-candidate
+    needs: [release-candidate, windows-native-tests]
     if: >-
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/tags/v')) ||
@@ -363,8 +393,6 @@ jobs:
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/heads/release/v'))
     runs-on: windows-latest
-    env:
-      SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions_windows_gnu_release
     steps:
       - uses: actions/checkout@v4
 
@@ -373,22 +401,84 @@ jobs:
           name: smart-explorer-builds
           path: release-candidate
 
-      - name: Verify exact staged GNU se version
+      - uses: actions/download-artifact@v4
+        with:
+          name: smart-explorer-windows-debug-peer
+          path: debug-peer
+
+      - name: Verify downloaded candidate bytes and CLI versions
         shell: powershell
         run: |
+          $version = "${{ needs.release-candidate.outputs.version }}"
+          $assetMappings = @(
+            [pscustomobject]@{ Source = ".\release-native\Smart Explorer Setup $version.exe"; Staged = ".\release-candidate\Smart Explorer Setup $version.exe" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.exe"; Staged = ".\release-candidate\smart_explorer.exe" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.exe"; Staged = ".\release-candidate\smart_explorer_updater.exe" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se.exe"; Staged = ".\release-candidate\se.exe" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.exe.sha256"; Staged = ".\release-candidate\smart_explorer.exe.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.exe.sha256"; Staged = ".\release-candidate\smart_explorer_updater.exe.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se.exe.sha256"; Staged = ".\release-candidate\se.exe.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer"; Staged = ".\release-candidate\smart_explorer" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater"; Staged = ".\release-candidate\smart_explorer_updater" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se"; Staged = ".\release-candidate\se" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.sha256"; Staged = ".\release-candidate\smart_explorer.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.sha256"; Staged = ".\release-candidate\smart_explorer_updater.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se.sha256"; Staged = ".\release-candidate\se.sha256" },
+            [pscustomobject]@{ Source = ".\install-linux.sh"; Staged = ".\release-candidate\install-linux.sh" },
+            [pscustomobject]@{ Source = ".\release-native\smart_explorer_command.dll"; Staged = ".\release-candidate\smart_explorer_command.dll" },
+            [pscustomobject]@{ Source = ".\release-native\share-server\se-share-server.exe"; Staged = ".\release-candidate\se-share-server.exe" },
+            [pscustomobject]@{ Source = ".\release-native\share-server\se-share-server-linux"; Staged = ".\release-candidate\se-share-server-linux" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\version.txt"; Staged = ".\release-candidate\version.txt" }
+          )
+          $stagedFiles = @([System.IO.Directory]::EnumerateFiles(
+            (Resolve-Path ".\release-candidate").Path,
+            "*",
+            [System.IO.SearchOption]::AllDirectories
+          ))
+          if ($assetMappings.Count -ne 18 -or $stagedFiles.Count -ne 18) {
+            throw "release candidate must contain exactly 18 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
+          }
+          $mappedSources = @{}
+          $mappedStaged = @{}
+          foreach ($mapping in $assetMappings) {
+            $source = (Resolve-Path -LiteralPath $mapping.Source -ErrorAction Stop).Path
+            $staged = (Resolve-Path -LiteralPath $mapping.Staged -ErrorAction Stop).Path
+            if ($mappedSources.ContainsKey($source) -or $mappedStaged.ContainsKey($staged)) {
+              throw "release candidate mapping contains a duplicate source or destination: $source -> $staged"
+            }
+            $mappedSources[$source] = $true
+            $mappedStaged[$staged] = $true
+            & "$env:SystemRoot\System32\fc.exe" /b $source $staged > $null
+            if ($LASTEXITCODE -ne 0) {
+              throw "downloaded candidate differs from committed source: $($mapping.Staged)"
+            }
+          }
           $se = (Resolve-Path ".\release-candidate\se.exe").Path
           $reported = (& $se --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $reported -ne "se ${{ needs.release-candidate.outputs.version }}") {
+          if ($LASTEXITCODE -ne 0 -or $reported -ne "se $version") {
             throw "staged se version mismatch: '$reported'"
           }
+          $peer = (Resolve-Path ".\debug-peer\se.exe").Path
+          $peerReported = (& $peer --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $peerReported -ne "se $version") {
+            throw "debug peer fixture version mismatch: '$peerReported'"
+          }
 
-      - name: Exact staged Windows GNU Share and Exec CLI E2E
+      - name: Exact staged Windows GNU Share and Exec CLI E2E in both roles
         shell: powershell
         run: |
           $se = (Resolve-Path ".\release-candidate\se.exe").Path
+          $peer = (Resolve-Path ".\debug-peer\se.exe").Path
           $server = (Resolve-Path ".\release-candidate\se-share-server.exe").Path
           .\native\test-share-lifecycle-e2e-windows.ps1 `
             -SeBinary $se `
+            -PeerSeBinary $peer `
+            -ExactCandidateRole A `
+            -ShareServerBinary $server
+          .\native\test-share-lifecycle-e2e-windows.ps1 `
+            -SeBinary $se `
+            -PeerSeBinary $peer `
+            -ExactCandidateRole B `
             -ShareServerBinary $server
 
   publish-release:
@@ -409,6 +499,70 @@ jobs:
         with:
           name: smart-explorer-builds
           path: native/out
+
+      - name: Reverify downloaded release bytes before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver='${{ needs.release-candidate.outputs.version }}'
+          asset_mappings=(
+            "release-native/Smart Explorer Setup $ver.exe|native/out/Smart Explorer Setup $ver.exe"
+            "release-native/update-feed/smart_explorer.exe|native/out/smart_explorer.exe"
+            "release-native/update-feed/smart_explorer_updater.exe|native/out/smart_explorer_updater.exe"
+            "release-native/update-feed/se.exe|native/out/se.exe"
+            "release-native/update-feed/smart_explorer.exe.sha256|native/out/smart_explorer.exe.sha256"
+            "release-native/update-feed/smart_explorer_updater.exe.sha256|native/out/smart_explorer_updater.exe.sha256"
+            "release-native/update-feed/se.exe.sha256|native/out/se.exe.sha256"
+            "release-native/update-feed/smart_explorer|native/out/smart_explorer"
+            "release-native/update-feed/smart_explorer_updater|native/out/smart_explorer_updater"
+            "release-native/update-feed/se|native/out/se"
+            "release-native/update-feed/smart_explorer.sha256|native/out/smart_explorer.sha256"
+            "release-native/update-feed/smart_explorer_updater.sha256|native/out/smart_explorer_updater.sha256"
+            "release-native/update-feed/se.sha256|native/out/se.sha256"
+            "install-linux.sh|native/out/install-linux.sh"
+            "release-native/smart_explorer_command.dll|native/out/smart_explorer_command.dll"
+            "release-native/share-server/se-share-server.exe|native/out/se-share-server.exe"
+            "release-native/share-server/se-share-server-linux|native/out/se-share-server-linux"
+            "release-native/update-feed/version.txt|native/out/version.txt"
+          )
+          if [ "${#asset_mappings[@]}" -ne 18 ]; then
+            echo "::error::Internal release mapping does not contain exactly 18 assets."
+            exit 1
+          fi
+          downloaded_count="$(find native/out -type f -printf '.' | wc -c)"
+          if [ "$downloaded_count" -ne 18 ]; then
+            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 18."
+            exit 1
+          fi
+          declare -A mapped_committed=()
+          declare -A mapped_staged=()
+          for mapping in "${asset_mappings[@]}"; do
+            IFS='|' read -r committed staged <<<"$mapping"
+            if [ ! -f "$committed" ] || [ ! -f "$staged" ]; then
+              echo "::error::Release asset mapping is missing a file: $committed -> $staged"
+              exit 1
+            fi
+            if [[ -n "${mapped_committed[$committed]+present}" ]] ||
+              [[ -n "${mapped_staged[$staged]+present}" ]]; then
+              echo "::error::Release asset mapping contains a duplicate source or destination: $committed -> $staged"
+              exit 1
+            fi
+            mapped_committed["$committed"]=1
+            mapped_staged["$staged"]=1
+            if ! cmp "$committed" "$staged"; then
+              echo "::error::Downloaded release asset differs from the committed source: $staged"
+              exit 1
+            fi
+          done
+          (
+            cd native/out
+            sha256sum --check --strict smart_explorer.exe.sha256
+            sha256sum --check --strict smart_explorer_updater.exe.sha256
+            sha256sum --check --strict se.exe.sha256
+            sha256sum --check --strict smart_explorer.sha256
+            sha256sum --check --strict smart_explorer_updater.sha256
+            sha256sum --check --strict se.sha256
+          )
 
       - name: Bind publication to exact main commit and immutable tag
         shell: bash
