@@ -1,111 +1,22 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use super::direct_validation;
+use super::limits::{
+    validate_identifier, validate_presence, RetainError, MAX_PUBLISHED_DIRECTS_PER_CLIENT,
+    MAX_WATCHES_PER_CLIENT,
+};
+use super::state::{lock_state, State};
+use super::{send, Out, PeerPresence, Writer};
 
-use super::{lock_state, send, Out, PeerPresence, State, Writer};
+#[cfg(test)]
+pub(super) use super::direct_messages::DirectDecisionKind;
+pub(super) use super::direct_messages::{
+    DirectPeerIdentity, DirectRoute, DirectRouteOutcome, SignedDirectDecision,
+    SignedDirectDecisionReceipt, SignedDirectRequest, SignedDirectRequestReceipt,
+};
 
-const MAX_WATCHES: usize = 256;
 pub(super) const CAPABILITY: &str = "tracked_direct_v1";
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct DirectPeerIdentity {
-    pub(super) device_id: String,
-    pub(super) device_name: String,
-    pub(super) node_id: String,
-    pub(super) public_key: String,
-    pub(super) fingerprint: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct SignedDirectRequest {
-    pub(super) request_id: String,
-    pub(super) lookup_id: String,
-    pub(super) requester: DirectPeerIdentity,
-    pub(super) target: DirectPeerIdentity,
-    pub(super) created_at: i64,
-    pub(super) expires_at: i64,
-    pub(super) nonce: String,
-    pub(super) message: Option<String>,
-    pub(super) hmac_proof: String,
-    pub(super) identity_signature: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct SignedDirectRequestReceipt {
-    pub(super) request_id: String,
-    pub(super) lookup_id: String,
-    pub(super) requester: DirectPeerIdentity,
-    pub(super) target: DirectPeerIdentity,
-    pub(super) request_digest: String,
-    pub(super) received_at: i64,
-    pub(super) expires_at: i64,
-    pub(super) nonce: String,
-    pub(super) message: Option<String>,
-    pub(super) hmac_proof: String,
-    pub(super) identity_signature: String,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum DirectDecisionKind {
-    Accepted,
-    Rejected,
-    Revoked,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct SignedDirectDecision {
-    pub(super) request_id: String,
-    pub(super) lookup_id: String,
-    pub(super) requester: DirectPeerIdentity,
-    pub(super) target: DirectPeerIdentity,
-    pub(super) request_digest: String,
-    pub(super) decision: DirectDecisionKind,
-    pub(super) decision_revision: u64,
-    pub(super) decided_at: i64,
-    pub(super) expires_at: i64,
-    pub(super) nonce: String,
-    pub(super) message: Option<String>,
-    pub(super) hmac_proof: String,
-    pub(super) identity_signature: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct SignedDirectDecisionReceipt {
-    pub(super) request_id: String,
-    pub(super) lookup_id: String,
-    pub(super) requester: DirectPeerIdentity,
-    pub(super) target: DirectPeerIdentity,
-    pub(super) decision_digest: String,
-    pub(super) decision: DirectDecisionKind,
-    pub(super) decision_revision: u64,
-    pub(super) received_at: i64,
-    pub(super) expires_at: i64,
-    pub(super) nonce: String,
-    pub(super) message: Option<String>,
-    pub(super) hmac_proof: String,
-    pub(super) identity_signature: String,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum DirectRoute {
-    Request,
-    RequestReceipt,
-    Decision,
-    DecisionReceipt,
-}
-
-/// A `forwarded` ACK means only that this relay accepted the message and
-/// enqueued it to at least one currently connected, compatible client writer.
-/// It is not proof that the peer socket received or persisted the payload.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum DirectRouteOutcome {
-    Forwarded,
-    TargetOffline,
-}
 
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
     offered
@@ -126,16 +37,43 @@ pub(super) fn route_request(
     origin_id: u64,
     origin: &Writer,
     request: SignedDirectRequest,
+    legacy_presence: Option<PeerPresence>,
     state: &Arc<Mutex<State>>,
 ) {
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if let Err(error) = direct_validation::validate_request(&request) {
+        send_retain_error(origin, error);
+        return;
+    }
+    if let Some(presence) = &legacy_presence {
+        if let Err(error) = direct_validation::validate_legacy_bridge(&request, presence) {
+            send_retain_error(origin, error);
+            return;
+        }
+    }
     let request_id = request.request_id.clone();
-    let targets = capable_writer_for_lookup(&request.lookup_id, state)
-        .map(|writer| vec![writer])
-        .unwrap_or_default();
-    let outcome = forward_to(targets, Out::DirectRequest { request });
+    let outcome = match request_target(&request.lookup_id, state) {
+        Some((target, true)) => forward_to(vec![target], Out::DirectRequest { request }),
+        Some((target, false)) => match legacy_presence {
+            Some(presence) => {
+                if send(
+                    &target,
+                    &Out::DirectAccessRequest {
+                        lookup_id: request.lookup_id,
+                        presence,
+                    },
+                ) {
+                    DirectRouteOutcome::LegacyForwarded
+                } else {
+                    DirectRouteOutcome::TargetOffline
+                }
+            }
+            _ => DirectRouteOutcome::TargetOffline,
+        },
+        None => DirectRouteOutcome::TargetOffline,
+    };
     acknowledge(origin, request_id, DirectRoute::Request, outcome);
 }
 
@@ -146,6 +84,10 @@ pub(super) fn route_request_receipt(
     state: &Arc<Mutex<State>>,
 ) {
     if !require_capability(origin_id, origin, state) {
+        return;
+    }
+    if let Err(error) = direct_validation::validate_request_receipt(&receipt) {
+        send_retain_error(origin, error);
         return;
     }
     let request_id = receipt.request_id.clone();
@@ -163,6 +105,10 @@ pub(super) fn route_decision(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if let Err(error) = direct_validation::validate_decision(&decision) {
+        send_retain_error(origin, error);
+        return;
+    }
     let request_id = decision.request_id.clone();
     let targets = capable_writers_by_device(&decision.requester.device_id, state);
     let outcome = forward_to(targets, Out::DirectDecision { decision });
@@ -178,6 +124,10 @@ pub(super) fn route_decision_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if let Err(error) = direct_validation::validate_decision_receipt(&receipt) {
+        send_retain_error(origin, error);
+        return;
+    }
     let request_id = receipt.request_id.clone();
     let targets = capable_writers_by_device(&receipt.target.device_id, state);
     let outcome = forward_to(targets, Out::DirectDecisionReceipt { receipt });
@@ -190,6 +140,10 @@ pub(super) fn request_legacy(
     presence: PeerPresence,
     state: &Arc<Mutex<State>>,
 ) {
+    if let Err(error) = direct_validation::validate_legacy_request(lookup_id, &presence) {
+        send_retain_error(origin, error);
+        return;
+    }
     let target = writer_for_lookup(lookup_id, state);
     if let Some(target) = target {
         send(
@@ -211,6 +165,7 @@ pub(super) fn request_legacy(
 }
 
 pub(super) fn decision_legacy(
+    origin: &Writer,
     lookup_id: &str,
     requester_device_id: &str,
     accepted: bool,
@@ -218,6 +173,15 @@ pub(super) fn decision_legacy(
     msg: Option<String>,
     state: &Arc<Mutex<State>>,
 ) {
+    if let Err(error) = direct_validation::validate_legacy_decision(
+        lookup_id,
+        requester_device_id,
+        presence.as_ref(),
+        msg.as_deref(),
+    ) {
+        send_retain_error(origin, error);
+        return;
+    }
     for target in writers_by_device(requester_device_id, state) {
         send(
             &target,
@@ -232,17 +196,39 @@ pub(super) fn decision_legacy(
     }
 }
 
-pub(super) fn publish(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>) {
+pub(super) fn publish(id: u64, origin: &Writer, presence: PeerPresence, state: &Arc<Mutex<State>>) {
+    if let Err(error) = validate_presence(&presence) {
+        send_retain_error(origin, error);
+        return;
+    }
     let lookup_id = presence.relation_id.clone();
-    let watchers = {
+    let retain_result = {
         let mut state = lock_state(state);
-        state
-            .direct
-            .insert(lookup_id.clone(), (id, presence.clone()));
-        if let Some(client) = state.clients.get_mut(&id) {
-            client.direct_lookup_ids.insert(lookup_id.clone());
+        let Some(client) = state.clients.get(&id) else {
+            return;
+        };
+        if client.device_id != presence.device_id {
+            Err(RetainError::InvalidField("presence device id"))
+        } else if !client.direct_lookup_ids.contains(&lookup_id)
+            && client.direct_lookup_ids.len() >= MAX_PUBLISHED_DIRECTS_PER_CLIENT
+        {
+            Err(RetainError::Limit("published directs"))
+        } else {
+            state
+                .direct
+                .insert(lookup_id.clone(), (id, presence.clone()));
+            if let Some(client) = state.clients.get_mut(&id) {
+                client.direct_lookup_ids.insert(lookup_id.clone());
+            }
+            Ok(state.watchers.get(&lookup_id).cloned().unwrap_or_default())
         }
-        state.watchers.get(&lookup_id).cloned().unwrap_or_default()
+    };
+    let watchers = match retain_result {
+        Ok(watchers) => watchers,
+        Err(error) => {
+            send_retain_error(origin, error);
+            return;
+        }
     };
     notify_available(&lookup_id, &presence, watchers, state);
 }
@@ -250,44 +236,55 @@ pub(super) fn publish(id: u64, presence: PeerPresence, state: &Arc<Mutex<State>>
 pub(super) fn unpublish(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
     let watchers = {
         let mut state = lock_state(state);
-        if state.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id) {
+        let removed = state.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id);
+        if removed {
             state.direct.remove(lookup_id);
         }
         if let Some(client) = state.clients.get_mut(&id) {
             client.direct_lookup_ids.remove(lookup_id);
         }
-        state.watchers.get(lookup_id).cloned().unwrap_or_default()
+        removed.then(|| state.watchers.get(lookup_id).cloned().unwrap_or_default())
     };
-    notify_offline(lookup_id, watchers, state);
+    if let Some(watchers) = watchers {
+        notify_offline(lookup_id, watchers, state);
+    }
 }
 
 pub(super) fn watch(id: u64, origin: &Writer, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    let current = {
+    if let Err(error) = validate_identifier("lookup id", lookup_id) {
+        send_retain_error(origin, error);
+        return;
+    }
+    let retain_result = {
         let mut state = lock_state(state);
-        if state
-            .clients
-            .get(&id)
-            .map(|client| client.watched_lookup_ids.len() >= MAX_WATCHES)
-            .unwrap_or(false)
+        let Some(client) = state.clients.get(&id) else {
+            return;
+        };
+        if !client.watched_lookup_ids.contains(lookup_id)
+            && client.watched_lookup_ids.len() >= MAX_WATCHES_PER_CLIENT
         {
-            send(
-                origin,
-                &Out::Error {
-                    scope: "direct".into(),
-                    msg: "too many watches".into(),
-                },
-            );
+            Err(RetainError::Limit("watches"))
+        } else {
+            state
+                .watchers
+                .entry(lookup_id.to_string())
+                .or_default()
+                .insert(id);
+            if let Some(client) = state.clients.get_mut(&id) {
+                client.watched_lookup_ids.insert(lookup_id.to_string());
+            }
+            Ok(state
+                .direct
+                .get(lookup_id)
+                .map(|(_, presence)| presence.clone()))
+        }
+    };
+    let current = match retain_result {
+        Ok(current) => current,
+        Err(error) => {
+            send_retain_error(origin, error);
             return;
         }
-        state
-            .watchers
-            .entry(lookup_id.to_string())
-            .or_default()
-            .insert(id);
-        if let Some(client) = state.clients.get_mut(&id) {
-            client.watched_lookup_ids.insert(lookup_id.to_string());
-        }
-        state.direct.get(lookup_id).map(|(_, p)| p.clone())
     };
     if let Some(presence) = current {
         send(
@@ -305,8 +302,14 @@ pub(super) fn unwatch(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
     if let Some(client) = state.clients.get_mut(&id) {
         client.watched_lookup_ids.remove(lookup_id);
     }
-    if let Some(watchers) = state.watchers.get_mut(lookup_id) {
+    let remove_lookup = if let Some(watchers) = state.watchers.get_mut(lookup_id) {
         watchers.remove(&id);
+        watchers.is_empty()
+    } else {
+        false
+    };
+    if remove_lookup {
+        state.watchers.remove(lookup_id);
     }
 }
 
@@ -330,13 +333,23 @@ fn require_capability(origin_id: u64, origin: &Writer, state: &Arc<Mutex<State>>
 fn forward_to(targets: Vec<Writer>, message: Out) -> DirectRouteOutcome {
     let mut forwarded = false;
     for target in targets {
-        forwarded |= target.send(message.clone()).is_ok();
+        forwarded |= send(&target, &message);
     }
     if forwarded {
         DirectRouteOutcome::Forwarded
     } else {
         DirectRouteOutcome::TargetOffline
     }
+}
+
+fn send_retain_error(origin: &Writer, error: RetainError) {
+    send(
+        origin,
+        &Out::Error {
+            scope: "direct".into(),
+            msg: error.message(),
+        },
+    );
 }
 
 fn acknowledge(
@@ -355,14 +368,18 @@ fn acknowledge(
     );
 }
 
-fn capable_writer_for_lookup(lookup_id: &str, state: &Arc<Mutex<State>>) -> Option<Writer> {
+fn request_target(lookup_id: &str, state: &Arc<Mutex<State>>) -> Option<(Writer, bool)> {
     let state = lock_state(state);
     state
         .direct
         .get(lookup_id)
         .and_then(|(owner_id, _)| state.clients.get(owner_id))
-        .filter(|client| client.capabilities.contains(CAPABILITY))
-        .map(|client| client.writer.clone())
+        .map(|client| {
+            (
+                client.writer.clone(),
+                client.capabilities.contains(CAPABILITY),
+            )
+        })
 }
 
 fn capable_writers_by_device(device_id: &str, state: &Arc<Mutex<State>>) -> Vec<Writer> {

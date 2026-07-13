@@ -7,192 +7,45 @@
 //! configuration. Clients validate HMAC proofs, pinned SmartExplorer identities,
 //! and Iroh NodeIds before opening a peer session.
 
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::io::{self, BufReader, ErrorKind, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
-use tungstenite::{accept, Error as WsError, Message, WebSocket};
+use std::net::{Shutdown, TcpListener};
+use std::sync::{Arc, Mutex};
 
+mod direct_messages;
+mod direct_validation;
+mod limits;
 mod line;
+#[cfg(test)]
+mod main_tests;
+#[cfg(test)]
+mod mixed_version_tests;
+mod protocol;
+mod rate_limits;
+mod registration_guard;
+mod relay;
+#[cfg(test)]
+mod resource_limits_tests;
+mod state;
+#[cfg(test)]
+mod state_transition_tests;
 mod tracked_direct;
 #[cfg(test)]
 mod tracked_direct_tests;
-use line::{read_line_limited, read_line_limited_from_stream, MAX_JSON_LINE};
+mod transport;
+#[cfg(test)]
+mod transport_cleanup_tests;
+mod websocket_read_limit;
+mod writer;
+use limits::{
+    ConnectionLimiter, SourceClassifier, MAX_CONNECTIONS_PER_SOURCE, MAX_CONNECTION_WORKERS,
+};
+use protocol::{In, Out, PeerPresence};
+use rate_limits::AcceptRateLimiter;
+use state::{join_room, leave_room, State};
+use transport::handle_with_source;
+use writer::Writer;
 
-const MAX_ROOM: usize = 64;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PeerPresence {
-    kind: String,
-    relation_id: String,
-    device_id: String,
-    device_name: String,
-    public_key: String,
-    fingerprint: String,
-    #[serde(default)]
-    node_id: String,
-    #[serde(default)]
-    relay_url: String,
-    candidates: Vec<String>,
-    expires_at: i64,
-    nonce: String,
-    proof: String,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize)]
-#[serde(tag = "t", rename_all = "snake_case")]
-enum In {
-    Hello {
-        protocol_version: u32,
-        device_id: String,
-        device_name: String,
-        listen_port: u16,
-        #[serde(default)]
-        lan: Vec<String>,
-        public_key: String,
-        fingerprint: String,
-        #[serde(default)]
-        capabilities: Vec<String>,
-    },
-    PublishDirect {
-        presence: PeerPresence,
-    },
-    UnpublishDirect {
-        lookup_id: String,
-    },
-    WatchDirect {
-        lookup_id: String,
-    },
-    RequestDirect {
-        lookup_id: String,
-        presence: PeerPresence,
-    },
-    DirectAccessAccepted {
-        lookup_id: String,
-        requester_device_id: String,
-        accepted: bool,
-        presence: Option<PeerPresence>,
-        msg: Option<String>,
-    },
-    SubmitDirectRequest {
-        request: tracked_direct::SignedDirectRequest,
-    },
-    SubmitDirectRequestReceipt {
-        receipt: tracked_direct::SignedDirectRequestReceipt,
-    },
-    SubmitDirectDecision {
-        decision: tracked_direct::SignedDirectDecision,
-    },
-    SubmitDirectDecisionReceipt {
-        receipt: tracked_direct::SignedDirectDecisionReceipt,
-    },
-    UnwatchDirect {
-        lookup_id: String,
-    },
-    JoinRoom {
-        room_id: String,
-        presence: PeerPresence,
-    },
-    LeaveRoom {
-        room_id: String,
-    },
-    Heartbeat,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(tag = "t", rename_all = "snake_case")]
-enum Out {
-    HelloOk {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        capabilities: Vec<String>,
-    },
-    DirectAvailable {
-        lookup_id: String,
-        presence: PeerPresence,
-    },
-    DirectOffline {
-        lookup_id: String,
-    },
-    DirectAccessRequest {
-        lookup_id: String,
-        presence: PeerPresence,
-    },
-    DirectAccessAccepted {
-        lookup_id: String,
-        requester_device_id: String,
-        accepted: bool,
-        presence: Option<PeerPresence>,
-        msg: Option<String>,
-    },
-    DirectRequest {
-        request: tracked_direct::SignedDirectRequest,
-    },
-    DirectRequestReceipt {
-        receipt: tracked_direct::SignedDirectRequestReceipt,
-    },
-    DirectDecision {
-        decision: tracked_direct::SignedDirectDecision,
-    },
-    DirectDecisionReceipt {
-        receipt: tracked_direct::SignedDirectDecisionReceipt,
-    },
-    DirectRouteAck {
-        request_id: String,
-        route: tracked_direct::DirectRoute,
-        outcome: tracked_direct::DirectRouteOutcome,
-    },
-    RoomRoster {
-        room_id: String,
-        members: Vec<PeerPresence>,
-    },
-    RoomJoined {
-        room_id: String,
-        presence: PeerPresence,
-    },
-    RoomLeft {
-        room_id: String,
-        device_id: String,
-    },
-    Error {
-        scope: String,
-        msg: String,
-    },
-    Pong,
-}
-
-type Writer = Sender<Out>;
-
-#[derive(Clone)]
-struct Client {
-    writer: Writer,
-    device_id: String,
-    capabilities: HashSet<String>,
-    direct_lookup_ids: HashSet<String>,
-    watched_lookup_ids: HashSet<String>,
-    rooms: HashSet<String>,
-}
-
-#[derive(Default)]
-struct State {
-    next_id: u64,
-    clients: HashMap<u64, Client>,
-    direct: HashMap<String, (u64, PeerPresence)>,
-    watchers: HashMap<String, HashSet<u64>>,
-    rooms: HashMap<String, HashMap<String, (u64, PeerPresence)>>,
-}
-
-fn send(w: &Writer, msg: &Out) {
-    let _ = w.send(msg.clone());
-}
-
-fn lock_state(state: &Arc<Mutex<State>>) -> MutexGuard<'_, State> {
-    state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn send(writer: &Writer, message: &Out) -> bool {
+    writer.try_send(message)
 }
 
 fn main() {
@@ -200,7 +53,20 @@ fn main() {
         .nth(1)
         .or_else(|| std::env::var("SE_SHARE_BIND").ok())
         .unwrap_or_else(|| "0.0.0.0:51820".to_string());
-    let _relay_guard = start_iroh_relay(&bind);
+    let source_classifier = match trusted_proxy_sources_from_env() {
+        Ok(classifier) => classifier,
+        Err(error) => {
+            eprintln!("se-share-server: {error}");
+            std::process::exit(1);
+        }
+    };
+    let _relay_guard = match relay::start(&bind) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("se-share-server: {error}");
+            std::process::exit(1);
+        }
+    };
     let listener = match TcpListener::bind(&bind) {
         Ok(l) => l,
         Err(e) => {
@@ -210,370 +76,51 @@ fn main() {
     };
     eprintln!("se-share-server signaling on {bind} (raw TCP + WebSocket upgrade)");
     let state = Arc::new(Mutex::new(State::default()));
+    let connections = ConnectionLimiter::new(MAX_CONNECTION_WORKERS, MAX_CONNECTIONS_PER_SOURCE);
+    let mut accept_rate = AcceptRateLimiter::new();
     for conn in listener.incoming() {
         let stream = match conn {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let state = state.clone();
-        std::thread::spawn(move || {
-            let _ = handle(stream, state);
-        });
-    }
-}
-
-struct RelayGuard {
-    _rt: tokio::runtime::Runtime,
-    _server: iroh_relay::server::Server,
-}
-
-fn start_iroh_relay(signal_bind: &str) -> Option<RelayGuard> {
-    if std::env::var("SE_IROH_RELAY_DISABLE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        eprintln!("iroh relay disabled via SE_IROH_RELAY_DISABLE");
-        return None;
-    }
-    let bind = std::env::var("SE_IROH_RELAY_BIND")
-        .ok()
-        .unwrap_or_else(|| default_relay_bind(signal_bind));
-    let addr = match bind.parse::<std::net::SocketAddr>() {
-        Ok(addr) => addr,
-        Err(e) => {
-            eprintln!("iroh relay disabled: invalid SE_IROH_RELAY_BIND/default {bind}: {e}");
-            return None;
-        }
-    };
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("se-iroh-relay")
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("iroh relay disabled: cannot create runtime: {e}");
-            return None;
-        }
-    };
-    let server = match rt.block_on(async {
-        let mut cfg = iroh_relay::server::ServerConfig::default();
-        cfg.relay = Some(iroh_relay::server::RelayConfig::new(addr));
-        iroh_relay::server::Server::spawn(cfg).await
-    }) {
-        Ok(server) => server,
-        Err(e) => {
-            eprintln!("iroh relay disabled: cannot bind {addr}: {e}");
-            return None;
-        }
-    };
-    let relay_url = server
-        .http_addr()
-        .map(|addr| format!("http://{addr}"))
-        .unwrap_or_else(|| format!("http://{addr}"));
-    eprintln!("se-share-server iroh relay listening on {relay_url}");
-    Some(RelayGuard {
-        _rt: rt,
-        _server: server,
-    })
-}
-
-fn default_relay_bind(signal_bind: &str) -> String {
-    let host_port = signal_bind
-        .trim()
-        .trim_start_matches("tcp://")
-        .trim_end_matches('/');
-    if let Ok(addr) = host_port.parse::<std::net::SocketAddr>() {
-        let mut next = addr;
-        next.set_port(addr.port().saturating_add(1));
-        return next.to_string();
-    }
-    "0.0.0.0:51821".to_string()
-}
-
-fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut probe = [0u8; 3];
-    let n = stream.peek(&mut probe)?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    if n >= 1 && probe[0] == b'G' {
-        return handle_ws(stream, state);
-    }
-    handle_tcp(stream, state)
-}
-
-fn handle_tcp(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let mut line = String::new();
-    if read_line_limited_from_stream(&mut stream, &mut line, MAX_JSON_LINE)? == 0 {
-        return Ok(());
-    }
-    let hello: In = match serde_json::from_str(line.trim()) {
-        Ok(h) => h,
-        Err(_) => return Ok(()),
-    };
-    let writer = spawn_tcp_writer(stream.try_clone()?);
-    let mut reader = BufReader::new(stream);
-    let In::Hello {
-        protocol_version,
-        device_id,
-        device_name: _,
-        listen_port: _,
-        lan: _,
-        public_key: _,
-        fingerprint: _,
-        capabilities,
-    } = hello
-    else {
-        send(
-            &writer,
-            &Out::Error {
-                scope: "server".into(),
-                msg: "first message must be hello".into(),
-            },
-        );
-        return Ok(());
-    };
-    if protocol_version != 3 || device_id.trim().is_empty() {
-        send(
-            &writer,
-            &Out::Error {
-                scope: "server".into(),
-                msg: "unsupported hello".into(),
-            },
-        );
-        return Ok(());
-    }
-
-    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
-    let id = register_client(&state, writer.clone(), device_id, capabilities.clone());
-    send(
-        &writer,
-        &Out::HelloOk {
-            capabilities: tracked_direct::capability_list(&capabilities),
-        },
-    );
-
-    loop {
-        line.clear();
-        match read_line_limited(&mut reader, &mut line, MAX_JSON_LINE) {
-            Ok(0) => break,
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                break;
+        let source = match stream.peer_addr() {
+            Ok(address) => source_classifier.classify(address),
+            Err(_) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                continue;
             }
-            Err(_) => break,
-            Ok(_) => {}
-        }
-        let msg: In = match serde_json::from_str(line.trim()) {
-            Ok(m) => m,
-            Err(_) => continue,
         };
-        dispatch(id, &writer, msg, &state);
-    }
-    cleanup(id, &state);
-    Ok(())
-}
-
-fn handle_ws(stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut ws = accept(stream).map_err(io_other)?;
-    let (writer, out_rx) = mpsc::channel::<Out>();
-    let hello = match read_ws_json(&mut ws, &out_rx, Duration::from_secs(60)) {
-        Ok(Some(msg)) => msg,
-        Ok(None) => return Ok(()),
-        Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-            return Ok(())
+        let Some(permit) = connections.try_acquire(source) else {
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
+        };
+        if !accept_rate.try_admit(source) {
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
         }
-        Err(e) => return Err(e),
-    };
-    let In::Hello {
-        protocol_version,
-        device_id,
-        device_name: _,
-        listen_port: _,
-        lan: _,
-        public_key: _,
-        fingerprint: _,
-        capabilities,
-    } = hello
-    else {
-        send(
-            &writer,
-            &Out::Error {
-                scope: "server".into(),
-                msg: "first message must be hello".into(),
-            },
-        );
-        flush_ws_out(&mut ws, &out_rx)?;
-        return Ok(());
-    };
-    if protocol_version != 3 || device_id.trim().is_empty() {
-        send(
-            &writer,
-            &Out::Error {
-                scope: "server".into(),
-                msg: "unsupported hello".into(),
-            },
-        );
-        flush_ws_out(&mut ws, &out_rx)?;
-        return Ok(());
+        let state = state.clone();
+        let _ = std::thread::Builder::new()
+            .name("share-server-connection".into())
+            .spawn(move || {
+                let _permit = permit;
+                let _ = handle_with_source(stream, state, source);
+            });
     }
-
-    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
-    let id = register_client(&state, writer.clone(), device_id, capabilities.clone());
-    send(
-        &writer,
-        &Out::HelloOk {
-            capabilities: tracked_direct::capability_list(&capabilities),
-        },
-    );
-
-    let result = loop {
-        if let Err(error) = flush_ws_out(&mut ws, &out_rx) {
-            break Err(error);
-        }
-        match read_ws_json(&mut ws, &out_rx, Duration::from_millis(500)) {
-            Ok(Some(msg)) => dispatch(id, &writer, msg, &state),
-            Ok(None) => break Ok(()),
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
-            Err(e) => break Err(e),
-        }
-    };
-    cleanup(id, &state);
-    result
 }
 
-fn register_client(
-    state: &Arc<Mutex<State>>,
-    writer: Writer,
-    device_id: String,
-    capabilities: HashSet<String>,
-) -> u64 {
-    let mut st = lock_state(state);
-    st.next_id += 1;
-    let id = st.next_id;
-    st.clients.insert(
-        id,
-        Client {
-            writer,
-            device_id,
-            capabilities,
-            direct_lookup_ids: HashSet::new(),
-            watched_lookup_ids: HashSet::new(),
-            rooms: HashSet::new(),
-        },
-    );
-    id
-}
-
-fn spawn_tcp_writer(mut stream: TcpStream) -> Writer {
-    let (tx, rx) = mpsc::channel::<Out>();
-    std::thread::Builder::new()
-        .name("share-server-tcp-writer".into())
-        .spawn(move || {
-            while let Ok(msg) = rx.recv() {
-                if write_tcp_msg(&mut stream, &msg).is_err() {
-                    break;
-                }
-            }
-        })
-        .ok();
-    tx
-}
-
-fn write_tcp_msg(stream: &mut TcpStream, msg: &Out) -> io::Result<()> {
-    let mut line = serde_json::to_string(msg).map_err(io_other)?;
-    line.push('\n');
-    stream.write_all(line.as_bytes())?;
-    stream.flush()
-}
-
-fn flush_ws_out(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Out>) -> io::Result<()> {
-    while let Ok(msg) = rx.try_recv() {
-        let text = serde_json::to_string(&msg).map_err(io_other)?;
-        ws.send(Message::Text(text)).map_err(ws_to_io)?;
-        ws.flush().map_err(ws_to_io)?;
-    }
-    Ok(())
-}
-
-fn read_ws_json(
-    ws: &mut WebSocket<TcpStream>,
-    out_rx: &Receiver<Out>,
-    timeout: Duration,
-) -> io::Result<Option<In>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        flush_ws_out(ws, out_rx)?;
-        match ws.read() {
-            Ok(Message::Text(text)) => {
-                ensure_ws_payload_limit(text.len())?;
-                let text = text.trim();
-                if text.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str(text) {
-                    Ok(msg) => return Ok(Some(msg)),
-                    Err(_) => continue,
-                }
-            }
-            Ok(Message::Binary(bytes)) => {
-                ensure_ws_payload_limit(bytes.len())?;
-                let text = String::from_utf8(bytes).map_err(io_other)?;
-                let text = text.trim();
-                if text.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str(text) {
-                    Ok(msg) => return Ok(Some(msg)),
-                    Err(_) => continue,
-                }
-            }
-            Ok(Message::Ping(payload)) => {
-                ws.send(Message::Pong(payload)).map_err(ws_to_io)?;
-                ws.flush().map_err(ws_to_io)?;
-            }
-            Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(_)) => return Ok(None),
-            Ok(_) => {}
-            Err(WsError::Io(e))
-                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-            {
-                if Instant::now() >= deadline {
-                    return Err(io::Error::new(ErrorKind::TimedOut, "websocket idle"));
-                }
-            }
-            Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
-            Err(e) => return Err(ws_to_io(e)),
+fn trusted_proxy_sources_from_env() -> Result<SourceClassifier, String> {
+    match std::env::var("SE_SHARE_TRUSTED_PROXY_IPS") {
+        Ok(value) => SourceClassifier::parse_proxy_ips(&value),
+        Err(std::env::VarError::NotPresent) => Ok(SourceClassifier::default()),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("SE_SHARE_TRUSTED_PROXY_IPS is not valid Unicode".into())
         }
     }
-}
-
-fn ensure_ws_payload_limit(len: usize) -> io::Result<()> {
-    if len > MAX_JSON_LINE {
-        Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "json line too large",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn ws_to_io(err: WsError) -> io::Error {
-    match err {
-        WsError::Io(e) => e,
-        other => io_other(other),
-    }
-}
-
-fn io_other<E: std::fmt::Display>(err: E) -> io::Error {
-    io::Error::other(err.to_string())
 }
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
-        In::PublishDirect { presence } => tracked_direct::publish(id, presence, state),
+        In::PublishDirect { presence } => tracked_direct::publish(id, writer, presence, state),
         In::UnpublishDirect { lookup_id } => tracked_direct::unpublish(id, &lookup_id, state),
         In::WatchDirect { lookup_id } => tracked_direct::watch(id, writer, &lookup_id, state),
         In::RequestDirect {
@@ -587,6 +134,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             presence,
             msg,
         } => tracked_direct::decision_legacy(
+            writer,
             &lookup_id,
             &requester_device_id,
             accepted,
@@ -594,9 +142,10 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             msg,
             state,
         ),
-        In::SubmitDirectRequest { request } => {
-            tracked_direct::route_request(id, writer, request, state)
-        }
+        In::SubmitDirectRequest {
+            request,
+            legacy_presence,
+        } => tracked_direct::route_request(id, writer, *request, legacy_presence, state),
         In::SubmitDirectRequestReceipt { receipt } => {
             tracked_direct::route_request_receipt(id, writer, receipt, state)
         }
@@ -609,361 +158,9 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
         In::UnwatchDirect { lookup_id } => tracked_direct::unwatch(id, &lookup_id, state),
         In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
         In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
-        In::Heartbeat => send(writer, &Out::Pong),
+        In::Heartbeat => {
+            send(writer, &Out::Pong);
+        }
         In::Hello { .. } => {}
-    }
-}
-
-fn join_room(
-    id: u64,
-    writer: &Writer,
-    room_id: &str,
-    presence: PeerPresence,
-    state: &Arc<Mutex<State>>,
-) {
-    let (roster, joined_targets) = {
-        let mut st = lock_state(state);
-        let members = st.rooms.entry(room_id.to_string()).or_default();
-        if members.len() >= MAX_ROOM && !members.contains_key(&presence.device_id) {
-            send(
-                writer,
-                &Out::Error {
-                    scope: "room".into(),
-                    msg: "room full".into(),
-                },
-            );
-            return;
-        }
-        let roster: Vec<PeerPresence> = members.values().map(|(_, p)| p.clone()).collect();
-        let target_ids: Vec<u64> = members.values().map(|(client_id, _)| *client_id).collect();
-        members.insert(presence.device_id.clone(), (id, presence.clone()));
-        if let Some(c) = st.clients.get_mut(&id) {
-            c.rooms.insert(room_id.to_string());
-        }
-        let targets: Vec<Writer> = target_ids
-            .into_iter()
-            .filter_map(|client_id| st.clients.get(&client_id).map(|c| c.writer.clone()))
-            .collect();
-        (roster, targets)
-    };
-    send(
-        writer,
-        &Out::RoomRoster {
-            room_id: room_id.to_string(),
-            members: roster,
-        },
-    );
-    for target in joined_targets {
-        send(
-            &target,
-            &Out::RoomJoined {
-                room_id: room_id.to_string(),
-                presence: presence.clone(),
-            },
-        );
-    }
-}
-
-fn leave_room(id: u64, room_id: &str, state: &Arc<Mutex<State>>) {
-    let (device_id, targets) = {
-        let mut st = lock_state(state);
-        let device_id = st
-            .clients
-            .get(&id)
-            .map(|c| c.device_id.clone())
-            .unwrap_or_default();
-        let mut targets = Vec::new();
-        if let Some(members) = st.rooms.get_mut(room_id) {
-            members.retain(|_, (client_id, _)| *client_id != id);
-            let remaining_ids: Vec<u64> =
-                members.values().map(|(client_id, _)| *client_id).collect();
-            if members.is_empty() {
-                st.rooms.remove(room_id);
-            }
-            for client_id in remaining_ids {
-                if let Some(c) = st.clients.get(&client_id) {
-                    targets.push(c.writer.clone());
-                }
-            }
-        }
-        if let Some(c) = st.clients.get_mut(&id) {
-            c.rooms.remove(room_id);
-        }
-        (device_id, targets)
-    };
-    for target in targets {
-        send(
-            &target,
-            &Out::RoomLeft {
-                room_id: room_id.to_string(),
-                device_id: device_id.clone(),
-            },
-        );
-    }
-}
-
-fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
-    let (directs, watched, rooms) = {
-        let mut st = lock_state(state);
-        let client = match st.clients.remove(&id) {
-            Some(c) => c,
-            None => return,
-        };
-        for lookup in &client.watched_lookup_ids {
-            if let Some(w) = st.watchers.get_mut(lookup) {
-                w.remove(&id);
-            }
-        }
-        (
-            client.direct_lookup_ids.into_iter().collect::<Vec<_>>(),
-            client.watched_lookup_ids.into_iter().collect::<Vec<_>>(),
-            client.rooms.into_iter().collect::<Vec<_>>(),
-        )
-    };
-    for lookup in directs {
-        tracked_direct::unpublish(id, &lookup, state);
-    }
-    for lookup in watched {
-        let mut st = lock_state(state);
-        if let Some(w) = st.watchers.get_mut(&lookup) {
-            w.remove(&id);
-        }
-    }
-    for room in rooms {
-        leave_room(id, &room, state);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn presence(kind: &str, relation: &str, device: &str) -> PeerPresence {
-        PeerPresence {
-            kind: kind.into(),
-            relation_id: relation.into(),
-            device_id: device.into(),
-            device_name: device.into(),
-            public_key: "pk".into(),
-            fingerprint: "fp".into(),
-            node_id: "node".into(),
-            relay_url: "http://127.0.0.1:51821".into(),
-            candidates: vec!["127.0.0.1:1".into()],
-            expires_at: 99,
-            nonce: "n".into(),
-            proof: "proof".into(),
-        }
-    }
-
-    #[test]
-    fn out_messages_serialize_tagged() {
-        let m = Out::DirectOffline {
-            lookup_id: "x".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&m).unwrap(),
-            r#"{"t":"direct_offline","lookup_id":"x"}"#
-        );
-        let r = Out::RoomRoster {
-            room_id: "r".into(),
-            members: vec![],
-        };
-        assert_eq!(
-            serde_json::to_string(&r).unwrap(),
-            r#"{"t":"room_roster","room_id":"r","members":[]}"#
-        );
-    }
-
-    #[test]
-    fn hello_parses() {
-        let h: In = serde_json::from_str(
-            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
-        )
-        .unwrap();
-        let In::Hello {
-            protocol_version,
-            device_id,
-            listen_port,
-            ..
-        } = h
-        else {
-            panic!("not hello");
-        };
-        assert_eq!(protocol_version, 3);
-        assert_eq!(device_id, "a");
-        assert_eq!(listen_port, 0);
-    }
-
-    #[test]
-    fn presence_roundtrips() {
-        let p = presence("room", "r", "d");
-        let s = serde_json::to_string(&p).unwrap();
-        let back: PeerPresence = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.kind, "room");
-        assert_eq!(back.relation_id, "r");
-        assert_eq!(back.device_id, "d");
-    }
-
-    #[test]
-    fn direct_request_routes_to_lookup_owner() {
-        let mut state = State::default();
-        let (owner_tx, owner_rx) = mpsc::channel();
-        let (requester_tx, requester_rx) = mpsc::channel();
-        state.clients.insert(
-            1,
-            Client {
-                writer: owner_tx,
-                device_id: "owner".into(),
-                capabilities: HashSet::new(),
-                direct_lookup_ids: HashSet::from(["lookup".into()]),
-                watched_lookup_ids: HashSet::new(),
-                rooms: HashSet::new(),
-            },
-        );
-        state.clients.insert(
-            2,
-            Client {
-                writer: requester_tx.clone(),
-                device_id: "requester".into(),
-                capabilities: HashSet::new(),
-                direct_lookup_ids: HashSet::new(),
-                watched_lookup_ids: HashSet::new(),
-                rooms: HashSet::new(),
-            },
-        );
-        state
-            .direct
-            .insert("lookup".into(), (1, presence("direct", "lookup", "owner")));
-        let state = Arc::new(Mutex::new(state));
-        tracked_direct::request_legacy(
-            &requester_tx,
-            "lookup",
-            presence("direct", "lookup", "requester"),
-            &state,
-        );
-        match owner_rx.recv().unwrap() {
-            Out::DirectAccessRequest {
-                lookup_id,
-                presence,
-            } => {
-                assert_eq!(lookup_id, "lookup");
-                assert_eq!(presence.device_id, "requester");
-            }
-            _ => panic!("wrong message"),
-        }
-        assert!(requester_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn direct_accept_routes_to_requester_device() {
-        let mut state = State::default();
-        let (requester_tx, requester_rx) = mpsc::channel();
-        state.clients.insert(
-            1,
-            Client {
-                writer: requester_tx,
-                device_id: "requester".into(),
-                capabilities: HashSet::new(),
-                direct_lookup_ids: HashSet::new(),
-                watched_lookup_ids: HashSet::new(),
-                rooms: HashSet::new(),
-            },
-        );
-        let state = Arc::new(Mutex::new(state));
-        tracked_direct::decision_legacy(
-            "lookup",
-            "requester",
-            true,
-            Some(presence("direct", "lookup", "owner")),
-            None,
-            &state,
-        );
-        match requester_rx.recv().unwrap() {
-            Out::DirectAccessAccepted {
-                lookup_id,
-                requester_device_id,
-                accepted,
-                presence,
-                ..
-            } => {
-                assert_eq!(lookup_id, "lookup");
-                assert_eq!(requester_device_id, "requester");
-                assert!(accepted);
-                assert_eq!(presence.unwrap().device_id, "owner");
-            }
-            _ => panic!("wrong message"),
-        }
-    }
-
-    #[test]
-    fn relay_bind_defaults_to_next_port() {
-        assert_eq!(default_relay_bind("127.0.0.1:51820"), "127.0.0.1:51821");
-        assert_eq!(default_relay_bind("0.0.0.0:443"), "0.0.0.0:444");
-    }
-
-    #[test]
-    fn websocket_client_can_hello_and_heartbeat() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(State::default()));
-        let server_state = state.clone();
-        let handle = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            handle(stream, server_state).unwrap();
-        });
-
-        let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
-        ws.send(Message::Text(
-            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["127.0.0.1"],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
-        ))
-        .unwrap();
-        let first = ws.read().unwrap().into_text().unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&first).unwrap()["t"],
-            "hello_ok"
-        );
-
-        std::thread::sleep(Duration::from_millis(750));
-        ws.send(Message::Text(r#"{"t":"heartbeat"}"#.to_string()))
-            .unwrap();
-        let second = ws.read().unwrap().into_text().unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&second).unwrap()["t"],
-            "pong"
-        );
-
-        ws.close(None).unwrap();
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn websocket_oversized_payload_is_rejected_and_client_is_cleaned_up() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(State::default()));
-        let server_state = state.clone();
-        let handle = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            handle(stream, server_state)
-        });
-
-        let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/se-share")).unwrap();
-        ws.send(Message::Text(
-            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":[],"public_key":"pk","fingerprint":"fp"}"#.to_string(),
-        ))
-        .unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&ws.read().unwrap().into_text().unwrap())
-                .unwrap()["t"],
-            "hello_ok"
-        );
-
-        ws.send(Message::Text("x".repeat(MAX_JSON_LINE + 1)))
-            .unwrap();
-        drop(ws);
-
-        let error = handle.join().unwrap().unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::InvalidData);
-        assert!(lock_state(&state).clients.is_empty());
     }
 }
