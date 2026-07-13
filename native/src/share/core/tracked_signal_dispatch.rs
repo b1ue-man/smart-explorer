@@ -195,6 +195,9 @@ fn relay_event(
     outcome: DirectRouteOutcome,
     now: i64,
 ) -> Result<DirectSignalEvent, String> {
+    if outcome == DirectRouteOutcome::LegacyForwarded && route != DirectRoute::Request {
+        return Err("Legacy-Relay-ACK ist nur fuer Direktanfragen erlaubt".into());
+    }
     let envelope = envelope_kind(route);
     let state = auth.lock().map_err(|_| "Share-State gesperrt")?;
     let entry = find_entry(&state.direct_requests, &request_id)?;
@@ -206,6 +209,7 @@ fn relay_event(
         envelope,
         outcome: match outcome {
             DirectRouteOutcome::Forwarded => DirectRelayOutcome::Forwarded,
+            DirectRouteOutcome::LegacyForwarded => DirectRelayOutcome::LegacyForwarded,
             DirectRouteOutcome::TargetOffline => DirectRelayOutcome::TargetOffline,
         },
         at: now,

@@ -58,6 +58,11 @@ fn repair_identity() -> Result<crate::share::ShareIdentity, String> {
     crate::share::ShareIdentity::repair_action_needed(super::default_device_name())?;
     let worker = stop_share_worker_for_repair()?;
     let repaired = crate::share::ShareIdentity::repair_missing(super::default_device_name());
+    let cleanup_failed = repaired
+        .as_ref()
+        .ok()
+        .and_then(|outcome| outcome.cleanup_warning.as_ref())
+        .is_some();
     if let Ok(outcome) = &repaired {
         match &outcome.action {
             crate::share::IdentityRepairAction::IdentityReplaced => eprintln!(
@@ -71,7 +76,14 @@ fn repair_identity() -> Result<crate::share::ShareIdentity, String> {
             eprintln!("warning: {warning}");
         }
     }
-    let restored = restore_share_worker_after_repair(worker);
+    let restored = if cleanup_failed && worker.share_running {
+        Err(
+            "identity repaired, but authorization cleanup failed; Share worker remains stopped"
+                .into(),
+        )
+    } else {
+        restore_share_worker_after_repair(worker)
+    };
     match (repaired, restored) {
         (Ok(outcome), Ok(())) => Ok(outcome.identity),
         (Ok(_), Err(error)) => Err(format!("identity repaired, but {error}")),

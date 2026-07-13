@@ -97,6 +97,12 @@ eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koenne
 dort ebenfalls lokal geloescht werden; **Ablehnen** und **Widerrufen** bleiben
 die expliziten signierten Peer-Entscheidungen.
 
+Meldet sich dieselbe Geraete-ID mit einem anderen Schluessel, Node-ID oder
+Fingerprint, bleibt die Anfrage sichtbar, wird aber als Identitaetskonflikt
+fail-closed von **Annehmen** ausgeschlossen. Text- und JSON-Ausgabe nennen den
+Konflikt sowie direkt nutzbare `revoke`-, `reject`- und `delete`-Befehle;
+Ablehnen und lokales Loeschen bleiben auch im Konfliktfall moeglich.
+
 `se connections` listet ohne Unterbefehl alle Ziele. Jede Share-Zeile nennt
 explizit `selector=<id>`; `remove-peer` akzeptiert genau diese ID, den ebenfalls
 ausgegebenen `share://direct/...`-Endpunkt, Name, Geraete-ID oder Fingerprint

@@ -232,12 +232,13 @@ pub(super) fn recover_locked(
 pub(super) fn recover_and_record(state: &mut ShareHostState, entry: &JournalEntry) {
     let result = recover_locked(state, entry);
     if let Some(error) = &result.error {
-        state
-            .ui_events
-            .push(crate::share::ShareEvent::Error(format!(
+        super::ui_events::push(
+            &mut state.ui_events,
+            crate::share::ShareEvent::Error(format!(
                 "Exec-Grant Recovery {}: {error}",
                 result.operation_id
-            )));
+            )),
+        );
     }
     state.exec_retry = (result.retry_state != ExecGrantRetryState::None).then_some(result);
 }

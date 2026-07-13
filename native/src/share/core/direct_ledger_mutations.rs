@@ -78,11 +78,13 @@ impl ShareProfiles {
                 && entry.requeue_forwarded_receipt(DirectEnvelopeKind::RequestReceipt));
         }
         self.ensure_direct_request_capacity(received_at)?;
+        let device_id = request.requester.device_id.clone();
         self.direct_requests.push(DirectRequestEntry::incoming(
             local_lookup_id.into(),
             request,
             received_at,
         )?);
+        self.recompute_identity_conflicts_for_device(&device_id);
         Ok(true)
     }
 
@@ -125,8 +127,7 @@ impl ShareProfiles {
         }
         let index = find_index(&self.direct_requests, &decision.request_id)?;
         require_decision(&self.direct_requests[index].record.request, &decision)?;
-        let entry = &mut self.direct_requests[index];
-        if let Some(existing) = &entry.decision {
+        if let Some(existing) = &self.direct_requests[index].decision {
             if decision.decision_revision < existing.decision_revision {
                 return Ok(false);
             }
@@ -134,11 +135,19 @@ impl ShareProfiles {
                 if existing != &decision {
                     return Err(DirectLedgerError::EnvelopeConflict);
                 }
+                let entry = &mut self.direct_requests[index];
                 let changed = entry.direction == DirectRequestDirection::Outgoing
                     && entry.requeue_forwarded_receipt(DirectEnvelopeKind::DecisionReceipt);
                 return Ok(changed);
             }
         }
+        if self.direct_requests[index].direction == DirectRequestDirection::Incoming
+            && decision.decision == super::direct_protocol::DirectDecisionKind::Accepted
+            && self.tracked_identity_conflict(&decision.request_id)
+        {
+            return Err(DirectLedgerError::IdentityConflict);
+        }
+        let entry = &mut self.direct_requests[index];
         entry.record.apply(DirectLifecycleEvent::Decision {
             request_id: decision.request_id.clone(),
             decision: decision.decision,
@@ -266,6 +275,12 @@ impl ShareProfiles {
             return Ok(false);
         }
         let entry = find_mut(&mut self.direct_requests, request_id)?;
+        if outcome == DirectRelayOutcome::LegacyForwarded
+            && (kind != DirectEnvelopeKind::Request
+                || entry.direction != DirectRequestDirection::Outgoing)
+        {
+            return Err(DirectLedgerError::EnvelopeConflict);
+        }
         if !entry.has_outbox(kind) {
             return Err(DirectLedgerError::MissingEnvelope);
         }
@@ -276,20 +291,37 @@ impl ShareProfiles {
         if retry.relay_changed_at == Some(at) {
             match (retry.relay_outcome, outcome) {
                 (Some(DirectRelayOutcome::Forwarded), DirectRelayOutcome::Forwarded)
+                | (
+                    Some(DirectRelayOutcome::LegacyForwarded),
+                    DirectRelayOutcome::LegacyForwarded,
+                )
                 | (Some(DirectRelayOutcome::TargetOffline), DirectRelayOutcome::TargetOffline) => {
                     return Ok(false);
                 }
-                (Some(DirectRelayOutcome::Forwarded), DirectRelayOutcome::TargetOffline) => {
+                (
+                    Some(DirectRelayOutcome::Forwarded | DirectRelayOutcome::LegacyForwarded),
+                    DirectRelayOutcome::TargetOffline,
+                ) => {
                     return Ok(false);
                 }
-                (Some(DirectRelayOutcome::TargetOffline), DirectRelayOutcome::Forwarded) => {}
+                (Some(DirectRelayOutcome::Forwarded), DirectRelayOutcome::LegacyForwarded) => {
+                    return Ok(false)
+                }
+                (Some(DirectRelayOutcome::LegacyForwarded), DirectRelayOutcome::Forwarded)
+                | (
+                    Some(DirectRelayOutcome::TargetOffline),
+                    DirectRelayOutcome::Forwarded | DirectRelayOutcome::LegacyForwarded,
+                ) => {}
                 (None, _) => return Err(DirectLedgerError::EnvelopeConflict),
             }
         }
         if at < 0 {
             return Err(DirectLedgerError::InvalidTimestamp);
         }
-        if outcome == DirectRelayOutcome::Forwarded {
+        if matches!(
+            outcome,
+            DirectRelayOutcome::Forwarded | DirectRelayOutcome::LegacyForwarded
+        ) {
             apply_relay_forwarded(entry, request_id, kind, at)?;
         }
         let retry = entry.retry_mut(kind);

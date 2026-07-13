@@ -334,7 +334,8 @@ fn tracked_wire_tags_match_server_schema() {
     assert_eq!(TRACKED_DIRECT_CAPABILITY, "tracked_direct_v1");
     let request = request();
     let encoded = serde_json::to_value(TrackedDirectClientMsg::Request {
-        request: request.clone(),
+        request: Box::new(request.clone()),
+        legacy_presence: None,
     })
     .unwrap();
     assert_eq!(encoded["t"], "submit_direct_request");
@@ -358,6 +359,21 @@ fn tracked_wire_tags_match_server_schema() {
             outcome: DirectRouteOutcome::TargetOffline,
         }
     );
+
+    let legacy_ack = serde_json::json!({
+        "t": "direct_route_ack",
+        "request_id": REQUEST_ID,
+        "route": "request",
+        "outcome": "legacy_forwarded"
+    });
+    assert!(matches!(
+        serde_json::from_value::<TrackedDirectServerMsg>(legacy_ack).unwrap(),
+        TrackedDirectServerMsg::RouteAck {
+            route: DirectRoute::Request,
+            outcome: DirectRouteOutcome::LegacyForwarded,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -399,7 +415,8 @@ fn every_tracked_wire_payload_uses_the_coordinated_tag() {
     let client = [
         (
             TrackedDirectClientMsg::Request {
-                request: request.clone(),
+                request: Box::new(request.clone()),
+                legacy_presence: None,
             },
             "submit_direct_request",
         ),

@@ -430,6 +430,43 @@ fn retry_and_relay_updates_are_absolute_monotonic_and_idempotent() {
 }
 
 #[test]
+fn legacy_forwarding_stops_automatic_request_retries_until_manual_retry() {
+    let request = request(None);
+    let request_id = request.request_id.clone();
+    let mut profiles = outgoing_profiles(&request);
+    profiles
+        .record_direct_attempt(&request_id, DirectEnvelopeKind::Request, 1, 110, None)
+        .unwrap();
+    profiles
+        .record_direct_relay_ack(
+            &request_id,
+            DirectEnvelopeKind::Request,
+            DirectRelayOutcome::LegacyForwarded,
+            111,
+        )
+        .unwrap();
+
+    let entry = profiles.direct_request(&request_id).unwrap();
+    assert_eq!(entry.record.delivery.state.code(), "server_queued");
+    assert!(entry.pending_outboxes(112).is_empty());
+    assert_eq!(
+        entry.manually_retryable_outboxes(112),
+        vec![DirectEnvelopeKind::Request]
+    );
+
+    assert!(profiles
+        .retry_direct_envelope_now(&request_id, DirectEnvelopeKind::Request, 113)
+        .unwrap());
+    assert_eq!(
+        profiles
+            .direct_request(&request_id)
+            .unwrap()
+            .pending_outboxes(113),
+        vec![DirectEnvelopeKind::Request]
+    );
+}
+
+#[test]
 fn request_ids_and_signed_artifacts_cannot_be_rebound() {
     let original = request(None);
     let mut profiles = outgoing_profiles(&original);

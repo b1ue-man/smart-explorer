@@ -113,6 +113,15 @@ fn successful_rotation_returns_the_single_persisted_code() {
     assert!(storage
         .secrets
         .contains_key(&direct_secret_account(&identity.direct_lookup_id)));
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::DirectCodeRotated)
+    );
+    identity.clear_pending_cleanup_with(&mut storage).unwrap();
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -123,6 +132,10 @@ fn stale_rotation_uses_the_identity_created_by_full_repair() {
     let repaired = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap();
     let repaired_code = repaired.identity.direct_code();
     let repaired_account = direct_secret_account(&repaired.identity.direct_lookup_id);
+    repaired
+        .identity
+        .clear_pending_cleanup_with(&mut storage)
+        .unwrap();
 
     let rotated = stale.regenerate_direct_code_with(&mut storage).unwrap();
 
@@ -143,6 +156,7 @@ fn stale_rename_preserves_a_newer_direct_code_rotation() {
     let mut stale = create_identity(&mut storage, "old name");
     let mut current = stale.clone();
     let rotated = current.regenerate_direct_code_with(&mut storage).unwrap();
+    current.clear_pending_cleanup_with(&mut storage).unwrap();
 
     stale
         .set_device_name_with("new name".into(), &mut storage)
@@ -245,6 +259,10 @@ fn missing_direct_secret_rotates_only_the_direct_code() {
         "contact-secret"
     );
     assert_eq!(storage.secrets["share:room:team"], "room-secret");
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::DirectCodeRotated)
+    );
     let loaded = ShareIdentity::load_or_create_with("fallback".into(), &mut storage).unwrap();
     assert_eq!(loaded.direct_code(), repair.identity.direct_code());
 }
@@ -313,6 +331,10 @@ fn missing_iroh_secret_replaces_the_whole_device_identity() {
         "contact-secret"
     );
     assert_eq!(storage.secrets["share:room:team"], "room-secret");
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::IdentityReplaced)
+    );
     let loaded = ShareIdentity::load_or_create_with("fallback".into(), &mut storage).unwrap();
     assert_eq!(loaded.device_id, repair.identity.device_id);
     assert_eq!(loaded.direct_code(), repair.identity.direct_code());
@@ -354,24 +376,79 @@ fn replacement_reports_old_direct_cleanup_failure_after_commit() {
 }
 
 #[test]
-fn mismatched_iroh_secret_is_not_treated_as_a_missing_direct_secret() {
+fn interrupted_replacement_with_mismatched_iroh_secret_is_repairable() {
     let mut storage = FakePersistence::default();
     let original = create_identity(&mut storage, "device");
-    storage
-        .secrets
-        .remove(&direct_secret_account(&original.direct_lookup_id));
     let replacement = iroh::SecretKey::from_bytes(&[0xa5; 32]);
     storage
         .secrets
         .insert(IDENTITY_KEY_ACCOUNT.into(), b64(&replacement.to_bytes()));
-    let old_identity = storage.identity.clone();
-    let old_secrets = storage.secrets.clone();
 
-    let error = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap_err();
+    let repair = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap();
 
-    assert!(error.contains("passt nicht"));
-    assert_eq!(storage.identity, old_identity);
-    assert_eq!(storage.secrets, old_secrets);
+    assert_eq!(repair.action, IdentityRepairAction::IdentityReplaced);
+    assert_ne!(repair.identity.device_id, original.device_id);
+    assert_ne!(repair.identity.node_id, original.node_id);
+    assert_ne!(repair.identity.node_id, replacement.public().to_string());
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::IdentityReplaced)
+    );
+}
+
+#[test]
+fn pending_cleanup_can_be_resumed_without_rotating_identity_again() {
+    let mut storage = FakePersistence::default();
+    let mut identity = create_identity(&mut storage, "device");
+    identity.regenerate_direct_code_with(&mut storage).unwrap();
+    let committed_code = identity.direct_code();
+
+    assert_eq!(
+        ShareIdentity::repair_action_needed_with("fallback".into(), &mut storage).unwrap(),
+        IdentityRepairAction::DirectCodeRotated
+    );
+    let resumed = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap();
+
+    assert_eq!(resumed.action, IdentityRepairAction::DirectCodeRotated);
+    assert_eq!(resumed.identity.direct_code(), committed_code);
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::DirectCodeRotated)
+    );
+}
+
+#[test]
+fn pending_cleanup_does_not_hide_a_newly_missing_secret() {
+    let mut storage = FakePersistence::default();
+    let mut identity = create_identity(&mut storage, "device");
+    identity.regenerate_direct_code_with(&mut storage).unwrap();
+    let missing_lookup = identity.direct_lookup_id.clone();
+    storage
+        .secrets
+        .remove(&direct_secret_account(&missing_lookup));
+
+    let repaired = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap();
+
+    assert_eq!(repaired.action, IdentityRepairAction::DirectCodeRotated);
+    assert_ne!(repaired.identity.direct_lookup_id, missing_lookup);
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::DirectCodeRotated)
+    );
+}
+
+#[test]
+fn stale_generation_cannot_clear_a_pending_cleanup_marker() {
+    let mut storage = FakePersistence::default();
+    let mut identity = create_identity(&mut storage, "device");
+    let stale = identity.clone();
+    identity.regenerate_direct_code_with(&mut storage).unwrap();
+
+    assert!(stale.clear_pending_cleanup_with(&mut storage).is_err());
+    assert_eq!(
+        ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+        Some(IdentityRepairAction::DirectCodeRotated)
+    );
 }
 
 #[test]

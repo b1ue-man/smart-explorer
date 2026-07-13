@@ -2,14 +2,11 @@ use super::direct_ledger::{DirectRequestDirection, DirectRequestEntry};
 use super::direct_lifecycle::DirectDecisionState;
 use super::direct_protocol::{
     DirectDecisionKind, DirectPeerIdentity, DirectRequestId, SignedDirectDecision,
-    SignedDirectRequest,
+    SignedDirectRequest, MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
 };
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
 use super::types::{DirectAccessState, ShareStatus};
-
-const REQUEST_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
-const DECISION_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Debug)]
 pub struct DirectRequestAction {
@@ -21,6 +18,19 @@ pub struct DirectRequestAction {
 /// immediately retryable. The signed request ID is generated before the
 /// transaction and remains stable if the optimistic save has to be replayed.
 pub fn queue_direct_request_for_contact(
+    default_home: Option<String>,
+    identity: &ShareIdentity,
+    contact_id: &str,
+    message: Option<String>,
+) -> Result<DirectRequestAction, String> {
+    ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
+        super::identity_store::with_matching_identity_generation(identity, current, |locked| {
+            queue_direct_request_for_contact_locked(default_home, locked, contact_id, message)
+        })
+    })
+}
+
+fn queue_direct_request_for_contact_locked(
     default_home: Option<String>,
     identity: &ShareIdentity,
     contact_id: &str,
@@ -50,7 +60,7 @@ pub fn queue_direct_request_for_contact(
             contact.expected_fingerprint.clone(),
         ),
         now,
-        now.saturating_add(REQUEST_LIFETIME_SECS),
+        now.saturating_add(MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS),
         message,
         &relation_secret,
         &identity.iroh_secret,
@@ -59,11 +69,11 @@ pub fn queue_direct_request_for_contact(
     let committed = ShareProfiles::mutate_persisted(default_home, |candidate| {
         require_contact_matches(candidate, &contact)?;
         if let Some(existing_id) = reusable_request_id(candidate, contact_id, now) {
-            let pending = candidate
+            let retryable = candidate
                 .direct_request(&existing_id)
                 .ok_or_else(|| format!("direct request disappeared: {existing_id}"))?
-                .pending_outboxes(now);
-            for envelope in pending {
+                .manually_retryable_outboxes(now);
+            for envelope in retryable {
                 candidate
                     .retry_direct_envelope_now(&existing_id, envelope, now)
                     .map_err(|error| error.to_string())?;
@@ -95,6 +105,28 @@ pub fn decide_direct_request(
     decision: DirectDecisionKind,
     message: Option<String>,
 ) -> Result<DirectRequestEntry, String> {
+    ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
+        super::identity_store::with_matching_identity_generation(identity, current, |locked| {
+            decide_direct_request_locked(
+                default_home,
+                locked,
+                request_id,
+                expected_fingerprint,
+                decision,
+                message,
+            )
+        })
+    })
+}
+
+fn decide_direct_request_locked(
+    default_home: Option<String>,
+    identity: &ShareIdentity,
+    request_id: &DirectRequestId,
+    expected_fingerprint: &str,
+    decision: DirectDecisionKind,
+    message: Option<String>,
+) -> Result<DirectRequestEntry, String> {
     let now = super::core::now_secs();
     let profiles = ShareProfiles::load_checked(default_home.clone())?;
     let entry = profiles
@@ -114,7 +146,7 @@ pub fn decide_direct_request(
         decision,
         revision,
         now,
-        now.saturating_add(DECISION_LIFETIME_SECS),
+        now.saturating_add(MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS),
         message,
         &identity.direct_secret(),
         &identity.iroh_secret,
@@ -129,6 +161,13 @@ pub fn decide_direct_request(
             || current.record.request != expected_request
         {
             return Err(format!("direct request changed concurrently: {request_id}"));
+        }
+        if decision == DirectDecisionKind::Accepted
+            && candidate.tracked_identity_conflict(request_id)
+        {
+            return Err(format!(
+                "direct request has an identity conflict and cannot be accepted: {request_id}"
+            ));
         }
         candidate
             .record_direct_decision(signed.clone(), now)
@@ -147,16 +186,16 @@ pub fn retry_direct_request_now(
 ) -> Result<DirectRequestEntry, String> {
     let now = super::core::now_secs();
     let committed = ShareProfiles::mutate_persisted(default_home, |candidate| {
-        let pending = candidate
+        let retryable = candidate
             .direct_request(request_id)
             .ok_or_else(|| format!("direct request not found: {request_id}"))?
-            .pending_outboxes(now);
-        if pending.is_empty() {
+            .manually_retryable_outboxes(now);
+        if retryable.is_empty() {
             return Err(format!(
                 "direct request has no retryable envelope: {request_id}"
             ));
         }
-        for envelope in pending {
+        for envelope in retryable {
             candidate
                 .retry_direct_envelope_now(request_id, envelope, now)
                 .map_err(|error| error.to_string())?;

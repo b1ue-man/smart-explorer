@@ -21,6 +21,9 @@ struct IdentityDisk {
     fingerprint: String,
     #[serde(default)]
     node_id: Option<String>,
+    /// Durable, fail-closed marker for post-identity-change profile cleanup.
+    #[serde(default)]
+    pending_cleanup: Option<IdentityRepairAction>,
 }
 
 #[derive(Clone, Debug)]
@@ -119,7 +122,57 @@ impl ShareIdentity {
     }
 
     fn save_with(&self, storage: &mut impl IdentityPersistence) -> Result<(), String> {
-        let contents = serde_json::to_string_pretty(&self.to_disk())
+        self.save_disk_with_pending_cleanup(storage, None)
+    }
+
+    pub(super) fn save_with_pending_cleanup(
+        &self,
+        storage: &mut impl IdentityPersistence,
+        action: IdentityRepairAction,
+    ) -> Result<(), String> {
+        self.save_disk_with_pending_cleanup(storage, Some(action))
+    }
+
+    fn save_disk_with_pending_cleanup(
+        &self,
+        storage: &mut impl IdentityPersistence,
+        pending_cleanup: Option<IdentityRepairAction>,
+    ) -> Result<(), String> {
+        let mut disk = self.to_disk();
+        disk.pending_cleanup = pending_cleanup;
+        let contents = serde_json::to_string_pretty(&disk)
+            .map_err(|error| format!("Share-Identitaet kodieren: {error}"))?;
+        storage
+            .save_identity(&contents)
+            .map_err(|error| format!("Share-Identitaet speichern: {error}"))
+    }
+
+    pub(super) fn pending_cleanup_action_with(
+        storage: &mut impl IdentityPersistence,
+    ) -> Result<Option<IdentityRepairAction>, String> {
+        Ok(load_disk(storage)?.and_then(|disk| disk.pending_cleanup))
+    }
+
+    pub(super) fn clear_pending_cleanup_with(
+        &self,
+        storage: &mut impl IdentityPersistence,
+    ) -> Result<(), String> {
+        let mut disk = load_disk(storage)?
+            .ok_or_else(|| "Share-Identitaet fehlt waehrend der Bereinigung".to_string())?;
+        let saved_node = disk.node_id.as_deref().unwrap_or(&disk.public_key);
+        if disk.device_id != self.device_id
+            || disk.direct_lookup_id != self.direct_lookup_id
+            || disk.public_key != self.public_key
+            || saved_node != self.node_id
+        {
+            return Err(
+                "Share identity changed while completing authorization cleanup".to_string(),
+            );
+        }
+        if disk.pending_cleanup.take().is_none() {
+            return Ok(());
+        }
+        let contents = serde_json::to_string_pretty(&disk)
             .map_err(|error| format!("Share-Identitaet kodieren: {error}"))?;
         storage
             .save_identity(&contents)
@@ -161,7 +214,9 @@ impl ShareIdentity {
         let mut candidate = self.clone();
         candidate.direct_lookup_id = direct_lookup_id;
         candidate.direct_secret = direct_secret;
-        if let Err(error) = candidate.save_with(storage) {
+        if let Err(error) =
+            candidate.save_with_pending_cleanup(storage, IdentityRepairAction::DirectCodeRotated)
+        {
             let cleanup = storage
                 .delete_secret(&new_account)
                 .err()
@@ -212,6 +267,12 @@ impl ShareIdentity {
         &self,
         storage: &mut impl IdentityPersistence,
     ) -> Result<Self, String> {
+        if Self::pending_cleanup_action_with(storage)?.is_some() {
+            return Err(
+                "Share identity authorization cleanup is pending; complete it before mutation"
+                    .to_string(),
+            );
+        }
         let disk = load_disk(storage)?
             .ok_or_else(|| "Share-Identitaet fehlt; Aenderung wurde verweigert".to_string())?;
         let iroh_bytes = load_required_secret(storage, IDENTITY_KEY_ACCOUNT, "Iroh-Identitaet")?;
@@ -238,6 +299,7 @@ impl ShareIdentity {
             public_key: self.public_key.clone(),
             fingerprint: self.fingerprint.clone(),
             node_id: Some(self.node_id.clone()),
+            pending_cleanup: None,
         }
     }
 
@@ -376,20 +438,25 @@ fn decode_secret(raw: &str, label: &str) -> Result<[u8; SECRET_BYTES], String> {
 }
 
 fn validate_disk(disk: &IdentityDisk) -> Result<(), String> {
-    if disk.device_id.trim().is_empty() || disk.direct_lookup_id.trim().is_empty() {
-        return Err("Share-Identitaet enthaelt keine stabile Geraete- oder Direkt-ID".into());
+    if disk.device_id.trim().is_empty()
+        || disk.direct_lookup_id.trim().is_empty()
+        || disk.public_key.trim().is_empty()
+    {
+        return Err(
+            "Share-Identitaet enthaelt keine stabile Geraete-, Direkt- oder Schluessel-ID".into(),
+        );
     }
     Ok(())
 }
 
 fn validate_iroh_matches(disk: &IdentityDisk, iroh_secret: &iroh::SecretKey) -> Result<(), String> {
     let node_id = iroh_secret.public().to_string();
-    if disk
+    let saved_node_id = disk
         .node_id
         .as_deref()
         .filter(|saved| !saved.trim().is_empty())
-        .is_some_and(|saved| saved != node_id)
-    {
+        .unwrap_or(&disk.public_key);
+    if saved_node_id != node_id {
         return Err("Share-Identitaet passt nicht zum sicher gespeicherten Iroh-Schluessel".into());
     }
     Ok(())

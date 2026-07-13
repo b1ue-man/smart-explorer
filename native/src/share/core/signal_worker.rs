@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 
 use super::backend::ShareIrohNode;
-use super::core::{eio, hmac_proof, now_secs, presence_payload, random_token};
+use super::core::eio;
 use super::identity::ShareIdentity;
 use super::keepalive::SIGNAL_MAINTENANCE_POLICY;
 use super::profiles::ShareProfiles;
@@ -16,11 +16,10 @@ use super::signal_commands::{
 };
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_connector::{spawn_connect, NegotiatedSignal};
+use super::signal_presence::build_presence;
 use super::tracked_signal_dispatch::dispatch_server_line;
 use super::tracked_signal_sender::{send_pending_tracked, AttemptCounters};
-use super::types::{
-    DirectAccessState, DirectContact, PeerPresence, PendingShareCmd, ShareAuthState, ShareEvent,
-};
+use super::types::{DirectAccessState, DirectContact, PendingShareCmd, ShareAuthState, ShareEvent};
 use super::wire::ClientMsg;
 
 pub(super) fn worker(
@@ -199,6 +198,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         && send_pending_tracked(
             &mut negotiated.connection,
             runtime.auth,
+            runtime.iroh,
             runtime.events,
             runtime.tracked_attempts,
         )
@@ -242,6 +242,9 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
                 .send(outcome.result.map_err(|error| error.to_string()));
             if outcome.published {
                 last_publish = Instant::now();
+            }
+            if outcome.should_reconnect {
+                break;
             }
             if outcome.should_stop {
                 stopped = true;
@@ -293,6 +296,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             if send_pending_tracked(
                 &mut negotiated.connection,
                 runtime.auth,
+                runtime.iroh,
                 runtime.events,
                 runtime.tracked_attempts,
             )
@@ -418,7 +422,7 @@ pub(super) fn send_direct_answer(
     auth: &Arc<Mutex<ShareAuthState>>,
     iroh: &ShareIrohNode,
     lookup_id: String,
-    requester: PeerPresence,
+    requester_device_id: String,
     accepted: bool,
 ) -> io::Result<()> {
     let state = auth
@@ -436,48 +440,10 @@ pub(super) fn send_direct_answer(
         stream,
         &ClientMsg::DirectAccessAccepted {
             lookup_id,
-            requester_device_id: requester.device_id,
+            requester_device_id,
             accepted,
             presence,
             msg: None,
         },
     )
-}
-
-pub(super) fn build_presence(
-    kind: &str,
-    relation_id: &str,
-    identity: &ShareIdentity,
-    secret: &[u8],
-    iroh: &ShareIrohNode,
-) -> io::Result<PeerPresence> {
-    let candidates = iroh.candidates();
-    let relay_url = iroh.relay_url().to_string();
-    let expires_at = now_secs() + 300;
-    let nonce = random_token(12).map_err(eio)?;
-    let payload = presence_payload(
-        kind,
-        relation_id,
-        &identity.device_id,
-        &identity.public_key,
-        &identity.node_id,
-        &relay_url,
-        &candidates,
-        expires_at,
-        &nonce,
-    );
-    Ok(PeerPresence {
-        kind: kind.to_string(),
-        relation_id: relation_id.to_string(),
-        device_id: identity.device_id.clone(),
-        device_name: identity.device_name.clone(),
-        public_key: identity.public_key.clone(),
-        fingerprint: identity.fingerprint.clone(),
-        node_id: identity.node_id.clone(),
-        relay_url,
-        candidates,
-        expires_at,
-        nonce,
-        proof: hmac_proof(secret, &payload),
-    })
 }

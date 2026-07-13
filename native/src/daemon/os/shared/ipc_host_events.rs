@@ -7,23 +7,35 @@ impl ShareHost {
             Ok(state) => state,
             Err(_) => return,
         };
-        let Some(service) = state.service.clone() else {
-            return;
-        };
-        let events: Vec<_> = service.events.try_iter().collect();
+        let events: Vec<_> = state
+            .service
+            .as_ref()
+            .map(|service| service.events.try_iter().collect())
+            .unwrap_or_default();
         let retrying_profile_commit = state.pending_profiles_base.is_some();
         let retrying_direct_events = !state.pending_direct_events.is_empty();
-        if events.is_empty() && !retrying_profile_commit && !retrying_direct_events {
+        let retrying_legacy_events = !state.pending_legacy_events.is_empty();
+        let retrying_legacy_answers = !state
+            .profiles
+            .legacy_answers_due(crate::share::core_now_secs())
+            .is_empty();
+        if events.is_empty()
+            && !retrying_profile_commit
+            && !retrying_direct_events
+            && !retrying_legacy_events
+            && !retrying_legacy_answers
+        {
             return;
         }
-        let mut direct_events = std::mem::take(&mut state.pending_direct_events);
+        let pending_direct_events = std::mem::take(&mut state.pending_direct_events);
+        let mut direct_events = Vec::new();
+        let mut legacy_events = std::mem::take(&mut state.pending_legacy_events);
         let previous_profiles = state.profiles.clone();
         let commit_base = state
             .pending_profiles_base
             .take()
             .unwrap_or_else(|| previous_profiles.clone());
         let mut changed = false;
-        let mut answers = Vec::new();
         for event in events {
             use crate::share::ShareEvent as Event;
             let mut ui_event = Some(event.clone());
@@ -44,7 +56,27 @@ impl ShareHost {
                     state.signal_error = Some(error);
                 }
                 Event::DirectSignal(event) => {
-                    direct_events.push(event);
+                    match state.identity.clone() {
+                        Some(expected_identity) => {
+                            if let Err(error) = super::ipc_host::direct_event_queue::enqueue(
+                                &mut direct_events,
+                                expected_identity,
+                                event,
+                            ) {
+                                super::ipc_host::ui_events::push(
+                                    &mut state.ui_events,
+                                    crate::share::ShareEvent::Error(error),
+                                );
+                            }
+                        }
+                        None => super::ipc_host::ui_events::push(
+                            &mut state.ui_events,
+                            crate::share::ShareEvent::Error(
+                                "Tracked-Direct-Event ohne lokale Share-Identitaet wurde verworfen"
+                                    .into(),
+                            ),
+                        ),
+                    }
                     ui_event = None;
                 }
                 Event::DirectAvailable {
@@ -96,40 +128,22 @@ impl ShareHost {
                 Event::DirectAccessRequest {
                     lookup_id,
                     presence,
-                } => match state.profiles.grant_for(&presence.device_id) {
-                    Some(grant)
-                        if grant.public_key == presence.public_key
-                            && grant.node_id == presence.node_id
-                            && grant.state == crate::share::DirectGrantState::Accepted =>
-                    {
-                        answers.push((lookup_id, presence, true));
-                        ui_event = None;
+                } => {
+                    // Authentication happened before this event was emitted.
+                    // Keep the raw event out of the UI/IPC backlog; the
+                    // separately typed durable legacy ledger is canonical.
+                    if let Err(error) = super::ipc_host::legacy_events::enqueue(
+                        &mut legacy_events,
+                        lookup_id,
+                        presence,
+                    ) {
+                        super::ipc_host::ui_events::push(
+                            &mut state.ui_events,
+                            crate::share::ShareEvent::Error(error),
+                        );
                     }
-                    Some(grant)
-                        if grant.public_key == presence.public_key
-                            && grant.node_id == presence.node_id
-                            && grant.state == crate::share::DirectGrantState::Ignored =>
-                    {
-                        ui_event = None;
-                    }
-                    Some(_) => log("share direct request identity conflict"),
-                    None => {
-                        if !state
-                            .pending_direct_requests
-                            .iter()
-                            .any(|pending| pending.device_id == presence.device_id)
-                        {
-                            state.pending_direct_requests.push(presence.clone());
-                        } else if let Some(existing) = state
-                            .pending_direct_requests
-                            .iter_mut()
-                            .find(|pending| pending.device_id == presence.device_id)
-                        {
-                            *existing = presence.clone();
-                        }
-                        log("share direct request pending in GUI");
-                    }
-                },
+                    ui_event = None;
+                }
                 Event::DirectAccessAccepted {
                     lookup_id,
                     requester_device_id,
@@ -142,9 +156,12 @@ impl ShareHost {
                         .as_ref()
                         .map(|identity| identity.device_id.clone())
                     else {
-                        state.ui_events.push(crate::share::ShareEvent::Error(
-                            "Share-Identitaet ist nicht verfuegbar".into(),
-                        ));
+                        super::ipc_host::ui_events::push(
+                            &mut state.ui_events,
+                            crate::share::ShareEvent::Error(
+                                "Share-Identitaet ist nicht verfuegbar".into(),
+                            ),
+                        );
                         continue;
                     };
                     if requester_device_id != local_device_id {
@@ -242,11 +259,7 @@ impl ShareHost {
                 }
             }
             if let Some(event) = ui_event {
-                state.ui_events.push(event);
-                let overflow = state.ui_events.len().saturating_sub(512);
-                if overflow > 0 {
-                    state.ui_events.drain(0..overflow);
-                }
+                super::ipc_host::ui_events::push(&mut state.ui_events, event);
             }
         }
         if changed || retrying_profile_commit {
@@ -265,11 +278,12 @@ impl ShareHost {
                 Err(error) => {
                     state.pending_profiles_base = Some(commit_base);
                     state.last_reload = std::time::Instant::now();
-                    state
-                        .ui_events
-                        .push(crate::share::ShareEvent::Error(format!(
+                    super::ipc_host::ui_events::push(
+                        &mut state.ui_events,
+                        crate::share::ShareEvent::Error(format!(
                             "Share-Status konnte nicht gespeichert werden; Wiederholung vorgemerkt: {error}"
-                        )));
+                        )),
+                    );
                 }
                 Ok(committed) => {
                     state.profiles = committed;
@@ -279,70 +293,77 @@ impl ShareHost {
             if state.pending_profiles_base.is_none() {
                 if let Some(service) = &state.service {
                     if let Err(error) = configure_service(service, &state.profiles) {
-                        state
-                            .ui_events
-                            .push(crate::share::ShareEvent::Error(format!(
+                        super::ipc_host::ui_events::push(
+                            &mut state.ui_events,
+                            crate::share::ShareEvent::Error(format!(
                                 "Share-Konfiguration konnte nicht zugestellt werden: {error}"
-                            )));
+                            )),
+                        );
                     }
                 }
             }
         }
-        if state.pending_profiles_base.is_some() && !direct_events.is_empty() {
-            state.pending_direct_events = direct_events;
-            direct_events = Vec::new();
+        let direct_batch = super::ipc_host::direct_event_schedule::process_tick(
+            pending_direct_events,
+            direct_events,
+            state.pending_profiles_base.is_some(),
+            super::ipc_host::direct_event_persistence::persist_all,
+        );
+        state.pending_direct_events = direct_batch.pending;
+        for error in direct_batch.errors {
+            super::ipc_host::ui_events::push(
+                &mut state.ui_events,
+                crate::share::ShareEvent::Error(error),
+            );
         }
-        if !direct_events.is_empty() {
-            let identity = state.identity.clone();
-            match identity {
-                None => {
-                    state.pending_direct_events = direct_events;
-                    state.ui_events.push(crate::share::ShareEvent::Error(
-                        "Direkt-Anfrage wartet auf die lokale Share-Identitaet".into(),
-                    ));
+        if let Some(committed) = direct_batch.committed {
+            state.profiles = committed;
+            if let Some(service) = &state.service {
+                if let Err(error) = configure_service(service, &state.profiles) {
+                    super::ipc_host::ui_events::push(
+                        &mut state.ui_events,
+                        crate::share::ShareEvent::Error(format!(
+                            "Direkt-Lifecycle konnte nicht zugestellt werden: {error}"
+                        )),
+                    );
                 }
-                Some(identity) => {
-                    match super::ipc_host::direct_events::persist_all(&identity, &direct_events) {
-                        Ok(committed) => {
-                            state.profiles = committed;
-                            if let Some(service) = &state.service {
-                                if let Err(error) = configure_service(service, &state.profiles) {
-                                    state
-                                        .ui_events
-                                        .push(crate::share::ShareEvent::Error(format!(
-                                    "Direkt-Lifecycle konnte nicht zugestellt werden: {error}"
-                                )));
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            state.pending_direct_events = direct_events;
-                            state.last_reload = std::time::Instant::now();
-                            state.ui_events.push(crate::share::ShareEvent::Error(format!(
-                            "Direkt-Lifecycle konnte nicht gespeichert werden; Wiederholung vorgemerkt: {error}"
-                        )));
-                        }
+            }
+        }
+        if !state.pending_direct_events.is_empty() {
+            state.last_reload = std::time::Instant::now();
+        }
+        if state.pending_profiles_base.is_some() && !legacy_events.is_empty() {
+            state.pending_legacy_events = legacy_events;
+            legacy_events = Vec::new();
+        }
+        if !legacy_events.is_empty() {
+            let batch = super::ipc_host::legacy_events::persist_all(legacy_events);
+            state.pending_legacy_events = batch.retry;
+            for error in batch.rejected {
+                super::ipc_host::ui_events::push(
+                    &mut state.ui_events,
+                    crate::share::ShareEvent::Error(error),
+                );
+            }
+            if let Some(committed) = batch.committed {
+                state.profiles = committed;
+                if let Some(service) = &state.service {
+                    if let Err(error) = configure_service(service, &state.profiles) {
+                        super::ipc_host::ui_events::push(
+                            &mut state.ui_events,
+                            crate::share::ShareEvent::Error(format!(
+                                "Legacy-Anfragen konnten nicht zugestellt werden: {error}"
+                            )),
+                        );
                     }
                 }
+            }
+            if !state.pending_legacy_events.is_empty() {
+                state.last_reload = std::time::Instant::now();
             }
         }
         drop(state);
-        for (lookup_id, presence, accepted) in answers {
-            if let Err(error) = service.cmd(crate::share::ShareCmd::AnswerDirectRequest {
-                lookup_id,
-                presence,
-                accepted,
-            }) {
-                log(&format!("share direct answer delivery failed: {error}"));
-                if let Ok(mut state) = self.state.lock() {
-                    state
-                        .ui_events
-                        .push(crate::share::ShareEvent::Error(format!(
-                            "Direkt-Antwort konnte nicht zugestellt werden: {error}"
-                        )));
-                }
-            }
-        }
+        self.flush_legacy_answers();
     }
 }
 

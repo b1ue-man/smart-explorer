@@ -6,12 +6,28 @@ use std::time::{Duration, Instant};
 use super::ipc_protocol::ShareWorkerSnapshot;
 use super::state::log;
 
+#[path = "ipc_host_direct_event_persistence.rs"]
+pub(super) mod direct_event_persistence;
+#[path = "ipc_host_direct_event_queue.rs"]
+pub(super) mod direct_event_queue;
+#[path = "ipc_host_direct_event_schedule.rs"]
+pub(super) mod direct_event_schedule;
 #[path = "ipc_host_direct_events.rs"]
 pub(super) mod direct_events;
 #[path = "exec_grant_journal.rs"]
 pub(super) mod exec_grant_journal;
+#[path = "ipc_host_legacy_events.rs"]
+pub(super) mod legacy_events;
 #[path = "ipc_host_profile_merge.rs"]
 pub(super) mod profile_merge;
+#[path = "ipc_host_stop.rs"]
+mod stop;
+#[path = "ipc_host_ui_events.rs"]
+pub(super) mod ui_events;
+
+#[cfg(test)]
+#[path = "ipc_host_direct_events_tests.rs"]
+mod direct_events_tests;
 
 const MAX_SHARE_SERVER_BYTES: u64 = 16 * 1024;
 
@@ -39,11 +55,11 @@ pub(super) struct ShareHostState {
     pub(super) signal_error: Option<String>,
     pub(super) last_reload: Instant,
     pub(super) ui_events: Vec<crate::share::ShareEvent>,
-    pub(super) pending_direct_requests: Vec<crate::share::PeerPresence>,
     /// Baseline for daemon-owned runtime mutations that could not yet be
     /// durably rebased. Keeping it makes consumed service events retryable.
     pub(super) pending_profiles_base: Option<crate::share::ShareProfiles>,
-    pub(super) pending_direct_events: Vec<crate::share::DirectSignalEvent>,
+    pub(super) pending_direct_events: Vec<direct_event_queue::PendingDirectEvent>,
+    pub(super) pending_legacy_events: Vec<(String, crate::share::PeerPresence)>,
     pub(super) exec_retry: Option<exec_grant_journal::ExecGrantPersistResult>,
 }
 
@@ -66,9 +82,9 @@ impl ShareHost {
             signal_error: None,
             last_reload: Instant::now() - Duration::from_secs(60),
             ui_events: Vec::new(),
-            pending_direct_requests: Vec::new(),
             pending_profiles_base: None,
             pending_direct_events: Vec::new(),
+            pending_legacy_events: Vec::new(),
             exec_retry: None,
         };
         ShareHost {
@@ -111,7 +127,10 @@ impl ShareHost {
             .exec_grant_lock
             .lock()
             .map_err(|_| "Exec-Grant mutation lock is poisoned".to_string())?;
-        self.reload_now_locked()
+        let running = self.reload_now_locked()?;
+        drop(_exclusive);
+        self.flush_legacy_answers();
+        Ok(running)
     }
 
     pub(super) fn reload_now_locked(&self) -> Result<bool, String> {
@@ -153,6 +172,21 @@ impl ShareHost {
         })?;
         match crate::share::ShareProfiles::load_checked(Some(default_home())) {
             Ok(mut profiles) => {
+                let identity = state
+                    .identity
+                    .clone()
+                    .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())?;
+                if !profiles.legacy_direct_requests.is_empty() {
+                    profiles = crate::share::refresh_legacy_request_expiry(
+                        Some(default_home()),
+                        &identity,
+                    )
+                    .map_err(|error| {
+                        state.profiles_error = Some(error.clone());
+                        let _ = stop_service_locked(&mut state);
+                        format!("Legacy-Anfragen konnten nicht authentifiziert werden: {error}")
+                    })?;
+                }
                 if let Some(entry) = &pending {
                     exec_grant_journal::prepare_pending_runtime(&mut state, &mut profiles, entry)?;
                 }
@@ -194,33 +228,13 @@ impl ShareHost {
         ) {
             return Err("Exec-Grant changes require the durable daemon mutation IPC".into());
         }
-        let answer_device = match &cmd {
-            crate::share::ShareCmd::AnswerDirectRequest { presence, .. } => {
-                Some(presence.device_id.clone())
-            }
-            _ => None,
-        };
         {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
             if let crate::share::ShareCmd::Stop = &cmd {
-                // Establish the barrier before asking the service to stop. If
-                // delivery is ambiguous, periodic reloads still cannot race a
-                // maintenance operation; an explicit RefreshShare releases it.
-                state.suspended = true;
-                let service = state.service.take();
-                state.running_server.clear();
-                state.signal_connected = false;
-                state.signal_error = None;
-                if let Some(service) = service {
-                    service.cmd(crate::share::ShareCmd::Stop)?;
-                }
-                state.ui_events.push(crate::share::ShareEvent::Status(
-                    "Share-Worker getrennt".to_string(),
-                ));
-                return Ok(());
+                return stop::stop_locked(&mut state);
             }
         }
         self.reload_now()?;
@@ -232,17 +246,7 @@ impl ShareHost {
             state.service.clone()
         }
         .ok_or_else(|| "Share-Worker ist nicht aktiv".to_string())?;
-        service.cmd(cmd).map(|_| ())?;
-        if let Some(device_id) = answer_device {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
-            state
-                .pending_direct_requests
-                .retain(|pending| pending.device_id != device_id);
-        }
-        Ok(())
+        service.cmd(cmd).map(|_| ())
     }
 
     pub(super) fn drain_for_ui(&self) -> ShareWorkerSnapshot {
@@ -254,7 +258,7 @@ impl ShareHost {
         if should_reload {
             if let Err(error) = self.reload_now() {
                 if let Ok(mut state) = self.state.lock() {
-                    state.ui_events.push(crate::share::ShareEvent::Error(error));
+                    ui_events::push(&mut state.ui_events, crate::share::ShareEvent::Error(error));
                 }
             }
         }
@@ -274,7 +278,7 @@ impl ShareHost {
             profiles: state.profiles.clone(),
             profile_revision: state.profiles.storage_revision.clone(),
             exec_grant_retry: state.exec_retry.clone(),
-            pending_direct_requests: state.pending_direct_requests.clone(),
+            pending_direct_requests: Vec::new(),
             running,
             connected: state.signal_connected,
             last_error: state.signal_error.clone(),

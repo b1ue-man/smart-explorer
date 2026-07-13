@@ -3,7 +3,7 @@ use super::fs::SharedRoot;
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
     ShareProfiles, LEGACY_SHARE_PROFILE_VERSION, OLDEST_SHARE_PROFILE_VERSION,
-    PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION,
+    PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION, TOMBSTONE_SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -36,16 +36,10 @@ impl ShareProfiles {
         profiles.storage_revision = revision;
         match profiles.schema_version {
             SHARE_PROFILE_VERSION => {}
-            PREVIOUS_SHARE_PROFILE_VERSION => {
-                // V5 already has exact per-peer Exec grants. V6 adds only the
-                // default-empty durable request-deletion tombstone ledger.
+            TOMBSTONE_SHARE_PROFILE_VERSION | PREVIOUS_SHARE_PROFILE_VERSION => {
                 profiles.schema_version = SHARE_PROFILE_VERSION;
             }
             OLDEST_SHARE_PROFILE_VERSION | LEGACY_SHARE_PROFILE_VERSION => {
-                // V3 had no tracked request ledger and V3/V4 exposed one
-                // export-wide Exec bit. No released runtime honored that bit
-                // safely, so migration preserves file configuration and base
-                // grants while resetting every exact peer Exec policy to deny.
                 profiles.schema_version = SHARE_PROFILE_VERSION;
                 profiles.reset_exec_for_legacy_migration();
             }
@@ -55,12 +49,15 @@ impl ShareProfiles {
                 ));
             }
         }
+        profiles.reconcile_legacy_grants(super::core::now_secs());
+        profiles.recompute_all_identity_conflicts();
         profiles
             .validate_direct_ledger()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
-        // Home is a first-run default only. Once a profile file exists, an
-        // empty export list is an explicit deny-all configuration and must not
-        // silently re-expose the user's home directory.
+        profiles
+            .validate_legacy_direct_requests()
+            .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
+        // Existing empty exports are an explicit deny-all configuration.
         if missing && profiles.default_direct_exports.roots.is_empty() {
             if let Some(home) = default_home {
                 profiles.default_direct_exports.roots.push(SharedRoot {
@@ -76,6 +73,10 @@ impl ShareProfiles {
         &mut self,
         storage: &mut impl ProfilePersistence,
     ) -> Result<(), String> {
+        self.reconcile_legacy_grants(super::core::now_secs());
+        self.recompute_all_identity_conflicts();
+        self.validate_legacy_direct_requests()
+            .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
         let contents = serde_json::to_string_pretty(self)
             .map_err(|error| format!("Share-Profile kodieren: {error}"))?;
         let revision = storage
@@ -158,7 +159,7 @@ impl ShareProfiles {
         storage: &mut impl ProfilePersistence,
     ) -> Result<(), String> {
         let mut candidate = self.clone();
-        candidate.set_direct_grant(presence, state);
+        candidate.set_direct_grant(presence, state)?;
         candidate.save_with(storage)?;
         *self = candidate;
         Ok(())
@@ -403,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_and_v4_profiles_migrate_to_v6_with_exec_default_denied() {
+    fn v3_and_v4_profiles_migrate_to_current_with_exec_default_denied() {
         let mut legacy = ShareProfiles {
             auto_connect: false,
             ..ShareProfiles::default()

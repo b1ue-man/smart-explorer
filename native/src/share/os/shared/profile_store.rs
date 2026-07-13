@@ -146,6 +146,14 @@ fn commit_transaction_candidate(
     candidate: &mut ShareProfiles,
 ) -> Result<(), profile_transaction::CommitError> {
     candidate.schema_version = SHARE_PROFILE_VERSION;
+    candidate.reconcile_legacy_grants(super::core::now_secs());
+    candidate
+        .validate_legacy_direct_requests()
+        .map_err(|error| {
+            profile_transaction::CommitError::Fatal(format!(
+                "Share-Profile sind beschaedigt: {error}"
+            ))
+        })?;
     let contents = serde_json::to_string_pretty(candidate).map_err(|error| {
         profile_transaction::CommitError::Fatal(format!("Share-Profile kodieren: {error}"))
     })?;

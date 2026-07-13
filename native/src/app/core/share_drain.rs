@@ -126,6 +126,12 @@ impl App {
                 {
                     self.share_status = format!("Share-Worker nicht erreichbar: {e}");
                 }
+                if let Err(cache_error) = super::profile_cache::reload(self) {
+                    self.share_profiles_error = Some(cache_error.clone());
+                    self.append_share_diag(format!(
+                        "Persistierten Share-Stand ohne Worker laden: {cache_error}"
+                    ));
+                }
                 self.share_next_poll_at = Instant::now() + SHARE_IDLE_POLL;
                 return;
             }
@@ -151,12 +157,12 @@ impl App {
         self.share_worker_running = snapshot.running;
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
-        self.share_direct_requests = snapshot
-            .pending_direct_requests
-            .into_iter()
-            .filter(|presence| self.share_profiles.grant_for(&presence.device_id).is_none())
-            .collect();
-        if !self.share_direct_requests.is_empty() {
+        if self
+            .share_profiles
+            .legacy_direct_requests
+            .iter()
+            .any(|entry| entry.is_pending(crate::share::core_now_secs()))
+        {
             self.show_share = true;
             self.share_tab = 0;
         }

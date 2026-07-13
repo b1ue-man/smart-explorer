@@ -8,6 +8,8 @@ const MAX_ID_BYTES: usize = 256;
 const MAX_NAME_BYTES: usize = 1024;
 const MAX_NONCE_BYTES: usize = 256;
 const MAX_MESSAGE_BYTES: usize = 4096;
+pub(crate) const MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
+pub(crate) const MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS: i64 = 5 * 60;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DirectRequestId(String);
@@ -309,6 +311,8 @@ pub enum DirectProtocolError {
     InvalidRequestId,
     InvalidField(&'static str),
     InvalidTimestamp,
+    LifetimeExceeded,
+    TimestampTooFarFuture,
     Expired,
     InvalidPublicKey,
     InvalidNodeId,
@@ -328,6 +332,8 @@ impl DirectProtocolError {
             Self::InvalidRequestId => "invalid_request_id",
             Self::InvalidField(_) => "invalid_field",
             Self::InvalidTimestamp => "invalid_timestamp",
+            Self::LifetimeExceeded => "lifetime_exceeded",
+            Self::TimestampTooFarFuture => "timestamp_too_far_future",
             Self::Expired => "expired",
             Self::InvalidPublicKey => "invalid_public_key",
             Self::InvalidNodeId => "invalid_node_id",
@@ -369,10 +375,7 @@ pub(super) fn validate_common(
     validate_optional_message(message)?;
     requester.validate()?;
     target.validate()?;
-    if timestamp < 0 || expires_at <= timestamp {
-        return Err(DirectProtocolError::InvalidTimestamp);
-    }
-    Ok(())
+    validate_timestamp_interval(timestamp, expires_at)
 }
 
 pub(super) fn validate_request_common(
@@ -389,10 +392,7 @@ pub(super) fn validate_request_common(
     validate_optional_message(message)?;
     requester.validate()?;
     target.validate_pin()?;
-    if timestamp < 0 || expires_at <= timestamp {
-        return Err(DirectProtocolError::InvalidTimestamp);
-    }
-    Ok(())
+    validate_timestamp_interval(timestamp, expires_at)
 }
 
 pub(super) fn validate_not_expired(
@@ -400,13 +400,33 @@ pub(super) fn validate_not_expired(
     created_at: i64,
     expires_at: i64,
 ) -> Result<(), DirectProtocolError> {
-    if now < created_at {
+    validate_timestamp_interval(created_at, expires_at)?;
+    if now < 0 {
         Err(DirectProtocolError::InvalidTimestamp)
+    } else if created_at > now.saturating_add(MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS) {
+        Err(DirectProtocolError::TimestampTooFarFuture)
     } else if now > expires_at {
         Err(DirectProtocolError::Expired)
     } else {
         Ok(())
     }
+}
+
+pub(super) fn validate_persisted_timestamp(
+    timestamp: i64,
+    expires_at: i64,
+) -> Result<(), DirectProtocolError> {
+    validate_timestamp_interval(timestamp, expires_at)
+}
+
+fn validate_timestamp_interval(timestamp: i64, expires_at: i64) -> Result<(), DirectProtocolError> {
+    if timestamp < 0 || expires_at <= timestamp {
+        return Err(DirectProtocolError::InvalidTimestamp);
+    }
+    if expires_at.saturating_sub(timestamp) > MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS {
+        return Err(DirectProtocolError::LifetimeExceeded);
+    }
+    Ok(())
 }
 
 fn validate_text(
@@ -430,3 +450,7 @@ fn validate_optional_message(message: Option<&str>) -> Result<(), DirectProtocol
         None => Ok(()),
     }
 }
+
+#[cfg(test)]
+#[path = "direct_protocol_lifetime_tests.rs"]
+mod lifetime_tests;

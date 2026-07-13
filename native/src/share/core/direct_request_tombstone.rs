@@ -83,7 +83,58 @@ impl ShareProfiles {
         }
         self.direct_request_tombstones.push(tombstone);
         self.direct_requests.remove(index);
+        if entry.direction == DirectRequestDirection::Incoming {
+            self.recompute_identity_conflicts_for_device(&entry.record.request.requester.device_id);
+        }
         Ok(true)
+    }
+
+    /// Removes request state that is cryptographically bound to an obsolete
+    /// local identity generation. No tombstone is needed: envelopes for the
+    /// old lookup ID or Iroh key cannot authenticate against the new identity.
+    /// This cleanup must remain capacity-independent so a full tombstone ledger
+    /// cannot prevent identity recovery.
+    pub(crate) fn reconcile_tracked_requests_after_identity_change(
+        &mut self,
+        current_lookup_id: &str,
+        identity_replaced: bool,
+    ) -> Result<usize, DirectLedgerError> {
+        if current_lookup_id.is_empty() {
+            return Err(DirectLedgerError::InvalidRelation);
+        }
+        let affected_devices = self
+            .direct_requests
+            .iter()
+            .filter(|entry| {
+                identity_replaced
+                    || (entry.direction == DirectRequestDirection::Incoming
+                        && entry.local_lookup_id.as_deref() != Some(current_lookup_id))
+            })
+            .filter(|entry| entry.direction == DirectRequestDirection::Incoming)
+            .map(|entry| entry.record.request.requester.device_id.clone())
+            .collect::<HashSet<_>>();
+        let requests_before = self.direct_requests.len();
+        let tombstones_before = self.direct_request_tombstones.len();
+        if identity_replaced {
+            self.direct_requests.clear();
+            self.direct_request_tombstones.clear();
+        } else {
+            self.direct_requests.retain(|entry| {
+                entry.direction != DirectRequestDirection::Incoming
+                    || entry.local_lookup_id.as_deref() == Some(current_lookup_id)
+            });
+            self.direct_request_tombstones.retain(|tombstone| {
+                tombstone.direction != DirectRequestDirection::Incoming
+                    || tombstone.request.lookup_id == current_lookup_id
+            });
+        }
+        for device_id in affected_devices {
+            self.recompute_identity_conflicts_for_device(&device_id);
+        }
+        Ok(
+            requests_before - self.direct_requests.len() + tombstones_before
+                - self.direct_request_tombstones.len(),
+        )
     }
 
     pub(crate) fn tombstone_blocks_request(

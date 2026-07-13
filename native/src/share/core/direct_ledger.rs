@@ -36,6 +36,7 @@ pub enum DirectEnvelopeKind {
 #[serde(rename_all = "snake_case")]
 pub enum DirectRelayOutcome {
     Forwarded,
+    LegacyForwarded,
     TargetOffline,
 }
 
@@ -97,6 +98,7 @@ pub enum DirectLedgerError {
     TombstoneFull,
     ActiveGrantRequiresRevoke,
     PendingPeerDelivery,
+    IdentityConflict,
     Protocol(DirectProtocolError),
     Lifecycle(DirectLifecycleError),
 }
@@ -122,6 +124,9 @@ impl fmt::Display for DirectLedgerError {
                 }
                 Self::PendingPeerDelivery => {
                     "direct request still has pending peer delivery; wait for the signed receipt before deleting it"
+                }
+                Self::IdentityConflict => {
+                    "direct request has an identity conflict and cannot be accepted"
                 }
                 Self::Protocol(_) | Self::Lifecycle(_) => unreachable!(),
             }),
@@ -201,7 +206,9 @@ impl DirectRequestEntry {
             DirectRequestDirection::Outgoing => {
                 let request_pending = now <= self.record.request.expires_at
                     && self.request_receipt.is_none()
-                    && self.decision.is_none();
+                    && self.decision.is_none()
+                    && self.retries.request.relay_outcome
+                        != Some(DirectRelayOutcome::LegacyForwarded);
                 if request_pending {
                     pending.push(DirectEnvelopeKind::Request);
                 }
@@ -232,6 +239,22 @@ impl DirectRequestEntry {
             }
         }
         pending
+    }
+
+    /// Returns envelopes a user may explicitly requeue. A successful legacy
+    /// bridge stops automatic retries because that protocol has no receipt, but
+    /// it must remain manually retryable when the user knows delivery was lost.
+    pub fn manually_retryable_outboxes(&self, now: i64) -> Vec<DirectEnvelopeKind> {
+        let mut retryable = self.pending_outboxes(now);
+        if self.direction == DirectRequestDirection::Outgoing
+            && now <= self.record.request.expires_at
+            && self.request_receipt.is_none()
+            && self.decision.is_none()
+            && self.retries.request.relay_outcome == Some(DirectRelayOutcome::LegacyForwarded)
+        {
+            retryable.push(DirectEnvelopeKind::Request);
+        }
+        retryable
     }
 
     /// History is removable only after every required peer-facing envelope is

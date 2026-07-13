@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$SeBinary = (Join-Path $PSScriptRoot "target\debug\se.exe"),
+    [string]$PeerSeBinary = "",
+    [ValidateSet("All", "A", "B")]
+    [string]$ExactCandidateRole = "All",
     [string]$ShareServerBinary = (Join-Path $PSScriptRoot "..\share-server\target\debug\se-share-server.exe")
 )
 
@@ -24,9 +27,63 @@ namespace SmartExplorerE2E
 }
 
 $script:SeBinary = [System.IO.Path]::GetFullPath($SeBinary)
+$script:PeerSeBinary = if ([string]::IsNullOrWhiteSpace($PeerSeBinary)) {
+    $null
+}
+else {
+    [System.IO.Path]::GetFullPath($PeerSeBinary)
+}
+$script:ExactCandidateRole = $ExactCandidateRole
 $script:ShareServerBinary = [System.IO.Path]::GetFullPath($ShareServerBinary)
 $script:RelayUrl = $null
 $script:TestNamespacePrefix = "share_" + [Guid]::NewGuid().ToString("N").Substring(0, 24)
+
+function Get-ClientBinary {
+    param([string]$ClientRoot)
+
+    if ($script:ExactCandidateRole -eq "All") {
+        return $script:SeBinary
+    }
+
+    $candidateRoot = if ($script:ExactCandidateRole -eq "A") {
+        $script:ClientA
+    }
+    else {
+        $script:ClientB
+    }
+    if ([StringComparer]::OrdinalIgnoreCase.Equals(
+        [System.IO.Path]::GetFullPath($ClientRoot),
+        [System.IO.Path]::GetFullPath($candidateRoot)
+    )) {
+        return $script:SeBinary
+    }
+    return $script:PeerSeBinary
+}
+
+function Get-ClientTestNamespace {
+    param([string]$ClientRoot)
+
+    if ($script:ExactCandidateRole -ne "All") {
+        $candidateRoot = if ($script:ExactCandidateRole -eq "A") {
+            $script:ClientA
+        }
+        else {
+            $script:ClientB
+        }
+        if ([StringComparer]::OrdinalIgnoreCase.Equals(
+            [System.IO.Path]::GetFullPath($ClientRoot),
+            [System.IO.Path]::GetFullPath($candidateRoot)
+        )) {
+            # Release binaries intentionally compile out the test namespace.
+            # Remove any inherited value as well, so exact-candidate coverage
+            # can never depend on a production namespace backdoor.
+            return $null
+        }
+    }
+
+    $clientName = [System.IO.Path]::GetFileName($ClientRoot)
+    return "$($script:TestNamespacePrefix)_$clientName"
+}
 
 function Assert-True {
     param(
@@ -146,7 +203,6 @@ function Start-ClientProcess {
         [string]$StderrPath
     )
 
-    $clientName = [System.IO.Path]::GetFileName($ClientRoot)
     $environment = @{
         HOME = (Join-Path $ClientRoot "home")
         USERPROFILE = (Join-Path $ClientRoot "home")
@@ -156,7 +212,7 @@ function Start-ClientProcess {
         APPDATA = (Join-Path $ClientRoot "roaming")
         LOCALAPPDATA = (Join-Path $ClientRoot "local")
         SE_SHARE_RELAY_URL = $script:RelayUrl
-        SMART_EXPLORER_E2E_TEST_NAMESPACE = "$($script:TestNamespacePrefix)_$clientName"
+        SMART_EXPLORER_E2E_TEST_NAMESPACE = (Get-ClientTestNamespace $ClientRoot)
     }
     $previous = @{}
     foreach ($name in $environment.Keys) {
@@ -170,7 +226,7 @@ function Start-ClientProcess {
         $nativeArguments = (($Arguments | ForEach-Object {
             ConvertTo-NativeArgument $_
         }) -join ' ')
-        $process = Start-Process -FilePath $script:SeBinary `
+        $process = Start-Process -FilePath (Get-ClientBinary $ClientRoot) `
             -ArgumentList $nativeArguments `
             -PassThru `
             -RedirectStandardInput $stdinPath `
@@ -583,7 +639,7 @@ function Get-ClientWorkerProcess {
     $syncDirectory = Join-Path $ClientRoot "roaming\smart_explorer\sync"
     $addressPath = Join-Path $syncDirectory "daemon.ipc"
     $generationPath = Join-Path $syncDirectory "daemon.generation"
-    $expectedExecutable = [System.IO.Path]::GetFullPath($script:SeBinary)
+    $expectedExecutable = [System.IO.Path]::GetFullPath((Get-ClientBinary $ClientRoot))
     $quotedCommandLine = '"' + $expectedExecutable + '" --sync-daemon'
     $bareCommandLine = $expectedExecutable + ' --sync-daemon'
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -698,10 +754,158 @@ function Stop-BoundWorkerHard {
     }
 }
 
+function Get-PublishedClientWorkerProcess {
+    param([string]$ClientRoot)
+
+    $addressPath = Join-Path $ClientRoot "roaming\smart_explorer\sync\daemon.ipc"
+    if (-not (Test-Path -LiteralPath $addressPath -PathType Leaf)) {
+        return $null
+    }
+
+    $address = [System.IO.File]::ReadAllText($addressPath).Trim()
+    if ($address -notmatch '^127\.0\.0\.1:([0-9]{1,5})$') {
+        throw "invalid published daemon address for ${ClientRoot}: $address"
+    }
+    $port = [int]$Matches[1]
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "invalid published daemon port for ${ClientRoot}: $port"
+    }
+
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port `
+        -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -eq "127.0.0.1" })
+    if ($listeners.Count -eq 0) {
+        return $null
+    }
+    if ($listeners.Count -ne 1) {
+        throw "expected one published 127.0.0.1:$port listener for $ClientRoot, found $($listeners.Count)"
+    }
+
+    $workerPid = [int]$listeners[0].OwningProcess
+    if ($workerPid -le 0) {
+        throw "published listener for $ClientRoot did not expose an owning PID"
+    }
+    $expectedExecutable = [System.IO.Path]::GetFullPath((Get-ClientBinary $ClientRoot))
+    $quotedCommandLine = '"' + $expectedExecutable + '" --sync-daemon'
+    $bareCommandLine = $expectedExecutable + ' --sync-daemon'
+    $cimProcess = Get-CimInstance -ClassName Win32_Process `
+        -Filter "ProcessId = $workerPid" -ErrorAction Stop
+    if ($null -eq $cimProcess -or -not [StringComparer]::OrdinalIgnoreCase.Equals(
+        [string]$cimProcess.ExecutablePath,
+        $expectedExecutable
+    )) {
+        throw "published listener PID $workerPid does not match the selected se binary for $ClientRoot"
+    }
+    $commandLine = [string]$cimProcess.CommandLine
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($commandLine, $quotedCommandLine) -and
+        -not [StringComparer]::OrdinalIgnoreCase.Equals($commandLine, $bareCommandLine)) {
+        throw "published listener PID $workerPid command line was not exactly se --sync-daemon"
+    }
+
+    $worker = [System.Diagnostics.Process]::GetProcessById($workerPid)
+    try {
+        $heldHandle = $worker.Handle
+        if ($heldHandle -eq [IntPtr]::Zero -or $worker.HasExited) {
+            throw "published listener PID $workerPid exited while its handle was acquired"
+        }
+        $mainModulePath = [System.IO.Path]::GetFullPath($worker.MainModule.FileName)
+        if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
+            $mainModulePath,
+            $expectedExecutable
+        )) {
+            throw "published listener PID $workerPid main module changed during cleanup binding"
+        }
+        $addressAfter = [System.IO.File]::ReadAllText($addressPath).Trim()
+        $listenersAfter = @(Get-NetTCPConnection -State Listen -LocalPort $port `
+            -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -eq "127.0.0.1" })
+        if ($addressAfter -ne $address -or $listenersAfter.Count -ne 1 -or
+            [int]$listenersAfter[0].OwningProcess -ne $workerPid -or $worker.HasExited) {
+            throw "daemon publication changed while binding cleanup PID $workerPid"
+        }
+        return $worker
+    }
+    catch {
+        $worker.Dispose()
+        throw
+    }
+}
+
 function Stop-ClientWorker {
     param([string]$ClientRoot)
 
     return Invoke-Client -ClientRoot $ClientRoot -Arguments @("share", "worker", "stop")
+}
+
+function Stop-ClientWorkerFully {
+    param(
+        [string]$ClientRoot,
+        [switch]$RequirePublished
+    )
+
+    $worker = Get-PublishedClientWorkerProcess $ClientRoot
+    if ($null -eq $worker) {
+        if ($RequirePublished) {
+            throw "no published Share worker was available to stop for $ClientRoot"
+        }
+        return $null
+    }
+
+    $result = $null
+    $stopError = $null
+    $forcedStop = $false
+    try {
+        try {
+            $result = Stop-ClientWorker $ClientRoot
+        }
+        catch {
+            $stopError = $_.Exception.Message
+        }
+
+        if (-not $worker.WaitForExit(10000)) {
+            $forcedStop = $true
+            if (-not $worker.HasExited) {
+                $worker.Kill()
+            }
+            if (-not $worker.WaitForExit(10000)) {
+                throw "Share worker for $ClientRoot survived its verified cleanup kill"
+            }
+        }
+    }
+    finally {
+        $worker.Dispose()
+    }
+
+    $replacement = Get-PublishedClientWorkerProcess $ClientRoot
+    if ($null -ne $replacement) {
+        $forcedStop = $true
+        try {
+            if (-not $replacement.HasExited) {
+                $replacement.Kill()
+            }
+            if (-not $replacement.WaitForExit(10000)) {
+                throw "replacement Share worker for $ClientRoot survived its verified cleanup kill"
+            }
+        }
+        finally {
+            $replacement.Dispose()
+        }
+    }
+
+    $remaining = Get-PublishedClientWorkerProcess $ClientRoot
+    if ($null -ne $remaining) {
+        try {
+            throw "Share worker for $ClientRoot remained published after complete cleanup"
+        }
+        finally {
+            $remaining.Dispose()
+        }
+    }
+    if ($null -ne $stopError) {
+        throw "Share worker stop failed for ${ClientRoot}: $stopError"
+    }
+    if ($forcedStop) {
+        throw "Share worker for $ClientRoot required a hard cleanup kill"
+    }
+    return $result
 }
 
 function Assert-RemotePathAbsent {
@@ -721,6 +925,17 @@ function Assert-RemotePathAbsent {
 if (-not (Test-Path -LiteralPath $script:SeBinary -PathType Leaf)) {
     throw "Windows se test binary is missing: $($script:SeBinary)"
 }
+if ($script:ExactCandidateRole -eq "All" -and $null -ne $script:PeerSeBinary) {
+    throw "PeerSeBinary requires ExactCandidateRole A or B"
+}
+if ($script:ExactCandidateRole -ne "All") {
+    if ($null -eq $script:PeerSeBinary) {
+        throw "ExactCandidateRole $($script:ExactCandidateRole) requires PeerSeBinary"
+    }
+    if (-not (Test-Path -LiteralPath $script:PeerSeBinary -PathType Leaf)) {
+        throw "Windows se peer fixture is missing: $($script:PeerSeBinary)"
+    }
+}
 if (-not (Test-Path -LiteralPath $script:ShareServerBinary -PathType Leaf)) {
     throw "Windows Share server test binary is missing: $($script:ShareServerBinary)"
 }
@@ -736,10 +951,11 @@ $clientA = Join-Path $root "a"
 $clientB = Join-Path $root "b"
 $clientC = Join-Path $root "c"
 $clientD = Join-Path $root "d"
+$script:ClientA = $clientA
+$script:ClientB = $clientB
 $serverStdout = Join-Path $root "share-server.stdout"
 $serverStderr = Join-Path $root "share-server.stderr"
 $server = $null
-$workersStopped = $false
 $succeeded = $false
 
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -1231,33 +1447,42 @@ try {
     Wait-EmptyRequestInbox $clientD | Out-Null
     Assert-Success (Invoke-Client -ClientRoot $clientA -Arguments @("connections", "remove-peer")) "A tombstone peer removal"
 
-    $stopA = Stop-ClientWorker $clientA
+    $stopA = Stop-ClientWorkerFully $clientA -RequirePublished
     Assert-Success $stopA "A worker stop"
-    $stopB = Stop-ClientWorker $clientB
+    $stopB = Stop-ClientWorkerFully $clientB -RequirePublished
     Assert-Success $stopB "B worker stop"
-    $stopC = Stop-ClientWorker $clientC
+    $stopC = Stop-ClientWorkerFully $clientC -RequirePublished
     Assert-Success $stopC "C worker stop"
-    $stopD = Stop-ClientWorker $clientD
+    $stopD = Stop-ClientWorkerFully $clientD -RequirePublished
     Assert-Success $stopD "D worker stop"
-    $workersStopped = $true
     $succeeded = $true
     Write-Host "Windows Share/Exec CLI lifecycle E2E passed: $requestId"
 }
 finally {
-    if (-not $workersStopped) {
-        try { Stop-ClientWorker $clientA | Out-Null } catch { }
-        try { Stop-ClientWorker $clientB | Out-Null } catch { }
-        try { Stop-ClientWorker $clientC | Out-Null } catch { }
-        try { Stop-ClientWorker $clientD | Out-Null } catch { }
+    $cleanupErrors = @()
+    foreach ($client in @($clientA, $clientB, $clientC, $clientD)) {
+        try {
+            Stop-ClientWorkerFully $client | Out-Null
+        }
+        catch {
+            $cleanupErrors += "$client`: $($_.Exception.Message)"
+        }
     }
     if ($null -ne $server -and -not $server.HasExited) {
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
         $server.WaitForExit(10000) | Out-Null
     }
-    if ($succeeded) {
+    if ($succeeded -and $cleanupErrors.Count -eq 0) {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
     }
     else {
         Write-Error "Windows Share/Exec CLI lifecycle E2E failed; diagnostics: $root" -ErrorAction Continue
+    }
+    if ($cleanupErrors.Count -gt 0) {
+        $cleanupMessage = "Windows Share worker cleanup was incomplete:`n" + ($cleanupErrors -join "`n")
+        if ($succeeded) {
+            throw $cleanupMessage
+        }
+        Write-Error $cleanupMessage -ErrorAction Continue
     }
 }

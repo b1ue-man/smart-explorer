@@ -11,8 +11,12 @@ pub(in crate::cli) fn request_value(
     let request = &entry.record.request;
     let (peer, peer_role) = peer(entry);
     let (authorization_active, authorization_basis) = authorization(entry, profiles);
+    let (effective_decision, decision_evidence) = effective_decision(entry, profiles);
     let (connectivity_state, connectivity_label) = connectivity(entry, profiles);
     let (relay_envelope, relay_retry) = current_relay(entry);
+    let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
+    let resolution_commands =
+        super::request_selection::tracked_conflict_resolution_commands(profiles, entry);
     serde_json::json!({
         "request_id": request.request_id.as_str(),
         "direction": direction_code(entry.direction),
@@ -58,6 +62,8 @@ pub(in crate::cli) fn request_value(
         },
         "decision": {
             "state": entry.record.decision.state.code(),
+            "effective_state": effective_decision,
+            "evidence": decision_evidence,
             "revision": entry.record.decision.revision,
             "changed_at": entry.record.decision.changed_at,
             "message": entry.record.decision.message,
@@ -84,6 +90,8 @@ pub(in crate::cli) fn request_value(
             "state": connectivity_state,
             "label": connectivity_label,
         },
+        "identity_conflict": identity_conflict,
+        "resolution_commands": resolution_commands,
     })
 }
 
@@ -105,14 +113,16 @@ pub(super) fn request_text(entry: &DirectRequestEntry, profiles: &ShareProfiles)
     let request = &entry.record.request;
     let (peer, _) = peer(entry);
     let (active, basis) = authorization(entry, profiles);
+    let (effective_decision, decision_evidence) = effective_decision(entry, profiles);
     let (connectivity_state, connectivity_label) = connectivity(entry, profiles);
     let (relay_envelope, relay_retry) = current_relay(entry);
+    let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
     let relay = relay_retry
         .and_then(|retry| retry.relay_outcome.map(relay_code))
         .unwrap_or("unconfirmed");
     let relay_at = relay_retry.and_then(|retry| retry.relay_changed_at);
     let mut lines = vec![format!(
-        "request\t{}\tdirection={}\tdelivery={}\tdelivery_at={}\trelay_envelope={}\trelay={}\trelay_at={}\trequest_peer_receipt={}\tdecision={}\tdecision_revision={}\tdecision_at={}\tdecision_delivery={}\tdecision_delivery_at={}\tdecision_peer_receipt={}\tauthorization={}\tconnectivity={}",
+        "request\t{}\tdirection={}\tdelivery={}\tdelivery_at={}\trelay_envelope={}\trelay={}\trelay_at={}\trequest_peer_receipt={}\tdecision={}\teffective_decision={}\tdecision_evidence={}\tdecision_revision={}\tdecision_at={}\tdecision_delivery={}\tdecision_delivery_at={}\tdecision_peer_receipt={}\tauthorization={}\tconnectivity={}\tidentity_conflict={}",
         request.request_id,
         direction_code(entry.direction),
         entry.record.delivery.state.code(),
@@ -122,6 +132,8 @@ pub(super) fn request_text(entry: &DirectRequestEntry, profiles: &ShareProfiles)
         option_i64(relay_at),
         receipt_state(&request_peer_receipt(entry)),
         entry.record.decision.state.code(),
+        effective_decision,
+        decision_evidence,
         entry.record.decision.revision,
         entry.record.decision.changed_at,
         entry.record.decision_delivery.state.code(),
@@ -129,6 +141,7 @@ pub(super) fn request_text(entry: &DirectRequestEntry, profiles: &ShareProfiles)
         receipt_state(&decision_peer_receipt(entry)),
         if active { "active" } else { "inactive" },
         connectivity_state,
+        identity_conflict,
     )];
     lines.push(format!(
         "request_peer\t{}\tdevice_id={}\tdevice_name={}\tfingerprint={}\tnode_id={}\tcreated_at={}\texpires_at={}\tauthorization_basis={}\tconnectivity_label={}",
@@ -170,6 +183,12 @@ pub(super) fn request_text(entry: &DirectRequestEntry, profiles: &ShareProfiles)
             retry.relay_outcome.map(relay_code).unwrap_or("unconfirmed"),
             option_i64(retry.relay_changed_at),
             failure_text(retry.last_error.as_ref()),
+        ));
+    }
+    for command in super::request_selection::tracked_conflict_resolution_commands(profiles, entry) {
+        lines.push(format!(
+            "request_resolution\t{}\t{}",
+            request.request_id, command
         ));
     }
     lines
@@ -262,14 +281,21 @@ fn authorization(entry: &DirectRequestEntry, profiles: &ShareProfiles) -> (bool,
         .is_some_and(|decision| decision.decision == DirectDecisionKind::Accepted);
     match entry.direction {
         DirectRequestDirection::Outgoing => {
-            let active = accepted
-                && entry.contact_id.as_ref().is_some_and(|contact_id| {
-                    profiles.direct_contacts.iter().any(|contact| {
-                        contact.id == *contact_id
-                            && contact.access_state == DirectAccessState::Accepted
-                    })
-                });
-            (active, "local_contact_projection")
+            let contact_active = entry.contact_id.as_ref().is_some_and(|contact_id| {
+                profiles.direct_contacts.iter().any(|contact| {
+                    contact.id == *contact_id && contact.access_state == DirectAccessState::Accepted
+                })
+            });
+            let legacy =
+                entry.retries.request.relay_outcome == Some(DirectRelayOutcome::LegacyForwarded);
+            (
+                contact_active && (accepted || legacy),
+                if legacy && entry.decision.is_none() {
+                    "legacy_contact_projection"
+                } else {
+                    "local_contact_projection"
+                },
+            )
         }
         DirectRequestDirection::Incoming => {
             let requester = &entry.record.request.requester;
@@ -277,11 +303,44 @@ fn authorization(entry: &DirectRequestEntry, profiles: &ShareProfiles) -> (bool,
                 && profiles.direct_grants.iter().any(|grant| {
                     grant.device_id == requester.device_id
                         && grant.public_key == requester.public_key
+                        && grant.node_id == requester.node_id
+                        && grant.fingerprint == requester.fingerprint
                         && grant.state == DirectGrantState::Accepted
                 });
             (active, "local_grant_projection")
         }
     }
+}
+
+fn effective_decision(
+    entry: &DirectRequestEntry,
+    profiles: &ShareProfiles,
+) -> (&'static str, &'static str) {
+    if entry.decision.is_some() {
+        return (entry.record.decision.state.code(), "signed_request");
+    }
+    if entry.direction != DirectRequestDirection::Outgoing
+        || entry.retries.request.relay_outcome != Some(DirectRelayOutcome::LegacyForwarded)
+    {
+        return (entry.record.decision.state.code(), "none");
+    }
+    let state = entry
+        .contact_id
+        .as_ref()
+        .and_then(|contact_id| {
+            profiles
+                .direct_contacts
+                .iter()
+                .find(|contact| contact.id == *contact_id)
+        })
+        .map(|contact| match contact.access_state {
+            DirectAccessState::Accepted => "accepted",
+            DirectAccessState::Ignored => "rejected",
+            DirectAccessState::IdentityConflict => "identity_conflict",
+            DirectAccessState::Pending => "pending",
+        })
+        .unwrap_or("unknown");
+    (state, "legacy_relation")
 }
 
 fn connectivity(entry: &DirectRequestEntry, profiles: &ShareProfiles) -> (&'static str, String) {
@@ -341,6 +400,7 @@ fn current_relay(entry: &DirectRequestEntry) -> (&'static str, Option<&DirectRet
 fn relay_code(outcome: DirectRelayOutcome) -> &'static str {
     match outcome {
         DirectRelayOutcome::Forwarded => "forwarded",
+        DirectRelayOutcome::LegacyForwarded => "legacy_forwarded",
         DirectRelayOutcome::TargetOffline => "target_offline",
     }
 }
@@ -361,89 +421,5 @@ fn clean(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{direction_code, envelope_code, request_text, request_value};
-    use crate::share::{
-        DirectAccessState, DirectContact, DirectEnvelopeKind, DirectPeerIdentity,
-        DirectRequestDirection, DirectRequestId, ShareProfiles, ShareStatus, SignedDirectRequest,
-        SignedDirectRequestReceipt,
-    };
-
-    #[test]
-    fn stable_codes_are_machine_friendly() {
-        assert_eq!(direction_code(DirectRequestDirection::Outgoing), "outgoing");
-        assert_eq!(
-            envelope_code(DirectEnvelopeKind::DecisionReceipt),
-            "decision_receipt"
-        );
-    }
-
-    #[test]
-    fn output_separates_delivery_receipt_authorization_and_connectivity() {
-        let requester_secret = iroh::SecretKey::from_bytes(&[3; 32]);
-        let target_secret = iroh::SecretKey::from_bytes(&[7; 32]);
-        let requester =
-            DirectPeerIdentity::from_secret("local-device", "Local Device", &requester_secret);
-        let target =
-            DirectPeerIdentity::from_secret("remote-device", "Remote Device", &target_secret);
-        let request = SignedDirectRequest::sign_with_nonce(
-            DirectRequestId::parse("01234567-89ab-4def-8123-456789abcdef").unwrap(),
-            "lookup",
-            requester,
-            DirectPeerIdentity::pinned_target(target.node_id.clone(), target.fingerprint.clone()),
-            10,
-            1_000,
-            "request-nonce",
-            None,
-            &[9; 32],
-            &requester_secret,
-        )
-        .unwrap();
-        let mut profiles = ShareProfiles::default();
-        profiles.direct_contacts.push(DirectContact {
-            id: "contact".into(),
-            display_name: "Peer".into(),
-            lookup_id: "lookup".into(),
-            expected_fingerprint: target.fingerprint.clone(),
-            expected_node_id: target.node_id.clone(),
-            remote_device_id: None,
-            remote_public_key: None,
-            auto_connect: true,
-            auto_open: false,
-            last_seen: None,
-            status: ShareStatus::Offline,
-            last_error: None,
-            presence: None,
-            access_state: DirectAccessState::Pending,
-            request_sent_at: Some(10),
-            accepted_at: None,
-            accepted_public_key: None,
-        });
-        profiles
-            .queue_outgoing_direct_request("contact", request.clone())
-            .unwrap();
-        let receipt = SignedDirectRequestReceipt::sign_with_nonce(
-            &request,
-            target,
-            11,
-            "receipt-nonce",
-            None,
-            &[9; 32],
-            &target_secret,
-        )
-        .unwrap();
-        profiles.record_direct_request_receipt(receipt).unwrap();
-
-        let entry = &profiles.direct_requests[0];
-        let value = request_value(entry, &profiles);
-        assert_eq!(value["direction"], "outgoing");
-        assert_eq!(value["delivery"]["state"], "received");
-        assert_eq!(value["peer_receipt"]["request"]["state"], "received");
-        assert_eq!(value["peer"]["device_name"], "Remote Device");
-        assert_eq!(value["authorization"]["state"], "inactive");
-        assert_eq!(value["connectivity"]["state"], "offline");
-        assert!(request_text(entry, &profiles)
-            .iter()
-            .any(|line| line.contains("request_peer_receipt=received")));
-    }
-}
+#[path = "lifecycle_output_tests.rs"]
+mod tests;

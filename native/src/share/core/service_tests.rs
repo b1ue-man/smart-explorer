@@ -7,7 +7,7 @@ use super::signal_auth::{
     remember_nonce, verify_direct_access_accepted_using, verify_local_direct_request,
 };
 use super::signal_connection::{normalize_signal_endpoint, normalize_tcp_addr, signal_endpoints};
-use super::signal_worker::build_presence;
+use super::signal_presence::build_presence;
 use super::types::ShareAuthState;
 use super::types::{
     DirectAccessState, DirectContact, DirectGrant, RoomProfile, ShareCmd, ShareStatus,

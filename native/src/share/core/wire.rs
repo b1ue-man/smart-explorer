@@ -103,7 +103,11 @@ pub(crate) enum SrvMsg {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub(crate) enum TrackedDirectClientMsg {
     #[serde(rename = "submit_direct_request")]
-    Request { request: SignedDirectRequest },
+    Request {
+        request: Box<SignedDirectRequest>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        legacy_presence: Option<PeerPresence>,
+    },
     #[serde(rename = "submit_direct_request_receipt")]
     RequestReceipt { receipt: SignedDirectRequestReceipt },
     #[serde(rename = "submit_direct_decision")]
@@ -148,6 +152,7 @@ pub(crate) enum DirectRoute {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DirectRouteOutcome {
     Forwarded,
+    LegacyForwarded,
     TargetOffline,
 }
 

@@ -38,62 +38,10 @@ pub(super) fn run(args: CompletionsArgs) -> Result<i32, String> {
     Ok(0)
 }
 
-pub(super) fn request_candidates() -> Vec<clap_complete::CompletionCandidate> {
-    let Ok(profiles) =
-        crate::share::ShareProfiles::load_checked(Some(super::share::default_home()))
-    else {
-        return Vec::new();
-    };
-    profiles
-        .direct_requests
-        .iter()
-        .map(|entry| {
-            let request = &entry.record.request;
-            let peer = match entry.direction {
-                crate::share::DirectRequestDirection::Incoming => &request.requester,
-                crate::share::DirectRequestDirection::Outgoing => &request.target,
-            };
-            candidate(
-                request.request_id.as_str(),
-                format!(
-                    "{} · {} · decision={} · delivery={}",
-                    direction(entry.direction),
-                    peer.device_name,
-                    entry.record.decision.state.code(),
-                    entry.record.delivery.state.code(),
-                ),
-            )
-        })
-        .collect()
-}
-
-pub(super) fn pending_request_candidates() -> Vec<clap_complete::CompletionCandidate> {
-    let now = crate::share::core_now_secs();
-    let Ok(profiles) =
-        crate::share::ShareProfiles::load_checked(Some(super::share::default_home()))
-    else {
-        return Vec::new();
-    };
-    profiles
-        .direct_requests
-        .iter()
-        .filter(|entry| {
-            entry.direction == crate::share::DirectRequestDirection::Incoming
-                && entry.record.decision.state == crate::share::DirectDecisionState::Pending
-                && entry.record.request.expires_at >= now
-        })
-        .map(|entry| {
-            let request = &entry.record.request;
-            candidate(
-                request.request_id.as_str(),
-                format!(
-                    "{} · fingerprint {}",
-                    request.requester.device_name, request.requester.fingerprint
-                ),
-            )
-        })
-        .collect()
-}
+pub(super) use super::completions_requests::{
+    acceptable_request_candidates, deletable_request_candidates, pending_request_candidates,
+    request_candidates, retry_request_candidates,
+};
 
 pub(super) fn active_grant_candidates() -> Vec<clap_complete::CompletionCandidate> {
     let Ok(profiles) =
@@ -295,13 +243,6 @@ pub(super) fn exec_job_selector(
 fn candidate(value: &str, help: String) -> clap_complete::CompletionCandidate {
     let help = help.replace(['\t', '\r', '\n'], " ");
     clap_complete::CompletionCandidate::new(value).help(Some(clap::builder::StyledStr::from(help)))
-}
-
-fn direction(value: crate::share::DirectRequestDirection) -> &'static str {
-    match value {
-        crate::share::DirectRequestDirection::Incoming => "incoming",
-        crate::share::DirectRequestDirection::Outgoing => "outgoing",
-    }
 }
 
 #[cfg(test)]

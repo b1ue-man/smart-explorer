@@ -44,11 +44,27 @@ impl App {
             .as_ref()
             .map(|identity| identity.device_name.clone())
             .unwrap_or(default_share_device_name);
-        let (share_profiles, mut share_profiles_error) =
+        let (mut share_profiles, mut share_profiles_error) =
             match crate::share::ShareProfiles::load_checked(Some(default_share_path.clone())) {
                 Ok(profiles) => (profiles, None),
                 Err(error) => (crate::share::ShareProfiles::default(), Some(error)),
             };
+        if let Some(identity) = &share_identity {
+            if !share_profiles.legacy_direct_requests.is_empty() {
+                match crate::share::refresh_legacy_request_expiry(
+                    Some(default_share_path.clone()),
+                    identity,
+                ) {
+                    Ok(refreshed) => share_profiles = refreshed,
+                    Err(error) => {
+                        share_profiles = crate::share::ShareProfiles::default();
+                        share_profiles_error = Some(format!(
+                            "Persistierte Legacy-Anfragen konnten nicht authentifiziert werden: {error}"
+                        ));
+                    }
+                }
+            }
+        }
         let room_draft_code = match crate::share::ShareProfiles::new_room_code() {
             Ok(code) => code,
             Err(error) => {
@@ -415,7 +431,6 @@ impl App {
             share_export_label_draft: "Home".to_string(),
             share_block_symlink_escape: true,
             share_regenerate_direct_confirm: false,
-            share_direct_requests: Vec::new(),
             share_diag_log: String::new(),
             share_manual_stop: false,
             share_poll_rx: None,

@@ -256,6 +256,15 @@ and revision, retry attempts/errors, authorization, and connectivity separately.
 Profile mutations use bounded compare-and-swap retries, so normal concurrent
 GUI/worker updates are rebased instead of overwriting each other.
 
+An incoming request whose device ID matches an existing tracked or legacy
+identity but whose public key, node ID, or fingerprint differs is an explicit
+`identity_conflict`. It is shown in text and JSON but excluded from acceptance
+and grant projection. The GUI disables Accept and names the blocker; the CLI
+prints exact revoke/reject/delete resolution commands. Reject and local delete
+remain available so a conflict cannot strand an unmanageable inbox row. An
+already active old identity must be revoked before the conflicting request can
+be reconsidered; no key change silently inherits its authority.
+
 Exec permission is separate from file access and default-denied for every exact
 device identity. Enabling it grants unrestricted code execution as the account
 running Smart Explorer; there is deliberately no command or path allowlist.
@@ -300,3 +309,10 @@ healthy idle beyond the heartbeat interval, Cancel, CLI disconnect, worker
 afterward. It also proves that active accepted history cannot be erased, then
 performs signed base-grant revoke, waits for its receipt, deletes the inactive
 history context-free, and confirms denied file access.
+
+The exact-candidate Linux gate also downloads the published `se` from v0.5.126
+under its pinned SHA-256 and runs `native/test-share-mixed-version-e2e.sh`.
+It proves new-to-old retry and acceptance plus old-to-new durable inbox,
+context-free accept/reject/retry/revoke/delete, completion, and file access.
+Every selector used by that scenario is obtained from earlier CLI output in the
+same run.

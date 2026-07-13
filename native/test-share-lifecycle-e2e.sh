@@ -350,11 +350,13 @@ inbox="$(wait_request_inbox "$client_b")"
 mapfile -t inbox_request_lines < <(awk -F '\t' '$1 == "pending_request"' <<<"$inbox")
 [[ ${#inbox_request_lines[@]} -eq 1 ]]
 IFS=$'\t' read -r inbox_kind inbox_request_id inbox_name inbox_device_id inbox_fingerprint \
-  inbox_delivery inbox_decision inbox_authorization <<<"${inbox_request_lines[0]}"
+  inbox_delivery inbox_decision inbox_authorization inbox_identity_conflict \
+  <<<"${inbox_request_lines[0]}"
 [[ "$inbox_kind" == pending_request && -n "$inbox_request_id" ]]
 [[ "$inbox_name" == device_name=?* && "$inbox_device_id" == device_id=?* ]]
 [[ "$inbox_fingerprint" == fingerprint=?* && "$inbox_delivery" == delivery=received ]]
 [[ "$inbox_decision" == decision=pending && "$inbox_authorization" == authorization=inactive ]]
+[[ "$inbox_identity_conflict" == identity_conflict=false ]]
 [[ "$inbox_request_id" == "$request_id" ]]
 wait_request_state "$client_a" "$request_id" '.delivery.state == "received" and .peer_receipt.request.state == "received"' >/dev/null
 

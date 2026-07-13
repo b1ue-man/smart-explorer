@@ -9,18 +9,22 @@ pub(super) struct StatusArgs {
 }
 
 pub(super) fn run(args: StatusArgs) -> Result<(), String> {
-    let snapshot = crate::daemon::drain_share_worker_events()?;
     let profiles = super::checked_profiles()?;
+    let (snapshot, worker_error) = match crate::daemon::drain_share_worker_events() {
+        Ok(snapshot) => (snapshot, None),
+        Err(error) => (crate::daemon::ShareWorkerSnapshot::default(), Some(error)),
+    };
     if args.json {
-        print_json(&snapshot, &profiles)
+        print_json(&snapshot, worker_error.as_deref(), &profiles)
     } else {
-        print_text(&snapshot, &profiles);
+        print_text(&snapshot, worker_error.as_deref(), &profiles);
         Ok(())
     }
 }
 
 fn print_json(
     snapshot: &crate::daemon::ShareWorkerSnapshot,
+    worker_error: Option<&str>,
     profiles: &crate::share::ShareProfiles,
 ) -> Result<(), String> {
     let contacts = profiles.direct_contacts.iter().map(|contact| {
@@ -56,15 +60,11 @@ fn print_json(
             "members": room.members.len(),
         })
     });
-    let pending = snapshot.pending_direct_requests.iter().map(|request| {
-        serde_json::json!({
-            "legacy": true,
-            "device_id": request.device_id,
-            "device_name": request.device_name,
-            "fingerprint": request.fingerprint,
-            "expires_at": request.expires_at,
-        })
-    });
+    let legacy_requests = profiles
+        .legacy_direct_requests
+        .iter()
+        .map(|entry| super::requests_legacy::value(entry, profiles))
+        .collect::<Vec<_>>();
     let requests = profiles
         .direct_requests
         .iter()
@@ -72,23 +72,28 @@ fn print_json(
         .collect::<Vec<_>>();
     let value = serde_json::json!({
         "worker": {
-            "running": snapshot.running,
-            "connected": snapshot.connected,
-            "last_error": snapshot.last_error,
+            "reachable": worker_error.is_none(),
+            "running": worker_error.is_none().then_some(snapshot.running),
+            "connected": worker_error.is_none().then_some(snapshot.connected),
+            "last_error": worker_error.or(snapshot.last_error.as_deref()),
             "relay_url": snapshot.relay_url,
             "candidates": snapshot.candidates,
         },
         // Keep the original top-level fields for existing scripts.
-        "running": snapshot.running,
-        "connected": snapshot.connected,
-        "last_error": snapshot.last_error,
+        "running": worker_error.is_none().then_some(snapshot.running),
+        "connected": worker_error.is_none().then_some(snapshot.connected),
+        "last_error": worker_error.or(snapshot.last_error.as_deref()),
         "relay_url": snapshot.relay_url,
         "candidates": snapshot.candidates,
         "contacts": contacts.collect::<Vec<_>>(),
         "rooms": rooms.collect::<Vec<_>>(),
         "requests": requests,
+        "legacy_requests": legacy_requests,
         "grants": grants::values(profiles),
-        "pending_requests": pending.collect::<Vec<_>>(),
+        "pending_requests": profiles.legacy_direct_requests.iter()
+            .filter(|entry| entry.is_pending(crate::share::core_now_secs()))
+            .map(|entry| super::requests_legacy::value(entry, profiles))
+            .collect::<Vec<_>>(),
         "events": snapshot.events.iter().filter_map(public_event).collect::<Vec<_>>(),
     });
     println!(
@@ -100,13 +105,23 @@ fn print_json(
 
 fn print_text(
     snapshot: &crate::daemon::ShareWorkerSnapshot,
+    worker_error: Option<&str>,
     profiles: &crate::share::ShareProfiles,
 ) {
-    println!("running\t{}", snapshot.running);
-    println!("connected\t{}", snapshot.connected);
+    println!("worker_reachable\t{}", worker_error.is_none());
+    println!(
+        "running\t{}",
+        worker_error.map_or_else(|| snapshot.running.to_string(), |_| "unknown".into())
+    );
+    println!(
+        "connected\t{}",
+        worker_error.map_or_else(|| snapshot.connected.to_string(), |_| "unknown".into())
+    );
     println!(
         "last_error\t{}",
-        snapshot.last_error.as_deref().unwrap_or("-")
+        worker_error
+            .or(snapshot.last_error.as_deref())
+            .unwrap_or("-")
     );
     println!("relay_url\t{}", snapshot.relay_url);
     for contact in &profiles.direct_contacts {
@@ -140,19 +155,13 @@ fn print_text(
             share_status_code(&room.status),
         );
     }
-    for request in &snapshot.pending_direct_requests {
-        println!(
-            "legacy_request\t{}\t{}\t{}\texpires_at={}",
-            request.device_id,
-            clean(&request.device_name),
-            clean(&request.fingerprint),
-            request.expires_at,
-        );
-    }
     for entry in &profiles.direct_requests {
         for line in lifecycle_output::request_text(entry, profiles) {
             println!("{line}");
         }
+    }
+    for entry in &profiles.legacy_direct_requests {
+        println!("{}", super::requests_legacy::text(entry, profiles));
     }
     for line in grants::text(profiles) {
         println!("{line}");

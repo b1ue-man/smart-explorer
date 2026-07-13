@@ -1,4 +1,5 @@
 mod completions;
+mod completions_requests;
 mod connections;
 mod doctor;
 mod exec;

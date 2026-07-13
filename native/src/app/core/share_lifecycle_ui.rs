@@ -19,12 +19,11 @@ enum LifecycleAction {
         request_id: crate::share::DirectRequestId,
         fingerprint: String,
     },
-    RevokeLegacyGrant {
-        device_id: String,
+    RevokeLegacy {
+        selector: String,
     },
-    LegacyDecision {
-        presence: Box<crate::share::PeerPresence>,
-        accepted: bool,
+    RevokeUnlinkedLegacyGrant {
+        device_id: String,
     },
     SelectExports,
 }
@@ -87,10 +86,7 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
 
     ui.separator();
     crate::app::share_exec_ui::ui_exec_grants(app, ui);
-    if !app.share_direct_requests.is_empty() {
-        ui.separator();
-        legacy_requests(app, ui, &mut action);
-    }
+    super::legacy_lifecycle_ui::ui(app, ui);
 
     if let Some(action) = action {
         perform_action(app, action);
@@ -170,21 +166,35 @@ fn request_card(
             });
 
         if incoming && request.can_decide {
+            if request.identity_conflict {
+                ui.colored_label(
+                    Color32::from_rgb(255, 120, 120),
+                    "Identitaetskonflikt: Akzeptieren ist gesperrt. Die Konfliktzeile nennt die bestehende Freigabe oder Anfrage, die zuerst aufgeloest werden muss; alternativ diese Anfrage ablehnen oder loeschen.",
+                );
+            }
             let confirmation_id = egui::Id::new((
                 "share_direct_fingerprint_confirm",
                 request.request_id.to_string(),
             ));
             let mut confirmed =
                 ui.data_mut(|data| data.get_temp::<bool>(confirmation_id).unwrap_or_default());
-            if ui
-                .checkbox(&mut confirmed, "Angezeigten Fingerprint geprueft")
-                .changed()
-            {
-                ui.data_mut(|data| data.insert_temp(confirmation_id, confirmed));
+            if request.can_accept {
+                if ui
+                    .checkbox(&mut confirmed, "Angezeigten Fingerprint geprueft")
+                    .changed()
+                {
+                    ui.data_mut(|data| data.insert_temp(confirmation_id, confirmed));
+                }
+            } else {
+                confirmed = false;
+                ui.data_mut(|data| data.insert_temp(confirmation_id, false));
             }
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(confirmed, egui::Button::new("Akzeptieren"))
+                    .add_enabled(
+                        request.can_accept && confirmed,
+                        egui::Button::new("Akzeptieren"),
+                    )
                     .clicked()
                 {
                     *action = Some(LifecycleAction::Decide {
@@ -262,66 +272,29 @@ fn authorized_card(
                     fingerprint: device.fingerprint.clone(),
                 });
             }
-        } else if device.authorization.starts_with("active") {
+        } else if let Some(selector) = &device.accepted_legacy_request {
             ui.colored_label(
                 Color32::from_rgb(255, 185, 120),
-                "Legacy-Freigabe ohne getrackte Request-ID; der Peer kann nicht benachrichtigt werden.",
+                "Legacy-Freigabe; ein Widerruf ist nur lokal und ungetrackt.",
             );
             if ui.button("Legacy-Freigabe lokal sperren").clicked() {
-                *action = Some(LifecycleAction::RevokeLegacyGrant {
+                *action = Some(LifecycleAction::RevokeLegacy {
+                    selector: selector.clone(),
+                });
+            }
+        } else if device.authorization.starts_with("active") {
+            ui.label("Legacy-Freigabe ohne gespeicherten Request-Verlauf.");
+            if ui
+                .button("Unverknuepfte Legacy-Freigabe lokal sperren")
+                .clicked()
+            {
+                *action = Some(LifecycleAction::RevokeUnlinkedLegacyGrant {
                     device_id: device.device_id.clone(),
                 });
             }
         }
     });
     ui.add_space(4.0);
-}
-
-fn legacy_requests(app: &App, ui: &mut egui::Ui, action: &mut Option<LifecycleAction>) {
-    section_heading(ui, "LEGACY-ANFRAGEN — UNBESTAETIGT");
-    ui.colored_label(
-        Color32::from_rgb(255, 185, 120),
-        "Legacy-Fallback ohne stabile Request-ID: Versand, Peer-Empfang und Entscheidung bleiben unbestaetigt.",
-    );
-    for presence in app.share_direct_requests.clone() {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.label(RichText::new(&presence.device_name).strong());
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Fingerprint:");
-                super::helpers::share_value_field(ui, &presence.fingerprint);
-            });
-            let confirmation_id = egui::Id::new((
-                "share_legacy_fingerprint_confirm",
-                presence.device_id.clone(),
-                presence.nonce.clone(),
-            ));
-            let mut confirmed =
-                ui.data_mut(|data| data.get_temp::<bool>(confirmation_id).unwrap_or_default());
-            if ui
-                .checkbox(&mut confirmed, "Angezeigten Fingerprint geprueft")
-                .changed()
-            {
-                ui.data_mut(|data| data.insert_temp(confirmation_id, confirmed));
-            }
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(confirmed, egui::Button::new("Legacy freigeben"))
-                    .clicked()
-                {
-                    *action = Some(LifecycleAction::LegacyDecision {
-                        presence: Box::new(presence.clone()),
-                        accepted: true,
-                    });
-                }
-                if ui.button("Legacy loeschen / ablehnen").clicked() {
-                    *action = Some(LifecycleAction::LegacyDecision {
-                        presence: Box::new(presence.clone()),
-                        accepted: false,
-                    });
-                }
-            });
-        });
-    }
 }
 
 fn perform_action(app: &mut App, action: LifecycleAction) {
@@ -342,9 +315,40 @@ fn perform_action(app: &mut App, action: LifecycleAction) {
             fingerprint,
             crate::share::DirectDecisionKind::Revoked,
         ),
-        LifecycleAction::RevokeLegacyGrant { device_id } => revoke_legacy_grant(app, &device_id),
-        LifecycleAction::LegacyDecision { presence, accepted } => {
-            legacy_decide(app, *presence, accepted)
+        LifecycleAction::RevokeLegacy { selector } => {
+            match crate::share::revoke_legacy_direct_request(Some(default_home()), &selector) {
+                Ok(_) => {
+                    let _ = refresh_after_action(
+                        app,
+                        format!("Legacy-Freigabe fuer {selector} lokal widerrufen"),
+                    );
+                }
+                Err(error) => app.error_msg = Some(format!("Legacy-Freigabe: {error}")),
+            }
+        }
+        LifecycleAction::RevokeUnlinkedLegacyGrant { device_id } => {
+            let now = crate::share::core_now_secs();
+            let result =
+                crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
+                    let grant = profiles
+                        .direct_grants
+                        .iter_mut()
+                        .find(|grant| grant.device_id == device_id)
+                        .ok_or_else(|| format!("Legacy-Freigabe nicht gefunden: {device_id}"))?;
+                    grant.state = crate::share::DirectGrantState::Ignored;
+                    grant.updated_at = now;
+                    grant.exec.disable_without_decision(now);
+                    Ok(())
+                });
+            match result {
+                Ok(_) => {
+                    let _ = refresh_after_action(
+                        app,
+                        format!("Unverknuepfte Legacy-Freigabe fuer {device_id} gesperrt"),
+                    );
+                }
+                Err(error) => app.error_msg = Some(format!("Legacy-Freigabe: {error}")),
+            }
         }
         LifecycleAction::SelectExports => {
             app.share_export_scope = 0;
@@ -416,75 +420,14 @@ fn delete_history(app: &mut App, request_id: crate::share::DirectRequestId) {
     }
 }
 
-fn legacy_decide(app: &mut App, presence: crate::share::PeerPresence, accepted: bool) {
-    let Some(identity) = app.share_identity.clone() else {
-        app.error_msg = Some("Share-Identitaet nicht verfuegbar".into());
-        return;
-    };
-    let state = if accepted {
-        crate::share::DirectGrantState::Accepted
-    } else {
-        crate::share::DirectGrantState::Ignored
-    };
-    let persisted =
-        crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
-            profiles.set_direct_grant(&presence, state.clone());
-            Ok(())
-        });
-    if let Err(error) = persisted {
-        app.error_msg = Some(format!("Legacy-Freigabe nicht gespeichert: {error}"));
-        return;
-    }
-    if app.share_cmd(crate::share::ShareCmd::AnswerDirectRequest {
-        lookup_id: identity.direct_lookup_id,
-        presence: presence.clone(),
-        accepted,
-    }) {
-        app.share_direct_requests
-            .retain(|request| request.device_id != presence.device_id);
-        app.notice = Some((
-            format!(
-                "Legacy-Entscheidung fuer {} gesendet; Peer-Empfang unbestaetigt",
-                presence.device_name
-            ),
-            Instant::now(),
-        ));
-        app.share_next_poll_at = Instant::now();
-    }
-}
-
-fn revoke_legacy_grant(app: &mut App, device_id: &str) {
-    let now = crate::share::core_now_secs();
-    let result = crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
-        let grant = profiles
-            .direct_grants
-            .iter_mut()
-            .find(|grant| grant.device_id == device_id)
-            .ok_or_else(|| format!("Legacy-Freigabe nicht gefunden: {device_id}"))?;
-        grant.state = crate::share::DirectGrantState::Ignored;
-        grant.updated_at = now;
-        grant.exec.disable_without_decision(now);
-        Ok(())
-    });
-    match result {
-        Ok(_) => {
-            let _ = refresh_after_action(
-                app,
-                format!(
-                    "Legacy-Freigabe fuer {device_id} lokal gesperrt; Peer-Benachrichtigung nicht moeglich"
-                ),
-            );
-        }
-        Err(error) => {
-            app.error_msg = Some(format!("Legacy-Freigabe nicht gesperrt: {error}"));
-        }
-    }
-}
-
 fn refresh_after_action(app: &mut App, notice: String) -> bool {
-    if !app.configure_share_service() {
+    if let Err(error) = super::profile_cache::reload(app) {
+        app.error_msg = Some(format!(
+            "Share-Aenderung gespeichert, aber GUI-Stand konnte nicht geladen werden: {error}"
+        ));
         return false;
     }
+    let _ = app.configure_share_service();
     app.notice = Some((notice, Instant::now()));
     app.share_next_poll_at = Instant::now();
     true
