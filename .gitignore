@@ -36,6 +36,25 @@ Thumbs.db
 !release-native/share-server/
 !release-native/share-server/se-share-server.exe
 
+# Complete-release locks, rollback copies, and failure-preserved candidates are
+# local recovery state. Never stage them as release assets.
+/release-native/.complete-release.lock
+/release-native/.release-stage.*
+/release-native/.complete-release-stage.*
+/release-native/.update-feed.release-new.*
+/release-native/.update-feed.release-backup.*
+/release-native/.update-feed.linux-candidate.*
+/release-native/.update-feed.backup.*
+/release-native/.*.release-new.*
+/release-native/.*.release-backup.*
+/release-native/.se-share-server-linux.stage.*
+/release-native/share-server/.se-share-server-linux.stage.*
+/release-native/share-server/.se-share-server-linux.release-new.*
+/release-native/share-server/.se-share-server-linux.backup.*
+/release-native/share-server/.*.release-new.*
+/release-native/share-server/.*.release-backup.*
+/release-native/windows-partial-v*/
+
 # Standalone se-agent crate build artifacts (the built binaries are committed
 # under native/agent-bin/, not these).
 /se-agent/target/

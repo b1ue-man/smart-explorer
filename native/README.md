@@ -39,6 +39,11 @@ Release-Flow steht in [`../docs/RELEASING.md`](../docs/RELEASING.md); auf einem
 Windows-Rechner ist `..\native\publish-release-local.ps1` der Standard, weil der
 Wrapper Windows- und Linux-Feed-Payloads inklusive `se` gemeinsam in einem
 isolierten Baum baut, prüft und erst danach rollback-geschützt veröffentlicht.
+Die vollständigen Windows- und Linux-Pfade teilen
+`release-native/.complete-release.lock` und brechen bei einem zweiten Lauf vor
+dem Build ab. Ein fehlgeschlagener vollständiger Lauf behält seinen Stage und
+meldet dessen Pfad; dieser ist Diagnosematerial, kein automatisch resumierbarer
+oder manuell zu promotender Release-Kandidat.
 
 Bench-Mode:
 ```bash
