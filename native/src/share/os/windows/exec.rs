@@ -1,3 +1,6 @@
+#[cfg(debug_assertions)]
+#[path = "exec_self_test.rs"]
+mod exec_self_test;
 #[path = "exec_supervisor.rs"]
 mod exec_supervisor;
 
@@ -211,11 +214,20 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
 }
 
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
+    #[cfg(debug_assertions)]
+    if let Some(result) = exec_self_test::run_helper_if_requested(arguments) {
+        return Some(result);
+    }
     if arguments.len() == 1 && arguments[0] == INTERNAL_MODE {
         Some(exec_supervisor::run())
     } else {
         None
     }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn run_extended_self_test() -> io::Result<()> {
+    exec_self_test::run()
 }
 
 struct LaunchedProcess {

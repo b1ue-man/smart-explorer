@@ -1,3 +1,6 @@
+#[cfg(debug_assertions)]
+#[path = "exec_self_test.rs"]
+mod exec_self_test;
 #[path = "exec_supervisor.rs"]
 mod exec_supervisor;
 #[path = "exec_systemd.rs"]
@@ -34,6 +37,8 @@ pub(crate) struct ContainedExec {
     control_group: PathBuf,
     socket_path: PathBuf,
     events: mpsc::Receiver<io::Result<SupervisorEvent>>,
+    #[cfg(debug_assertions)]
+    supervisor_pid: u32,
 }
 
 struct Control {
@@ -156,6 +161,8 @@ impl ContainedExec {
             control_group,
             socket_path,
             events,
+            #[cfg(debug_assertions)]
+            supervisor_pid: credentials.pid as u32,
         })
     }
 
@@ -268,6 +275,10 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
 }
 
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
+    #[cfg(debug_assertions)]
+    if let Some(result) = exec_self_test::run_helper_if_requested(arguments) {
+        return Some(result);
+    }
     if arguments.len() != 2 || arguments[0] != INTERNAL_MODE {
         return None;
     }
@@ -290,6 +301,11 @@ pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::
         exec_supervisor::run(stream)
     })();
     Some(result)
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn run_extended_self_test() -> io::Result<()> {
+    exec_self_test::run()
 }
 
 fn accept_supervisor(
