@@ -4,6 +4,11 @@ use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::time::{Duration, Instant};
 
+#[path = "exec_self_test_process.rs"]
+mod process;
+
+use self::process::{launch_isolated_suspended_test_host, SuspendedTestHost};
+
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
@@ -14,8 +19,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateProcessW, GetExitCodeProcess, ResumeThread, SetEvent, TerminateProcess,
-    WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTUPINFOW,
+    WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    PROCESS_INFORMATION, STARTUPINFOW,
 };
 
 use crate::share::exec_supervisor_protocol::{
@@ -61,7 +66,7 @@ pub(super) fn run() -> io::Result<()> {
 
 fn run_compatible_outer_job_test() -> io::Result<()> {
     let outer = super::create_job()?;
-    let child = launch_suspended_test_host(NESTED_HELPER_MODE)?;
+    let child = launch_isolated_suspended_test_host(NESTED_HELPER_MODE)?;
     assign_to_outer_job(&outer, &child)?;
     resume_and_expect_success(child)?;
     require_empty_job(&outer, "compatible outer Job")
@@ -69,7 +74,7 @@ fn run_compatible_outer_job_test() -> io::Result<()> {
 
 fn run_incompatible_outer_job_test() -> io::Result<()> {
     let outer = create_ui_restricted_job()?;
-    let child = launch_suspended_test_host(INCOMPATIBLE_HELPER_MODE)?;
+    let child = launch_isolated_suspended_test_host(INCOMPATIBLE_HELPER_MODE)?;
     if unsafe { AssignProcessToJobObject(outer.raw(), child.process.raw()) } == 0 {
         let error = io::Error::last_os_error();
         let access_denied = error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32);
@@ -124,7 +129,10 @@ fn run_nested_helper() -> io::Result<()> {
 fn run_incompatible_helper() -> io::Result<()> {
     let request = helper_request(vec![BREAKAWAY_TARGET_MODE.into()])?;
     match ContainedExec::prepare(&request) {
-        Err(_) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
+            "UI-restricted nested Job failed with an unexpected error: {error}"
+        ))),
         Ok(mut process) => {
             process.terminate_all(StopReason::ProtocolError)?;
             process.confirm_empty(Instant::now() + Duration::from_secs(5))?;
@@ -271,45 +279,6 @@ fn create_ui_restricted_job() -> io::Result<OwnedHandle> {
         return Err(io::Error::last_os_error());
     }
     Ok(job)
-}
-
-struct SuspendedTestHost {
-    process: OwnedHandle,
-    thread: OwnedHandle,
-}
-
-fn launch_suspended_test_host(mode: &str) -> io::Result<SuspendedTestHost> {
-    let executable = std::env::current_exe()?;
-    let executable_wide: Vec<u16> = executable
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let mut command_line: Vec<u16> = format!("se {mode}").encode_utf16().chain(Some(0)).collect();
-    let mut startup: STARTUPINFOW = unsafe { zeroed() };
-    startup.cb = size_of::<STARTUPINFOW>() as u32;
-    let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
-    if unsafe {
-        CreateProcessW(
-            executable_wide.as_ptr(),
-            command_line.as_mut_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-            std::ptr::null(),
-            std::ptr::null(),
-            &startup,
-            &mut process,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(SuspendedTestHost {
-        process: OwnedHandle::new(process.hProcess)?,
-        thread: OwnedHandle::new(process.hThread)?,
-    })
 }
 
 fn assign_to_outer_job(job: &OwnedHandle, child: &SuspendedTestHost) -> io::Result<()> {
