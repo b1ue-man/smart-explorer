@@ -109,6 +109,80 @@ if [ -z "$version" ]; then
   exit 1
 fi
 
+tool_dir=""
+feed_candidate=""
+feed_backup=""
+feed_install=""
+share_stage=""
+share_backup=""
+share_install=""
+version_stage=""
+feed_installed=0
+feed_had_destination=0
+share_installed=0
+share_had_destination=0
+transaction_active=0
+publication_complete=0
+preserve_failed_stage=0
+
+# Resolved relative to this script at runtime.
+# shellcheck source=release-lock.sh
+# shellcheck disable=SC1091
+. "$script_dir/release-lock.sh"
+
+rollback_publication() {
+  local failed=0
+  if [ "$feed_installed" = "1" ] && [ -e "$feed" ]; then
+    rm -rf -- "$feed" || failed=1
+  fi
+  if [ "$feed_had_destination" = "1" ] && [ -n "$feed_backup" ] && [ -e "$feed_backup" ]; then
+    mv -- "$feed_backup" "$feed" || failed=1
+  fi
+  if [ "$share_installed" = "1" ] && [ -e "$share_out/se-share-server-linux" ]; then
+    rm -f -- "$share_out/se-share-server-linux" || failed=1
+  fi
+  if [ "$share_had_destination" = "1" ] && [ -n "$share_backup" ] && [ -e "$share_backup" ]; then
+    mv -- "$share_backup" "$share_out/se-share-server-linux" || failed=1
+  fi
+  return "$failed"
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [ "$transaction_active" = "1" ]; then
+    if ! rollback_publication; then
+      echo "Linux release rollback encountered an error; inspect the preserved candidate and backups." >&2
+      status=1
+    fi
+  fi
+  [ -n "$tool_dir" ] && rm -rf -- "$tool_dir"
+  [ -n "$feed_install" ] && rm -rf "$feed_install"
+  [ -n "$share_install" ] && rm -f "$share_install"
+  if [ "$publication_complete" = "1" ] || [ "$preserve_failed_stage" != "1" ]; then
+    [ -n "$feed_candidate" ] && rm -rf "$feed_candidate"
+    [ -n "$share_stage" ] && rm -f "$share_stage"
+    [ -n "$version_stage" ] && rm -f "$version_stage"
+  elif [ "$status" -ne 0 ]; then
+    echo "Linux release stage failed; preserved candidate paths:" >&2
+    [ -n "$feed_candidate" ] && [ -e "$feed_candidate" ] && echo "  feed: $feed_candidate" >&2
+    [ -n "$share_stage" ] && [ -e "$share_stage" ] && echo "  share server: $share_stage" >&2
+    [ -n "$version_stage" ] && [ -e "$version_stage" ] && echo "  version marker: $version_stage" >&2
+    echo "No automatic resume is assumed. Inspect these bytes and rerun only through a verified release script." >&2
+  fi
+  if ! release_lock_release; then
+    status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+if [ "$check_env" != "1" ] && [ "$check_gui" != "1" ]; then
+  release_lock_acquire "$rel" "native/publish-linux-feed-wsl.sh"
+  preserve_failed_stage=1
+fi
+
 echo "Preparing Linux release toolchain for Smart Explorer $version ..."
 rustup target add "$linux_gui_target" "$linux_static_target" >/dev/null
 
@@ -155,52 +229,6 @@ if [ -z "$zig_bin" ]; then
 fi
 
 tool_dir="$(mktemp -d "${TMPDIR:-/tmp}/smart-explorer-release.XXXXXX")"
-feed_candidate=""
-feed_backup=""
-share_stage=""
-share_backup=""
-version_stage=""
-feed_installed=0
-feed_had_destination=0
-share_installed=0
-share_had_destination=0
-transaction_active=0
-
-rollback_publication() {
-  if [ "$feed_installed" = "1" ] && [ -e "$feed" ]; then
-    rm -rf "$feed"
-  fi
-  if [ "$feed_had_destination" = "1" ] && [ -n "$feed_backup" ] && [ -e "$feed_backup" ]; then
-    mv "$feed_backup" "$feed"
-  fi
-  if [ "$share_installed" = "1" ] && [ -e "$share_out/se-share-server-linux" ]; then
-    rm -f "$share_out/se-share-server-linux"
-  fi
-  if [ "$share_had_destination" = "1" ] && [ -n "$share_backup" ] && [ -e "$share_backup" ]; then
-    mv "$share_backup" "$share_out/se-share-server-linux"
-  fi
-}
-
-cleanup() {
-  local status=$?
-  trap - EXIT
-  set +e
-  if [ "$transaction_active" = "1" ]; then
-    rollback_publication
-  fi
-  rm -rf "$tool_dir"
-  if [ -n "$feed_candidate" ]; then
-    rm -rf "$feed_candidate"
-  fi
-  if [ -n "$share_stage" ]; then
-    rm -f "$share_stage"
-  fi
-  if [ -n "$version_stage" ]; then
-    rm -f "$version_stage"
-  fi
-  exit "$status"
-}
-trap cleanup EXIT
 
 cat > "$tool_dir/zigcc-gnu" <<EOF
 #!/usr/bin/env bash
@@ -498,27 +526,47 @@ transaction_active=1
 if [ "$build_share_server" = "1" ] && [ "$share_in_feed" != "1" ]; then
   share_destination="$share_out/se-share-server-linux"
   share_backup="$share_parent/.se-share-server-linux.backup.$$.${RANDOM}"
+  share_install="$share_parent/.se-share-server-linux.release-new.$$.${RANDOM}"
+  cp -p -- "$share_stage" "$share_install"
+  if [ "$(sha256sum "$share_stage" | awk '{print $1}')" != "$(sha256sum "$share_install" | awk '{print $1}')" ]; then
+    echo "Linux Share-server candidate copy verification failed." >&2
+    exit 1
+  fi
   if [ -e "$share_destination" ]; then
     share_had_destination=1
     mv "$share_destination" "$share_backup"
   fi
   share_installed=1
-  mv "$share_stage" "$share_destination"
-  share_stage=""
+  mv "$share_install" "$share_destination"
+  share_install=""
 fi
 
 feed_backup="$feed_parent/.${feed_name}.backup.$$.${RANDOM}"
+feed_install="$feed_parent/.${feed_name}.release-new.$$.${RANDOM}"
+cp -a -- "$feed_candidate" "$feed_install"
+(
+  cd "$feed_install"
+  sha256sum -c smart_explorer.sha256
+  sha256sum -c smart_explorer_updater.sha256
+  sha256sum -c se.sha256
+  if [ "$write_version" = "1" ]; then
+    sha256sum -c smart_explorer.exe.sha256
+    sha256sum -c smart_explorer_updater.exe.sha256
+    sha256sum -c se.exe.sha256
+  fi
+)
 if [ -e "$feed" ]; then
   feed_had_destination=1
   mv "$feed" "$feed_backup"
 fi
 feed_installed=1
-mv "$feed_candidate" "$feed"
-feed_candidate=""
+mv "$feed_install" "$feed"
+feed_install=""
 
 if [ "$write_version" = "1" ]; then
-  mv "$version_stage" "$feed/version.txt"
-  version_stage=""
+  version_install="$feed/.version.release-new.$$.${RANDOM}"
+  install -m 0644 "$version_stage" "$version_install"
+  mv "$version_install" "$feed/version.txt"
 fi
 
 (
@@ -544,16 +592,27 @@ if [ "$build_share_server" = "1" ]; then
 fi
 
 transaction_active=0
-if [ "$feed_had_destination" = "1" ]; then
-  rm -rf "$feed_backup"
-fi
-if [ "$share_had_destination" = "1" ]; then
-  rm -f "$share_backup"
-fi
-
+publication_complete=1
+backup_cleanup_incomplete=0
 if [ "$write_version" = "1" ]; then
   echo "Complete Linux/Windows feed atomically published: $feed (v$version)"
 else
   echo "Linux feed payloads atomically staged: $feed"
   echo "version.txt not changed; the complete release wrapper owns the final version commit."
+fi
+if [ "$feed_had_destination" = "1" ]; then
+  if ! rm -rf -- "$feed_backup"; then
+    echo "WARNING: Linux feed promotion is committed and verified at $feed, but the old feed backup could not be removed: $feed_backup" >&2
+    backup_cleanup_incomplete=1
+  fi
+fi
+if [ "$share_had_destination" = "1" ]; then
+  if ! rm -f -- "$share_backup"; then
+    echo "WARNING: Linux feed promotion is committed and verified, but the old Share-server backup could not be removed: $share_backup" >&2
+    backup_cleanup_incomplete=1
+  fi
+fi
+
+if [ "$backup_cleanup_incomplete" = "1" ]; then
+  echo "The promoted destination remains committed; backup cleanup is best-effort and does not require rebuilding or rerunning this promotion." >&2
 fi

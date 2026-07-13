@@ -38,6 +38,11 @@ user can pull updates.
 
 ## Cut a release
 
+Steps 2–7 below are one terminal release transaction performed exactly once,
+after every task intended for that release and all relevant development
+validation are complete. A complete release build is never an intermediate
+test or checkpoint; disposable and targeted test builds belong in step 1.
+
 1. **Finish the complete task batch and development validation first.** Normal
    commits and pushes may run formatting, checks, tests, disposable builds, and
    E2E, but they do not bump a version, rewrite `release-native/`, stage release
@@ -74,9 +79,16 @@ user can pull updates.
      servers, and installer, verifies them in staging, and writes
      `version.txt` last. This is the supported full-release path on a Linux
      release host.
-   Choose exactly one complete host path. The repair and partial-bundle commands
-   resume or diagnose a failed stage; they are not additional release cycles
-   after a successful complete build.
+   Choose exactly one complete host path. Repair and partial-bundle commands are
+   targeted diagnostics/recovery builds; they are not additional release cycles
+   after a successful complete build. A failed full wrapper retains its isolated
+   stage and prints the path, but the current scripts do not promise a general
+   automatic resume from that directory. Inspect it to locate the failed
+   boundary, fix the cause, and rerun the same wrapper for the same version;
+   Cargo can reuse its own valid build cache. Never hand-promote retained files.
+   Once the complete build succeeds, continue directly through steps 4–7; a
+   successful full release build must not remain uncommitted, untagged, or
+   unpublished unless publication is technically blocked.
 4. **Commit** the version and `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
    smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
    se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
@@ -95,6 +107,15 @@ user can pull updates.
    platform E2E. Fix failures on the same intended version and repeat only the
    failed build stage or verification; do not create a tag until this run is
    green.
+   If workflow dispatch is technically unavailable, push the same main commit
+   to the version-bound verification branch instead:
+   ```
+   git push origin <exact-main-commit>:refs/heads/verify/vX.Y.Z
+   ```
+   `verify/v*` runs the same exact Linux and Windows candidate gates but is not
+   included in the publication-job condition. Its suffix must equal
+   `Cargo.toml`, deletion events are ignored, and the branch must be deleted
+   after the green run. Dispatch remains the preferred verify-only path.
 7. **Publish the GitHub Release** (attaches OS payloads/hashes, installer, DLL,
    install script, both Share servers, and `version.txt`):
    - Normally: push a tag — CI's `build.yml` releases on `v*`:
@@ -131,6 +152,16 @@ filters the musl-only `-ldl` mismatch. The live feed remains untouched while
 either platform build or staged verification is in progress; promotion
 failures restore the prior feed and ancillary files.
 
+Every artifact-mutating release path uses the same repository lock:
+`release-native/.complete-release.lock`. Its creation is atomic across the
+Windows and WSL views of the checkout, so a second release fails before it can
+build or promote anything. Clean exits remove it. A hard crash deliberately
+leaves owner metadata behind because Windows and WSL PIDs cannot be compared
+safely. Verify that no release-related Windows, WSL, or Linux process remains
+before deleting only that stale lock file. Failure-retained `.release-stage.*`,
+`.complete-release-stage.*`, and Linux candidate paths are ignored by Git and
+must not be committed as release assets.
+
 Before cutting a release on a workstation, the fast environment check is:
 
 ```powershell
@@ -158,10 +189,11 @@ Share lifecycle. That path may create disposable test binaries, but it never
 runs a complete release build, stages or uploads a candidate, creates a tag, or
 publishes a GitHub Release.
 
-An explicit `workflow_dispatch` with `verify_release_candidate=true` enables
-the exact-candidate jobs without enabling publication. A `v*` tag, an explicit
-dispatch with `publish_release=true`, or the documented `release/v*` fallback
-also enables those gates and enables publication only after they pass. CI
+An explicit `workflow_dispatch` with `verify_release_candidate=true`, or the
+non-publishing `verify/v*` push fallback, enables the exact-candidate jobs
+without enabling publication. A `v*` tag, an explicit dispatch with
+`publish_release=true`, or the documented `release/v*` fallback also enables
+those gates and enables publication only after they pass. CI
 deliberately does not rebuild the release there: it
 checks the version, all six payload hashes, Windows build manifest, portable
 Windows/feed byte equality, installer and all ancillary assets directly from

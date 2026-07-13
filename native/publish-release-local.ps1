@@ -16,6 +16,7 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 $releaseRoot = Join-Path $repoRoot "release-native"
 $feed = Join-Path $releaseRoot "update-feed"
+. (Join-Path $scriptRoot "release-lock.ps1")
 
 function Get-NativeVersion {
     $cargoToml = Join-Path $scriptRoot "Cargo.toml"
@@ -176,6 +177,7 @@ function Publish-CompleteRelease(
     )
     $records = [System.Collections.Generic.List[object]]::new()
     $feedBackup = Join-Path $releaseRoot (".update-feed.release-backup.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N"))
+    $feedCandidate = Join-Path $releaseRoot (".update-feed.release-new.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N"))
     $feedHadDestination = Test-Path -LiteralPath $feed
     $feedInstalled = $false
     $committed = $false
@@ -187,22 +189,30 @@ function Publish-CompleteRelease(
             $record = [pscustomobject]@{
                 Destination = $spec.Destination
                 Backup = Join-Path $destinationParent (".{0}.release-backup.{1}.{2}" -f ([System.IO.Path]::GetFileName($spec.Destination)), $PID, [guid]::NewGuid().ToString("N"))
+                Candidate = Join-Path $destinationParent (".{0}.release-new.{1}.{2}" -f ([System.IO.Path]::GetFileName($spec.Destination)), $PID, [guid]::NewGuid().ToString("N"))
                 HadDestination = Test-Path -LiteralPath $spec.Destination
                 Installed = $false
             }
             $records.Add($record)
+            Copy-Item -LiteralPath $spec.Source -Destination $record.Candidate
+            Assert-SameSha256 $spec.Source $record.Candidate
             if ($record.HadDestination) {
                 Move-Item -LiteralPath $record.Destination -Destination $record.Backup
             }
             $record.Installed = $true
-            Move-Item -LiteralPath $spec.Source -Destination $record.Destination
+            Move-Item -LiteralPath $record.Candidate -Destination $record.Destination
         }
 
+        Copy-Item -LiteralPath $StageFeed -Destination $feedCandidate -Recurse
+        Assert-WindowsManifest $feedCandidate $ExpectedVersion
+        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
+            Assert-FeedHash $feedCandidate $name
+        }
         if ($feedHadDestination) {
             Move-Item -LiteralPath $feed -Destination $feedBackup
         }
         $feedInstalled = $true
-        Move-Item -LiteralPath $StageFeed -Destination $feed
+        Move-Item -LiteralPath $feedCandidate -Destination $feed
         Publish-FileAtomic $VersionSource (Join-Path $feed "version.txt")
 
         $publishedVersion = (Get-Content -LiteralPath (Join-Path $feed "version.txt") -TotalCount 1).Trim()
@@ -219,24 +229,64 @@ function Publish-CompleteRelease(
         $committed = $true
     } catch {
         $primary = $_
-        try {
+        $rollbackErrors = [System.Collections.Generic.List[System.Exception]]::new()
+        $attemptRollback = {
+            param(
+                [Parameter(Mandatory = $true)][string]$Description,
+                [Parameter(Mandatory = $true)][scriptblock]$Action
+            )
+            try {
+                & $Action
+            } catch {
+                $rollbackErrors.Add(
+                    [System.InvalidOperationException]::new(
+                        "Rollback step failed: $Description",
+                        $_.Exception
+                    )
+                )
+            }
+        }
+
+        & $attemptRollback "remove newly installed feed '$feed'" {
             if ($feedInstalled -and (Test-Path -LiteralPath $feed)) {
                 Remove-Item -LiteralPath $feed -Recurse -Force
             }
+        }
+        & $attemptRollback "restore prior feed from '$feedBackup'" {
             if ($feedHadDestination -and (Test-Path -LiteralPath $feedBackup)) {
+                if (Test-Path -LiteralPath $feed) {
+                    throw "Cannot restore the prior feed while the newly installed feed still exists: $feed"
+                }
                 Move-Item -LiteralPath $feedBackup -Destination $feed
             }
-            for ($index = $records.Count - 1; $index -ge 0; $index--) {
-                $record = $records[$index]
+        }
+        for ($index = $records.Count - 1; $index -ge 0; $index--) {
+            $record = $records[$index]
+            & $attemptRollback "remove newly installed artifact '$($record.Destination)'" {
                 if ($record.Installed -and (Test-Path -LiteralPath $record.Destination)) {
                     Remove-Item -LiteralPath $record.Destination -Force
                 }
+            }
+            & $attemptRollback "restore prior artifact '$($record.Destination)' from '$($record.Backup)'" {
                 if ($record.HadDestination -and (Test-Path -LiteralPath $record.Backup)) {
+                    if (Test-Path -LiteralPath $record.Destination) {
+                        throw "Cannot restore the prior artifact while the newly installed artifact still exists: $($record.Destination)"
+                    }
                     Move-Item -LiteralPath $record.Backup -Destination $record.Destination
                 }
             }
-        } catch {
-            throw "Complete-release publication failed ($primary); rollback failed: $_"
+        }
+
+        if ($rollbackErrors.Count -gt 0) {
+            $allErrors = [System.Collections.Generic.List[System.Exception]]::new()
+            $allErrors.Add($primary.Exception)
+            foreach ($rollbackError in $rollbackErrors) {
+                $allErrors.Add($rollbackError)
+            }
+            throw [System.AggregateException]::new(
+                "Complete-release publication failed and $($rollbackErrors.Count) rollback step(s) also failed. The first inner exception is the primary publication failure; every remaining inner exception is a rollback failure.",
+                $allErrors
+            )
         }
         throw $primary
     } finally {
@@ -248,6 +298,14 @@ function Publish-CompleteRelease(
                 if ($record.HadDestination) {
                     Remove-Item -LiteralPath $record.Backup -Force -ErrorAction SilentlyContinue
                 }
+            }
+        }
+        if (Test-Path -LiteralPath $feedCandidate) {
+            Remove-Item -LiteralPath $feedCandidate -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        foreach ($record in $records) {
+            if (Test-Path -LiteralPath $record.Candidate) {
+                Remove-Item -LiteralPath $record.Candidate -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -321,23 +379,30 @@ if ($CheckEnvOnly) {
     exit 0
 }
 
-# The Windows desktop binary embeds the Linux SSH-agent payloads. Refresh them
-# before the Windows build so source/protocol changes cannot ship a stale helper.
+$releaseLock = $null
+$stageRoot = $null
+$releaseCompleted = $false
 if (-not $SkipLinuxFeed) {
-    Invoke-Checked -ErrorMessage "SSH-agent bundle build failed." -Command {
-        & wsl.exe bash -lc "cd '$repoRootWsl' && native/build-agent-bundles.sh"
-    }
+    $releaseLock = Enter-CompleteReleaseLock $releaseRoot "native/publish-release-local.ps1"
 }
-
-New-Item -ItemType Directory -Force $releaseRoot | Out-Null
-$stageName = ".complete-release-stage.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N")
-$stageRoot = Join-Path $releaseRoot $stageName
-$stageRelease = Join-Path $stageRoot "release"
-$stageFeed = Join-Path $stageRelease "update-feed"
-$versionStage = Join-Path $stageRoot "version.txt"
-New-Item -ItemType Directory -Force $stageRelease | Out-Null
-
 try {
+    # The Windows desktop binary embeds the Linux SSH-agent payloads. Refresh
+    # them before the Windows build so source/protocol changes cannot ship a
+    # stale helper.
+    if (-not $SkipLinuxFeed) {
+        Invoke-Checked -ErrorMessage "SSH-agent bundle build failed." -Command {
+            & wsl.exe bash -lc "cd '$repoRootWsl' && native/build-agent-bundles.sh"
+        }
+    }
+
+    New-Item -ItemType Directory -Force $releaseRoot | Out-Null
+    $stageName = ".complete-release-stage.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N")
+    $stageRoot = Join-Path $releaseRoot $stageName
+    $stageRelease = Join-Path $stageRoot "release"
+    $stageFeed = Join-Path $stageRelease "update-feed"
+    $versionStage = Join-Path $stageRoot "version.txt"
+    New-Item -ItemType Directory -Force $stageRelease | Out-Null
+
     Push-Location $scriptRoot
     try {
         & .\publish-update.ps1 -Feed $stageFeed -ReleaseOutput $stageRelease -AllowPartialFeed -DeferFeedVersion
@@ -378,6 +443,7 @@ try {
         $partialOutput = Join-Path $releaseRoot "windows-partial-v$version"
         Publish-PartialBundle $stageRelease $partialOutput
         Write-Warning "NON-PUBLISHABLE partial Windows bundle verified at $partialOutput. The shared update feed and version.txt were not changed."
+        $releaseCompleted = $true
         return
     }
 
@@ -387,7 +453,7 @@ try {
         $linuxArgs = " --no-bootstrap-zig"
     }
     Invoke-Checked -ErrorMessage "Linux feed build failed." -Command {
-        & wsl.exe bash -lc "cd '$repoRootWsl' && SMART_EXPLORER_FEED_DIR='$stageReleaseWsl/update-feed' SMART_EXPLORER_SHARE_DIR='$stageReleaseWsl/share-server' native/publish-linux-feed-wsl.sh$linuxArgs"
+        & wsl.exe bash -lc "cd '$repoRootWsl' && SMART_EXPLORER_RELEASE_LOCK_TOKEN='$($releaseLock.Token)' SMART_EXPLORER_FEED_DIR='$stageReleaseWsl/update-feed' SMART_EXPLORER_SHARE_DIR='$stageReleaseWsl/share-server' native/publish-linux-feed-wsl.sh$linuxArgs"
     }
 
     Assert-NonEmptyFile $linuxInstaller
@@ -421,6 +487,17 @@ try {
     Write-Host "Complete local release artifacts atomically staged and verified: v$version"
     Write-Host "Installer: $(Join-Path $releaseRoot "Smart Explorer Setup $version.exe")"
     Write-Host "Feed: $feed"
+    $releaseCompleted = $true
 } finally {
-    Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($stageRoot -and (Test-Path -LiteralPath $stageRoot)) {
+        if ($releaseCompleted -or $SkipLinuxFeed) {
+            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Warning "Complete release failed; preserved stage: $stageRoot"
+            Write-Warning "No automatic resume is assumed. Inspect the stage and rerun only through a verified release script."
+        }
+    }
+    if ($releaseLock) {
+        Exit-CompleteReleaseLock $releaseLock
+    }
 }

@@ -33,33 +33,49 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 
 mkdir -p "$rel"
-stage_root="$(mktemp -d "$rel/.release-stage.XXXXXX")"
-feed_stage="$stage_root/update-feed"
-share_stage="$stage_root/share-server"
-portable_stage="$stage_root/portable"
-mkdir -p "$feed_stage" "$share_stage" "$portable_stage"
+# Resolved relative to this script at runtime.
+# shellcheck source=release-lock.sh
+# shellcheck disable=SC1091
+. "$script_dir/release-lock.sh"
+release_lock_acquire "$rel" "native/publish-feed.sh"
+
+stage_root=""
+feed_stage=""
+share_stage=""
+portable_stage=""
 transaction_active=0
+release_complete=0
 feed_backup=""
+feed_install=""
 feed_had_destination=0
 feed_installed=0
 promoted_destinations=()
 promoted_backups=()
 promoted_had_destination=()
+promotion_temporaries=()
 
 rollback_publication() {
+  local failed=0
   if [ "$feed_installed" = "1" ] && [ -e "$feed" ]; then
-    rm -rf "$feed"
+    rm -rf -- "$feed" || failed=1
   fi
   if [ "$feed_had_destination" = "1" ] && [ -n "$feed_backup" ] && [ -e "$feed_backup" ]; then
-    mv "$feed_backup" "$feed"
+    mv -- "$feed_backup" "$feed" || failed=1
   fi
   local index
   for ((index = ${#promoted_destinations[@]} - 1; index >= 0; index--)); do
-    rm -f "${promoted_destinations[$index]}"
-    if [ "${promoted_had_destination[$index]}" = "1" ] && [ -e "${promoted_backups[$index]}" ]; then
-      mv "${promoted_backups[$index]}" "${promoted_destinations[$index]}"
+    if [ "${promoted_had_destination[$index]}" = "1" ]; then
+      if [ -e "${promoted_backups[$index]}" ]; then
+        rm -f -- "${promoted_destinations[$index]}" || failed=1
+        mv -- "${promoted_backups[$index]}" "${promoted_destinations[$index]}" || failed=1
+      elif [ ! -e "${promoted_destinations[$index]}" ]; then
+        failed=1
+      fi
+    else
+      rm -f -- "${promoted_destinations[$index]}" || failed=1
     fi
   done
+  return "$failed"
 }
 
 cleanup() {
@@ -67,12 +83,36 @@ cleanup() {
   trap - EXIT
   set +e
   if [ "$transaction_active" = "1" ]; then
-    rollback_publication
+    if ! rollback_publication; then
+      echo "Complete-release rollback encountered an error; inspect the preserved stage and backup files." >&2
+      status=1
+    fi
   fi
-  rm -rf "$stage_root"
+  local temporary
+  for temporary in "${promotion_temporaries[@]}"; do
+    [ -n "$temporary" ] && rm -rf -- "$temporary"
+  done
+  if [ -n "$feed_install" ]; then
+    rm -rf -- "$feed_install"
+  fi
+  if [ "$release_complete" = "1" ] && [ -n "$stage_root" ]; then
+    rm -rf -- "$stage_root"
+  elif [ -n "$stage_root" ] && [ -d "$stage_root" ]; then
+    echo "Complete release failed; preserved stage: $stage_root" >&2
+    echo "No automatic resume is assumed. Inspect the stage and rerun only through a verified release script." >&2
+  fi
+  if ! release_lock_release; then
+    status=1
+  fi
   exit "$status"
 }
 trap cleanup EXIT
+
+stage_root="$(mktemp -d "$rel/.release-stage.XXXXXX")"
+feed_stage="$stage_root/update-feed"
+share_stage="$stage_root/share-server"
+portable_stage="$stage_root/portable"
+mkdir -p "$feed_stage" "$share_stage" "$portable_stage"
 
 echo "Building complete Smart Explorer v$version release ..."
 
@@ -195,18 +235,28 @@ promote_file() {
   local destination=$2
   local destination_parent
   local backup
+  local candidate
   local had_destination=0
   destination_parent="$(dirname "$destination")"
   mkdir -p "$destination_parent"
   backup="$destination_parent/.$(basename "$destination").release-backup.$$.${RANDOM}"
+  candidate="$destination_parent/.$(basename "$destination").release-new.$$.${RANDOM}"
+  promotion_temporaries+=("$candidate")
+  cp -p -- "$source" "$candidate"
+  if [ "$(sha256sum "$source" | awk '{print $1}')" != "$(sha256sum "$candidate" | awk '{print $1}')" ]; then
+    echo "Release candidate copy verification failed: $destination" >&2
+    return 1
+  fi
   if [ -e "$destination" ]; then
     had_destination=1
-    mv "$destination" "$backup"
   fi
   promoted_destinations+=("$destination")
   promoted_backups+=("$backup")
   promoted_had_destination+=("$had_destination")
-  mv "$source" "$destination"
+  if [ "$had_destination" = "1" ]; then
+    mv "$destination" "$backup"
+  fi
+  mv "$candidate" "$destination"
 }
 
 version_stage="$stage_root/version.txt"
@@ -222,13 +272,25 @@ promote_file "$share_stage/se-share-server.exe" "$share_out/se-share-server.exe"
 promote_file "$share_stage/se-share-server-linux" "$share_out/se-share-server-linux"
 
 feed_backup="$rel/.update-feed.release-backup.$$.${RANDOM}"
+feed_install="$rel/.update-feed.release-new.$$.${RANDOM}"
+promotion_temporaries+=("$feed_install")
+cp -a -- "$feed_stage" "$feed_install"
+(
+  cd "$feed_install"
+  for payload in "${feed_payloads[@]}"; do
+    sha256sum -c "$payload.sha256"
+  done
+)
 if [ -e "$feed" ]; then
   feed_had_destination=1
   mv "$feed" "$feed_backup"
 fi
 feed_installed=1
-mv "$feed_stage" "$feed"
-mv "$version_stage" "$feed/version.txt"
+mv "$feed_install" "$feed"
+feed_install=""
+version_install="$feed/.version.release-new.$$.${RANDOM}"
+install -m 0644 "$version_stage" "$version_install"
+mv "$version_install" "$feed/version.txt"
 
 test "$(tr -d '\r\n' < "$feed/version.txt")" = "$version"
 (
@@ -253,15 +315,26 @@ file "$feed/smart_explorer" | grep -Fq 'dynamically linked'
 file "$share_out/se-share-server-linux" | grep -Eq 'statically linked|static-pie linked'
 
 transaction_active=0
+release_complete=1
+backup_cleanup_incomplete=0
+echo "Complete local release committed and verified: v$version"
+echo "Installer: $rel/Smart Explorer Setup $version.exe"
+echo "Feed: $feed"
 if [ "$feed_had_destination" = "1" ]; then
-  rm -rf "$feed_backup"
+  if ! rm -rf -- "$feed_backup"; then
+    echo "WARNING: Complete release v$version is committed and verified at $feed, but the old feed backup could not be removed: $feed_backup" >&2
+    backup_cleanup_incomplete=1
+  fi
 fi
 for ((index = 0; index < ${#promoted_destinations[@]}; index++)); do
   if [ "${promoted_had_destination[$index]}" = "1" ]; then
-    rm -f "${promoted_backups[$index]}"
+    if ! rm -f -- "${promoted_backups[$index]}"; then
+      echo "WARNING: Complete release v$version is committed and verified, but an old artifact backup could not be removed: ${promoted_backups[$index]}" >&2
+      backup_cleanup_incomplete=1
+    fi
   fi
 done
 
-echo "Complete local release staged and verified: v$version"
-echo "Installer: $rel/Smart Explorer Setup $version.exe"
-echo "Feed: $feed"
+if [ "$backup_cleanup_incomplete" = "1" ]; then
+  echo "Release v$version remains committed; backup cleanup is best-effort and does not require rebuilding or rerunning the release." >&2
+fi

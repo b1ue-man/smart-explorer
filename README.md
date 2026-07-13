@@ -249,14 +249,19 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/`se`/Installer,
    baut die Linux/WSL-Payloads im selben isolierten Staging-Baum, prüft alle
    Artefakte und schreibt `version.txt` erst nach der rollback-geschützten
-   Gesamt-Promotion. `-SkipLinuxFeed` erzeugt nur ein ausdrücklich nicht
+   Gesamt-Promotion. Alle artefaktverändernden Release-Pfade teilen dabei ein
+   Windows-/WSL-/Linux-weites Fail-fast-Lock. Ein fehlgeschlagener vollständiger
+   Lauf behält seinen isolierten Stage zur Diagnose, verspricht daraus aber kein
+   automatisches Resume. `-SkipLinuxFeed` erzeugt nur ein ausdrücklich nicht
    publizierbares Windows-Prüfbundle; der gemeinsame Feed bleibt unverändert.
 4. Version und `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
 5. `build.yml` am exakten Commit mit `verify_release_candidate=true` und
    `publish_release=false` ausführen. Das baut und veröffentlicht keinen
    Release, sondern prüft die committierten Linux-/Windows-Bytes einschließlich
-   der plattformeigenen E2E vor dem unveränderlichen Tag.
+   der plattformeigenen E2E vor dem unveränderlichen Tag. Wenn Dispatch technisch
+   nicht verfügbar ist, denselben Commit auf `verify/vX.Y.Z` pushen; dieser
+   Fallback prüft nur, veröffentlicht nie und wird danach wieder gelöscht.
 6. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen. CI baut den Kandidaten
    nicht erneut, sondern validiert, testet und veröffentlicht bytegenau die
    committierten Windows-/Linux-App-, Updater- und `se`-Payloads samt Hashes,
