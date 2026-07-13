@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::share::exec_supervisor_protocol::{
-    environment_for, SupervisorCommand, SupervisorEvent, SupervisorStart,
+    environment_for, recv_event, send_command, SupervisorCommand, SupervisorEvent, SupervisorStart,
 };
 use crate::share::exec_types::{ExecCommand, ExecId, ExecStart};
 
@@ -53,6 +53,18 @@ fn run_supervisor_sigkill_test() -> io::Result<()> {
 }
 
 fn start_fork_probe() -> io::Result<ContainedExec> {
+    let request = fork_probe_request()?;
+    let environment = environment_for(&request);
+    let mut process = ContainedExec::prepare(&request)?;
+    process.configure(&request)?;
+    process.send(&SupervisorCommand::Start(SupervisorStart {
+        request,
+        environment,
+    }))?;
+    Ok(process)
+}
+
+fn fork_probe_request() -> io::Result<ExecStart> {
     let executable = std::env::current_exe()?
         .into_os_string()
         .into_string()
@@ -69,14 +81,7 @@ fn start_fork_probe() -> io::Result<ContainedExec> {
         max_output_bytes: None,
     };
     request.validate()?;
-    let environment = environment_for(&request);
-    let mut process = ContainedExec::prepare(&request)?;
-    process.configure(&request)?;
-    process.send(&SupervisorCommand::Start(SupervisorStart {
-        request,
-        environment,
-    }))?;
-    Ok(process)
+    Ok(request)
 }
 
 fn wait_for_fork_ready(process: &mut ContainedExec) -> io::Result<()> {
@@ -84,31 +89,63 @@ fn wait_for_fork_ready(process: &mut ContainedExec) -> io::Result<()> {
     let mut output = Vec::new();
     let mut started = false;
     loop {
-        match process.next_event(Some(deadline))? {
-            SupervisorEvent::Started { .. } => started = true,
-            SupervisorEvent::Stdout(bytes) => {
-                output.extend(bytes);
-                if started
-                    && output
-                        .windows(FORK_READY.len())
-                        .any(|window| window == FORK_READY)
-                {
-                    return Ok(());
-                }
-            }
-            SupervisorEvent::RootExited(exit) | SupervisorEvent::Exited(exit) => {
-                return Err(io::Error::other(format!(
-                    "fork helper exited before readiness: {exit:?}"
-                )));
-            }
-            SupervisorEvent::Error(message) => return Err(io::Error::other(message)),
-            SupervisorEvent::Stderr(_) => {}
+        if observe_fork_ready(
+            process.next_event(Some(deadline))?,
+            &mut started,
+            &mut output,
+        )? {
+            return Ok(());
         }
     }
 }
 
+fn wait_for_raw_fork_ready(
+    stream: &mut std::os::unix::net::UnixStream,
+    deadline: Instant,
+) -> io::Result<()> {
+    let mut output = Vec::new();
+    let mut started = false;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "fork helper readiness timed out")
+            })?;
+        stream.set_read_timeout(Some(remaining.max(Duration::from_millis(1))))?;
+        if observe_fork_ready(recv_event(stream)?, &mut started, &mut output)? {
+            return Ok(());
+        }
+    }
+}
+
+fn observe_fork_ready(
+    event: SupervisorEvent,
+    started: &mut bool,
+    output: &mut Vec<u8>,
+) -> io::Result<bool> {
+    match event {
+        SupervisorEvent::Started { .. } => *started = true,
+        SupervisorEvent::Stdout(bytes) => output.extend(bytes),
+        SupervisorEvent::RootExited(exit) | SupervisorEvent::Exited(exit) => {
+            return Err(io::Error::other(format!(
+                "fork helper exited before readiness: {exit:?}"
+            )));
+        }
+        SupervisorEvent::Error(message) => return Err(io::Error::other(message)),
+        SupervisorEvent::Stderr(_) => {}
+    }
+    Ok(*started
+        && output
+            .windows(FORK_READY.len())
+            .any(|window| window == FORK_READY))
+}
+
 fn require_cgroup_processes(process: &ContainedExec, minimum: usize) -> io::Result<()> {
-    let pids = std::fs::read_to_string(process.control_group.join("cgroup.procs"))?;
+    require_cgroup_path_processes(&process.control_group, minimum)
+}
+
+fn require_cgroup_path_processes(control_group: &Path, minimum: usize) -> io::Result<()> {
+    let pids = std::fs::read_to_string(control_group.join("cgroup.procs"))?;
     let count = pids.lines().filter(|line| !line.trim().is_empty()).count();
     if count < minimum {
         return Err(io::Error::other(format!(
@@ -165,6 +202,7 @@ fn fork_grandchild_and_exit() -> ! {
 }
 
 fn run_runtime_backstop_test() -> io::Result<()> {
+    let request = fork_probe_request()?;
     let id = ExecId::generate()?;
     let directory = super::runtime_directory()?;
     let socket_path = directory.join(format!("runtime-{}.sock", id.as_str()));
@@ -182,7 +220,7 @@ fn run_runtime_backstop_test() -> io::Result<()> {
     }
     let mut cleanup_unit: Option<(OwnedObjectPath, PathBuf)> = None;
     let result = (|| {
-        let (stream, credentials) =
+        let (mut stream, credentials) =
             super::accept_supervisor(&listener, Instant::now() + Duration::from_secs(15))?;
         if credentials.uid != unsafe { libc::geteuid() }
             || credentials.gid != unsafe { libc::getegid() }
@@ -211,6 +249,16 @@ fn run_runtime_backstop_test() -> io::Result<()> {
                 "RuntimeMaxUSec probe never populated its cgroup",
             ));
         }
+        let environment = environment_for(&request);
+        send_command(
+            &mut stream,
+            &SupervisorCommand::Start(SupervisorStart {
+                request,
+                environment,
+            }),
+        )?;
+        wait_for_raw_fork_ready(&mut stream, backstop_started + Duration::from_secs(5))?;
+        require_cgroup_path_processes(&control_group, FORK_WORKERS + 2)?;
         let deadline = backstop_started + Duration::from_secs(10);
         loop {
             let active = unit_active_state(&connection, &unit_path)?;
