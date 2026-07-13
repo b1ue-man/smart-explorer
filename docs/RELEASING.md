@@ -72,7 +72,8 @@ user can pull updates.
    ```
    git push origin <branch>:main          # fast-forward
    ```
-5. **Publish the GitHub Release** (attaches OS payloads + installer + dll + script + version.txt):
+5. **Publish the GitHub Release** (attaches OS payloads/hashes, installer, DLL,
+   install script, both Share servers, and `version.txt`):
    - Normally: push a tag — CI's `build.yml` releases on `v*`:
      ```
      git tag vX.Y.Z && git push origin vX.Y.Z
@@ -106,16 +107,24 @@ runner): format check, dependency audit, Windows-target check, native Windows
 library and standalone-`se` tests, all-target host tests (including built-`se`
 headless subprocess tests), Windows test-harness compile, clippy, static-musl
 `se-agent` builds, COM DLL check/build, and share-server checks/builds. It also
-runs the real two-client tracked Share lifecycle against `se-share-server`,
-covering offline delivery/retry, daemon restarts, signed acceptance receipts,
-operational authorization, revoke, and post-revoke denial. CI then performs the
-Windows + Linux release builds including the `se` terminal companion, installer
-build (NSIS), artifact upload, and Release publication. Before publishing it
+runs the multi-profile tracked Share lifecycle against `se-share-server`,
+covering offline delivery/retry, daemon restarts, signed receipts,
+accept/reject/pending-delete persistence, operational authorization, Exec,
+revoke, and post-revoke denial. CI then performs the Windows + Linux release
+builds including the `se` terminal companion and installer (NSIS), uploads the
+exact staged Windows GNU `se.exe` and `se-share-server.exe`, and runs those same
+bytes through the full lifecycle on a native Windows runner. GitHub Release
+publication is a separate dependent job and cannot start until that exact
+release-binary gate succeeds. Before staging those bytes the build
 **fails the release if the committed feed version, Windows build manifest,
 payload hashes, installer, DLL, and share-server artifacts are incomplete or
 inconsistent**. Fresh CI builds remain compile gates; GitHub Release assets are
-then copied from those verified committed artifacts, so the published bytes
-are the same bytes served by the auto-update feed.
+then copied from the verified committed artifacts. Published app/updater/`se`
+payloads, hashes, and `version.txt` are byte-identical to the auto-update feed;
+the installer, script, DLL, and Share servers are the corresponding verified
+ancillary artifacts. Publication binds a newly created tag to the exact tested
+workflow commit and treats any unmatched one of the 18 required asset paths as
+a hard failure.
 
 The Linux installer first tries the verified GitHub Release payloads, so a
 terminal-only installation needs no Rust or desktop toolchain:

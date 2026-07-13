@@ -10,7 +10,7 @@ mod grants;
 #[path = "share/identity_command.rs"]
 mod identity_command;
 #[path = "share/lifecycle_output.rs"]
-mod lifecycle_output;
+pub(super) mod lifecycle_output;
 #[path = "share/request_selection.rs"]
 mod request_selection;
 #[path = "share/requests.rs"]

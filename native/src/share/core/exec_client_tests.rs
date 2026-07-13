@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::share::core::public_fingerprint;
+use crate::share::exec_client_active::ClientServerState;
+use crate::share::exec_heartbeat::ExecHeartbeatPolicy;
 use crate::share::exec_protocol::{
     recv_client_frame, recv_client_hello, send_hello_ok, send_server_frame, send_server_hello,
-    ExecServerHello, ExecWireError,
+    ExecServerHello, ExecWireError, ServerFrame,
 };
 use crate::share::exec_types::{ExecCommand, ExecTerminalKind};
 use crate::share::types::{PeerPresence, ShareScope};
@@ -178,6 +180,18 @@ fn one_start_streams_raw_io_and_distinct_lifecycle_events() {
             )
             .await
             .unwrap();
+            assert_eq!(
+                recv_client_frame(&mut server_read).await.unwrap(),
+                ClientFrame::ResultAck {
+                    exec_id: exec_id.clone()
+                }
+            );
+            send_server_frame(
+                &mut server_write,
+                &ServerFrame::ResultAcknowledged { exec_id },
+            )
+            .await
+            .unwrap();
         });
         input_tx
             .send(ExecClientInput::Stdin(vec![0, 0xff, b'\n']))
@@ -331,6 +345,9 @@ fn unavailable_provider_fails_before_start_is_sent() {
         assert!(matches!(observed, Err(_) | Ok(Err(_))));
     });
 }
+
+#[path = "exec_client_heartbeat_integration_tests.rs"]
+mod heartbeat_integration;
 
 fn run<F: Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()

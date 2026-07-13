@@ -3,24 +3,24 @@ use std::future::Future;
 use std::io;
 use std::time::Duration;
 
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, VarInt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use super::exec_auth::build_client_hello;
+use super::exec_client_active::TransportClosed;
+use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
 use super::exec_protocol::{
-    recv_hello_result, recv_server_frame, recv_server_hello, send_client_frame, send_client_hello,
-    ClientFrame, ExecHelloOk, ServerFrame,
+    recv_hello_result, recv_server_hello, send_client_frame, send_client_hello, ClientFrame,
+    ExecHelloOk,
 };
-use super::exec_types::{
-    ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal, MAX_EXEC_DATA_BYTES,
-};
+use super::exec_types::{ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal};
 use super::identity::ShareIdentity;
 use super::types::PeerEndpoint;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
+const FAILURE_EVENT_TIMEOUT: Duration = Duration::from_secs(1);
 const INPUT_CAPACITY: usize = 16;
 const EVENT_CAPACITY: usize = 32;
 
@@ -110,7 +110,7 @@ pub(crate) async fn run_connected(
         run_connected_inner(connection, endpoint, identity, start, input, events.clone()).await;
     if let Err(error) = &result {
         let _ = tokio::time::timeout(
-            EVENT_TIMEOUT,
+            FAILURE_EVENT_TIMEOUT,
             events.send(ExecClientEvent::Failed(error.clone())),
         )
         .await;
@@ -143,21 +143,97 @@ async fn run_connected_inner(
         .await
         .map_err(|_| handshake_timeout(false))?
         .map_err(|error| disconnected(error, false))?;
-    run_stream(send, recv, endpoint, identity, start, input, events).await
+    let close_watch = connection.clone();
+    let result = run_stream_with_transport(
+        send,
+        recv,
+        endpoint,
+        identity,
+        start,
+        input,
+        events,
+        EXEC_HEARTBEAT_POLICY,
+        Box::pin(async move {
+            let _ = close_watch.closed().await;
+        }),
+    )
+    .await;
+    connection.close(VarInt::from_u32(0x4558), b"Exec session completed");
+    result
 }
 
+#[cfg(test)]
 async fn run_stream<W, R>(
+    send: W,
+    recv: R,
+    endpoint: PeerEndpoint,
+    identity: ShareIdentity,
+    start: ExecStart,
+    input: mpsc::Receiver<ExecClientInput>,
+    events: mpsc::Sender<ExecClientEvent>,
+) -> Result<ExecTerminal, ExecClientFailure>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    run_stream_with_policy(
+        send,
+        recv,
+        endpoint,
+        identity,
+        start,
+        input,
+        events,
+        EXEC_HEARTBEAT_POLICY,
+    )
+    .await
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn run_stream_with_policy<W, R>(
+    send: W,
+    recv: R,
+    endpoint: PeerEndpoint,
+    identity: ShareIdentity,
+    start: ExecStart,
+    input: mpsc::Receiver<ExecClientInput>,
+    events: mpsc::Sender<ExecClientEvent>,
+    heartbeat_policy: ExecHeartbeatPolicy,
+) -> Result<ExecTerminal, ExecClientFailure>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    run_stream_with_transport(
+        send,
+        recv,
+        endpoint,
+        identity,
+        start,
+        input,
+        events,
+        heartbeat_policy,
+        Box::pin(std::future::pending()),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_stream_with_transport<W, R>(
     mut send: W,
     mut recv: R,
     endpoint: PeerEndpoint,
     identity: ShareIdentity,
     start: ExecStart,
-    mut input: mpsc::Receiver<ExecClientInput>,
+    input: mpsc::Receiver<ExecClientInput>,
     events: mpsc::Sender<ExecClientEvent>,
+    heartbeat_policy: ExecHeartbeatPolicy,
+    transport_closed: TransportClosed,
 ) -> Result<ExecTerminal, ExecClientFailure>
 where
     W: AsyncWrite + Unpin,
-    R: AsyncRead + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
 {
     let hello = handshake(&mut send, &mut recv, &endpoint, &identity).await?;
     emit(
@@ -185,48 +261,23 @@ where
     // This flag is set before the only Start write. Even a partial write is an
     // ambiguous handoff and must never be retried by this client.
     let start_sent = true;
-    write_frame(&mut send, &ClientFrame::Start { start, digest }, start_sent).await?;
-
-    let mut server_state = ClientServerState::default();
-    let mut stdin_closed = false;
-    let mut cancelling = false;
-    loop {
-        tokio::select! {
-            frame = recv_server_frame(&mut recv) => {
-                let frame = frame.map_err(|error| classify_io(error, start_sent, "server_frame"))?;
-                let event = server_state.accept(frame, &exec_id, start_sent)?;
-                if let ExecClientEvent::Terminal(terminal) = &event {
-                    emit(&events, event.clone(), start_sent).await?;
-                    return Ok(terminal.clone());
-                }
-                emit_or_cancel(&events, event, &mut send, &exec_id, start_sent).await?;
-            }
-            command = input.recv() => {
-                match command {
-                    Some(ExecClientInput::Stdin(data)) if !stdin_closed && !cancelling => {
-                        if data.len() > MAX_EXEC_DATA_BYTES {
-                            return Err(protocol("stdin chunk exceeds 64 KiB", start_sent, "stdin_too_large"));
-                        }
-                        write_frame(&mut send, &ClientFrame::Stdin { exec_id: exec_id.clone(), data }, start_sent).await?;
-                    }
-                    Some(ExecClientInput::StdinEof) if !stdin_closed && !cancelling => {
-                        stdin_closed = true;
-                        write_frame(&mut send, &ClientFrame::StdinEof { exec_id: exec_id.clone() }, start_sent).await?;
-                    }
-                    Some(ExecClientInput::Cancel) if !cancelling => {
-                        cancelling = true;
-                        write_frame(&mut send, &ClientFrame::Cancel { exec_id: exec_id.clone() }, start_sent).await?;
-                    }
-                    Some(ExecClientInput::Cancel) => {}
-                    Some(_) => return Err(protocol("stdin arrived after EOF or Cancel", start_sent, "input_order")),
-                    None => {
-                        let _ = write_frame(&mut send, &ClientFrame::Cancel { exec_id: exec_id.clone() }, start_sent).await;
-                        return Err(failure(ExecClientFailureKind::Local, "input_closed", "local Exec input channel closed", start_sent));
-                    }
-                }
-            }
-        }
-    }
+    write_frame_with_timeout(
+        &mut send,
+        &ClientFrame::Start { start, digest },
+        start_sent,
+        heartbeat_policy.write_timeout,
+    )
+    .await?;
+    super::exec_client_active::run(
+        send,
+        recv,
+        input,
+        events,
+        exec_id,
+        heartbeat_policy,
+        transport_closed,
+    )
+    .await
 }
 
 async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
@@ -259,60 +310,13 @@ async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     }
 }
 
-#[derive(Default)]
-struct ClientServerState {
-    started: bool,
-    terminal: bool,
-}
-
-impl ClientServerState {
-    fn accept(
-        &mut self,
-        frame: ServerFrame,
-        want: &ExecId,
-        start_sent: bool,
-    ) -> Result<ExecClientEvent, ExecClientFailure> {
-        let event = match frame {
-            ServerFrame::Started { exec_id } if exec_id == *want && !self.started => {
-                self.started = true;
-                ExecClientEvent::Started
-            }
-            ServerFrame::Stdout { exec_id, data } if exec_id == *want && self.started => {
-                ExecClientEvent::Stdout(data)
-            }
-            ServerFrame::Stderr { exec_id, data } if exec_id == *want && self.started => {
-                ExecClientEvent::Stderr(data)
-            }
-            ServerFrame::Terminal(terminal) if terminal.exec_id == *want && !self.terminal => {
-                self.terminal = true;
-                ExecClientEvent::Terminal(terminal)
-            }
-            ServerFrame::Error(error) => {
-                return Err(failure(
-                    ExecClientFailureKind::Remote,
-                    &error.code,
-                    &error.message,
-                    start_sent,
-                ));
-            }
-            _ => {
-                return Err(protocol(
-                    "invalid Exec server frame order or id",
-                    start_sent,
-                    "server_order",
-                ))
-            }
-        };
-        Ok(event)
-    }
-}
-
-async fn write_frame<W: AsyncWrite + Unpin>(
+pub(super) async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(
     send: &mut W,
     frame: &ClientFrame,
     start_sent: bool,
+    timeout: Duration,
 ) -> Result<(), ExecClientFailure> {
-    tokio::time::timeout(WRITE_TIMEOUT, send_client_frame(send, frame))
+    tokio::time::timeout(timeout, send_client_frame(send, frame))
         .await
         .map_err(|_| {
             failure(
@@ -325,12 +329,21 @@ async fn write_frame<W: AsyncWrite + Unpin>(
         .map_err(|error| classify_io(error, start_sent, "client_frame"))
 }
 
-async fn emit(
+pub(super) async fn emit(
     events: &mpsc::Sender<ExecClientEvent>,
     event: ExecClientEvent,
     start_sent: bool,
 ) -> Result<(), ExecClientFailure> {
-    tokio::time::timeout(EVENT_TIMEOUT, events.send(event))
+    emit_with_timeout(events, event, start_sent, EVENT_TIMEOUT).await
+}
+
+pub(super) async fn emit_with_timeout(
+    events: &mpsc::Sender<ExecClientEvent>,
+    event: ExecClientEvent,
+    start_sent: bool,
+    timeout: Duration,
+) -> Result<(), ExecClientFailure> {
+    tokio::time::timeout(timeout, events.send(event))
         .await
         .map_err(|_| {
             failure(
@@ -350,22 +363,40 @@ async fn emit(
         })
 }
 
-async fn emit_or_cancel<W: AsyncWrite + Unpin>(
+pub(super) async fn emit_or_cancel<W: AsyncWrite + Unpin>(
     events: &mpsc::Sender<ExecClientEvent>,
     event: ExecClientEvent,
     send: &mut W,
     exec_id: &ExecId,
     start_sent: bool,
+    peer_deadline: tokio::time::Instant,
 ) -> Result<(), ExecClientFailure> {
-    if let Err(error) = emit(events, event, start_sent).await {
-        let _ = write_frame(
-            send,
-            &ClientFrame::Cancel {
-                exec_id: exec_id.clone(),
-            },
+    let remaining = peer_deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(failure(
+            ExecClientFailureKind::Disconnected,
+            "peer_unresponsive",
+            "Exec peer stopped answering authenticated heartbeats",
             start_sent,
-        )
-        .await;
+        ));
+    }
+    if let Err(error) =
+        emit_with_timeout(events, event, start_sent, remaining.min(EVENT_TIMEOUT)).await
+    {
+        let cancel_timeout = peer_deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+            .min(EXEC_HEARTBEAT_POLICY.write_timeout);
+        if !cancel_timeout.is_zero() {
+            let _ = write_frame_with_timeout(
+                send,
+                &ClientFrame::Cancel {
+                    exec_id: exec_id.clone(),
+                },
+                start_sent,
+                cancel_timeout,
+            )
+            .await;
+        }
         return Err(error);
     }
     Ok(())
@@ -407,7 +438,11 @@ fn handshake_timeout(start_sent: bool) -> ExecClientFailure {
     )
 }
 
-fn protocol(error: impl fmt::Display, start_sent: bool, code: &str) -> ExecClientFailure {
+pub(super) fn protocol(
+    error: impl fmt::Display,
+    start_sent: bool,
+    code: &str,
+) -> ExecClientFailure {
     failure(
         ExecClientFailureKind::Protocol,
         code,
@@ -416,7 +451,7 @@ fn protocol(error: impl fmt::Display, start_sent: bool, code: &str) -> ExecClien
     )
 }
 
-fn classify_io(error: io::Error, start_sent: bool, code: &str) -> ExecClientFailure {
+pub(super) fn classify_io(error: io::Error, start_sent: bool, code: &str) -> ExecClientFailure {
     match error.kind() {
         io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => {
             protocol(error, start_sent, code)
@@ -426,7 +461,7 @@ fn classify_io(error: io::Error, start_sent: bool, code: &str) -> ExecClientFail
     }
 }
 
-fn failure(
+pub(super) fn failure(
     kind: ExecClientFailureKind,
     code: &str,
     message: &str,

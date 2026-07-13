@@ -36,7 +36,13 @@ struct OptionalSelector {
 pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
     let snapshot = crate::daemon::exec_jobs()?;
     match args.command {
-        None | Some(ExecStatusCommand::List) => print(active(&snapshot), args.json),
+        None | Some(ExecStatusCommand::List) => {
+            print(active(&snapshot), args.json)?;
+            if !args.json {
+                println!("history\tse share exec history");
+            }
+            Ok(())
+        }
         Some(ExecStatusCommand::History) => print(history(&snapshot), args.json),
         Some(ExecStatusCommand::Show(selector)) => {
             let all = active(&snapshot)

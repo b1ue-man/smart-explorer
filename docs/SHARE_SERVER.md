@@ -166,6 +166,13 @@ valid choices and usable commands. Active and terminal execution state is
 visible on both endpoints, and Disable/Cancel terminates the contained tree
 before a terminal state is recorded.
 
+Unauthenticated Iroh failures cannot grow the worker's diagnostics without
+bound. FS/Exec handshake and stream failures are classified into a fixed set,
+their detail is truncated, repeated failures are coalesced, and the service
+event channel is bounded. A flood can therefore lose repetitive diagnostic
+lines, but it cannot consume unbounded memory or suppress a later legitimate
+connection once the consumer drains capacity.
+
 The accepted direct code authorizes the owner's `Standard Direkt` export scope.
 That scope is visible next to the code and can be changed before accepting or
 while the service is online. Windows firewall setup is attempted automatically;
@@ -175,17 +182,22 @@ through UAC.
 ## Lifecycle Regression Guard
 
 CI runs native Windows library and standalone-`se` tests plus
-`native/test-share-lifecycle-e2e-windows.ps1` on a Windows runner. The latter
-uses two isolated endpoint/credential namespaces, a real relay, context-free
-request and grant commands, and a real contained remote `cmd.exe`, then verifies
-disable, signed revoke, receipts, and deletion. The cross-platform build also
-runs `native/test-share-lifecycle-e2e.sh` with two isolated Linux client profiles
-and a real `se-share-server`. That scenario
-checks an initially offline target, same-ID retry, pending-inbox survival across
-daemon restart, offline acceptance delivery after requester restart, both
-signed receipts, an operational file listing after acceptance, and the full
+`native/test-share-lifecycle-e2e-windows.ps1` on a Windows runner. After the
+cross-platform release build it downloads the exact staged Windows GNU
+`se.exe` and `se-share-server.exe` and runs the same script again; release
+publication depends on that exact-binary gate. The lifecycle
+uses four isolated endpoint/credential profiles, a real relay, context-free
+request and grant commands, and a real contained remote `cmd.exe`. It verifies
+pending-inbox survival across a worker restart, offline acceptance delivery,
+receipts, reject, pending deletion across two restarts, disable, signed revoke,
+and history deletion. The cross-platform build runs
+`native/test-share-lifecycle-e2e.sh` with the equivalent four isolated Linux
+profiles and a real `se-share-server`. That scenario obtains every selector,
+request, peer, grant, path, and Exec ID from earlier CLI output in the same run;
+checks request receive/accept/reject/delete persistence; and exercises the full
 installed-CLI Exec lifecycle: binary I/O, nonzero exit, output cap, timeout,
-Cancel, CLI disconnect, worker `SIGKILL`, permission revoke, containment cleanup,
-and denied execution afterward. It finally checks that active accepted history
-cannot be erased, then performs signed base-grant revoke, waits for its receipt,
-deletes the inactive history context-free, and confirms denied file access.
+healthy idle beyond the heartbeat interval, Cancel, CLI disconnect, worker
+`SIGKILL`, permission revoke, containment cleanup, and denied execution
+afterward. It also proves that active accepted history cannot be erased, then
+performs signed base-grant revoke, waits for its receipt, deletes the inactive
+history context-free, and confirms denied file access.

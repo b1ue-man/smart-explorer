@@ -55,8 +55,8 @@ impl SignalMaintenancePolicy {
 pub(super) fn iroh_transport_config() -> QuicTransportConfig {
     QuicTransportConfig::builder()
         // Live idle peers remain open because the transport sends a keepalive
-        // every five seconds. A crashed peer cannot answer those probes and is
-        // therefore reported to an active Exec client within a bounded time.
+        // every five seconds. QUIC may extend its effective timeout to at least
+        // three PTOs, so Exec adds its own authenticated application deadline.
         .max_idle_timeout(Some(
             VarInt::from_u32(IROH_CONNECTION_IDLE_TIMEOUT.as_millis() as u32).into(),
         ))

@@ -61,6 +61,8 @@ jobs:
   windows-gnu:
     needs: windows-native-tests
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.stage.outputs.version }}
     defaults:
       run:
         working-directory: native
@@ -199,11 +201,6 @@ jobs:
           makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" -DCLI_SRC="target/x86_64-pc-windows-gnu/release/se.exe" -DINSTALLER_OUT="$PWD/out/Smart Explorer Setup $ver.exe" installer.nsi
           echo "Built version $ver (Windows exe/updater/se + Linux desktop binaries/se + dll + installer)"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: smart-explorer-builds
-          path: native/out
-
       - name: Verify committed feed matches the version (release only)
         # The flow guarantee: a release can't go out while the committed feed
         # (what installed apps auto-update from) lags Cargo.toml. Forces
@@ -305,29 +302,77 @@ jobs:
           cp ../install-linux.sh out/install-linux.sh
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
 
+      - name: Upload exact staged release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-explorer-builds
+          path: native/out
+
+  windows-gnu-release-e2e:
+    needs: windows-gnu
+    runs-on: windows-latest
+    env:
+      SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions_windows_gnu_release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: smart-explorer-builds
+          path: release-candidate
+
+      - name: Verify exact staged GNU se version
+        shell: powershell
+        run: |
+          $se = (Resolve-Path ".\release-candidate\se.exe").Path
+          $reported = (& $se --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $reported -ne "se ${{ needs.windows-gnu.outputs.version }}") {
+            throw "staged se version mismatch: '$reported'"
+          }
+
+      - name: Exact staged Windows GNU Share and Exec CLI E2E
+        shell: powershell
+        run: |
+          $se = (Resolve-Path ".\release-candidate\se.exe").Path
+          $server = (Resolve-Path ".\release-candidate\se-share-server.exe").Path
+          .\native\test-share-lifecycle-e2e-windows.ps1 `
+            -SeBinary $se `
+            -ShareServerBinary $server
+
+  publish-release:
+    needs: [windows-gnu, windows-gnu-release-e2e]
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: smart-explorer-builds
+          path: native/out
+
       - name: Publish GitHub Release
-        # Fires on a v* tag, a manual dispatch, OR a push to a release/** branch.
-        # The branch path is the one that works where the git host rejects tag
-        # pushes and the token can't dispatch: push `release/vX.Y.Z` and CI cuts
-        # the tag + release from Cargo.toml's version.
-        if: >-
-          startsWith(github.ref, 'refs/tags/v') ||
-          github.event_name == 'workflow_dispatch' ||
-          startsWith(github.ref, 'refs/heads/release/')
+        # Fires only after the exact staged Windows GNU CLI/server bytes pass
+        # the native Windows lifecycle gate.
         uses: softprops/action-gh-release@v2
         with:
           # On a manual dispatch (no tag ref), create the tag at this commit.
-          tag_name: v${{ steps.stage.outputs.version }}
-          name: Smart Explorer ${{ steps.stage.outputs.version }}
+          tag_name: v${{ needs.windows-gnu.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Smart Explorer ${{ needs.windows-gnu.outputs.version }}
+          fail_on_unmatched_files: true
           body: |
-            **Smart Explorer ${{ steps.stage.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
+            **Smart Explorer ${{ needs.windows-gnu.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
 
             Linux one-line install:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
             ```
 
-            - **Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe** —
+            - **Smart Explorer Setup ${{ needs.windows-gnu.outputs.version }}.exe** —
               installer (recommended). Sets up auto-update from the Git feed and
               the right-click "In Smart Explorer öffnen" verb.
             - **smart_explorer.exe** — portable app (also the self-update
@@ -347,7 +392,7 @@ jobs:
             Built by CI (ubuntu + mingw-w64 + `x86_64-pc-windows-gnu`). Update +
             release flow: `docs/RELEASING.md`.
           files: |
-            native/out/Smart Explorer Setup ${{ steps.stage.outputs.version }}.exe
+            native/out/Smart Explorer Setup ${{ needs.windows-gnu.outputs.version }}.exe
             native/out/smart_explorer.exe
             native/out/smart_explorer_updater.exe
             native/out/se.exe

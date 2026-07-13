@@ -4,7 +4,7 @@ use crate::share::{
     ShareProfiles, ShareStatus,
 };
 
-pub(super) fn request_value(
+pub(in crate::cli) fn request_value(
     entry: &DirectRequestEntry,
     profiles: &ShareProfiles,
 ) -> serde_json::Value {

@@ -40,7 +40,8 @@ Save a Smart Explorer direct peer from the other client's direct code.
 The command is one-sided: paste the code here, and the other Smart Explorer
 client receives the normal confirmation request in its CLI or GUI. Re-running the
 same command with an already-saved code requeues the request when access is still
-needed.";
+needed. Its output includes the exact selector and copyable share:// endpoint for
+later file operations or removal.";
 
 const ADD_ROOM_HELP: &str = "\
 Save a Smart Explorer room from a room invite code and configure the share worker
@@ -157,6 +158,11 @@ struct PeerAddArgs {
     #[arg(long, default_value = "", help = "Local display name for this peer")]
     name: String,
     #[arg(
+        long,
+        help = "Print selector, endpoint, request ID, and lifecycle state as JSON"
+    )]
+    json: bool,
+    #[arg(
         long = "no-request",
         action = ArgAction::SetFalse,
         default_value_t = true,
@@ -223,8 +229,8 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             Ok(0)
         }
         Some(Command::AddPeer(args)) => {
-            let msg = setup::add_peer(&args.code, &args.name, args.request)?;
-            println!("{msg}");
+            let output = setup::add_peer(&args.code, &args.name, args.request)?;
+            println!("{}", output.render(args.json)?);
             Ok(0)
         }
         Some(Command::AddRoom(args)) => {

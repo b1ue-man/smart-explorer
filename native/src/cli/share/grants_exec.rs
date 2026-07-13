@@ -175,7 +175,7 @@ fn select<'a>(
 ) -> Result<&'a ExecChoice, String> {
     let matches = choices
         .iter()
-        .filter(|choice| enabling || choice.enabled)
+        .filter(|choice| choice.enabled != enabling)
         .filter(|choice| {
             selector.is_none_or(|selector| {
                 choice.label.eq_ignore_ascii_case(selector)
@@ -253,4 +253,31 @@ fn target_selector(target: &crate::share::ExecGrantTarget) -> String {
 
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_free_toggle_considers_only_grants_that_need_the_change() {
+        let choices = vec![choice("enabled", true), choice("disabled", false)];
+        assert_eq!(select(&choices, None, true).unwrap().label, "disabled");
+        assert_eq!(select(&choices, None, false).unwrap().label, "enabled");
+    }
+
+    fn choice(label: &str, enabled: bool) -> ExecChoice {
+        ExecChoice {
+            target: crate::share::ExecGrantTarget::Direct {
+                device_id: label.into(),
+                public_key: format!("{label}-key"),
+                fingerprint: format!("{label}-fingerprint"),
+                node_id: format!("{label}-node"),
+            },
+            label: label.into(),
+            device_id: label.into(),
+            fingerprint: format!("{label}-fingerprint"),
+            enabled,
+        }
+    }
 }

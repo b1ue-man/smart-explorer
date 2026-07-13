@@ -6,6 +6,7 @@ use std::time::Duration;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::sync::OwnedSemaphorePermit;
 
+use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
 use super::framing::{recv_ctrl, reply, reply_err, send_ctrl};
 use super::fs::{self, ShareExportConfig};
@@ -68,10 +69,10 @@ pub(super) async fn handle_connection(
         let session = session.clone();
         let auth = node.auth.clone();
         let exec_slots = exec_slots.clone();
-        let events = node.ev.clone();
+        let node = node.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_peer_stream(send, recv, session, auth, exec_slots).await {
-                let _ = events.send(ShareEvent::Error(format!("Iroh-FS: {error}")));
+                node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
             }
         });
     }

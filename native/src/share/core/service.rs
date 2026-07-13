@@ -220,7 +220,7 @@ impl ShareService {
     ) -> io::Result<ShareService> {
         let listen_port = 0;
         let (cmd_tx, cmd_rx) = unbounded::<PendingShareCmd>();
-        let (ev_tx, ev_rx) = unbounded::<ShareEvent>();
+        let (ev_tx, ev_rx) = super::connection_events::channel();
         let stopped = Arc::new(AtomicBool::new(false));
         match super::system::ensure_firewall_rule() {
             Ok(msg) => {
