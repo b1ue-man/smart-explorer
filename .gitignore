@@ -54,6 +54,9 @@ Thumbs.db
 /release-native/share-server/.*.release-new.*
 /release-native/share-server/.*.release-backup.*
 /release-native/windows-partial-v*/
+# Running a feed updater in place may create its private rollback archive.
+# It is local runtime state, never part of the committed update feed.
+/release-native/update-feed/versions/
 
 # Standalone se-agent crate build artifacts (the built binaries are committed
 # under native/agent-bin/, not these).
