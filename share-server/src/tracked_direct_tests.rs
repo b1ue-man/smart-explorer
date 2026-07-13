@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::state::{Client, State};
 use super::tracked_direct::{
     self, DirectDecisionKind, DirectPeerIdentity, DirectRoute, DirectRouteOutcome,
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
     SignedDirectRequestReceipt, CAPABILITY,
 };
-use super::{handle, Client, In, Out, PeerPresence, State};
+use super::transport::handle;
+use super::{In, Out, PeerPresence};
 
 #[test]
 fn tracked_request_routes_by_lookup_and_duplicates_remain_forwardable() {
@@ -18,8 +20,8 @@ fn tracked_request_routes_by_lookup_and_duplicates_remain_forwardable() {
     let origin = state.lock().unwrap().clients[&1].writer.clone();
     let request = signed_request();
 
-    tracked_direct::route_request(1, &origin, request.clone(), &state);
-    tracked_direct::route_request(1, &origin, request.clone(), &state);
+    tracked_direct::route_request(1, &origin, request.clone(), None, &state);
+    tracked_direct::route_request(1, &origin, request.clone(), None, &state);
 
     for _ in 0..2 {
         match target_rx.recv().unwrap() {
@@ -93,20 +95,77 @@ fn requester_decision_receipt_routes_to_target_device() {
 
 #[test]
 fn offline_request_gets_correlated_relay_ack_without_peer_receipt_claim() {
-    let (origin_tx, origin_rx) = mpsc::channel();
+    let (origin_tx, origin_rx) = super::Writer::test_channel(8);
     let mut state = State::default();
     state
         .clients
         .insert(1, client(origin_tx.clone(), "requester", true));
     let state = Arc::new(Mutex::new(state));
 
-    tracked_direct::route_request(1, &origin_tx, signed_request(), &state);
+    tracked_direct::route_request(1, &origin_tx, signed_request(), None, &state);
 
     assert_ack(
         origin_rx.recv().unwrap(),
         DirectRoute::Request,
         DirectRouteOutcome::TargetOffline,
     );
+}
+
+#[test]
+fn oversized_tracked_envelopes_are_rejected_without_forward_or_ack() {
+    let (state, requester_rx, target_rx) = routed_state("requester", "target", Some("lookup"));
+    let requester = state.lock().unwrap().clients[&1].writer.clone();
+    let mut request = signed_request();
+    request.request_id = "r".repeat(2 * 1024 * 1024);
+    tracked_direct::route_request(1, &requester, request, None, &state);
+    assert_error(requester_rx.recv().unwrap());
+    assert!(target_rx.try_recv().is_err());
+
+    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
+    let target = state.lock().unwrap().clients[&2].writer.clone();
+    let mut receipt = signed_request_receipt();
+    receipt.request_digest = "d".repeat(257);
+    tracked_direct::route_request_receipt(2, &target, receipt, &state);
+    assert_error(target_rx.recv().unwrap());
+    assert!(requester_rx.try_recv().is_err());
+
+    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
+    let target = state.lock().unwrap().clients[&2].writer.clone();
+    let mut decision = signed_decision();
+    decision.message = Some("m".repeat(4097));
+    tracked_direct::route_decision(2, &target, decision, &state);
+    assert_error(target_rx.recv().unwrap());
+    assert!(requester_rx.try_recv().is_err());
+
+    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
+    let requester = state.lock().unwrap().clients[&1].writer.clone();
+    let mut receipt = signed_decision_receipt();
+    receipt.identity_signature = "s".repeat(1025);
+    tracked_direct::route_decision_receipt(1, &requester, receipt, &state);
+    assert_error(requester_rx.recv().unwrap());
+    assert!(target_rx.try_recv().is_err());
+}
+
+#[test]
+fn oversized_legacy_fields_are_rejected_without_forwarding() {
+    let (state, requester_rx, target_rx) = routed_state("requester", "target", Some("lookup"));
+    let requester = state.lock().unwrap().clients[&1].writer.clone();
+    tracked_direct::request_legacy(&requester, &"l".repeat(257), presence("requester"), &state);
+    assert_error(requester_rx.recv().unwrap());
+    assert!(target_rx.try_recv().is_err());
+
+    let target = state.lock().unwrap().clients[&2].writer.clone();
+    tracked_direct::decision_legacy(
+        &target,
+        "lookup",
+        "requester",
+        true,
+        Some(presence("target")),
+        Some("m".repeat(4097)),
+        &state,
+    );
+    assert_error(target_rx.recv().unwrap());
+    assert!(requester_rx.try_recv().is_err());
 }
 
 #[test]
@@ -217,13 +276,23 @@ fn assert_ack(message: Out, route: DirectRoute, outcome: DirectRouteOutcome) {
     }
 }
 
+fn assert_error(message: Out) {
+    match message {
+        Out::Error { scope, msg } => {
+            assert_eq!(scope, "direct");
+            assert!(msg.len() < 128);
+        }
+        _ => panic!("invalid envelope was not rejected with a bounded error"),
+    }
+}
+
 fn routed_state(
     requester_device: &str,
     target_device: &str,
     lookup: Option<&str>,
 ) -> (Arc<Mutex<State>>, Receiver<Out>, Receiver<Out>) {
-    let (requester_tx, requester_rx) = mpsc::channel();
-    let (target_tx, target_rx) = mpsc::channel();
+    let (requester_tx, requester_rx) = super::Writer::test_channel(8);
+    let (target_tx, target_rx) = super::Writer::test_channel(8);
     let mut state = State {
         clients: HashMap::from([
             (1, client(requester_tx, requester_device, true)),
@@ -242,6 +311,7 @@ fn routed_state(
 fn client(writer: super::Writer, device_id: &str, capable: bool) -> Client {
     Client {
         writer,
+        source: super::limits::SourceKey::Ipv4([127, 0, 0, 1]),
         device_id: device_id.into(),
         capabilities: if capable {
             HashSet::from([CAPABILITY.to_string()])

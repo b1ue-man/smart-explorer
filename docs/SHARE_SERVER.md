@@ -20,18 +20,97 @@ For raw TCP signaling on port `N`, the Iroh relay listens on `N + 1` by default
 URL with `SE_SHARE_RELAY_URL`. Both listeners must be reachable if encrypted
 relay fallback is required.
 
+Relay startup is fail-closed by default. An invalid relay bind, runtime setup
+failure, or occupied relay port makes `se-share-server` exit nonzero instead of
+appearing healthy with only signaling available. Signaling-only operation is
+permitted only when `SE_IROH_RELAY_DISABLE=1` (or `true`) is set explicitly.
+
 Multiple app endpoints can be separated with commas or semicolons:
 
 ```text
 wss://share.example.com/se-share, share.example.com:51820
 ```
 
+## Signaling Resource Limits
+
+The public signaling listener uses fixed resource ceilings so unauthenticated
+internet traffic cannot create unbounded threads, queues, or retained routing
+state. It admits at most 256 connection workers globally and 16 per source,
+then at most 128 registered clients globally and eight per source. IPv4 sources
+are counted by address and IPv6 sources by `/64`, preventing cheap address
+rotation inside one normal IPv6 allocation. New sockets are additionally token
+bucket limited to 128/s with a 256 global burst and 16/s with a 32 per-source
+burst before a worker is spawned. The HTTP/WebSocket upgrade and the first valid
+`Hello` must both finish inside one absolute ten-second deadline; invalid and
+control-frame traffic cannot extend it. Registered connections accept at most
+128 messages/s and 2 MiB/s with the same-size burst before the offender is
+closed. For WebSockets, the byte limit is charged on raw wire reads before
+frame parsing, including upgrade bytes, frame headers, masks, control frames,
+and fragmented or empty continuation frames.
+
+Each TCP or WebSocket client has a nonblocking outbound queue capped at 32
+messages and 2 MiB of serialized JSON, plus a five-second socket write deadline.
+Each queued message is serialized through a bounded 256 KiB buffer. A full queue
+or oversized server message drops that individual route instead of allowing a
+sender to disconnect its target; an expired or failed socket write closes the
+client so its routing state can be removed. Reconnecting clients republish and
+retry their signed endpoint-owned envelopes through the normal lifecycle.
+Applying a changed Share profile explicitly unwatches removed or disabled
+auto-connect contacts and leaves removed or disabled auto-join rooms before
+publishing the replacement configuration, so GUI/CLI removal does not leave
+stale server-side presence behind.
+
+Per registered client, the server retains at most 64 published direct IDs, 256
+watches, and 64 room memberships; rooms contain at most 64 clients. Identifier,
+presence, candidate, key, name, URL, signed-direct envelope, receipt, decision,
+digest, and user-message lengths are validated before insertion or forwarding.
+WebSocket messages and raw JSON lines are limited to 256 KiB, and empty watcher
+keys are removed on unwatch/disconnect. These limits affect only rendezvous
+availability: the server still does not derive authorization from signaling
+state or retain a durable direct-access inbox.
+
+A TLS/WebSocket reverse proxy otherwise collapses every signaling connection
+into the proxy's backend address. Set `SE_SHARE_TRUSTED_PROXY_IPS` to exact,
+comma- or semicolon-separated proxy IPs (for example `127.0.0.1,::1`) to keep
+the global ceilings while delegating only the per-source worker, registration,
+and accept-rate buckets for those backend sockets. The proxy must then enforce
+equivalent connection, handshake, and request-rate limits per original client.
+Only list loopback/private proxy addresses under your control. The server does
+not trust spoofable forwarded-IP headers. Once this exemption is enabled, the
+backend signaling listener must be reachable only from those proxies (normally
+by binding to loopback and/or firewalling the port); otherwise another host can
+connect directly and receive the proxy exemption.
+
+The adjacent Iroh relay admits at most 512 TCP connections globally and 64 per
+socket source before it spawns TLS, HTTP, WebSocket, or Iroh authentication
+work. IPv4 sources are counted by address and IPv6 sources by `/64`; these
+permits remain held for established relay connections and are returned by RAII
+on every exit path. Accepted sockets are also token-bucket limited before a
+handler is spawned: 256/s with a global burst of 512, and 32/s with a burst of
+64 per IPv4 address or IPv6 `/64`; the source-bucket cache is an LRU capped at
+4096 entries. TLS, HTTP upgrade, WebSocket upgrade, ClientAuth, authorization,
+and actor registration share one absolute 30-second establishment deadline.
+After Iroh's challenge/proof handshake, a second admission gate allows at most
+four connections per authenticated Endpoint ID.
+
+A reverse proxy is one socket source from the relay's perspective, so its
+backend connection budget must fit inside the 64-connection source ceiling and
+the proxy must enforce a smaller per-original-client WebSocket connection
+limit. Each relay connection is limited to 64 MiB/s of received ciphertext with
+an 8 MiB burst. Each destination's outgoing packet queue is capped at 512
+packets and 1 MiB of retained payload, with a shared 64 MiB payload ceiling for
+all destination queues; byte reservations remain held through the bounded write
+attempt and are returned on send, timeout, rejection, or disconnect. Peer-route
+notification relationships are removed when either endpoint disappears, and
+the public key cache holds at most 4096 entries. These are availability controls
+only and do not weaken or replace peer authentication or end-to-end encryption.
+
 ## HTTPS / 443 Deployment
 
 Run the server locally and terminate TLS in a reverse proxy:
 
 ```text
-se-share-server 127.0.0.1:51820
+SE_SHARE_TRUSTED_PROXY_IPS=127.0.0.1 se-share-server 127.0.0.1:51820
 ```
 
 Caddy example:
@@ -47,7 +126,13 @@ share.example.com {
 Nginx example:
 
 ```nginx
+# http {} scope: bound the original public client before backend source collapse
+limit_conn_zone $binary_remote_addr zone=se_share_conn:10m;
+limit_req_zone $binary_remote_addr zone=se_share_req:10m rate=16r/s;
+
 location /se-share {
+    limit_conn se_share_conn 8;
+    limit_req zone=se_share_req burst=32 nodelay;
     proxy_pass http://127.0.0.1:51820;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -56,6 +141,8 @@ location /se-share {
 }
 
 location / {
+    limit_conn se_share_conn 8;
+    limit_req zone=se_share_req burst=32 nodelay;
     proxy_pass http://127.0.0.1:51821;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -63,6 +150,10 @@ location / {
     proxy_set_header Host $host;
 }
 ```
+
+The Caddy snippet shows routing/TLS topology only; stock Caddy has no equivalent
+per-client connection limiter. Put a rate-limiting WAF/load balancer in front of
+it or use an audited limiter module before enabling the trusted-proxy exemption.
 
 This makes both signaling and the encrypted Iroh relay reachable through the
 same TLS hostname. Iroh still tries direct peer paths first. If the data relay is
@@ -85,8 +176,8 @@ The user-visible state deliberately has separate axes:
 | Axis | Values | Meaning |
 | --- | --- | --- |
 | Request delivery | `queued`, `sent`, `server_queued`, `delivered`, `received`, `failed`, `expired` | Progress of the signed request envelope. Only `received` is backed by the target's signed request receipt. |
-| Signaling route result (`relay.*`) | `forwarded`, `target_offline`, or unconfirmed | What the rendezvous server did with the latest access envelope. This is not peer receipt or Iroh data-path status. |
-| Decision | `pending`, `accepted`, `rejected`, `revoked`, `failed`, `expired` | Latest verified access decision and its revision. |
+| Signaling route result (`relay.*`) | `forwarded`, `legacy_forwarded`, `target_offline`, or unconfirmed | What the rendezvous server did with the latest access envelope. `legacy_forwarded` means it translated the request for an online old client. This is not peer receipt or Iroh data-path status. |
+| Decision | `pending`, `accepted`, `rejected`, `revoked`, `failed`, `expired` | Latest signed request decision and its revision. For an old peer, `effective_state` and `evidence=legacy_relation` separately report the verified legacy relation decision. |
 | Decision delivery | `not_started`, `queued`, `sent`, `server_queued`, `delivered`, `received`, `failed`, `expired` | Progress of the signed decision envelope. On the deciding endpoint, `received` requires the peer's signed decision receipt. |
 | Authorization | `active` or `inactive` | Whether the verified decision is currently projected into a local contact/grant. |
 | Connectivity | offline/waiting/connecting/direct/relay/error state | Current data-path reachability. It is independent of authorization and signaling delivery. |
@@ -94,16 +185,24 @@ The user-visible state deliberately has separate axes:
 Consequently, `queued` means only "durably stored on this endpoint". A signaling
 route ACK of `forwarded` means only that the server enqueued the envelope to a
 currently connected compatible client writer. It does not mean that the peer
-read, verified, or persisted it. `target_offline` is likewise a retryable
-signaling observation, not a rejected request. These route ACKs are distinct
-from connectivity such as `connected_relay`, which describes an authenticated
-Iroh data session using the encrypted transport relay.
+read, verified, or persisted it. `legacy_forwarded` means the server delivered
+the compatibility request to an online old client and stops automatic duplicate
+popups; that client cannot return a signed request receipt. Its HMAC-verified
+relation decision is shown separately from the still-unconfirmed signed request
+decision, while authorization reports whether access is actually active.
+`target_offline` is likewise a retryable signaling observation, not a rejected
+request. These route ACKs are distinct from connectivity such as
+`connected_relay`, which describes an authenticated Iroh data session using the
+encrypted transport relay.
 
 The rendezvous server does not store a direct-access inbox. Durable outbox,
 inbox, retry counters, signed envelopes, receipts, decisions, and grants live on
 the endpoints. Replaying the same request keeps the same request ID and is
 idempotent. Clients negotiate `tracked_direct_v1`; old fallback messages remain
-visible as legacy/unconfirmed because they cannot prove all lifecycle states.
+visible with explicit legacy evidence because they cannot prove all signed
+lifecycle states. A new server translates a new request for an online old
+target only after the supplied legacy presence exactly matches the signed
+requester identity and relation.
 
 ## Manage Requests and Grants
 

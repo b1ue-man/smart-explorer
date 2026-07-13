@@ -1,5 +1,6 @@
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, BufReader};
 use std::net::TcpStream;
+use std::time::Instant;
 
 pub(crate) const MAX_JSON_LINE: usize = 256 * 1024;
 
@@ -38,36 +39,58 @@ pub(crate) fn read_line_limited(
     Ok(n)
 }
 
-pub(crate) fn read_line_limited_from_stream(
-    stream: &mut TcpStream,
+pub(crate) fn read_line_limited_until(
+    reader: &mut BufReader<TcpStream>,
     line: &mut String,
     max: usize,
+    deadline: Instant,
 ) -> io::Result<usize> {
     line.clear();
     let mut bytes = Vec::new();
-    let mut byte = [0u8; 1];
     loop {
-        match stream.read(&mut byte) {
-            Ok(0) => break,
-            Ok(n) => {
-                if bytes.len().saturating_add(n) > max {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "json line too large",
-                    ));
-                }
-                bytes.extend_from_slice(&byte[..n]);
-                if byte[0] == b'\n' {
-                    break;
-                }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(deadline_expired());
+        }
+        reader.get_ref().set_read_timeout(Some(remaining))?;
+        let available = match reader.fill_buf() {
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                return Err(deadline_expired());
             }
-            Err(e) => return Err(e),
+            Err(error) => return Err(error),
+            Ok(available) => available,
+        };
+        if available.is_empty() {
+            break;
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|position| position + 1)
+            .unwrap_or(available.len());
+        if bytes.len().saturating_add(take) > max {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "json line too large",
+            ));
+        }
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if bytes.last() == Some(&b'\n') {
+            break;
         }
     }
     let n = bytes.len();
     *line = String::from_utf8(bytes)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json line invalid utf8"))?;
     Ok(n)
+}
+
+fn deadline_expired() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "pre-registration deadline expired")
 }
 
 #[cfg(test)]
