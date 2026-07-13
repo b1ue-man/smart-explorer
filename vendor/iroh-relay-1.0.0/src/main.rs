@@ -508,6 +508,14 @@ struct Limits {
     accept_conn_limit: Option<f64>,
     /// Burst limit for accepting new connection. Unlimited if not set.
     accept_conn_burst: Option<usize>,
+    /// Rate limit for accepting new connections per IPv4 address or IPv6 /64.
+    accept_conn_limit_per_source: Option<f64>,
+    /// Burst limit for accepting new connections per IPv4 address or IPv6 /64.
+    accept_conn_burst_per_source: Option<usize>,
+    /// Maximum concurrent TCP connections globally.
+    max_concurrent_tcp_connections: Option<usize>,
+    /// Maximum concurrent TCP connections per IPv4 address or IPv6 /64.
+    max_concurrent_tcp_connections_per_source: Option<usize>,
     /// Rate limiting configuration per client.
     client: Option<PerClientRateLimitConfig>,
 }
@@ -753,6 +761,11 @@ async fn build_relay_config(cfg: Config) -> Result<relay::ServerConfig> {
             let mut out = relay::Limits::default();
             out.accept_conn_limit = limits.accept_conn_limit;
             out.accept_conn_burst = limits.accept_conn_burst;
+            out.accept_conn_limit_per_source = limits.accept_conn_limit_per_source;
+            out.accept_conn_burst_per_source = limits.accept_conn_burst_per_source;
+            out.max_concurrent_tcp_connections = limits.max_concurrent_tcp_connections;
+            out.max_concurrent_tcp_connections_per_source =
+                limits.max_concurrent_tcp_connections_per_source;
             out.client_rx = client_rx;
             out
         }
@@ -775,7 +788,8 @@ async fn build_relay_config(cfg: Config) -> Result<relay::ServerConfig> {
     server_config.quic = quic_config;
     #[cfg(feature = "metrics")]
     {
-        server_config.metrics_addr = Some(cfg.metrics_bind_addr()).filter(|_| cfg.enable_metrics);
+        let metrics_bind_addr = cfg.metrics_bind_addr();
+        server_config.metrics_addr = cfg.enable_metrics.then_some(metrics_bind_addr);
     }
     Ok(server_config)
 }
@@ -821,7 +835,29 @@ mod tests {
 
         let relay = relay_config.relay.expect("no relay config");
         assert!(relay.limits.client_rx.is_none());
+        assert!(relay.limits.accept_conn_limit.is_none());
+        assert!(relay.limits.accept_conn_limit_per_source.is_none());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_accept_rate_limit_config() -> Result {
+        let config = "
+            [limits]
+            accept_conn_limit = 256.0
+            accept_conn_burst = 512
+            accept_conn_limit_per_source = 32.0
+            accept_conn_burst_per_source = 64
+        ";
+        let config = Config::from_str(config)?;
+        let relay_config = build_relay_config(config).await?;
+        let limits = relay_config.relay.expect("no relay config").limits;
+
+        assert_eq!(limits.accept_conn_limit, Some(256.0));
+        assert_eq!(limits.accept_conn_burst, Some(512));
+        assert_eq!(limits.accept_conn_limit_per_source, Some(32.0));
+        assert_eq!(limits.accept_conn_burst_per_source, Some(64));
         Ok(())
     }
 

@@ -61,10 +61,14 @@ use crate::{
     tls::CaTlsConfig,
 };
 
+mod accept_rate_limits;
 pub mod client;
 pub mod clients;
+mod connection_limits;
+mod connection_source;
 pub mod http_server;
 mod metrics;
+mod queue_budget;
 pub(crate) mod resolver;
 pub mod streams;
 #[cfg(feature = "test-utils")]
@@ -377,6 +381,7 @@ pub struct OnDisconnectGuard {
     access: Option<Arc<dyn DynAccessControl>>,
     endpoint_id: EndpointId,
     connection_id: ConnectionId,
+    connection_permit: Option<Arc<connection_limits::ConnectionPermit>>,
 }
 
 impl OnDisconnectGuard {
@@ -390,6 +395,7 @@ impl OnDisconnectGuard {
             access: Some(access),
             endpoint_id: request.endpoint_id(),
             connection_id: request.connection_id(),
+            connection_permit: None,
         }
     }
 
@@ -402,7 +408,15 @@ impl OnDisconnectGuard {
             access: None,
             endpoint_id,
             connection_id: ConnectionId::next(),
+            connection_permit: None,
         }
+    }
+
+    fn attach_connection_permit(
+        &mut self,
+        connection_permit: Option<Arc<connection_limits::ConnectionPermit>>,
+    ) {
+        self.connection_permit = connection_permit;
     }
 
     /// Returns the [`EndpointId`] of the guarded connection.
@@ -482,8 +496,7 @@ impl TlsConfig {
     }
 }
 
-/// Rate limits.
-// TODO: accept_conn_limit and accept_conn_burst are not currently implemented.
+/// Resource limits.
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct Limits {
@@ -491,12 +504,39 @@ pub struct Limits {
     pub client_rx: Option<ClientRateLimit>,
     /// Rate limit for accepting new connections. Unlimited if not set.
     ///
-    /// Not currently implemented, setting this has no effect.
+    /// Expressed in accepted TCP sockets per second. The token bucket is applied
+    /// immediately after `accept` and before spawning a connection handler.
     pub accept_conn_limit: Option<f64>,
-    /// Burst limit for accepting new connections. Unlimited if not set.
+    /// Global burst for accepting new connections.
     ///
-    /// Not currently implemented, setting this has no effect.
+    /// Has an effect only when [`Limits::accept_conn_limit`] is set. If omitted
+    /// while the rate is set, the burst defaults to the rate rounded up, at least one.
     pub accept_conn_burst: Option<usize>,
+    /// Per-source rate limit for accepting new connections. Unlimited if not set.
+    ///
+    /// IPv4 addresses are counted individually, IPv4-mapped IPv6 is normalized to
+    /// IPv4, and native IPv6 is grouped by `/64`. At most 4096 source buckets are
+    /// retained in an LRU cache.
+    pub accept_conn_limit_per_source: Option<f64>,
+    /// Per-source burst for accepting new connections.
+    ///
+    /// Has an effect only when [`Limits::accept_conn_limit_per_source`] is set.
+    /// If omitted while the rate is set, the burst defaults to the rate rounded up,
+    /// at least one.
+    pub accept_conn_burst_per_source: Option<usize>,
+    /// Maximum concurrent TCP connections across all source addresses.
+    ///
+    /// The count begins immediately after socket acceptance and remains held through
+    /// TLS, HTTP, WebSocket, authentication, and the established relay connection.
+    /// Unlimited if not set.
+    pub max_concurrent_tcp_connections: Option<usize>,
+    /// Maximum concurrent TCP connections from one source.
+    ///
+    /// IPv4 addresses are counted individually. IPv6 addresses are grouped by `/64`;
+    /// IPv4-mapped IPv6 addresses are counted as their IPv4 address. The socket peer
+    /// address is used, so a TCP reverse proxy represents one source. Unlimited if
+    /// not set.
+    pub max_concurrent_tcp_connections_per_source: Option<usize>,
 }
 
 /// Per-client rate limit configuration.
@@ -666,6 +706,8 @@ pub enum SpawnError {
         #[error(std_err)]
         source: std::io::Error,
     },
+    #[error("Invalid accept rate limit: {details}")]
+    InvalidAcceptRateLimit { details: String },
 }
 
 /// Server task errors
@@ -741,6 +783,18 @@ impl Server {
                 if let Some(cfg) = relay_config.limits.client_rx {
                     builder = builder.client_rx_ratelimit(cfg);
                 }
+                builder = builder.tcp_connection_limits(
+                    relay_config.limits.max_concurrent_tcp_connections,
+                    relay_config
+                        .limits
+                        .max_concurrent_tcp_connections_per_source,
+                );
+                builder = builder.accept_connection_rate_limits(
+                    relay_config.limits.accept_conn_limit,
+                    relay_config.limits.accept_conn_burst,
+                    relay_config.limits.accept_conn_limit_per_source,
+                    relay_config.limits.accept_conn_burst_per_source,
+                )?;
                 let (http_addr, tls_config) = match relay_config.tls {
                     Some(tls_config) => {
                         let server_tls_config = match tls_config.cert {

@@ -8,7 +8,10 @@ use n0_future::{SinkExt, StreamExt};
 use rand::RngExt;
 use time::{Date, OffsetDateTime};
 use tokio::{
-    sync::mpsc::{self, error::TrySendError},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot,
+    },
     time::MissedTickBehavior,
 };
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
@@ -29,17 +32,20 @@ use crate::{
         ConnectionId, OnDisconnectGuard,
         clients::Clients,
         metrics::Metrics,
+        queue_budget::{ClientPacketQueueBudget, PacketQueuePermit},
         streams::{RecvError as RelayRecvError, RelayedStream, SendError as RelaySendError},
     },
 };
 
 /// A request to write a dataframe to a Client
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct Packet {
     /// The sender of the packet
     src: EndpointId,
     /// The data packet bytes.
     data: Datagrams,
+    /// Retained payload-byte capacity in both the per-client and global queues.
+    queue_permit: PacketQueuePermit,
 }
 
 /// Configuration for a client connection.
@@ -97,21 +103,58 @@ pub(super) struct Client {
     handle: AbortOnDropHandle<()>,
     /// Channel to send packets intended for the client.
     packet_queue: mpsc::Sender<Packet>,
+    /// Payload-byte budget shared by packets queued for this client.
+    packet_queue_budget: ClientPacketQueueBudget,
     /// Channel to send non-packet messages to the client.
     message_queue: mpsc::Sender<RelayToClientMsg>,
     /// Relay protocol version negotiated for this client.
     protocol_version: ProtocolVersion,
 }
 
+/// Releases a newly spawned client actor only after its registry entry is visible.
+#[derive(Debug)]
+#[must_use = "the client actor must be started after registry insertion"]
+pub(super) struct ClientActorStart {
+    start: Option<oneshot::Sender<()>>,
+}
+
+impl ClientActorStart {
+    /// Allows the actor to begin processing the connection.
+    pub(super) fn start(mut self) {
+        self.release();
+    }
+
+    fn release(&mut self) {
+        if let Some(start) = self.start.take() {
+            let _ = start.send(());
+        }
+    }
+}
+
+impl Drop for ClientActorStart {
+    fn drop(&mut self) {
+        // Never strand an inserted client if registration unwinds after insertion.
+        self.release();
+    }
+}
+
 impl Client {
-    /// Creates a client from a connection & starts a read and write loop to handle io to and from
-    /// the client
+    /// Creates a client from a connection and spawns its read and write loop behind a start gate.
     ///
     /// The `guard` is moved into the connection actor and reports the disconnect to access
     /// control once the connection ends.
     ///
+    /// The caller must insert the returned client into the registry before releasing the returned
+    /// [`ClientActorStart`]. This ensures an immediately closed connection cannot unregister before
+    /// its registry entry exists.
+    ///
     /// Call [`Client::shutdown`] to close the read and write loops before dropping the [`Client`]
-    pub(super) fn new<S>(config: Config<S>, clients: &Clients, metrics: Arc<Metrics>) -> Client
+    pub(super) fn new<S>(
+        config: Config<S>,
+        clients: &Clients,
+        packet_queue_budget: ClientPacketQueueBudget,
+        metrics: Arc<Metrics>,
+    ) -> (Client, ClientActorStart)
     where
         S: BytesStreamSink + Send + 'static,
     {
@@ -141,23 +184,38 @@ impl Client {
             metrics,
         };
 
-        // start io loop
+        // Spawn the IO loop, but do not let it observe EOF or unregister until Clients::register
+        // has made this connection visible in the registry.
+        let (actor_start, wait_for_start) = oneshot::channel();
         let io_done = done.clone();
-        let handle = tokio::task::spawn(actor.run(io_done).instrument(tracing::info_span!(
-            "client-connection-actor",
-            remote_endpoint = %endpoint_id.fmt_short(),
-            connection_id = %connection_id
-        )));
+        let handle = tokio::task::spawn(
+            async move {
+                if wait_for_start.await.is_ok() {
+                    actor.run(io_done).await;
+                }
+            }
+            .instrument(tracing::info_span!(
+                "client-connection-actor",
+                remote_endpoint = %endpoint_id.fmt_short(),
+                connection_id = %connection_id
+            )),
+        );
 
-        Client {
-            endpoint_id,
-            connection_id,
-            handle: AbortOnDropHandle::new(handle),
-            done,
-            packet_queue: packet_send_queue_s,
-            message_queue: message_send_queue_s,
-            protocol_version,
-        }
+        (
+            Client {
+                endpoint_id,
+                connection_id,
+                handle: AbortOnDropHandle::new(handle),
+                done,
+                packet_queue: packet_send_queue_s,
+                packet_queue_budget,
+                message_queue: message_send_queue_s,
+                protocol_version,
+            },
+            ClientActorStart {
+                start: Some(actor_start),
+            },
+        )
     }
 
     pub(super) fn connection_id(&self) -> ConnectionId {
@@ -186,8 +244,19 @@ impl Client {
         &self,
         src: EndpointId,
         data: Datagrams,
-    ) -> Result<(), TrySendError<Packet>> {
-        self.packet_queue.try_send(Packet { src, data })
+    ) -> Result<(), TrySendPacketError> {
+        let Some(queue_permit) = self.packet_queue_budget.try_reserve(data.contents.len()) else {
+            return Err(TrySendPacketError::Full);
+        };
+        match self.packet_queue.try_send(Packet {
+            src,
+            data,
+            queue_permit,
+        }) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(TrySendPacketError::Full),
+            Err(TrySendError::Closed(_)) => Err(TrySendPacketError::Closed),
+        }
     }
 
     pub(super) fn try_send_peer_gone(
@@ -210,6 +279,12 @@ impl Client {
         };
         self.message_queue.try_send(message)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TrySendPacketError {
+    Full,
+    Closed,
 }
 
 /// Error when handling an incoming frame from a client.
@@ -412,17 +487,24 @@ where
     /// Errors if the send does not happen within the `timeout` duration
     /// Does not flush.
     async fn send_raw(&mut self, packet: Packet) -> Result<(), WriteFrameError> {
-        let remote_endpoint_id = packet.src;
-        let datagrams = packet.data;
+        let Packet {
+            src: remote_endpoint_id,
+            data: datagrams,
+            queue_permit,
+        } = packet;
 
         if let Ok(len) = datagrams.contents.len().try_into() {
             self.metrics.bytes_sent.inc_by(len);
         }
-        self.write_frame(RelayToClientMsg::Datagrams {
-            remote_endpoint_id,
-            datagrams,
-        })
-        .await
+        let result = self
+            .write_frame(RelayToClientMsg::Datagrams {
+                remote_endpoint_id,
+                datagrams,
+            })
+            .await;
+        // Keep the reservation through the entire write attempt, including its timeout.
+        drop(queue_permit);
+        result
     }
 
     async fn send_packet(&mut self, packet: Packet) -> Result<(), WriteFrameError> {
@@ -618,11 +700,12 @@ mod tests {
         let packet = Packet {
             src: endpoint_id,
             data: Datagrams::from(&data[..]),
+            queue_permit: crate::server::queue_budget::PacketQueueBudget::default()
+                .client()
+                .try_reserve(data.len())
+                .expect("test packet fits queue budget"),
         };
-        send_queue_s
-            .send(packet.clone())
-            .await
-            .std_context("send")?;
+        send_queue_s.send(packet).await.std_context("send")?;
         let frame = recv_frame(FrameType::RelayToClientDatagram, &mut io_rw)
             .await
             .anyerr()?;
@@ -672,6 +755,66 @@ mod tests {
 
         done.cancel();
         handle.await.std_context("join")?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn packet_queue_releases_byte_budget_on_full_and_drop() -> Result {
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(13u64);
+        let endpoint_id = SecretKey::from_bytes(&rng.random()).public();
+        let guard = OnDisconnectGuard::empty(endpoint_id);
+        let connection_id = guard.connection_id;
+        let (packet_queue, mut packet_receiver) = mpsc::channel(1);
+        let (message_queue, _message_receiver) = mpsc::channel(1);
+        let budget = crate::server::queue_budget::PacketQueueBudget::new(8, 8);
+        let packet_queue_budget = budget.client();
+        let done = CancellationToken::new();
+        let handle = tokio::spawn(std::future::pending());
+        let client = Client {
+            endpoint_id,
+            connection_id,
+            done,
+            handle: AbortOnDropHandle::new(handle),
+            packet_queue,
+            packet_queue_budget: packet_queue_budget.clone(),
+            message_queue,
+            protocol_version: ProtocolVersion::V2,
+        };
+
+        client
+            .try_send_packet(endpoint_id, Datagrams::from(b"1234"))
+            .expect("first packet fills the one-entry channel");
+        assert_eq!(packet_queue_budget.available_local_bytes(), 4);
+        assert_eq!(budget.available_global_bytes(), 4);
+
+        assert_eq!(
+            client.try_send_packet(endpoint_id, Datagrams::from(b"5678")),
+            Err(TrySendPacketError::Full)
+        );
+        assert_eq!(
+            packet_queue_budget.available_local_bytes(),
+            4,
+            "channel-full packet returned and released both permits"
+        );
+        assert_eq!(budget.available_global_bytes(), 4);
+
+        let first = packet_receiver.recv().await.expect("queued first packet");
+        client
+            .try_send_packet(endpoint_id, Datagrams::from(b"5678"))
+            .expect("empty channel accepts the second reservation");
+        assert_eq!(packet_queue_budget.available_local_bytes(), 0);
+        assert_eq!(budget.available_global_bytes(), 0);
+        assert_eq!(
+            client.try_send_packet(endpoint_id, Datagrams::from(b"x")),
+            Err(TrySendPacketError::Full),
+            "byte saturation rejects additional retained payload"
+        );
+
+        drop(first);
+        assert_eq!(packet_queue_budget.available_local_bytes(), 4);
+        drop(packet_receiver.recv().await.expect("queued second packet"));
+        assert_eq!(packet_queue_budget.available_local_bytes(), 8);
+        assert_eq!(budget.available_global_bytes(), 8);
         Ok(())
     }
 
