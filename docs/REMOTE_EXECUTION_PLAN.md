@@ -1,8 +1,10 @@
-# Secure peer remote execution — implementation plan
+# Secure peer remote execution — implementation and validation record
 
-Status: **planned, not enabled**. The current release remains fail-closed.
+Status: **implemented for 0.5.132**. Exec remains fail-closed until one exact
+device grant is explicitly enabled and the host containment provider is
+available.
 
-Research and code audit date: **2026-07-12**.
+Research date: **2026-07-12**. Local installed-Linux validation: **2026-07-13**.
 
 This plan enables unrestricted command execution over Smart Explorer Share. An
 explicitly authorized peer gets the same practical authority as the OS account
@@ -71,9 +73,9 @@ as Task Scheduler, WMI, a service manager, Docker, or `systemd-run` to start
 unrelated work. Preventing that would require a sandbox or reduced account and
 would contradict this feature's unrestricted-user-shell contract.
 
-## 3. Current foundation and blocking gaps
+## 3. Pre-implementation audit (resolved in 0.5.132)
 
-The existing data plane is a sound base:
+The pre-0.5.132 data plane was a sound base:
 
 - Iroh authenticates the remote EndpointId as its TLS public-key identity and
   encrypts traffic end to end, including over a relay.
@@ -90,8 +92,8 @@ The existing data plane is a sound base:
 - current Exec submission is deliberately at-most-once; the caller does not
   retry after an ambiguous transport failure.
 
-Simply replacing the `Unsupported` result in `share/core/exec.rs` would still
-be unsafe and unusable:
+The following gaps blocked the old batch stub. 0.5.132 resolves them with the
+modules and validation gates recorded below rather than enabling that stub:
 
 - `ShareExportConfig.allow_exec` applies to every accepted direct peer, or to
   every member of a room. It is not a per-device permission.
@@ -428,8 +430,9 @@ the full output. Local IPC never retries Start after handoff.
 
 ## 11. Remote connection keepalive companion requirement
 
-Implementation status: **delivered independently in 0.5.131**. Remote Exec is
-still disabled; it does not gate the connection-liveness fix.
+Implementation status: **base backend liveness delivered in 0.5.131; Exec
+enabled in 0.5.132**. Exec reuses the same Iroh keepalive policy and adds
+bounded failed-peer detection without closing a healthy idle session.
 
 Idle connections must remain usable independently of Exec. The user-visible
 contract is: after an arbitrary idle period, the next operation either uses the
@@ -446,7 +449,7 @@ Protocol-specific implementation:
 | WebDAV | Pooled safe `PROPFIND`/`GET` setup retries once when a stale connection dies. `PROPFIND` also consumes the complete private response body inside that attempt, so headers followed by a partial body or blackhole retry once without exposing bytes; an already returned file reader never restarts after exposure. Connect is bounded to 10 seconds and read/write inactivity to 60 seconds, without a total-duration cap on a progressing transfer. Mutations and `PUT` use an unpooled agent with redirects disabled and strict success-status validation; response loss is terminally ambiguous instead of causing another mutation or another `flush()`. |
 | Google Drive | No quota-consuming heartbeat is sent: pooled HTTPS reads transparently replace stale sockets, and complete metadata JSON bodies retry within the bounded read policy before any bytes escape. Metadata and OAuth requests have a 60-second overall deadline; streaming downloads use a 10-second connect and 60-second read/write inactivity deadline without limiting total progressing transfer time. A transport failure or 5xx after a mutation is reconciled against the exact reserved/resource ID and expected postcondition rather than replayed. Folder creation durably journals its pre-generated exact ID under the stable Drive `permissionId` before POST; restarts verify or retry only that same ID. Resumable content retains its server-offset reconciliation. |
 | Share signaling | DNS resolution, TCP connect, TLS, WebSocket handshake, and writes are explicitly bounded. The client sends Heartbeat every 20 seconds, requires Pong within 40 seconds, and enters the reconnect/republish loop after a missed deadline. Constants, literal-IP DNS bypass, and thresholds are directly tested. |
-| Share Iroh/QUIC | Connection and path keepalive are explicitly configured to five seconds instead of depending on crate defaults. A failed cached `open_bi` is generation-checked, then reconnects and reauthenticates once before any request payload exists. Stream I/O has inactivity deadlines. Exported synchronous backend work runs in a bounded blocking pool, so a slow filesystem cannot starve the QUIC timers. |
+| Share Iroh/QUIC | Connection and path keepalive are explicitly configured to five seconds instead of depending on crate defaults. A healthy idle session therefore remains active, while a crashed peer that cannot answer probes reaches the explicit 20-second connection idle timeout. A failed cached `open_bi` is generation-checked, then reconnects and reauthenticates once before any request payload exists. Exec uses a fresh connection and never retries after Start may have been sent. Stream I/O has inactivity deadlines. Exported synchronous backend work runs in a bounded blocking pool, so a slow filesystem cannot starve the QUIC timers. |
 | Windows UNC/SMB | The Windows redirector owns SMB ECHO and protocol reconnect. Smart Explorer now retains a reference-counted WNet lease in every saved-UNC backend and cancels it only after the final in-process user releases it. |
 
 Keepalive and reconnect are not mutation replay. A failure after a mutating
@@ -482,11 +485,16 @@ New or extracted Rust files stay behavior-scoped and below the repository's
 - `share/os/windows/exec.rs` — Job Object and `CreateProcessW` adapter;
 - `share/os/linux_os/exec.rs` — systemd transient-unit adapter;
 - `share/os/linux_os/exec_supervisor.rs` — hidden supervisor mode;
-- `daemon/os/shared/ipc_exec.rs` — full-duplex local Exec bridge;
+- `daemon/os/shared/exec_ipc.rs` — full-duplex local Exec bridge;
 - `cli/exec.rs` — discoverable CLI, stdio, completion, and exit mapping;
 - focused app UI modules for grant confirmation and active/history rendering;
 - backend-owned liveness modules for SFTP/Agent, FTP/FTPS, WebDAV/Drive, Share,
   and UNC rather than one protocol-blind heartbeat thread in `vfs::Backend`.
+
+Implemented source stays within the repository's 500-line/50-KiB limit for
+new or substantially edited modules. The daemon uses
+`daemon/os/shared/exec_ipc.rs` and a separate crash-safe Exec-grant journal;
+the GUI grant/job controls are likewise split into focused modules.
 
 Windows bindings add only the required Job Object/process/thread/pipe features.
 The Linux D-Bus dependency is target-specific, uses no C library, and is
@@ -559,12 +567,28 @@ Under cgroup v2/systemd:
 - no-argument commands list/auto-select correctly and completions return live
   grant/peer/exec selectors on every supported shell;
 - status is visible and consistent on requester and target for every state;
-- Linux -> Windows and Windows -> Linux execute argv, shell, stdin, output,
-  nonzero exit, long-running, Cancel, revoke, and worker-crash cases;
-- the same suite is repeated after updating an older installed version;
+- installed Linux candidates execute the full two-profile argv, shell, binary
+  I/O, nonzero exit, long-running, Cancel, revoke, and worker-crash suite;
+- native Windows CI runs two isolated Share endpoints through the same protocol
+  and real Windows provider, including remote `cmd.exe`, nonzero exit, disable,
+  denial, signed revoke, receipt, and context-free history deletion;
+- published Windows <-> Linux candidates and the old-version update path remain
+  the separate M11 interoperability certification rather than being inferred
+  from cross-compilation;
 - all remote backends pass a real idle-beyond-server-timeout operation test.
 
 ## 14. Implementation milestones and validation gates
+
+M0–M9 are implemented in 0.5.132. M10 shipped in 0.5.131. The static Linux
+release-feed `se` and release Share server are locally green with two isolated
+profiles; the run obtains the invite, request, peer, grant, and Exec IDs only
+from earlier CLI output. It covers binary stdin/stdout, stderr, exit 7, explicit
+output truncation, timeout, target-side Cancel, local CLI death, target-worker
+`SIGKILL`, cgroup/socket cleanup, permission revoke, and post-revoke start
+denial. Native Windows CI runs both the real Job-Object
+provider self-test (including root-exits-first and empty containment) and a
+two-isolated-profile Share/Exec lifecycle with remote `cmd.exe`; the GNU target
+compile additionally verifies the full Windows CLI/provider surface.
 
 | Milestone | Functional result | Primary files | Validation signal |
 |---|---|---|---|
@@ -579,7 +603,7 @@ Under cgroup v2/systemd:
 | M8 — policy cancellation/UI | Revoke, worker refresh/stop, and GUI/CLI Cancel terminate matching active jobs and show history | registry integration, signal commands, app UI | race stress tests and state parity on both endpoints pass |
 | M9 — outside-DoS hardening | Pre-auth work, frames, queues, and server writers are bounded | node/framing/server and share-server | Slowloris/connection flood/oversize tests pass under memory/task assertions |
 | M10 — all-backend keepalive ✅ 0.5.131 | Stateful remotes survive idle through protocol heartbeats or safe fresh connections; request-based backends avoid artificial traffic | SFTP, FTP/FTPS, WebDAV/Drive, Share, UNC | deterministic stale-connection/non-replay tests, host suite, Windows cross-check, and full release builds pass; credentialed live-server smokes remain environment-gated |
-| M11 — installed cross-OS E2E | Published candidates work Windows <-> Linux from a context-free CLI run | E2E scripts and release workflow | fresh install and update-path matrix passes with orphan-PID checks |
+| M11 — published cross-OS certification | Published candidates work Windows <-> Linux and across an old-version update from a context-free CLI run | release interoperability lab | fresh install and update-path matrix passes with orphan-PID checks; same-OS native gates do not claim this result |
 
 No later milestone may paper over a failed earlier security gate. In particular,
 the CLI stays disabled until both M6 and M7 pass on their native platforms and
@@ -594,16 +618,18 @@ This is a native security feature and follows the complete native release path:
    and Windows target compilation;
 2. native Windows containment tests and Linux systemd/cgroup tests;
 3. Share direct and relay E2E, including negative authorization tests;
-4. full installed Windows <-> Linux CLI validation with IDs discovered during
-   the test itself;
+4. installed Linux two-profile CLI validation plus native Windows two-profile
+   CLI/Exec and Job-Object gates, always using IDs discovered during the run;
 5. patch-version bump and full local Windows/Linux feed build;
 6. matching commit on `main`, tag, GitHub Release, all expected artifacts and
-   hashes, and post-publication fresh-install verification.
+   hashes, and post-publication Linux CLI reinstall verification. Published
+   cross-OS/update-path certification is tracked separately as M11.
 
-The Help text changes from `Unavailable` only in the release whose installed
-artifacts passed this gate. A platform that cannot prove its containment
-provider reports that specific platform prerequisite through `se doctor` and
-keeps Exec unavailable.
+The locally installed `se 0.5.132` is byte-identical to the verified static feed
+payload (`SHA-256 06ce885d8428555e698f3f7eda06240ddd822ec08dacc150e5684392a0fdf2e2`),
+completed the two-profile Linux gate with the release Share server, and exposes
+Exec in Help. A platform that cannot provide its containment provider reports
+that specific prerequisite and starts no payload.
 
 ## 16. Primary references
 

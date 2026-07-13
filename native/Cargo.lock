@@ -1356,6 +1356,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
+dependencies = [
+ "dispatch2",
+ "nix 0.31.3",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ctutils"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6181,13 +6192,14 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smart_explorer"
-version = "0.5.131"
+version = "0.5.132"
 dependencies = [
  "base64",
  "chrono",
  "clap",
  "clap_complete",
  "crossbeam-channel",
+ "ctrlc",
  "eframe",
  "egui_extras",
  "getrandom 0.2.17",
@@ -6225,6 +6237,7 @@ dependencies = [
  "windows-core 0.58.0",
  "windows-sys 0.59.0",
  "winreg",
+ "zbus 5.16.0",
  "zip",
 ]
 

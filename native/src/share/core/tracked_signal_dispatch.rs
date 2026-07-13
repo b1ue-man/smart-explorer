@@ -4,7 +4,7 @@ use super::core::now_secs;
 use super::direct_ledger::{
     DirectEnvelopeKind, DirectRelayOutcome, DirectRequestDirection, DirectRequestEntry,
 };
-use super::direct_protocol::{DirectPeerIdentity, DirectRequestId};
+use super::direct_protocol::{DirectPeerIdentity, DirectRequestId, SignedDirectRequest};
 use super::direct_signal_event::DirectSignalEvent;
 use super::profiles::ShareProfiles;
 use super::signal_auth::handle_server_msg;
@@ -102,25 +102,19 @@ fn verified_event(
             })
         }
         TrackedDirectServerMsg::RequestReceipt { receipt } => {
-            let (entry, contact, local) = outgoing_context(auth, &receipt.request_id)?;
+            let (request, contact, local) = outgoing_context(auth, &receipt.request_id)?;
             let secret = contact_secret(&contact)?;
-            verify_request_receipt_for_requester(
-                &receipt,
-                &entry.record.request,
-                &local,
-                &secret,
-                now,
-            )
-            .map_err(|error| error.to_string())?;
+            verify_request_receipt_for_requester(&receipt, &request, &local, &secret, now)
+                .map_err(|error| error.to_string())?;
             Ok(DirectSignalEvent::RequestReceiptReceived {
                 receipt,
                 received_at: now,
             })
         }
         TrackedDirectServerMsg::Decision { decision } => {
-            let (entry, contact, local) = outgoing_context(auth, &decision.request_id)?;
+            let (request, contact, local) = outgoing_context(auth, &decision.request_id)?;
             let secret = contact_secret(&contact)?;
-            verify_decision_for_requester(&decision, &entry.record.request, &local, &secret, now)
+            verify_decision_for_requester(&decision, &request, &local, &secret, now)
                 .map_err(|error| error.to_string())?;
             Ok(DirectSignalEvent::DecisionReceived {
                 decision,
@@ -162,20 +156,36 @@ fn verified_event(
 fn outgoing_context(
     auth: &Arc<Mutex<ShareAuthState>>,
     request_id: &DirectRequestId,
-) -> Result<(DirectRequestEntry, DirectContact, DirectPeerIdentity), String> {
+) -> Result<(SignedDirectRequest, DirectContact, DirectPeerIdentity), String> {
     let state = auth.lock().map_err(|_| "Share-State gesperrt")?;
-    let entry = find_entry(&state.direct_requests, request_id)?;
-    if entry.direction != DirectRequestDirection::Outgoing {
-        return Err("Direktnachricht hat falsche Richtung".into());
-    }
-    let contact_id = entry.contact_id.as_deref().ok_or("Kontaktbezug fehlt")?;
+    let (request, contact_id) = match find_entry(&state.direct_requests, request_id) {
+        Ok(entry) if entry.direction == DirectRequestDirection::Outgoing => (
+            entry.record.request.clone(),
+            entry.contact_id.clone().ok_or("Kontaktbezug fehlt")?,
+        ),
+        Ok(_) => return Err("Direktnachricht hat falsche Richtung".into()),
+        Err(_) => {
+            let tombstone = state
+                .direct_request_tombstones
+                .iter()
+                .find(|tombstone| {
+                    tombstone.request.request_id == *request_id
+                        && tombstone.direction == DirectRequestDirection::Outgoing
+                })
+                .ok_or("unbekannte oder lokal geloeschte Direktanfrage")?;
+            (
+                tombstone.request.clone(),
+                tombstone.contact_id.clone().ok_or("Kontaktbezug fehlt")?,
+            )
+        }
+    };
     let contact = state
         .direct_contacts
         .iter()
         .find(|contact| contact.id == contact_id)
         .cloned()
         .ok_or("Direktkontakt fehlt")?;
-    Ok((entry.clone(), contact, local_identity(&state.identity)))
+    Ok((request, contact, local_identity(&state.identity)))
 }
 
 fn relay_event(

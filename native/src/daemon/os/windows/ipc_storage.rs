@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 const IPC_ADDR_FILE: &str = "daemon.ipc";
 const IPC_GENERATION_FILE: &str = "daemon.generation";
 const IPC_TOKEN_FILE: &str = "daemon.token";
+const EXEC_JOURNAL_FILE: &str = "exec-grants.journal";
 const MAX_TOKEN_BYTES: u64 = 4 * 1024;
 
 fn ipc_addr_path() -> io::Result<PathBuf> {
@@ -47,6 +48,49 @@ pub(super) fn read_ipc_generation() -> Option<String> {
     let generation = generation.trim();
     (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| generation.to_string())
+}
+
+pub(super) fn exec_journal_path() -> io::Result<PathBuf> {
+    Ok(sync_data_directory()?.join(EXEC_JOURNAL_FILE))
+}
+
+pub(super) fn open_exec_journal() -> io::Result<File> {
+    let file = open_file_without_following_links(&exec_journal_path()?)?;
+    validate_private_file_handle(&file, "Exec grant journal")?;
+    Ok(file)
+}
+
+pub(super) fn secure_exec_journal_temp(file: &File) -> io::Result<()> {
+    validate_private_file_handle(file, "Exec grant journal temporary file")
+}
+
+pub(super) fn sync_exec_journal_directory() -> io::Result<()> {
+    sync_data_directory().map(|_| ())
+}
+
+pub(super) fn commit_exec_journal_temp(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 pub(super) fn load_or_create_token() -> io::Result<String> {
@@ -137,6 +181,10 @@ fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
 }
 
 fn open_token_without_following_links(path: &Path) -> io::Result<File> {
+    open_file_without_following_links(path)
+}
+
+fn open_file_without_following_links(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     OpenOptions::new()
@@ -146,6 +194,10 @@ fn open_token_without_following_links(path: &Path) -> io::Result<File> {
 }
 
 fn validate_token_handle(file: &File) -> io::Result<()> {
+    validate_private_file_handle(file, "daemon IPC token")
+}
+
+fn validate_private_file_handle(file: &File, label: &str) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -164,7 +216,7 @@ fn validate_token_handle(file: &File) -> io::Result<()> {
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "daemon IPC token must be a single-link regular file",
+            format!("{label} must be a single-link regular file"),
         ));
     }
     Ok(())

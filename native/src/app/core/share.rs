@@ -985,20 +985,6 @@ impl App {
         {
             changed = true;
         }
-        if ui
-            .checkbox(
-                &mut cfg.allow_exec,
-                "Vollstaendige Remote-Codeausfuehrung erlauben",
-            )
-            .changed()
-        {
-            changed = true;
-        }
-        if cfg.allow_exec {
-            ui.small(
-                "Umfasst Programme und Shell-Befehle; die Ausfuehrung ist derzeit bis zur sicheren Prozessbaum-Kapselung deaktiviert.",
-            );
-        }
         ui.checkbox(
             &mut self.share_block_symlink_escape,
             "Symlinks ausserhalb der Freigabe blockieren",

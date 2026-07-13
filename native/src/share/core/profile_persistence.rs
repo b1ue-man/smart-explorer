@@ -2,7 +2,8 @@ use super::core::{b64, random_token};
 use super::fs::SharedRoot;
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
-    ShareProfiles, PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION,
+    ShareProfiles, LEGACY_SHARE_PROFILE_VERSION, OLDEST_SHARE_PROFILE_VERSION,
+    PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -36,14 +37,21 @@ impl ShareProfiles {
         match profiles.schema_version {
             SHARE_PROFILE_VERSION => {}
             PREVIOUS_SHARE_PROFILE_VERSION => {
-                // V3 had no tracked request ledger. Existing contacts and grants
-                // remain intact; the worker can create new signed V4 requests for
-                // legacy pending contacts once the identity is available.
+                // V5 already has exact per-peer Exec grants. V6 adds only the
+                // default-empty durable request-deletion tombstone ledger.
                 profiles.schema_version = SHARE_PROFILE_VERSION;
+            }
+            OLDEST_SHARE_PROFILE_VERSION | LEGACY_SHARE_PROFILE_VERSION => {
+                // V3 had no tracked request ledger and V3/V4 exposed one
+                // export-wide Exec bit. No released runtime honored that bit
+                // safely, so migration preserves file configuration and base
+                // grants while resetting every exact peer Exec policy to deny.
+                profiles.schema_version = SHARE_PROFILE_VERSION;
+                profiles.reset_exec_for_legacy_migration();
             }
             version => {
                 return Err(format!(
-                    "Nicht unterstuetzte Share-Profilversion {version} (erwartet {PREVIOUS_SHARE_PROFILE_VERSION} oder {SHARE_PROFILE_VERSION})"
+                    "Nicht unterstuetzte Share-Profilversion {version} (erwartet {OLDEST_SHARE_PROFILE_VERSION} bis {SHARE_PROFILE_VERSION})"
                 ));
             }
         }
@@ -279,6 +287,10 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{ProfilePersistence, ProfileRevision, ShareProfiles, SHARE_PROFILE_VERSION};
+    use crate::share::{
+        DirectGrant, DirectGrantState, ExecGrant, RoomMember, RoomProfile, ShareExportConfig,
+        ShareStatus,
+    };
 
     #[derive(Default)]
     struct FakePersistence {
@@ -391,33 +403,47 @@ mod tests {
     }
 
     #[test]
-    fn v3_profiles_migrate_to_v4_without_losing_existing_configuration() {
-        let legacy = ShareProfiles {
+    fn v3_and_v4_profiles_migrate_to_v6_with_exec_default_denied() {
+        let mut legacy = ShareProfiles {
             auto_connect: false,
             ..ShareProfiles::default()
         };
-        let mut value = serde_json::to_value(&legacy).unwrap();
-        value["schema_version"] = serde_json::json!(3);
-        value.as_object_mut().unwrap().remove("direct_requests");
-        let mut storage = FakePersistence {
-            profiles: Some(serde_json::to_string_pretty(&value).unwrap()),
-            ..FakePersistence::default()
+        let enabled = ExecGrant {
+            enabled: true,
+            policy_revision: 9,
+            changed_at: 7,
+            ..ExecGrant::default()
         };
+        legacy.direct_grants.push(direct_grant(enabled.clone()));
+        legacy.rooms.push(room_with_member(enabled));
 
-        let mut migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-        assert_eq!(migrated.schema_version, SHARE_PROFILE_VERSION);
-        assert!(!migrated.auto_connect);
-        assert!(migrated.direct_requests.is_empty());
+        for version in [3, 4] {
+            let mut value = serde_json::to_value(&legacy).unwrap();
+            value["schema_version"] = serde_json::json!(version);
+            value["default_direct_exports"]["allow_exec"] = serde_json::json!(true);
+            value["rooms"][0]["exports"]["allow_exec"] = serde_json::json!(true);
+            if version == 3 {
+                value.as_object_mut().unwrap().remove("direct_requests");
+            }
+            let mut storage = FakePersistence {
+                profiles: Some(serde_json::to_string_pretty(&value).unwrap()),
+                ..FakePersistence::default()
+            };
 
-        migrated.save_with(&mut storage).unwrap();
-        let persisted: serde_json::Value =
-            serde_json::from_str(storage.profiles.as_deref().unwrap()).unwrap();
-        assert_eq!(persisted["schema_version"], SHARE_PROFILE_VERSION);
-        assert_eq!(persisted["direct_requests"], serde_json::json!([]));
+            let mut migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
+            assert_eq!(migrated.schema_version, SHARE_PROFILE_VERSION);
+            assert!(!migrated.auto_connect);
+            assert!(!migrated.direct_grants[0].exec.enabled);
+            assert!(!migrated.rooms[0].members[0].exec.enabled);
+
+            migrated.save_with(&mut storage).unwrap();
+            let persisted = storage.profiles.as_deref().unwrap();
+            assert!(!persisted.contains("allow_exec"));
+        }
     }
 
     #[test]
-    fn profile_versions_older_than_v3_and_newer_than_v4_fail_closed() {
+    fn profile_versions_older_than_v3_and_newer_than_v6_fail_closed() {
         for version in [2, SHARE_PROFILE_VERSION + 1] {
             let mut value = serde_json::to_value(ShareProfiles::default()).unwrap();
             value["schema_version"] = serde_json::json!(version);
@@ -427,6 +453,45 @@ mod tests {
             };
             let error = ShareProfiles::load_checked_with(None, &mut storage).unwrap_err();
             assert!(error.contains("Nicht unterstuetzte Share-Profilversion"));
+        }
+    }
+
+    fn direct_grant(exec: ExecGrant) -> DirectGrant {
+        DirectGrant {
+            device_id: "device-a".into(),
+            device_name: "Device A".into(),
+            public_key: "key-a".into(),
+            fingerprint: "fingerprint-a".into(),
+            node_id: "node-a".into(),
+            state: DirectGrantState::Accepted,
+            updated_at: 1,
+            exec,
+        }
+    }
+
+    fn room_with_member(exec: ExecGrant) -> RoomProfile {
+        RoomProfile {
+            id: "profile-a".into(),
+            name: "Room A".into(),
+            room_id: "room-a".into(),
+            auto_join: true,
+            last_seen: None,
+            status: ShareStatus::Waiting,
+            members: vec![RoomMember {
+                device_id: "device-b".into(),
+                device_name: "Device B".into(),
+                fingerprint: "fingerprint-b".into(),
+                public_key: "key-b".into(),
+                node_id: "node-b".into(),
+                relay_url: String::new(),
+                candidates: Vec::new(),
+                last_seen: None,
+                status: ShareStatus::Waiting,
+                blocked: false,
+                exec,
+                presence: None,
+            }],
+            exports: ShareExportConfig::default(),
         }
     }
 }

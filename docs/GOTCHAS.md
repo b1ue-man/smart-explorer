@@ -34,6 +34,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   incremental mirror state does not depend on a system SQLite DLL. Keep the GNU C
   toolchain available for release builds, and do not drop `bundled` unless the
   Windows and WSL feed build both prove the replacement path.
+- **Linux Exec talks to systemd through target-specific `zbus`.** Keep `zbus`
+  under the Linux Cargo target section with `default-features = false` and the
+  Rust-only Tokio/blocking API features. The Exec provider calls
+  `StartTransientUnit` directly; replacing it with `systemd-run` would trust a
+  shell/PATH boundary, while moving `zbus` to shared dependencies would burden
+  and risk the Windows GNU build.
 - **cargo-audit quick-xml advisories via plist.** `quick-xml 0.39.2` is currently
   pinned by `plist 1.9.0` through `netdev`/`iroh` and by Wayland build tooling.
   CI explicitly ignores only `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` on the

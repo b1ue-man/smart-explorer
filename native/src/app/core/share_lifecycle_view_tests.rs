@@ -73,7 +73,7 @@ fn outgoing_projection_separates_relay_forwarding_from_peer_receipt() {
 }
 
 #[test]
-fn rejected_incoming_request_leaves_open_inbox_then_becomes_deletable() {
+fn incoming_delete_stays_available_pending_and_waits_for_terminal_history() {
     let requester_key = iroh::SecretKey::from_bytes(&[21; 32]);
     let target_key = iroh::SecretKey::from_bytes(&[22; 32]);
     let request = signed_request(&requester_key, &target_key);
@@ -83,7 +83,7 @@ fn rejected_incoming_request_leaves_open_inbox_then_becomes_deletable() {
         .unwrap();
     let (incoming, _) = request_views(&profiles, 111);
     assert!(incoming[0].can_decide);
-    assert!(!incoming[0].can_delete);
+    assert!(incoming[0].can_delete);
 
     let target = DirectPeerIdentity::from_secret("target", "Target", &target_key);
     let request_receipt = SignedDirectRequestReceipt::sign_with_nonce(

@@ -11,7 +11,8 @@ use super::request_selection::{
 #[command(long_about = "Inspect and decide durable direct access requests.\n\n\
 With no subcommand, this shows the pending incoming inbox and the exact next\n\
 command. `accept` and `reject` need no selector when exactly one request is\n\
-pending. Selectors can be copied from this command's output or completed with\n\
+pending; `show`, `retry`, and `delete` likewise auto-select their sole eligible\n\
+entry. Selectors can be copied from this command's output or completed with\n\
 the shell integration from `se completions <shell>`.")]
 pub(super) struct RequestArgs {
     #[arg(long, global = true, help = "Print machine-readable JSON")]
@@ -31,19 +32,19 @@ enum RequestCommand {
     #[command(about = "Reject a pending incoming request; auto-selects the only one")]
     Reject(DecisionArgs),
     #[command(about = "Retry the pending envelope for the same request ID now")]
-    Retry(RetryArgs),
-    #[command(about = "Delete terminal history after required peer delivery is complete")]
-    Delete(RetryArgs),
+    Retry(SelectionArgs),
+    #[command(about = "Delete a request locally, stop retries, and retain a replay tombstone")]
+    Delete(SelectionArgs),
 }
 
 #[derive(Args)]
 struct ShowArgs {
     #[arg(
         allow_hyphen_values = true,
-        help = "Request UUID, device ID/name, fingerprint, or unambiguous prefix",
+        help = "Optional request UUID, device ID/name, fingerprint, or prefix; omit when only one exists",
         add = ArgValueCandidates::new(crate::cli::completions::request_candidates)
     )]
-    selector: String,
+    selector: Option<String>,
 }
 
 #[derive(Args)]
@@ -64,20 +65,20 @@ struct DecisionArgs {
 }
 
 #[derive(Args)]
-struct RetryArgs {
+struct SelectionArgs {
     #[arg(
         allow_hyphen_values = true,
-        help = "Request selector shown by request list",
+        help = "Optional request selector shown by request list; omit when only one is eligible",
         add = ArgValueCandidates::new(crate::cli::completions::request_candidates)
     )]
-    selector: String,
+    selector: Option<String>,
 }
 
 pub(super) fn run(args: RequestArgs) -> Result<(), String> {
     match args.command {
         None => inbox(args.json),
         Some(RequestCommand::List) => list(args.json),
-        Some(RequestCommand::Show(command)) => show(&command.selector, args.json),
+        Some(RequestCommand::Show(command)) => show(command.selector.as_deref(), args.json),
         Some(RequestCommand::Accept(command)) => decide(
             command,
             crate::share::DirectDecisionKind::Accepted,
@@ -88,8 +89,10 @@ pub(super) fn run(args: RequestArgs) -> Result<(), String> {
             crate::share::DirectDecisionKind::Rejected,
             args.json,
         ),
-        Some(RequestCommand::Retry(command)) => retry(&command.selector, args.json),
-        Some(RequestCommand::Delete(command)) => delete_history(&command.selector, args.json),
+        Some(RequestCommand::Retry(command)) => retry(command.selector.as_deref(), args.json),
+        Some(RequestCommand::Delete(command)) => {
+            delete_history(command.selector.as_deref(), args.json)
+        }
     }
 }
 
@@ -192,9 +195,9 @@ fn list(json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn show(selector: &str, json: bool) -> Result<(), String> {
+fn show(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let entry = select_tracked(&profiles, Some(selector), |_| true, "request")?;
+    let entry = select_tracked(&profiles, selector, |_| true, "request")?;
     lifecycle_output::print_request(entry, &profiles, json);
     Ok(())
 }
@@ -262,13 +265,19 @@ fn decide(
     print_action(&entry, &committed, decision.code(), worker, json)
 }
 
-fn retry(selector: &str, json: bool) -> Result<(), String> {
+fn retry(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let request_id = select_tracked(&profiles, Some(selector), |_| true, "request")?
-        .record
-        .request
-        .request_id
-        .clone();
+    let now = crate::share::core_now_secs();
+    let request_id = select_tracked(
+        &profiles,
+        selector,
+        |entry| !entry.pending_outboxes(now).is_empty(),
+        "retryable request",
+    )?
+    .record
+    .request
+    .request_id
+    .clone();
     let persisted =
         crate::share::retry_direct_request_now(Some(super::default_home()), &request_id)?;
     let worker = worker_refresh();
@@ -280,16 +289,12 @@ fn retry(selector: &str, json: bool) -> Result<(), String> {
     print_action(&entry, &committed, "retry_due_now", worker, json)
 }
 
-fn delete_history(selector: &str, json: bool) -> Result<(), String> {
+fn delete_history(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let entry = select_tracked(&profiles, Some(selector), |_| true, "request")?;
+    let entry = select_tracked(&profiles, selector, |_| true, "request")?;
     let request_id = entry.record.request.request_id.clone();
-    if !entry.removable_from_history(crate::share::core_now_secs()) {
-        return Err(format!(
-            "request cannot be deleted while pending, active, or awaiting peer delivery: {request_id}"
-        ));
-    }
     crate::share::delete_direct_request_history(Some(super::default_home()), &request_id)?;
+    let worker = worker_refresh();
     if json {
         println!(
             "{}",
@@ -297,11 +302,15 @@ fn delete_history(selector: &str, json: bool) -> Result<(), String> {
                 "action": "deleted",
                 "request_id": request_id.as_str(),
                 "persisted": true,
+                "worker_refresh": worker.value(),
             }))
             .map_err(|error| error.to_string())?
         );
     } else {
-        println!("action\tdeleted\trequest_id={request_id}\tpersisted=true");
+        println!(
+            "action\tdeleted\trequest_id={request_id}\tpersisted=true\tworker_refresh={}",
+            worker.state
+        );
     }
     Ok(())
 }

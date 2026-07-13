@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use iroh::endpoint::QuicTransportConfig;
+use iroh::endpoint::{QuicTransportConfig, VarInt};
 
 pub(super) const IROH_CONNECTION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_PATH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const IROH_CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const SIGNAL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 pub(super) const SIGNAL_PONG_TIMEOUT: Duration = Duration::from_secs(40);
 pub(super) const SIGNAL_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -53,6 +54,12 @@ impl SignalMaintenancePolicy {
 
 pub(super) fn iroh_transport_config() -> QuicTransportConfig {
     QuicTransportConfig::builder()
+        // Live idle peers remain open because the transport sends a keepalive
+        // every five seconds. A crashed peer cannot answer those probes and is
+        // therefore reported to an active Exec client within a bounded time.
+        .max_idle_timeout(Some(
+            VarInt::from_u32(IROH_CONNECTION_IDLE_TIMEOUT.as_millis() as u32).into(),
+        ))
         .keep_alive_interval(IROH_CONNECTION_KEEPALIVE_INTERVAL)
         .default_path_keep_alive_interval(IROH_PATH_KEEPALIVE_INTERVAL)
         .build()
@@ -105,6 +112,7 @@ mod tests {
     fn iroh_transport_keepalives_are_explicit_and_nonzero() {
         assert_eq!(IROH_CONNECTION_KEEPALIVE_INTERVAL, Duration::from_secs(5));
         assert_eq!(IROH_PATH_KEEPALIVE_INTERVAL, Duration::from_secs(5));
+        assert_eq!(IROH_CONNECTION_IDLE_TIMEOUT, Duration::from_secs(20));
         assert!(!IROH_CONNECTION_KEEPALIVE_INTERVAL.is_zero());
         assert!(!IROH_PATH_KEEPALIVE_INTERVAL.is_zero());
 

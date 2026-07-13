@@ -2,6 +2,8 @@ use clap::{Args, Subcommand};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[path = "share/exec_status.rs"]
+mod exec_status;
 mod exports;
 #[path = "share/grants.rs"]
 mod grants;
@@ -36,6 +38,8 @@ enum Command {
     Request(requests::RequestArgs),
     #[command(about = "Inspect and revoke direct authorization grants")]
     Grants(grants::GrantsArgs),
+    #[command(about = "Inspect and cancel active or recent remote executions")]
+    Exec(exec_status::ExecStatusArgs),
     #[command(about = "Manage local folders exported to peers")]
     Export(exports::ExportArgs),
     #[command(about = "Create a Share room and print its invite code")]
@@ -86,6 +90,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
         Some(Command::Status(args)) => status::run(args)?,
         Some(Command::Request(args)) => requests::run(args)?,
         Some(Command::Grants(args)) => grants::run(args)?,
+        Some(Command::Exec(args)) => exec_status::run(args)?,
         Some(Command::Export(args)) => exports::run(args)?,
         Some(Command::Room(args)) => match args.command {
             RoomCommand::Create { name } => create_room(&name)?,
@@ -249,6 +254,7 @@ mod tests {
         assert!(
             Cli::try_parse_from(["se", "share", "request", "show", REQUEST_ID, "--json"]).is_ok()
         );
+        assert!(Cli::try_parse_from(["se", "share", "request", "show"]).is_ok());
         assert!(Cli::try_parse_from([
             "se",
             "share",
@@ -262,7 +268,9 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "retry", REQUEST_ID]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share", "request", "retry"]).is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "delete", REQUEST_ID]).is_ok());
+        assert!(Cli::try_parse_from(["se", "share", "request", "delete"]).is_ok());
     }
 
     #[test]
@@ -280,5 +288,25 @@ mod tests {
             "0011",
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn parses_context_free_exec_grant_and_job_commands() {
+        for command in [
+            vec!["se", "share", "grants", "exec"],
+            vec!["se", "share", "grants", "exec", "enable", "--yes"],
+            vec!["se", "share", "grants", "exec", "disable"],
+            vec!["se", "share", "exec"],
+            vec!["se", "share", "exec", "list", "--json"],
+            vec!["se", "share", "exec", "history"],
+            vec!["se", "share", "exec", "cancel"],
+            vec!["se", "share", "exec", "cancel", "abcd"],
+            vec!["se", "share", "exec", "show", REQUEST_ID],
+        ] {
+            assert!(
+                Cli::try_parse_from(command.clone()).is_ok(),
+                "failed to parse {command:?}"
+            );
+        }
     }
 }

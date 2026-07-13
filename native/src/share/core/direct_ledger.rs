@@ -94,6 +94,9 @@ pub enum DirectLedgerError {
     InvalidAttempt,
     InvalidTimestamp,
     LedgerFull,
+    TombstoneFull,
+    ActiveGrantRequiresRevoke,
+    PendingPeerDelivery,
     Protocol(DirectProtocolError),
     Lifecycle(DirectLifecycleError),
 }
@@ -113,6 +116,13 @@ impl fmt::Display for DirectLedgerError {
                 Self::InvalidAttempt => "invalid direct request attempt",
                 Self::InvalidTimestamp => "invalid direct request timestamp",
                 Self::LedgerFull => "direct request ledger is full",
+                Self::TombstoneFull => "direct request deletion tombstone ledger is full",
+                Self::ActiveGrantRequiresRevoke => {
+                    "accepted incoming request cannot be deleted while its authorization is active; revoke the grant first"
+                }
+                Self::PendingPeerDelivery => {
+                    "direct request still has pending peer delivery; wait for the signed receipt before deleting it"
+                }
                 Self::Protocol(_) | Self::Lifecycle(_) => unreachable!(),
             }),
         }

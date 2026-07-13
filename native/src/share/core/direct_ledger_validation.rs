@@ -29,6 +29,7 @@ impl ShareProfiles {
                 .validate_persisted()
                 .map_err(|error| format!("ungueltiger direkter Request {request_id}: {error}"))?;
         }
+        self.validate_direct_request_tombstones()?;
         Ok(())
     }
 }

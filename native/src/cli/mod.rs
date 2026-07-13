@@ -1,6 +1,7 @@
 mod completions;
 mod connections;
 mod doctor;
+mod exec;
 mod ops;
 #[cfg(test)]
 mod ops_safety_tests;
@@ -90,8 +91,8 @@ enum Command {
     Mkdir(PathArg),
     #[command(about = "Search names below a target")]
     Search(SearchArgs),
-    #[command(about = "Unavailable: remote execution is disabled in this release")]
-    Exec(ExecArgs),
+    #[command(about = "Run an unrestricted command on an explicitly authorized Share peer")]
+    Exec(exec::ExecArgs),
 }
 
 #[derive(Args)]
@@ -155,35 +156,6 @@ struct SearchArgs {
     max_results: u64,
     #[arg(long, help = "Return matching directories instead of files")]
     dirs: bool,
-}
-
-#[derive(Args)]
-struct ExecArgs {
-    #[arg(help = "Share peer endpoint, such as share://direct/id")]
-    target: String,
-    #[arg(long, help = "Remote working directory")]
-    cwd: Option<String>,
-    #[arg(long, default_value_t = 30, help = "Remote timeout in seconds")]
-    timeout: u64,
-    #[arg(
-        long,
-        default_value_t = 1024 * 1024,
-        help = "Maximum combined stdout and stderr bytes returned"
-    )]
-    max_output: u64,
-    #[arg(
-        long,
-        help = "Keep the remote exit status even when returned output was truncated"
-    )]
-    allow_truncated_output: bool,
-    #[arg(long, help = "Run one shell command under the full-code permission")]
-    shell: Option<String>,
-    #[arg(
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-        help = "Program and arguments after --"
-    )]
-    argv: Vec<String>,
 }
 
 pub fn run() -> i32 {
@@ -250,21 +222,8 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             ops::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
             Ok(0)
         }
-        Command::Exec(args) => exec(args),
+        Command::Exec(args) => exec::run(args),
     }
-}
-
-fn exec(args: ExecArgs) -> Result<i32, String> {
-    let ExecArgs {
-        target: _,
-        cwd: _,
-        timeout: _,
-        max_output: _,
-        allow_truncated_output: _,
-        shell: _,
-        argv: _,
-    } = args;
-    Err("remote execution is unsupported in this release".to_string())
 }
 
 #[cfg(test)]
@@ -278,7 +237,7 @@ mod tests {
         let cli = Cli::parse_from(["se", "exec", "share://direct/c", "--", "echo", "-n", "hi"]);
         match cli.command {
             super::Command::Exec(args) => {
-                assert_eq!(args.target, "share://direct/c");
+                assert_eq!(args.target.as_deref(), Some("share://direct/c"));
                 assert_eq!(args.argv, ["echo", "-n", "hi"]);
             }
             _ => panic!("wrong command"),
@@ -319,31 +278,23 @@ mod tests {
 
     #[test]
     fn parses_shell_exec_without_argv() {
-        let cli = Cli::parse_from([
-            "se",
-            "exec",
-            "share://direct/c",
-            "--allow-truncated-output",
-            "--shell",
-            "echo hi",
-        ]);
+        let cli = Cli::parse_from(["se", "exec", "share://direct/c", "--shell", "echo hi"]);
         match cli.command {
             super::Command::Exec(args) => {
                 assert_eq!(args.shell.as_deref(), Some("echo hi"));
                 assert!(args.argv.is_empty());
-                assert!(args.allow_truncated_output);
             }
             _ => panic!("wrong command"),
         }
     }
 
     #[test]
-    fn exec_fails_before_contacting_the_worker() {
-        let cli = Cli::parse_from(["se", "exec", "share://direct/c", "--", "echo", "hello"]);
-        assert_eq!(
-            super::run_inner(cli).unwrap_err(),
-            "remote execution is unsupported in this release"
-        );
+    fn exec_accepts_context_free_form_for_runtime_selection() {
+        let cli = Cli::parse_from(["se", "exec", "--", "echo", "hello"]);
+        match cli.command {
+            super::Command::Exec(args) => assert!(args.target.is_none()),
+            _ => panic!("wrong command"),
+        }
     }
 
     #[test]
@@ -376,5 +327,48 @@ mod tests {
         assert!(help.contains("@label:/path"));
         assert!(help.contains("se connections add-peer"));
         assert!(help.contains("share://direct/id/path"));
+    }
+
+    #[test]
+    fn help_exposes_exec_as_available_and_explains_context_free_discovery() {
+        let top = Cli::command().render_long_help().to_string();
+        assert!(top.contains("Run an unrestricted command"));
+        assert!(!top
+            .to_ascii_lowercase()
+            .contains("remote execution is disabled"));
+
+        let exec = nested_help(&["exec"]);
+        assert!(exec.contains("unrestricted shell authority"));
+        assert!(exec.contains("target may be omitted"));
+        assert!(exec.contains("--shell"));
+        assert!(exec.contains("--timeout"));
+
+        let requests = nested_help(&["share", "request"]);
+        for command in ["list", "show", "accept", "reject", "delete"] {
+            assert!(
+                requests.contains(command),
+                "missing {command} in {requests}"
+            );
+        }
+
+        let grants = nested_help(&["share", "grants", "exec"]);
+        assert!(grants.contains("enable"));
+        assert!(grants.contains("disable"));
+
+        let jobs = nested_help(&["share", "exec"]);
+        for command in ["list", "show", "cancel", "history"] {
+            assert!(jobs.contains(command), "missing {command} in {jobs}");
+        }
+    }
+
+    fn nested_help(path: &[&str]) -> String {
+        let mut command = Cli::command();
+        for name in path {
+            command = command
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("missing command {name}"))
+                .clone();
+        }
+        command.render_long_help().to_string()
     }
 }

@@ -102,7 +102,9 @@ pub(super) fn request_views(
                 && entry.record.decision.state == DirectDecisionState::Pending
                 && entry.record.request.expires_at >= now,
             can_retry: !entry.pending_outboxes(now).is_empty(),
-            can_delete: entry.removable_from_history(now),
+            can_delete: entry.direction == DirectRequestDirection::Outgoing
+                || entry.record.decision.state == DirectDecisionState::Pending
+                || entry.removable_from_history(now),
         };
         match entry.direction {
             DirectRequestDirection::Incoming => incoming.push(view),

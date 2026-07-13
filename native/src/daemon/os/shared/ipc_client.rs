@@ -9,6 +9,10 @@ use super::ipc_protocol::{
 };
 use super::ipc_storage::{read_ipc_addr, read_ipc_generation, read_token};
 
+#[path = "ipc_exec_grant_client.rs"]
+mod exec_grant_client;
+pub(crate) use exec_grant_client::mutate_exec_grant;
+
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(25);
 

@@ -175,17 +175,9 @@ pub fn delete_direct_request_history(
 ) -> Result<(), String> {
     let now = super::core::now_secs();
     ShareProfiles::mutate_persisted(default_home, |profiles| {
-        let entry = profiles
-            .direct_request(request_id)
-            .ok_or_else(|| format!("direct request not found: {request_id}"))?;
-        if !entry.removable_from_history(now) {
-            return Err(format!(
-                "direct request cannot be deleted while pending, active, or awaiting peer delivery: {request_id}"
-            ));
-        }
         profiles
-            .direct_requests
-            .retain(|entry| entry.record.request.request_id != *request_id);
+            .delete_direct_request_locally(request_id, now)
+            .map_err(|error| error.to_string())?;
         Ok(())
     })?;
     Ok(())

@@ -112,6 +112,10 @@ mod remote_open;
 mod scanning;
 #[path = "core/share.rs"]
 mod share;
+#[path = "core/share_exec_jobs_ui.rs"]
+mod share_exec_jobs_ui;
+#[path = "core/share_exec_ui.rs"]
+mod share_exec_ui;
 #[path = "core/shell_toolbar.rs"]
 mod shell_toolbar;
 #[path = "core/shutdown.rs"]

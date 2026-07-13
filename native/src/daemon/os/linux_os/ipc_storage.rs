@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 const IPC_ADDR_FILE: &str = "daemon.ipc";
 const IPC_GENERATION_FILE: &str = "daemon.generation";
+const EXEC_JOURNAL_FILE: &str = "exec-grants.journal";
+const EXEC_JOURNAL_NAME: &[u8] = b"exec-grants.journal\0";
 const SYNC_DIRECTORY: &[u8] = b"sync\0";
 const TOKEN_NAME: &[u8] = b"daemon.token\0";
 const APP_DIRECTORY_MODE: u32 = 0o700;
@@ -56,6 +58,57 @@ pub(super) fn read_ipc_generation() -> Option<String> {
     let generation = generation.trim();
     (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| generation.to_string())
+}
+
+pub(super) fn exec_journal_path() -> io::Result<PathBuf> {
+    secure_sync_directory()?;
+    Ok(app_data_path().join("sync").join(EXEC_JOURNAL_FILE))
+}
+
+pub(super) fn open_exec_journal() -> io::Result<File> {
+    let directory = secure_sync_directory()?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            EXEC_JOURNAL_NAME.as_ptr().cast(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    validate_exec_journal_file(&file)?;
+    Ok(file)
+}
+
+pub(super) fn secure_exec_journal_temp(file: &File) -> io::Result<()> {
+    file.set_permissions(std::fs::Permissions::from_mode(TOKEN_MODE))?;
+    validate_exec_journal_file(file).map(|_| ())
+}
+
+pub(super) fn sync_exec_journal_directory() -> io::Result<()> {
+    secure_sync_directory()?.sync_all()
+}
+
+pub(super) fn commit_exec_journal_temp(source: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::rename(source, destination)?;
+    sync_exec_journal_directory()
+}
+
+fn validate_exec_journal_file(file: &File) -> io::Result<std::fs::Metadata> {
+    let metadata = file.metadata()?;
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_file()
+        || metadata.uid() != uid
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o7777 != TOKEN_MODE
+    {
+        return Err(permission_denied(
+            "Exec grant journal must be a single-link, user-owned mode 0600 regular file",
+        ));
+    }
+    Ok(metadata)
 }
 
 pub(super) fn load_or_create_token() -> io::Result<String> {
@@ -266,7 +319,10 @@ fn permission_denied(message: impl Into<String>) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_or_create_token_in, read_token_in, secure_sync_directory_in};
+    use super::{
+        load_or_create_token_in, read_token_in, secure_exec_journal_temp, secure_sync_directory_in,
+        validate_exec_journal_file,
+    };
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     fn app_directory() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -352,5 +408,34 @@ mod tests {
 
         assert!(load_or_create_token_in(&app).is_err());
         assert_eq!(std::fs::read_to_string(token).unwrap(), "short");
+    }
+
+    #[test]
+    fn exec_journal_temp_is_owner_only_and_revalidated() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("journal");
+        let file = std::fs::File::create(path).unwrap();
+        std::fs::set_permissions(
+            root.path().join("journal"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        secure_exec_journal_temp(&file).unwrap();
+        assert_eq!(
+            file.metadata().unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn hard_linked_exec_journal_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("journal");
+        let file = std::fs::File::create(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::hard_link(path, root.path().join("other-link")).unwrap();
+
+        assert!(validate_exec_journal_file(&file).is_err());
     }
 }

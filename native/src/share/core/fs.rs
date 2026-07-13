@@ -22,8 +22,6 @@ pub struct SharedRoot {
 pub struct ShareExportConfig {
     pub roots: Vec<SharedRoot>,
     pub include_connections: bool,
-    #[serde(default)]
-    pub allow_exec: bool,
 }
 
 #[derive(Clone)]

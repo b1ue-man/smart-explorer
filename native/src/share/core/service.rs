@@ -10,8 +10,8 @@ use super::core::eio;
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
 use super::types::{
-    PeerEndpoint, PeerOpenTarget, PendingShareCmd, ShareAuthState, ShareCmd, ShareEvent,
-    ShareScope, ShareStatus,
+    ExecGrantTarget, PeerEndpoint, PeerOpenTarget, PendingShareCmd, ShareAuthState, ShareCmd,
+    ShareCmdResult, ShareEvent, ShareScope, ShareStatus,
 };
 
 pub struct ShareService {
@@ -27,7 +27,7 @@ pub struct ShareService {
 }
 
 impl ShareService {
-    pub fn cmd(&self, c: ShareCmd) -> Result<(), String> {
+    pub fn cmd(&self, c: ShareCmd) -> Result<ShareCmdResult, String> {
         const ACK_TIMEOUT: Duration = Duration::from_secs(5);
         let is_stop = matches!(&c, ShareCmd::Stop);
         let (acknowledge, acknowledged) = bounded(1);
@@ -52,6 +52,43 @@ impl ShareService {
         result
     }
 
+    pub fn enable_exec(
+        &self,
+        target: ExecGrantTarget,
+    ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
+        self.exec_grant_command(ShareCmd::EnableExec { target })
+    }
+
+    pub fn disable_exec(
+        &self,
+        target: ExecGrantTarget,
+    ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
+        self.exec_grant_command(ShareCmd::DisableExec { target })
+    }
+
+    pub fn apply_persisted_exec_grant(
+        &self,
+        target: ExecGrantTarget,
+        principal: super::exec_types::ExecPrincipal,
+        policy: super::exec_policy::ExecGrant,
+    ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
+        self.exec_grant_command(ShareCmd::ApplyExecGrant {
+            target,
+            principal,
+            policy,
+        })
+    }
+
+    fn exec_grant_command(
+        &self,
+        command: ShareCmd,
+    ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
+        match self.cmd(command)? {
+            ShareCmdResult::ExecGrant(mutation) => Ok(*mutation),
+            ShareCmdResult::Applied => Err("Share worker returned no Exec grant mutation".into()),
+        }
+    }
+
     pub fn probe_backend_for_target(
         &self,
         target: &PeerOpenTarget,
@@ -74,12 +111,39 @@ impl ShareService {
         be.exec(req).map_err(|e| e.to_string())
     }
 
+    pub(crate) fn start_exec_for_target(
+        &self,
+        target: &PeerOpenTarget,
+        start: super::exec_types::ExecStart,
+    ) -> Result<super::exec_session::ShareExecSession, String> {
+        let endpoint = self.endpoint_for_target(target)?;
+        self.iroh
+            .start_exec(endpoint, self.identity.clone(), start)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn relay_url(&self) -> String {
         self.iroh.relay_url().to_string()
     }
 
     pub fn peer_candidates(&self) -> Vec<String> {
         self.iroh.candidates()
+    }
+
+    pub(crate) fn exec_active_views(&self) -> Vec<super::exec_types::ExecJobView> {
+        self.iroh.exec_registry().active_views()
+    }
+
+    pub(crate) fn exec_history(&self) -> Vec<super::exec_types::ExecJobView> {
+        self.iroh.exec_registry().redacted_history()
+    }
+
+    pub(crate) fn cancel_exec(&self, id: &super::exec_types::ExecId, peer_device_id: &str) -> bool {
+        self.iroh.exec_registry().cancel_exact(
+            id,
+            peer_device_id,
+            super::exec_registry::ExecCancelReason::User,
+        )
     }
 
     fn endpoint_for_target(&self, target: &PeerOpenTarget) -> Result<PeerEndpoint, String> {
@@ -177,11 +241,14 @@ impl ShareService {
             direct_grants: profiles.direct_grants.clone(),
             rooms: profiles.rooms.clone(),
             direct_requests: profiles.direct_requests.clone(),
+            direct_request_tombstones: profiles.direct_request_tombstones.clone(),
             seen_nonces: HashSet::new(),
             direct_online: true,
+            authorization_epoch: 0,
         }));
 
         let iroh = ShareIrohNode::start(&server, &identity, auth.clone(), ev_tx.clone())?;
+        super::exec_grant_runtime::seed_registry(&auth, iroh.exec_registry())?;
         let _ = ev_tx.send(ShareEvent::Status(format!(
             "Iroh bereit: node={}, relay={}",
             identity.node_id,
@@ -244,6 +311,9 @@ impl Clone for ShareService {
 impl Drop for ShareService {
     fn drop(&mut self) {
         if self.owner {
+            self.iroh
+                .exec_registry()
+                .cancel_all(super::exec_registry::ExecCancelReason::WorkerStopping);
             self.stopped.store(true, Ordering::Relaxed);
         }
     }

@@ -8,6 +8,8 @@ use super::state::log;
 
 #[path = "ipc_host_direct_events.rs"]
 pub(super) mod direct_events;
+#[path = "exec_grant_journal.rs"]
+pub(super) mod exec_grant_journal;
 #[path = "ipc_host_profile_merge.rs"]
 pub(super) mod profile_merge;
 
@@ -18,6 +20,8 @@ pub(crate) struct ShareHost {
     pub(super) state: Arc<Mutex<ShareHostState>>,
     generation: Arc<str>,
     initialized: Arc<AtomicBool>,
+    pub(super) exec_state: Arc<super::exec_state::ExecState>,
+    exec_grant_lock: Arc<Mutex<()>>,
 }
 
 pub(super) struct ShareHostState {
@@ -40,6 +44,7 @@ pub(super) struct ShareHostState {
     /// durably rebased. Keeping it makes consumed service events retryable.
     pub(super) pending_profiles_base: Option<crate::share::ShareProfiles>,
     pub(super) pending_direct_events: Vec<crate::share::DirectSignalEvent>,
+    pub(super) exec_retry: Option<exec_grant_journal::ExecGrantPersistResult>,
 }
 
 impl ShareHost {
@@ -64,11 +69,14 @@ impl ShareHost {
             pending_direct_requests: Vec::new(),
             pending_profiles_base: None,
             pending_direct_events: Vec::new(),
+            exec_retry: None,
         };
         ShareHost {
             state: Arc::new(Mutex::new(state)),
             generation: Arc::from(generation),
             initialized: Arc::new(AtomicBool::new(false)),
+            exec_state: Arc::new(super::exec_state::ExecState::new()),
+            exec_grant_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -99,6 +107,14 @@ impl ShareHost {
     }
 
     pub(crate) fn reload_now(&self) -> Result<bool, String> {
+        let _exclusive = self
+            .exec_grant_lock
+            .lock()
+            .map_err(|_| "Exec-Grant mutation lock is poisoned".to_string())?;
+        self.reload_now_locked()
+    }
+
+    pub(super) fn reload_now_locked(&self) -> Result<bool, String> {
         self.drain_events();
         let mut state = self
             .state
@@ -129,8 +145,17 @@ impl ShareHost {
                 return Err(format!("Share-Identitaet nicht verfuegbar: {error}"));
             }
         }
+        let pending = exec_grant_journal::load_pending().map_err(|error| {
+            exec_grant_journal::mask_all(&mut state.profiles);
+            state.profiles_error = Some(error.clone());
+            let _ = stop_service_locked(&mut state);
+            format!("Exec-Grant Recovery nicht verfuegbar: {error}")
+        })?;
         match crate::share::ShareProfiles::load_checked(Some(default_home())) {
-            Ok(profiles) => {
+            Ok(mut profiles) => {
+                if let Some(entry) = &pending {
+                    exec_grant_journal::prepare_pending_runtime(&mut state, &mut profiles, entry)?;
+                }
                 state.profiles = profiles;
                 state.profiles_error = None;
             }
@@ -141,6 +166,11 @@ impl ShareHost {
             }
         }
         configure_or_restart_locked(&mut state)?;
+        if let Some(entry) = &pending {
+            exec_grant_journal::recover_and_record(&mut state, entry);
+        } else {
+            state.exec_retry = None;
+        }
         Ok(state.service.is_some())
     }
 
@@ -156,6 +186,14 @@ impl ShareHost {
     }
 
     pub(super) fn send_command(&self, cmd: crate::share::ShareCmd) -> Result<(), String> {
+        if matches!(
+            &cmd,
+            crate::share::ShareCmd::EnableExec { .. }
+                | crate::share::ShareCmd::DisableExec { .. }
+                | crate::share::ShareCmd::ApplyExecGrant { .. }
+        ) {
+            return Err("Exec-Grant changes require the durable daemon mutation IPC".into());
+        }
         let answer_device = match &cmd {
             crate::share::ShareCmd::AnswerDirectRequest { presence, .. } => {
                 Some(presence.device_id.clone())
@@ -194,7 +232,7 @@ impl ShareHost {
             state.service.clone()
         }
         .ok_or_else(|| "Share-Worker ist nicht aktiv".to_string())?;
-        service.cmd(cmd)?;
+        service.cmd(cmd).map(|_| ())?;
         if let Some(device_id) = answer_device {
             let mut state = self
                 .state
@@ -235,6 +273,7 @@ impl ShareHost {
             events: std::mem::take(&mut state.ui_events),
             profiles: state.profiles.clone(),
             profile_revision: state.profiles.storage_revision.clone(),
+            exec_grant_retry: state.exec_retry.clone(),
             pending_direct_requests: state.pending_direct_requests.clone(),
             running,
             connected: state.signal_connected,
@@ -380,9 +419,12 @@ pub(super) fn configure_service(
         rooms: profiles.rooms.clone(),
         default_direct_exports: profiles.default_direct_exports.clone(),
     })?;
-    service.cmd(crate::share::ShareCmd::SyncDirectRequests {
-        direct_requests: profiles.direct_requests.clone(),
-    })
+    service
+        .cmd(crate::share::ShareCmd::SyncDirectRequests {
+            direct_requests: profiles.direct_requests.clone(),
+            direct_request_tombstones: profiles.direct_request_tombstones.clone(),
+        })
+        .map(|_| ())
 }
 
 fn load_share_server() -> Result<String, String> {

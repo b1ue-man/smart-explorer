@@ -3,6 +3,9 @@ use clap_complete::ArgValueCandidates;
 
 use super::lifecycle_output;
 
+#[path = "grants_exec.rs"]
+mod grants_exec;
+
 #[derive(Args)]
 #[command(long_about = "Inspect and revoke direct authorization grants.\n\n\
 With no subcommand, this lists every grant and its active/inactive state.\n\
@@ -20,6 +23,8 @@ enum GrantsCommand {
     List,
     #[command(about = "Revoke an authorization; auto-selects the only active grant")]
     Revoke(RevokeArgs),
+    #[command(about = "Inspect, enable, or disable unrestricted per-device Exec grants")]
+    Exec(grants_exec::ExecGrantArgs),
 }
 
 #[derive(Args)]
@@ -40,6 +45,7 @@ pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
     match args.command {
         None | Some(GrantsCommand::List) => list(args.json),
         Some(GrantsCommand::Revoke(command)) => revoke(command, args.json),
+        Some(GrantsCommand::Exec(command)) => grants_exec::run(command, args.json),
     }
 }
 
@@ -68,6 +74,11 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                     },
                     "active": grant.state == crate::share::DirectGrantState::Accepted,
                 },
+                "exec": {
+                    "enabled": grant.exec.enabled,
+                    "policy_revision": grant.exec.policy_revision,
+                    "changed_at": grant.exec.changed_at,
+                },
                 "connectivity": {"state": "unknown", "label": "Not tracked per grant"},
                 "tracked": !requests.is_empty(),
                 "requests": requests,
@@ -86,7 +97,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(",");
         lines.push(format!(
-            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\tconnectivity=unknown\trequest_ids={}",
+            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}",
             clean(&grant.device_id),
             clean(&grant.device_name),
             clean(&grant.fingerprint),
@@ -97,6 +108,8 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             } else {
                 "inactive"
             },
+            if grant.exec.enabled { "enabled" } else { "disabled" },
+            grant.exec.policy_revision,
             request_ids,
         ));
         for entry in related {
@@ -225,6 +238,7 @@ fn revoke_legacy(grant: &crate::share::DirectGrant, json: bool) -> Result<(), St
                 .ok_or_else(|| format!("legacy grant disappeared: {device_id}"))?;
             current.state = crate::share::DirectGrantState::Ignored;
             current.updated_at = now;
+            current.exec.disable_without_decision(now);
             Ok(())
         })?;
     let persisted = committed

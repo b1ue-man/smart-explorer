@@ -200,7 +200,7 @@ mod tests {
                     Ok(profile)
                 },
                 |profile| {
-                    profile.default_direct_exports.allow_exec = true;
+                    profile.default_direct_exports.include_connections = true;
                     Ok(())
                 },
                 |profile| right_store.commit(profile),
@@ -212,7 +212,7 @@ mod tests {
         right.join().unwrap();
         let committed = store.snapshot();
         assert!(!committed.auto_connect);
-        assert!(committed.default_direct_exports.allow_exec);
+        assert!(committed.default_direct_exports.include_connections);
         assert!(store.saves.load(Ordering::SeqCst) >= 3);
     }
 

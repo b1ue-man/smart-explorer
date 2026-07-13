@@ -52,10 +52,18 @@ Datenträger. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
-Execution ist bis zu einer plattformuebergreifend sicheren Prozessbaum-Kapselung
-deaktiviert; `se exec share://... -- program args` bricht deshalb sicher ab.
-Programm- und Shell-Ausfuehrung teilen sich bewusst eine einzige Berechtigung
-fuer vollstaendige Remote-Codeausfuehrung.
+Execution ist ab 0.5.132 als separate, standardmaessig deaktivierte
+Geraeteberechtigung verfuegbar. `se share grants exec` zeigt die exakten
+Identitaeten, `enable --yes` erlaubt einem Geraet die vollstaendige Shell-Autoritaet
+des Smart-Explorer-Benutzers und `disable` entzieht sie wieder und beendet dessen
+aktive Prozessbaeume. `se exec -- PROGRAM ARGS...` waehlt den einzigen bereiten
+Peer automatisch; alternativ funktionieren sichtbarer Name/Endpunkt und
+`--shell COMMAND`. stdin/stdout/stderr werden binaer gestreamt, Exitcodes bleiben
+erhalten, `se share exec` zeigt aktive/letzte Jobs und kann sie abbrechen. Windows
+kapselt jeden Job in einem Kill-on-close Job Object, Linux in einer transienten
+systemd-cgroup; ohne diesen Plattformprovider startet kein Payload. Es gibt
+bewusst keine Command-, Pfad- oder Shell-Filter: die Freigabe ist volle
+Remote-Codeausfuehrung als der laufende Benutzer.
 Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
 example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
@@ -74,13 +82,20 @@ Autorisierungsstatus. Ist genau eine Anfrage offen, akzeptiert oder verwirft
 `se share request accept` beziehungsweise `reject` sie ohne versteckte IDs oder
 erneute Fingerprint-Eingabe; bei mehreren Anfragen nennt die Inbox direkt die
 gueltigen Befehle. `list`, `show`, `retry` und `delete` verwalten den
-vollstaendigen Verlauf, wobei `delete` erst nach Abschluss notwendiger
-Peer-Zustellungen freigegeben wird. `se share grants` zeigt ohne Unterbefehl
+vollstaendigen Verlauf. `delete` entfernt auch eine offene eingehende oder
+ausgehende Anfrage lokal, stoppt ihre Retries und behaelt einen kleinen
+dauerhaften Replay-Tombstone; ein spaetes Accept einer geloeschten ausgehenden
+Anfrage erzeugt dadurch keine Autoritaet. Das Loeschen abgeschlossener Historie
+widerruft keinen unabhaengigen Grant. Eine angenommene eingehende Anfrage bleibt
+solange sichtbar, wie sie den aktiven Grant oder dessen noch unbestaetigten
+signierten Widerruf traegt; danach kann auch sie geloescht werden. `show`,
+`retry` und `delete` waehlen wie die Entscheidungsbefehle den einzigen passenden
+Eintrag automatisch. `se share grants` zeigt ohne Unterbefehl
 aktive und inaktive Autorisierungen; `se share grants revoke` waehlt die einzige
 aktive Freigabe automatisch. In der GUI trennt **Teilen** offene Anfragen vom
-eingeklappten Verlauf. **Loeschen / ablehnen** entfernt eine offene Anfrage aus
-der Inbox und benachrichtigt den Peer; abgeschlossener Verlauf wird loeschbar,
-sobald die signierte Zustellung beendet ist.
+eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koennen
+dort ebenfalls lokal geloescht werden; **Ablehnen** und **Widerrufen** bleiben
+die expliziten signierten Peer-Entscheidungen.
 
 `se connections` listet ohne Unterbefehl alle Ziele. Jede Share-Zeile nennt
 explizit `selector=<id>`; `remove-peer` akzeptiert genau diese ID, den ebenfalls
@@ -138,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.131.exe`](release-native/Smart%20Explorer%20Setup%200.5.131.exe)
+1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.132.exe`](release-native/Smart%20Explorer%20Setup%200.5.132.exe)
    (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer

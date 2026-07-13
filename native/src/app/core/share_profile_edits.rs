@@ -98,6 +98,11 @@ fn merge_room(latest: &mut RoomProfile, before: &RoomProfile, edited: &RoomProfi
         };
         if edited_member.blocked != before_member.blocked {
             latest_member.blocked = edited_member.blocked;
+            if edited_member.blocked {
+                latest_member
+                    .exec
+                    .disable_without_decision(crate::share::core_now_secs());
+            }
         }
         if before_member.presence.is_some() && edited_member.presence.is_none() {
             latest_member.presence = None;

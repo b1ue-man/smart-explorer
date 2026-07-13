@@ -23,6 +23,10 @@ mod backend_transfer;
 mod backend_tree_send;
 #[path = "os/shared/backend_walk.rs"]
 mod backend_walk;
+#[path = "os/shared/exec_ipc.rs"]
+mod exec_ipc;
+#[path = "os/shared/exec_state.rs"]
+mod exec_state;
 #[path = "os/shared/handoff.rs"]
 mod handoff;
 #[path = "os/shared/ipc.rs"]
@@ -64,6 +68,14 @@ mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
 
+pub use exec_ipc::{
+    connect as connect_exec, ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession,
+};
+pub use exec_state::{
+    cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
+    ExecJobsSnapshot,
+};
+pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
     refresh_share_worker_checked, request_daemon_replacement, send_share_command,

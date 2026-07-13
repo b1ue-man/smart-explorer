@@ -19,6 +19,9 @@ pub struct ShareWorkerSnapshot {
     pub profiles: crate::share::ShareProfiles,
     #[serde(default)]
     pub(crate) profile_revision: crate::share::ProfileRevision,
+    #[serde(default)]
+    pub(crate) exec_grant_retry:
+        Option<super::ipc_host::exec_grant_journal::ExecGrantPersistResult>,
     pub pending_direct_requests: Vec<crate::share::PeerPresence>,
     pub running: bool,
     #[serde(default)]
@@ -43,6 +46,11 @@ pub(super) enum IpcRequest {
         token: String,
         cmd: crate::share::ShareCmd,
     },
+    MutateExecGrant {
+        token: String,
+        target: crate::share::ExecGrantTarget,
+        enabled: bool,
+    },
     DrainShareEvents {
         token: String,
     },
@@ -55,6 +63,18 @@ pub(super) enum IpcRequest {
         target: crate::share::PeerOpenTarget,
         req: crate::share::ExecRequest,
     },
+    ExecStream {
+        token: String,
+        target: crate::share::PeerOpenTarget,
+        start: crate::share::ExecStart,
+    },
+    ExecJobs {
+        token: String,
+    },
+    CancelExec {
+        token: String,
+        target: super::exec_state::ExecCancelTarget,
+    },
 }
 
 impl IpcRequest {
@@ -63,9 +83,13 @@ impl IpcRequest {
             Self::Ping { token }
             | Self::RefreshShare { token }
             | Self::ShareCommand { token, .. }
+            | Self::MutateExecGrant { token, .. }
             | Self::DrainShareEvents { token }
             | Self::OpenShare { token, .. }
-            | Self::ExecShare { token, .. } => token,
+            | Self::ExecShare { token, .. }
+            | Self::ExecStream { token, .. }
+            | Self::ExecJobs { token }
+            | Self::CancelExec { token, .. } => token,
         }
     }
 }
@@ -94,6 +118,18 @@ pub(super) enum IpcResponse {
     },
     ExecResult {
         result: crate::share::ExecResult,
+    },
+    ExecGrantMutation {
+        result: super::ipc_host::exec_grant_journal::ExecGrantPersistResult,
+    },
+    ExecReady {
+        exec_id: crate::share::ExecId,
+    },
+    ExecJobs {
+        snapshot: super::exec_state::ExecJobsSnapshot,
+    },
+    ExecCancelled {
+        found: bool,
     },
     Err {
         msg: String,
@@ -347,6 +383,61 @@ mod tests {
                 assert_eq!(result.stdout, b"hi\n");
                 assert_eq!(result.exit_code, Some(0));
                 assert!(!result.timed_out);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exec_grant_ipc_reports_durable_and_runtime_state() {
+        use super::super::ipc_host::exec_grant_journal::{
+            ExecGrantPersistResult, ExecGrantRetryState,
+        };
+
+        let target = crate::share::ExecGrantTarget::Direct {
+            device_id: "device-a".into(),
+            public_key: "key-a".into(),
+            fingerprint: "fingerprint-a".into(),
+            node_id: "key-a".into(),
+        };
+        let request = IpcRequest::MutateExecGrant {
+            token: "token".into(),
+            target: target.clone(),
+            enabled: true,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        match serde_json::from_str::<IpcRequest>(&json).unwrap() {
+            IpcRequest::MutateExecGrant {
+                token,
+                target: decoded,
+                enabled,
+            } => {
+                assert_eq!(token, "token");
+                assert_eq!(decoded, target);
+                assert!(enabled);
+            }
+            _ => panic!("wrong request"),
+        }
+
+        let response = IpcResponse::ExecGrantMutation {
+            result: ExecGrantPersistResult {
+                operation_id: "01".repeat(16),
+                target,
+                requested_enabled: true,
+                persisted: true,
+                applied: false,
+                revision: 7,
+                retry_state: ExecGrantRetryState::PendingApply,
+                error: Some("retry".into()),
+            },
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        match serde_json::from_str::<IpcResponse>(&json).unwrap() {
+            IpcResponse::ExecGrantMutation { result } => {
+                assert!(result.persisted);
+                assert!(!result.applied);
+                assert_eq!(result.revision, 7);
+                assert_eq!(result.retry_state, ExecGrantRetryState::PendingApply);
             }
             other => panic!("unexpected response: {other:?}"),
         }

@@ -6,8 +6,11 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream, VarInt};
 use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::core::{eio, hmac_proof, random_token};
+use super::exec_protocol::EXEC_ALPN;
+use super::exec_registry::{ExecRegistry, ExecRegistryLimits};
 use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
@@ -20,6 +23,7 @@ use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 use super::wire::{Ctrl, FsResponse, PeerHello};
 
 const ALPN: &[u8] = b"smart-explorer/share-fs/3";
+const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
 
 pub(crate) struct ShareIrohNode {
     rt: Arc<tokio::runtime::Runtime>,
@@ -31,6 +35,8 @@ pub(crate) struct ShareIrohNode {
     incoming_sessions: Mutex<HashMap<u64, Connection>>,
     next_incoming_session: AtomicU64,
     accept_errors: Mutex<HashMap<String, (Instant, u32)>>,
+    exec_registry: Arc<ExecRegistry>,
+    handshake_slots: Arc<Semaphore>,
     relay_url: String,
 }
 
@@ -57,7 +63,7 @@ impl ShareIrohNode {
         let endpoint = rt.block_on(async {
             Endpoint::builder(presets::Minimal)
                 .secret_key(identity.iroh_secret.clone())
-                .alpns(vec![ALPN.to_vec()])
+                .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec()])
                 .relay_mode(relay_mode)
                 .transport_config(iroh_transport_config())
                 .bind()
@@ -74,6 +80,8 @@ impl ShareIrohNode {
             incoming_sessions: Mutex::new(HashMap::new()),
             next_incoming_session: AtomicU64::new(0),
             accept_errors: Mutex::new(HashMap::new()),
+            exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
+            handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             relay_url,
         });
         node.spawn_accept_loop();
@@ -94,6 +102,10 @@ impl ShareIrohNode {
 
     pub(super) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
         self.rt.block_on(future)
+    }
+
+    pub(crate) fn exec_registry(&self) -> &Arc<ExecRegistry> {
+        &self.exec_registry
     }
 
     pub(super) fn track_incoming(
@@ -306,16 +318,53 @@ impl ShareIrohNode {
         }))
     }
 
+    pub(super) fn connect_exec(&self, endpoint: &PeerEndpoint) -> io::Result<Connection> {
+        if let Some(expected) = endpoint.expected_node_id.as_deref() {
+            if !expected.trim().is_empty() && expected != endpoint.presence.node_id {
+                return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
+            }
+        }
+        let addr = endpoint_addr(&endpoint.presence)?;
+        self.block_on(io_deadline::run("peer exec connection", async {
+            self.endpoint
+                .connect(addr, EXEC_ALPN)
+                .await
+                .map_err(io_deadline::disconnected)
+        }))
+    }
+
+    pub(super) fn start_exec(
+        self: &Arc<Self>,
+        endpoint: PeerEndpoint,
+        identity: ShareIdentity,
+        start: super::exec_types::ExecStart,
+    ) -> io::Result<super::exec_session::ShareExecSession> {
+        let connection = self.connect_exec(&endpoint)?;
+        let _runtime = self.rt.enter();
+        let client = super::exec_client::spawn_connected(connection, endpoint, identity, start);
+        Ok(super::exec_session::ShareExecSession::new(
+            self.clone(),
+            client,
+        ))
+    }
+
     fn spawn_accept_loop(self: &Arc<Self>) {
         let node = self.clone();
         self.rt.spawn(async move {
             while let Some(incoming) = node.endpoint.accept().await {
+                let permit = match node.handshake_slots.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        incoming.refuse();
+                        continue;
+                    }
+                };
                 let node = node.clone();
                 tokio::spawn(async move {
                     match incoming.await {
                         Ok(connection) => {
                             if let Err(error) =
-                                super::server::handle_connection(node.clone(), connection).await
+                                dispatch_connection(node.clone(), connection, permit).await
                             {
                                 let _ = node
                                     .ev
@@ -350,6 +399,18 @@ impl ShareIrohNode {
         if let Some(message) = send {
             let _ = self.ev.send(ShareEvent::Error(message));
         }
+    }
+}
+
+async fn dispatch_connection(
+    node: Arc<ShareIrohNode>,
+    connection: Connection,
+    permit: OwnedSemaphorePermit,
+) -> io::Result<()> {
+    match connection.alpn() {
+        ALPN => super::server::handle_connection(node, connection, permit).await,
+        EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
+        _ => Err(eio("Unbekanntes Share-Protokoll")),
     }
 }
 

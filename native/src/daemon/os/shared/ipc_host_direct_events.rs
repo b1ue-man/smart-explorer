@@ -35,6 +35,9 @@ fn apply(
                 request.clone(),
                 *received_at,
             )?;
+            if profiles.direct_request(&request.request_id).is_none() {
+                return Ok(());
+            }
             ensure_request_receipt(profiles, identity, request, *received_at)?;
             ensure_existing_grant_decision(profiles, identity, request, *received_at)?;
         }
@@ -72,6 +75,12 @@ fn apply(
             receipt,
             received_at,
         } => {
+            if profiles
+                .direct_request_tombstone(&receipt.request_id)
+                .is_some()
+            {
+                return Ok(());
+            }
             let entry = profiles
                 .direct_request(&receipt.request_id)
                 .ok_or("unknown direct request")?;
@@ -201,16 +210,20 @@ fn outgoing_request_and_secret(
     profiles: &ShareProfiles,
     request_id: &crate::share::DirectRequestId,
 ) -> Result<(crate::share::SignedDirectRequest, Vec<u8>), ApplyError> {
-    let entry = profiles
-        .direct_request(request_id)
-        .ok_or("unknown direct request")?;
-    if entry.direction != DirectRequestDirection::Outgoing {
-        return Err("direct request has the wrong direction".into());
-    }
-    let contact_id = entry
-        .contact_id
-        .as_deref()
-        .ok_or("direct request contact is missing")?;
+    let (request, contact_id) = match profiles.direct_request(request_id) {
+        Some(entry) if entry.direction == DirectRequestDirection::Outgoing => (
+            entry.record.request.clone(),
+            entry
+                .contact_id
+                .clone()
+                .ok_or("direct request contact is missing")?,
+        ),
+        Some(_) => return Err("direct request has the wrong direction".into()),
+        None => profiles
+            .tombstoned_outgoing_request(request_id)
+            .map(|(request, contact_id)| (request.clone(), contact_id.to_string()))
+            .ok_or("unknown direct request")?,
+    };
     let contact = profiles
         .direct_contacts
         .iter()
@@ -218,7 +231,7 @@ fn outgoing_request_and_secret(
         .ok_or("direct request contact was removed")?;
     let secret = ShareProfiles::direct_secret_checked(contact)?
         .ok_or("direct request relation secret is missing")?;
-    Ok((entry.record.request.clone(), secret))
+    Ok((request, secret))
 }
 
 fn local_peer(identity: &ShareIdentity) -> DirectPeerIdentity {
