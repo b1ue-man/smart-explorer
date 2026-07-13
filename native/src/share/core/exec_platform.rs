@@ -140,7 +140,7 @@ pub(super) fn run_platform_self_test() -> io::Result<()> {
         return Err(io::Error::other("platform self-test missed start"));
     }
     run_root_exits_first_test()?;
-    Ok(())
+    super::platform_exec::run_extended_self_test()
 }
 
 #[cfg(debug_assertions)]

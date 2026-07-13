@@ -16,6 +16,28 @@ pub(super) fn start_unit(
     socket: &Path,
     runtime_usec: Option<u64>,
 ) -> io::Result<()> {
+    start_unit_with_collect_mode(connection, name, socket, runtime_usec, "inactive-or-failed")
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn start_runtime_test_unit(
+    connection: &Connection,
+    name: &str,
+    socket: &Path,
+    runtime_usec: u64,
+) -> io::Result<()> {
+    // Retain the expected failed unit until the self-test has verified its
+    // exact Result. Production units continue to collect both terminal states.
+    start_unit_with_collect_mode(connection, name, socket, Some(runtime_usec), "inactive")
+}
+
+fn start_unit_with_collect_mode(
+    connection: &Connection,
+    name: &str,
+    socket: &Path,
+    runtime_usec: Option<u64>,
+    collect_mode: &str,
+) -> io::Result<()> {
     let executable = format!("/proc/{}/exe", std::process::id());
     let socket = socket.to_string_lossy().into_owned();
     let exec = vec![(
@@ -38,7 +60,7 @@ pub(super) fn start_unit(
         ("OOMPolicy", string_value("stop")),
         ("TimeoutStartUSec", OwnedValue::from(15_000_000u64)),
         ("TimeoutStopUSec", OwnedValue::from(2_000_000u64)),
-        ("CollectMode", string_value("inactive-or-failed")),
+        ("CollectMode", string_value(collect_mode)),
     ];
     if let Some(runtime_usec) = runtime_usec {
         properties.push(("RuntimeMaxUSec", OwnedValue::from(runtime_usec)));
@@ -122,6 +144,33 @@ pub(super) fn unit_active_state(
     unit_proxy(connection, path)?
         .get_property("ActiveState")
         .map_err(eio)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn unit_runtime_max_usec(
+    connection: &Connection,
+    path: &OwnedObjectPath,
+) -> io::Result<u64> {
+    service_proxy(connection, path)?
+        .get_property("RuntimeMaxUSec")
+        .map_err(eio)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn unit_result(connection: &Connection, path: &OwnedObjectPath) -> io::Result<String> {
+    service_proxy(connection, path)?
+        .get_property("Result")
+        .map_err(eio)
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn reset_failed_unit(connection: &Connection, name: &str) -> io::Result<()> {
+    let result: zbus::Result<()> = manager_proxy(connection)?.call("ResetFailedUnit", &(name,));
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("not loaded") => Ok(()),
+        Err(error) => Err(eio(error)),
+    }
 }
 
 pub(super) fn cgroup_populated(path: &Path) -> io::Result<bool> {
