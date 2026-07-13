@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 #[path = "exec_self_test_process.rs"]
 mod process;
 
-use self::process::{launch_isolated_suspended_test_host, SuspendedTestHost};
+use self::process::{
+    launch_isolated_suspended_test_host, launch_suspended_test_host, IsolationOutcome,
+    SuspendedTestHost,
+};
 
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -66,7 +69,9 @@ pub(super) fn run() -> io::Result<()> {
 
 fn run_compatible_outer_job_test() -> io::Result<()> {
     let outer = super::create_job()?;
-    let child = launch_isolated_suspended_test_host(NESTED_HELPER_MODE)?;
+    // Keep an ambient runner Job when one exists. Adding our unrestricted
+    // outer Job then exercises the same supported nesting used by production.
+    let child = launch_suspended_test_host(NESTED_HELPER_MODE)?;
     assign_to_outer_job(&outer, &child)?;
     resume_and_expect_success(child)?;
     require_empty_job(&outer, "compatible outer Job")
@@ -74,28 +79,41 @@ fn run_compatible_outer_job_test() -> io::Result<()> {
 
 fn run_incompatible_outer_job_test() -> io::Result<()> {
     let outer = create_ui_restricted_job()?;
-    let child = launch_isolated_suspended_test_host(INCOMPATIBLE_HELPER_MODE)?;
+    match launch_isolated_suspended_test_host(INCOMPATIBLE_HELPER_MODE)? {
+        IsolationOutcome::Isolated(child) => run_isolated_incompatible_test(&outer, child),
+        IsolationOutcome::AmbientLocked => require_ambient_incompatible_rejection(&outer),
+    }
+}
+
+fn run_isolated_incompatible_test(outer: &OwnedHandle, child: SuspendedTestHost) -> io::Result<()> {
     if unsafe { AssignProcessToJobObject(outer.raw(), child.process.raw()) } == 0 {
         let error = io::Error::last_os_error();
-        let access_denied = error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32);
-        if let Err(cleanup) =
-            terminate_process_and_wait(&child.process, "incompatible outer Job setup")
-        {
-            return Err(io::Error::other(format!(
-                "{error}; incompatible outer Job setup cleanup also failed: {cleanup}"
-            )));
-        }
-        // An ambient runner Job can make this setup impossible. Treat that as
-        // missing evidence, not as a successful incompatible-Job probe.
-        if access_denied {
-            return Err(io::Error::other(
-                "incompatible nested Job test could not be constructed: the suspended test host was already constrained by another Job",
-            ));
-        }
-        return Err(error);
+        return Err(terminate_process_after_error(
+            &child.process,
+            error,
+            "incompatible outer Job setup",
+        ));
     }
     resume_and_expect_success(child)?;
-    require_empty_job(&outer, "UI-restricted outer Job")
+    require_empty_job(outer, "UI-restricted outer Job")
+}
+
+fn require_ambient_incompatible_rejection(outer: &OwnedHandle) -> io::Result<()> {
+    let (child_stdin, _writer) = super::pipe_pair(false)?;
+    let (child_stdout, _reader) = super::pipe_pair(true)?;
+    match super::launch_supervisor(outer.raw(), child_stdin.raw(), child_stdout.raw()) {
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
+            "UI-restricted production launch failed with an unexpected error: {error}"
+        ))),
+        Ok(launched) => Err(terminate_process_after_error(
+            &launched.process,
+            io::Error::other(
+                "production launcher unexpectedly accepted a UI-restricted nested Job",
+            ),
+            "unexpected incompatible production launch",
+        )),
+    }
 }
 
 fn run_breakaway_test() -> io::Result<()> {
