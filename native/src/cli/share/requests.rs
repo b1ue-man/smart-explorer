@@ -3,16 +3,20 @@ use clap_complete::ArgValueCandidates;
 
 use super::lifecycle_output;
 use super::request_selection::{
-    ambiguous_pending_error, is_pending_incoming, matching_legacy, matching_tracked,
-    no_pending_error, pending_legacy, pending_tracked, select_tracked, verify_optional_fingerprint,
+    ambiguous_pending_error, is_pending_incoming, legacy_accept_eligible, legacy_retryable,
+    legacy_selector_matches, matching_legacy, matching_tracked, no_acceptable_error,
+    no_pending_error, pending_legacy, tracked_accept_eligible, tracked_deletable,
+    tracked_retryable, verify_optional_fingerprint,
 };
+use super::requests_support::{worker_refresh, WorkerRefresh};
 
 #[derive(Args)]
 #[command(long_about = "Inspect and decide durable direct access requests.\n\n\
 With no subcommand, this shows the pending incoming inbox and the exact next\n\
-command. `accept` and `reject` need no selector when exactly one request is\n\
-pending; `show`, `retry`, and `delete` likewise auto-select their sole eligible\n\
-entry. Selectors can be copied from this command's output or completed with\n\
+command. `accept` needs no selector when exactly one non-conflicting request is\n\
+accept-eligible; `reject` needs none when exactly one request is pending.\n\
+`show`, `retry`, and `delete` likewise auto-select their sole eligible entry.\n\
+Selectors can be copied from this command's output or completed with the shell\n\
 the shell integration from `se completions <shell>`.")]
 pub(super) struct RequestArgs {
     #[arg(long, global = true, help = "Print machine-readable JSON")]
@@ -27,14 +31,41 @@ enum RequestCommand {
     List,
     #[command(about = "Show one durable request by any selector emitted by request list")]
     Show(ShowArgs),
-    #[command(about = "Accept a pending incoming request; auto-selects the only one")]
-    Accept(DecisionArgs),
+    #[command(about = "Accept an eligible incoming request; conflicts are excluded")]
+    Accept(AcceptDecisionArgs),
     #[command(about = "Reject a pending incoming request; auto-selects the only one")]
     Reject(DecisionArgs),
-    #[command(about = "Retry the pending envelope for the same request ID now")]
-    Retry(SelectionArgs),
+    #[command(about = "Retry a tracked envelope or an unconfirmed legacy decision now")]
+    Retry(RetrySelectionArgs),
     #[command(about = "Delete a request locally, stop retries, and retain a replay tombstone")]
-    Delete(SelectionArgs),
+    Delete(DeleteSelectionArgs),
+}
+
+#[derive(Args)]
+struct AcceptDecisionArgs {
+    #[arg(
+        allow_hyphen_values = true,
+        help = "Optional accept-eligible request selector; conflicts are excluded",
+        add = ArgValueCandidates::new(crate::cli::completions::acceptable_request_candidates)
+    )]
+    selector: Option<String>,
+    #[arg(
+        long,
+        help = "Optional extra fingerprint assertion; never required for a stored signed request"
+    )]
+    fingerprint: Option<String>,
+    #[arg(long, help = "Optional signed decision message")]
+    message: Option<String>,
+}
+
+impl From<AcceptDecisionArgs> for DecisionArgs {
+    fn from(value: AcceptDecisionArgs) -> Self {
+        Self {
+            selector: value.selector,
+            fingerprint: value.fingerprint,
+            message: value.message,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -65,22 +96,32 @@ struct DecisionArgs {
 }
 
 #[derive(Args)]
-struct SelectionArgs {
+struct RetrySelectionArgs {
     #[arg(
         allow_hyphen_values = true,
         help = "Optional request selector shown by request list; omit when only one is eligible",
-        add = ArgValueCandidates::new(crate::cli::completions::request_candidates)
+        add = ArgValueCandidates::new(crate::cli::completions::retry_request_candidates)
+    )]
+    selector: Option<String>,
+}
+
+#[derive(Args)]
+struct DeleteSelectionArgs {
+    #[arg(
+        allow_hyphen_values = true,
+        help = "Optional deletable request selector shown by request list; omit when only one is eligible",
+        add = ArgValueCandidates::new(crate::cli::completions::deletable_request_candidates)
     )]
     selector: Option<String>,
 }
 
 pub(super) fn run(args: RequestArgs) -> Result<(), String> {
     match args.command {
-        None => inbox(args.json),
+        None => super::requests_inbox::run(args.json),
         Some(RequestCommand::List) => list(args.json),
         Some(RequestCommand::Show(command)) => show(command.selector.as_deref(), args.json),
         Some(RequestCommand::Accept(command)) => decide(
-            command,
+            command.into(),
             crate::share::DirectDecisionKind::Accepted,
             args.json,
         ),
@@ -96,82 +137,6 @@ pub(super) fn run(args: RequestArgs) -> Result<(), String> {
     }
 }
 
-fn inbox(json: bool) -> Result<(), String> {
-    let profiles = super::checked_profiles()?;
-    let now = crate::share::core_now_secs();
-    let tracked = pending_tracked(&profiles, now);
-    let (legacy, worker_error) = match crate::daemon::drain_share_worker_events() {
-        Ok(snapshot) => (pending_legacy(snapshot.pending_direct_requests, now), None),
-        Err(error) => (Vec::new(), Some(error)),
-    };
-    let count = tracked.len() + legacy.len();
-    let history_count = profiles.direct_requests.len();
-    if json {
-        let requests = tracked
-            .iter()
-            .map(|entry| lifecycle_output::request_value(entry, &profiles))
-            .collect::<Vec<_>>();
-        let legacy_requests = legacy.iter().map(legacy_value).collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "count": count,
-                "requests": requests,
-                "legacy_requests": legacy_requests,
-                "worker_error": worker_error,
-                "next_command": (count == 1).then_some("se share request accept"),
-                "history_count": history_count,
-                "history_command": "se share request list",
-            }))
-            .map_err(|error| error.to_string())?
-        );
-        return Ok(());
-    }
-    println!("pending_requests\t{count}");
-    println!("request_history\t{history_count}");
-    for entry in &tracked {
-        let request = &entry.record.request;
-        println!(
-            "pending_request\t{}\tdevice_name={}\tdevice_id={}\tfingerprint={}\tdelivery={}\tdecision={}\tauthorization=inactive",
-            request.request_id,
-            clean(&request.requester.device_name),
-            clean(&request.requester.device_id),
-            clean(&request.requester.fingerprint),
-            entry.record.delivery.state.code(),
-            entry.record.decision.state.code(),
-        );
-    }
-    for request in &legacy {
-        println!(
-            "pending_legacy_request\t{}\tdevice_name={}\tfingerprint={}\tdelivery=received\tdecision=pending\tauthorization=inactive",
-            clean(&request.device_id),
-            clean(&request.device_name),
-            clean(&request.fingerprint),
-        );
-    }
-    if count == 1 {
-        println!("next\tse share request accept");
-    } else if count > 1 {
-        for entry in &tracked {
-            println!(
-                "accept\tse share request accept {}",
-                entry.record.request.request_id
-            );
-        }
-        for request in &legacy {
-            println!(
-                "accept\tse share request accept {}",
-                clean(&request.device_id)
-            );
-        }
-    }
-    println!("history\tse share request list");
-    if let Some(error) = worker_error {
-        println!("worker_error\t{}", clean(&error));
-    }
-    Ok(())
-}
-
 fn list(json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
     if json {
@@ -180,15 +145,21 @@ fn list(json: bool) -> Result<(), String> {
             .iter()
             .map(|entry| lifecycle_output::request_value(entry, &profiles))
             .collect::<Vec<_>>();
+        let legacy_requests = profiles
+            .legacy_direct_requests
+            .iter()
+            .map(|entry| super::requests_legacy::value(entry, &profiles))
+            .collect::<Vec<_>>();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "count": requests.len(),
+                "count": requests.len() + legacy_requests.len(),
                 "requests": requests,
+                "legacy_requests": legacy_requests,
             }))
             .map_err(|error| error.to_string())?
         );
-    } else if profiles.direct_requests.is_empty() {
+    } else if profiles.direct_requests.is_empty() && profiles.legacy_direct_requests.is_empty() {
         println!("requests\t0");
     } else {
         for entry in &profiles.direct_requests {
@@ -196,15 +167,33 @@ fn list(json: bool) -> Result<(), String> {
                 println!("{line}");
             }
         }
+        for entry in &profiles.legacy_direct_requests {
+            println!("{}", super::requests_legacy::text(entry, &profiles));
+        }
     }
     Ok(())
 }
 
 fn show(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let entry = select_tracked(&profiles, selector, |_| true, "request")?;
-    lifecycle_output::print_request(entry, &profiles, json);
-    Ok(())
+    let tracked = matching_tracked(&profiles, selector, |_| true);
+    let legacy = profiles
+        .legacy_direct_requests
+        .iter()
+        .filter(|entry| selector.is_none_or(|value| legacy_selector_matches(entry, value.trim())))
+        .collect::<Vec<_>>();
+    match tracked.len() + legacy.len() {
+        1 if tracked.len() == 1 => {
+            lifecycle_output::print_request(tracked[0], &profiles, json);
+            Ok(())
+        }
+        1 => super::requests_legacy::print(legacy[0], &profiles, json),
+        0 => Err(format!(
+            "request not found: {}",
+            selector.unwrap_or("<only item>")
+        )),
+        _ => Err("request selector is ambiguous; run `se share request list`".into()),
+    }
 }
 
 fn decide(
@@ -215,21 +204,29 @@ fn decide(
     let profiles = super::checked_profiles()?;
     let now = crate::share::core_now_secs();
     let tracked_matches = matching_tracked(&profiles, args.selector.as_deref(), |entry| {
-        is_pending_incoming(entry, now)
+        if decision == crate::share::DirectDecisionKind::Accepted {
+            tracked_accept_eligible(&profiles, entry, now)
+        } else {
+            is_pending_incoming(entry, now)
+        }
     });
-    let legacy_snapshot = crate::daemon::drain_share_worker_events().ok();
-    let legacy = legacy_snapshot
-        .map(|snapshot| pending_legacy(snapshot.pending_direct_requests, now))
-        .unwrap_or_default();
-    let legacy_matches = matching_legacy(&legacy, args.selector.as_deref());
+    let legacy = pending_legacy(&profiles, now);
+    let eligible_legacy = legacy
+        .iter()
+        .copied()
+        .filter(|entry| {
+            decision != crate::share::DirectDecisionKind::Accepted
+                || legacy_accept_eligible(entry, now)
+        })
+        .collect::<Vec<_>>();
+    let legacy_matches = matching_legacy(&eligible_legacy, args.selector.as_deref());
     match tracked_matches.len() + legacy_matches.len() {
         0 => {
-            return Err(no_pending_error(
-                args.selector.as_deref(),
-                &profiles,
-                &legacy,
-                now,
-            ))
+            return Err(if decision == crate::share::DirectDecisionKind::Accepted {
+                no_acceptable_error(args.selector.as_deref(), &profiles, now)
+            } else {
+                no_pending_error(args.selector.as_deref(), &profiles, &legacy, now)
+            })
         }
         1 if tracked_matches.len() == 1 => {}
         1 => {
@@ -273,16 +270,42 @@ fn decide(
 fn retry(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
     let now = crate::share::core_now_secs();
-    let request_id = select_tracked(
-        &profiles,
-        selector,
-        |entry| !entry.pending_outboxes(now).is_empty(),
-        "retryable request",
-    )?
-    .record
-    .request
-    .request_id
-    .clone();
+    let tracked = matching_tracked(&profiles, selector, |entry| tracked_retryable(entry, now));
+    let legacy = profiles
+        .legacy_direct_requests
+        .iter()
+        .filter(|entry| legacy_retryable(entry))
+        .filter(|entry| selector.is_none_or(|value| legacy_selector_matches(entry, value.trim())))
+        .collect::<Vec<_>>();
+    if tracked.len() + legacy.len() != 1 {
+        return Err(if tracked.is_empty() && legacy.is_empty() {
+            format!(
+                "retryable request not found: {}",
+                selector.unwrap_or("<only item>")
+            )
+        } else {
+            "retryable request selector is ambiguous; run `se share request list`".into()
+        });
+    }
+    if tracked.is_empty() {
+        let selector = legacy[0].selector.clone();
+        let persisted =
+            crate::share::retry_legacy_direct_answer(Some(super::default_home()), &selector)?;
+        let worker = worker_refresh();
+        let committed = super::checked_profiles()?;
+        let entry = committed
+            .legacy_direct_request(&selector)
+            .cloned()
+            .unwrap_or(persisted);
+        return super::requests_legacy::print_action(
+            &entry,
+            &committed,
+            "retry_queued",
+            worker,
+            json,
+        );
+    }
+    let request_id = tracked[0].record.request.request_id.clone();
     let persisted =
         crate::share::retry_direct_request_now(Some(super::default_home()), &request_id)?;
     let worker = worker_refresh();
@@ -296,28 +319,54 @@ fn retry(selector: Option<&str>, json: bool) -> Result<(), String> {
 
 fn delete_history(selector: Option<&str>, json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let entry = select_tracked(&profiles, selector, |_| true, "request")?;
-    let request_id = entry.record.request.request_id.clone();
-    crate::share::delete_direct_request_history(Some(super::default_home()), &request_id)?;
-    let worker = worker_refresh();
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "action": "deleted",
-                "request_id": request_id.as_str(),
-                "persisted": true,
-                "worker_refresh": worker.value(),
-            }))
-            .map_err(|error| error.to_string())?
-        );
-    } else {
-        println!(
-            "action\tdeleted\trequest_id={request_id}\tpersisted=true\tworker_refresh={}",
-            worker.state
+    let now = crate::share::core_now_secs();
+    let tracked = matching_tracked(&profiles, selector, |entry| tracked_deletable(entry, now));
+    let legacy_all = profiles
+        .legacy_direct_requests
+        .iter()
+        .filter(|entry| selector.is_none_or(|value| legacy_selector_matches(entry, value.trim())))
+        .collect::<Vec<_>>();
+    let legacy = legacy_all
+        .iter()
+        .copied()
+        .filter(|entry| !entry.authorization_active(&profiles))
+        .collect::<Vec<_>>();
+    if tracked.len() + legacy.len() != 1 {
+        if tracked.is_empty()
+            && legacy.is_empty()
+            && legacy_all.len() == 1
+            && legacy_all[0].authorization_active(&profiles)
+        {
+            return Err(format!(
+                "legacy request has an active authorization; run `se share grants revoke {}` before deletion",
+                legacy_all[0].selector
+            ));
+        }
+        return Err(if tracked.is_empty() && legacy.is_empty() {
+            format!(
+                "deletable request not found: {}",
+                selector.unwrap_or("<only item>")
+            )
+        } else {
+            "deletable request selector is ambiguous; run `se share request list`".into()
+        });
+    }
+    if tracked.is_empty() {
+        let legacy_selector = legacy[0].selector.clone();
+        crate::share::delete_legacy_direct_request(Some(super::default_home()), &legacy_selector)?;
+        let worker = worker_refresh();
+        return super::requests_legacy::print_deleted(
+            "selector",
+            &legacy_selector,
+            true,
+            worker,
+            json,
         );
     }
-    Ok(())
+    let request_id = tracked[0].record.request.request_id.clone();
+    crate::share::delete_direct_request_history(Some(super::default_home()), &request_id)?;
+    let worker = worker_refresh();
+    super::requests_legacy::print_deleted("request_id", request_id.as_str(), false, worker, json)
 }
 
 fn print_action(
@@ -352,97 +401,47 @@ fn print_action(
 
 fn answer_legacy(
     args: DecisionArgs,
-    request: crate::share::PeerPresence,
+    request: crate::share::LegacyDirectRequestEntry,
     accepted: bool,
     json: bool,
 ) -> Result<(), String> {
+    if args.message.is_some() {
+        return Err(
+            "legacy requests do not support authenticated decision messages; omit --message".into(),
+        );
+    }
     verify_optional_fingerprint(
         args.fingerprint.as_deref(),
-        &request.fingerprint,
-        &request.device_id,
+        &request.peer.fingerprint,
+        &request.selector,
     )?;
     let identity = super::identity_command::load_with_repair_hint()?;
-    let state = if accepted {
-        crate::share::DirectGrantState::Accepted
-    } else {
-        crate::share::DirectGrantState::Ignored
-    };
-    crate::share::ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
-        profiles.set_direct_grant(&request, state.clone());
-        Ok(())
-    })?;
-    let device_id = request.device_id.clone();
-    crate::daemon::send_share_command(crate::share::ShareCmd::AnswerDirectRequest {
-        lookup_id: identity.direct_lookup_id,
-        presence: request,
+    let persisted = crate::share::decide_legacy_direct_request(
+        Some(super::default_home()),
+        &identity,
+        &request.selector,
+        &request.peer.fingerprint,
         accepted,
-    })
-    .map_err(|error| format!("legacy decision persisted, but delivery failed: {error}"))?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "legacy": true,
-                "device_id": device_id,
-                "decision": if accepted { "accepted" } else { "rejected" },
-                "decision_delivery": "attempted_untracked",
-                "authorization": if accepted { "active" } else { "inactive" },
-            }))
-            .map_err(|error| error.to_string())?
-        );
-    } else {
-        println!(
-            "legacy_request\t{}\tdecision={}\tdecision_delivery=attempted_untracked\tauthorization={}",
-            device_id,
-            if accepted { "accepted" } else { "rejected" },
-            if accepted { "active" } else { "inactive" },
-        );
-    }
-    Ok(())
-}
-
-fn legacy_value(request: &crate::share::PeerPresence) -> serde_json::Value {
-    serde_json::json!({
-        "legacy": true,
-        "selector": request.device_id,
-        "device_id": request.device_id,
-        "device_name": request.device_name,
-        "fingerprint": request.fingerprint,
-        "expires_at": request.expires_at,
-        "delivery": {"state": "received"},
-        "decision": {"state": "pending"},
-        "authorization": {"state": "inactive", "active": false},
-    })
-}
-
-struct WorkerRefresh {
-    state: &'static str,
-    error: Option<String>,
-}
-
-impl WorkerRefresh {
-    fn value(&self) -> serde_json::Value {
-        serde_json::json!({"state": self.state, "error": self.error})
-    }
-}
-
-fn worker_refresh() -> WorkerRefresh {
-    match crate::daemon::refresh_share_worker_checked() {
-        Ok(true) => WorkerRefresh {
-            state: "refreshed",
-            error: None,
-        },
-        Ok(false) => WorkerRefresh {
-            state: "inactive",
-            error: Some("Share server is not configured or Auto-Connect is off".to_string()),
-        },
-        Err(error) => WorkerRefresh {
-            state: "unavailable",
-            error: Some(error),
-        },
-    }
+    )?;
+    let worker = worker_refresh();
+    let committed = super::checked_profiles()?;
+    let entry = committed
+        .legacy_direct_request(&request.selector)
+        .cloned()
+        .unwrap_or(persisted);
+    super::requests_legacy::print_action(
+        &entry,
+        &committed,
+        if accepted { "accepted" } else { "rejected" },
+        worker,
+        json,
+    )
 }
 
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
+
+#[cfg(test)]
+#[path = "requests_tests.rs"]
+mod tests;

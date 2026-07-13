@@ -101,8 +101,10 @@ mod tests {
 
     #[test]
     fn operation_specific_frame_limits_are_stricter_than_response_budget() {
-        assert!(MAX_HANDSHAKE_CTRL_FRAME < MAX_REQUEST_CTRL_FRAME);
-        assert!(MAX_REQUEST_CTRL_FRAME < MAX_FRAME);
+        const {
+            assert!(MAX_HANDSHAKE_CTRL_FRAME < MAX_REQUEST_CTRL_FRAME);
+            assert!(MAX_REQUEST_CTRL_FRAME < MAX_FRAME);
+        }
         assert!(validate_frame_len(MAX_HANDSHAKE_CTRL_FRAME, MAX_HANDSHAKE_CTRL_FRAME).is_ok());
         assert!(
             validate_frame_len(MAX_HANDSHAKE_CTRL_FRAME + 1, MAX_HANDSHAKE_CTRL_FRAME).is_err()

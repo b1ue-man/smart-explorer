@@ -20,13 +20,24 @@ impl ShareIdentity {
     pub fn load_or_create(default_name: String) -> Result<Self, String> {
         let _guard = identity_transaction_guard()
             .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
-        Self::load_or_create_with(default_name, &mut SystemIdentityPersistence)
+        let mut storage = SystemIdentityPersistence;
+        load_ready_identity(default_name, Some(default_home()), &mut storage)
     }
 
     pub fn repair_missing(default_name: String) -> Result<IdentityRepair, String> {
         let _guard = identity_transaction_guard()
             .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
-        Self::repair_missing_with(default_name, &mut SystemIdentityPersistence)
+        let mut storage = SystemIdentityPersistence;
+        let mut repair = Self::repair_missing_with(default_name, &mut storage)?;
+        if let Err(error) =
+            finish_pending_cleanup_locked(Some(default_home()), &repair.identity, &mut storage)
+        {
+            append_cleanup_warning(
+                &mut repair.cleanup_warning,
+                format!("Direkt-Freigaben nach Identitaetsreparatur sperren: {error}"),
+            );
+        }
+        Ok(repair)
     }
 
     pub fn repair_action_needed(default_name: String) -> Result<IdentityRepairAction, String> {
@@ -38,15 +49,128 @@ impl ShareIdentity {
     pub fn regenerate_direct_code(&mut self) -> Result<DirectCodeRotation, String> {
         let _guard = identity_transaction_guard()
             .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
-        self.regenerate_direct_code_with(&mut SystemIdentityPersistence)
+        let mut storage = SystemIdentityPersistence;
+        load_ready_identity(self.device_name.clone(), Some(default_home()), &mut storage)?;
+        // The durable marker written by this mutation is completed by the GUI
+        // while the worker remains stopped. A crash before that point is safe:
+        // every production identity load completes the same cleanup first.
+        self.regenerate_direct_code_with(&mut storage)
+    }
+
+    pub(crate) fn complete_pending_cleanup(
+        &self,
+        default_home: Option<String>,
+    ) -> Result<super::profiles::ShareProfiles, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
+        let mut storage = SystemIdentityPersistence;
+        let current = Self::load_or_create_with(self.device_name.clone(), &mut storage)?;
+        with_matching_identity_generation(self, &current, |locked| {
+            let load_home = default_home.clone();
+            finish_pending_cleanup_locked(default_home, locked, &mut storage)?.map_or_else(
+                || super::profiles::ShareProfiles::load_checked(load_home),
+                Ok,
+            )
+        })
+    }
+
+    pub(crate) fn with_current_locked<T>(
+        default_name: String,
+        action: impl FnOnce(&ShareIdentity) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _guard = identity_transaction_guard()
+            .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
+        let mut storage = SystemIdentityPersistence;
+        let identity = load_ready_identity(default_name, Some(default_home()), &mut storage)?;
+        action(&identity)
     }
 
     pub fn set_device_name(&mut self, name: String) -> Result<(), String> {
         let _guard = identity_transaction_guard()
             .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
-        self.set_device_name_with(name, &mut SystemIdentityPersistence)
+        let mut storage = SystemIdentityPersistence;
+        load_ready_identity(self.device_name.clone(), Some(default_home()), &mut storage)?;
+        self.set_device_name_with(name, &mut storage)
     }
 }
+
+fn load_ready_identity(
+    default_name: String,
+    default_home: Option<String>,
+    storage: &mut impl IdentityPersistence,
+) -> Result<ShareIdentity, String> {
+    let identity = ShareIdentity::load_or_create_with(default_name, storage)?;
+    finish_pending_cleanup_locked(default_home, &identity, storage)?;
+    Ok(identity)
+}
+
+fn finish_pending_cleanup_locked(
+    default_home: Option<String>,
+    identity: &ShareIdentity,
+    storage: &mut impl IdentityPersistence,
+) -> Result<Option<super::profiles::ShareProfiles>, String> {
+    finish_pending_cleanup_with(identity, storage, |action| {
+        super::legacy_direct_actions::invalidate_direct_grants_after_identity_rotation(
+            default_home,
+            identity,
+            action,
+        )
+    })
+}
+
+fn finish_pending_cleanup_with<T>(
+    identity: &ShareIdentity,
+    storage: &mut impl IdentityPersistence,
+    cleanup: impl FnOnce(IdentityRepairAction) -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    let Some(action) = ShareIdentity::pending_cleanup_action_with(storage)? else {
+        return Ok(None);
+    };
+    let cleaned = cleanup(action)?;
+    identity.clear_pending_cleanup_with(storage)?;
+    Ok(Some(cleaned))
+}
+
+fn default_home() -> String {
+    default_home_path().to_string_lossy().replace('\\', "/")
+}
+
+fn default_home_path() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+pub(crate) fn with_matching_identity_generation<T>(
+    expected: &ShareIdentity,
+    current: &ShareIdentity,
+    action: impl FnOnce(&ShareIdentity) -> Result<T, String>,
+) -> Result<T, String> {
+    let matches = expected.device_id == current.device_id
+        && expected.direct_lookup_id == current.direct_lookup_id
+        && expected.public_key == current.public_key
+        && expected.fingerprint == current.fingerprint
+        && expected.node_id == current.node_id
+        && expected.direct_secret == current.direct_secret;
+    if !matches {
+        return Err(
+            "Share identity changed concurrently; reload the request and retry".to_string(),
+        );
+    }
+    action(current)
+}
+
+fn append_cleanup_warning(target: &mut Option<String>, warning: String) {
+    *target = Some(match target.take() {
+        Some(existing) => format!("{existing}; {warning}"),
+        None => warning,
+    });
+}
+
+#[cfg(test)]
+#[path = "identity_store_tests.rs"]
+mod generation_tests;
 
 struct SystemIdentityPersistence;
 

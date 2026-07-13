@@ -7,7 +7,8 @@ pub struct IdentityRepair {
     pub cleanup_warning: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum IdentityRepairAction {
     IdentityReplaced,
     DirectCodeRotated,
@@ -32,22 +33,40 @@ impl IdentityRepairNeed {
 
 impl ShareIdentity {
     pub(in crate::share) fn repair_action_needed_with(
-        _default_name: String,
+        default_name: String,
         storage: &mut impl IdentityPersistence,
     ) -> Result<IdentityRepairAction, String> {
-        inspect_repair_need(storage).map(|need| need.action())
+        let pending = Self::pending_cleanup_action_with(storage)?;
+        if let Some(action) = pending {
+            if Self::load_or_create_with(default_name, storage).is_ok() {
+                return Ok(action);
+            }
+        }
+        inspect_repair_need(storage).map(|need| strongest_cleanup_action(pending, need.action()))
     }
 
     pub(in crate::share) fn repair_missing_with(
         default_name: String,
         storage: &mut impl IdentityPersistence,
     ) -> Result<IdentityRepair, String> {
+        let pending = Self::pending_cleanup_action_with(storage)?;
+        if let Some(action) = pending {
+            if let Ok(identity) = Self::load_or_create_with(default_name.clone(), storage) {
+                return Ok(IdentityRepair {
+                    identity,
+                    action,
+                    cleanup_warning: None,
+                });
+            }
+        }
         match inspect_repair_need(storage)? {
             IdentityRepairNeed::ReplaceIdentity(disk) => {
                 Self::replace_missing_iroh(disk, default_name, storage)
             }
             IdentityRepairNeed::RotateDirectCode { disk, iroh_secret } => {
-                Self::replace_missing_direct(disk, default_name, *iroh_secret, storage)
+                let action =
+                    strongest_cleanup_action(pending, IdentityRepairAction::DirectCodeRotated);
+                Self::replace_missing_direct(disk, default_name, *iroh_secret, action, storage)
             }
         }
     }
@@ -56,6 +75,7 @@ impl ShareIdentity {
         disk: IdentityDisk,
         default_name: String,
         iroh_secret: iroh::SecretKey,
+        cleanup_action: IdentityRepairAction,
         storage: &mut impl IdentityPersistence,
     ) -> Result<IdentityRepair, String> {
         let (direct_lookup_id, direct_secret) =
@@ -63,13 +83,13 @@ impl ShareIdentity {
         let new_account = direct_secret_account(&direct_lookup_id);
         let mut identity = Self::from_disk(disk, default_name, iroh_secret, direct_secret);
         identity.direct_lookup_id = direct_lookup_id;
-        if let Err(error) = identity.save_with(storage) {
+        if let Err(error) = identity.save_with_pending_cleanup(storage, cleanup_action) {
             let cleanup = cleanup_secret(storage, &new_account, "neues Direkt-Secret");
             return Err(with_cleanup(error, cleanup.into_iter().collect()));
         }
         Ok(IdentityRepair {
             identity,
-            action: IdentityRepairAction::DirectCodeRotated,
+            action: cleanup_action,
             cleanup_warning: None,
         })
     }
@@ -113,7 +133,9 @@ impl ShareIdentity {
             iroh_secret,
             direct_secret,
         );
-        if let Err(error) = identity.save_with(storage) {
+        if let Err(error) =
+            identity.save_with_pending_cleanup(storage, IdentityRepairAction::IdentityReplaced)
+        {
             let cleanup = [
                 cleanup_secret(storage, &new_direct_account, "neues Direkt-Secret"),
                 cleanup_secret(storage, IDENTITY_KEY_ACCOUNT, "neue Iroh-Identitaet"),
@@ -135,6 +157,19 @@ impl ShareIdentity {
     }
 }
 
+fn strongest_cleanup_action(
+    pending: Option<IdentityRepairAction>,
+    required: IdentityRepairAction,
+) -> IdentityRepairAction {
+    if pending == Some(IdentityRepairAction::IdentityReplaced)
+        || required == IdentityRepairAction::IdentityReplaced
+    {
+        IdentityRepairAction::IdentityReplaced
+    } else {
+        IdentityRepairAction::DirectCodeRotated
+    }
+}
+
 fn inspect_repair_need(
     storage: &mut impl IdentityPersistence,
 ) -> Result<IdentityRepairNeed, String> {
@@ -148,8 +183,18 @@ fn inspect_repair_need(
         return Ok(IdentityRepairNeed::ReplaceIdentity(disk));
     };
 
-    let iroh_secret = iroh::SecretKey::from_bytes(&decode_secret(&iroh_raw, "Iroh-Identitaet")?);
-    validate_iroh_matches(&disk, &iroh_secret)?;
+    let iroh_bytes = match decode_secret(&iroh_raw, "Iroh-Identitaet") {
+        Ok(secret) => secret,
+        // An interrupted full replacement can leave the old metadata next to
+        // a partially written replacement secret. Explicit repair must be
+        // able to replace that unusable generation instead of requiring
+        // manual credential-store surgery.
+        Err(_) => return Ok(IdentityRepairNeed::ReplaceIdentity(disk)),
+    };
+    let iroh_secret = iroh::SecretKey::from_bytes(&iroh_bytes);
+    if validate_iroh_matches(&disk, &iroh_secret).is_err() {
+        return Ok(IdentityRepairNeed::ReplaceIdentity(disk));
+    }
     let direct_account = direct_secret_account(&disk.direct_lookup_id);
     if load_optional_secret(storage, &direct_account, "Direkt-Code")?.is_some() {
         return Err("Share-Identitaet ist vollstaendig; Reparatur wurde verweigert".to_string());
@@ -158,4 +203,85 @@ fn inspect_repair_need(
         disk,
         iroh_secret: Box::new(iroh_secret),
     })
+}
+
+#[cfg(test)]
+mod crash_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn full_replacement_marker_survives_a_later_missing_direct_secret() {
+        let mut storage = MemoryPersistence::default();
+        ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
+        storage.secrets.remove(IDENTITY_KEY_ACCOUNT);
+        let replaced = ShareIdentity::repair_missing_with("device".into(), &mut storage).unwrap();
+        let replaced_device_id = replaced.identity.device_id.clone();
+        storage
+            .secrets
+            .remove(&direct_secret_account(&replaced.identity.direct_lookup_id));
+
+        let repaired = ShareIdentity::repair_missing_with("device".into(), &mut storage).unwrap();
+
+        assert_eq!(repaired.action, IdentityRepairAction::IdentityReplaced);
+        assert_eq!(repaired.identity.device_id, replaced_device_id);
+        assert_eq!(
+            ShareIdentity::pending_cleanup_action_with(&mut storage).unwrap(),
+            Some(IdentityRepairAction::IdentityReplaced)
+        );
+    }
+
+    #[test]
+    fn legacy_metadata_without_node_id_still_binds_the_fixed_iroh_secret() {
+        let mut storage = MemoryPersistence::default();
+        ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap();
+        let mut disk: serde_json::Value =
+            serde_json::from_str(storage.identity.as_deref().unwrap()).unwrap();
+        disk.as_object_mut().unwrap().remove("node_id");
+        storage.identity = Some(serde_json::to_string(&disk).unwrap());
+        let replacement = iroh::SecretKey::from_bytes(&[0xa7; 32]);
+        storage
+            .secrets
+            .insert(IDENTITY_KEY_ACCOUNT.into(), b64(&replacement.to_bytes()));
+
+        let error = ShareIdentity::load_or_create_with("device".into(), &mut storage).unwrap_err();
+
+        assert!(error.contains("passt nicht"));
+        assert_eq!(
+            ShareIdentity::repair_action_needed_with("device".into(), &mut storage).unwrap(),
+            IdentityRepairAction::IdentityReplaced
+        );
+    }
+
+    #[derive(Default)]
+    struct MemoryPersistence {
+        identity: Option<String>,
+        secrets: HashMap<String, String>,
+    }
+
+    impl IdentityPersistence for MemoryPersistence {
+        fn load_identity(&mut self) -> Result<Option<String>, String> {
+            Ok(self.identity.clone())
+        }
+
+        fn save_identity(&mut self, contents: &str) -> Result<(), String> {
+            self.identity = Some(contents.to_string());
+            Ok(())
+        }
+
+        fn load_secret(&mut self, account: &str) -> Result<Option<String>, String> {
+            Ok(self.secrets.get(account).cloned())
+        }
+
+        fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
+            self.secrets.insert(account.to_string(), secret.to_string());
+            Ok(())
+        }
+
+        fn delete_secret(&mut self, account: &str) -> Result<(), String> {
+            self.secrets.remove(account);
+            Ok(())
+        }
+    }
 }

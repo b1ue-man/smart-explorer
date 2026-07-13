@@ -34,10 +34,14 @@ impl TrackedOutboxEnvelope {
         }
     }
 
-    pub(super) fn wire_message(&self) -> TrackedDirectClientMsg {
+    pub(super) fn wire_message(
+        &self,
+        legacy_presence: Option<super::types::PeerPresence>,
+    ) -> TrackedDirectClientMsg {
         match self {
             Self::Request(request) => TrackedDirectClientMsg::Request {
-                request: request.clone(),
+                request: Box::new(request.clone()),
+                legacy_presence,
             },
             Self::RequestReceipt(receipt) => TrackedDirectClientMsg::RequestReceipt {
                 receipt: receipt.clone(),

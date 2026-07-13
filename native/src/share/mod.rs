@@ -16,6 +16,9 @@ mod connection_events;
 mod core;
 #[path = "os/shared/direct_actions.rs"]
 mod direct_actions;
+#[cfg(test)]
+#[path = "core/direct_identity_conflict_tests.rs"]
+mod direct_identity_conflict_tests;
 #[path = "core/direct_ledger.rs"]
 mod direct_ledger;
 #[path = "core/direct_ledger_mutations.rs"]
@@ -88,12 +91,28 @@ mod identity_lock;
 #[cfg(windows)]
 #[path = "os/windows/identity_lock.rs"]
 mod identity_lock;
+#[cfg(test)]
+#[path = "core/identity_profile_reconciliation_tests.rs"]
+mod identity_profile_reconciliation_tests;
 #[path = "os/shared/identity_store.rs"]
 mod identity_store;
 #[path = "core/io_deadline.rs"]
 mod io_deadline;
 #[path = "core/keepalive.rs"]
 mod keepalive;
+#[path = "os/shared/legacy_direct_actions.rs"]
+mod legacy_direct_actions;
+#[path = "core/legacy_direct_request.rs"]
+mod legacy_direct_request;
+#[path = "core/legacy_direct_request_mutations.rs"]
+mod legacy_direct_request_mutations;
+#[path = "core/legacy_direct_request_reconciliation.rs"]
+mod legacy_direct_request_reconciliation;
+#[cfg(test)]
+#[path = "core/legacy_direct_request_tests.rs"]
+mod legacy_direct_request_tests;
+#[path = "core/legacy_direct_request_validation.rs"]
+mod legacy_direct_request_validation;
 #[path = "core/line.rs"]
 mod line;
 #[path = "core/node.rs"]
@@ -130,12 +149,19 @@ mod shared_system;
 mod signal_auth;
 #[path = "core/signal_commands.rs"]
 mod signal_commands;
+#[cfg(test)]
+#[path = "core/signal_configure_tests.rs"]
+mod signal_configure_tests;
 #[path = "core/signal_connection.rs"]
 mod signal_connection;
 #[path = "core/signal_connector.rs"]
 mod signal_connector;
 #[path = "core/signal_handshake.rs"]
 mod signal_handshake;
+#[path = "core/signal_presence.rs"]
+mod signal_presence;
+#[path = "core/signal_subscriptions.rs"]
+mod signal_subscriptions;
 #[path = "core/signal_worker.rs"]
 mod signal_worker;
 #[cfg(windows)]
@@ -150,6 +176,9 @@ mod tracked_signal_dispatch;
 mod tracked_signal_outbox;
 #[path = "core/tracked_signal_sender.rs"]
 mod tracked_signal_sender;
+#[cfg(test)]
+#[path = "core/tracked_signal_sender_tests.rs"]
+mod tracked_signal_sender_tests;
 #[path = "core/tracked_signal_verify.rs"]
 mod tracked_signal_verify;
 #[path = "core/types.rs"]
@@ -175,6 +204,7 @@ pub use self::direct_lifecycle::{
     DirectLifecycleEvent, DirectRequestRecord,
 };
 pub use self::direct_lifecycle_error::DirectLifecycleError;
+pub(crate) use self::direct_protocol::MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS;
 pub use self::direct_protocol::{
     DirectDecisionKind, DirectPeerIdentity, DirectProtocolError, DirectRequestId,
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
@@ -192,6 +222,17 @@ pub use self::exec_types::{
 };
 pub use self::fs::{ShareExportConfig, SharedRoot};
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
+pub(crate) use self::identity_store::with_matching_identity_generation;
+pub(crate) use self::legacy_direct_actions::mark_legacy_answer_attempt;
+pub use self::legacy_direct_actions::{
+    decide_legacy_direct_request, delete_legacy_direct_request, reconcile_legacy_identity,
+    refresh_legacy_request_expiry, retry_legacy_direct_answer, revoke_legacy_direct_request,
+};
+pub use self::legacy_direct_request::{
+    LegacyDirectAnswer, LegacyDirectDecisionDelivery, LegacyDirectDecisionSource,
+    LegacyDirectDecisionState, LegacyDirectDeliveryState, LegacyDirectPresenceEvidence,
+    LegacyDirectRequestEntry, MAX_LEGACY_DIRECT_REQUESTS, MAX_LEGACY_PRESENCE_FUTURE_SECS,
+};
 pub use self::profile_persistence::ProfileChange;
 pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
@@ -232,6 +273,9 @@ mod direct_ledger_retention_tests;
 #[cfg(test)]
 #[path = "core/direct_ledger_tests.rs"]
 mod direct_ledger_tests;
+#[cfg(test)]
+#[path = "core/direct_ledger_validation_tests.rs"]
+mod direct_ledger_validation_tests;
 #[cfg(test)]
 #[path = "core/direct_lifecycle_tests.rs"]
 mod direct_lifecycle_tests;

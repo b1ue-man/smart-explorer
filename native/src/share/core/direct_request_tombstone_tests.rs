@@ -250,7 +250,7 @@ fn v5_profile_migration_preserves_exec_and_defaults_tombstones_empty() {
     let mut storage = V5Storage(Some(serde_json::to_string(&value).unwrap()), false);
 
     let migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-    assert_eq!(migrated.schema_version, 6);
+    assert_eq!(migrated.schema_version, 7);
     assert!(migrated.direct_grants[0].exec.enabled);
     assert!(migrated.direct_request_tombstones.is_empty());
 }
@@ -296,10 +296,14 @@ fn target() -> DirectPeerIdentity {
 }
 
 fn request() -> SignedDirectRequest {
+    request_for(REQUEST_ID, "lookup-a")
+}
+
+fn request_for(request_id: &str, lookup_id: &str) -> SignedDirectRequest {
     let public = key(2).public().to_string();
     SignedDirectRequest::sign_with_nonce(
-        DirectRequestId::parse(REQUEST_ID).unwrap(),
-        "lookup-a",
+        DirectRequestId::parse(request_id).unwrap(),
+        lookup_id,
         requester(),
         DirectPeerIdentity::pinned_target(public.clone(), public_fingerprint(public.as_bytes())),
         100,

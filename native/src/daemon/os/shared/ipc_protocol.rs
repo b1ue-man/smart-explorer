@@ -22,6 +22,7 @@ pub struct ShareWorkerSnapshot {
     #[serde(default)]
     pub(crate) exec_grant_retry:
         Option<super::ipc_host::exec_grant_journal::ExecGrantPersistResult>,
+    #[serde(default)]
     pub pending_direct_requests: Vec<crate::share::PeerPresence>,
     pub running: bool,
     #[serde(default)]

@@ -102,9 +102,9 @@ pub(super) fn verify_local_direct_request(
     presence: &PeerPresence,
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> bool {
-    if presence.expires_at < now_secs()
-        || presence.kind != "direct"
-        || presence.relation_id != lookup_id
+    let now = now_secs();
+    if super::legacy_direct_request_validation::validate_presence(lookup_id, presence, Some(now))
+        .is_err()
     {
         return false;
     }

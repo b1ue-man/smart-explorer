@@ -348,7 +348,7 @@ pub enum ShareCmd {
     },
     ApplyExecGrant {
         target: ExecGrantTarget,
-        principal: super::exec_types::ExecPrincipal,
+        principal: Box<super::exec_types::ExecPrincipal>,
         policy: ExecGrant,
     },
     LeaveRoom {
@@ -357,9 +357,11 @@ pub enum ShareCmd {
     RequestDirect {
         contact_id: String,
     },
-    AnswerDirectRequest {
+    AnswerLegacyDirectRequest {
+        selector: String,
+        decision_revision: u64,
         lookup_id: String,
-        presence: PeerPresence,
+        requester_device_id: String,
         accepted: bool,
     },
 }

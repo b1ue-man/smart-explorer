@@ -6,6 +6,7 @@ use super::authorization_policy::configuration_changed;
 use super::backend::ShareIrohNode;
 use super::core::eio;
 use super::signal_connection::{send_line, SignalConnection};
+use super::signal_subscriptions::{plan_subscription_teardown, SubscriptionTeardownPlan};
 use super::signal_worker::{publish_all, send_direct_answer, send_direct_request};
 use super::tracked_signal_sender::{send_pending_tracked, AttemptCounters};
 use super::types::{ShareAuthState, ShareCmd, ShareCmdResult, ShareEvent};
@@ -31,6 +32,7 @@ pub(super) struct OfflineCommandRuntime<'a> {
 pub(super) struct CommandOutcome {
     pub(super) result: io::Result<ShareCmdResult>,
     pub(super) should_stop: bool,
+    pub(super) should_reconnect: bool,
     pub(super) published: bool,
 }
 
@@ -39,14 +41,28 @@ impl CommandOutcome {
         Self {
             result: result.map(|()| ShareCmdResult::Applied),
             should_stop: false,
+            should_reconnect: false,
             published: false,
         }
     }
 
     fn connected(result: io::Result<()>, published: bool) -> Self {
+        let published = published && result.is_ok();
         Self {
             result: result.map(|()| ShareCmdResult::Applied),
             should_stop: false,
+            should_reconnect: false,
+            published,
+        }
+    }
+
+    fn connected_fail_closed(result: io::Result<()>, published: bool) -> Self {
+        let should_reconnect = result.is_err();
+        let published = published && result.is_ok();
+        Self {
+            result: result.map(|()| ShareCmdResult::Applied),
+            should_stop: false,
+            should_reconnect,
             published,
         }
     }
@@ -55,6 +71,7 @@ impl CommandOutcome {
         Self {
             result: Ok(ShareCmdResult::Applied),
             should_stop: true,
+            should_reconnect: false,
             published: false,
         }
     }
@@ -63,6 +80,7 @@ impl CommandOutcome {
         Self {
             result: result.map(|mutation| ShareCmdResult::ExecGrant(Box::new(mutation))),
             should_stop: false,
+            should_reconnect: false,
             published: false,
         }
     }
@@ -79,25 +97,33 @@ pub(super) fn run_connected_command(
             rooms,
             default_direct_exports,
         } => {
-            let result = apply_configuration(
-                runtime.auth,
-                runtime.iroh,
-                runtime.direct_requests_sent,
-                direct,
-                direct_grants,
-                rooms,
-                default_direct_exports,
-            )
-            .and_then(|()| {
-                publish_all(
-                    runtime.signal,
-                    runtime.auth,
-                    runtime.iroh,
-                    runtime.direct_requests_sent,
-                    runtime.tracked_direct,
-                )
-            });
-            CommandOutcome::connected(result, true)
+            let result = plan_current_subscription_teardown(runtime.auth, &direct, &rooms)
+                .and_then(|teardown| {
+                    apply_configuration(
+                        runtime.auth,
+                        runtime.iroh,
+                        runtime.direct_requests_sent,
+                        direct,
+                        direct_grants,
+                        rooms,
+                        default_direct_exports,
+                    )?;
+                    send_subscription_teardown(runtime.signal, teardown)
+                })
+                .and_then(|()| {
+                    publish_all(
+                        runtime.signal,
+                        runtime.auth,
+                        runtime.iroh,
+                        runtime.direct_requests_sent,
+                        runtime.tracked_direct,
+                    )
+                });
+            // Configuration may already be committed locally when session
+            // invalidation, teardown, or republishing fails. Drop this
+            // registration so server cleanup removes every old subscription;
+            // the reconnect publishes only the canonical new local state.
+            CommandOutcome::connected_fail_closed(result, true)
         }
         ShareCmd::SyncDirectRequests {
             direct_requests,
@@ -110,6 +136,7 @@ pub(super) fn run_connected_command(
                             send_pending_tracked(
                                 runtime.signal,
                                 runtime.auth,
+                                runtime.iroh,
                                 runtime.events,
                                 runtime.tracked_attempts,
                             )
@@ -161,7 +188,7 @@ pub(super) fn run_connected_command(
             runtime.auth,
             runtime.iroh,
             target,
-            principal,
+            *principal,
             policy,
         )),
         ShareCmd::Stop => CommandOutcome::stop(),
@@ -174,6 +201,7 @@ pub(super) fn run_connected_command(
                 send_pending_tracked(
                     runtime.signal,
                     runtime.auth,
+                    runtime.iroh,
                     runtime.events,
                     runtime.tracked_attempts,
                 )
@@ -186,29 +214,25 @@ pub(super) fn run_connected_command(
             }
             CommandOutcome::connected(result, false)
         }
-        ShareCmd::AnswerDirectRequest {
+        ShareCmd::AnswerLegacyDirectRequest {
+            selector: _,
+            decision_revision: _,
             lookup_id,
-            presence,
+            requester_device_id,
             accepted,
         } => {
-            let result = if runtime.tracked_direct {
-                send_pending_tracked(
-                    runtime.signal,
-                    runtime.auth,
-                    runtime.events,
-                    runtime.tracked_attempts,
-                )
-                .map(|_| ())
-            } else {
-                send_direct_answer(
-                    runtime.signal,
-                    runtime.auth,
-                    runtime.iroh,
-                    lookup_id,
-                    presence,
-                    accepted,
-                )
-            };
+            // This command exists only for a verified legacy request. It must
+            // keep using the legacy wire even when the server also negotiated
+            // tracked_direct_v1; an old requester cannot consume a signed
+            // decision envelope.
+            let result = send_direct_answer(
+                runtime.signal,
+                runtime.auth,
+                runtime.iroh,
+                lookup_id,
+                requester_device_id,
+                accepted,
+            );
             CommandOutcome::connected(result, false)
         }
     }
@@ -264,16 +288,38 @@ pub(super) fn run_offline_command(
             runtime.auth,
             runtime.iroh,
             target,
-            principal,
+            *principal,
             policy,
         )),
         ShareCmd::Stop => CommandOutcome::stop(),
         ShareCmd::LeaveRoom { .. }
         | ShareCmd::RequestDirect { .. }
-        | ShareCmd::AnswerDirectRequest { .. } => CommandOutcome::local(Err(eio(
+        | ShareCmd::AnswerLegacyDirectRequest { .. } => CommandOutcome::local(Err(eio(
             "Share-Server nicht verbunden; Netzwerkkommando wurde nicht gesendet",
         ))),
     }
+}
+
+fn plan_current_subscription_teardown(
+    auth: &Arc<Mutex<ShareAuthState>>,
+    direct: &[super::types::DirectContact],
+    rooms: &[super::types::RoomProfile],
+) -> io::Result<SubscriptionTeardownPlan> {
+    let state = auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
+    Ok(plan_subscription_teardown(&state, direct, rooms))
+}
+
+fn send_subscription_teardown(
+    signal: &mut SignalConnection,
+    teardown: SubscriptionTeardownPlan,
+) -> io::Result<()> {
+    for lookup_id in teardown.direct_lookup_ids {
+        send_line(signal, &ClientMsg::UnwatchDirect { lookup_id })?;
+    }
+    for room_id in teardown.room_ids {
+        send_line(signal, &ClientMsg::LeaveRoom { room_id })?;
+    }
+    Ok(())
 }
 
 fn mutate_exec_grant(

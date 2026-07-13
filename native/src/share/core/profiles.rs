@@ -6,11 +6,13 @@ use super::direct_ledger::DirectRequestEntry;
 use super::direct_request_tombstone::DirectRequestTombstone;
 use super::exec_policy::{reset_all_for_legacy_migration, ExecGrant};
 use super::fs::ShareExportConfig;
+use super::legacy_direct_request::{LegacyDirectRequestEntry, LegacyDirectRequestTombstone};
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
-pub(super) const SHARE_PROFILE_VERSION: u32 = 6;
+pub(super) const SHARE_PROFILE_VERSION: u32 = 7;
+pub(super) const TOMBSTONE_SHARE_PROFILE_VERSION: u32 = 6;
 pub(super) const PREVIOUS_SHARE_PROFILE_VERSION: u32 = 5;
 pub(super) const LEGACY_SHARE_PROFILE_VERSION: u32 = 4;
 pub(super) const OLDEST_SHARE_PROFILE_VERSION: u32 = 3;
@@ -48,6 +50,10 @@ pub struct ShareProfiles {
     #[serde(default)]
     pub(crate) direct_request_tombstones: Vec<DirectRequestTombstone>,
     #[serde(default)]
+    pub legacy_direct_requests: Vec<LegacyDirectRequestEntry>,
+    #[serde(default)]
+    pub(crate) legacy_direct_request_tombstones: Vec<LegacyDirectRequestTombstone>,
+    #[serde(default)]
     pub rooms: Vec<RoomProfile>,
 }
 
@@ -62,6 +68,8 @@ impl Default for ShareProfiles {
             direct_grants: Vec::new(),
             direct_requests: Vec::new(),
             direct_request_tombstones: Vec::new(),
+            legacy_direct_requests: Vec::new(),
+            legacy_direct_request_tombstones: Vec::new(),
             rooms: Vec::new(),
         }
     }
@@ -85,7 +93,11 @@ impl ShareProfiles {
         self.direct_grants.iter().find(|g| g.device_id == device_id)
     }
 
-    pub fn set_direct_grant(&mut self, presence: &PeerPresence, state: DirectGrantState) {
+    pub fn set_direct_grant(
+        &mut self,
+        presence: &PeerPresence,
+        state: DirectGrantState,
+    ) -> Result<(), String> {
         let now = super::core::now_secs();
         if let Some(g) = self
             .direct_grants
@@ -96,7 +108,10 @@ impl ShareProfiles {
                 || g.fingerprint != presence.fingerprint
                 || g.node_id != presence.node_id;
             if identity_changed {
-                g.exec.reset_for_identity_change(now);
+                return Err(format!(
+                    "direct grant identity conflicts with the saved key for device {}",
+                    presence.device_id
+                ));
             } else if state != DirectGrantState::Accepted {
                 g.exec.disable_without_decision(now);
             }
@@ -118,6 +133,7 @@ impl ShareProfiles {
                 exec: ExecGrant::default(),
             });
         }
+        Ok(())
     }
 
     pub(super) fn reset_exec_for_legacy_migration(&mut self) {
@@ -259,7 +275,9 @@ mod tests {
             nonce: "n".into(),
             proof: "proof".into(),
         };
-        profiles.set_direct_grant(&presence, DirectGrantState::Accepted);
+        profiles
+            .set_direct_grant(&presence, DirectGrantState::Accepted)
+            .unwrap();
         assert_eq!(profiles.direct_grants.len(), 1);
         assert_eq!(
             profiles.grant_for("dev-a").unwrap().state,
@@ -270,24 +288,32 @@ mod tests {
             policy_revision: 7,
             ..ExecGrant::default()
         };
-        profiles.set_direct_grant(&presence, DirectGrantState::Accepted);
+        profiles
+            .set_direct_grant(&presence, DirectGrantState::Accepted)
+            .unwrap();
         assert!(profiles.direct_grants[0].exec.enabled);
         assert_eq!(profiles.direct_grants[0].exec.policy_revision, 7);
 
         let mut changed_identity = presence.clone();
         changed_identity.node_id = "changed-node".into();
-        profiles.set_direct_grant(&changed_identity, DirectGrantState::Accepted);
-        assert!(!profiles.direct_grants[0].exec.enabled);
-        assert_eq!(profiles.direct_grants[0].exec.policy_revision, 8);
+        assert!(profiles
+            .set_direct_grant(&changed_identity, DirectGrantState::Accepted)
+            .unwrap_err()
+            .contains("conflicts"));
+        assert!(profiles.direct_grants[0].exec.enabled);
+        assert_eq!(profiles.direct_grants[0].exec.policy_revision, 7);
+        assert_eq!(profiles.direct_grants[0].node_id, "node");
 
         profiles.direct_grants[0].exec.enabled = true;
-        profiles.set_direct_grant(&presence, DirectGrantState::Ignored);
+        profiles
+            .set_direct_grant(&presence, DirectGrantState::Ignored)
+            .unwrap();
         assert_eq!(profiles.direct_grants.len(), 1);
         assert_eq!(
             profiles.grant_for("dev-a").unwrap().state,
             DirectGrantState::Ignored
         );
         assert!(!profiles.direct_grants[0].exec.enabled);
-        assert_eq!(profiles.direct_grants[0].exec.policy_revision, 9);
+        assert_eq!(profiles.direct_grants[0].exec.policy_revision, 8);
     }
 }

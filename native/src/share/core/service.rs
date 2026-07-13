@@ -74,7 +74,7 @@ impl ShareService {
     ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
         self.exec_grant_command(ShareCmd::ApplyExecGrant {
             target,
-            principal,
+            principal: Box::new(principal),
             policy,
         })
     }

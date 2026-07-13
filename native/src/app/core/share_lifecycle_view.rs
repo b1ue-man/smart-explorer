@@ -17,7 +17,9 @@ pub(super) struct RequestView {
     pub fingerprint: String,
     pub decision: DirectDecisionState,
     pub facts: Vec<LifecycleFact>,
+    pub identity_conflict: bool,
     pub can_decide: bool,
+    pub can_accept: bool,
     pub can_retry: bool,
     pub can_delete: bool,
 }
@@ -31,6 +33,7 @@ pub(super) struct AuthorizedDeviceView {
     pub connectivity: String,
     pub updated_at: String,
     pub accepted_request: Option<DirectRequestId>,
+    pub accepted_legacy_request: Option<String>,
 }
 
 pub(super) fn request_views(
@@ -40,6 +43,8 @@ pub(super) fn request_views(
     let mut incoming = Vec::new();
     let mut outgoing = Vec::new();
     for entry in &profiles.direct_requests {
+        let identity_conflict =
+            profiles.tracked_identity_conflict(&entry.record.request.request_id);
         let peer = match entry.direction {
             DirectRequestDirection::Incoming => &entry.record.request.requester,
             DirectRequestDirection::Outgoing => entry
@@ -91,17 +96,26 @@ pub(super) fn request_views(
         let peer_device_id = contact
             .and_then(|contact| contact.remote_device_id.clone())
             .unwrap_or_else(|| peer.device_id.clone());
+        let effective_decision = match entry.direction {
+            DirectRequestDirection::Outgoing => outgoing_effective_decision(entry, contact),
+            DirectRequestDirection::Incoming => entry.record.decision.state,
+        };
         let view = RequestView {
             request_id: entry.record.request.request_id.clone(),
             peer_device_id,
             peer_name,
             fingerprint: peer.fingerprint.clone(),
-            decision: entry.record.decision.state,
+            decision: effective_decision,
             facts,
+            identity_conflict,
             can_decide: entry.direction == DirectRequestDirection::Incoming
                 && entry.record.decision.state == DirectDecisionState::Pending
                 && entry.record.request.expires_at >= now,
-            can_retry: !entry.pending_outboxes(now).is_empty(),
+            can_accept: entry.direction == DirectRequestDirection::Incoming
+                && entry.record.decision.state == DirectDecisionState::Pending
+                && entry.record.request.expires_at >= now
+                && !identity_conflict,
+            can_retry: !entry.manually_retryable_outboxes(now).is_empty(),
             can_delete: entry.direction == DirectRequestDirection::Outgoing
                 || entry.record.decision.state == DirectDecisionState::Pending
                 || entry.removable_from_history(now),
@@ -124,7 +138,7 @@ pub(super) fn authorized_device_views(profiles: &ShareProfiles) -> Vec<Authorize
             .iter()
             .filter(|entry| {
                 entry.direction == DirectRequestDirection::Incoming
-                    && entry.record.request.requester.device_id == grant.device_id
+                    && request_matches_grant(entry, grant)
                     && entry.record.decision.state == DirectDecisionState::Accepted
             })
             .max_by_key(|entry| entry.record.decision.changed_at)
@@ -134,6 +148,18 @@ pub(super) fn authorized_device_views(profiles: &ShareProfiles) -> Vec<Authorize
             crate::share::DirectGrantState::Ignored => "inactive — Zugriff gesperrt",
         }
         .to_string();
+        let accepted_legacy_request = profiles
+            .legacy_direct_requests
+            .iter()
+            .filter(|entry| {
+                entry.peer.device_id == grant.device_id
+                    && entry.peer.public_key == grant.public_key
+                    && entry.peer.node_id == grant.node_id
+                    && entry.peer.fingerprint == grant.fingerprint
+                    && entry.decision == crate::share::LegacyDirectDecisionState::Accepted
+            })
+            .max_by_key(|entry| entry.decision_changed_at)
+            .map(|entry| entry.selector.clone());
         let connectivity = profiles
             .direct_contacts
             .iter()
@@ -148,6 +174,7 @@ pub(super) fn authorized_device_views(profiles: &ShareProfiles) -> Vec<Authorize
             connectivity,
             updated_at: timestamp(grant.updated_at),
             accepted_request,
+            accepted_legacy_request,
         });
     }
     views.sort_by(|left, right| left.device_name.cmp(&right.device_name));
@@ -175,7 +202,7 @@ fn outgoing_facts(
     });
     facts.push(LifecycleFact {
         label: "Entscheidung vom Peer".into(),
-        value: decision_label(entry.record.decision.state).into(),
+        value: outgoing_decision_label(entry, contact),
     });
     if entry.decision_receipt.is_some() {
         facts.push(LifecycleFact {
@@ -216,6 +243,46 @@ fn outgoing_facts(
     }
 }
 
+fn outgoing_effective_decision(
+    entry: &crate::share::DirectRequestEntry,
+    contact: Option<&crate::share::DirectContact>,
+) -> DirectDecisionState {
+    if entry.decision.is_some()
+        || entry.retries.request.relay_outcome != Some(DirectRelayOutcome::LegacyForwarded)
+    {
+        return entry.record.decision.state;
+    }
+    match contact.map(|contact| &contact.access_state) {
+        Some(crate::share::DirectAccessState::Accepted) => DirectDecisionState::Accepted,
+        Some(crate::share::DirectAccessState::Ignored) => DirectDecisionState::Rejected,
+        _ => DirectDecisionState::Pending,
+    }
+}
+
+fn outgoing_decision_label(
+    entry: &crate::share::DirectRequestEntry,
+    contact: Option<&crate::share::DirectContact>,
+) -> String {
+    if entry.decision.is_some()
+        || entry.retries.request.relay_outcome != Some(DirectRelayOutcome::LegacyForwarded)
+    {
+        return decision_label(entry.record.decision.state).into();
+    }
+    match contact.map(|contact| &contact.access_state) {
+        Some(crate::share::DirectAccessState::Accepted) => {
+            "accepted — Altclient-Beziehungsfreigabe; keine signierte Request-Entscheidung".into()
+        }
+        Some(crate::share::DirectAccessState::Ignored) => {
+            "rejected — Altclient-Beziehungsentscheidung; keine signierte Request-Entscheidung"
+                .into()
+        }
+        Some(crate::share::DirectAccessState::IdentityConflict) => {
+            "identity_conflict — Altclient-Identitaet stimmt nicht".into()
+        }
+        _ => "pending — Altclient-Entscheidung offen".into(),
+    }
+}
+
 fn incoming_facts(
     entry: &crate::share::DirectRequestEntry,
     profiles: &ShareProfiles,
@@ -235,6 +302,30 @@ fn incoming_facts(
         label: "Lokale Entscheidung".into(),
         value: decision_label(entry.record.decision.state).into(),
     });
+    if profiles.tracked_identity_conflict(&entry.record.request.request_id) {
+        let peer = &entry.record.request.requester;
+        let active_blocker = profiles.direct_grants.iter().find(|grant| {
+            grant.state == crate::share::DirectGrantState::Accepted
+                && grant.device_id == peer.device_id
+                && (grant.public_key != peer.public_key
+                    || grant.node_id != peer.node_id
+                    || grant.fingerprint != peer.fingerprint)
+        });
+        let resolution = if let Some(grant) = active_blocker {
+            format!(
+                "bestehende Autorisierung {} (Fingerprint {}) unten widerrufen, um diese Anfrage zu behalten; alternativ diese Anfrage ablehnen oder loeschen",
+                grant.device_name, grant.fingerprint
+            )
+        } else if entry.record.decision.state == DirectDecisionState::Accepted {
+            "passende Autorisierung zuerst widerrufen".to_string()
+        } else {
+            "eine der konfligierenden Anfragen ablehnen oder lokal loeschen".to_string()
+        };
+        facts.push(LifecycleFact {
+            label: "Identitaetskonflikt".into(),
+            value: format!("blocked — gleiche Geraet-ID mit abweichendem Schluessel; {resolution}"),
+        });
+    }
     if entry.decision.is_some() {
         facts.push(LifecycleFact {
             label: "Lokaler Versand Entscheidung".into(),
@@ -250,7 +341,9 @@ fn incoming_facts(
         });
     }
     let grant = profiles
-        .grant_for(&entry.record.request.requester.device_id)
+        .direct_grants
+        .iter()
+        .find(|grant| request_matches_grant(entry, grant))
         .map(|grant| match grant.state {
             crate::share::DirectGrantState::Accepted => "active — Zugriff erlaubt",
             crate::share::DirectGrantState::Ignored => "inactive — Zugriff gesperrt",
@@ -284,6 +377,7 @@ fn append_retry(label: &str, retry: &DirectRetryState, facts: &mut Vec<Lifecycle
     if let Some(outcome) = retry.relay_outcome {
         let outcome = match outcome {
             DirectRelayOutcome::Forwarded => "forwarded",
+            DirectRelayOutcome::LegacyForwarded => "legacy_forwarded",
             DirectRelayOutcome::TargetOffline => "target_offline",
         };
         value.push_str(&format!("; Relay: {outcome}"));
@@ -330,6 +424,9 @@ fn transport_state(retry: &DirectRetryState) -> String {
         Some(DirectRelayOutcome::Forwarded) => {
             "relay_forwarded — Peer-Empfang nicht bestaetigt".into()
         }
+        Some(DirectRelayOutcome::LegacyForwarded) => {
+            "legacy_forwarded — Altclient hat keine signierte Empfangsquittung".into()
+        }
         Some(DirectRelayOutcome::TargetOffline) => {
             "sent — Relay meldet target_offline; Retry aktiv".into()
         }
@@ -360,6 +457,17 @@ fn created_at(profiles: &ShareProfiles, request_id: &DirectRequestId) -> i64 {
         .direct_request(request_id)
         .map(|entry| entry.record.request.created_at)
         .unwrap_or_default()
+}
+
+fn request_matches_grant(
+    entry: &crate::share::DirectRequestEntry,
+    grant: &crate::share::DirectGrant,
+) -> bool {
+    let peer = &entry.record.request.requester;
+    peer.device_id == grant.device_id
+        && peer.public_key == grant.public_key
+        && peer.node_id == grant.node_id
+        && peer.fingerprint == grant.fingerprint
 }
 
 #[cfg(test)]

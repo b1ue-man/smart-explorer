@@ -54,8 +54,11 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
         .direct_grants
         .iter()
         .map(|grant| {
-            let requests = related_requests(profiles, &grant.device_id)
+            let requests = related_requests(profiles, grant)
                 .map(|entry| lifecycle_output::request_value(entry, profiles))
+                .collect::<Vec<_>>();
+            let legacy_requests = related_legacy_requests(profiles, grant)
+                .map(|entry| super::requests_legacy::value(entry, profiles))
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "selector": grant.device_id,
@@ -82,6 +85,7 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                 "connectivity": {"state": "unknown", "label": "Not tracked per grant"},
                 "tracked": !requests.is_empty(),
                 "requests": requests,
+                "legacy_requests": legacy_requests,
             })
         })
         .collect()
@@ -90,14 +94,18 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
 pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
     let mut lines = Vec::new();
     for grant in &profiles.direct_grants {
-        let related = related_requests(profiles, &grant.device_id).collect::<Vec<_>>();
+        let related = related_requests(profiles, grant).collect::<Vec<_>>();
         let request_ids = related
             .iter()
             .map(|entry| entry.record.request.request_id.as_str())
             .collect::<Vec<_>>()
             .join(",");
+        let legacy_selectors = related_legacy_requests(profiles, grant)
+            .map(|entry| entry.selector.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         lines.push(format!(
-            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}",
+            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}",
             clean(&grant.device_id),
             clean(&grant.device_name),
             clean(&grant.fingerprint),
@@ -111,6 +119,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             if grant.exec.enabled { "enabled" } else { "disabled" },
             grant.exec.policy_revision,
             request_ids,
+            legacy_selectors,
         ));
         for entry in related {
             lines.extend(lifecycle_output::request_text(entry, profiles));
@@ -183,8 +192,14 @@ fn revoke(args: RevokeArgs, json: bool) -> Result<(), String> {
         &grant.fingerprint,
         &grant.device_id,
     )?;
-    let Some(entry) = latest_accepted_request(&profiles, &grant.device_id) else {
-        return revoke_legacy(grant, json);
+    let Some(entry) = latest_accepted_request(&profiles, grant) else {
+        if args.message.is_some() {
+            return Err(
+                "legacy grant revocation does not support an authenticated --message; omit it"
+                    .into(),
+            );
+        }
+        return revoke_legacy(&profiles, grant, json);
     };
     let request_id = entry.record.request.request_id.clone();
     let identity = super::identity_command::load_with_repair_hint()?;
@@ -225,9 +240,48 @@ fn revoke(args: RevokeArgs, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn revoke_legacy(grant: &crate::share::DirectGrant, json: bool) -> Result<(), String> {
+fn revoke_legacy(
+    profiles: &crate::share::ShareProfiles,
+    grant: &crate::share::DirectGrant,
+    json: bool,
+) -> Result<(), String> {
+    if let Some(entry) = related_legacy_requests(profiles, grant)
+        .filter(|entry| entry.decision == crate::share::LegacyDirectDecisionState::Accepted)
+        .max_by_key(|entry| entry.decision_changed_at)
+    {
+        let selector = entry.selector.clone();
+        let persisted =
+            crate::share::revoke_legacy_direct_request(Some(super::default_home()), &selector)?;
+        let (worker_state, worker_error) = worker_refresh();
+        let committed = super::checked_profiles()?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "revoked",
+                    "legacy": true,
+                    "request": super::requests_legacy::value(&persisted, &committed),
+                    "worker_refresh": {"state": worker_state, "error": worker_error},
+                }))
+                .map_err(|error| error.to_string())?
+            );
+        } else {
+            println!(
+                "action\trevoked\tselector={}\tlegacy=true\tdecision_delivery=local_only_untracked\tauthorization=inactive\tpersisted=true\tworker_refresh={}",
+                clean(&selector), worker_state
+            );
+        }
+        return Ok(());
+    }
     let device_id = grant.device_id.clone();
     let public_key = grant.public_key.clone();
+    let peer = crate::share::DirectPeerIdentity {
+        device_id: grant.device_id.clone(),
+        device_name: grant.device_name.clone(),
+        node_id: grant.node_id.clone(),
+        public_key: grant.public_key.clone(),
+        fingerprint: grant.fingerprint.clone(),
+    };
     let now = crate::share::core_now_secs();
     let committed =
         crate::share::ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
@@ -239,6 +293,7 @@ fn revoke_legacy(grant: &crate::share::DirectGrant, json: bool) -> Result<(), St
             current.state = crate::share::DirectGrantState::Ignored;
             current.updated_at = now;
             current.exec.disable_without_decision(now);
+            profiles.mark_legacy_revoked_for_peer(&peer, now);
             Ok(())
         })?;
     let persisted = committed
@@ -274,11 +329,23 @@ fn revoke_legacy(grant: &crate::share::DirectGrant, json: bool) -> Result<(), St
     Ok(())
 }
 
+fn related_legacy_requests<'a>(
+    profiles: &'a crate::share::ShareProfiles,
+    grant: &'a crate::share::DirectGrant,
+) -> impl Iterator<Item = &'a crate::share::LegacyDirectRequestEntry> {
+    profiles.legacy_direct_requests.iter().filter(move |entry| {
+        entry.peer.device_id == grant.device_id
+            && entry.peer.public_key == grant.public_key
+            && entry.peer.node_id == grant.node_id
+            && entry.peer.fingerprint == grant.fingerprint
+    })
+}
+
 fn latest_accepted_request<'a>(
     profiles: &'a crate::share::ShareProfiles,
-    device_id: &'a str,
+    grant: &'a crate::share::DirectGrant,
 ) -> Option<&'a crate::share::DirectRequestEntry> {
-    related_requests(profiles, device_id)
+    related_requests(profiles, grant)
         .filter(|entry| entry.record.decision.state == crate::share::DirectDecisionState::Accepted)
         .max_by_key(|entry| entry.record.decision.changed_at)
 }
@@ -291,8 +358,10 @@ fn grant_selector_matches(
     grant.device_name.eq_ignore_ascii_case(selector)
         || exact_or_prefix(selector, &grant.device_id)
         || exact_or_prefix(selector, &grant.fingerprint)
-        || related_requests(profiles, &grant.device_id)
+        || related_requests(profiles, grant)
             .any(|entry| exact_or_prefix(selector, entry.record.request.request_id.as_str()))
+        || related_legacy_requests(profiles, grant)
+            .any(|entry| exact_or_prefix(selector, &entry.selector))
 }
 
 fn exact_or_prefix(selector: &str, candidate: &str) -> bool {
@@ -305,12 +374,23 @@ fn exact_or_prefix(selector: &str, candidate: &str) -> bool {
 
 fn related_requests<'a>(
     profiles: &'a crate::share::ShareProfiles,
-    device_id: &'a str,
+    grant: &'a crate::share::DirectGrant,
 ) -> impl Iterator<Item = &'a crate::share::DirectRequestEntry> {
     profiles.direct_requests.iter().filter(move |entry| {
         entry.direction == crate::share::DirectRequestDirection::Incoming
-            && entry.record.request.requester.device_id == device_id
+            && tracked_request_matches_grant(entry, grant)
     })
+}
+
+fn tracked_request_matches_grant(
+    entry: &crate::share::DirectRequestEntry,
+    grant: &crate::share::DirectGrant,
+) -> bool {
+    let peer = &entry.record.request.requester;
+    peer.device_id == grant.device_id
+        && peer.public_key == grant.public_key
+        && peer.node_id == grant.node_id
+        && peer.fingerprint == grant.fingerprint
 }
 
 fn worker_refresh() -> (&'static str, Option<String>) {
@@ -334,3 +414,7 @@ fn grant_state_code(state: &crate::share::DirectGrantState) -> &'static str {
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
+
+#[cfg(test)]
+#[path = "grants_tests.rs"]
+mod tests;

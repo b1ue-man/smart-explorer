@@ -5,10 +5,16 @@ use super::*;
 mod drain;
 #[path = "share_helpers.rs"]
 mod helpers;
+#[path = "share_identity_rotation.rs"]
+mod identity_rotation;
+#[path = "share_legacy_lifecycle_ui.rs"]
+mod legacy_lifecycle_ui;
 #[path = "share_lifecycle_ui.rs"]
 mod lifecycle_ui;
 #[path = "share_poll_status.rs"]
 mod poll_status;
+#[path = "share_profile_cache.rs"]
+mod profile_cache;
 #[path = "share_profile_edits.rs"]
 mod profile_edits;
 #[path = "share_lifecycle_view.rs"]
@@ -532,29 +538,7 @@ impl App {
             );
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Wirklich neu generieren").clicked() {
-                    match self
-                        .share_identity
-                        .as_mut()
-                        .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())
-                        .and_then(|identity| identity.regenerate_direct_code())
-                    {
-                        Ok(outcome) => {
-                            self.share_regenerate_direct_confirm = false;
-                            let configured = self.configure_share_service();
-                            if configured {
-                                self.notice = Some((
-                                    "Direkt-Code dauerhaft erneuert".into(),
-                                    std::time::Instant::now(),
-                                ));
-                            }
-                            if let Some(warning) = outcome.cleanup_warning {
-                                self.error_msg = Some(warning);
-                            }
-                        }
-                        Err(error) => {
-                            self.error_msg = Some(format!("Direkt-Code nicht erneuert: {error}"));
-                        }
-                    }
+                    identity_rotation::rotate(self);
                 }
                 if ui.button("Abbrechen").clicked() {
                     self.share_regenerate_direct_confirm = false;

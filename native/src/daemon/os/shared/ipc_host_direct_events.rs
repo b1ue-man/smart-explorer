@@ -2,21 +2,60 @@ use crate::share::{
     DirectDecisionKind, DirectGrantState, DirectLedgerError, DirectPeerIdentity,
     DirectProtocolError, DirectRequestDirection, DirectSignalEvent, ShareIdentity, ShareProfiles,
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequestReceipt,
+    MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
 };
-use std::fmt;
+use std::{cell::RefCell, fmt};
 
-const DECISION_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
-
-pub(crate) fn persist_all(
+pub(super) fn persist_group(
     identity: &ShareIdentity,
     events: &[DirectSignalEvent],
-) -> Result<ShareProfiles, String> {
-    ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
+) -> Result<ShareProfiles, GroupPersistError> {
+    let apply_error = RefCell::new(None);
+    let result = ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
+        apply_error.take();
         for event in events {
-            apply(profiles, identity, event).map_err(|error| error.to_string())?;
+            if let Err(error) = apply(profiles, identity, event) {
+                let message = error.to_string();
+                apply_error.replace(Some(error));
+                return Err(message);
+            }
         }
         Ok(())
-    })
+    });
+    match result {
+        Ok(profiles) => Ok(profiles),
+        Err(error) => match apply_error.take() {
+            Some(error) if error.is_retryable() => {
+                Err(GroupPersistError::Retryable(error.to_string()))
+            }
+            Some(error) => Err(GroupPersistError::Permanent(error.to_string())),
+            None if retryable_persistence_error(&error) => Err(GroupPersistError::Retryable(error)),
+            None => Err(GroupPersistError::Permanent(error)),
+        },
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum GroupPersistError {
+    Permanent(String),
+    Retryable(String),
+}
+
+fn retryable_persistence_error(error: &str) -> bool {
+    let permanent = [
+        "Share-Profile sind beschaedigt",
+        "Nicht unterstuetzte Share-Profilversion",
+        "Share-Profile kodieren",
+        "exceed their byte budget",
+        "not a regular file",
+        "not valid UTF-8",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker));
+    !permanent
+        && (error.starts_with("Share-Profile lesen:")
+            || error.starts_with("Share-Profile speichern:")
+            || error.contains("changed concurrently"))
 }
 
 fn apply(
@@ -197,7 +236,7 @@ fn ensure_existing_grant_decision(
         decision,
         1,
         now,
-        now.saturating_add(DECISION_LIFETIME_SECS),
+        now.saturating_add(MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS),
         None,
         &identity.direct_secret(),
         &identity.iroh_secret,
@@ -229,7 +268,8 @@ fn outgoing_request_and_secret(
         .iter()
         .find(|contact| contact.id == contact_id)
         .ok_or("direct request contact was removed")?;
-    let secret = ShareProfiles::direct_secret_checked(contact)?
+    let secret = ShareProfiles::direct_secret_checked(contact)
+        .map_err(ApplyError::relation_secret)?
         .ok_or("direct request relation secret is missing")?;
     Ok((request, secret))
 }
@@ -242,12 +282,31 @@ fn local_peer(identity: &ShareIdentity) -> DirectPeerIdentity {
     )
 }
 
-#[derive(Debug)]
-struct ApplyError(String);
+#[derive(Clone, Debug)]
+enum ApplyError {
+    Permanent(String),
+    Retryable(String),
+}
+
+impl ApplyError {
+    fn relation_secret(error: String) -> Self {
+        if error.contains("ist ungueltig") || error.contains("hat nicht 32 Bytes") {
+            Self::Permanent(error)
+        } else {
+            Self::Retryable(error)
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::Retryable(_))
+    }
+}
 
 impl fmt::Display for ApplyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        match self {
+            Self::Permanent(error) | Self::Retryable(error) => formatter.write_str(error),
+        }
     }
 }
 
@@ -255,24 +314,35 @@ impl std::error::Error for ApplyError {}
 
 impl From<DirectProtocolError> for ApplyError {
     fn from(error: DirectProtocolError) -> Self {
-        Self(error.to_string())
+        if error == DirectProtocolError::EntropyUnavailable {
+            Self::Retryable(error.to_string())
+        } else {
+            Self::Permanent(error.to_string())
+        }
     }
 }
 
 impl From<DirectLedgerError> for ApplyError {
     fn from(error: DirectLedgerError) -> Self {
-        Self(error.to_string())
+        if matches!(
+            error,
+            DirectLedgerError::Protocol(DirectProtocolError::EntropyUnavailable)
+        ) {
+            Self::Retryable(error.to_string())
+        } else {
+            Self::Permanent(error.to_string())
+        }
     }
 }
 
 impl From<String> for ApplyError {
     fn from(error: String) -> Self {
-        Self(error)
+        Self::Permanent(error)
     }
 }
 
 impl From<&str> for ApplyError {
     fn from(error: &str) -> Self {
-        Self(error.to_string())
+        Self::Permanent(error.to_string())
     }
 }

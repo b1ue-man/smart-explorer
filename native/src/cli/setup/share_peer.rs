@@ -256,6 +256,7 @@ fn refresh_worker_state() -> (&'static str, Option<String>) {
 fn relay_outcome_code(outcome: crate::share::DirectRelayOutcome) -> &'static str {
     match outcome {
         crate::share::DirectRelayOutcome::Forwarded => "forwarded",
+        crate::share::DirectRelayOutcome::LegacyForwarded => "legacy_forwarded",
         crate::share::DirectRelayOutcome::TargetOffline => "target_offline",
     }
 }

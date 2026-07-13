@@ -110,6 +110,25 @@ impl SignalConnection {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn from_test_tcp(stream: TcpStream) -> io::Result<Self> {
+        set_tcp_timeouts(&stream, SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
+        let reader = io::BufReader::new(stream.try_clone()?);
+        Ok(Self::Tcp {
+            label: "tcp://test".into(),
+            stream,
+            reader,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn shutdown_test_transport(&mut self) -> io::Result<()> {
+        match self {
+            Self::Tcp { stream, .. } => stream.shutdown(std::net::Shutdown::Both),
+            Self::WebSocket { .. } => Err(eio("test shutdown requires raw TCP")),
+        }
+    }
+
     fn send<T: serde::Serialize>(&mut self, msg: &T) -> io::Result<()> {
         match self {
             Self::Tcp { stream, .. } => {

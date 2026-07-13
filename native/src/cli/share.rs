@@ -12,9 +12,15 @@ mod identity_command;
 #[path = "share/lifecycle_output.rs"]
 pub(super) mod lifecycle_output;
 #[path = "share/request_selection.rs"]
-mod request_selection;
+pub(super) mod request_selection;
 #[path = "share/requests.rs"]
 mod requests;
+#[path = "share/requests_inbox.rs"]
+mod requests_inbox;
+#[path = "share/requests_legacy.rs"]
+mod requests_legacy;
+#[path = "share/requests_support.rs"]
+mod requests_support;
 #[path = "share/status.rs"]
 mod status;
 
@@ -156,8 +162,13 @@ fn worker(command: WorkerCommand) -> Result<(), String> {
 }
 
 pub(super) fn checked_profiles() -> Result<crate::share::ShareProfiles, String> {
-    crate::share::ShareProfiles::load_checked(Some(default_home()))
-        .map_err(|error| format!("share profiles: {error}"))
+    let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
+        .map_err(|error| format!("share profiles: {error}"))?;
+    if !profiles.legacy_direct_requests.is_empty() {
+        let identity = identity_command::load_with_repair_hint()?;
+        profiles = crate::share::refresh_legacy_request_expiry(Some(default_home()), &identity)?;
+    }
+    Ok(profiles)
 }
 
 pub(super) fn validate_server(server: &str) -> Result<String, String> {
