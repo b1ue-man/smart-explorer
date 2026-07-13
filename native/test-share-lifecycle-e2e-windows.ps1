@@ -166,6 +166,13 @@ function Start-ClientProcess {
             -RedirectStandardOutput $StdoutPath `
             -RedirectStandardError $StderrPath `
             -WindowStyle Hidden
+        # Open and retain the native process handle while the child is still
+        # associated with this Process instance. Windows PowerShell 5.1 can
+        # return an empty adapted Handle after a fast redirected child exits.
+        [IntPtr]$processHandle = $process.Handle
+        if ($processHandle -eq [IntPtr]::Zero) {
+            throw "Start-Process returned an invalid native process handle"
+        }
     }
     finally {
         foreach ($name in $environment.Keys) {
@@ -175,6 +182,7 @@ function Start-ClientProcess {
 
     return [pscustomobject]@{
         Process = $process
+        ProcessHandle = $processHandle
         StdoutPath = $StdoutPath
         StderrPath = $StderrPath
     }
@@ -208,12 +216,13 @@ function Wait-ClientProcess {
     if (-not $process.HasExited) {
         throw "$Context reported WaitForExit success while the process was still active"
     }
-    # Windows PowerShell 5.1 returned an empty adapted ExitCode for a fast,
-    # redirected child in CI even after both waits. The retained native process
-    # handle is the authoritative source and also distinguishes STILL_ACTIVE.
+    # Windows PowerShell 5.1 returned empty adapted ExitCode and Handle values
+    # for a fast redirected child in CI even after both waits. Use the native
+    # handle captured immediately after Start-Process; it is authoritative and
+    # also distinguishes STILL_ACTIVE.
     [uint32]$nativeExitCode = 0
     if (-not [SmartExplorerE2E.NativeProcess]::GetExitCodeProcess(
-        $process.Handle,
+        [IntPtr]$Invocation.ProcessHandle,
         [ref]$nativeExitCode
     )) {
         $win32 = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
