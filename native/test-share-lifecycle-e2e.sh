@@ -35,7 +35,7 @@ cleanup() {
   if [[ $status -ne 0 ]]; then
     echo "Share lifecycle E2E failed; diagnostics: $root" >&2
   fi
-  if [[ "${SMART_EXPLORER_KEEP_E2E_ROOT:-0}" != 1 ]]; then
+  if [[ $status -eq 0 && "${SMART_EXPLORER_KEEP_E2E_ROOT:-0}" != 1 ]]; then
     rm -rf "$root"
   fi
   return "$status"
@@ -244,6 +244,7 @@ wait_child() {
     sleep 0.1
   done
   if kill -0 "$pid" 2>/dev/null; then
+    ps -o pid,ppid,stat,wchan:32,etime,cmd -p "$pid" >&2 || true
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     echo "child $pid did not exit within ${timeout}s" >&2

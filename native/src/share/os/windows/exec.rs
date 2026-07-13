@@ -7,7 +7,7 @@ use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
@@ -37,7 +37,7 @@ use crate::share::exec_types::{ExecProviderStatus, ExecStart};
 const INTERNAL_MODE: &str = "--share-exec-supervisor";
 
 pub(crate) struct ContainedExec {
-    control: Arc<Control>,
+    control: Control,
     events: mpsc::Receiver<io::Result<SupervisorEvent>>,
 }
 
@@ -83,7 +83,7 @@ impl ContainedExec {
                     break;
                 }
             })?;
-        let control = Arc::new(Control {
+        let control = Control {
             job,
             outbound,
             launch: Mutex::new(LaunchState {
@@ -92,7 +92,7 @@ impl ContainedExec {
                 resumed: false,
             }),
             stopped: AtomicBool::new(false),
-        });
+        };
         Ok(Self { control, events })
     }
 
@@ -105,7 +105,7 @@ impl ContainedExec {
     }
 
     pub(crate) fn next_event(&mut self, deadline: Option<Instant>) -> io::Result<SupervisorEvent> {
-        let result = match deadline {
+        match deadline {
             Some(deadline) => self
                 .events
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -120,8 +120,7 @@ impl ContainedExec {
             None => self.events.recv().map_err(|_| {
                 io::Error::new(io::ErrorKind::UnexpectedEof, "exec supervisor closed")
             })?,
-        };
-        result
+        }
     }
 
     pub(crate) fn terminate_all(&mut self, _reason: StopReason) -> io::Result<()> {
@@ -244,14 +243,14 @@ fn create_job() -> io::Result<OwnedHandle> {
 
 /// Returns `(child_end, parent_file)`. `parent_reads` chooses pipe direction.
 fn pipe_pair(parent_reads: bool) -> io::Result<(OwnedHandle, std::fs::File)> {
-    let mut attributes = SECURITY_ATTRIBUTES {
+    let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: std::ptr::null_mut(),
         bInheritHandle: 1,
     };
     let mut read = std::ptr::null_mut();
     let mut write = std::ptr::null_mut();
-    if unsafe { CreatePipe(&mut read, &mut write, &mut attributes, 0) } == 0 {
+    if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let read = OwnedHandle::new(read)?;
