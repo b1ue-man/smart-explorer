@@ -487,7 +487,8 @@ function Wait-ExecHistory {
     param(
         [string]$ClientRoot,
         [string]$Direction,
-        [string]$State
+        [string]$State,
+        [string]$Program = ""
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -498,9 +499,18 @@ function Wait-ExecHistory {
         ) -TimeoutSeconds 10
         if ($lastResult.ExitCode -eq 0) {
             try {
-                $history = @($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop)
+                $history = @(
+                    ($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop) |
+                        ForEach-Object { $_ }
+                )
                 $match = @($history | Where-Object {
-                    $_.direction -eq $Direction -and $_.job.state -eq $State
+                    $_.direction -eq $Direction -and
+                        $_.job.state -eq $State -and
+                        ([string]::IsNullOrEmpty($Program) -or
+                            [StringComparer]::OrdinalIgnoreCase.Equals(
+                                [string]$_.job.program,
+                                $Program
+                            ))
                 })
                 if ($match.Count -gt 0) {
                     return $match[$match.Count - 1]
@@ -534,7 +544,10 @@ function Wait-ExecState {
         ) -TimeoutSeconds 10
         if ($lastResult.ExitCode -eq 0) {
             try {
-                $jobs = @($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop)
+                $jobs = @(
+                    ($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop) |
+                        ForEach-Object { $_ }
+                )
                 $matches = @($jobs | Where-Object {
                     $_.direction -eq $Direction -and $_.job.state -eq $State
                 })
@@ -577,7 +590,10 @@ function Wait-ExecHistoryId {
         ) -TimeoutSeconds 10
         if ($lastResult.ExitCode -eq 0) {
             try {
-                $history = @($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop)
+                $history = @(
+                    ($lastResult.Stdout | ConvertFrom-Json -ErrorAction Stop) |
+                        ForEach-Object { $_ }
+                )
                 $match = @($history | Where-Object {
                     $_.direction -eq $Direction -and
                         $_.job.state -eq $State -and
@@ -860,13 +876,22 @@ function Stop-ClientWorkerFully {
             $stopError = $_.Exception.Message
         }
 
+        $stopPath = Join-Path $ClientRoot "roaming\smart_explorer\sync\daemon.stop"
+        [System.IO.Directory]::CreateDirectory(
+            [System.IO.Path]::GetDirectoryName($stopPath)
+        ) | Out-Null
+        [System.IO.File]::WriteAllBytes(
+            $stopPath,
+            [System.Text.Encoding]::ASCII.GetBytes("stop")
+        )
+
         if (-not $worker.WaitForExit(10000)) {
             $forcedStop = $true
             if (-not $worker.HasExited) {
                 $worker.Kill()
             }
             if (-not $worker.WaitForExit(10000)) {
-                throw "Share worker for $ClientRoot survived its verified cleanup kill"
+                throw "daemon for $ClientRoot survived its verified cleanup kill"
             }
         }
     }
@@ -882,7 +907,7 @@ function Stop-ClientWorkerFully {
                 $replacement.Kill()
             }
             if (-not $replacement.WaitForExit(10000)) {
-                throw "replacement Share worker for $ClientRoot survived its verified cleanup kill"
+                throw "replacement daemon for $ClientRoot survived its verified cleanup kill"
             }
         }
         finally {
@@ -893,7 +918,7 @@ function Stop-ClientWorkerFully {
     $remaining = Get-PublishedClientWorkerProcess $ClientRoot
     if ($null -ne $remaining) {
         try {
-            throw "Share worker for $ClientRoot remained published after complete cleanup"
+            throw "daemon for $ClientRoot remained published after complete cleanup"
         }
         finally {
             $remaining.Dispose()
@@ -903,7 +928,7 @@ function Stop-ClientWorkerFully {
         throw "Share worker stop failed for ${ClientRoot}: $stopError"
     }
     if ($forcedStop) {
-        throw "Share worker for $ClientRoot required a hard cleanup kill"
+        throw "daemon for $ClientRoot required a hard cleanup kill"
     }
     return $result
 }
@@ -1179,9 +1204,10 @@ try {
     )
     Assert-True ($exec.ExitCode -eq 7) "remote cmd.exe exit code was $($exec.ExitCode), expected 7`n$($exec.Stderr)"
     Assert-True ($exec.Stdout -match "(?m)^WINDOWS_EXEC_OK\s*$") "remote cmd.exe stdout was not returned"
-    $outgoingExec = Wait-ExecHistory $clientA "outgoing" "exited"
-    $incomingExec = Wait-ExecHistory $clientB "incoming" "exited"
-    Assert-True ($outgoingExec.job.exec_id -eq $incomingExec.job.exec_id) "Exec history did not converge on both endpoints"
+    $outgoingExec = Wait-ExecHistory $clientA "outgoing" "exited" -Program "cmd.exe"
+    $execId = [string]$outgoingExec.job.exec_id
+    $incomingExec = Wait-ExecHistoryId $clientB "incoming" "exited" $execId
+    Assert-True ($execId -eq [string]$incomingExec.job.exec_id) "Exec history did not converge on both endpoints"
     Assert-True ([int]$outgoingExec.job.terminal.exit_code -eq 7) "outgoing Exec history lost the remote exit code"
 
     # A healthy command may remain completely silent beyond the 20-second
