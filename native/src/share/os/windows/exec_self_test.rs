@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 mod process;
 
 use self::process::{
-    launch_isolated_suspended_test_host, launch_suspended_test_host, IsolationOutcome,
-    SuspendedTestHost,
+    launch_suspended_test_host, launch_suspended_test_host_in_job, SuspendedTestHost,
 };
 
 use windows_sys::Win32::Foundation::{
@@ -34,7 +33,7 @@ use crate::share::exec_types::{ExecCommand, ExecId, ExecStart};
 use super::{ContainedExec, OwnedHandle, StopReason};
 
 const NESTED_HELPER_MODE: &str = "--share-exec-windows-nested-job-probe";
-const INCOMPATIBLE_HELPER_MODE: &str = "--share-exec-windows-incompatible-job-probe";
+const RESTRICTED_HELPER_MODE: &str = "--share-exec-windows-restricted-job-probe";
 const BREAKAWAY_HELPER_MODE: &str = "--share-exec-windows-breakaway-probe";
 const BREAKAWAY_TARGET_MODE: &str = "--share-exec-windows-breakaway-target";
 const HANDLE_HELPER_MODE: &str = "--share-exec-windows-handle-probe";
@@ -43,8 +42,8 @@ pub(super) fn run_helper_if_requested(arguments: &[OsString]) -> Option<io::Resu
     if arguments.len() == 1 {
         let result = if arguments[0] == NESTED_HELPER_MODE {
             run_nested_helper()
-        } else if arguments[0] == INCOMPATIBLE_HELPER_MODE {
-            run_incompatible_helper()
+        } else if arguments[0] == RESTRICTED_HELPER_MODE {
+            run_restricted_helper()
         } else if arguments[0] == BREAKAWAY_HELPER_MODE {
             run_breakaway_helper()
         } else if arguments[0] == BREAKAWAY_TARGET_MODE {
@@ -62,7 +61,7 @@ pub(super) fn run_helper_if_requested(arguments: &[OsString]) -> Option<io::Resu
 
 pub(super) fn run() -> io::Result<()> {
     run_compatible_outer_job_test()?;
-    run_incompatible_outer_job_test()?;
+    run_restricted_outer_job_test()?;
     run_breakaway_test()?;
     run_handle_allowlist_test()
 }
@@ -73,47 +72,13 @@ fn run_compatible_outer_job_test() -> io::Result<()> {
     // outer Job then exercises the same supported nesting used by production.
     let child = launch_suspended_test_host(NESTED_HELPER_MODE)?;
     assign_to_outer_job(&outer, &child)?;
-    resume_and_expect_success(child)?;
-    require_empty_job(&outer, "compatible outer Job")
+    run_test_host_and_require_empty(child, &outer, "compatible outer Job")
 }
 
-fn run_incompatible_outer_job_test() -> io::Result<()> {
+fn run_restricted_outer_job_test() -> io::Result<()> {
     let outer = create_ui_restricted_job()?;
-    match launch_isolated_suspended_test_host(INCOMPATIBLE_HELPER_MODE)? {
-        IsolationOutcome::Isolated(child) => run_isolated_incompatible_test(&outer, child),
-        IsolationOutcome::AmbientLocked => require_ambient_incompatible_rejection(&outer),
-    }
-}
-
-fn run_isolated_incompatible_test(outer: &OwnedHandle, child: SuspendedTestHost) -> io::Result<()> {
-    if unsafe { AssignProcessToJobObject(outer.raw(), child.process.raw()) } == 0 {
-        let error = io::Error::last_os_error();
-        return Err(terminate_process_after_error(
-            &child.process,
-            error,
-            "incompatible outer Job setup",
-        ));
-    }
-    resume_and_expect_success(child)?;
-    require_empty_job(outer, "UI-restricted outer Job")
-}
-
-fn require_ambient_incompatible_rejection(outer: &OwnedHandle) -> io::Result<()> {
-    let (child_stdin, _writer) = super::pipe_pair(false)?;
-    let (child_stdout, _reader) = super::pipe_pair(true)?;
-    match super::launch_supervisor(outer.raw(), child_stdin.raw(), child_stdout.raw()) {
-        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => Ok(()),
-        Err(error) => Err(io::Error::other(format!(
-            "UI-restricted production launch failed with an unexpected error: {error}"
-        ))),
-        Ok(launched) => Err(terminate_process_after_error(
-            &launched.process,
-            io::Error::other(
-                "production launcher unexpectedly accepted a UI-restricted nested Job",
-            ),
-            "unexpected incompatible production launch",
-        )),
-    }
+    let child = launch_suspended_test_host_in_job(RESTRICTED_HELPER_MODE, outer.raw())?;
+    run_test_host_and_require_empty(child, &outer, "UI-restricted outer Job")
 }
 
 fn run_breakaway_test() -> io::Result<()> {
@@ -144,20 +109,15 @@ fn run_nested_helper() -> io::Result<()> {
     run_contained_helper(vec![BREAKAWAY_TARGET_MODE.into()])
 }
 
-fn run_incompatible_helper() -> io::Result<()> {
-    let request = helper_request(vec![BREAKAWAY_TARGET_MODE.into()])?;
+fn run_restricted_helper() -> io::Result<()> {
+    let request = helper_request(vec![BREAKAWAY_HELPER_MODE.into()])?;
+    request.validate()?;
     match ContainedExec::prepare(&request) {
         Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => Ok(()),
         Err(error) => Err(io::Error::other(format!(
-            "UI-restricted nested Job failed with an unexpected error: {error}"
+            "UI-restricted containment preparation failed unexpectedly: {error}"
         ))),
-        Ok(mut process) => {
-            process.terminate_all(StopReason::ProtocolError)?;
-            process.confirm_empty(Instant::now() + Duration::from_secs(5))?;
-            Err(io::Error::other(
-                "UI-restricted nested Job unexpectedly accepted the supervisor",
-            ))
-        }
+        Ok(process) => run_prepared_contained_helper(request, process),
     }
 }
 
@@ -226,8 +186,12 @@ fn run_handle_helper(argument: &OsString) -> io::Result<()> {
 fn run_contained_helper(arguments: Vec<String>) -> io::Result<()> {
     let request = helper_request(arguments)?;
     request.validate()?;
+    let process = ContainedExec::prepare(&request)?;
+    run_prepared_contained_helper(request, process)
+}
+
+fn run_prepared_contained_helper(request: ExecStart, mut process: ContainedExec) -> io::Result<()> {
     let environment = environment_for(&request);
-    let mut process = ContainedExec::prepare(&request)?;
     require_owned_supervisor_job(&process)?;
     process.configure(&request)?;
     process.send(&SupervisorCommand::Start(SupervisorStart {
@@ -325,6 +289,22 @@ fn assign_to_outer_job(job: &OwnedHandle, child: &SuspendedTestHost) -> io::Resu
         ));
     }
     Ok(())
+}
+
+fn run_test_host_and_require_empty(
+    child: SuspendedTestHost,
+    outer: &OwnedHandle,
+    label: &str,
+) -> io::Result<()> {
+    let run = resume_and_expect_success(child);
+    let drained = require_empty_job(outer, label);
+    match (run, drained) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(drain_error)) => Err(io::Error::other(format!(
+            "{error}; {label} drain also failed: {drain_error}"
+        ))),
+    }
 }
 
 fn resume_and_expect_success(child: SuspendedTestHost) -> io::Result<()> {
