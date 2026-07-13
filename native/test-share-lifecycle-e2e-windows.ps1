@@ -7,6 +7,22 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
+if ($null -eq ("SmartExplorerE2E.NativeProcess" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace SmartExplorerE2E
+{
+    public static class NativeProcess
+    {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetExitCodeProcess(IntPtr process, out UInt32 exitCode);
+    }
+}
+'@
+}
+
 $script:SeBinary = [System.IO.Path]::GetFullPath($SeBinary)
 $script:ShareServerBinary = [System.IO.Path]::GetFullPath($ShareServerBinary)
 $script:RelayUrl = $null
@@ -188,6 +204,24 @@ function Wait-ClientProcess {
     # A second wait lets Start-Process finish closing its redirected file
     # handles before this test reads the two files.
     $process.WaitForExit()
+    $process.Refresh()
+    if (-not $process.HasExited) {
+        throw "$Context reported WaitForExit success while the process was still active"
+    }
+    # Windows PowerShell 5.1 returned an empty adapted ExitCode for a fast,
+    # redirected child in CI even after both waits. The retained native process
+    # handle is the authoritative source and also distinguishes STILL_ACTIVE.
+    [uint32]$nativeExitCode = 0
+    if (-not [SmartExplorerE2E.NativeProcess]::GetExitCodeProcess(
+        $process.Handle,
+        [ref]$nativeExitCode
+    )) {
+        $win32 = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "$Context could not read its native exit code (Win32 $win32)"
+    }
+    if ($nativeExitCode -eq 259) {
+        throw "$Context returned STILL_ACTIVE after both waits"
+    }
     $stdout = if (Test-Path -LiteralPath $Invocation.StdoutPath) {
         [System.IO.File]::ReadAllText($Invocation.StdoutPath)
     }
@@ -197,7 +231,7 @@ function Wait-ClientProcess {
     }
     else { "" }
     return [pscustomobject]@{
-        ExitCode = $process.ExitCode
+        ExitCode = [int]$nativeExitCode
         Stdout = $stdout
         Stderr = $stderr
     }
