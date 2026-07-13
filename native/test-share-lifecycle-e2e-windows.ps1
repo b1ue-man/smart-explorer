@@ -860,17 +860,29 @@ try {
             $request.peer_receipt.request.state -eq "received"
     } "durably received with signed request receipt on requester" | Out-Null
 
-    # The pending inbox must survive a full target-worker restart.
-    $stopPendingB = Stop-ClientWorker $clientB
-    Assert-Success $stopPendingB "B pending worker stop"
+    # The pending inbox must survive a full daemon crash/restart without
+    # changing the persisted Auto-Connect preference. `share worker stop` is an
+    # intentional administrative disable and therefore is not a restart probe.
+    $pendingWorkerB = Get-ClientWorkerProcess $clientB 30
+    try {
+        Stop-BoundWorkerHard $pendingWorkerB "B pending restart"
+    }
+    finally {
+        $pendingWorkerB.Dispose()
+    }
     Wait-WorkerConnected $clientB 60 | Out-Null
     $restartedInbox = Wait-PendingRequestInbox $clientB
     Assert-True ([string]$restartedInbox.requests[0].request_id -eq $inboxRequestId) "B lost its pending request across worker restart"
 
     # A is offline while B accepts. B must retain and retry its signed
     # decision until A restarts and returns the decision receipt.
-    $stopBeforeAcceptA = Stop-ClientWorker $clientA
-    Assert-Success $stopBeforeAcceptA "A worker stop before B acceptance"
+    $offlineWorkerA = Get-ClientWorkerProcess $clientA 30
+    try {
+        Stop-BoundWorkerHard $offlineWorkerA "A offline-before-accept restart"
+    }
+    finally {
+        $offlineWorkerA.Dispose()
+    }
 
     $accepted = Convert-CommandJson (Invoke-Client -ClientRoot $clientB -Arguments @(
         "share", "request", "accept", "--json"
@@ -1188,10 +1200,22 @@ try {
     )) "B pending request delete"
     Assert-True ($pendingDeleted.request_id -eq $pendingInboxId) "B deleted a different pending request"
     Assert-True ([bool]$pendingDeleted.persisted) "pending request tombstone was not persisted"
-    Assert-Success (Stop-ClientWorker $clientD) "D tombstone worker stop"
+    $firstTombstoneWorkerD = Get-ClientWorkerProcess $clientD 30
+    try {
+        Stop-BoundWorkerHard $firstTombstoneWorkerD "D first tombstone restart"
+    }
+    finally {
+        $firstTombstoneWorkerD.Dispose()
+    }
     Wait-WorkerConnected $clientD 60 | Out-Null
     Wait-EmptyRequestInbox $clientD | Out-Null
-    Assert-Success (Stop-ClientWorker $clientD) "D second tombstone worker stop"
+    $secondTombstoneWorkerD = Get-ClientWorkerProcess $clientD 30
+    try {
+        Stop-BoundWorkerHard $secondTombstoneWorkerD "D second tombstone restart"
+    }
+    finally {
+        $secondTombstoneWorkerD.Dispose()
+    }
     Wait-WorkerConnected $clientD 60 | Out-Null
     Wait-EmptyRequestInbox $clientD | Out-Null
     Assert-Success (Invoke-Client -ClientRoot $clientA -Arguments @("connections", "remove-peer")) "A tombstone peer removal"
