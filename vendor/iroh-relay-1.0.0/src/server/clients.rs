@@ -11,7 +11,8 @@ use tracing::{debug, trace};
 
 use super::{
     ConnectionId, OnDisconnectGuard,
-    client::{Client, Config, ForwardPacketError},
+    client::{Client, ClientActorStart, Config, ForwardPacketError, TrySendPacketError},
+    queue_budget::PacketQueueBudget,
 };
 use crate::{
     protos::{
@@ -28,12 +29,24 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct Clients(Arc<Inner>);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Inner {
     /// The list of all currently connected clients.
     clients: DashMap<EndpointId, ClientState>,
     /// Map of which client has sent where
     sent_to: DashMap<EndpointId, HashSet<EndpointId>>,
+    /// Relay-wide payload-byte budget shared by all outgoing packet queues.
+    packet_queue_budget: PacketQueueBudget,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            clients: DashMap::new(),
+            sent_to: DashMap::new(),
+            packet_queue_budget: PacketQueueBudget::default(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -64,6 +77,7 @@ impl Clients {
         trace!("shutting down {} clients", keys.len());
         let clients = keys.into_iter().filter_map(|k| self.0.clients.remove(&k));
         n0_future::join_all(clients.map(|(_, state)| state.shutdown_all())).await;
+        self.0.sent_to.clear();
     }
 
     /// Builds the client handler and starts the read & write loops for the connection.
@@ -74,10 +88,23 @@ impl Clients {
     where
         S: BytesStreamSink + Send + 'static,
     {
+        self.insert_waiting(client_config, metrics).start();
+    }
+
+    /// Inserts a client while its actor remains blocked on the registration start gate.
+    fn insert_waiting<S>(&self, client_config: Config<S>, metrics: Arc<Metrics>) -> ClientActorStart
+    where
+        S: BytesStreamSink + Send + 'static,
+    {
         let endpoint_id = client_config.guard.endpoint_id;
         trace!(remote_endpoint = %endpoint_id.fmt_short(), "registering client");
 
-        let client = Client::new(client_config, self, metrics.clone());
+        let (client, actor_start) = Client::new(
+            client_config,
+            self,
+            self.0.packet_queue_budget.client(),
+            metrics.clone(),
+        );
         match self.0.clients.entry(endpoint_id) {
             dashmap::Entry::Occupied(mut entry) => {
                 let state = entry.get_mut();
@@ -99,6 +126,9 @@ impl Clients {
                 });
             }
         }
+        // Every map-entry guard has been dropped before the actor may observe EOF and call
+        // unregister, so cleanup can never run before this insertion becomes visible.
+        actor_start
     }
 
     /// Removes the client from the map of clients, & sends a notification
@@ -115,6 +145,7 @@ impl Clients {
         );
 
         let mut notify_peers = None;
+        let mut endpoint_removed = false;
 
         self.0.clients.remove_if_mut(&endpoint_id, |_id, state| {
             if state.active.connection_id() == connection_id {
@@ -130,6 +161,7 @@ impl Clients {
                 } else {
                     // No inactive clients: collect sent_to set for peer-gone notifications.
                     notify_peers = self.0.sent_to.remove(&endpoint_id).map(|(_, peers)| peers);
+                    endpoint_removed = true;
                     // Remove entry from the client map.
                     true
                 }
@@ -143,6 +175,19 @@ impl Clients {
                 false
             }
         });
+
+        if endpoint_removed {
+            // This endpoint was fully removed. It may also be a destination in other
+            // clients' notification sets. Prune those reverse relationships so a
+            // long-lived sender cannot accumulate disconnected endpoint IDs forever.
+            // A successful send retains its `clients` DashMap read guard until after
+            // inserting this relationship, so unregister's mutable lookup serializes
+            // cleanup after every successful send to the departing endpoint.
+            self.0.sent_to.retain(|_, peers| {
+                peers.remove(&endpoint_id);
+                !peers.is_empty()
+            });
+        }
 
         // Inform peers that this endpoint is gone.
         // Done outside the remove_if_mut closure to avoid DashMap deadlocks.
@@ -215,14 +260,14 @@ impl Clients {
                 self.0.sent_to.entry(src).or_default().insert(dst);
                 Ok(())
             }
-            Err(TrySendError::Full(_)) => {
+            Err(TrySendPacketError::Full) => {
                 debug!(
                     dst = %dst.fmt_short(),
                     "client too busy to receive packet, dropping packet"
                 );
                 Err(ForwardPacketError::new(SendError::Full))
             }
-            Err(TrySendError::Closed(_)) => {
+            Err(TrySendPacketError::Closed) => {
                 debug!(
                     dst = %dst.fmt_short(),
                     "can no longer write to client, dropping message and pruning connection"
@@ -244,7 +289,7 @@ impl Clients {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{net::Ipv4Addr, time::Duration};
 
     use iroh_base::SecretKey;
     use n0_error::{Result, StdResultExt};
@@ -257,7 +302,10 @@ mod tests {
         client::conn::Conn,
         http::ProtocolVersion,
         protos::{common::FrameType, relay::RelayToClientMsg, streams::WsBytesFramed},
-        server::streams::{MaybeTlsStream, RateLimited, ServerRelayedStream},
+        server::{
+            connection_limits::ConnectionLimiter,
+            streams::{MaybeTlsStream, RateLimited, ServerRelayedStream},
+        },
     };
 
     async fn recv_frame<
@@ -293,6 +341,93 @@ mod tests {
         config.write_timeout = Duration::from_secs(1);
         config.channel_capacity = 10;
         (config, Conn::test(client, protocol_version))
+    }
+
+    #[tokio::test]
+    async fn immediately_closed_registration_churn_returns_all_state_to_baseline() -> Result {
+        const CHURN_CONNECTIONS: usize = 128;
+
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(17u64);
+        let clients = Clients::default();
+        let metrics = Arc::new(Metrics::default());
+        let limiter = ConnectionLimiter::new(Some(1), Some(1)).expect("enabled limiter");
+        let source_ip = Ipv4Addr::new(192, 0, 2, 10);
+        let global_budget_baseline = clients.0.packet_queue_budget.available_global_bytes();
+
+        for completed in 1..=CHURN_CONNECTIONS {
+            let endpoint_id = SecretKey::from_bytes(&rng.random()).public();
+            let source_id = SecretKey::from_bytes(&rng.random()).public();
+            let permit = limiter
+                .try_acquire(source_ip.into())
+                .expect("previous connection permit returned to baseline");
+            let mut guard = OnDisconnectGuard::empty(endpoint_id);
+            guard.attach_connection_permit(Some(permit));
+
+            let (server_stream, peer_stream) = tokio::io::duplex(1024);
+            let mut config = Config::new(
+                guard,
+                ServerRelayedStream::test(server_stream),
+                ProtocolVersion::default(),
+            );
+            config.write_timeout = Duration::from_secs(1);
+            config.channel_capacity = 1;
+
+            let actor_start = clients.insert_waiting(config, metrics.clone());
+            assert!(
+                clients.0.clients.contains_key(&endpoint_id),
+                "client must be visible before its actor starts"
+            );
+            assert_eq!(limiter.active_connections(), 1);
+
+            clients.send_packet(endpoint_id, Datagrams::from(b"x"), source_id, &metrics)?;
+            assert_eq!(
+                clients.0.packet_queue_budget.available_global_bytes(),
+                global_budget_baseline - 1,
+                "queued packet must retain its global and per-client byte permits"
+            );
+            assert!(
+                clients
+                    .0
+                    .sent_to
+                    .get(&source_id)
+                    .is_some_and(|destinations| destinations.contains(&endpoint_id)),
+                "successful queueing must record the notification relationship"
+            );
+
+            // The peer is already gone when the actor first polls the stream. Without the
+            // registration gate, this EOF could unregister before the map insertion.
+            drop(peer_stream);
+            actor_start.start();
+
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let state_is_clean = clients.0.clients.is_empty()
+                        && clients.0.sent_to.is_empty()
+                        && clients.0.packet_queue_budget.available_global_bytes()
+                            == global_budget_baseline
+                        && limiter.active_connections() == 0
+                        && metrics.disconnects.get() == completed as u64;
+                    if state_is_clean {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .std_context("immediately closed registration did not return to baseline")?;
+        }
+
+        assert_eq!(metrics.accepts.get(), CHURN_CONNECTIONS as u64);
+        assert_eq!(metrics.disconnects.get(), CHURN_CONNECTIONS as u64);
+        assert!(clients.0.clients.is_empty());
+        assert!(clients.0.sent_to.is_empty());
+        assert_eq!(
+            clients.0.packet_queue_budget.available_global_bytes(),
+            global_budget_baseline
+        );
+        assert_eq!(limiter.active_connections(), 0);
+        clients.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]
@@ -514,6 +649,71 @@ mod tests {
         let frame = recv_frame(FrameType::EndpointGone, &mut b_rw).await?;
         assert_eq!(frame, RelayToClientMsg::EndpointGone(a_key));
 
+        clients.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn disconnected_destinations_are_pruned_from_long_lived_sender_state() -> Result {
+        const CHURNED_DESTINATIONS: usize = 64;
+
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7u64);
+        let source_key = SecretKey::from_bytes(&rng.random()).public();
+        let clients = Clients::default();
+        let metrics = Arc::new(Metrics::default());
+        let (source_builder, _source_connection) = test_client_builder(source_key);
+        clients.register(source_builder, metrics.clone());
+
+        for index in 0..CHURNED_DESTINATIONS {
+            let destination_key = SecretKey::from_bytes(&rng.random()).public();
+            let (destination_builder, mut destination_connection) =
+                test_client_builder(destination_key);
+            clients.register(destination_builder, metrics.clone());
+
+            clients.send_packet(
+                destination_key,
+                Datagrams::from(format!("packet-{index}")),
+                source_key,
+                &metrics,
+            )?;
+            let frame = recv_frame(
+                FrameType::RelayToClientDatagram,
+                &mut destination_connection,
+            )
+            .await?;
+            assert!(matches!(frame, RelayToClientMsg::Datagrams { .. }));
+            assert_eq!(
+                clients
+                    .0
+                    .sent_to
+                    .get(&source_key)
+                    .map(|destinations| destinations.len()),
+                Some(1),
+                "only the currently connected destination may be retained"
+            );
+
+            assert!(clients.disconnect(destination_key, None));
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while clients.0.clients.contains_key(&destination_key) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .std_context("timeout waiting for churned destination to unregister")?;
+
+            assert!(
+                clients
+                    .0
+                    .sent_to
+                    .get(&source_key)
+                    .is_none_or(|destinations| destinations.is_empty()),
+                "disconnected destination remained in sender notification state"
+            );
+            assert!(clients.0.clients.contains_key(&source_key));
+        }
+
+        assert!(clients.0.sent_to.is_empty());
         clients.shutdown().await;
         Ok(())
     }

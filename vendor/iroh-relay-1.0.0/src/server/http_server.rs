@@ -32,7 +32,10 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{Instrument, debug, error, info, info_span, trace, warn, warn_span};
 
 use super::{
-    AllowAll, ClientRequest, DynAccessControl, SpawnError, clients::Clients,
+    AllowAll, ClientRequest, DynAccessControl, SpawnError,
+    accept_rate_limits::AcceptRateLimiter,
+    clients::Clients,
+    connection_limits::{ConnectionLimiter, ConnectionPermit},
     streams::InvalidBucketConfig,
 };
 use crate::{
@@ -69,10 +72,10 @@ pub(super) type HyperHandler = Box<
 /// WebSocket GUID needed for accepting websocket connections, see RFC 6455 (<https://www.rfc-editor.org/rfc/rfc6455>) section 1.3
 const SEC_WEBSOCKET_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-/// Timeout for a connection to finish the TLS and WebSocket upgrade handshakes.
+/// Timeout for a connection to finish TLS, WebSocket upgrade, authentication, and authorization.
 ///
-/// The connection is aborted if the connection does not complete the TLS handshake
-/// and establishes relay protocol WebSocket stream within this timeout.
+/// The connection is aborted if it is not registered as an authenticated relay client
+/// within this timeout.
 const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Derives the accept key for WebSocket handshake according to RFC 6455.
@@ -354,6 +357,8 @@ pub(super) struct ServerBuilder {
     access: Arc<dyn DynAccessControl>,
     metrics: Option<Arc<Metrics>>,
     establish_timeout: Duration,
+    connection_limiter: Option<ConnectionLimiter>,
+    accept_rate_limiter: Option<AcceptRateLimiter>,
 }
 
 impl ServerBuilder {
@@ -369,6 +374,8 @@ impl ServerBuilder {
             access: Arc::new(AllowAll),
             metrics: None,
             establish_timeout: ESTABLISH_TIMEOUT,
+            connection_limiter: None,
+            accept_rate_limiter: None,
         }
     }
 
@@ -393,9 +400,9 @@ impl ServerBuilder {
     /// Sets the timeout after which connections are aborted if they don't become fully established.
     ///
     /// The timeout is started immediately after a TCP connection comes in, and cleared once
-    /// the connection has finished the TLS handshake and fully processed the WebSocket request
-    /// to initiate the relay protocol. If the timeout expires before being cleared, the
-    /// connection is aborted.
+    /// the connection has finished TLS and WebSocket handshakes, authenticated, passed access
+    /// control, and registered its relay client actor. If the timeout expires before being
+    /// cleared, every establishment task and the connection are aborted.
     ///
     /// Defaults to 30s.
     #[cfg(test)]
@@ -411,6 +418,30 @@ impl ServerBuilder {
     pub(super) fn client_rx_ratelimit(mut self, config: ClientRateLimit) -> Self {
         self.client_rx_ratelimit = Some(config);
         self
+    }
+
+    /// Sets concurrent TCP connection ceilings applied before spawning a handler task.
+    pub(super) fn tcp_connection_limits(
+        mut self,
+        max_total: Option<usize>,
+        max_per_source: Option<usize>,
+    ) -> Self {
+        self.connection_limiter = ConnectionLimiter::new(max_total, max_per_source);
+        self
+    }
+
+    /// Sets optional global and per-source token buckets for newly accepted sockets.
+    pub(super) fn accept_connection_rate_limits(
+        mut self,
+        global_rate: Option<f64>,
+        global_burst: Option<usize>,
+        source_rate: Option<f64>,
+        source_burst: Option<usize>,
+    ) -> Result<Self, SpawnError> {
+        self.accept_rate_limiter =
+            AcceptRateLimiter::new(global_rate, global_burst, source_rate, source_burst)
+                .map_err(|details| e!(SpawnError::InvalidAcceptRateLimit { details }))?;
+        Ok(self)
     }
 
     /// Adds a custom handler for a specific Method & URI.
@@ -441,6 +472,9 @@ impl ServerBuilder {
     /// Builds and spawns an HTTP(S) Relay Server.
     pub(super) async fn spawn(self) -> Result<Server, SpawnError> {
         let cancel_token = CancellationToken::new();
+        let connection_limiter = self.connection_limiter;
+        let accept_rate_limiter = self.accept_rate_limiter;
+        let establish_timeout = self.establish_timeout;
 
         let service = RelayService::new(
             self.handlers,
@@ -488,13 +522,35 @@ impl ServerBuilder {
                         }
                         res = listener.accept() => match res {
                             Ok((stream, peer_addr)) => {
+                                if accept_rate_limiter
+                                    .as_ref()
+                                    .is_some_and(|limiter| !limiter.try_accept(peer_addr.ip()))
+                                {
+                                    trace!(peer = %peer_addr, "TCP connection rejected by accept rate limits");
+                                    continue;
+                                }
+                                let connection_permit = match connection_limiter.as_ref() {
+                                    Some(limiter) => match limiter.try_acquire(peer_addr.ip()) {
+                                        Some(permit) => Some(permit),
+                                        None => {
+                                            trace!(peer = %peer_addr, "TCP connection rejected by admission limits");
+                                            continue;
+                                        }
+                                    },
+                                    None => None,
+                                };
                                 debug!("connection opened from {peer_addr}");
                                 let tls_config = tls_config.clone();
                                 let service = service.clone();
                                 // spawn a task to handle the connection
                                 set.spawn(async move {
                                     service
-                                        .handle_connection(stream, tls_config, self.establish_timeout)
+                                        .handle_connection_inner(
+                                            stream,
+                                            tls_config,
+                                            establish_timeout,
+                                            connection_permit,
+                                        )
                                         .await
                                 }.instrument(info_span!("conn", peer = %peer_addr)));
                             }
@@ -572,7 +628,7 @@ impl RelayServiceWithNotify {
     /// Upgrades the HTTP connection to the relay protocol, runs relay client.
     fn handle_relay_ws_upgrade(
         &self,
-        mut req: Request<Incoming>,
+        req: Request<Incoming>,
     ) -> Result<Response<BytesBody>, RelayUpgradeReqError> {
         fn expect_header(
             req: &Request<Incoming>,
@@ -631,25 +687,13 @@ impl RelayServiceWithNotify {
         tokio::task::spawn({
             let this = self.clone();
             async move {
-                match hyper::upgrade::on(&mut req).await {
-                    Ok(upgraded) => {
-                        let (parts, _) = req.into_parts();
-                        if let Err(err) = this
-                            .service
-                            .0
-                            .relay_connection_handler(upgraded, parts, protocol_version)
-                            .await
-                        {
-                            warn!("error accepting upgraded connection: {err:#}",);
-                        } else {
-                            // We have passed the connection to the relay protocol handler,
-                            // thus we trigger the on_establish notification so that timeouts
-                            // on the upper layer will be cleared.
-                            this.on_establish.notify_waiters();
-                            debug!("upgraded connection completed");
-                        };
-                    }
-                    Err(err) => warn!("upgrade error: {err:#}"),
+                let establish = this.complete_relay_upgrade(req, protocol_version);
+                let established = this.await_establishment(establish).await;
+                if established {
+                    // Registration transferred the socket and connection permit to the
+                    // client actor, so the outer connection timeout may now be cleared.
+                    this.on_establish.notify_waiters();
+                    debug!("upgraded connection completed");
                 }
             }
             .instrument(warn_span!("handler"))
@@ -669,6 +713,57 @@ impl RelayServiceWithNotify {
             .header(CONNECTION, "upgrade")
             .body(body_full("switching to websocket protocol"))
             .expect("valid body"))
+    }
+
+    async fn complete_relay_upgrade(
+        &self,
+        mut req: Request<Incoming>,
+        protocol_version: ProtocolVersion,
+    ) -> bool {
+        let upgraded = match hyper::upgrade::on(&mut req).await {
+            Ok(upgraded) => upgraded,
+            Err(err) => {
+                warn!("upgrade error: {err:#}");
+                return false;
+            }
+        };
+        let (parts, _) = req.into_parts();
+        if let Err(err) = self
+            .service
+            .0
+            .relay_connection_handler(
+                upgraded,
+                parts,
+                protocol_version,
+                self.connection_permit.clone(),
+            )
+            .await
+        {
+            warn!("error accepting upgraded connection: {err:#}");
+            return false;
+        }
+        true
+    }
+
+    async fn await_establishment<F>(&self, establish: F) -> bool
+    where
+        F: Future<Output = bool>,
+    {
+        // Standalone users may construct and reuse this service long before a request arrives.
+        // Give each such upgrade its own bounded authentication window. The built-in server
+        // supplies an earlier absolute deadline that starts immediately after TCP accept.
+        let deadline = self
+            .establish_deadline
+            .unwrap_or_else(|| tokio::time::Instant::now() + ESTABLISH_TIMEOUT);
+        match tokio::time::timeout_at(deadline, establish).await {
+            Ok(established) => established,
+            Err(_) => {
+                warn!(
+                    "relay connection authentication did not finish before the establishment deadline"
+                );
+                false
+            }
+        }
     }
 }
 
@@ -724,17 +819,38 @@ impl RelayServiceWithNotify {
 pub struct RelayServiceWithNotify {
     service: RelayService,
     on_establish: Arc<Notify>,
+    connection_permit: Option<Arc<ConnectionPermit>>,
+    /// Absolute deadline shared with the outer TLS/HTTP connection driver, when one exists.
+    establish_deadline: Option<tokio::time::Instant>,
 }
 
 impl RelayServiceWithNotify {
     /// Creates a new service wrapper for a connection.
     ///
     /// The `on_establish` notification is triggered once the connection is passed to the
-    /// relay protocol, i.e. after a WebSocket request on /relay is received and established.
+    /// relay protocol after authentication and authorization. Since standalone services may be
+    /// constructed once and reused, each WebSocket upgrade gets a fresh 30-second authentication
+    /// deadline rather than starting one when this wrapper is constructed.
     pub fn new(service: RelayService, on_establish: Arc<Notify>) -> Self {
         Self {
             service,
             on_establish,
+            connection_permit: None,
+            establish_deadline: None,
+        }
+    }
+
+    fn with_connection_permit(
+        service: RelayService,
+        on_establish: Arc<Notify>,
+        connection_permit: Option<Arc<ConnectionPermit>>,
+        establish_deadline: tokio::time::Instant,
+    ) -> Self {
+        Self {
+            service,
+            on_establish,
+            connection_permit,
+            establish_deadline: Some(establish_deadline),
         }
     }
 }
@@ -821,6 +937,7 @@ impl Inner {
         upgraded: Upgraded,
         request_parts: http::request::Parts,
         protocol_version: ProtocolVersion,
+        connection_permit: Option<Arc<ConnectionPermit>>,
     ) -> Result<(), ConnectionHandlerError> {
         debug!("relay_connection upgraded");
         let (io, read_buf) = downcast_upgrade(upgraded)?;
@@ -828,7 +945,8 @@ impl Inner {
             return Err(e!(ConnectionHandlerError::BufferNotEmpty { buf: read_buf }));
         }
 
-        self.accept(io, request_parts, protocol_version).await?;
+        self.accept(io, request_parts, protocol_version, connection_permit)
+            .await?;
         Ok(())
     }
 
@@ -847,6 +965,7 @@ impl Inner {
         io: MaybeTlsStream,
         request_parts: http::request::Parts,
         protocol_version: ProtocolVersion,
+        connection_permit: Option<Arc<ConnectionPermit>>,
     ) -> Result<(), AcceptError> {
         trace!("accept: start");
 
@@ -873,9 +992,10 @@ impl Inner {
             ClientRequest::new(authentication.client_key, protocol_version, request_parts);
 
         // Authorize the request against the configured `AccessControl`.
-        let guard = authentication
+        let mut guard = authentication
             .authorize_with(&request, &self.access, &mut io)
             .await?;
+        guard.attach_connection_permit(connection_permit);
 
         trace!("accept: verified authorization");
 
@@ -1008,12 +1128,29 @@ impl RelayService {
         tls_config: Option<TlsConfig>,
         establish_timeout: Duration,
     ) {
+        self.handle_connection_inner(stream, tls_config, establish_timeout, None)
+            .await;
+    }
+
+    async fn handle_connection_inner(
+        self,
+        stream: TcpStream,
+        tls_config: Option<TlsConfig>,
+        establish_timeout: Duration,
+        connection_permit: Option<Arc<ConnectionPermit>>,
+    ) {
         let metrics = self.0.metrics.clone();
         metrics.http_connections.inc();
-        // We create a notification token to be triggered once the connection is fully established
-        // and passed to the relay server.
+        // TLS/HTTP and the detached WebSocket authentication task share this one
+        // absolute deadline, so an HTTP 101 response cannot reset or evade it.
+        let establish_deadline = tokio::time::Instant::now() + establish_timeout;
         let on_establish = Arc::new(Notify::new());
-        let service = RelayServiceWithNotify::new(self, on_establish.clone());
+        let service = RelayServiceWithNotify::with_connection_permit(
+            self,
+            on_establish.clone(),
+            connection_permit,
+            establish_deadline,
+        );
 
         // This is the main connection future, driving the connection to completion.
         let serve_fut = async move {
@@ -1030,11 +1167,11 @@ impl RelayService {
             }
         };
 
-        // We set a timeout for the connection to limit lingering connections during establishment.
-        // The timeout is cleared once the connection has completed the TLS and WebSocket
-        // handshakes and has been passed over to the relay protocol handler.
+        // Bound TLS and HTTP processing against the same absolute deadline used by the
+        // detached WebSocket authentication task. The timeout is cleared only after the
+        // authenticated client has been registered with the relay actor.
         // If the timeout expires before that happens, the connection is aborted.
-        let res = clearable_timeout(establish_timeout, on_establish, serve_fut)
+        let res = clearable_timeout_at(establish_deadline, on_establish, serve_fut)
             .await
             .map_err(|_elapsed| e!(ServeConnectionError::EstablishTimeout))
             .flatten();
@@ -1145,19 +1282,19 @@ impl std::ops::DerefMut for Handlers {
     }
 }
 
-/// Requires a future to complete before the specified duration elapses, unless the timeout is cleared.
+/// Requires a future to complete before the absolute deadline, unless the timeout is cleared.
 ///
-/// If the future completes before the duration has elapsed, then the completed value is returned.
+/// If the future completes before the deadline, then the completed value is returned.
 /// Otherwise, an error is returned and the future is canceled.
 ///
 /// If `clear_timeout` is triggered, the timeout is cleared and the future is always run to completion.
-async fn clearable_timeout<F: Future>(
-    timeout: Duration,
+async fn clearable_timeout_at<F: Future>(
+    deadline: tokio::time::Instant,
     clear_timeout: Arc<Notify>,
     fut: F,
 ) -> Result<F::Output, Elapsed> {
     tokio::pin!(fut);
-    let timeout = MaybeFuture::Some(tokio::time::sleep(timeout));
+    let timeout = MaybeFuture::Some(tokio::time::sleep_until(deadline));
     tokio::pin!(timeout);
     loop {
         tokio::select! {
@@ -1217,6 +1354,306 @@ mod tests {
         .expect("cert is right");
 
         TlsConfig::new(Arc::new(config))
+    }
+
+    #[tokio::test]
+    async fn tcp_limit_rejects_before_handler_spawn_and_reuses_capacity() -> Result {
+        let builder = ServerBuilder::new("127.0.0.1:0".parse().unwrap())
+            .tcp_connection_limits(Some(1), None)
+            .establish_timeout(Duration::from_secs(5));
+        let limiter = builder
+            .connection_limiter
+            .clone()
+            .expect("configured connection limiter");
+        let server = builder.spawn().await?;
+        let metrics = server.service().0.metrics.clone();
+
+        let first = TcpStream::connect(server.addr()).await?;
+        wait_until("first raw TCP connection was not admitted", || {
+            limiter.active_connections() == 1 && metrics.http_connections.get() == 1
+        })
+        .await;
+
+        let mut second = TcpStream::connect(server.addr()).await?;
+        let mut byte = [0_u8; 1];
+        let second_read = tokio::time::timeout(Duration::from_secs(2), second.read(&mut byte))
+            .await
+            .expect("second connection was not rejected before the deadline");
+        assert!(
+            matches!(second_read, Ok(0) | Err(_)),
+            "second connection remained open despite exhausted capacity"
+        );
+        assert_eq!(
+            metrics.http_connections.get(),
+            1,
+            "rejected connection spawned a handler task"
+        );
+
+        drop(first);
+        wait_until("first connection permit was not released", || {
+            limiter.active_connections() == 0
+        })
+        .await;
+
+        let mut third = TcpStream::connect(server.addr()).await?;
+        wait_until("third raw TCP connection was not admitted", || {
+            limiter.active_connections() == 1 && metrics.http_connections.get() == 2
+        })
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), third.read(&mut byte))
+                .await
+                .is_err(),
+            "third connection was closed instead of reusing released capacity"
+        );
+
+        drop(third);
+        wait_until("third connection permit was not released", || {
+            limiter.active_connections() == 0
+        })
+        .await;
+        server.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accept_rate_burst_rejects_before_handler_spawn() -> Result {
+        let builder = ServerBuilder::new("127.0.0.1:0".parse().unwrap())
+            .accept_connection_rate_limits(Some(0.01), Some(1), None, None)
+            .expect("valid accept rate limit")
+            .establish_timeout(Duration::from_secs(5));
+        let server = builder.spawn().await?;
+        let metrics = server.service().0.metrics.clone();
+
+        let first = TcpStream::connect(server.addr()).await?;
+        wait_until(
+            "first rate-limited connection did not spawn a handler",
+            || metrics.http_connections.get() == 1,
+        )
+        .await;
+
+        let mut rejected = TcpStream::connect(server.addr()).await?;
+        let mut byte = [0_u8; 1];
+        let rejected_read = tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte))
+            .await
+            .expect("burst-exceeding socket was not rejected before the deadline");
+        assert!(
+            matches!(rejected_read, Ok(0) | Err(_)),
+            "burst-exceeding socket remained open"
+        );
+        assert_eq!(
+            metrics.http_connections.get(),
+            1,
+            "rate-rejected socket spawned a connection handler"
+        );
+
+        drop(first);
+        server.shutdown();
+        Ok(())
+    }
+
+    async fn wait_until<F>(message: &str, mut condition: F)
+    where
+        F: FnMut() -> bool,
+    {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if condition() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect(message);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn standalone_service_uses_a_fresh_bounded_deadline_for_each_upgrade() {
+        let relay_service = RelayService::new(
+            Default::default(),
+            Default::default(),
+            None,
+            KeyCache::test(),
+            Arc::new(AllowAll),
+            Default::default(),
+        );
+        let service = RelayServiceWithNotify::new(relay_service, Arc::new(Notify::new()));
+        assert!(
+            service.establish_deadline.is_none(),
+            "standalone service age must not consume an upgrade deadline"
+        );
+
+        tokio::time::advance(ESTABLISH_TIMEOUT + Duration::from_secs(1)).await;
+        assert!(
+            service.await_establishment(async { true }).await,
+            "an upgrade after the old construction-relative deadline must still establish"
+        );
+
+        let first_upgrade_started = tokio::time::Instant::now();
+        assert!(
+            !service
+                .clone()
+                .await_establishment(std::future::pending())
+                .await,
+            "standalone authentication must remain bounded"
+        );
+        assert_eq!(
+            tokio::time::Instant::now().duration_since(first_upgrade_started),
+            ESTABLISH_TIMEOUT
+        );
+
+        tokio::time::advance(Duration::from_secs(90)).await;
+        let reused_upgrade_started = tokio::time::Instant::now();
+        assert!(
+            !service.await_establishment(std::future::pending()).await,
+            "a reused service must apply a fresh bound to every upgrade"
+        );
+        assert_eq!(
+            tokio::time::Instant::now().duration_since(reused_upgrade_started),
+            ESTABLISH_TIMEOUT
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_client_holds_tcp_permit_until_close() -> Result {
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(91u64);
+        let builder = ServerBuilder::new("127.0.0.1:0".parse().unwrap())
+            .tcp_connection_limits(Some(1), None)
+            .establish_timeout(Duration::from_secs(5));
+        let limiter = builder
+            .connection_limiter
+            .clone()
+            .expect("configured connection limiter");
+        let server = builder.spawn().await?;
+        let metrics = server.service().0.metrics.clone();
+        let relay_url: Url = format!("http://{}", server.addr()).parse().unwrap();
+
+        let first_key = SecretKey::from_bytes(&rng.random());
+        let (_, mut first_client) = create_test_client(first_key, relay_url.clone()).await?;
+        wait_until("authenticated client did not retain its TCP permit", || {
+            limiter.active_connections() == 1
+        })
+        .await;
+        first_client.send(ClientToRelayMsg::Ping([11u8; 8])).await?;
+        assert_eq!(
+            first_client.next().await.expect("first client pong")?,
+            RelayToClientMsg::Pong([11u8; 8])
+        );
+
+        let mut rejected = TcpStream::connect(server.addr()).await?;
+        let mut byte = [0_u8; 1];
+        let rejected_read = tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte))
+            .await
+            .expect("second socket was not rejected before the deadline");
+        assert!(
+            matches!(rejected_read, Ok(0) | Err(_)),
+            "second socket remained open while authenticated client held the only permit"
+        );
+        assert_eq!(
+            metrics.http_connections.get(),
+            1,
+            "rejected socket spawned a connection handler"
+        );
+
+        first_client.close().await?;
+        wait_until("client.close did not release the TCP permit", || {
+            limiter.active_connections() == 0
+        })
+        .await;
+
+        let second_key = SecretKey::from_bytes(&rng.random());
+        let (_, mut second_client) = create_test_client(second_key, relay_url).await?;
+        wait_until("replacement authenticated client was not admitted", || {
+            limiter.active_connections() == 1
+        })
+        .await;
+        second_client
+            .send(ClientToRelayMsg::Ping([22u8; 8]))
+            .await?;
+        assert_eq!(
+            second_client.next().await.expect("second client pong")?,
+            RelayToClientMsg::Pong([22u8; 8])
+        );
+        second_client.close().await?;
+        wait_until("replacement client did not release the TCP permit", || {
+            limiter.active_connections() == 0
+        })
+        .await;
+
+        server.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_without_client_auth_hits_absolute_deadline_and_releases_permit() -> Result {
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(92u64);
+        let builder = ServerBuilder::new("127.0.0.1:0".parse().unwrap())
+            .tcp_connection_limits(Some(1), None)
+            .establish_timeout(Duration::from_millis(500));
+        let limiter = builder
+            .connection_limiter
+            .clone()
+            .expect("configured connection limiter");
+        let server = builder.spawn().await?;
+        let ws_uri = format!("ws://{}{RELAY_PATH}", server.addr());
+
+        let (mut stalled_client, response) = tokio_websockets::ClientBuilder::new()
+            .uri(&ws_uri)
+            .expect("valid WebSocket URI")
+            .add_header(
+                SEC_WEBSOCKET_PROTOCOL,
+                HeaderValue::from_static("iroh-relay-v2"),
+            )
+            .expect("relay subprotocol header")
+            .connect()
+            .await
+            .anyerr()?;
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        wait_until(
+            "upgraded unauthenticated socket did not retain its permit",
+            || limiter.active_connections() == 1,
+        )
+        .await;
+
+        let challenge = tokio::time::timeout(Duration::from_secs(1), stalled_client.next())
+            .await
+            .expect("server did not send its authentication challenge")
+            .expect("WebSocket ended before the authentication challenge")
+            .anyerr()?;
+        assert!(challenge.is_binary(), "authentication challenge is binary");
+        // Deliberately send no ClientAuth response.
+
+        wait_until(
+            "authentication deadline did not release the TCP permit",
+            || limiter.active_connections() == 0,
+        )
+        .await;
+        let closed = tokio::time::timeout(Duration::from_secs(2), stalled_client.next())
+            .await
+            .expect("timed-out unauthenticated WebSocket remained open");
+        assert!(
+            matches!(closed, None | Some(Err(_)))
+                || matches!(closed, Some(Ok(ref message)) if message.is_close()),
+            "timed-out unauthenticated WebSocket was not closed: {closed:?}"
+        );
+
+        let relay_url: Url = format!("http://{}", server.addr()).parse().unwrap();
+        let replacement_key = SecretKey::from_bytes(&rng.random());
+        let (_, mut replacement) = create_test_client(replacement_key, relay_url).await?;
+        replacement.send(ClientToRelayMsg::Ping([33u8; 8])).await?;
+        assert_eq!(
+            replacement.next().await.expect("replacement client pong")?,
+            RelayToClientMsg::Pong([33u8; 8])
+        );
+        replacement.close().await?;
+        wait_until("replacement client did not release its permit", || {
+            limiter.active_connections() == 0
+        })
+        .await;
+
+        server.shutdown();
+        Ok(())
     }
 
     #[tokio::test]
@@ -1493,6 +1930,7 @@ mod tests {
                 MaybeTlsStream::Test(rw_a),
                 Request::new(()).into_parts().0,
                 Default::default(),
+                None,
             )
             .await
         });
@@ -1509,6 +1947,7 @@ mod tests {
                 MaybeTlsStream::Test(rw_b),
                 Request::new(()).into_parts().0,
                 Default::default(),
+                None,
             )
             .await
         });
@@ -1605,6 +2044,7 @@ mod tests {
                 MaybeTlsStream::Test(rw_a),
                 Request::new(()).into_parts().0,
                 Default::default(),
+                None,
             )
             .await
         });
@@ -1621,6 +2061,7 @@ mod tests {
                 MaybeTlsStream::Test(rw_b),
                 Request::new(()).into_parts().0,
                 Default::default(),
+                None,
             )
             .await
         });
@@ -1677,6 +2118,7 @@ mod tests {
                 MaybeTlsStream::Test(new_rw_b),
                 Request::new(()).into_parts().0,
                 Default::default(),
+                None,
             )
             .await
         });
