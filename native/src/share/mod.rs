@@ -78,6 +78,8 @@ mod framing;
 mod fs;
 #[path = "core/fs_error.rs"]
 mod fs_error;
+#[path = "core/handshake_limits.rs"]
+mod handshake_limits;
 #[path = "core/identity.rs"]
 mod identity;
 #[cfg(not(windows))]
