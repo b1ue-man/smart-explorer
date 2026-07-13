@@ -30,12 +30,23 @@ $script:TestNamespacePrefix = "share_" + [Guid]::NewGuid().ToString("N").Substri
 
 function Assert-True {
     param(
-        [bool]$Condition,
+        [object]$Condition,
         [string]$Message
     )
 
-    if (-not $Condition) {
-        throw $Message
+    # Windows PowerShell 5.1 comparison operators preserve collection
+    # semantics: comparing an array yields the matching values (possibly an
+    # Object[]) rather than a Boolean. A [bool] parameter rejects that value
+    # during binding before the assertion can report its call site. Evaluate
+    # it with PowerShell's own conditional semantics instead.
+    if (-not [System.Management.Automation.LanguagePrimitives]::IsTrue($Condition)) {
+        $conditionType = if ($null -eq $Condition) {
+            "null"
+        }
+        else {
+            $Condition.GetType().FullName
+        }
+        throw "$Message (assertion at line $($MyInvocation.ScriptLineNumber); condition type: $conditionType)"
     }
 }
 
