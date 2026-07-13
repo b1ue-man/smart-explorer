@@ -10,6 +10,7 @@
 #   native/publish-linux-feed-wsl.sh
 #   native/publish-linux-feed-wsl.sh --write-version
 #   native/publish-linux-feed-wsl.sh --check-env
+#   native/publish-linux-feed-wsl.sh --check-gui
 
 set -euo pipefail
 
@@ -19,10 +20,15 @@ repo_root="$(cd .. && pwd)"
 rel="$repo_root/release-native"
 feed="${SMART_EXPLORER_FEED_DIR:-$rel/update-feed}"
 share_out="${SMART_EXPLORER_SHARE_DIR:-$rel/share-server}"
-linux_target="x86_64-unknown-linux-musl"
+# winit loads X11/Wayland client libraries at runtime, which a static-musl
+# executable cannot do. Ship the desktop app as a dynamic GNU/glibc binary and
+# keep the headless payloads static-musl for standalone portability.
+linux_gui_target="x86_64-unknown-linux-gnu"
+linux_static_target="x86_64-unknown-linux-musl"
 write_version=0
 build_share_server=1
 check_env=0
+check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
 zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.16.0}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
@@ -38,12 +44,19 @@ while [ "$#" -gt 0 ]; do
     --check-env)
       check_env=1
       ;;
+    --check-gui)
+      check_gui=1
+      ;;
     --no-bootstrap-zig)
       bootstrap_zig=0
       ;;
-    --target)
+    --gui-target)
       shift
-      linux_target="${1:?missing value for --target}"
+      linux_gui_target="${1:?missing value for --gui-target}"
+      ;;
+    --static-target|--target)
+      shift
+      linux_static_target="${1:?missing value for --static-target}"
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -73,6 +86,22 @@ if [ "$write_version" = "1" ] && [ "$build_share_server" != "1" ]; then
   echo "--write-version requires the Linux share-server build; remove --skip-share-server." >&2
   exit 1
 fi
+if [ "$check_env" = "1" ] && [ "$check_gui" = "1" ]; then
+  echo "--check-env and --check-gui are mutually exclusive." >&2
+  exit 2
+fi
+if [ "$write_version" = "1" ] && [ "$check_gui" = "1" ]; then
+  echo "--check-gui is a non-publishing test build and cannot write the feed version." >&2
+  exit 2
+fi
+if [ "$linux_gui_target" != "x86_64-unknown-linux-gnu" ]; then
+  echo "The release GUI must target x86_64-unknown-linux-gnu for dynamic display-library loading." >&2
+  exit 2
+fi
+if [ "$linux_static_target" != "x86_64-unknown-linux-musl" ]; then
+  echo "The Linux updater, CLI, and share server must target x86_64-unknown-linux-musl." >&2
+  exit 2
+fi
 
 version="$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
 if [ -z "$version" ]; then
@@ -81,7 +110,7 @@ if [ -z "$version" ]; then
 fi
 
 echo "Preparing Linux release toolchain for Smart Explorer $version ..."
-rustup target add "$linux_target" >/dev/null
+rustup target add "$linux_gui_target" "$linux_static_target" >/dev/null
 
 find_zig() {
   if command -v zig >/dev/null 2>&1; then
@@ -179,12 +208,12 @@ set -e
 args=()
 for arg in "\$@"; do
   case "\$arg" in
-    --target=x86_64-unknown-linux-gnu) args+=(--target=x86_64-linux-gnu) ;;
+    --target=x86_64-unknown-linux-gnu) args+=(--target=x86_64-linux-gnu.2.17) ;;
     --target=x86_64-unknown-linux-musl) args+=(--target=x86_64-linux-musl) ;;
     *) args+=("\$arg") ;;
   esac
 done
-exec "$zig_bin" cc -target x86_64-linux-gnu "\${args[@]}"
+exec "$zig_bin" cc -target x86_64-linux-gnu.2.17 "\${args[@]}"
 EOF
 
 cat > "$tool_dir/zigcc-musl" <<EOF
@@ -241,19 +270,40 @@ export PKG_CONFIG_ALLOW_CROSS=1
 
 if [ "$check_env" = "1" ]; then
   "$script_dir/build-agent-bundles.sh" --check-env
+  for tool in file ldd readelf xvfb-run xauth xwininfo; do
+    command -v "$tool" >/dev/null 2>&1 || {
+      echo "Required Linux GUI smoke-test tool missing: $tool" >&2
+      exit 1
+    }
+  done
+  command -v rustfmt >/dev/null 2>&1 || {
+    echo "rustfmt is missing from the active Rust toolchain." >&2
+    exit 1
+  }
+  cargo clippy --version >/dev/null
+  "$zig_bin" version >/dev/null
   echo "cargo: $(cargo --version)"
   echo "rustc: $(rustc --version)"
   echo "rustfmt: $(rustfmt --version)"
   echo "clippy: $(cargo clippy --version)"
-  echo "target: $linux_target"
+  echo "Linux GUI target: $linux_gui_target"
+  echo "Linux static target: $linux_static_target"
   echo "zig: $("$zig_bin" version)"
   echo "rust-lld: $real_rust_lld"
   echo "release environment OK"
   exit 0
 fi
 
-echo "Building native Linux payloads for $linux_target ..."
-cargo build --release --target "$linux_target" --bin smart_explorer --bin smart_explorer_updater --bin se
+echo "Building Linux desktop app for $linux_gui_target ..."
+cargo build --release --target "$linux_gui_target" --bin smart_explorer
+if [ "$check_gui" = "1" ]; then
+  "$script_dir/test-linux-gui-startup.sh" \
+    "target/$linux_gui_target/release/smart_explorer"
+  echo "Targeted Linux GUI build/start check passed; no feed files were changed."
+  exit 0
+fi
+echo "Building static Linux updater and CLI for $linux_static_target ..."
+cargo build --release --target "$linux_static_target" --bin smart_explorer_updater --bin se
 
 feed_parent="$(dirname "$feed")"
 mkdir -p "$feed_parent"
@@ -272,9 +322,9 @@ if [ "$write_version" = "1" ]; then
   rm -f "$feed_candidate/version.txt"
 fi
 
-install -m 0755 "target/$linux_target/release/smart_explorer" "$feed_candidate/smart_explorer"
-install -m 0755 "target/$linux_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
-install -m 0755 "target/$linux_target/release/se" "$feed_candidate/se"
+install -m 0755 "target/$linux_gui_target/release/smart_explorer" "$feed_candidate/smart_explorer"
+install -m 0755 "target/$linux_static_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
+install -m 0755 "target/$linux_static_target/release/se" "$feed_candidate/se"
 
 mkdir -p "$(dirname "$share_out")"
 feed_abs="$(cd "$feed_parent" && pwd)/$feed_name"
@@ -290,20 +340,20 @@ elif [[ "$share_abs/" == "$feed_abs/"* ]]; then
 fi
 
 if [ "$build_share_server" = "1" ] && [ -d "$repo_root/share-server" ]; then
-  echo "Building Linux share server for $linux_target ..."
+  echo "Building static Linux share server for $linux_static_target ..."
   (
     cd "$repo_root/share-server"
-    cargo build --release --target "$linux_target" --bin se-share-server
+    cargo build --release --target "$linux_static_target" --bin se-share-server
   )
   if [ "$share_in_feed" = "1" ]; then
     install -m 0755 \
-      "$repo_root/share-server/target/$linux_target/release/se-share-server" \
+      "$repo_root/share-server/target/$linux_static_target/release/se-share-server" \
       "$feed_candidate/se-share-server-linux"
   else
     mkdir -p "$share_out"
     share_stage="$(mktemp "$share_parent/.se-share-server-linux.stage.XXXXXX")"
     install -m 0755 \
-      "$repo_root/share-server/target/$linux_target/release/se-share-server" \
+      "$repo_root/share-server/target/$linux_static_target/release/se-share-server" \
       "$share_stage"
   fi
 elif [ "$build_share_server" = "1" ]; then
@@ -321,7 +371,9 @@ fi
   sha256sum -c se.sha256
 )
 
-file "$feed_candidate/smart_explorer" | grep -Eq 'statically linked|static-pie linked'
+"$script_dir/test-linux-gui-startup.sh" "$feed_candidate/smart_explorer"
+file "$feed_candidate/smart_explorer_updater" | grep -Eq 'statically linked|static-pie linked'
+file "$feed_candidate/se" | grep -Eq 'statically linked|static-pie linked'
 if [ "$build_share_server" = "1" ]; then
   if [ "$share_in_feed" = "1" ]; then
     file "$feed_candidate/se-share-server-linux" | grep -Eq 'statically linked|static-pie linked'

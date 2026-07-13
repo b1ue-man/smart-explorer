@@ -1,12 +1,10 @@
 name: build
 
-# Builds the Windows release on every push using the SAME cross-compile path
-# that is verified locally (ubuntu + mingw-w64 + x86_64-pc-windows-gnu). This is
-# the "build a release for each commit" gate. It publishes a GitHub Release
-# (carrying the Windows/Linux app, updater and CLI payloads plus hashes,
-# installer, install script, context-menu DLL, Share servers, and version
-# marker) on a version tag (v*), manual `workflow_dispatch`, or `release/**`
-# branch. Non-tag triggers create the tag at that exact release commit.
+# Every push and pull request runs development checks and disposable E2E builds.
+# The complete release candidate is built once locally and committed. Only a
+# verify_release_candidate dispatch validates the exact committed bytes before
+# tagging. A version tag (v*), explicit publish_release dispatch, or release/v*
+# fallback repeats that immutable-byte gate and then publishes those bytes.
 
 on:
   push:
@@ -14,9 +12,20 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      verify_release_candidate:
+        description: Verify the exact committed candidate without publishing
+        required: true
+        default: false
+        type: boolean
+      publish_release:
+        description: Publish the exact committed release candidate
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows-native-tests:
@@ -61,16 +70,18 @@ jobs:
   windows-gnu:
     needs: windows-native-tests
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.stage.outputs.version }}
     defaults:
       run:
         working-directory: native
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mingw-w64 linker + NSIS (installer)
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64 nsis
+      - name: Install development cross-check dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          binutils file mingw-w64 xvfb xauth x11-utils libegl1 libgl1 libgl1-mesa-dri
+          libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon0
+          libxkbcommon-x11-0 libxrandr2
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -115,6 +126,11 @@ jobs:
           CARGO_BUILD_JOBS: 1
         run: cargo test --all-targets --no-fail-fast -- --test-threads=1
 
+      - name: Linux GUI disposable startup check
+        run: |
+          cargo build --bin smart_explorer
+          ./test-linux-gui-startup.sh --runtime-only target/debug/smart_explorer
+
       - name: Compile test harness (windows target)
         env:
           CARGO_BUILD_JOBS: 1
@@ -152,65 +168,54 @@ jobs:
         working-directory: .
         run: native/test-share-lifecycle-e2e.sh
 
-      - name: Release build
-        run: |
-          cargo build --release --target x86_64-pc-windows-gnu --bin smart_explorer --bin smart_explorer_updater --bin se
-          mkdir -p out
-          SMART_EXPLORER_FEED_DIR="$PWD/out" \
-          SMART_EXPLORER_SHARE_DIR="$PWD/out" \
-            ./publish-linux-feed-wsl.sh
+  release-candidate:
+    needs: windows-gnu
+    if: >-
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.verify_release_candidate == true || inputs.publish_release == true)) ||
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/heads/release/v'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.stage.outputs.version }}
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Build context-menu COM DLL
-        working-directory: native/explorer-command
-        run: cargo build --release --target x86_64-pc-windows-gnu
+      - name: Install exact-candidate verification dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          binutils file jq mingw-w64 p7zip-full xvfb xauth x11-utils
+          libegl1 libgl1 libgl1-mesa-dri libx11-6 libx11-xcb1
+          libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
 
-      - name: Build share signaling/relay server
-        working-directory: share-server
-        run: cargo build --release --target x86_64-pc-windows-gnu --bin se-share-server
-
-      - name: Stage feed + build installer
+      - name: Verify and stage exact committed release candidate
         id: stage
+        # The locally built candidate is already committed. This job never
+        # rebuilds or rewrites it; every published byte comes from that commit.
         run: |
-          mkdir -p out
-          cp "target/x86_64-pc-windows-gnu/release/smart_explorer.exe" "out/smart_explorer.exe"
-          cp "target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" "out/smart_explorer_updater.exe"
-          cp "target/x86_64-pc-windows-gnu/release/se.exe" "out/se.exe"
-          cp "../install-linux.sh" "out/install-linux.sh"
-          cp "explorer-command/target/x86_64-pc-windows-gnu/release/smart_explorer_command.dll" "out/smart_explorer_command.dll"
-          cp "../share-server/target/x86_64-pc-windows-gnu/release/se-share-server.exe" "out/se-share-server.exe"
           ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
-          ( cd out
-            sha256sum smart_explorer.exe > smart_explorer.exe.sha256
-            sha256sum smart_explorer_updater.exe > smart_explorer_updater.exe.sha256
-            sha256sum se.exe > se.exe.sha256
-            sha256sum smart_explorer > smart_explorer.sha256
-            sha256sum smart_explorer_updater > smart_explorer_updater.sha256
-            sha256sum se > se.sha256
-          )
-          {
-            printf 'version=%s\n' "$ver"
-            for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
-              printf '%s=%s\n' "$payload" "$(sha256sum "out/$payload" | awk '{print $1}')"
-            done
-          } > out/windows-build.manifest
-          file out/smart_explorer | grep -Eq 'statically linked|static-pie linked'
-          file out/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
-          printf '%s\n' "$ver" > out/version.txt
+          test -n "$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          # NSIS installer (per-user; sets the Git update source + context menu).
-          makensis -DVERSION="$ver" -DEXE_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer.exe" -DUPDATER_SRC="target/x86_64-pc-windows-gnu/release/smart_explorer_updater.exe" -DCLI_SRC="target/x86_64-pc-windows-gnu/release/se.exe" -DINSTALLER_OUT="$PWD/out/Smart Explorer Setup $ver.exe" installer.nsi
-          echo "Built version $ver (Windows exe/updater/se + Linux desktop binaries/se + dll + installer)"
-
-      - name: Verify committed feed matches the version (release only)
-        # The flow guarantee: a release can't go out while the committed feed
-        # (what installed apps auto-update from) lags Cargo.toml. Forces
-        # "run publish-feed.sh + commit release-native/" before releasing.
-        if: >-
-          startsWith(github.ref, 'refs/tags/v') ||
-          github.event_name == 'workflow_dispatch' ||
-          startsWith(github.ref, 'refs/heads/release/')
-        run: |
-          ver="${{ steps.stage.outputs.version }}"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Release candidate $GITHUB_SHA is not contained in origin/main. Push the exact candidate to main before publishing."
+            exit 1
+          fi
+          tag_ref="refs/tags/v$ver"
+          tag_lines="$(git ls-remote origin "$tag_ref" "$tag_ref^{}")"
+          tag_commit="$(printf '%s\n' "$tag_lines" | awk '$2 ~ /\^\{\}$/ { print $1; exit }')"
+          if [ -z "$tag_commit" ]; then
+            tag_commit="$(printf '%s\n' "$tag_lines" | awk -v ref="$tag_ref" '$2 == ref { print $1; exit }')"
+          fi
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::error::Existing v$ver tag points to $tag_commit, not exact candidate $GITHUB_SHA. Tags are immutable; use the next patch version."
+            exit 1
+          fi
           feed="$(cat ../release-native/update-feed/version.txt 2>/dev/null || echo '')"
           if [ "$feed" != "$ver" ]; then
             echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh on a Linux/WSL host and commit release-native/ before releasing."
@@ -237,6 +242,23 @@ jobs:
           test -s ../release-native/share-server/se-share-server-linux
           test -s ../release-native/smart_explorer_command.dll
           test -x ../install-linux.sh
+          reported_linux_se="$(../release-native/update-feed/se --version)"
+          if [ "$reported_linux_se" != "se $ver" ]; then
+            echo "::error::Committed Linux se version mismatch: $reported_linux_se"
+            exit 1
+          fi
+          cmp ../release-native/update-feed/smart_explorer.exe "../release-native/Smart Explorer.exe"
+          cmp ../release-native/update-feed/smart_explorer_updater.exe "../release-native/Smart Explorer Updater.exe"
+          cmp ../release-native/update-feed/se.exe ../release-native/se.exe
+          installer="../release-native/Smart Explorer Setup $ver.exe"
+          installer_root="$(mktemp -d)"
+          trap 'rm -rf "$installer_root"' EXIT
+          7z x -y -o"$installer_root" "$installer" >/dev/null
+          cmp "$installer_root/Smart Explorer.exe" ../release-native/update-feed/smart_explorer.exe
+          cmp "$installer_root/Smart Explorer Updater.exe" ../release-native/update-feed/smart_explorer_updater.exe
+          cmp "$installer_root/se.exe" ../release-native/update-feed/se.exe
+          rm -rf "$installer_root"
+          trap - EXIT
           (
             cd ../release-native/update-feed
             sha256sum -c smart_explorer.exe.sha256
@@ -268,7 +290,10 @@ jobs:
               exit 1
             fi
           done
-          file ../release-native/update-feed/smart_explorer | grep -Eq 'statically linked|static-pie linked'
+          file ../release-native/update-feed/smart_explorer | grep -Fq 'dynamically linked'
+          file ../release-native/update-feed/smart_explorer_updater | grep -Eq 'statically linked|static-pie linked'
+          file ../release-native/update-feed/se | grep -Eq 'statically linked|static-pie linked'
+          ./test-linux-gui-startup.sh ../release-native/update-feed/smart_explorer
           file ../release-native/share-server/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
           x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllGetClassObject
           x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllCanUnloadNow
@@ -276,7 +301,7 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $ver."
             exit 1
           fi
-          if [[ "$GITHUB_REF" == refs/heads/release/* ]]; then
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then
             branch_ver="${GITHUB_REF_NAME##*/}"
             branch_ver="${branch_ver#v}"
             if [[ "$branch_ver" != "$ver" ]]; then
@@ -284,9 +309,7 @@ jobs:
               exit 1
             fi
           fi
-          # Fresh builds above are compile gates. GitHub Release assets must be
-          # the exact committed artifacts that installed clients fetch and that
-          # this release gate just verified, so replace out/ only after checks.
+          mkdir -p out
           for asset in \
             smart_explorer.exe smart_explorer_updater.exe se.exe \
             smart_explorer.exe.sha256 smart_explorer_updater.exe.sha256 se.exe.sha256 \
@@ -302,6 +325,14 @@ jobs:
           cp ../install-linux.sh out/install-linux.sh
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
 
+      - name: Exact committed Linux Share and Exec CLI E2E
+        working-directory: .
+        env:
+          SMART_EXPLORER_SE_BINARY: ${{ github.workspace }}/release-native/update-feed/se
+          SMART_EXPLORER_SHARE_SERVER_BINARY: ${{ github.workspace }}/release-native/share-server/se-share-server-linux
+          SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions_linux_release
+        run: native/test-share-lifecycle-e2e.sh
+
       - name: Upload exact staged release candidate
         uses: actions/upload-artifact@v4
         with:
@@ -309,7 +340,14 @@ jobs:
           path: native/out
 
   windows-gnu-release-e2e:
-    needs: windows-gnu
+    needs: release-candidate
+    if: >-
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.verify_release_candidate == true || inputs.publish_release == true)) ||
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/heads/release/v'))
     runs-on: windows-latest
     env:
       SMART_EXPLORER_E2E_TEST_NAMESPACE: github_actions_windows_gnu_release
@@ -326,7 +364,7 @@ jobs:
         run: |
           $se = (Resolve-Path ".\release-candidate\se.exe").Path
           $reported = (& $se --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $reported -ne "se ${{ needs.windows-gnu.outputs.version }}") {
+          if ($LASTEXITCODE -ne 0 -or $reported -ne "se ${{ needs.release-candidate.outputs.version }}") {
             throw "staged se version mismatch: '$reported'"
           }
 
@@ -340,12 +378,16 @@ jobs:
             -ShareServerBinary $server
 
   publish-release:
-    needs: [windows-gnu, windows-gnu-release-e2e]
+    needs: [release-candidate, windows-gnu-release-e2e]
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.ref, 'refs/heads/release/')
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) ||
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/heads/release/v'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -354,25 +396,69 @@ jobs:
           name: smart-explorer-builds
           path: native/out
 
+      - name: Bind publication to exact main commit and immutable tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${{ needs.release-candidate.outputs.version }}"
+          tag="v$ver"
+          tag_ref="refs/tags/$tag"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Tested candidate $GITHUB_SHA is not contained in origin/main."
+            exit 1
+          fi
+          remote_tag_commit() {
+            local lines peeled direct
+            lines="$(git ls-remote origin "$tag_ref" "$tag_ref^{}")"
+            peeled="$(printf '%s\n' "$lines" | awk '$2 ~ /\^\{\}$/ { print $1; exit }')"
+            if [ -n "$peeled" ]; then
+              printf '%s\n' "$peeled"
+              return
+            fi
+            direct="$(printf '%s\n' "$lines" | awk -v ref="$tag_ref" '$2 == ref { print $1; exit }')"
+            printf '%s\n' "$direct"
+          }
+          existing="$(remote_tag_commit)"
+          if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+            echo "::error::Existing $tag points to $existing, not tested candidate $GITHUB_SHA. Refusing to rewrite it or replace its assets."
+            exit 1
+          fi
+          if [ -z "$existing" ]; then
+            git update-ref "$tag_ref" "$GITHUB_SHA"
+            if ! git push origin "$tag_ref"; then
+              existing="$(remote_tag_commit)"
+              if [ "$existing" != "$GITHUB_SHA" ]; then
+                echo "::error::Could not create $tag atomically at tested candidate $GITHUB_SHA."
+                exit 1
+              fi
+            fi
+          fi
+          final="$(remote_tag_commit)"
+          if [ "$final" != "$GITHUB_SHA" ]; then
+            echo "::error::$tag is not bound to tested candidate $GITHUB_SHA immediately before publication."
+            exit 1
+          fi
+
       - name: Publish GitHub Release
         # Fires only after the exact staged Windows GNU CLI/server bytes pass
         # the native Windows lifecycle gate.
         uses: softprops/action-gh-release@v2
         with:
-          # On a manual dispatch (no tag ref), create the tag at this commit.
-          tag_name: v${{ needs.windows-gnu.outputs.version }}
+          # Dispatch and release/v* fallbacks create the tag at this commit.
+          tag_name: v${{ needs.release-candidate.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: Smart Explorer ${{ needs.windows-gnu.outputs.version }}
+          name: Smart Explorer ${{ needs.release-candidate.outputs.version }}
           fail_on_unmatched_files: true
           body: |
-            **Smart Explorer ${{ needs.windows-gnu.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
+            **Smart Explorer ${{ needs.release-candidate.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
 
             Linux one-line install:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
             ```
 
-            - **Smart Explorer Setup ${{ needs.windows-gnu.outputs.version }}.exe** —
+            - **Smart Explorer Setup ${{ needs.release-candidate.outputs.version }}.exe** —
               installer (recommended). Sets up auto-update from the Git feed and
               the right-click "In Smart Explorer öffnen" verb.
             - **smart_explorer.exe** — portable app (also the self-update
@@ -389,10 +475,11 @@ jobs:
               standalone signaling server plus Iroh encrypted-traffic relay for
               direct peer sharing.
 
-            Built by CI (ubuntu + mingw-w64 + `x86_64-pc-windows-gnu`). Update +
-            release flow: `docs/RELEASING.md`.
+            Built once by the local complete release workflow and published
+            from the exact committed candidate. Update + release flow:
+            `docs/RELEASING.md`.
           files: |
-            native/out/Smart Explorer Setup ${{ needs.windows-gnu.outputs.version }}.exe
+            native/out/Smart Explorer Setup ${{ needs.release-candidate.outputs.version }}.exe
             native/out/smart_explorer.exe
             native/out/smart_explorer_updater.exe
             native/out/se.exe

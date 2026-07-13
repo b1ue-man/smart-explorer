@@ -4,10 +4,14 @@ How a new version goes from a commit to an installed app updating itself.
 One version number drives everything: `native/Cargo.toml`.
 
 ```
- bump Cargo.toml ─▶ build (CI or publish-release-local.ps1)
-                     ├─▶ update feed   version + manifest + Windows/Linux app/updater/se + hashes
-                     ├─▶ installer     Windows NSIS + Linux install-linux.sh
-                     └─▶ GitHub Release vX.Y.Z  (verified feed payloads/hashes + installer/script/dll/share servers)
+ finish task batch + development validation
+   ─▶ bump Cargo.toml once
+   ─▶ one complete local release build
+       ├─▶ update feed   version + manifest + Windows/Linux app/updater/se + hashes
+       └─▶ installer     Windows NSIS + Linux install-linux.sh
+   ─▶ commit + push main
+   ─▶ release trigger ─▶ exact-byte CI validation/E2E
+                     ─▶ GitHub Release vX.Y.Z  (verified feed payloads/hashes + installer/script/dll/share servers)
                                          │
  installed app on launch ──▶ reads update_source (default: the Git feed on main)
                           ──▶ newer version? ──▶ stage + SHA-check app/updater/se
@@ -15,7 +19,8 @@ One version number drives everything: `native/Cargo.toml`.
 ```
 
 The version is consistent across all four outputs because each reads it from
-`Cargo.toml`. Never hand-edit `version.txt` — the scripts/CI write it.
+`Cargo.toml`. Never hand-edit `version.txt` — the complete local release script
+writes it last.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
 
@@ -33,11 +38,18 @@ user can pull updates.
 
 ## Cut a release
 
-1. **Bump** `version` in `native/Cargo.toml`. Commit.
-2. **Build + stage** the release artifacts:
+1. **Finish the complete task batch and development validation first.** Normal
+   commits and pushes may run formatting, checks, tests, disposable builds, and
+   E2E, but they do not bump a version, rewrite `release-native/`, stage release
+   assets, or publish anything. Run the workstation preflight before entering
+   the release stage.
+2. **Bump once**: set `version` in `native/Cargo.toml` to the one intended patch
+   version for the whole batch.
+3. **Build + stage once** with one complete release workflow:
    - Windows workstation default: `.\native\publish-release-local.ps1`
      builds the Windows app/updater/`se`/installer with `publish-update.ps1`, then
-     calls WSL to build the Linux musl app/updater/`se`/share-server payloads.
+     calls WSL to build the dynamic GNU/glibc Linux GUI plus static-musl
+     updater/`se`/share-server payloads.
      Both platforms are built and verified in one isolated release tree. Only
      then does the wrapper promote the ancillary artifacts and complete feed
      with rollback backups, writing `version.txt` as the final commit marker.
@@ -62,38 +74,62 @@ user can pull updates.
      servers, and installer, verifies them in staging, and writes
      `version.txt` last. This is the supported full-release path on a Linux
      release host.
-3. **Commit** `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
+   Choose exactly one complete host path. The repair and partial-bundle commands
+   resume or diagnose a failed stage; they are not additional release cycles
+   after a successful complete build.
+4. **Commit** the version and `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
    smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
    se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
    `smart_explorer_command.dll`, both `share-server/` payloads, and
    `Smart Explorer Setup X.Y.Z.exe`).
-4. **Merge to `main`** — the feed is served from `main`, so updates only go live
+5. **Merge to `main`** — the feed is served from `main`, so updates only go live
    once `main` has the new feed:
    ```
    git push origin <branch>:main          # fast-forward
    ```
-5. **Publish the GitHub Release** (attaches OS payloads/hashes, installer, DLL,
+6. **Verify the exact candidate before tagging.** Dispatch `build.yml` at that
+   exact `main` commit with `verify_release_candidate=true` and
+   `publish_release=false`. This does not rebuild or publish a release. It
+   validates and temporarily stages the 18 committed assets, then runs the
+   committed Linux and Windows GNU `se`/Share-server bytes through their exact
+   platform E2E. Fix failures on the same intended version and repeat only the
+   failed build stage or verification; do not create a tag until this run is
+   green.
+7. **Publish the GitHub Release** (attaches OS payloads/hashes, installer, DLL,
    install script, both Share servers, and `version.txt`):
    - Normally: push a tag — CI's `build.yml` releases on `v*`:
      ```
      git tag vX.Y.Z && git push origin vX.Y.Z
      ```
    - If tag push is unavailable but GitHub Actions dispatch is authorized, run
-     `build.yml` with `workflow_dispatch` at the exact release commit. The
-     workflow creates `vX.Y.Z` from `Cargo.toml` and publishes that release.
+     `build.yml` with `workflow_dispatch` at the exact release commit and set
+     the required Boolean input `publish_release` to `true`. A dispatch with the
+     default `false` runs development validation only. The explicit release
+     dispatch creates `vX.Y.Z` from `Cargo.toml` and publishes that release.
    - Where the git host rejects tag pushes (e.g. some sandboxes), push a release
-     branch as the final fallback — CI releases on `release/**`, creating the
+     branch as the final fallback — CI releases only on `release/v*`, creating the
      tag from `Cargo.toml`'s version:
      ```
      git push origin <branch>:release/vX.Y.Z
      ```
      Delete the branch after the release is published; it's only a trigger.
 
+   Every publication path requires the exact candidate commit to already be
+   contained in `origin/main`. An existing `vX.Y.Z` must point to that exact
+   commit; CI never moves or rewrites a tag. Dispatch and release-branch
+   fallbacks create a missing tag immediately before publication and abort if
+   another commit claimed it concurrently.
+
 The local Windows release wrapper expects WSL with Rust installed. It ensures
-the Linux musl target is present, uses Zig for C dependencies where WSL lacks a
-system compiler, filters the musl-only `-ldl` linker mismatch, and leaves the
-live feed untouched while either platform build or staged verification is in
-progress. Promotion failures restore the prior feed and ancillary files.
+both Linux targets are present: the desktop app uses
+`x86_64-unknown-linux-gnu` with a Zig-pinned glibc 2.17 baseline because winit
+loads X11/Wayland libraries dynamically, while the updater, `se`, and Share
+server remain standalone `x86_64-unknown-linux-musl` executables. The staged
+GUI must create a real window under Xvfb before promotion. Zig also supplies C
+dependencies where WSL lacks a system compiler, and the musl linker wrapper
+filters the musl-only `-ldl` mismatch. The live feed remains untouched while
+either platform build or staged verification is in progress; promotion
+failures restore the prior feed and ancillary files.
 
 Before cutting a release on a workstation, the fast environment check is:
 
@@ -101,30 +137,44 @@ Before cutting a release on a workstation, the fast environment check is:
 .\native\publish-release-local.ps1 -CheckEnvOnly
 ```
 
-`build.yml` does the whole thing on CI (ubuntu + mingw-w64 +
-`x86_64-pc-windows-gnu`, the verified cross-compile, plus a native Windows
-runner): format check, dependency audit, Windows-target check, native Windows
-library and standalone-`se` tests, all-target host tests (including built-`se`
-headless subprocess tests), Windows test-harness compile, clippy, static-musl
-`se-agent` builds, COM DLL check/build, and share-server checks/builds. It also
-runs the multi-profile tracked Share lifecycle against `se-share-server`,
-covering offline delivery/retry, daemon restarts, signed receipts,
-accept/reject/pending-delete persistence, operational authorization, Exec,
-revoke, and post-revoke denial. CI then performs the Windows + Linux release
-builds including the `se` terminal companion and installer (NSIS), uploads the
-exact staged Windows GNU `se.exe` and `se-share-server.exe`, and runs those same
-bytes through the full lifecycle on a native Windows runner. GitHub Release
-publication is a separate dependent job and cannot start until that exact
-release-binary gate succeeds. Before staging those bytes the build
-**fails the release if the committed feed version, Windows build manifest,
-payload hashes, installer, DLL, and share-server artifacts are incomplete or
-inconsistent**. Fresh CI builds remain compile gates; GitHub Release assets are
-then copied from the verified committed artifacts. Published app/updater/`se`
-payloads, hashes, and `version.txt` are byte-identical to the auto-update feed;
-the installer, script, DLL, and Share servers are the corresponding verified
-ancillary artifacts. Publication binds a newly created tag to the exact tested
-workflow commit and treats any unmatched one of the 18 required asset paths as
-a hard failure.
+When the Linux GUI packaging path changed and a targeted preflight is relevant,
+run this before the single complete build:
+
+```bash
+native/publish-linux-feed-wsl.sh --check-gui
+```
+
+It builds only the GNU/glibc 2.17 desktop target into Cargo's normal target
+directory and proves that it opens a real X window. It does not touch or
+promote `release-native`, write `version.txt`, or publish anything.
+
+On every ordinary branch push and pull request, `build.yml` runs development
+validation on native Windows and Ubuntu/mingw: formatting, dependency audit,
+Windows-target checks, native Windows library and standalone-`se` tests,
+all-target host tests (including built-`se` subprocess coverage), Windows
+test-harness compilation, clippy, deterministic static-musl `se-agent` bundle
+verification, COM DLL checks, share-server checks, and the multi-profile tracked
+Share lifecycle. That path may create disposable test binaries, but it never
+runs a complete release build, stages or uploads a candidate, creates a tag, or
+publishes a GitHub Release.
+
+An explicit `workflow_dispatch` with `verify_release_candidate=true` enables
+the exact-candidate jobs without enabling publication. A `v*` tag, an explicit
+dispatch with `publish_release=true`, or the documented `release/v*` fallback
+also enables those gates and enables publication only after they pass. CI
+deliberately does not rebuild the release there: it
+checks the version, all six payload hashes, Windows build manifest, portable
+Windows/feed byte equality, installer and all ancillary assets directly from
+the exact commit. It also starts the committed GNU/glibc Linux GUI under Xvfb,
+checks the static headless Linux payloads and DLL exports, stages exactly those
+committed bytes, runs the committed static Linux `se` and Share server through
+the full Share/Exec lifecycle, and uploads them for the native-Windows GNU `se.exe` and
+`se-share-server.exe` lifecycle E2E. Publication is a separate dependent job
+and cannot start before that exact-binary gate succeeds. Published
+app/updater/`se` payloads, hashes, and `version.txt` are therefore byte-identical
+to the auto-update feed; the installer, script, DLL, and Share servers are the
+same verified committed ancillary artifacts. The publication action treats any
+unmatched one of the 18 required asset paths as a hard failure.
 
 The Linux installer first tries the verified GitHub Release payloads, so a
 terminal-only installation needs no Rust or desktop toolchain:
@@ -164,13 +214,17 @@ release-native/update-feed/
   smart_explorer_updater.exe.sha256
   se.exe               Windows terminal companion
   se.exe.sha256
-  smart_explorer       Linux app payload
+  smart_explorer       Linux GNU/glibc desktop app payload (glibc 2.17+)
   smart_explorer.sha256
   smart_explorer_updater       Linux updater helper
   smart_explorer_updater.sha256
   se                   Linux terminal companion
   se.sha256
 ```
+
+The Linux desktop payload relies on the normal X11 or Wayland client libraries
+provided by desktop distributions. The `--cli-only` installer path needs none
+of those GUI libraries because `se` remains a static-musl executable.
 
 The normal update path uses a separate helper installed next to the app binary
 (`Smart Explorer Updater.exe` on Windows, `smart_explorer_updater` on Linux) and

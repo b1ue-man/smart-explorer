@@ -145,6 +145,10 @@ angezeigt). Keine Rechtsberatung.
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
 ```
 
+Die Desktop-App ist für GNU/Linux mit glibc 2.17+ gebaut und nutzt die üblichen
+X11-/Wayland-Clientbibliotheken der Desktop-Distribution. Der Release-Build
+startet genau diese Payload vor der Veröffentlichung unter Xvfb.
+
 **Linux nur Terminal (ohne Desktop-/X11-Abhängigkeiten):**
 
 ```bash
@@ -237,19 +241,29 @@ cd native && cargo build --release
 Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) steht in
 **[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
-1. `version` in `native/Cargo.toml` erhöhen, committen.
-2. Bauen + Artefakte stagen: auf Windows standardmäßig
+1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und mit normalen
+   Checks, Tests, Test-Builds und E2E validieren. Zwischencommits sind keine
+   Releases und bauen oder überschreiben keine Release-Artefakte.
+2. `version` in `native/Cargo.toml` genau einmal erhöhen.
+3. Genau einen vollständigen Release-Build ausführen: auf Windows standardmäßig
    `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/`se`/Installer,
    baut die Linux/WSL-Payloads im selben isolierten Staging-Baum, prüft alle
    Artefakte und schreibt `version.txt` erst nach der rollback-geschützten
    Gesamt-Promotion. `-SkipLinuxFeed` erzeugt nur ein ausdrücklich nicht
    publizierbares Windows-Prüfbundle; der gemeinsame Feed bleibt unverändert.
-3. `release-native/` committen und **nach `main` mergen** (der Feed wird von
+4. Version und `release-native/` committen und **nach `main` mergen** (der Feed wird von
    `main` ausgeliefert — erst dann ist das Update live).
-4. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen (CI `build.yml` released
-   auf `v*`). Hängt die verifizierten Windows-/Linux-App-, Updater- und
-   `se`-Payloads samt Hashes, Installer, Linux-Installskript, Kontextmenü-DLL,
-   beide Share-Server und `version.txt` an.
+5. `build.yml` am exakten Commit mit `verify_release_candidate=true` und
+   `publish_release=false` ausführen. Das baut und veröffentlicht keinen
+   Release, sondern prüft die committierten Linux-/Windows-Bytes einschließlich
+   der plattformeigenen E2E vor dem unveränderlichen Tag.
+6. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen. CI baut den Kandidaten
+   nicht erneut, sondern validiert, testet und veröffentlicht bytegenau die
+   committierten Windows-/Linux-App-, Updater- und `se`-Payloads samt Hashes,
+   Installer, Linux-Installskript, Kontextmenü-DLL, beide Share-Server und
+   `version.txt`. Kandidat und unveränderlicher Tag müssen dabei exakt auf einem
+   bereits nach `main` gepushten Commit liegen. Die dokumentierten Fallbacks sind ein manueller Lauf mit
+   `publish_release=true` oder ein Push auf `release/vX.Y.Z`.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
