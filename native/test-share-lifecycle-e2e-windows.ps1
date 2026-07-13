@@ -84,11 +84,18 @@ function Invoke-Client {
         [Environment]::SetEnvironmentVariable($name, $environment[$name], "Process")
     }
 
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 promotes a native process' redirected stderr
+        # to NativeCommandError when the caller uses Stop. Non-zero native
+        # exits are test results here, so capture them and restore Stop before
+        # any PowerShell-side validation runs.
+        $ErrorActionPreference = "Continue"
         & $script:SeBinary @Arguments 1> $stdoutPath 2> $stderrPath
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         foreach ($name in $environment.Keys) {
             [Environment]::SetEnvironmentVariable($name, $previous[$name], "Process")
         }
