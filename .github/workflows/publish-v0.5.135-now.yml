@@ -1,0 +1,48 @@
+name: publish-v0.5.135-now
+
+on:
+  push:
+    branches: ["release/v0.5.135"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish committed release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.5.135
+          target_commitish: ${{ github.sha }}
+          name: Smart Explorer 0.5.135
+          fail_on_unmatched_files: true
+          body: |
+            Smart Explorer 0.5.135 for Windows x64 and Linux x86_64.
+
+            Linux install:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh
+            ```
+          files: |
+            release-native/Smart Explorer Setup 0.5.135.exe
+            release-native/update-feed/smart_explorer.exe
+            release-native/update-feed/smart_explorer_updater.exe
+            release-native/update-feed/se.exe
+            release-native/update-feed/smart_explorer.exe.sha256
+            release-native/update-feed/smart_explorer_updater.exe.sha256
+            release-native/update-feed/se.exe.sha256
+            release-native/update-feed/smart_explorer
+            release-native/update-feed/smart_explorer_updater
+            release-native/update-feed/se
+            release-native/update-feed/smart_explorer.sha256
+            release-native/update-feed/smart_explorer_updater.sha256
+            release-native/update-feed/se.sha256
+            install-linux.sh
+            release-native/smart_explorer_command.dll
+            release-native/share-server/se-share-server.exe
+            release-native/share-server/se-share-server-linux
+            release-native/update-feed/version.txt
