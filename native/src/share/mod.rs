@@ -18,6 +18,8 @@ mod direct_actions;
 mod direct_ledger;
 #[path = "core/direct_ledger_mutations.rs"]
 mod direct_ledger_mutations;
+#[path = "core/direct_ledger_projection.rs"]
+mod direct_ledger_projection;
 #[path = "core/direct_ledger_retention.rs"]
 mod direct_ledger_retention;
 #[path = "core/direct_ledger_validation.rs"]
@@ -30,12 +32,38 @@ mod direct_lifecycle_error;
 mod direct_messages;
 #[path = "core/direct_protocol.rs"]
 mod direct_protocol;
+#[path = "core/direct_request_tombstone.rs"]
+mod direct_request_tombstone;
 #[path = "core/direct_signal_event.rs"]
 mod direct_signal_event;
 #[path = "core/direct_transcript.rs"]
 mod direct_transcript;
 #[path = "core/exec.rs"]
 mod exec;
+#[path = "core/exec_auth.rs"]
+mod exec_auth;
+#[path = "core/exec_client.rs"]
+mod exec_client;
+#[path = "core/exec_grant_runtime.rs"]
+mod exec_grant_runtime;
+#[path = "core/exec_job.rs"]
+mod exec_job;
+#[path = "core/exec_platform.rs"]
+mod exec_platform;
+#[path = "core/exec_policy.rs"]
+mod exec_policy;
+#[path = "core/exec_protocol.rs"]
+mod exec_protocol;
+#[path = "core/exec_registry.rs"]
+mod exec_registry;
+#[path = "core/exec_server.rs"]
+mod exec_server;
+#[path = "core/exec_session.rs"]
+mod exec_session;
+#[path = "core/exec_supervisor_protocol.rs"]
+mod exec_supervisor_protocol;
+#[path = "core/exec_types.rs"]
+mod exec_types;
 #[path = "core/framing.rs"]
 mod framing;
 #[path = "core/fs.rs"]
@@ -64,6 +92,12 @@ mod node;
 mod peer_read;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/exec.rs"]
+mod platform_exec;
+#[cfg(windows)]
+#[path = "os/windows/exec.rs"]
+mod platform_exec;
 #[path = "os/shared/profile_operations.rs"]
 mod profile_operations;
 #[path = "core/profile_persistence.rs"]
@@ -136,7 +170,16 @@ pub use self::direct_protocol::{
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
     SignedDirectRequestReceipt,
 };
+pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
+pub(crate) use self::exec_client::{ExecClientEvent, ExecClientInput};
+pub use self::exec_grant_runtime::ExecGrantMutation;
+pub use self::exec_policy::ExecGrant;
+pub(crate) use self::exec_session::{ShareExecInput, ShareExecSession};
+pub use self::exec_types::{
+    ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
+    ExecTerminal, ExecTerminalKind,
+};
 pub use self::fs::{ShareExportConfig, SharedRoot};
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub use self::profile_persistence::ProfileChange;
@@ -144,12 +187,30 @@ pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;
 pub use self::types::{
-    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecRequest, ExecResult,
-    PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent, ShareStatus,
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecGrantTarget, ExecRequest,
+    ExecResult, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent,
+    ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {
     self::core::now_secs()
+}
+
+pub(crate) fn exec_provider_status() -> ExecProviderStatus {
+    exec_platform::provider_status()
+}
+
+/// Runs the exact hidden supervisor invocation before CLI or GUI parsing.
+/// Returning `Some` means the process was an internal supervisor and must exit.
+pub fn run_exec_supervisor_if_requested(
+    arguments: &[std::ffi::OsString],
+) -> Option<std::io::Result<()>> {
+    exec_platform::run_supervisor_if_requested(arguments)
+}
+
+#[cfg(debug_assertions)]
+pub fn run_exec_platform_self_test() -> std::io::Result<()> {
+    exec_platform::run_platform_self_test()
 }
 
 #[cfg(test)]

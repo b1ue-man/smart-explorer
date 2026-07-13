@@ -298,12 +298,23 @@ fn incoming_decision_outbox_survives_accept_and_newer_revoke() {
         145
     );
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Accepted);
+    profiles.direct_grants[0].exec.enabled = true;
 
     let revoked = decision(&request, DirectDecisionKind::Revoked, 2, 250);
     profiles
         .record_direct_decision(revoked.clone(), 250)
         .unwrap();
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
+    assert!(!profiles.direct_grants[0].exec.enabled);
+    assert_eq!(profiles.direct_grants[0].exec.policy_revision, 1);
+    assert_eq!(
+        profiles.direct_grants[0].exec.source_request_id.as_ref(),
+        Some(&request.request_id)
+    );
+    assert_eq!(
+        profiles.direct_grants[0].exec.source_decision_revision,
+        Some(2)
+    );
     let entry = profiles.direct_request(&request.request_id).unwrap();
     assert_eq!(entry.decision, Some(revoked));
     assert!(entry.decision_receipt.is_none());

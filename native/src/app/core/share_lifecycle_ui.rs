@@ -85,6 +85,8 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
+    ui.separator();
+    crate::app::share_exec_ui::ui_exec_grants(app, ui);
     if !app.share_direct_requests.is_empty() {
         ui.separator();
         legacy_requests(app, ui, &mut action);
@@ -191,7 +193,7 @@ fn request_card(
                         decision: crate::share::DirectDecisionKind::Accepted,
                     });
                 }
-                if ui.button("Loeschen / ablehnen").clicked() {
+                if ui.button("Ablehnen").clicked() {
                     *action = Some(LifecycleAction::Decide {
                         request_id: request.request_id.clone(),
                         fingerprint: request.fingerprint.clone(),
@@ -202,26 +204,38 @@ fn request_card(
                     *action = Some(LifecycleAction::SelectExports);
                 }
             });
-        } else if request.can_delete {
-            if ui.button("Aus Verlauf loeschen").clicked() {
+        }
+        ui.horizontal_wrapped(|ui| {
+            if !incoming
+                && request.can_retry
+                && ui
+                    .button("Mit gleicher Request-ID erneut versuchen")
+                    .clicked()
+            {
+                *action = Some(LifecycleAction::Retry {
+                    request_id: request.request_id.clone(),
+                });
+            }
+            let delete_label = if request.decision == crate::share::DirectDecisionState::Pending {
+                "Anfrage lokal loeschen"
+            } else {
+                "Aus Verlauf loeschen"
+            };
+            if ui
+                .add_enabled(request.can_delete, egui::Button::new(delete_label))
+                .on_hover_text(
+                    "Pending-Anfragen koennen lokal geloescht werden. Eine angenommene Anfrage muss zuerst unter Autorisierte Geraete widerrufen und vom Peer bestaetigt werden.",
+                )
+                .clicked()
+            {
                 *action = Some(LifecycleAction::DeleteHistory {
                     request_id: request.request_id.clone(),
                 });
             }
-        } else if !incoming
-            && request.can_retry
-            && ui
-                .button("Mit gleicher Request-ID erneut versuchen")
-                .clicked()
-        {
-            *action = Some(LifecycleAction::Retry {
-                request_id: request.request_id.clone(),
-            });
-        }
+        });
     });
     ui.add_space(4.0);
 }
-
 fn authorized_card(
     ui: &mut egui::Ui,
     device: &AuthorizedDeviceView,
@@ -449,6 +463,7 @@ fn revoke_legacy_grant(app: &mut App, device_id: &str) {
             .ok_or_else(|| format!("Legacy-Freigabe nicht gefunden: {device_id}"))?;
         grant.state = crate::share::DirectGrantState::Ignored;
         grant.updated_at = now;
+        grant.exec.disable_without_decision(now);
         Ok(())
     });
     match result {

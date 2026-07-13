@@ -96,3 +96,41 @@ fn sync_daemon_text_in_a_normal_argument_is_not_hijacked() {
     assert_success(&bounded.output);
     assert!(stdout(&bounded.output).contains("name\t--sync-daemon\n"));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_systemd_cgroup_exec_provider_contains_and_drains_processes() {
+    let systemd_host = std::path::Path::new("/run/systemd/system").is_dir()
+        && std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").is_file()
+        && (unsafe { libc::geteuid() } != 0
+            || std::path::Path::new("/run/dbus/system_bus_socket").exists());
+    if !systemd_host {
+        eprintln!("explicitly unavailable: test host has no systemd+cgroup-v2 manager");
+        return;
+    }
+    let sandbox = Sandbox::new("exec-platform-systemd");
+    let bounded = run_bounded(
+        sandbox.command().arg("--share-exec-platform-self-test"),
+        Duration::from_secs(45),
+    );
+    assert!(
+        !bounded.timed_out,
+        "systemd containment self-test timed out"
+    );
+    assert_success(&bounded.output);
+}
+
+#[cfg(windows)]
+#[test]
+fn real_windows_job_exec_provider_contains_and_drains_processes() {
+    let sandbox = Sandbox::new("exec-platform-windows-job");
+    let bounded = run_bounded(
+        sandbox.command().arg("--share-exec-platform-self-test"),
+        Duration::from_secs(45),
+    );
+    assert!(
+        !bounded.timed_out,
+        "Windows Job Object containment self-test timed out"
+    );
+    assert_success(&bounded.output);
+}

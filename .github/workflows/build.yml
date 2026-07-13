@@ -36,13 +36,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native
+          workspaces: |
+            native
+            share-server
 
       - name: Native Windows library tests
         run: cargo test --lib --no-fail-fast -- --test-threads=1
 
       - name: Native Windows standalone se tests
         run: cargo test --test se_cli --no-fail-fast -- --test-threads=1
+
+      - name: Build native Windows Share CLI E2E binaries
+        run: |
+          cargo build --bin se
+          cargo build --manifest-path ..\share-server\Cargo.toml --bin se-share-server
+
+      - name: Native Windows Share and Exec CLI E2E
+        shell: powershell
+        run: .\test-share-lifecycle-e2e-windows.ps1
 
       - name: Native Windows Clippy
         run: cargo clippy --all-targets -- -D warnings

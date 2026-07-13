@@ -92,14 +92,21 @@ fn merge_members(
         if previous_member == Some(updated_member) {
             continue;
         }
+        let exec_changed = previous_member.is_some_and(|member| member.exec != updated_member.exec);
         if let Some(current_member) = current
             .members
             .iter_mut()
             .find(|member| member.device_id == updated_member.device_id)
         {
             let blocked = current_member.blocked;
+            let exec = if exec_changed {
+                updated_member.exec.clone()
+            } else {
+                current_member.exec.clone()
+            };
             *current_member = updated_member.clone();
             current_member.blocked = blocked;
+            current_member.exec = exec;
         }
     }
 }

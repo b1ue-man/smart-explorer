@@ -355,6 +355,9 @@ fn upsert_room_member(room: &mut crate::share::RoomProfile, presence: crate::sha
         if member.public_key != presence.public_key
             || (!member.node_id.is_empty() && member.node_id != presence.node_id)
         {
+            member
+                .exec
+                .reset_for_identity_change(crate::share::core_now_secs());
             member.status = crate::share::ShareStatus::IdentityConflict;
             return;
         }
@@ -378,6 +381,7 @@ fn upsert_room_member(room: &mut crate::share::RoomProfile, presence: crate::sha
             last_seen: Some(crate::share::core_now_secs()),
             status: crate::share::ShareStatus::Available,
             blocked: false,
+            exec: crate::share::ExecGrant::default(),
             presence: Some(presence),
         });
     }

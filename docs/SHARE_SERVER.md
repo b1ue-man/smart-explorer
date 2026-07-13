@@ -112,8 +112,12 @@ The GUI's **Teilen** view shows three durable sections:
 - **Eingehende Anfragen**: request ID, requester identity, fingerprint,
   transport/receipt state, decision, authorization, and actions to accept after
   explicitly confirming the displayed fingerprint or to delete/reject without
-  an unrelated confirmation hurdle. Completed entries move into a collapsed
-  history and can be removed once no peer delivery remains pending.
+  an unrelated confirmation hurdle. Local delete stops retries and persists a
+  bounded replay tombstone; signed reject remains the peer-visible decision.
+  Completed entries move into a collapsed history. An accepted incoming entry
+  remains until its active grant is signed-revoked and the peer receipt arrives;
+  this preserves the only durable revoke outbox. It can then be removed locally
+  without revoking an independent grant.
 - **Ausgehende Anfragen**: the same lifecycle state from the requester side and
   a retry action that reuses the request ID.
 - **Autorisierte Geraete**: active grants and connectivity, with signed revoke
@@ -131,20 +135,36 @@ se share request retry [<selector>] [--json]
 se share request delete [<selector>] [--json]
 se share grants [--json]
 se share grants revoke [<selector>] [--fingerprint <assertion>] [--message <text>] [--json]
+se share grants exec [enable|disable] [<selector>] [--yes] [--json]
+se exec [<peer-selector>] -- PROGRAM [ARGS...]
+se exec [<peer-selector>] --shell COMMAND
+se share exec [list|history] [--json]
+se share exec show <selector> [--json]
+se share exec cancel [<selector>] [--json]
 se share status [--json]
 se completions bash|zsh|fish|elvish|powershell
 ```
 
 Bare `request`, `grants`, and `connections` commands list the corresponding
 objects and expose selectors accepted by their action commands. If exactly one
-request or active grant is actionable, `accept`, `reject`, or `revoke`
-auto-selects it. With multiple matches the command prints the exact usable
-selectors instead of requiring hidden data. Optional fingerprint arguments are
-additional assertions against the signed stored identity, never required input.
+request, retryable envelope, deletable history row, or active grant is eligible,
+`show`, `accept`, `reject`, `retry`, `delete`, or `revoke` auto-selects it. With
+multiple matches the command prints the exact usable selectors instead of
+requiring hidden data. Optional fingerprint arguments are additional assertions
+against the signed stored identity, never required input.
 Request/status output reports delivery, relay result, peer receipts, decision
 and revision, retry attempts/errors, authorization, and connectivity separately.
 Profile mutations use bounded compare-and-swap retries, so normal concurrent
 GUI/worker updates are rebased instead of overwriting each other.
+
+Exec permission is separate from file access and default-denied for every exact
+device identity. Enabling it grants unrestricted code execution as the account
+running Smart Explorer; there is deliberately no command or path allowlist.
+Windows uses a kill-on-close Job Object and Linux a transient systemd cgroup.
+The CLI auto-selects the only eligible peer/grant/job, otherwise it prints the
+valid choices and usable commands. Active and terminal execution state is
+visible on both endpoints, and Disable/Cancel terminates the contained tree
+before a terminal state is recorded.
 
 The accepted direct code authorizes the owner's `Standard Direkt` export scope.
 That scope is visible next to the code and can be changed before accepting or
@@ -154,10 +174,18 @@ through UAC.
 
 ## Lifecycle Regression Guard
 
-CI runs native Windows library and standalone-`se` tests on a Windows runner.
-The cross-platform build also runs `native/test-share-lifecycle-e2e.sh` with two
-isolated Linux client profiles and a real `se-share-server`. That scenario
+CI runs native Windows library and standalone-`se` tests plus
+`native/test-share-lifecycle-e2e-windows.ps1` on a Windows runner. The latter
+uses two isolated endpoint/credential namespaces, a real relay, context-free
+request and grant commands, and a real contained remote `cmd.exe`, then verifies
+disable, signed revoke, receipts, and deletion. The cross-platform build also
+runs `native/test-share-lifecycle-e2e.sh` with two isolated Linux client profiles
+and a real `se-share-server`. That scenario
 checks an initially offline target, same-ID retry, pending-inbox survival across
 daemon restart, offline acceptance delivery after requester restart, both
-signed receipts, an operational file listing after acceptance, signed revoke,
-and denied file access after revocation.
+signed receipts, an operational file listing after acceptance, and the full
+installed-CLI Exec lifecycle: binary I/O, nonzero exit, output cap, timeout,
+Cancel, CLI disconnect, worker `SIGKILL`, permission revoke, containment cleanup,
+and denied execution afterward. It finally checks that active accepted history
+cannot be erased, then performs signed base-grant revoke, waits for its receipt,
+deletes the inactive history context-free, and confirms denied file access.

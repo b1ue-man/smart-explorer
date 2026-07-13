@@ -38,9 +38,6 @@ pub(super) fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
     if cfg.include_connections {
         parts.push("gespeicherte Verbindungen".to_string());
     }
-    if cfg.allow_exec {
-        parts.push("vollstaendige Codeausfuehrung (deaktiviert)".to_string());
-    }
     parts.join(", ")
 }
 

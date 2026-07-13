@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.131"
+version = "0.5.132"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -10,6 +10,7 @@ eframe = { version = "0.29", default-features = false, features = ["accesskit", 
 egui_extras = { version = "0.29", features = ["datepicker"] }
 rayon = "1.10"
 crossbeam-channel = "0.5"
+ctrlc = "3.5"
 # The conflict editor uses deadline-aware Myers line diffs (linear auxiliary
 # space) instead of allocating a quadratic LCS table. Only the std/text API is
 # enabled, so this remains a pure-Rust dependency for both release targets.
@@ -105,6 +106,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
     "Win32_System_Registry",
@@ -141,6 +143,11 @@ windows = { version = "0.58", features = [
 [target.'cfg(not(windows))'.dependencies]
 libc = "0.2" # renameat2(RENAME_NOREPLACE) for race-free local move quarantine
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Remote execution uses the systemd Manager D-Bus API directly for transient
+# cgroup-backed services. The CLI never shells out to systemd-run.
+zbus = { version = "5.16", default-features = false, features = ["tokio", "blocking-api"] }
 
 [profile.release]
 opt-level = 3

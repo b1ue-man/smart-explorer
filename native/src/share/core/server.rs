@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
+use tokio::sync::OwnedSemaphorePermit;
 
 use super::core::eio;
 use super::framing::{recv_ctrl, reply, reply_err, send_ctrl};
@@ -16,6 +17,7 @@ use super::wire::{Ctrl, FsRequest, FsResponse};
 pub(super) async fn handle_connection(
     node: Arc<ShareIrohNode>,
     conn: Connection,
+    handshake_permit: OwnedSemaphorePermit,
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&conn)?;
     let remote_node = conn.remote_id().to_string();
@@ -51,6 +53,7 @@ pub(super) async fn handle_connection(
         }
     };
     send_ctrl(&mut send, &Ctrl::PeerHelloOk).await?;
+    drop(handshake_permit);
     let _ = node.ev.send(ShareEvent::Status(format!(
         "Iroh-Session akzeptiert: {} ({})",
         hello.device_id, remote_node
@@ -101,9 +104,7 @@ async fn handle_peer_stream(
     };
     let req = match ctrl {
         Ctrl::Fs { req } => req,
-        Ctrl::Exec { req } => {
-            return handle_exec_stream(&mut send, req, &exports, exec_slots).await
-        }
+        Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, exec_slots).await,
         _ => return Err(eio("Dateioperation erwartet")),
     };
     match req {
@@ -203,19 +204,17 @@ async fn handle_peer_stream(
 async fn handle_exec_stream(
     send: &mut SendStream,
     req: ExecRequest,
-    exports: &Arc<Mutex<ShareExportConfig>>,
     exec_slots: Arc<AtomicUsize>,
 ) -> io::Result<()> {
-    let config = exports
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    let result = match super::exec::prepare(req, &config, exec_slots) {
-        Ok(prepared) => tokio::task::spawn_blocking(move || prepared.run())
-            .await
-            .map_err(|error| eio(format!("remote execution worker failed: {error}")))?,
-        Err(error) => Err(error),
-    };
+    // Filesystem protocol v3 never carries an enabled Exec authorization.
+    // A later dedicated Exec ALPN must supply the exact per-device policy.
+    let result =
+        match super::exec::prepare(req, &super::exec_policy::ExecGrant::default(), exec_slots) {
+            Ok(prepared) => tokio::task::spawn_blocking(move || prepared.run())
+                .await
+                .map_err(|error| eio(format!("remote execution worker failed: {error}")))?,
+            Err(error) => Err(error),
+        };
     match result {
         Ok(result) => send_ctrl(send, &Ctrl::ExecResp { result }).await,
         Err(error) => {

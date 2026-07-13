@@ -40,7 +40,6 @@ fn iroh_direct_session_transfers_files() {
                 path: root.to_string_lossy().replace('\\', "/"),
             }],
             include_connections: false,
-            ..Default::default()
         },
         direct_contacts: Vec::new(),
         direct_grants: vec![crate::share::types::DirectGrant {
@@ -51,11 +50,14 @@ fn iroh_direct_session_transfers_files() {
             node_id: a.node_id.clone(),
             state: DirectGrantState::Accepted,
             updated_at: 1,
+            exec: crate::share::ExecGrant::default(),
         }],
         rooms: Vec::new(),
         direct_requests: Vec::new(),
+        direct_request_tombstones: Vec::new(),
         seen_nonces: Default::default(),
         direct_online: true,
+        authorization_epoch: 0,
     }));
     let auth_a = Arc::new(Mutex::new(ShareAuthState {
         identity: a.clone(),
@@ -65,8 +67,10 @@ fn iroh_direct_session_transfers_files() {
         direct_grants: Vec::new(),
         rooms: Vec::new(),
         direct_requests: Vec::new(),
+        direct_request_tombstones: Vec::new(),
         seen_nonces: Default::default(),
         direct_online: true,
+        authorization_epoch: 0,
     }));
 
     let node_b = ShareIrohNode::start("relay-disabled://test", &b, auth_b, tx_b).unwrap();

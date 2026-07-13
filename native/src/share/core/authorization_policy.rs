@@ -39,6 +39,7 @@ fn same_grants(left: &[DirectGrant], right: &[DirectGrant]) -> bool {
                 && left.fingerprint == right.fingerprint
                 && left.node_id == right.node_id
                 && left.state == right.state
+                && left.exec == right.exec
         })
 }
 
@@ -61,6 +62,7 @@ fn same_members(left: &[RoomMember], right: &[RoomMember]) -> bool {
                 && left.fingerprint == right.fingerprint
                 && left.node_id == right.node_id
                 && left.blocked == right.blocked
+                && left.exec == right.exec
         })
 }
 

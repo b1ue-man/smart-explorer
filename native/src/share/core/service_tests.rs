@@ -128,6 +128,7 @@ fn local_commands_are_acknowledged_while_server_hello_is_stalled() {
     service
         .cmd(ShareCmd::SyncDirectRequests {
             direct_requests: Vec::new(),
+            direct_request_tombstones: Vec::new(),
         })
         .expect("lifecycle sync is a local ACK during handshake");
     service
@@ -135,6 +136,11 @@ fn local_commands_are_acknowledged_while_server_hello_is_stalled() {
         .expect("Refresh intent is acknowledged during handshake");
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(service.auth.lock().unwrap().default_direct_exports, exports);
+    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 1);
+    service
+        .cmd(ShareCmd::SetDirectOnline { online: false })
+        .expect("base authorization change is acknowledged");
+    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 2);
     service
         .cmd(ShareCmd::Stop)
         .expect("Stop is acknowledged during handshake");
@@ -310,8 +316,10 @@ fn test_service() -> ShareService {
         direct_grants: Vec::<DirectGrant>::new(),
         rooms: Vec::new(),
         direct_requests: Vec::new(),
+        direct_request_tombstones: Vec::new(),
         seen_nonces: HashSet::new(),
         direct_online: true,
+        authorization_epoch: 0,
     }));
     let iroh = ShareIrohNode::start("127.0.0.1:0", &identity, auth.clone(), ev_tx).unwrap();
     ShareService {

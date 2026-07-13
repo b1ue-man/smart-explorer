@@ -3,6 +3,8 @@ use std::net::TcpStream;
 use std::time::Instant;
 
 use super::backend_server::serve_backend;
+#[allow(unused_imports)]
+pub(crate) use super::ipc_client::mutate_exec_grant;
 pub use super::ipc_client::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
     refresh_share_worker_checked, request_daemon_replacement, send_share_command,
@@ -43,6 +45,12 @@ pub(super) fn handle_client(
             Ok(()) => write_response(&mut stream, &IpcResponse::Ok),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
+        IpcRequest::MutateExecGrant {
+            target, enabled, ..
+        } => match host.mutate_exec_grant(target, enabled) {
+            Ok(result) => write_response(&mut stream, &IpcResponse::ExecGrantMutation { result }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
         IpcRequest::DrainShareEvents { .. } => {
             let snapshot = bound_snapshot_for_ipc(host.drain_for_ui());
             write_response(
@@ -64,6 +72,32 @@ pub(super) fn handle_client(
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecResult { result }),
             Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
         },
+        IpcRequest::ExecStream { target, start, .. } => {
+            match super::exec_ipc::start_remote(&host, target, start) {
+                Ok(remote) => {
+                    write_response(
+                        &mut stream,
+                        &IpcResponse::ExecReady {
+                            exec_id: remote.session.exec_id().clone(),
+                        },
+                    )?;
+                    super::exec_ipc::serve(stream, remote, host.exec_state.clone())
+                }
+                Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+            }
+        }
+        IpcRequest::ExecJobs { .. } => write_response(
+            &mut stream,
+            &IpcResponse::ExecJobs {
+                snapshot: super::exec_state::snapshot(&host),
+            },
+        ),
+        IpcRequest::CancelExec { target, .. } => write_response(
+            &mut stream,
+            &IpcResponse::ExecCancelled {
+                found: super::exec_state::cancel(&host, &target),
+            },
+        ),
     }
 }
 

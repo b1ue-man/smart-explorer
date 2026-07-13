@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Instant;
 
+use super::exec_policy::ExecGrant;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
 use super::{direct_ledger::DirectRequestEntry, direct_signal_event::DirectSignalEvent};
@@ -103,6 +104,8 @@ pub struct DirectGrant {
     pub node_id: String,
     pub state: DirectGrantState,
     pub updated_at: i64,
+    #[serde(default)]
+    pub exec: ExecGrant,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -169,6 +172,8 @@ pub struct RoomMember {
     #[serde(default)]
     pub blocked: bool,
     #[serde(default)]
+    pub exec: ExecGrant,
+    #[serde(default)]
     pub presence: Option<PeerPresence>,
 }
 
@@ -194,6 +199,28 @@ pub struct PeerEndpoint {
     pub presence: PeerPresence,
     pub relation_secret: Vec<u8>,
     pub expected_node_id: Option<String>,
+}
+
+/// Exact, display-name-independent identity addressed by an Exec grant.
+///
+/// Unlike file-open targets, direct grants do not require a saved contact and
+/// room grants never accept a local profile id. Every mutation repeats all
+/// cryptographic pins so stale UI labels or replaced devices fail closed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExecGrantTarget {
+    Direct {
+        device_id: String,
+        public_key: String,
+        fingerprint: String,
+        node_id: String,
+    },
+    RoomMember {
+        room_id: String,
+        device_id: String,
+        public_key: String,
+        fingerprint: String,
+        node_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -306,11 +333,23 @@ pub enum ShareCmd {
     },
     SyncDirectRequests {
         direct_requests: Vec<DirectRequestEntry>,
+        direct_request_tombstones: Vec<super::direct_request_tombstone::DirectRequestTombstone>,
     },
     Refresh,
     Stop,
     SetDirectOnline {
         online: bool,
+    },
+    EnableExec {
+        target: ExecGrantTarget,
+    },
+    DisableExec {
+        target: ExecGrantTarget,
+    },
+    ApplyExecGrant {
+        target: ExecGrantTarget,
+        principal: super::exec_types::ExecPrincipal,
+        policy: ExecGrant,
     },
     LeaveRoom {
         room_id: String,
@@ -323,6 +362,12 @@ pub enum ShareCmd {
         presence: PeerPresence,
         accepted: bool,
     },
+}
+
+#[derive(Clone, Debug)]
+pub enum ShareCmdResult {
+    Applied,
+    ExecGrant(Box<super::exec_grant_runtime::ExecGrantMutation>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -366,7 +411,7 @@ pub enum ShareEvent {
 
 pub(crate) struct PendingShareCmd {
     pub(crate) command: ShareCmd,
-    pub(crate) acknowledgement: Sender<Result<(), String>>,
+    pub(crate) acknowledgement: Sender<Result<ShareCmdResult, String>>,
     pub(crate) expires_at: Instant,
 }
 
@@ -381,6 +426,9 @@ pub(crate) struct ShareAuthState {
     pub(crate) direct_grants: Vec<DirectGrant>,
     pub(crate) rooms: Vec<RoomProfile>,
     pub(crate) direct_requests: Vec<DirectRequestEntry>,
+    pub(crate) direct_request_tombstones:
+        Vec<super::direct_request_tombstone::DirectRequestTombstone>,
     pub(crate) seen_nonces: HashSet<String>,
     pub(crate) direct_online: bool,
+    pub(crate) authorization_epoch: u64,
 }

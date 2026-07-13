@@ -3,6 +3,13 @@ mod se_path_windows;
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = smart_explorer::share::run_exec_supervisor_if_requested(&arguments) {
+        exit_internal_portable(result);
+    }
+    #[cfg(debug_assertions)]
+    if is_internal_invocation(&arguments, "--share-exec-platform-self-test") {
+        exit_internal_portable(smart_explorer::share::run_exec_platform_self_test());
+    }
     if is_internal_invocation(&arguments, "--sync-daemon") {
         smart_explorer::daemon::run_daemon();
         return;
@@ -16,6 +23,16 @@ fn main() {
         exit_internal(se_path_windows::unregister());
     }
     std::process::exit(smart_explorer::cli::run());
+}
+
+fn exit_internal_portable(result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("se: internal remote-exec process failed: {error}");
+            std::process::exit(1)
+        }
+    }
 }
 
 #[cfg(windows)]

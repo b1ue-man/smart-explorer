@@ -6,11 +6,10 @@ use super::direct_lifecycle::{
     DirectDecisionDeliveryState, DirectDeliveryState, DirectFailure, DirectLifecycleEvent,
 };
 use super::direct_protocol::{
-    DirectDecisionKind, DirectRequestId, SignedDirectDecision, SignedDirectDecisionReceipt,
-    SignedDirectRequest, SignedDirectRequestReceipt,
+    DirectRequestId, SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
+    SignedDirectRequestReceipt,
 };
 use super::profiles::ShareProfiles;
-use super::types::{DirectAccessState, DirectGrant, DirectGrantState, ShareStatus};
 
 impl ShareProfiles {
     pub fn direct_request(&self, request_id: &DirectRequestId) -> Option<&DirectRequestEntry> {
@@ -37,6 +36,9 @@ impl ShareProfiles {
             return Err(DirectLedgerError::InvalidRelation);
         }
         request.digest()?;
+        if self.tombstone_blocks_request(&request, DirectRequestDirection::Outgoing)? {
+            return Err(DirectLedgerError::RequestIdConflict);
+        }
         if let Some(existing) = self.direct_request(&request.request_id) {
             return same_request(
                 existing,
@@ -61,6 +63,9 @@ impl ShareProfiles {
             return Err(DirectLedgerError::InvalidRelation);
         }
         request.digest()?;
+        if self.tombstone_blocks_request(&request, DirectRequestDirection::Incoming)? {
+            return Ok(false);
+        }
         if let Ok(index) = find_index(&self.direct_requests, &request.request_id) {
             same_request(
                 &self.direct_requests[index],
@@ -85,6 +90,9 @@ impl ShareProfiles {
         &mut self,
         receipt: SignedDirectRequestReceipt,
     ) -> Result<bool, DirectLedgerError> {
+        if self.tombstone_blocks_digest(&receipt.request_id, &receipt.request_digest)? {
+            return Ok(false);
+        }
         let entry = find_mut(&mut self.direct_requests, &receipt.request_id)?;
         require_request_receipt(&entry.record.request, &receipt)?;
         if let Some(existing) = &entry.request_receipt {
@@ -112,6 +120,9 @@ impl ShareProfiles {
         decision: SignedDirectDecision,
         observed_at: i64,
     ) -> Result<bool, DirectLedgerError> {
+        if let Some(changed) = self.record_tombstoned_direct_decision(&decision)? {
+            return Ok(changed);
+        }
         let index = find_index(&self.direct_requests, &decision.request_id)?;
         require_decision(&self.direct_requests[index].record.request, &decision)?;
         let entry = &mut self.direct_requests[index];
@@ -156,6 +167,9 @@ impl ShareProfiles {
         &mut self,
         receipt: SignedDirectDecisionReceipt,
     ) -> Result<bool, DirectLedgerError> {
+        if self.direct_request_tombstone(&receipt.request_id).is_some() {
+            return Ok(false);
+        }
         let entry = find_mut(&mut self.direct_requests, &receipt.request_id)?;
         let decision = entry
             .decision
@@ -196,6 +210,9 @@ impl ShareProfiles {
         at: i64,
         error: Option<DirectFailure>,
     ) -> Result<bool, DirectLedgerError> {
+        if self.direct_request_tombstone(request_id).is_some() {
+            return Ok(false);
+        }
         let entry = find_mut(&mut self.direct_requests, request_id)?;
         if !entry.has_outbox(kind) {
             return Err(DirectLedgerError::MissingEnvelope);
@@ -245,6 +262,9 @@ impl ShareProfiles {
         outcome: DirectRelayOutcome,
         at: i64,
     ) -> Result<bool, DirectLedgerError> {
+        if self.direct_request_tombstone(request_id).is_some() {
+            return Ok(false);
+        }
         let entry = find_mut(&mut self.direct_requests, request_id)?;
         if !entry.has_outbox(kind) {
             return Err(DirectLedgerError::MissingEnvelope);
@@ -291,6 +311,9 @@ impl ShareProfiles {
         if now < 0 {
             return Err(DirectLedgerError::InvalidTimestamp);
         }
+        if self.direct_request_tombstone(request_id).is_some() {
+            return Ok(false);
+        }
         let entry = find_mut(&mut self.direct_requests, request_id)?;
         if !entry.has_outbox(kind) {
             return Err(DirectLedgerError::MissingEnvelope);
@@ -301,68 +324,6 @@ impl ShareProfiles {
         }
         *retry = DirectRetryState::default();
         Ok(true)
-    }
-
-    fn project_decision(&mut self, index: usize, decision: &SignedDirectDecision) {
-        match self.direct_requests[index].direction {
-            DirectRequestDirection::Incoming => self.project_grant(decision),
-            DirectRequestDirection::Outgoing => {
-                let contact_id = self.direct_requests[index].contact_id.clone();
-                if let Some(contact) = self
-                    .direct_contacts
-                    .iter_mut()
-                    .find(|contact| Some(&contact.id) == contact_id.as_ref())
-                {
-                    contact.remote_device_id = Some(decision.target.device_id.clone());
-                    contact.remote_public_key = Some(decision.target.public_key.clone());
-                    contact.last_error = None;
-                    match decision.decision {
-                        DirectDecisionKind::Accepted => {
-                            contact.access_state = DirectAccessState::Accepted;
-                            contact.accepted_at = Some(decision.decided_at);
-                            contact.accepted_public_key = Some(decision.target.public_key.clone());
-                        }
-                        DirectDecisionKind::Rejected | DirectDecisionKind::Revoked => {
-                            contact.access_state = DirectAccessState::Ignored;
-                            contact.accepted_at = None;
-                            contact.accepted_public_key = None;
-                            contact.status = ShareStatus::WaitingForAccess;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn project_grant(&mut self, decision: &SignedDirectDecision) {
-        let peer = &decision.requester;
-        let state = if decision.decision == DirectDecisionKind::Accepted {
-            DirectGrantState::Accepted
-        } else {
-            DirectGrantState::Ignored
-        };
-        if let Some(grant) = self
-            .direct_grants
-            .iter_mut()
-            .find(|grant| grant.device_id == peer.device_id)
-        {
-            grant.device_name = peer.device_name.clone();
-            grant.node_id = peer.node_id.clone();
-            grant.public_key = peer.public_key.clone();
-            grant.fingerprint = peer.fingerprint.clone();
-            grant.state = state;
-            grant.updated_at = decision.decided_at;
-        } else {
-            self.direct_grants.push(DirectGrant {
-                device_id: peer.device_id.clone(),
-                device_name: peer.device_name.clone(),
-                node_id: peer.node_id.clone(),
-                public_key: peer.public_key.clone(),
-                fingerprint: peer.fingerprint.clone(),
-                state,
-                updated_at: decision.decided_at,
-            });
-        }
     }
 }
 

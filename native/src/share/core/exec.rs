@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-use super::fs::ShareExportConfig;
+use super::exec_policy::ExecGrant;
 use super::types::{ExecRequest, ExecResult};
 
 const MAX_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
@@ -65,10 +65,10 @@ pub(super) fn peer_slots(peer_key: &str) -> Arc<AtomicUsize> {
 /// same full-code-execution permission boundary.
 pub(super) fn prepare(
     req: ExecRequest,
-    cfg: &ShareExportConfig,
+    grant: &ExecGrant,
     peer: Arc<AtomicUsize>,
 ) -> io::Result<PreparedExec> {
-    if !cfg.allow_exec {
+    if !grant.enabled {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "remote full-code execution is not enabled for this account",
@@ -181,16 +181,16 @@ mod tests {
         }
     }
 
-    fn allowed() -> ShareExportConfig {
-        ShareExportConfig {
-            allow_exec: true,
-            ..Default::default()
+    fn allowed() -> ExecGrant {
+        ExecGrant {
+            enabled: true,
+            ..ExecGrant::default()
         }
     }
 
     #[test]
     fn exec_is_denied_by_default() {
-        let error = prepare(req(), &ShareExportConfig::default(), Arc::default()).unwrap_err();
+        let error = prepare(req(), &ExecGrant::default(), Arc::default()).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 

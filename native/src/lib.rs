@@ -42,6 +42,11 @@ pub mod webdav;
 pub mod zipfs;
 
 pub fn run_gui() -> eframe::Result<()> {
+    let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = share::run_exec_supervisor_if_requested(&raw_args) {
+        result.unwrap_or_else(|error| panic!("remote-exec supervisor failed: {error}"));
+        return Ok(());
+    }
     install_panic_logger();
 
     let args: Vec<String> = std::env::args().collect();
