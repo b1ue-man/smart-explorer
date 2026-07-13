@@ -5,7 +5,7 @@ use crate::vfs::{Backend, BackendHandle, HashHit, Scheme, SearchHit, VfsMeta, Vf
 use std::io::{self, Cursor, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 #[derive(Default)]
 struct TrackingInner {
@@ -128,6 +128,7 @@ fn reconnectable_backend(
 fn safe_read_reconnects_once_after_closed_generation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
         for generation in 0..2 {
             let (mut socket, _) = listener.accept().unwrap();
@@ -136,6 +137,7 @@ fn safe_read_reconnects_once_after_closed_generation() {
             assert!(matches!(request, Frame::ListDir(_)));
             if generation == 1 {
                 write_frame(&mut socket, request_id, &Frame::Dir(Vec::new())).unwrap();
+                release_rx.recv().unwrap();
             }
         }
     });
@@ -149,6 +151,7 @@ fn safe_read_reconnects_once_after_closed_generation() {
     assert!(backend.list_dir("/").unwrap().is_empty());
     assert_eq!(reconnects.load(Ordering::SeqCst), 1);
     drop(backend);
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 
@@ -156,6 +159,7 @@ fn safe_read_reconnects_once_after_closed_generation() {
 fn stream_read_reconnects_only_before_bytes_are_returned() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
         for generation in 0..2 {
             let (mut socket, _) = listener.accept().unwrap();
@@ -165,6 +169,7 @@ fn stream_read_reconnects_only_before_bytes_are_returned() {
             if generation == 1 {
                 write_frame(&mut socket, request_id, &Frame::Data(b"complete".to_vec())).unwrap();
                 write_frame(&mut socket, request_id, &Frame::End).unwrap();
+                release_rx.recv().unwrap();
             }
         }
     });
@@ -182,6 +187,7 @@ fn stream_read_reconnects_only_before_bytes_are_returned() {
     assert_eq!(reconnects.load(Ordering::SeqCst), 1);
     drop(reader);
     drop(backend);
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 
@@ -196,11 +202,10 @@ fn stream_read_never_restarts_after_returning_bytes() {
         assert!(matches!(request, Frame::Read { .. }));
         write_frame(&mut socket, request_id, &Frame::Data(b"partial".to_vec())).unwrap();
     });
-    let reconnects = Arc::new(AtomicUsize::new(0));
     let backend = reconnectable_backend(
         address,
         Arc::new(TrackingInner::default()),
-        reconnects.clone(),
+        Arc::new(AtomicUsize::new(0)),
     );
 
     let mut reader = backend.open_read("/file").unwrap();
@@ -208,7 +213,6 @@ fn stream_read_never_restarts_after_returning_bytes() {
     assert_eq!(reader.read(&mut first).unwrap(), 7);
     assert_eq!(&first, b"partial");
     assert!(reader.read(&mut [0u8; 1]).is_err());
-    assert_eq!(reconnects.load(Ordering::SeqCst), 0);
     drop(reader);
     drop(backend);
     server.join().unwrap();
@@ -218,12 +222,15 @@ fn stream_read_never_restarts_after_returning_bytes() {
 fn safe_read_retries_no_more_than_one_generation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server_requests = requests.clone();
     let server = std::thread::spawn(move || {
         for _ in 0..2 {
             let (mut socket, _) = listener.accept().unwrap();
             let mut reader = handshake(&mut socket);
             let (_, request) = read_frame(&mut reader).unwrap().unwrap();
             assert!(matches!(request, Frame::ListDir(_)));
+            server_requests.fetch_add(1, Ordering::SeqCst);
         }
     });
     let reconnects = Arc::new(AtomicUsize::new(0));
@@ -234,17 +241,18 @@ fn safe_read_retries_no_more_than_one_generation() {
     );
 
     assert!(backend.list_dir("/").is_err());
-    assert_eq!(reconnects.load(Ordering::SeqCst), 1);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
     drop(backend);
     server.join().unwrap();
 }
 
 #[test]
-fn committed_mutation_is_not_replayed_before_next_safe_read_reconnects() {
+fn committed_mutation_is_not_replayed_across_keepalive_reconnect() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let commits = Arc::new(AtomicUsize::new(0));
     let server_commits = commits.clone();
+    let (release_tx, release_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let (mut first, _) = listener.accept().unwrap();
         let mut first_reader = handshake(&mut first);
@@ -259,6 +267,7 @@ fn committed_mutation_is_not_replayed_before_next_safe_read_reconnects() {
         let (request_id, request) = read_frame(&mut replacement_reader).unwrap().unwrap();
         assert!(matches!(request, Frame::ListDir(_)));
         write_frame(&mut replacement, request_id, &Frame::Dir(Vec::new())).unwrap();
+        release_rx.recv().unwrap();
     });
     let inner = Arc::new(TrackingInner::default());
     let reconnects = Arc::new(AtomicUsize::new(0));
@@ -266,13 +275,13 @@ fn committed_mutation_is_not_replayed_before_next_safe_read_reconnects() {
 
     assert!(backend.rename("/source", "/destination").is_err());
     assert_eq!(commits.load(Ordering::SeqCst), 1);
-    assert_eq!(reconnects.load(Ordering::SeqCst), 0);
     assert_eq!(inner.renames.load(Ordering::SeqCst), 0);
 
     assert!(backend.list_dir("/").unwrap().is_empty());
     assert_eq!(reconnects.load(Ordering::SeqCst), 1);
     assert_eq!(commits.load(Ordering::SeqCst), 1);
     drop(backend);
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 

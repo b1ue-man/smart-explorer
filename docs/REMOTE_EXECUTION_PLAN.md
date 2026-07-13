@@ -1,6 +1,6 @@
 # Secure peer remote execution — implementation and validation record
 
-Status: **implemented for 0.5.132**. Exec remains fail-closed until one exact
+Status: **implemented for 0.5.133**. Exec remains fail-closed until one exact
 device grant is explicitly enabled and the host containment provider is
 available.
 
@@ -73,9 +73,9 @@ as Task Scheduler, WMI, a service manager, Docker, or `systemd-run` to start
 unrelated work. Preventing that would require a sandbox or reduced account and
 would contradict this feature's unrestricted-user-shell contract.
 
-## 3. Pre-implementation audit (resolved in 0.5.132)
+## 3. Pre-implementation audit (resolved in 0.5.133)
 
-The pre-0.5.132 data plane was a sound base:
+The pre-0.5.133 data plane was a sound base:
 
 - Iroh authenticates the remote EndpointId as its TLS public-key identity and
   encrypts traffic end to end, including over a relay.
@@ -92,7 +92,7 @@ The pre-0.5.132 data plane was a sound base:
 - current Exec submission is deliberately at-most-once; the caller does not
   retry after an ambiguous transport failure.
 
-The following gaps blocked the old batch stub. 0.5.132 resolves them with the
+The following gaps blocked the old batch stub. 0.5.133 resolves them with the
 modules and validation gates recorded below rather than enabling that stub:
 
 - `ShareExportConfig.allow_exec` applies to every accepted direct peer, or to
@@ -431,7 +431,7 @@ the full output. Local IPC never retries Start after handoff.
 ## 11. Remote connection keepalive companion requirement
 
 Implementation status: **base backend liveness delivered in 0.5.131; Exec
-enabled in 0.5.132**. Exec reuses the same Iroh keepalive policy and adds
+enabled in 0.5.133**. Exec reuses the same Iroh keepalive policy and adds
 bounded failed-peer detection without closing a healthy idle session.
 
 Idle connections must remain usable independently of Exec. The user-visible
@@ -579,7 +579,7 @@ Under cgroup v2/systemd:
 
 ## 14. Implementation milestones and validation gates
 
-M0–M9 are implemented in 0.5.132. M10 shipped in 0.5.131. The static Linux
+M0–M9 are implemented in 0.5.133. M10 shipped in 0.5.131. The static Linux
 release-feed `se` and release Share server are locally green with two isolated
 profiles; the run obtains the invite, request, peer, grant, and Exec IDs only
 from earlier CLI output. It covers binary stdin/stdout, stderr, exit 7, explicit
@@ -625,8 +625,8 @@ This is a native security feature and follows the complete native release path:
    hashes, and post-publication Linux CLI reinstall verification. Published
    cross-OS/update-path certification is tracked separately as M11.
 
-The locally installed `se 0.5.132` is byte-identical to the verified static feed
-payload (`SHA-256 06ce885d8428555e698f3f7eda06240ddd822ec08dacc150e5684392a0fdf2e2`),
+The locally installed `se 0.5.133` is byte-identical to the verified static feed
+payload (`SHA-256 badfa1f0f247bb14c0d17deace975bcdadba6bedc7823303ec36ec9d1af70e17`),
 completed the two-profile Linux gate with the release Share server, and exposes
 Exec in Help. A platform that cannot provide its containment provider reports
 that specific prerequisite and starts no payload.
