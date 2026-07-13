@@ -221,7 +221,9 @@ function Start-ClientProcess {
     }
 
     try {
-        $stdinPath = Join-Path $ClientRoot "background-empty.stdin"
+        $stdinPath = Join-Path $ClientRoot (
+            "background-empty-$([Guid]::NewGuid().ToString('N')).stdin"
+        )
         [System.IO.File]::WriteAllBytes($stdinPath, [byte[]]@())
         $nativeArguments = (($Arguments | ForEach-Object {
             ConvertTo-NativeArgument $_
