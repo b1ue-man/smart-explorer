@@ -338,8 +338,10 @@ Create one unnamed Job Object per execution:
 8. The worker owns the sole non-inherited Job handle. A worker crash closes it,
    and the kernel applies kill-on-close to the complete job tree.
 
-Nested Jobs are supported by the Windows versions Smart Explorer targets. An
-incompatible outer Job remains a diagnosed fail-closed condition.
+Nested Jobs are supported by the Windows versions Smart Explorer targets. A
+restricted outer topology is used only when atomic assignment proves the new
+supervisor remains in Smart Explorer's own Job; any topology Windows rejects
+remains a diagnosed fail-closed condition.
 
 ### 7.2 Linux
 
@@ -565,9 +567,9 @@ Use a committed test helper with `tree`, `root-exits-first`, `ignore-stop`,
 - root exit, timeout, Cancel, QUIC reset, worker Stop, and forced worker death
   leave no helper PIDs;
 - an outer compatible Job tests nesting, including inside a runner-owned
-  ambient Job; a UI-restricted incompatible Job is rejected before user code,
-  either by the isolated helper path or by the exact production launcher under
-  a locked ambient Job;
+  ambient Job; under a UI-restricted outer Job the exact production launcher
+  either fails closed before payload start or proves own-Job membership,
+  contained execution, breakaway denial, and full drain;
 - `CREATE_BREAKAWAY_FROM_JOB` cannot escape;
 - the child inherits only its three stdio handles;
 - worker crash proves kernel kill-on-close rather than cooperative cleanup.
