@@ -163,7 +163,7 @@ test -x "$repo_root/install-linux.sh" || {
   echo "Linux installer missing or not executable: $repo_root/install-linux.sh" >&2
   exit 1
 }
-file "$feed_stage/smart_explorer" | grep -Eq 'statically linked|static-pie linked'
+file "$feed_stage/smart_explorer" | grep -Fq 'dynamically linked'
 file "$share_stage/se-share-server-linux" | grep -Eq 'statically linked|static-pie linked'
 
 (
@@ -249,7 +249,7 @@ test -s "$rel/se.exe"
 test -s "$rel/smart_explorer_command.dll"
 test -s "$share_out/se-share-server.exe"
 test -s "$share_out/se-share-server-linux"
-file "$feed/smart_explorer" | grep -Eq 'statically linked|static-pie linked'
+file "$feed/smart_explorer" | grep -Fq 'dynamically linked'
 file "$share_out/se-share-server-linux" | grep -Eq 'statically linked|static-pie linked'
 
 transaction_active=0

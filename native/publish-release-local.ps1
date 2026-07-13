@@ -268,6 +268,10 @@ if ($CheckEnvOnly) {
     if ($LASTEXITCODE -ne 0) {
         throw "cargo fmt is not available. Install rustfmt for the Windows Rust toolchain."
     }
+    & cargo clippy --version | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo clippy is not available. Install clippy for the Windows Rust toolchain."
+    }
 }
 $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
 if (-not $makensis) {
@@ -400,7 +404,7 @@ try {
     }
 
     Invoke-Checked -ErrorMessage "Staged Linux/static release verification failed." -Command {
-        & wsl.exe bash -lc "cd '$stageReleaseWsl/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && test -x '$repoRootWsl/install-linux.sh' && file smart_explorer | grep -Eq 'statically linked|static-pie linked' && file '$stageReleaseWsl/share-server/se-share-server-linux' | grep -Eq 'statically linked|static-pie linked'"
+        & wsl.exe bash -lc "cd '$stageReleaseWsl/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && test -x '$repoRootWsl/install-linux.sh' && file smart_explorer | grep -Fq 'dynamically linked' && file '$stageReleaseWsl/share-server/se-share-server-linux' | grep -Eq 'statically linked|static-pie linked'"
     }
 
     Set-Content -LiteralPath $versionStage -Value $version -Encoding ascii
