@@ -4,38 +4,55 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
-use tokio::sync::OwnedSemaphorePermit;
 
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
-use super::framing::{recv_ctrl, reply, reply_err, send_ctrl};
+use super::framing::{
+    recv_ctrl_limited, reply, reply_err, send_ctrl, MAX_HANDSHAKE_CTRL_FRAME,
+    MAX_REQUEST_CTRL_FRAME,
+};
 use super::fs::{self, ShareExportConfig};
+use super::handshake_limits::ApplicationHandshakePermit;
+use super::io_deadline;
 use super::node::ShareIrohNode;
 use super::session::{authenticate_incoming_session, IncomingSession};
 use super::types::{ExecRequest, ShareEvent};
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
 pub(super) async fn handle_connection(
     node: Arc<ShareIrohNode>,
     conn: Connection,
-    handshake_permit: OwnedSemaphorePermit,
+    handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&conn)?;
     let remote_node = conn.remote_id().to_string();
-    let (mut send, mut recv) = tokio::time::timeout(Duration::from_secs(20), conn.accept_bi())
+    let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
+    let (mut send, mut recv) = tokio::time::timeout_at(handshake_deadline, conn.accept_bi())
         .await
         .map_err(|_| eio("Session-Handshake Timeout"))?
         .map_err(eio)?;
-    let hello = match recv_ctrl(&mut recv).await? {
+    let hello = match io_deadline::run_until(
+        handshake_deadline,
+        "Session-Hello Timeout",
+        recv_ctrl_limited(&mut recv, MAX_HANDSHAKE_CTRL_FRAME),
+    )
+    .await?
+    {
         Ctrl::PeerHello { hello } => hello,
         _ => return Err(eio("Session-Hello fehlt")),
     };
     if hello.protocol_version != 3 {
-        send_ctrl(
-            &mut send,
-            &Ctrl::FsResp {
-                resp: super::fs_error::message("Inkompatibles Share-Protokoll"),
-            },
+        io_deadline::run_until(
+            handshake_deadline,
+            "Session-Ablehnung Timeout",
+            send_ctrl(
+                &mut send,
+                &Ctrl::FsResp {
+                    resp: super::fs_error::message("Inkompatibles Share-Protokoll"),
+                },
+            ),
         )
         .await?;
         return Err(eio("Inkompatibles Share-Protokoll"));
@@ -43,17 +60,26 @@ pub(super) async fn handle_connection(
     let session = match authenticate_incoming_session(&hello, &remote_node, &node.auth) {
         Ok(session) => session,
         Err(error) => {
-            send_ctrl(
-                &mut send,
-                &Ctrl::FsResp {
-                    resp: super::fs_error::response(&error),
-                },
+            io_deadline::run_until(
+                handshake_deadline,
+                "Session-Ablehnung Timeout",
+                send_ctrl(
+                    &mut send,
+                    &Ctrl::FsResp {
+                        resp: super::fs_error::response(&error),
+                    },
+                ),
             )
             .await?;
             return Err(error);
         }
     };
-    send_ctrl(&mut send, &Ctrl::PeerHelloOk).await?;
+    io_deadline::run_until(
+        handshake_deadline,
+        "Session-Bestaetigung Timeout",
+        send_ctrl(&mut send, &Ctrl::PeerHelloOk),
+    )
+    .await?;
     drop(handshake_permit);
     let _ = node.ev.send(ShareEvent::Status(format!(
         "Iroh-Session akzeptiert: {} ({})",
@@ -85,22 +111,33 @@ async fn handle_peer_stream(
     auth: Arc<Mutex<super::types::ShareAuthState>>,
     exec_slots: Arc<AtomicUsize>,
 ) -> io::Result<()> {
-    let ctrl = recv_ctrl(&mut recv).await?;
+    if let Err(error) = session.authorize(&auth) {
+        return io_deadline::run("Share authorization rejection", reply_err(&mut send, error))
+            .await;
+    }
+    let ctrl = io_deadline::run(
+        "Share operation frame",
+        recv_ctrl_limited(&mut recv, MAX_REQUEST_CTRL_FRAME),
+    )
+    .await?;
     let exports = match session.authorize(&auth) {
         Ok(exports) => Arc::new(Mutex::new(exports)),
         Err(error) => {
-            return match ctrl {
-                Ctrl::Exec { .. } => {
-                    send_ctrl(
-                        &mut send,
-                        &Ctrl::ExecErr {
-                            msg: error.to_string(),
-                        },
-                    )
-                    .await
+            return io_deadline::run("Share authorization rejection", async {
+                match ctrl {
+                    Ctrl::Exec { .. } => {
+                        send_ctrl(
+                            &mut send,
+                            &Ctrl::ExecErr {
+                                msg: error.to_string(),
+                            },
+                        )
+                        .await
+                    }
+                    _ => reply_err(&mut send, error).await,
                 }
-                _ => reply_err(&mut send, error).await,
-            }
+            })
+            .await;
         }
     };
     let req = match ctrl {

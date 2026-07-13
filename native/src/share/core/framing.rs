@@ -9,6 +9,8 @@ use super::wire::{Ctrl, FsResponse};
 pub(super) const TAG_CTRL: u8 = 0;
 pub(super) const TAG_DATA: u8 = 1;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
+pub(super) const MAX_HANDSHAKE_CTRL_FRAME: usize = 64 * 1024;
+pub(super) const MAX_REQUEST_CTRL_FRAME: usize = 256 * 1024;
 
 pub(super) async fn reply(send: &mut SendStream, resp: FsResponse) -> io::Result<()> {
     send_ctrl(send, &Ctrl::FsResp { resp }).await
@@ -23,7 +25,11 @@ pub(super) async fn send_ctrl(send: &mut SendStream, ctrl: &Ctrl) -> io::Result<
 }
 
 pub(super) async fn recv_ctrl(recv: &mut RecvStream) -> io::Result<Ctrl> {
-    let (tag, payload) = recv_tagged(recv).await?;
+    recv_ctrl_limited(recv, MAX_FRAME).await
+}
+
+pub(super) async fn recv_ctrl_limited(recv: &mut RecvStream, max_frame: usize) -> io::Result<Ctrl> {
+    let (tag, payload) = recv_tagged_limited(recv, max_frame).await?;
     if tag != TAG_CTRL {
         return Err(eio("Peer sendet keinen Steuerframe"));
     }
@@ -57,15 +63,26 @@ pub(super) async fn send_tagged(send: &mut SendStream, tag: u8, payload: &[u8]) 
 }
 
 pub(super) async fn recv_tagged(recv: &mut RecvStream) -> io::Result<(u8, Vec<u8>)> {
+    recv_tagged_limited(recv, MAX_FRAME).await
+}
+
+async fn recv_tagged_limited(recv: &mut RecvStream, max_frame: usize) -> io::Result<(u8, Vec<u8>)> {
     let mut len4 = [0u8; 4];
     recv.read_exact(&mut len4).await.map_err(read_exact_error)?;
     let n = u32::from_be_bytes(len4) as usize;
-    if n == 0 || n > MAX_FRAME {
-        return Err(eio("Frame zu gross"));
-    }
+    validate_frame_len(n, max_frame)?;
     let mut buf = vec![0u8; n];
     recv.read_exact(&mut buf).await.map_err(read_exact_error)?;
     Ok((buf[0], buf[1..].to_vec()))
+}
+
+fn validate_frame_len(len: usize, requested_max: usize) -> io::Result<()> {
+    let max = requested_max.min(MAX_FRAME);
+    if len == 0 || len > max {
+        Err(eio("Frame zu gross"))
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn read_exact_error(error: ReadExactError) -> io::Error {
@@ -75,5 +92,22 @@ pub(super) fn read_exact_error(error: ReadExactError) -> io::Error {
             format!("peer stream closed after {read} bytes"),
         ),
         ReadExactError::ReadError(error) => io::Error::from(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_specific_frame_limits_are_stricter_than_response_budget() {
+        assert!(MAX_HANDSHAKE_CTRL_FRAME < MAX_REQUEST_CTRL_FRAME);
+        assert!(MAX_REQUEST_CTRL_FRAME < MAX_FRAME);
+        assert!(validate_frame_len(MAX_HANDSHAKE_CTRL_FRAME, MAX_HANDSHAKE_CTRL_FRAME).is_ok());
+        assert!(
+            validate_frame_len(MAX_HANDSHAKE_CTRL_FRAME + 1, MAX_HANDSHAKE_CTRL_FRAME).is_err()
+        );
+        assert!(validate_frame_len(0, MAX_REQUEST_CTRL_FRAME).is_err());
+        assert!(validate_frame_len(MAX_FRAME + 1, usize::MAX).is_err());
     }
 }

@@ -6,13 +6,14 @@ use std::time::Instant;
 
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream, VarInt};
 use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::{eio, hmac_proof, random_token};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecRegistry, ExecRegistryLimits};
 use super::framing::{recv_ctrl, send_ctrl};
+use super::handshake_limits::{ApplicationHandshakePermit, PeerHandshakeLimiter};
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::keepalive::iroh_transport_config;
@@ -25,6 +26,7 @@ use super::wire::{Ctrl, FsResponse, PeerHello};
 
 const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
+const MAX_PENDING_HANDSHAKES_PER_ENDPOINT: usize = 4;
 
 pub(crate) struct ShareIrohNode {
     rt: Arc<tokio::runtime::Runtime>,
@@ -38,6 +40,7 @@ pub(crate) struct ShareIrohNode {
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
     handshake_slots: Arc<Semaphore>,
+    peer_handshake_slots: PeerHandshakeLimiter,
     relay_url: String,
 }
 
@@ -83,6 +86,10 @@ impl ShareIrohNode {
             connection_events: ConnectionEventReporter::default(),
             exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
+            peer_handshake_slots: PeerHandshakeLimiter::new(
+                MAX_PENDING_HANDSHAKES_PER_ENDPOINT,
+                MAX_PENDING_APPLICATION_HANDSHAKES,
+            ),
             relay_url,
         });
         node.spawn_accept_loop();
@@ -364,6 +371,18 @@ impl ShareIrohNode {
                 tokio::spawn(async move {
                     match incoming.await {
                         Ok(connection) => {
+                            let remote = connection.remote_id().to_string();
+                            let peer_permit = match node.peer_handshake_slots.try_acquire(&remote) {
+                                Ok(permit) => permit,
+                                Err(_) => {
+                                    connection.close(
+                                        VarInt::from_u32(2),
+                                        b"application handshake admission limit reached",
+                                    );
+                                    return;
+                                }
+                            };
+                            let permit = ApplicationHandshakePermit::new(permit, peer_permit);
                             let error_kind = match connection.alpn() {
                                 ALPN => ConnectionErrorKind::FsConnection,
                                 EXEC_ALPN => ConnectionErrorKind::ExecConnection,
@@ -391,7 +410,7 @@ impl ShareIrohNode {
 async fn dispatch_connection(
     node: Arc<ShareIrohNode>,
     connection: Connection,
-    permit: OwnedSemaphorePermit,
+    permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     match connection.alpn() {
         ALPN => super::server::handle_connection(node, connection, permit).await,

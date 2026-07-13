@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::endpoint::Connection;
-use tokio::sync::{mpsc, OwnedSemaphorePermit};
+use tokio::sync::mpsc;
 
 use super::core::{eio, now_secs, random_token};
 use super::exec_auth::authorize_client_hello;
@@ -17,6 +17,7 @@ use super::exec_protocol::{
 };
 use super::exec_registry::{ExecAdmission, ExecCancelReason, ExecRegistry, ExecReservation};
 use super::exec_types::{ExecId, ExecStart};
+use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
 use super::node::ShareIrohNode;
 
@@ -25,7 +26,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) async fn handle_connection(
     node: Arc<ShareIrohNode>,
     connection: Connection,
-    handshake_permit: OwnedSemaphorePermit,
+    handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&connection)?;
     let remote_node = connection.remote_id().to_string();

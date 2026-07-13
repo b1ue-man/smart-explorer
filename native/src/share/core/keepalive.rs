@@ -5,6 +5,8 @@ use iroh::endpoint::{QuicTransportConfig, VarInt};
 pub(super) const IROH_CONNECTION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_PATH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const IROH_MAX_CONCURRENT_BIDI_STREAMS: u32 = 64;
+pub(super) const IROH_MAX_CONCURRENT_UNI_STREAMS: u32 = 0;
 pub(super) const SIGNAL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 pub(super) const SIGNAL_PONG_TIMEOUT: Duration = Duration::from_secs(40);
 pub(super) const SIGNAL_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -62,6 +64,8 @@ pub(super) fn iroh_transport_config() -> QuicTransportConfig {
         ))
         .keep_alive_interval(IROH_CONNECTION_KEEPALIVE_INTERVAL)
         .default_path_keep_alive_interval(IROH_PATH_KEEPALIVE_INTERVAL)
+        .max_concurrent_bidi_streams(VarInt::from_u32(IROH_MAX_CONCURRENT_BIDI_STREAMS))
+        .max_concurrent_uni_streams(VarInt::from_u32(IROH_MAX_CONCURRENT_UNI_STREAMS))
         .build()
 }
 
@@ -115,6 +119,8 @@ mod tests {
         assert_eq!(IROH_CONNECTION_IDLE_TIMEOUT, Duration::from_secs(20));
         assert!(!IROH_CONNECTION_KEEPALIVE_INTERVAL.is_zero());
         assert!(!IROH_PATH_KEEPALIVE_INTERVAL.is_zero());
+        assert_eq!(IROH_MAX_CONCURRENT_BIDI_STREAMS, 64);
+        assert_eq!(IROH_MAX_CONCURRENT_UNI_STREAMS, 0);
 
         let _config = iroh_transport_config();
     }
