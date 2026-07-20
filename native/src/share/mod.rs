@@ -43,6 +43,8 @@ mod direct_request_tombstone;
 mod direct_signal_event;
 #[path = "core/direct_transcript.rs"]
 mod direct_transcript;
+#[path = "core/endpoint_routes.rs"]
+mod endpoint_routes;
 #[path = "core/exec.rs"]
 mod exec;
 #[path = "core/exec_auth.rs"]
@@ -181,6 +183,8 @@ mod tracked_signal_sender;
 mod tracked_signal_sender_tests;
 #[path = "core/tracked_signal_verify.rs"]
 mod tracked_signal_verify;
+#[path = "os/shared/transport_options.rs"]
+mod transport_options;
 #[path = "core/types.rs"]
 mod types;
 #[path = "core/walk.rs"]

@@ -123,7 +123,7 @@ impl ShareService {
     }
 
     pub fn relay_url(&self) -> String {
-        self.iroh.relay_url().to_string()
+        self.iroh.relay_url()
     }
 
     pub fn peer_candidates(&self) -> Vec<String> {
