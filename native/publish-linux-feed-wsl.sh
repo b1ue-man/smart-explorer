@@ -81,6 +81,9 @@ command -v cargo >/dev/null 2>&1 || { echo "cargo not found. Install rustup/Rust
 command -v rustup >/dev/null 2>&1 || { echo "rustup not found. Install rustup in WSL first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum not found." >&2; exit 1; }
 command -v file >/dev/null 2>&1 || { echo "file not found." >&2; exit 1; }
+if [ "$write_version" = "1" ]; then
+  command -v git >/dev/null 2>&1 || { echo "git is required to verify build provenance." >&2; exit 1; }
+fi
 
 if [ "$write_version" = "1" ] && [ "$build_share_server" != "1" ]; then
   echo "--write-version requires the Linux share-server build; remove --skip-share-server." >&2
@@ -323,7 +326,9 @@ if [ "$check_env" = "1" ]; then
 fi
 
 echo "Building Linux desktop app for $linux_gui_target ..."
-cargo build --release --target "$linux_gui_target" --bin smart_explorer
+cargo build --locked --release \
+  --target-dir "$script_dir/target" \
+  --target "$linux_gui_target" --bin smart_explorer
 if [ "$check_gui" = "1" ]; then
   "$script_dir/test-linux-gui-startup.sh" \
     "target/$linux_gui_target/release/smart_explorer"
@@ -331,7 +336,9 @@ if [ "$check_gui" = "1" ]; then
   exit 0
 fi
 echo "Building static Linux updater and CLI for $linux_static_target ..."
-cargo build --release --target "$linux_static_target" --bin smart_explorer_updater --bin se
+cargo build --locked --release \
+  --target-dir "$script_dir/target" \
+  --target "$linux_static_target" --bin smart_explorer_updater --bin se
 
 feed_parent="$(dirname "$feed")"
 mkdir -p "$feed_parent"
@@ -371,7 +378,9 @@ if [ "$build_share_server" = "1" ] && [ -d "$repo_root/share-server" ]; then
   echo "Building static Linux share server for $linux_static_target ..."
   (
     cd "$repo_root/share-server"
-    cargo build --release --target "$linux_static_target" --bin se-share-server
+    cargo build --locked --release \
+      --target-dir "$repo_root/share-server/target" \
+      --target "$linux_static_target" --bin se-share-server
   )
   if [ "$share_in_feed" = "1" ]; then
     install -m 0755 \
@@ -445,6 +454,8 @@ manifest_value() {
 verify_windows_manifest() {
   local manifest="$feed_candidate/windows-build.manifest"
   local manifest_version
+  local manifest_source_commit
+  local expected_source_commit
   local windows_payload
   local manifest_hash
   local actual_hash
@@ -458,6 +469,20 @@ verify_windows_manifest() {
   }
   if [ "$manifest_version" != "$version" ]; then
     echo "Windows build manifest version '$manifest_version' does not match '$version'." >&2
+    return 1
+  fi
+  manifest_source_commit="$(manifest_value "$manifest" source_commit)" || {
+    echo "Windows build manifest must contain exactly one source_commit entry." >&2
+    return 1
+  }
+  expected_source_commit="$(git -C "$repo_root" rev-parse 'HEAD^{commit}')"
+  if ! [[ "$manifest_source_commit" =~ ^[0-9a-fA-F]{40,64}$ ]] ||
+    [ "${manifest_source_commit,,}" != "${expected_source_commit,,}" ]; then
+    echo "Windows build manifest source commit '$manifest_source_commit' does not match '$expected_source_commit'." >&2
+    return 1
+  fi
+  if [ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != "5" ]; then
+    echo "Windows build manifest must contain exactly version, source_commit, and three hashes." >&2
     return 1
   fi
   for windows_payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do

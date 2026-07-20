@@ -7,10 +7,10 @@ One version number drives everything: `native/Cargo.toml`.
  finish task batch + development validation
    ─▶ top-level wrapper bumps Cargo.toml once
    ─▶ one complete local release build
-       ├─▶ update feed   version + manifest + Windows/Linux app/updater/se + hashes
+       ├─▶ update feed   version + source-bound manifest + Windows/Linux app/updater/se + hashes
        └─▶ installer     Windows NSIS + Linux install-linux.sh
    ─▶ commit + push main
-   ─▶ release trigger ─▶ exact-byte CI validation/E2E
+   ─▶ release trigger ─▶ static exact-byte CI validation/publication
                      ─▶ GitHub Release vX.Y.Z  (verified feed payloads/hashes + installer/script/dll/share servers)
                                          │
  installed app on launch ──▶ reads update_source (default: the Git feed on main)
@@ -50,10 +50,18 @@ run an exact-candidate verification pipeline by hand first.
    ```
 
    It checks Windows/WSL or Linux cross-build tooling, Rust targets,
-   `rustfmt`/Clippy, Zig, NSIS, MinGW, network access, the active workflow, and
-   non-interactive Git write authentication. Resolve every failure before the
-   complete build. The HTTPS remote needs a usable Git credential; anonymous
-   GitHub API access is sufficient only for public read/poll operations.
+   `rustfmt`/Clippy, Zig, NSIS, MinGW, 7-Zip, network access, the active workflow, and
+   non-interactive Git write authentication for `main` plus at least one of the
+   exact tag or `release/vX.Y.Z` trigger paths. Resolve every failure before the
+   complete build. The HTTPS remote needs a usable Git credential, and the
+   long-running REST poll requires `GH_TOKEN`/`GITHUB_TOKEN` or a successful
+   `gh auth login`; recovery of a failed tagged run additionally requires
+   GitHub Actions write permission on that token. Anonymous API quota is
+   deliberately not accepted. Untracked
+   files below native, Share-server, agent, root Cargo configuration, or vendored
+   dependency build roots are also rejected so release bytes can never depend
+   on source absent from the candidate commit. Every Cargo release invocation
+   also pins the exact target directory from which its payload is staged.
 2. Invoke the same top-level wrapper exactly once without `-CheckEnvOnly`:
 
    ```powershell
@@ -67,23 +75,32 @@ run an exact-candidate verification pipeline by hand first.
    `publish-feed.sh` is refused.
 3. The wrapper owns every remaining step. It bumps the patch version once,
    reuses that version after a pre-tag failure, builds and promotes the complete
-   artifact set, verifies the six feed hashes and exact 18 publication assets,
+   artifact set, verifies the six feed hashes, the installer's embedded
+   app/updater/`se` bytes, the manifest's exact source-parent binding, and the
+   exact 18 publication assets,
+   rejects any build-time drift in tracked sub-workspace lockfiles,
    creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards
-   `main`, and pushes exactly one immutable `vX.Y.Z` tag. The marked main-branch
+   `main`, and pushes exactly one immutable `vX.Y.Z` tag. If and only if that
+   tag push is technically rejected while the remote tag is still absent, the
+   same wrapper pushes the exact candidate once to `release/vX.Y.Z` instead and
+   follows that mutually exclusive publication run. The marked main-branch
    commit skips its redundant development CI run; the tag run performs the
-   exact committed Linux/Windows candidate gates and publishes the GitHub
-   Release. The wrapper polls that exact run, checks all 18 published asset
+   static exact committed Linux/Windows candidate gates and publishes the
+   GitHub Release. The wrapper polls that exact run, checks all 18 published asset
    digests against the local bytes, and only then reports success.
 4. On Linux the wrapper finally installs `se` from that exact tag with release
    assets required, verifies its version and SHA-256, and requests the existing
-   daemon's version-bound handoff. This avoids leaving the terminal command or
-   background Share worker on the previous binary.
+   daemon's version-bound handoff. CLI-only installation leaves an existing
+   desktop `update_source.txt` unchanged, so this exact one-time handoff cannot
+   pin future app updates to the candidate SHA.
 
 `verify_release_candidate=true` and `verify/v*` remain available only when a
 user explicitly requests exact-candidate verification without a release. They
 must not precede the normal tag publication, because that would create a second
 pipeline for the same candidate. Likewise, do not use workflow dispatch or a
-`release/v*` branch in addition to the wrapper's tag run.
+`release/v*` branch in addition to a successful wrapper tag run. The wrapper
+alone may select that branch after proving the tag push failed and no remote
+tag exists; it never dispatches a competing pipeline.
 
 The Windows-only diagnostic
 `.\native\publish-release-local.ps1 -SkipLinuxFeed` remains non-publishable: it
@@ -93,8 +110,31 @@ scripts are recovery diagnostics, not alternate complete-release entrypoints.
 A failed build may retain an isolated stage for diagnosis; never hand-promote
 it. Fix the cause and rerun the top wrapper for the same intended version.
 Before an immutable tag exists, the wrapper recovers that candidate instead of
-inventing another patch. After a tag exists it never moves or rewrites it; a
-source/artifact correction then requires the exceptional next patch version.
+inventing another patch. Every build records its current source HEAD. Once the
+bounded release candidate is committed, the manifest must bind that commit's
+sole parent; a replacement build on an interrupted candidate therefore binds
+that candidate as the replacement's parent. A later source fix rebuilds the
+same intended version. After a tag exists the wrapper never moves or rewrites
+it. A second wrapper invocation may retry the first exact workflow run once
+through GitHub's existing-run API: an ordinary failure reruns only failed jobs
+and their dependents, while a cancelled or otherwise run-wide failure reruns
+that same run because it may contain no failed job. The static candidate gate
+can safely restage the same committed bytes with overwrite-safe artifact
+upload; SHA, ref, and run ID remain unchanged and no competing pipeline is
+created. If that unchanged retry also fails, or a
+source/artifact correction is required, the wrapper stops; only the latter case
+requires the exceptional next patch version. This same-SHA/ref rerun behavior
+was checked against the [official GitHub Actions documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+on 2026-07-20.
+
+If a `release/vX.Y.Z` fallback run fails its static candidate gate before it
+can create the tag, a corrected candidate remains on the same intended version.
+The wrapper first retries the tag path. If tags are still blocked, it may
+fast-forward that same fallback branch only after proving the old SHA is an
+ancestor of the new main candidate, exactly one attributable old run completed
+unsuccessfully, and neither the tag nor GitHub Release exists. It never force
+pushes or advances a successful, active, unattributable, or already published
+fallback.
 
 The cross-platform release wrapper ensures both Linux targets are present: the
 desktop app uses
@@ -147,30 +187,23 @@ publishes a GitHub Release.
 An explicit `workflow_dispatch` with `verify_release_candidate=true`, or the
 non-publishing `verify/v*` push fallback, enables the exact-candidate jobs
 without enabling publication when verification without a release was requested.
-The normal release wrapper does not use either path. Its single `v*` tag enables
-the same gates and publication only after they pass. CI deliberately does not
-rebuild the release there: it
-checks the version, all six payload hashes, Windows build manifest, portable
-Windows/feed byte equality, installer and all ancillary assets directly from
-the exact commit. It also starts the committed GNU/glibc Linux GUI under Xvfb,
-checks the static headless Linux payloads and DLL exports, stages exactly those
-committed bytes, runs the committed static Linux `se` and Share server through
-the full Share/Exec lifecycle, and uploads them for the native-Windows GNU
-`se.exe` and `se-share-server.exe` lifecycle E2E. The Windows gate pairs that
-exact release `se.exe` with a same-commit debug peer fixture, then runs the full
-lifecycle twice so the exact candidate is once requester A and once the primary
-accepted target B. Only debug peers receive per-profile test namespaces; the
-release candidate never receives one, and the disposable peer fixture is never a
-published asset. Publication is a separate dependent job and cannot start
-before that exact-binary gate succeeds. Both the Windows E2E consumer and the
-publication consumer fail if any downloaded candidate byte differs from the
-same commit or if the candidate contains anything other than the 18 mapped
-assets. The publication consumer also fails if any downloaded feed payload does
-not match its committed SHA-256 file. Published
-app/updater/`se` payloads, hashes, and `version.txt` are therefore byte-identical
-to the auto-update feed; the installer, script, DLL, and Share servers are the
-same verified committed ancillary artifacts. The publication action treats any
-unmatched one of the 18 required asset paths as a hard failure.
+That explicit verify-only path adds the committed Linux, mixed-version, and
+Windows Share/Exec lifecycle runs; it still does not rebuild or rewrite the
+candidate.
+
+The normal release wrapper does not use the verify-only path. Its one tag push,
+or its mutually exclusive `release/v*` fallback, runs only the static
+publication consumer: version consistency, all six payload hashes, Windows
+build-manifest source-parent binding, portable Windows/feed equality, installer payload equality,
+ELF linkage, DLL exports, and the exact 18-file map are checked directly from
+the candidate commit. The publication job downloads that staged set, fails if
+any byte differs from the same commit or any extra/missing asset exists, checks
+the six sidecars again, binds the immutable tag, and uploads those bytes. It
+never invokes Cargo, the task-level suite, a GUI/runtime E2E, or another
+candidate pipeline. Published app/updater/`se` payloads, hashes, and
+`version.txt` are therefore byte-identical to the auto-update feed; the
+installer, script, DLL, and Share servers are the same statically verified
+committed ancillary artifacts.
 
 The Linux installer first tries the verified GitHub Release payloads, so a
 terminal-only installation needs no Rust or desktop toolchain:
@@ -208,7 +241,7 @@ http(s)/Git URL — only the transport differs (`updater.rs`'s `Feed` enum):
 ```
 release-native/update-feed/
   version.txt          first line = "X.Y.Z"
-  windows-build.manifest   binds the version to all three Windows payload hashes
+  windows-build.manifest   binds source commit + version to all three Windows payload hashes
   smart_explorer.exe   Windows app payload
   smart_explorer.exe.sha256
   smart_explorer_updater.exe   Windows updater helper
@@ -313,7 +346,8 @@ On every launch (and on "Jetzt prüfen"):
 
 So a release is "done" only when, for the new version: `Cargo.toml` = feed
 `version.txt` = Windows build manifest = Release tag = installer version; all
-six update payload hashes verify; and the GitHub Release is visible with the
+six update payload hashes verify; the manifest's `source_commit` equals the
+release-candidate commit's sole parent; and the GitHub Release is visible with the
 Windows/Linux app, updater, and `se` payloads and hashes, installer,
 `install-linux.sh`, context-menu DLL, both share-server payloads, and
 `version.txt`.
@@ -334,6 +368,7 @@ cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
 cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256
 grep -Fx "version=$(sed -nE 's/^version = \"([^\"]+)\".*/\1/p' ../../native/Cargo.toml | head -1)" windows-build.manifest
+grep -Fx "source_commit=$(git -C ../.. rev-parse HEAD^)" windows-build.manifest  # release candidate's exact source parent
 git show origin/main:release-native/update-feed/version.txt   # must match, on main
 ```
 

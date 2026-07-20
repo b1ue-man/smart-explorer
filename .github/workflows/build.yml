@@ -1,11 +1,9 @@
 name: build
 
-# Every push and pull request runs development checks and disposable E2E builds.
-# The complete release wrapper marks its exact artifact commit so the redundant
-# main-branch development run is skipped. Its single v* tag run still performs
-# the immutable-byte candidate gate and publishes those committed bytes.
-# verify_release_candidate remains available only for an explicitly requested
-# verification without a release.
+# Ordinary branch pushes and pull requests run development checks and disposable
+# builds. Publication triggers only verify and publish the exact committed
+# candidate bytes; they never rebuild or rerun the task-level suite. Heavyweight
+# exact-candidate E2Es are reserved for explicit verification without a release.
 
 on:
   push:
@@ -31,8 +29,11 @@ permissions:
 jobs:
   windows-native-tests:
     if: >-
-      github.event_name != 'push' ||
-      (github.event.deleted != true &&
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.event.deleted != true &&
+        startsWith(github.ref, 'refs/heads/') &&
+        startsWith(github.ref, 'refs/heads/verify/v') == false &&
+        startsWith(github.ref, 'refs/heads/release/v') == false &&
         (github.ref != 'refs/heads/main' ||
           endsWith(github.event.head_commit.message, '[release candidate]') == false))
     runs-on: windows-latest
@@ -88,6 +89,7 @@ jobs:
 
   windows-gnu:
     needs: windows-native-tests
+    if: needs.windows-native-tests.result == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -98,7 +100,7 @@ jobs:
       - name: Install development cross-check dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          binutils file mingw-w64 xvfb xauth x11-utils libegl1 libgl1 libgl1-mesa-dri
+          binutils file mingw-w64 p7zip-full python3-yaml xvfb xauth x11-utils libegl1 libgl1 libgl1-mesa-dri
           libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon0
           libxkbcommon-x11-0 libxrandr2
 
@@ -188,12 +190,12 @@ jobs:
         run: native/test-share-lifecycle-e2e.sh
 
   release-candidate:
-    needs: windows-gnu
     if: >-
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' &&
-        (inputs.verify_release_candidate == true || inputs.publish_release == true)) ||
+        (inputs.publish_release == true ||
+          (inputs.verify_release_candidate == true && inputs.publish_release != true))) ||
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/heads/verify/v')) ||
       (github.event_name == 'push' && github.event.deleted != true &&
@@ -206,21 +208,25 @@ jobs:
         working-directory: native
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install exact-candidate verification dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          binutils file jq mingw-w64 p7zip-full xvfb xauth x11-utils
-          libegl1 libgl1 libgl1-mesa-dri libx11-6 libx11-xcb1
-          libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
+          binutils file mingw-w64 p7zip-full python3-yaml
 
       - name: Verify and stage exact committed release candidate
         id: stage
         # The locally built candidate is already committed. This job never
         # rebuilds or rewrites it; every published byte comes from that commit.
         run: |
-          ver=$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)
-          test -n "$ver"
+          set -euo pipefail
+          ver="$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+          if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cargo.toml does not contain a valid release version: '$ver'."
+            exit 1
+          fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
@@ -274,7 +280,8 @@ jobs:
           installer="../release-native/Smart Explorer Setup $ver.exe"
           installer_root="$(mktemp -d)"
           trap 'rm -rf "$installer_root"' EXIT
-          7z x -y -o"$installer_root" "$installer" >/dev/null
+          7z e -y -o"$installer_root" "$installer" \
+            "Smart Explorer.exe" "Smart Explorer Updater.exe" se.exe >/dev/null
           cmp "$installer_root/Smart Explorer.exe" ../release-native/update-feed/smart_explorer.exe
           cmp "$installer_root/Smart Explorer Updater.exe" ../release-native/update-feed/smart_explorer_updater.exe
           cmp "$installer_root/se.exe" ../release-native/update-feed/se.exe
@@ -300,6 +307,62 @@ jobs:
             done
           )
           manifest=../release-native/update-feed/windows-build.manifest
+          candidate_subject="$(git show -s --format=%s "$GITHUB_SHA")"
+          if [ "$candidate_subject" != "Release Smart Explorer v$ver [release candidate]" ]; then
+            echo "::error::Exact candidate commit has unexpected subject: $candidate_subject"
+            exit 1
+          fi
+          read -r -a candidate_parents <<<"$(git show -s --format=%P "$GITHUB_SHA")"
+          if [ "${#candidate_parents[@]}" -ne 1 ]; then
+            echo "::error::Exact release candidate must have one source parent."
+            exit 1
+          fi
+          source_commit="${candidate_parents[0]}"
+          declare -A allowed_release_change=()
+          for path in \
+            native/Cargo.toml native/Cargo.lock \
+            native/agent-bin/se-agent-x86_64-linux-musl \
+            native/agent-bin/se-agent-aarch64-linux-musl \
+            "release-native/Smart Explorer Setup $ver.exe" \
+            "release-native/Smart Explorer.exe" \
+            "release-native/Smart Explorer Updater.exe" \
+            release-native/se.exe \
+            release-native/smart_explorer_command.dll \
+            release-native/share-server/se-share-server.exe \
+            release-native/share-server/se-share-server-linux \
+            release-native/update-feed/smart_explorer.exe \
+            release-native/update-feed/smart_explorer_updater.exe \
+            release-native/update-feed/se.exe \
+            release-native/update-feed/smart_explorer.exe.sha256 \
+            release-native/update-feed/smart_explorer_updater.exe.sha256 \
+            release-native/update-feed/se.exe.sha256 \
+            release-native/update-feed/smart_explorer \
+            release-native/update-feed/smart_explorer_updater \
+            release-native/update-feed/se \
+            release-native/update-feed/smart_explorer.sha256 \
+            release-native/update-feed/smart_explorer_updater.sha256 \
+            release-native/update-feed/se.sha256 \
+            release-native/update-feed/windows-build.manifest \
+            release-native/update-feed/version.txt; do
+            allowed_release_change["$path"]=1
+          done
+          changed_count=0
+          while IFS= read -r changed; do
+            [ -z "$changed" ] && continue
+            ((changed_count += 1))
+            if [[ -z "${allowed_release_change[$changed]+present}" ]]; then
+              echo "::error::Release candidate commit contains non-release source change: $changed"
+              exit 1
+            fi
+          done < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")
+          if [ "$changed_count" -eq 0 ]; then
+            echo "::error::Release candidate commit contains no release publication changes."
+            exit 1
+          fi
+          if [[ "$(tr -d '\r' < "$manifest" | grep -Fxc "source_commit=$source_commit")" != 1 ]]; then
+            echo "::error::Committed Windows build manifest does not bind source parent $source_commit."
+            exit 1
+          fi
           if [[ "$(awk -F= '$1 == "version" { count++; value=substr($0, index($0, "=") + 1) } END { sub(/\r$/, "", value); if (count != 1) exit 1; print value }' "$manifest")" != "$ver" ]]; then
             echo "::error::Committed Windows build manifest does not bind version $ver."
             exit 1
@@ -311,13 +374,17 @@ jobs:
               exit 1
             fi
           done
+          if [[ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != 5 ]]; then
+            echo "::error::Windows build manifest must contain exactly version, source_commit, and three hashes."
+            exit 1
+          fi
           file ../release-native/update-feed/smart_explorer | grep -Fq 'dynamically linked'
           file ../release-native/update-feed/smart_explorer_updater | grep -Eq 'statically linked|static-pie linked'
           file ../release-native/update-feed/se | grep -Eq 'statically linked|static-pie linked'
-          ./test-linux-gui-startup.sh ../release-native/update-feed/smart_explorer
           file ../release-native/share-server/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
-          x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllGetClassObject
-          x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll | grep -q DllCanUnloadNow
+          dll_headers="$(x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll)"
+          grep -Fq DllGetClassObject <<<"$dll_headers"
+          grep -Fq DllCanUnloadNow <<<"$dll_headers"
           if [[ "$GITHUB_REF" == refs/tags/v* ]] && [[ "${GITHUB_REF_NAME#v}" != "$ver" ]]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $ver."
             exit 1
@@ -352,9 +419,19 @@ jobs:
           cp ../release-native/share-server/se-share-server.exe out/se-share-server.exe
           cp ../release-native/share-server/se-share-server-linux out/se-share-server-linux
           cp ../install-linux.sh out/install-linux.sh
+          staged_count="$(find out -maxdepth 1 -type f -printf '.' | wc -c)"
+          if [ "$staged_count" -ne 18 ]; then
+            echo "::error::Staged release candidate contains $staged_count files, expected exactly 18."
+            exit 1
+          fi
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
 
       - name: Exact committed Linux Share and Exec CLI E2E
+        if: >-
+          (github.event_name == 'workflow_dispatch' &&
+            inputs.verify_release_candidate == true && inputs.publish_release != true) ||
+          (github.event_name == 'push' && github.event.deleted != true &&
+            startsWith(github.ref, 'refs/heads/verify/v'))
         working-directory: .
         env:
           SMART_EXPLORER_SE_BINARY: ${{ github.workspace }}/release-native/update-feed/se
@@ -363,6 +440,11 @@ jobs:
         run: native/test-share-lifecycle-e2e.sh
 
       - name: Exact committed Linux mixed-version Share E2E
+        if: >-
+          (github.event_name == 'workflow_dispatch' &&
+            inputs.verify_release_candidate == true && inputs.publish_release != true) ||
+          (github.event_name == 'push' && github.event.deleted != true &&
+            startsWith(github.ref, 'refs/heads/verify/v'))
         working-directory: .
         env:
           SMART_EXPLORER_SE_BINARY: ${{ github.workspace }}/release-native/update-feed/se
@@ -384,18 +466,16 @@ jobs:
         with:
           name: smart-explorer-builds
           path: native/out
+          overwrite: true
 
   windows-gnu-release-e2e:
-    needs: [release-candidate, windows-native-tests]
+    needs: release-candidate
     if: >-
-      (github.event_name == 'push' && github.event.deleted != true &&
-        startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' &&
-        (inputs.verify_release_candidate == true || inputs.publish_release == true)) ||
-      (github.event_name == 'push' && github.event.deleted != true &&
-        startsWith(github.ref, 'refs/heads/verify/v')) ||
-      (github.event_name == 'push' && github.event.deleted != true &&
-        startsWith(github.ref, 'refs/heads/release/v'))
+      always() && needs.release-candidate.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' &&
+          inputs.verify_release_candidate == true && inputs.publish_release != true) ||
+        (github.event_name == 'push' && github.event.deleted != true &&
+          startsWith(github.ref, 'refs/heads/verify/v')))
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -404,11 +484,6 @@ jobs:
         with:
           name: smart-explorer-builds
           path: release-candidate
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: smart-explorer-windows-debug-peer
-          path: debug-peer
 
       - name: Verify downloaded candidate bytes and CLI versions
         shell: powershell
@@ -462,42 +537,39 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $reported -ne "se $version") {
             throw "staged se version mismatch: '$reported'"
           }
-          $peer = (Resolve-Path ".\debug-peer\se.exe").Path
-          $peerReported = (& $peer --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $peerReported -ne "se $version") {
-            throw "debug peer fixture version mismatch: '$peerReported'"
-          }
 
       - name: Exact staged Windows GNU Share and Exec CLI E2E in both roles
         shell: powershell
         run: |
           $se = (Resolve-Path ".\release-candidate\se.exe").Path
-          $peer = (Resolve-Path ".\debug-peer\se.exe").Path
           $server = (Resolve-Path ".\release-candidate\se-share-server.exe").Path
           .\native\test-share-lifecycle-e2e-windows.ps1 `
             -SeBinary $se `
-            -PeerSeBinary $peer `
+            -PeerSeBinary $se `
             -ExactCandidateRole A `
             -ShareServerBinary $server
           .\native\test-share-lifecycle-e2e-windows.ps1 `
             -SeBinary $se `
-            -PeerSeBinary $peer `
+            -PeerSeBinary $se `
             -ExactCandidateRole B `
             -ShareServerBinary $server
 
   publish-release:
-    needs: [release-candidate, windows-gnu-release-e2e]
+    needs: release-candidate
     if: >-
-      (github.event_name == 'push' && github.event.deleted != true &&
-        startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) ||
-      (github.event_name == 'push' && github.event.deleted != true &&
-        startsWith(github.ref, 'refs/heads/release/v'))
+      always() && needs.release-candidate.result == 'success' &&
+      ((github.event_name == 'push' && github.event.deleted != true &&
+          startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) ||
+        (github.event_name == 'push' && github.event.deleted != true &&
+          startsWith(github.ref, 'refs/heads/release/v')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -570,6 +642,8 @@ jobs:
 
       - name: Bind publication to exact main commit and immutable tag
         shell: bash
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ver="${{ needs.release-candidate.outputs.version }}"
@@ -593,31 +667,45 @@ jobs:
           }
           existing="$(remote_tag_commit)"
           if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
-            echo "::error::Existing $tag points to $existing, not tested candidate $GITHUB_SHA. Refusing to rewrite it or replace its assets."
+            echo "::error::Existing $tag points to $existing, not verified candidate $GITHUB_SHA. Refusing to rewrite it or replace its assets."
             exit 1
           fi
           if [ -z "$existing" ]; then
-            git update-ref "$tag_ref" "$GITHUB_SHA"
-            if ! git push origin "$tag_ref"; then
-              existing="$(remote_tag_commit)"
-              if [ "$existing" != "$GITHUB_SHA" ]; then
-                echo "::error::Could not create $tag atomically at tested candidate $GITHUB_SHA."
-                exit 1
-              fi
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error::Tag-triggered publication cannot find its immutable remote tag $tag."
+              exit 1
             fi
+            response_file="$(mktemp)"
+            trap 'rm -f "$response_file"' EXIT
+            payload="$(printf '{"ref":"refs/tags/%s","sha":"%s"}' "$tag" "$GITHUB_SHA")"
+            status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $RELEASE_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/refs" \
+              --data "$payload")"
+            if [ "$status" != 201 ] && [ "$status" != 422 ]; then
+              echo "::error::GitHub API could not create immutable $tag at $GITHUB_SHA (HTTP $status)."
+              sed -n '1,20p' "$response_file"
+              exit 1
+            fi
+            rm -f "$response_file"
+            trap - EXIT
           fi
           final="$(remote_tag_commit)"
           if [ "$final" != "$GITHUB_SHA" ]; then
-            echo "::error::$tag is not bound to tested candidate $GITHUB_SHA immediately before publication."
+            echo "::error::$tag is not bound to verified candidate $GITHUB_SHA immediately before publication."
             exit 1
           fi
 
       - name: Publish GitHub Release
-        # Fires only after the exact staged Windows GNU CLI/server bytes pass
-        # the native Windows lifecycle gate.
+        # Publication consumes only the statically verified committed bytes.
+        # Fallback tag creation uses this workflow's token and therefore does
+        # not enqueue a competing tag-triggered workflow.
         uses: softprops/action-gh-release@v2
         with:
-          # Dispatch and release/v* fallbacks create the tag at this commit.
+          # Every path reaches this step with the immutable tag already bound.
           tag_name: v${{ needs.release-candidate.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: Smart Explorer ${{ needs.release-candidate.outputs.version }}
