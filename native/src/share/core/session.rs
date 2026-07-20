@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use iroh::endpoint::Connection;
 use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 
-use super::core::{eio, verify_hmac};
+use super::core::{eio, now_secs, verify_hmac};
 use super::fs::ShareExportConfig;
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::types::{DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope};
@@ -116,7 +116,13 @@ impl IncomingSession {
     }
 }
 
-pub(super) fn endpoint_addr(presence: &PeerPresence) -> io::Result<EndpointAddr> {
+pub(super) fn endpoint_addr(
+    presence: &PeerPresence,
+    local_addr: &EndpointAddr,
+) -> io::Result<EndpointAddr> {
+    if !presence.is_current_at(now_secs()) {
+        return Err(eio("Peer-Presence ist abgelaufen"));
+    }
     let node: EndpointId = presence.node_id.parse().map_err(eio)?;
     let mut addrs: Vec<TransportAddr> = presence
         .candidates
@@ -124,9 +130,15 @@ pub(super) fn endpoint_addr(presence: &PeerPresence) -> io::Result<EndpointAddr>
         .filter_map(|candidate| candidate.parse::<SocketAddr>().ok())
         .map(TransportAddr::Ip)
         .collect();
-    if let Ok(relay) = presence.relay_url.parse::<RelayUrl>() {
+    if let Some(relay) = parse_relay_url(&relay_url_from_endpoint(&presence.relay_url)) {
         addrs.push(TransportAddr::Relay(relay));
     }
+    // Both peers rendezvous on the configured Share relay, but an older
+    // presence may contain an address alias which is only reachable from the
+    // publishing host (for example, loopback versus the public name). Add only
+    // our current relay aliases for the remote EndpointId; local IP addresses
+    // never describe a route to the peer.
+    addrs.extend(local_addr.relay_urls().cloned().map(TransportAddr::Relay));
     Ok(EndpointAddr::from_parts(node, addrs))
 }
 
@@ -165,30 +177,52 @@ pub(super) fn session_payload(
     )
 }
 
+#[cfg(test)]
 pub(super) fn relay_url_from_signal(config: &str) -> String {
-    if let Ok(url) = std::env::var("SE_SHARE_RELAY_URL") {
-        let trimmed = url.trim();
-        if !trimmed.is_empty() {
-            return trim_url_path(trimmed);
-        }
-    }
-    let first = config
+    config
         .split([',', ';'])
         .map(str::trim)
-        .find(|value| !value.is_empty())
-        .unwrap_or("127.0.0.1:51820");
-    let normalized = if let Some(rest) = first.strip_prefix("wss://") {
+        .filter(|value| !value.is_empty())
+        .map(relay_url_from_endpoint)
+        .find(|value| parse_relay_url(value).is_some())
+        .unwrap_or_default()
+}
+
+pub(super) fn relay_urls_from_signal(config: &str) -> Vec<RelayUrl> {
+    let mut relay_urls = Vec::new();
+    for endpoint in config
+        .split([',', ';'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let Some(relay_url) = parse_relay_url(&relay_url_from_endpoint(endpoint)) else {
+            continue;
+        };
+        if !relay_urls.contains(&relay_url) {
+            relay_urls.push(relay_url);
+        }
+    }
+    relay_urls
+}
+
+fn parse_relay_url(value: &str) -> Option<RelayUrl> {
+    let relay_url = value.parse::<RelayUrl>().ok()?;
+    matches!(relay_url.scheme(), "http" | "https").then_some(relay_url)
+}
+
+fn relay_url_from_endpoint(endpoint: &str) -> String {
+    let normalized = if let Some(rest) = endpoint.strip_prefix("wss://") {
         format!("https://{rest}")
-    } else if let Some(rest) = first.strip_prefix("ws://") {
+    } else if let Some(rest) = endpoint.strip_prefix("ws://") {
         format!("http://{rest}")
-    } else if first.starts_with("https://") || first.starts_with("http://") {
-        first.to_string()
-    } else if let Some(rest) = first.strip_prefix("tcp://") {
+    } else if endpoint.starts_with("https://") || endpoint.starts_with("http://") {
+        endpoint.to_string()
+    } else if let Some(rest) = endpoint.strip_prefix("tcp://") {
         format!("http://{}", relay_tcp_addr(rest))
-    } else if first.contains("://") {
-        first.to_string()
+    } else if endpoint.contains("://") {
+        endpoint.to_string()
     } else {
-        format!("http://{}", relay_tcp_addr(first))
+        format!("http://{}", relay_tcp_addr(endpoint))
     };
     trim_url_path(&normalized)
 }

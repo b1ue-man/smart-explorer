@@ -182,6 +182,9 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         "Share-Server verbunden ({}, tracked_direct={tracked_direct})",
         negotiated.transport
     )));
+    // Read before publishing: if the endpoint changes during publication the
+    // newer revision remains visible and triggers another coherent publish.
+    let mut published_route_revision = runtime.iroh.route_revision();
     if let Err(error) = publish_all(
         &mut negotiated.connection,
         runtime.auth,
@@ -261,6 +264,8 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             last_tracked_send.elapsed(),
             tracked_direct,
         );
+        let current_route_revision = runtime.iroh.route_revision();
+        let routes_changed = current_route_revision != published_route_revision;
         if SIGNAL_MAINTENANCE_POLICY
             .pong_expired(heartbeat_outstanding_since.map(|started| started.elapsed()))
         {
@@ -277,7 +282,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             last_heartbeat = Instant::now();
             heartbeat_outstanding_since.get_or_insert(last_heartbeat);
         }
-        if maintenance.presence_refresh {
+        if maintenance.presence_refresh || routes_changed {
             if let Err(error) = publish_all(
                 &mut negotiated.connection,
                 runtime.auth,
@@ -290,6 +295,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
                 )));
                 break;
             }
+            published_route_revision = current_route_revision;
             last_publish = Instant::now();
         }
         if maintenance.tracked_outbox {

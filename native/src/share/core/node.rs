@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream, VarInt};
-use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl};
+use iroh::{Endpoint, RelayMode};
 use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::{eio, hmac_proof, random_token};
+use super::endpoint_routes::{EndpointRoutes, PublishedEndpointRoutes};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecRegistry, ExecRegistryLimits};
 use super::framing::{recv_ctrl, send_ctrl};
@@ -18,8 +19,7 @@ use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::keepalive::iroh_transport_config;
 use super::session::{
-    endpoint_addr, relation_kind_id, relay_url_from_signal, session_key, session_payload,
-    transport_label,
+    endpoint_addr, relation_kind_id, session_key, session_payload, transport_label,
 };
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 use super::wire::{Ctrl, FsResponse, PeerHello};
@@ -41,7 +41,7 @@ pub(crate) struct ShareIrohNode {
     exec_registry: Arc<ExecRegistry>,
     handshake_slots: Arc<Semaphore>,
     peer_handshake_slots: PeerHandshakeLimiter,
-    relay_url: String,
+    routes: EndpointRoutes,
 }
 
 impl ShareIrohNode {
@@ -58,22 +58,23 @@ impl ShareIrohNode {
                 .build()
                 .map_err(eio)?,
         );
-        let relay_url = relay_url_from_signal(server);
-        let relay_mode = relay_url
-            .parse::<RelayUrl>()
-            .ok()
-            .map(|url| RelayMode::Custom(RelayMap::from(url)))
-            .unwrap_or(RelayMode::Disabled);
-        let endpoint = rt.block_on(async {
-            Endpoint::builder(presets::Minimal)
-                .secret_key(identity.iroh_secret.clone())
-                .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec()])
-                .relay_mode(relay_mode)
-                .transport_config(iroh_transport_config())
-                .bind()
-                .await
-                .map_err(eio)
-        })?;
+        let transport_options = super::transport_options::load(server);
+        let relay_configured = !transport_options.relay_urls.is_empty();
+        let relay_mode = if relay_configured {
+            RelayMode::custom(transport_options.relay_urls)
+        } else {
+            RelayMode::Disabled
+        };
+        let mut builder = Endpoint::builder(presets::Minimal)
+            .secret_key(identity.iroh_secret.clone())
+            .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec()])
+            .relay_mode(relay_mode)
+            .transport_config(iroh_transport_config());
+        if transport_options.relay_only {
+            builder = builder.clear_ip_transports();
+        }
+        let endpoint = rt.block_on(async { builder.bind().await.map_err(eio) })?;
+        let routes = EndpointRoutes::start(&rt, &endpoint, relay_configured);
         let node = Arc::new(Self {
             rt,
             endpoint,
@@ -90,22 +91,26 @@ impl ShareIrohNode {
                 MAX_PENDING_HANDSHAKES_PER_ENDPOINT,
                 MAX_PENDING_APPLICATION_HANDSHAKES,
             ),
-            relay_url,
+            routes,
         });
         node.spawn_accept_loop();
         Ok(node)
     }
 
-    pub(crate) fn relay_url(&self) -> &str {
-        &self.relay_url
+    pub(crate) fn relay_url(&self) -> String {
+        self.routes.published(&self.endpoint).relay_url
     }
 
     pub(crate) fn candidates(&self) -> Vec<String> {
-        self.endpoint
-            .addr()
-            .ip_addrs()
-            .map(|addr| addr.to_string())
-            .collect()
+        self.routes.published(&self.endpoint).candidates
+    }
+
+    pub(super) fn published_routes(&self) -> PublishedEndpointRoutes {
+        self.routes.published(&self.endpoint)
+    }
+
+    pub(super) fn route_revision(&self) -> u64 {
+        self.routes.revision()
     }
 
     pub(super) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
@@ -269,7 +274,8 @@ impl ShareIrohNode {
                 return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
             }
         }
-        let addr = endpoint_addr(&endpoint.presence)?;
+        let local_addr = self.routes.current(&self.endpoint);
+        let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
         let (kind, relation_id) = relation_kind_id(endpoint);
         let remote_device = endpoint.presence.device_id.clone();
         let remote_node = endpoint.presence.node_id.clone();
@@ -332,7 +338,8 @@ impl ShareIrohNode {
                 return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
             }
         }
-        let addr = endpoint_addr(&endpoint.presence)?;
+        let local_addr = self.routes.current(&self.endpoint);
+        let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
         self.block_on(io_deadline::run("peer exec connection", async {
             self.endpoint
                 .connect(addr, EXEC_ALPN)

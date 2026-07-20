@@ -12,8 +12,11 @@ pub(super) fn build_presence(
     secret: &[u8],
     iroh: &ShareIrohNode,
 ) -> io::Result<PeerPresence> {
-    let candidates = iroh.candidates();
-    let relay_url = iroh.relay_url().to_string();
+    // Sign one coherent Iroh address snapshot so relay and direct routes can
+    // never come from different network revisions.
+    let routes = iroh.published_routes();
+    let candidates = routes.candidates;
+    let relay_url = routes.relay_url;
     let expires_at = now_secs() + 300;
     let nonce = random_token(12).map_err(eio)?;
     let payload = presence_payload(
