@@ -176,7 +176,7 @@ where
     let Some(presence) = presence else {
         return false;
     };
-    if presence.expires_at < now_secs()
+    if !presence.is_current_at(now_secs())
         || presence.kind != "direct"
         || presence.relation_id != lookup_id
     {
@@ -228,7 +228,7 @@ fn verify_direct_presence(
     presence: &PeerPresence,
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> bool {
-    if presence.expires_at < now_secs()
+    if !presence.is_current_at(now_secs())
         || presence.kind != "direct"
         || presence.relation_id != lookup_id
     {
@@ -281,7 +281,7 @@ fn verify_room_presence(
     presence: &PeerPresence,
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> bool {
-    if presence.expires_at < now_secs()
+    if !presence.is_current_at(now_secs())
         || presence.kind != "room"
         || presence.relation_id != room_id
     {
