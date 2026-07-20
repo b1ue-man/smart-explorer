@@ -126,12 +126,14 @@ pub struct PeerPresence {
     pub proof: String,
 }
 
+pub(super) const MAX_PRESENCE_FUTURE_SECS: i64 = 15 * 60;
+
 impl PeerPresence {
     /// A persisted presence is only routing evidence while its signed lifetime
     /// is current. Identity pins and relation grants outlive this short-lived
     /// network snapshot and are intentionally kept separately.
     pub fn is_current_at(&self, now: i64) -> bool {
-        self.expires_at >= now
+        self.expires_at >= now && self.expires_at <= now.saturating_add(MAX_PRESENCE_FUTURE_SECS)
     }
 }
 

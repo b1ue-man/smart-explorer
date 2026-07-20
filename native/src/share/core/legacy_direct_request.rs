@@ -8,7 +8,7 @@ use super::profiles::ShareProfiles;
 use super::types::{DirectGrantState, PeerPresence};
 
 pub const MAX_LEGACY_DIRECT_REQUESTS: usize = 24;
-pub const MAX_LEGACY_PRESENCE_FUTURE_SECS: i64 = 15 * 60;
+pub const MAX_LEGACY_PRESENCE_FUTURE_SECS: i64 = super::types::MAX_PRESENCE_FUTURE_SECS;
 pub(crate) const MAX_LEGACY_DIRECT_TOMBSTONES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
