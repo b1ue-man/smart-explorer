@@ -1,11 +1,11 @@
 name: build
 
 # Every push and pull request runs development checks and disposable E2E builds.
-# The complete release candidate is built once locally and committed. Only a
-# verify_release_candidate dispatch (or verify/v* push fallback) validates the
-# exact committed bytes before tagging. A version tag (v*), explicit
-# publish_release dispatch, or release/v* fallback repeats that immutable-byte
-# gate and then publishes those bytes.
+# The complete release wrapper marks its exact artifact commit so the redundant
+# main-branch development run is skipped. Its single v* tag run still performs
+# the immutable-byte candidate gate and publishes those committed bytes.
+# verify_release_candidate remains available only for an explicitly requested
+# verification without a release.
 
 on:
   push:
@@ -30,7 +30,11 @@ permissions:
 
 jobs:
   windows-native-tests:
-    if: github.event_name != 'push' || github.event.deleted != true
+    if: >-
+      github.event_name != 'push' ||
+      (github.event.deleted != true &&
+        (github.ref != 'refs/heads/main' ||
+          endsWith(github.event.head_commit.message, '[release candidate]') == false))
     runs-on: windows-latest
     defaults:
       run:
@@ -235,7 +239,7 @@ jobs:
           fi
           feed="$(cat ../release-native/update-feed/version.txt 2>/dev/null || echo '')"
           if [ "$feed" != "$ver" ]; then
-            echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run native/publish-feed.sh on a Linux/WSL host and commit release-native/ before releasing."
+            echo "::error::Committed feed version.txt ($feed) != Cargo.toml ($ver). Run only native/publish-release-local.ps1 for a complete release."
             exit 1
           fi
           test -s ../release-native/update-feed/smart_explorer.exe

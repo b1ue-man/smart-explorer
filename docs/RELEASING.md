@@ -5,7 +5,7 @@ One version number drives everything: `native/Cargo.toml`.
 
 ```
  finish task batch + development validation
-   ─▶ bump Cargo.toml once
+   ─▶ top-level wrapper bumps Cargo.toml once
    ─▶ one complete local release build
        ├─▶ update feed   version + manifest + Windows/Linux app/updater/se + hashes
        └─▶ installer     Windows NSIS + Linux install-linux.sh
@@ -38,116 +38,66 @@ user can pull updates.
 
 ## Cut a release
 
-Steps 2–7 below are one terminal release transaction performed exactly once,
-after every task intended for that release and all relevant development
-validation are complete. A complete release build is never an intermediate
-test or checkpoint; disposable and targeted test builds belong in step 1.
+The release is one terminal transaction, started only after the complete task
+batch and its single task-level suite are finished. Do not bump the version or
+run an exact-candidate verification pipeline by hand first.
 
-1. **Finish the complete task batch and development validation first.** Normal
-   commits and pushes may run formatting, checks, tests, disposable builds, and
-   E2E, but they do not bump a version, rewrite `release-native/`, stage release
-   assets, or publish anything. Run the workstation preflight before entering
-   the release stage.
-2. **Bump once**: set `version` in `native/Cargo.toml` to the one intended patch
-   version for the whole batch.
-3. **Build + stage once** with one complete release workflow:
-   - Windows workstation default: `.\native\publish-release-local.ps1`
-     builds the Windows app/updater/`se`/installer with `publish-update.ps1`, then
-     calls WSL to build the dynamic GNU/glibc Linux GUI plus static-musl
-     updater/`se`/share-server payloads.
-     Both platforms are built and verified in one isolated release tree. Only
-     then does the wrapper promote the ancillary artifacts and complete feed
-     with rollback backups, writing `version.txt` as the final commit marker.
-     This is the preferred local release path.
-   - Linux/WSL Linux payload repair only:
-     `native/publish-linux-feed-wsl.sh --write-version`. This script prepares
-     temporary Zig/LLD wrappers automatically and can bootstrap Zig into
-     `~/.local/zig` when missing. Before it may write a version, the existing
-     Windows payloads/hashes must be bound to the same version by
-     `windows-build.manifest`; otherwise it refuses to publish.
-   - Windows-only validation bundle:
-     `.\native\publish-release-local.ps1 -SkipLinuxFeed`. It writes a clearly
-     non-publishable `release-native/windows-partial-vX.Y.Z/` bundle without
-     changing the shared update feed or its `version.txt`. A direct
-     `publish-update.ps1` run also requires `-AllowPartialFeed`, a nonstandard
-     `-Feed` path, and an explicit isolated `-ReleaseOutput` outside both the
-     feed and the shared `release-native/` root; it always refuses to write the
-     shared feed/artifacts.
-   - Complete Linux/WSL cross-build path: `native/publish-feed.sh`, when that
-     host has the Windows GNU and NSIS dependencies installed. It builds the
-     same complete Windows/Linux feed, portable files, context-menu DLL, Share
-     servers, and installer, verifies them in staging, and writes
-     `version.txt` last. This is the supported full-release path on a Linux
-     release host.
-   Choose exactly one complete host path. Repair and partial-bundle commands are
-   targeted diagnostics/recovery builds; they are not additional release cycles
-   after a successful complete build. A failed full wrapper retains its isolated
-   stage and prints the path, but the current scripts do not promise a general
-   automatic resume from that directory. Inspect it to locate the failed
-   boundary, fix the cause, and rerun the same wrapper for the same version;
-   Cargo can reuse its own valid build cache. Never hand-promote retained files.
-   Once the complete build succeeds, continue directly through steps 4–7; a
-   successful full release build must not remain uncommitted, untagged, or
-   unpublished unless publication is technically blocked.
-4. **Commit** the version and `release-native/` (`update-feed/{version.txt, windows-build.manifest, smart_explorer.exe,
-   smart_explorer_updater.exe, se.exe, smart_explorer, smart_explorer_updater,
-   se, *.sha256}`, `Smart Explorer.exe`, `Smart Explorer Updater.exe`, `se.exe`,
-   `smart_explorer_command.dll`, both `share-server/` payloads, and
-   `Smart Explorer Setup X.Y.Z.exe`).
-5. **Merge to `main`** — the feed is served from `main`, so updates only go live
-   once `main` has the new feed:
-   ```
-   git push origin <branch>:main          # fast-forward
-   ```
-6. **Verify the exact candidate before tagging.** Dispatch `build.yml` at that
-   exact `main` commit with `verify_release_candidate=true` and
-   `publish_release=false`. This does not rebuild or publish a release. It
-   validates and temporarily stages the 18 committed assets, then runs the
-   committed Linux and Windows GNU `se`/Share-server bytes through their exact
-   platform E2E. The Linux gate also runs the SHA-256-pinned published v0.5.126
-   CLI through the mixed-version Share lifecycle. The Windows consumer
-   byte-compares all 18 downloaded files with
-   the same checkout's committed sources. On publication paths, the publication
-   consumer repeats that comparison and reruns all six payload SHA-256 files
-   before it may create the tag or upload a Release. Fix failures on the same
-   intended version and repeat only the failed build stage or verification; do
-   not create a tag until this run is green.
-   If workflow dispatch is technically unavailable, push the same main commit
-   to the version-bound verification branch instead:
-   ```
-   git push origin <exact-main-commit>:refs/heads/verify/vX.Y.Z
-   ```
-   `verify/v*` runs the same exact Linux and Windows candidate gates but is not
-   included in the publication-job condition. Its suffix must equal
-   `Cargo.toml`, deletion events are ignored, and the branch must be deleted
-   after the green run. Dispatch remains the preferred verify-only path.
-7. **Publish the GitHub Release** (attaches OS payloads/hashes, installer, DLL,
-   install script, both Share servers, and `version.txt`):
-   - Normally: push a tag — CI's `build.yml` releases on `v*`:
-     ```
-     git tag vX.Y.Z && git push origin vX.Y.Z
-     ```
-   - If tag push is unavailable but GitHub Actions dispatch is authorized, run
-     `build.yml` with `workflow_dispatch` at the exact release commit and set
-     the required Boolean input `publish_release` to `true`. A dispatch with the
-     default `false` runs development validation only. The explicit release
-     dispatch creates `vX.Y.Z` from `Cargo.toml` and publishes that release.
-   - Where the git host rejects tag pushes (e.g. some sandboxes), push a release
-     branch as the final fallback — CI releases only on `release/v*`, creating the
-     tag from `Cargo.toml`'s version:
-     ```
-     git push origin <branch>:release/vX.Y.Z
-     ```
-     Delete the branch after the release is published; it's only a trigger.
+1. Run the non-building preflight from the repository's clean, synchronized
+   `main` branch:
 
-   Every publication path requires the exact candidate commit to already be
-   contained in `origin/main`. An existing `vX.Y.Z` must point to that exact
-   commit; CI never moves or rewrites a tag. Dispatch and release-branch
-   fallbacks create a missing tag immediately before publication and abort if
-   another commit claimed it concurrently.
+   ```powershell
+   pwsh ./native/publish-release-local.ps1 -CheckEnvOnly
+   ```
 
-The local Windows release wrapper expects WSL with Rust installed. It ensures
-both Linux targets are present: the desktop app uses
+   It checks Windows/WSL or Linux cross-build tooling, Rust targets,
+   `rustfmt`/Clippy, Zig, NSIS, MinGW, network access, the active workflow, and
+   non-interactive Git write authentication. Resolve every failure before the
+   complete build. The HTTPS remote needs a usable Git credential; anonymous
+   GitHub API access is sufficient only for public read/poll operations.
+2. Invoke the same top-level wrapper exactly once without `-CheckEnvOnly`:
+
+   ```powershell
+   pwsh ./native/publish-release-local.ps1
+   ```
+
+   On Windows it builds Windows locally and Linux through WSL. On Linux/WSL it
+   calls the checked-in `native/publish-feed.sh` internally for the complete
+   Windows-GNU/Linux cross-build. Both paths inherit the same
+   `release-native/.complete-release.lock`; a direct full invocation of
+   `publish-feed.sh` is refused.
+3. The wrapper owns every remaining step. It bumps the patch version once,
+   reuses that version after a pre-tag failure, builds and promotes the complete
+   artifact set, verifies the six feed hashes and exact 18 publication assets,
+   creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards
+   `main`, and pushes exactly one immutable `vX.Y.Z` tag. The marked main-branch
+   commit skips its redundant development CI run; the tag run performs the
+   exact committed Linux/Windows candidate gates and publishes the GitHub
+   Release. The wrapper polls that exact run, checks all 18 published asset
+   digests against the local bytes, and only then reports success.
+4. On Linux the wrapper finally installs `se` from that exact tag with release
+   assets required, verifies its version and SHA-256, and requests the existing
+   daemon's version-bound handoff. This avoids leaving the terminal command or
+   background Share worker on the previous binary.
+
+`verify_release_candidate=true` and `verify/v*` remain available only when a
+user explicitly requests exact-candidate verification without a release. They
+must not precede the normal tag publication, because that would create a second
+pipeline for the same candidate. Likewise, do not use workflow dispatch or a
+`release/v*` branch in addition to the wrapper's tag run.
+
+The Windows-only diagnostic
+`.\native\publish-release-local.ps1 -SkipLinuxFeed` remains non-publishable: it
+writes `release-native/windows-partial-vX.Y.Z/` without changing the shared
+feed, bumping a version, committing, pushing, or tagging. Linux payload repair
+scripts are recovery diagnostics, not alternate complete-release entrypoints.
+A failed build may retain an isolated stage for diagnosis; never hand-promote
+it. Fix the cause and rerun the top wrapper for the same intended version.
+Before an immutable tag exists, the wrapper recovers that candidate instead of
+inventing another patch. After a tag exists it never moves or rewrites it; a
+source/artifact correction then requires the exceptional next patch version.
+
+The cross-platform release wrapper ensures both Linux targets are present: the
+desktop app uses
 `x86_64-unknown-linux-gnu` with a Zig-pinned glibc 2.17 baseline because winit
 loads X11/Wayland libraries dynamically, while the updater, `se`, and Share
 server remain standalone `x86_64-unknown-linux-musl` executables. The staged
@@ -170,7 +120,7 @@ must not be committed as release assets.
 Before cutting a release on a workstation, the fast environment check is:
 
 ```powershell
-.\native\publish-release-local.ps1 -CheckEnvOnly
+pwsh ./native/publish-release-local.ps1 -CheckEnvOnly
 ```
 
 When the Linux GUI packaging path changed and a targeted preflight is relevant,
@@ -196,10 +146,10 @@ publishes a GitHub Release.
 
 An explicit `workflow_dispatch` with `verify_release_candidate=true`, or the
 non-publishing `verify/v*` push fallback, enables the exact-candidate jobs
-without enabling publication. A `v*` tag, an explicit dispatch with
-`publish_release=true`, or the documented `release/v*` fallback also enables
-those gates and enables publication only after they pass. CI
-deliberately does not rebuild the release there: it
+without enabling publication when verification without a release was requested.
+The normal release wrapper does not use either path. Its single `v*` tag enables
+the same gates and publication only after they pass. CI deliberately does not
+rebuild the release there: it
 checks the version, all six payload hashes, Windows build manifest, portable
 Windows/feed byte equality, installer and all ancillary assets directly from
 the exact commit. It also starts the committed GNU/glibc Linux GUI under Xvfb,
@@ -229,7 +179,12 @@ terminal-only installation needs no Rust or desktop toolchain:
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
 ```
 
-If release assets are unavailable it falls back to a one-job local Cargo build.
+If release assets are unavailable it normally falls back to a one-job local
+Cargo build. The complete release wrapper pins
+`SMART_EXPLORER_RELEASE_TAG=vX.Y.Z` and sets
+`SMART_EXPLORER_REQUIRE_RELEASE_ASSETS=1` for its final local CLI update, so that
+transaction can neither drift to another `latest` release nor silently compile
+different bytes.
 The Windows installer registers its exact install directory in the per-user
 `PATH`; the helper records ownership so uninstall removes only the component it
 added and refuses to delete `se.exe` if safe PATH cleanup fails.

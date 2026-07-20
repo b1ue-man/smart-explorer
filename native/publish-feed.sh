@@ -10,6 +10,25 @@ rel="$repo_root/release-native"
 feed="$rel/update-feed"
 share_out="$rel/share-server"
 windows_target="x86_64-pc-windows-gnu"
+check_env=0
+bootstrap_zig=1
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --check-env)
+      check_env=1
+      ;;
+    --no-bootstrap-zig)
+      bootstrap_zig=0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: native/publish-feed.sh [--check-env] [--no-bootstrap-zig]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 if [ "$(uname -s 2>/dev/null || echo unknown)" != "Linux" ]; then
   echo "publish-feed.sh requires Linux/WSL for a complete release." >&2
@@ -17,7 +36,7 @@ if [ "$(uname -s 2>/dev/null || echo unknown)" != "Linux" ]; then
   exit 1
 fi
 for tool in cargo rustc rustup x86_64-w64-mingw32-gcc \
-  x86_64-w64-mingw32-objdump makensis sha256sum file; do
+  x86_64-w64-mingw32-objdump makensis sha256sum file install; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Required release tool missing: $tool" >&2
     exit 1
@@ -31,6 +50,27 @@ if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
 fi
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+
+linux_release_args=()
+if [ "$bootstrap_zig" != "1" ]; then
+  linux_release_args+=(--no-bootstrap-zig)
+fi
+
+if [ "$check_env" = "1" ]; then
+  rustup target add "$windows_target" >/dev/null
+  cargo fmt --version >/dev/null
+  cargo clippy --version >/dev/null
+  "$script_dir/build-agent-bundles.sh" --check-env
+  "$script_dir/publish-linux-feed-wsl.sh" --check-env "${linux_release_args[@]}"
+  echo "Complete Linux-host release environment OK for Smart Explorer $version."
+  exit 0
+fi
+
+if [ -z "${SMART_EXPLORER_RELEASE_LOCK_TOKEN:-}" ]; then
+  echo "A complete release may only run through native/publish-release-local.ps1." >&2
+  echo "Run 'pwsh native/publish-release-local.ps1' so one wrapper owns the version, lock, build, publication, and final verification." >&2
+  exit 1
+fi
 
 mkdir -p "$rel"
 # Resolved relative to this script at runtime.
@@ -126,7 +166,7 @@ cargo build --release --target "$windows_target" \
 
 SMART_EXPLORER_FEED_DIR="$feed_stage" \
 SMART_EXPLORER_SHARE_DIR="$share_stage" \
-  "$script_dir/publish-linux-feed-wsl.sh"
+  "$script_dir/publish-linux-feed-wsl.sh" "${linux_release_args[@]}"
 
 (
   cd "$repo_root/share-server"

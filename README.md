@@ -163,8 +163,9 @@ curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/instal
 
 **Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
 
-1. **Installer (empfohlen):** [`Smart Explorer Setup 0.5.135.exe`](release-native/Smart%20Explorer%20Setup%200.5.135.exe)
-   (oder unter **[Releases](../../releases/latest)**) herunterladen und ausführen.
+1. **Installer (empfohlen):** Die aktuelle
+   **[`Smart Explorer Setup X.Y.Z.exe`](https://github.com/b1ue-man/smart-explorer/releases/latest)**
+   unter **Releases** herunterladen und ausführen.
    Installiert nach `%LOCALAPPDATA%\Programs\Smart Explorer`, legt Startmenü-/
    Desktop-Verknüpfung an, registriert das Rechtsklick-Menü „In Smart Explorer
    öffnen", installiert `se.exe` fuer Terminal-Operationen und trägt dessen
@@ -222,8 +223,8 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/` | Rust-Quellcode (das aktuelle Programm) |
 | `native/explorer-command/` | Separate COM-DLL (`IExplorerCommand`) für das Win11-Modern-Kontextmenü |
 | `native/installer.nsi` | NSIS-Installer-Skript |
-| `native/publish-release-local.ps1` | Standard-Release auf Windows: Windows + Linux isoliert bauen, vollständig prüfen, Feed atomar promoten |
-| `native/publish-feed.sh` | Vollständiger Release auf Linux/WSL: Windows + Linux, Installer, DLL und Share-Server bauen/pruefen, Feed atomar promoten |
+| `native/publish-release-local.ps1` | Einziger vollständiger Windows-/Linux-Release-Einstieg: Preflight, Patch-Bump, Build, Prüfung, Commit/Push, Tag, GitHub Release und lokale `se`-Aktualisierung |
+| `native/publish-feed.sh` | Interner Linux-Cross-Build des Top-Level-Wrappers; ein direkter vollständiger Aufruf ohne geerbtes Release-Lock wird verweigert |
 | `native/publish-update.ps1` | Windows-only-Bundle; verlangt `-AllowPartialFeed` sowie getrennte, explizite `-Feed`- und `-ReleaseOutput`-Pfade |
 | `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen; Versions-Commit nur mit passendem Windows-Build-Manifest |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
@@ -247,34 +248,24 @@ cd native && cargo build --release
 Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) steht in
 **[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
-1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und mit normalen
-   Checks, Tests, Test-Builds und E2E validieren. Zwischencommits sind keine
-   Releases und bauen oder überschreiben keine Release-Artefakte.
-2. `version` in `native/Cargo.toml` genau einmal erhöhen.
-3. Genau einen vollständigen Release-Build ausführen: auf Windows standardmäßig
-   `.\native\publish-release-local.ps1`. Der Wrapper baut App/Updater/`se`/Installer,
-   baut die Linux/WSL-Payloads im selben isolierten Staging-Baum, prüft alle
-   Artefakte und schreibt `version.txt` erst nach der rollback-geschützten
-   Gesamt-Promotion. Alle artefaktverändernden Release-Pfade teilen dabei ein
-   Windows-/WSL-/Linux-weites Fail-fast-Lock. Ein fehlgeschlagener vollständiger
-   Lauf behält seinen isolierten Stage zur Diagnose, verspricht daraus aber kein
-   automatisches Resume. `-SkipLinuxFeed` erzeugt nur ein ausdrücklich nicht
-   publizierbares Windows-Prüfbundle; der gemeinsame Feed bleibt unverändert.
-4. Version und `release-native/` committen und **nach `main` mergen** (der Feed wird von
-   `main` ausgeliefert — erst dann ist das Update live).
-5. `build.yml` am exakten Commit mit `verify_release_candidate=true` und
-   `publish_release=false` ausführen. Das baut und veröffentlicht keinen
-   Release, sondern prüft die committierten Linux-/Windows-Bytes einschließlich
-   der plattformeigenen E2E vor dem unveränderlichen Tag. Wenn Dispatch technisch
-   nicht verfügbar ist, denselben Commit auf `verify/vX.Y.Z` pushen; dieser
-   Fallback prüft nur, veröffentlicht nie und wird danach wieder gelöscht.
-6. GitHub-Release veröffentlichen: Tag `vX.Y.Z` pushen. CI baut den Kandidaten
-   nicht erneut, sondern validiert, testet und veröffentlicht bytegenau die
-   committierten Windows-/Linux-App-, Updater- und `se`-Payloads samt Hashes,
-   Installer, Linux-Installskript, Kontextmenü-DLL, beide Share-Server und
-   `version.txt`. Kandidat und unveränderlicher Tag müssen dabei exakt auf einem
-   bereits nach `main` gepushten Commit liegen. Die dokumentierten Fallbacks sind ein manueller Lauf mit
-   `publish_release=true` oder ein Push auf `release/vX.Y.Z`.
+1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und über seine eine
+   automatisierte Task-Suite validieren. Zwischencommits sind keine Releases.
+2. Den nicht bauenden Preflight ausführen:
+   `pwsh ./native/publish-release-local.ps1 -CheckEnvOnly`.
+3. Danach genau einmal `pwsh ./native/publish-release-local.ps1` starten. Dieser
+   eine Wrapper erhöht die Patch-Version, hält das gemeinsame Cross-Host-Lock,
+   baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die sechs
+   Feed-Hashes und 18 Release-Assets, committet und pusht den exakten Kandidaten
+   nach `main`, pusht genau einen unveränderlichen Tag und wartet auf dessen
+   Exact-Byte-CI und sichtbaren GitHub Release. Auf Linux aktualisiert er danach
+   das lokale `se` aus genau diesem Tag und übergibt den Daemon an die neue
+   Version. Ein Fehler vor dem Tag bleibt bei derselben vorgesehenen Version;
+   Tags werden niemals verschoben oder überschrieben.
+
+`verify_release_candidate`/`verify/v*` dienen nur einer ausdrücklich
+angeforderten Verifikation **ohne** Release und werden dem normalen Taglauf
+nicht vorgeschaltet. `-SkipLinuxFeed` bleibt ein nicht publizierbares
+Windows-Diagnosebundle.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe

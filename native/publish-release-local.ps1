@@ -1,4 +1,4 @@
-# Build a complete local Smart Explorer release on Windows with WSL available.
+# Build and publish one complete Smart Explorer release from Windows/WSL or Linux.
 #
 # Windows and Linux outputs are built into one isolated release tree. The live
 # release-native artifacts are changed only after every staged artifact passes
@@ -7,7 +7,9 @@
 param(
     [switch]$SkipLinuxFeed,
     [switch]$NoBootstrapZig,
-    [switch]$CheckEnvOnly
+    [switch]$CheckEnvOnly,
+    [switch]$SkipLocalCliUpdate,
+    [ValidateRange(30, 360)][int]$PublicationTimeoutMinutes = 180
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,7 +18,14 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 $releaseRoot = Join-Path $repoRoot "release-native"
 $feed = Join-Path $releaseRoot "update-feed"
+$workflowFile = "build.yml"
+$releaseCommitSuffix = "[release candidate]"
 . (Join-Path $scriptRoot "release-lock.ps1")
+$publicationHelper = Join-Path $scriptRoot "release-publication.ps1"
+if (-not (Test-Path -LiteralPath $publicationHelper -PathType Leaf)) {
+    throw "Release publication helper missing: $publicationHelper"
+}
+. $publicationHelper
 
 function Get-NativeVersion {
     $cargoToml = Join-Path $scriptRoot "Cargo.toml"
@@ -311,6 +320,7 @@ function Publish-CompleteRelease(
     }
 }
 
+function Invoke-WindowsReleaseBuild {
 $version = Get-NativeVersion
 $action = if ($CheckEnvOnly) { "Checking" } else { "Building" }
 Write-Host "$action complete local release v$version ..."
@@ -380,10 +390,16 @@ if ($CheckEnvOnly) {
 }
 
 $releaseLock = $null
+$ownsReleaseLock = $false
 $stageRoot = $null
 $releaseCompleted = $false
 if (-not $SkipLinuxFeed) {
-    $releaseLock = Enter-CompleteReleaseLock $releaseRoot "native/publish-release-local.ps1"
+    if ($script:completeReleaseLock) {
+        $releaseLock = $script:completeReleaseLock
+    } else {
+        $releaseLock = Enter-CompleteReleaseLock $releaseRoot "native/publish-release-local.ps1"
+        $ownsReleaseLock = $true
+    }
 }
 try {
     # The Windows desktop binary embeds the Linux SSH-agent payloads. Refresh
@@ -497,7 +513,391 @@ try {
             Write-Warning "No automatic resume is assumed. Inspect the stage and rerun only through a verified release script."
         }
     }
-    if ($releaseLock) {
+    if ($ownsReleaseLock -and $releaseLock) {
         Exit-CompleteReleaseLock $releaseLock
     }
+}
+}
+
+function Test-RunningOnLinux {
+    $isLinuxVariable = Get-Variable -Name IsLinux -ErrorAction SilentlyContinue
+    if ($isLinuxVariable) {
+        return [bool]$isLinuxVariable.Value
+    }
+    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Unix
+}
+
+function Invoke-GitCaptured {
+    param([string[]]$ArgumentList, [switch]$AllowFailure)
+    return Invoke-ReleasePublicationGit `
+        -RepoRoot $repoRoot `
+        -Arguments $ArgumentList `
+        -AllowFailure:$AllowFailure
+}
+
+function Get-GitText([string[]]$ArgumentList) {
+    return (Invoke-GitCaptured -ArgumentList $ArgumentList).StdOut.Trim()
+}
+
+function Get-GitHubRepositorySlug {
+    return Get-PublicationRepositorySlug -RepoRoot $repoRoot
+}
+
+function Invoke-GitHubGet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$AllowNotFound
+    )
+    $apiPath = if ($Path.StartsWith('/')) { $Path } else { "/$Path" }
+    return Invoke-ReleasePublicationGitHubGet `
+        -RepositorySlug $script:githubRepository `
+        -ApiPath $apiPath `
+        -AllowNotFound:$AllowNotFound
+}
+
+function Get-VersionFromCargoText([string]$Text, [string]$Source) {
+    $match = [regex]::Match($Text, '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        throw "Could not read native version from $Source."
+    }
+    return $match.Groups[1].Value
+}
+
+function Get-RemoteMainVersion {
+    return Get-VersionFromCargoText (Get-GitText @("show", "origin/main:native/Cargo.toml")) "origin/main:native/Cargo.toml"
+}
+
+function Set-NativeVersion([string]$Version) {
+    $cargoToml = Join-Path $scriptRoot "Cargo.toml"
+    $text = [System.IO.File]::ReadAllText($cargoToml)
+    $pattern = [regex]::new('(?m)^version\s*=\s*"[^"]+"')
+    if (-not $pattern.IsMatch($text)) {
+        throw "Could not update version in $cargoToml"
+    }
+    $updated = $pattern.Replace($text, "version = `"$Version`"", 1)
+    [System.IO.File]::WriteAllText($cargoToml, $updated, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Get-NextPatchVersion([string]$Version) {
+    $match = [regex]::Match($Version, '^(\d+)\.(\d+)\.(\d+)$')
+    if (-not $match.Success) {
+        throw "Automatic release bump requires a stable major.minor.patch version, got '$Version'."
+    }
+    $patch = [uint64]$match.Groups[3].Value
+    if ($patch -eq [uint64]::MaxValue) {
+        throw "Patch version overflow for $Version."
+    }
+    return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($patch + 1)"
+}
+
+function Get-HeadSha {
+    return Get-GitText @("rev-parse", "HEAD")
+}
+
+function Get-OriginMainSha {
+    return Get-GitText @("rev-parse", "origin/main")
+}
+
+function Get-RemoteMainSha {
+    $line = Get-GitText @("ls-remote", "origin", "refs/heads/main")
+    if (-not $line) {
+        throw "origin/main is missing."
+    }
+    return ($line -split '\s+')[0]
+}
+
+function Get-RemoteTagCommit([string]$Tag) {
+    return Get-PublicationRemoteTagCommit -RepoRoot $repoRoot -Tag $Tag
+}
+
+function Test-GitAncestor([string]$Ancestor, [string]$Descendant) {
+    $result = Invoke-GitCaptured -ArgumentList @("merge-base", "--is-ancestor", $Ancestor, $Descendant) -AllowFailure
+    if ($result.ExitCode -eq 0) { return $true }
+    if ($result.ExitCode -eq 1) { return $false }
+    throw "Could not compare Git ancestry: $($result.Output)"
+}
+
+function Test-ReleaseMutablePath([string]$Path) {
+    $normalized = $Path.Replace('\', '/')
+    return $normalized -eq "native/Cargo.toml" -or
+        $normalized -eq "native/Cargo.lock" -or
+        $normalized.StartsWith("native/agent-bin/") -or
+        $normalized.StartsWith("release-native/update-feed/") -or
+        $normalized.StartsWith("release-native/share-server/") -or
+        $normalized -eq "release-native/Smart Explorer.exe" -or
+        $normalized -eq "release-native/Smart Explorer Updater.exe" -or
+        $normalized -eq "release-native/se.exe" -or
+        $normalized -eq "release-native/smart_explorer_command.dll" -or
+        $normalized.StartsWith("release-native/Smart Explorer Setup ")
+}
+
+function Get-TrackedChanges {
+    $status = Get-GitText @("status", "--porcelain=v1", "--untracked-files=no")
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($status -split "`n")) {
+        if ($line.Length -lt 4) { continue }
+        $path = $line.Substring(3)
+        if ($path.Contains(" -> ")) {
+            $path = ($path -split ' -> ')[-1]
+        }
+        $paths.Add($path.Trim('"'))
+    }
+    return $paths.ToArray()
+}
+
+function Assert-GitReleasePreflight {
+    $branch = Get-GitText @("branch", "--show-current")
+    if ($branch -ne "main") {
+        throw "Complete releases require the local main branch; current branch is '$branch'."
+    }
+    Invoke-GitCaptured -ArgumentList @("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main") | Out-Null
+    $head = Get-HeadSha
+    $remote = Get-OriginMainSha
+    if ($head -ne $remote) {
+        $subject = Get-GitText @("show", "-s", "--format=%s", "HEAD")
+        $ahead = Get-GitText @("rev-list", "--count", "origin/main..HEAD")
+        if (-not (Test-GitAncestor $remote $head) -or $ahead -ne "1" -or
+            $subject -notmatch '^Release Smart Explorer v[^ ]+ \[release candidate\]$') {
+            throw "main must equal origin/main before a release. Only one exact unpushed release-candidate commit may resume."
+        }
+    }
+    foreach ($path in (Get-TrackedChanges)) {
+        if (-not (Test-ReleaseMutablePath $path)) {
+            throw "Tracked worktree change is outside release recovery state: $path"
+        }
+    }
+}
+
+function Assert-NonInteractiveGitWriteAccess {
+    $probe = "refs/tags/smart-explorer-release-auth-preflight-$PID"
+    $oldPrompt = $env:GIT_TERMINAL_PROMPT
+    $oldGcmInteractive = $env:GCM_INTERACTIVE
+    try {
+        $env:GIT_TERMINAL_PROMPT = "0"
+        $env:GCM_INTERACTIVE = "Never"
+        $result = Invoke-GitCaptured -ArgumentList @("push", "--dry-run", "origin", "HEAD:$probe") -AllowFailure
+        if ($result.ExitCode -ne 0) {
+            throw "Non-interactive Git write preflight failed: $($result.Output)"
+        }
+    } finally {
+        $env:GIT_TERMINAL_PROMPT = $oldPrompt
+        $env:GCM_INTERACTIVE = $oldGcmInteractive
+    }
+}
+
+function Resolve-ReleasePlan {
+    $localVersion = Get-NativeVersion
+    $remoteVersion = Get-RemoteMainVersion
+    try {
+        $localSemver = [version]$localVersion
+        $remoteSemver = [version]$remoteVersion
+    } catch {
+        throw "Release recovery requires numeric stable versions (local '$localVersion', origin/main '$remoteVersion')."
+    }
+    $head = Get-HeadSha
+    $tag = "v$localVersion"
+    $tagCommit = Get-RemoteTagCommit $tag
+    if ($tagCommit) {
+        if ($tagCommit -eq $head) {
+            return [pscustomobject]@{ Action = "Tagged"; Version = $localVersion; Tag = $tag; Candidate = $head }
+        }
+        if (-not (Test-GitAncestor $tagCommit $head)) {
+            throw "$tag points to unrelated commit $tagCommit; tags are immutable."
+        }
+        $next = Get-NextPatchVersion $localVersion
+        if (Get-RemoteTagCommit "v$next") {
+            throw "The next patch tag v$next already exists; refusing to skip or rewrite versions."
+        }
+        return [pscustomobject]@{ Action = "Bump"; Version = $next; Tag = "v$next"; Candidate = $null }
+    }
+    if ($localSemver -lt $remoteSemver) {
+        throw "Local version $localVersion is older than origin/main $remoteVersion."
+    }
+    if ($localSemver -gt $remoteSemver) {
+        $expected = Get-NextPatchVersion $remoteVersion
+        if ($localVersion -ne $expected) {
+            throw "Recovery version $localVersion must be the single next patch after origin/main $remoteVersion."
+        }
+    }
+    return [pscustomobject]@{ Action = "Resume"; Version = $localVersion; Tag = $tag; Candidate = $null }
+}
+
+function Assert-LinuxReleaseEnvironment {
+    foreach ($tool in @("bash", "git")) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            throw "$tool is required for the Linux release path."
+        }
+    }
+    $script:peInspector = Get-Command x86_64-w64-mingw32-objdump -ErrorAction SilentlyContinue
+    $args = @((Join-Path $scriptRoot "publish-feed.sh"), "--check-env")
+    if ($NoBootstrapZig) { $args += "--no-bootstrap-zig" }
+    & bash @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "Linux complete-release environment check failed."
+    }
+}
+
+function Assert-WindowsReleaseEnvironment {
+    $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;C:\Program Files (x86)\NSIS;$env:Path"
+    $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
+    if (-not $cargo) { throw "cargo.exe not found. Install Rust for Windows or fix PATH." }
+    & cargo fmt --version | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "cargo fmt is not available for the Windows Rust toolchain." }
+    & cargo clippy --version | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "cargo clippy is not available for the Windows Rust toolchain." }
+    $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+    if (-not $makensis) {
+        $nsisCandidates = @(
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+        )
+        $makensis = $nsisCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    }
+    if (-not $makensis) { throw "makensis.exe not found; a release without an installer is incomplete." }
+    $script:peInspector = @("llvm-objdump.exe", "objdump.exe", "dumpbin.exe") |
+        ForEach-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
+    if (-not $script:peInspector) { throw "No PE export inspector found." }
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) { throw "wsl.exe not found; a complete Windows-host release requires WSL." }
+    $repoRootForWsl = ($repoRoot -replace '\\', '/')
+    $repoRootWsl = (& wsl.exe wslpath -a $repoRootForWsl).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $repoRootWsl) { throw "Could not translate repo path for WSL." }
+    $linuxArgs = "--check-env"
+    if ($NoBootstrapZig) { $linuxArgs += " --no-bootstrap-zig" }
+    & wsl.exe bash -lc "cd '$repoRootWsl' && native/publish-linux-feed-wsl.sh $linuxArgs"
+    if ($LASTEXITCODE -ne 0) { throw "WSL/Linux release environment check failed." }
+}
+
+function Assert-CommonReleasePreflight {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "git is required for a complete release."
+    }
+    Assert-GitReleasePreflight
+    $script:githubRepository = Get-GitHubRepositorySlug
+    $workflow = Invoke-GitHubGet "actions/workflows/$workflowFile"
+    if (-not $workflow -or $workflow.state -ne "active") {
+        throw "GitHub workflow $workflowFile is not active."
+    }
+    Assert-NonInteractiveGitWriteAccess
+    if (Test-RunningOnLinux) {
+        Assert-LinuxReleaseEnvironment
+    } else {
+        Assert-WindowsReleaseEnvironment
+    }
+    $plan = Resolve-ReleasePlan
+    Write-Host "Release preflight OK: action=$($plan.Action), candidate=$($plan.Tag)."
+    return $plan
+}
+
+function Invoke-LinuxCompleteReleaseBuild($ReleaseLock) {
+    $oldToken = $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN
+    try {
+        $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN = $ReleaseLock.Token
+        $args = @((Join-Path $scriptRoot "publish-feed.sh"))
+        if ($NoBootstrapZig) { $args += "--no-bootstrap-zig" }
+        & bash @args
+        if ($LASTEXITCODE -ne 0) {
+            throw "Complete Linux-host release build failed."
+        }
+    } finally {
+        $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN = $oldToken
+    }
+}
+
+function Test-CompleteReleaseCandidateAvailable([string]$Version) {
+    try {
+        $null = Assert-ReleasePublicationCandidate -RepoRoot $repoRoot -Version $Version
+        return $true
+    } catch {
+        Write-Host "A complete v$Version candidate is not yet available: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+if ($SkipLinuxFeed) {
+    if (Test-RunningOnLinux) {
+        throw "-SkipLinuxFeed is a Windows-only non-publishable diagnostic."
+    }
+    Invoke-WindowsReleaseBuild
+    exit 0
+}
+
+$preflightPlan = Assert-CommonReleasePreflight
+if ($CheckEnvOnly) {
+    Write-Host "Complete release environment and publication access are ready for $($preflightPlan.Tag)."
+    exit 0
+}
+
+$completeReleaseLock = Enter-CompleteReleaseLock $releaseRoot "native/publish-release-local.ps1"
+$script:completeReleaseLock = $completeReleaseLock
+$releaseSucceeded = $false
+try {
+    # Re-resolve under the cross-host lock so a concurrent remote tag cannot
+    # turn the preflight decision into a second version or a rewritten tag.
+    $plan = Resolve-ReleasePlan
+    if ($plan.Action -eq "Bump") {
+        Set-NativeVersion $plan.Version
+        Write-Host "Release version advanced once to $($plan.Version)."
+    }
+    $version = $plan.Version
+
+    if ($plan.Action -ne "Tagged") {
+        if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
+            if (Test-RunningOnLinux) {
+                Invoke-LinuxCompleteReleaseBuild $completeReleaseLock
+            } else {
+                Invoke-WindowsReleaseBuild
+            }
+        } else {
+            Write-Host "Reusing the already verified v$version release build after a pre-tag interruption."
+        }
+        if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
+            throw "Complete v$version candidate validation failed after the release build."
+        }
+        $commit = Invoke-ReleasePublicationCommit -RepoRoot $repoRoot -Version $version
+        $candidateSha = $commit.CandidateSha
+        Invoke-ReleasePublicationMainPush -RepoRoot $repoRoot -CandidateSha $candidateSha
+        Invoke-ReleasePublicationTagPush -RepoRoot $repoRoot -Version $version -CandidateSha $candidateSha
+    } else {
+        $candidateSha = $plan.Candidate
+        if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
+            throw "The immutable $($plan.Tag) candidate is incomplete in the local checkout."
+        }
+        Invoke-ReleasePublicationMainPush -RepoRoot $repoRoot -CandidateSha $candidateSha
+        Write-Host "Immutable $($plan.Tag) already targets $candidateSha; no tag is created or moved."
+    }
+
+    $deadline = [DateTime]::UtcNow.AddMinutes($PublicationTimeoutMinutes)
+    Wait-ReleasePublicationWorkflow `
+        -RepositorySlug $script:githubRepository `
+        -Version $version `
+        -CandidateSha $candidateSha `
+        -Deadline $deadline
+    Wait-ReleasePublicationAssets `
+        -RepoRoot $repoRoot `
+        -RepositorySlug $script:githubRepository `
+        -Version $version `
+        -Deadline $deadline
+    $publishedTagCommit = Get-RemoteTagCommit "v$version"
+    if ($publishedTagCommit -ne $candidateSha) {
+        throw "Published tag v$version moved to '$publishedTagCommit'; expected immutable candidate '$candidateSha'."
+    }
+
+    if ((Test-RunningOnLinux) -and -not $SkipLocalCliUpdate) {
+        Invoke-ReleasePublicationLinuxCliUpdate `
+            -RepoRoot $repoRoot `
+            -RepositorySlug $script:githubRepository `
+            -Version $version `
+            -CandidateSha $candidateSha
+    }
+    Write-Host "Complete Smart Explorer v$version release published and verified from $candidateSha."
+    $releaseSucceeded = $true
+} finally {
+    $script:completeReleaseLock = $null
+    Exit-CompleteReleaseLock $completeReleaseLock
+}
+
+if (-not $releaseSucceeded) {
+    throw "Complete release did not reach its final publication and local-update checks."
 }
