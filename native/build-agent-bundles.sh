@@ -81,8 +81,8 @@ fi
   cd "$agent_dir"
   # Match the copy source below even when the caller configures another target
   # directory globally or through the environment.
-  cargo build --release --target-dir "$agent_dir/target" --target "$x86_target" --bin se-agent
-  cargo build --release --target-dir "$agent_dir/target" --target "$arm_target" --bin se-agent
+  cargo build --locked --release --target-dir "$agent_dir/target" --target "$x86_target" --bin se-agent
+  cargo build --locked --release --target-dir "$agent_dir/target" --target "$arm_target" --bin se-agent
 )
 
 mkdir -p "$bundle_dir"

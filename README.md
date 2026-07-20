@@ -255,17 +255,27 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 3. Danach genau einmal `pwsh ./native/publish-release-local.ps1` starten. Dieser
    eine Wrapper erhöht die Patch-Version, hält das gemeinsame Cross-Host-Lock,
    baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die sechs
-   Feed-Hashes und 18 Release-Assets, committet und pusht den exakten Kandidaten
-   nach `main`, pusht genau einen unveränderlichen Tag und wartet auf dessen
-   Exact-Byte-CI und sichtbaren GitHub Release. Auf Linux aktualisiert er danach
-   das lokale `se` aus genau diesem Tag und übergibt den Daemon an die neue
-   Version. Ein Fehler vor dem Tag bleibt bei derselben vorgesehenen Version;
-   Tags werden niemals verschoben oder überschrieben.
+   Feed-Hashes, die im Installer eingebetteten App-/Updater-/`se`-Bytes, den
+   gebundenen Quell-Commit und 18 Release-Assets, committet und pusht den
+   exakten Kandidaten nach `main` und
+   startet genau eine statische Exact-Byte-Publikation. Normalerweise geschieht
+   das über einen unveränderlichen Tag; nur wenn dessen Push technisch abgelehnt
+   wird und der Remote-Tag noch fehlt, verwendet derselbe Wrapper einmalig den
+   gegenseitig ausschließenden Pfad `release/vX.Y.Z`. CI baut und testet diesen
+   Kandidaten nicht erneut, sondern veröffentlicht ausschließlich die bereits
+   geprüften Commit-Bytes. Auf Linux aktualisiert der Wrapper danach das lokale
+   `se` aus genau diesem Tag und übergibt den Daemon an die neue Version. Ein
+   Fehler vor dem Tag bleibt bei derselben vorgesehenen Version; Tags werden
+   niemals verschoben oder überschrieben. Ist nur der erste bereits getaggte
+   Workflow fehlgeschlagen, kann derselbe Wrapper diesen exakten Run einmal mit
+   unverändertem SHA/Ref fortsetzen, ohne eine zweite Pipeline zu erzeugen.
 
 `verify_release_candidate`/`verify/v*` dienen nur einer ausdrücklich
 angeforderten Verifikation **ohne** Release und werden dem normalen Taglauf
 nicht vorgeschaltet. `-SkipLinuxFeed` bleibt ein nicht publizierbares
-Windows-Diagnosebundle.
+Windows-Diagnosebundle. Der Preflight benötigt neben den Build-Werkzeugen und
+7-Zip auch nichtinteraktive Git-Schreibrechte sowie `GH_TOKEN`/`GITHUB_TOKEN`
+oder eine gültige `gh auth login`-Sitzung für die authentifizierte Überwachung.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe

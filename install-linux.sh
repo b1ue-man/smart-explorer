@@ -360,12 +360,12 @@ install_files() {
     install_executable_atomic "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
   fi
   install_executable_atomic "$src_dir/se" "$CLI_BIN"
-  if [ "$DRY_RUN" = 1 ]; then
-    log "dry-run: write $INSTALL_DIR/update_source.txt"
-  else
-    printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
-  fi
   if [ "$CLI_ONLY" != 1 ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      log "dry-run: write $INSTALL_DIR/update_source.txt"
+    else
+      printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
+    fi
     run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
   fi
   run ln -sf "$CLI_BIN" "$BIN_DIR/se"

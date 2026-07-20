@@ -1,6 +1,8 @@
 # Rust build output (huge, regenerable)
 native/target/
 native/explorer-command/target/
+/native/.Cargo.lock.complete-release-version.*
+/native/.Cargo.toml.complete-release-version.*
 
 # Graphify project graph lives at /graphify-out; avoid accidental nested runs.
 native/src/graphify-out/

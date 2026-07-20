@@ -19,6 +19,14 @@ $version = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"'
 Write-Host "Baue Version $version ..."
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$git = Get-Command git -ErrorAction SilentlyContinue
+if (-not $git) {
+    throw "git wird fuer die Build-Provenienz im Windows-Manifest benoetigt."
+}
+$sourceCommit = (& $git.Source -C $repoRoot rev-parse "HEAD^{commit}" | Out-String).Trim().ToLowerInvariant()
+if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40,64}$') {
+    throw "Quell-Commit fuer das Windows-Buildmanifest konnte nicht bestimmt werden."
+}
 $defaultFeed = Join-Path $repoRoot "release-native\update-feed"
 $defaultReleaseOutput = Join-Path $repoRoot "release-native"
 if ([string]::IsNullOrWhiteSpace($Feed)) {
@@ -137,34 +145,52 @@ function Publish-FeedDirectoryTransaction(
 
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
-cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se
+$rustcVersion = (& rustc -vV | Out-String)
+if ($LASTEXITCODE -ne 0) {
+    throw "Rust-Host-Target konnte nicht bestimmt werden."
+}
+$hostMatch = [regex]::Match($rustcVersion, '(?m)^host:\s*([0-9A-Za-z_.-]+)\s*$')
+if (-not $hostMatch.Success) {
+    throw "Rust-Host-Target fehlt in rustc -vV."
+}
+$hostTriple = $hostMatch.Groups[1].Value
+$nativeTargetDir = Join-Path $PSScriptRoot "target"
+$nativeReleaseDir = Join-Path (Join-Path $nativeTargetDir $hostTriple) "release"
+$nativeApp = Join-Path $nativeReleaseDir "smart_explorer.exe"
+$nativeUpdater = Join-Path $nativeReleaseDir "smart_explorer_updater.exe"
+$nativeCli = Join-Path $nativeReleaseDir "se.exe"
+cargo build --locked --release --target-dir $nativeTargetDir --target $hostTriple --bin smart_explorer --bin smart_explorer_updater --bin se
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 $shareSrc = Join-Path $repoRoot "share-server"
 $shareOut = Join-Path $ReleaseOutput "share-server"
 if (Test-Path $shareSrc) {
+    $shareTargetDir = Join-Path $shareSrc "target"
+    $shareReleaseDir = Join-Path (Join-Path $shareTargetDir $hostTriple) "release"
     Push-Location $shareSrc
     try {
-        cargo build --release --bin se-share-server
+        cargo build --locked --release --target-dir $shareTargetDir --target $hostTriple --bin se-share-server
         if ($LASTEXITCODE -ne 0) { throw "Share-Server-Build fehlgeschlagen" }
     } finally {
         Pop-Location
     }
     New-Item -ItemType Directory -Force $shareOut | Out-Null
-    Copy-Item (Join-Path $shareSrc "target\release\se-share-server.exe") (Join-Path $shareOut "se-share-server.exe") -Force
+    Copy-Item (Join-Path $shareReleaseDir "se-share-server.exe") (Join-Path $shareOut "se-share-server.exe") -Force
 } else {
     throw "Share-Server-Quellverzeichnis fehlt: $shareSrc"
 }
 
 $commandProject = Join-Path $PSScriptRoot "explorer-command"
+$commandTargetDir = Join-Path $commandProject "target"
+$commandReleaseDir = Join-Path (Join-Path $commandTargetDir $hostTriple) "release"
 Push-Location $commandProject
 try {
-    cargo build --release
+    cargo build --locked --release --target-dir $commandTargetDir --target $hostTriple
     if ($LASTEXITCODE -ne 0) { throw "Context-Menü-DLL-Build fehlgeschlagen" }
 } finally {
     Pop-Location
 }
-$commandDll = Join-Path $commandProject "target\release\smart_explorer_command.dll"
+$commandDll = Join-Path $commandReleaseDir "smart_explorer_command.dll"
 Assert-NonEmptyFile $commandDll
 
 # Installer neu bauen (fuer Neuinstallationen). EXE_SRC zeigt auf den nativen
@@ -185,7 +211,7 @@ if ($makensis) {
     New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
     $installer = Join-Path $ReleaseOutput "Smart Explorer Setup $version.exe"
     Remove-Item $installer -Force -ErrorAction SilentlyContinue
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=target\release\smart_explorer.exe" "/DUPDATER_SRC=target\release\smart_explorer_updater.exe" "/DCLI_SRC=target\release\se.exe" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DUPDATER_SRC=$nativeUpdater" "/DCLI_SRC=$nativeCli" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Installer-Build fehlgeschlagen: $installer"
     }
@@ -197,9 +223,9 @@ if ($makensis) {
 
 # Portable Kopie
 New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
-Copy-Item "target\release\smart_explorer.exe" (Join-Path $ReleaseOutput "Smart Explorer.exe") -Force
-Copy-Item "target\release\smart_explorer_updater.exe" (Join-Path $ReleaseOutput "Smart Explorer Updater.exe") -Force
-Copy-Item "target\release\se.exe" (Join-Path $ReleaseOutput "se.exe") -Force
+Copy-Item $nativeApp (Join-Path $ReleaseOutput "Smart Explorer.exe") -Force
+Copy-Item $nativeUpdater (Join-Path $ReleaseOutput "Smart Explorer Updater.exe") -Force
+Copy-Item $nativeCli (Join-Path $ReleaseOutput "se.exe") -Force
 Copy-Item -LiteralPath $commandDll -Destination (Join-Path $ReleaseOutput "smart_explorer_command.dll") -Force
 
 # Publish the Windows-only candidate only after every Windows artifact exists.
@@ -212,11 +238,11 @@ $versionStage = Join-Path $feedParent (".windows-version.{0}.{1}.tmp" -f $PID, [
 New-Item -ItemType Directory -Force $feedStage | Out-Null
 try {
     $payloads = @(
-        [pscustomobject]@{ Name = "smart_explorer.exe"; Source = "target\release\smart_explorer.exe" },
-        [pscustomobject]@{ Name = "smart_explorer_updater.exe"; Source = "target\release\smart_explorer_updater.exe" },
-        [pscustomobject]@{ Name = "se.exe"; Source = "target\release\se.exe" }
+        [pscustomobject]@{ Name = "smart_explorer.exe"; Source = $nativeApp },
+        [pscustomobject]@{ Name = "smart_explorer_updater.exe"; Source = $nativeUpdater },
+        [pscustomobject]@{ Name = "se.exe"; Source = $nativeCli }
     )
-    $manifest = @("version=$version")
+    $manifest = @("version=$version", "source_commit=$sourceCommit")
     foreach ($payload in $payloads) {
         $name = $payload.Name
         $source = $payload.Source

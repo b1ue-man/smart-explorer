@@ -215,6 +215,137 @@ function Assert-PublicationHashSidecar {
     return $actual
 }
 
+function Get-PublicationExpectedSourceCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    $head = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("rev-parse", "HEAD^{commit}")).StdOut.Trim().ToLowerInvariant()
+    $subject = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("show", "-s", "--format=%s", "HEAD")).StdOut.Trim()
+    $releaseSubject = "Release Smart Explorer v$Version [release candidate]"
+    if ($subject -ne $releaseSubject) {
+        return $head
+    }
+    if (Test-PublicationPendingReleaseChanges -RepoRoot $RepoRoot -Version $Version) {
+        # A replacement build made on top of an interrupted candidate must bind
+        # the candidate itself. After the replacement is committed, that SHA is
+        # the new candidate's sole source parent.
+        return $head
+    }
+    $parents = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("show", "-s", "--format=%P", "HEAD")).StdOut.Trim() -split '\s+'
+    $parents = @($parents | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($parents.Count -ne 1 -or $parents[0] -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw "Release candidate HEAD must have exactly one source parent."
+    }
+    $allowed = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($path in (Get-PublicationReleaseCommitPaths -Version $Version)) {
+        [void]$allowed.Add($path.Replace('\', '/'))
+    }
+    $changed = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).StdOut
+    $changedPaths = @($changed -split "`r?`n" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($changedPaths.Count -eq 0) {
+        throw "Release candidate commit contains no release publication changes."
+    }
+    $unexpected = @($changedPaths | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and
+        -not $allowed.Contains($_.Replace('\', '/'))
+    })
+    if ($unexpected.Count -gt 0) {
+        throw "Release candidate commit contains non-release source changes: $($unexpected -join '; ')"
+    }
+    return $parents[0].ToLowerInvariant()
+}
+
+function Assert-PublicationInstallerPayloads {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Installer,
+        [Parameter(Mandatory = $true)][string]$Feed
+    )
+
+    Assert-PublicationNonEmptyFile $Installer
+    $extractor = @("7z", "7zz", "7za", "7z.exe", "7za.exe") |
+        ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
+    if (-not $extractor) {
+        $standardPaths = @(
+            "$env:ProgramFiles\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        )
+        $standardPath = $standardPaths |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+            Select-Object -First 1
+        if ($standardPath) {
+            $extractor = Get-Item -LiteralPath $standardPath
+        }
+    }
+    if (-not $extractor) {
+        throw "7z is required to bind the installer to its exact release payloads."
+    }
+    $extractorPath = if ($extractor -is [System.IO.FileInfo]) {
+        $extractor.FullName
+    } elseif ($extractor.Path) {
+        $extractor.Path
+    } else {
+        $extractor.Definition
+    }
+    if (-not $extractorPath) {
+        throw "Could not resolve the 7z executable path."
+    }
+    $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+        "smart-explorer-installer-check-{0}" -f [guid]::NewGuid().ToString("N")
+    )
+    New-Item -ItemType Directory -Path $extractRoot | Out-Null
+    try {
+        $result = Invoke-ReleasePublicationProcess `
+            -FilePath $extractorPath `
+            -Arguments @(
+                "e",
+                "-y",
+                "-o$extractRoot",
+                $Installer,
+                "Smart Explorer.exe",
+                "Smart Explorer Updater.exe",
+                "se.exe"
+            ) `
+            -WorkingDirectory $RepoRoot `
+            -TimeoutSeconds 300 `
+            -AllowFailure
+        if ($result.ExitCode -ne 0) {
+            throw "Could not inspect the release installer: $($result.Output)"
+        }
+        foreach ($pair in @(
+            @("Smart Explorer.exe", "smart_explorer.exe"),
+            @("Smart Explorer Updater.exe", "smart_explorer_updater.exe"),
+            @("se.exe", "se.exe")
+        )) {
+            $embedded = Join-Path $extractRoot $pair[0]
+            $payload = Join-Path $Feed $pair[1]
+            if ((Get-PublicationSha256 $embedded) -ne (Get-PublicationSha256 $payload)) {
+                throw "Installer payload '$($pair[0])' differs from feed payload '$($pair[1])'."
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-ReleasePublicationCandidate {
     [CmdletBinding()]
     param(
@@ -279,9 +410,15 @@ function Assert-ReleasePublicationCandidate {
         }
         $manifest[$key] = $parts[1].Trim()
     }
-    $expectedManifestKeys = @("version", "smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")
+    $expectedManifestKeys = @(
+        "version",
+        "source_commit",
+        "smart_explorer.exe",
+        "smart_explorer_updater.exe",
+        "se.exe"
+    )
     if ($manifest.Count -ne $expectedManifestKeys.Count) {
-        throw "Windows build manifest must contain exactly version and three Windows payload hashes."
+        throw "Windows build manifest must contain exactly version, source_commit, and three Windows payload hashes."
     }
     foreach ($key in $expectedManifestKeys) {
         if (-not $manifest.ContainsKey($key)) {
@@ -290,6 +427,14 @@ function Assert-ReleasePublicationCandidate {
     }
     if ($manifest["version"] -ne $Version) {
         throw "Windows build manifest version '$($manifest["version"])' does not match '$Version'."
+    }
+    $expectedSourceCommit = Get-PublicationExpectedSourceCommit `
+        -RepoRoot $RepoRoot `
+        -Version $Version
+    $manifestSourceCommit = [string]$manifest["source_commit"]
+    if ($manifestSourceCommit -notmatch '^[0-9a-fA-F]{40,64}$' -or
+        $manifestSourceCommit.ToLowerInvariant() -ne $expectedSourceCommit) {
+        throw "Windows build manifest source commit '$($manifest["source_commit"])' does not match '$expectedSourceCommit'."
     }
     foreach ($payload in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
         if ($manifest[$payload].ToLowerInvariant() -ne $hashes[$payload]) {
@@ -309,6 +454,10 @@ function Assert-ReleasePublicationCandidate {
             throw "Portable release file '$($pair[0])' differs from feed payload '$($pair[1])'."
         }
     }
+    Assert-PublicationInstallerPayloads `
+        -RepoRoot $RepoRoot `
+        -Installer (Join-Path $releaseRoot "Smart Explorer Setup $Version.exe") `
+        -Feed $feed
     foreach ($agent in @(
         "native/agent-bin/se-agent-x86_64-linux-musl",
         "native/agent-bin/se-agent-aarch64-linux-musl"
@@ -380,6 +529,25 @@ function Get-PublicationRepositorySlug {
     return $slug
 }
 
+function Assert-PublicationNoUntrackedBuildInputs {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $raw = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @(
+            "-c", "core.quotepath=false",
+            "ls-files", "--others", "--exclude-standard", "-z", "--",
+            "native", "share-server", "se-agent", "install-linux.sh",
+            ".github/workflows/build.yml", ".cargo", "vendor",
+            "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"
+        )).StdOut
+    $untracked = @($raw -split [char]0 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($untracked.Count -gt 0) {
+        throw "Untracked release build inputs must be committed or removed before building: $($untracked -join '; ')"
+    }
+}
+
 function Get-PublicationReleaseCommitPaths {
     param(
         [Parameter(Mandatory = $true)]
@@ -416,6 +584,23 @@ function Get-PublicationReleaseCommitPaths {
     )
 }
 
+function Test-PublicationPendingReleaseChanges {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    $arguments = @("status", "--porcelain=v1", "--untracked-files=all", "--") +
+        @(Get-PublicationReleaseCommitPaths -Version $Version)
+    $status = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments $arguments).StdOut
+    return -not [string]::IsNullOrWhiteSpace($status)
+}
+
 function Test-PublicationLocalReleaseStatePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -435,6 +620,7 @@ function Invoke-ReleasePublicationCommit {
         [string]$Version
     )
 
+    Assert-PublicationNoUntrackedBuildInputs -RepoRoot $RepoRoot
     $candidate = Test-ReleasePublicationCandidate -RepoRoot $RepoRoot -Version $Version
     if (-not $candidate) {
         throw "Complete v$Version release candidate validation failed before commit."
@@ -472,6 +658,37 @@ function Invoke-ReleasePublicationCommit {
 
     $stageArguments = @("add", "--") + $allowed
     $null = Invoke-ReleasePublicationGit -RepoRoot $RepoRoot -Arguments $stageArguments
+
+    $allowedSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($path in $allowed) {
+        [void]$allowedSet.Add($path.Replace('\', '/'))
+    }
+    $trackedChanges = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($arguments in @(
+        @("diff", "--name-only"),
+        @("diff", "--cached", "--name-only")
+    )) {
+        $changed = (Invoke-ReleasePublicationGit `
+            -RepoRoot $RepoRoot `
+            -Arguments $arguments).StdOut
+        foreach ($path in @($changed -split "`r?`n")) {
+            if (-not [string]::IsNullOrWhiteSpace($path)) {
+                [void]$trackedChanges.Add($path.Replace('\', '/'))
+            }
+        }
+    }
+    $unexpectedTracked = @($trackedChanges | Where-Object { -not $allowedSet.Contains($_) })
+    if ($unexpectedTracked.Count -gt 0) {
+        $null = Invoke-ReleasePublicationGit `
+            -RepoRoot $RepoRoot `
+            -Arguments (@("reset", "--quiet", "HEAD", "--") + $allowed) `
+            -AllowFailure
+        throw "Release build changed tracked files outside the explicit candidate set: $($unexpectedTracked -join '; ')"
+    }
 
     $releaseStatus = (Invoke-ReleasePublicationGit `
         -RepoRoot $RepoRoot `
@@ -627,6 +844,92 @@ function Get-PublicationRemoteTagCommit {
     return $direct
 }
 
+function Get-PublicationRemoteBranchCommit {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
+
+    $branchRef = "refs/heads/$Branch"
+    $line = (Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("ls-remote", "origin", $branchRef)).StdOut.Trim()
+    if ([string]::IsNullOrWhiteSpace($line)) {
+        return $null
+    }
+    $parts = $line -split '\s+'
+    if ($parts.Count -lt 2 -or $parts[1] -ne $branchRef) {
+        throw "Could not parse remote branch '$Branch'."
+    }
+    return $parts[0].ToLowerInvariant()
+}
+
+function Assert-PublicationFallbackAdvance {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9a-fA-F]{40,64}$')]
+        [string]$PreviousCandidate,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9a-fA-F]{40,64}$')]
+        [string]$CandidateSha
+    )
+
+    $branch = "release/v$Version"
+    $currentFallback = Get-PublicationRemoteBranchCommit `
+        -RepoRoot $RepoRoot `
+        -Branch $branch
+    if ($currentFallback -ne $PreviousCandidate.ToLowerInvariant()) {
+        throw "Publication fallback '$branch' changed while recovery was being evaluated."
+    }
+    $tag = "v$Version"
+    $remoteTag = Get-PublicationRemoteTagCommit -RepoRoot $RepoRoot -Tag $tag
+    if ($remoteTag) {
+        throw "Fallback '$branch' cannot advance after remote tag '$tag' exists."
+    }
+    $ancestor = Invoke-ReleasePublicationGit `
+        -RepoRoot $RepoRoot `
+        -Arguments @("merge-base", "--is-ancestor", $PreviousCandidate, $CandidateSha) `
+        -AllowFailure
+    if ($ancestor.ExitCode -ne 0) {
+        throw "Publication fallback may advance only by fast-forward from '$PreviousCandidate' to '$CandidateSha'."
+    }
+    $repositorySlug = Get-PublicationRepositorySlug -RepoRoot $RepoRoot
+    $encodedBranch = [uri]::EscapeDataString($branch)
+    $encodedSha = [uri]::EscapeDataString($PreviousCandidate.ToLowerInvariant())
+    $response = Invoke-ReleasePublicationGitHubGet `
+        -RepositorySlug $repositorySlug `
+        -ApiPath "/actions/workflows/build.yml/runs?event=push&branch=$encodedBranch&head_sha=$encodedSha&per_page=100"
+    $matches = @($response.workflow_runs | Where-Object {
+        $_.event -eq "push" -and
+        $_.head_branch -eq $branch -and
+        $_.head_sha.ToLowerInvariant() -eq $PreviousCandidate.ToLowerInvariant() -and
+        $_.path -eq ".github/workflows/build.yml"
+    })
+    if ($matches.Count -ne 1) {
+        throw "Fallback '$branch' may advance only after exactly one attributable prior workflow run; found $($matches.Count)."
+    }
+    $run = $matches[0]
+    $retryableConclusions = @(
+        "failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"
+    )
+    if ($run.status -ne "completed" -or $run.conclusion -notin $retryableConclusions) {
+        throw "Fallback '$branch' prior run $($run.id) is '$($run.status)/$($run.conclusion)', not a completed failed candidate."
+    }
+    $apiTag = [uri]::EscapeDataString($tag)
+    $release = Invoke-ReleasePublicationGitHubGet `
+        -RepositorySlug $repositorySlug `
+        -ApiPath "/releases/tags/$apiTag" `
+        -AllowNotFound
+    if ($release) {
+        throw "Fallback '$branch' cannot advance after GitHub Release '$tag' exists."
+    }
+}
+
 function Invoke-ReleasePublicationTagPush {
     [CmdletBinding()]
     param(
@@ -644,11 +947,28 @@ function Invoke-ReleasePublicationTagPush {
         -Arguments @("rev-parse", "$CandidateSha^{commit}")).StdOut.Trim().ToLowerInvariant()
     $tag = "v$Version"
     $tagRef = "refs/tags/$tag"
+    $fallbackBranch = "release/v$Version"
+    $fallbackRef = "refs/heads/$fallbackBranch"
     $remoteBefore = Get-PublicationRemoteTagCommit -RepoRoot $RepoRoot -Tag $tag
     if ($remoteBefore -and $remoteBefore -ne $candidateSha) {
         throw "Immutable remote tag '$tag' already points to '$remoteBefore', not '$candidateSha'."
     }
-
+    $fallbackBefore = Get-PublicationRemoteBranchCommit `
+        -RepoRoot $RepoRoot `
+        -Branch $fallbackBranch
+    $fallbackAdvanceProven = $false
+    if (-not $remoteBefore -and $fallbackBefore -and
+        $fallbackBefore -ne $candidateSha) {
+        # Durable remote state, not a machine-local tag, decides whether the
+        # old fallback candidate may be superseded. Prove this before creating,
+        # repairing, or pushing any local tag ref.
+        Assert-PublicationFallbackAdvance `
+            -RepoRoot $RepoRoot `
+            -Version $Version `
+            -PreviousCandidate $fallbackBefore `
+            -CandidateSha $candidateSha
+        $fallbackAdvanceProven = $true
+    }
     $localExists = Invoke-ReleasePublicationGit `
         -RepoRoot $RepoRoot `
         -Arguments @("show-ref", "--verify", "--quiet", $tagRef) `
@@ -661,7 +981,23 @@ function Invoke-ReleasePublicationTagPush {
             -RepoRoot $RepoRoot `
             -Arguments @("rev-list", "-n", "1", $tagRef)).StdOut.Trim().ToLowerInvariant()
         if ($localCommit -ne $candidateSha) {
-            throw "Immutable local tag '$tag' already points to '$localCommit', not '$candidateSha'."
+            if ($remoteBefore) {
+                # The immutable remote tag is authoritative; repair only the
+                # stale local ref with a compare-and-swap update.
+                $null = Invoke-ReleasePublicationGit `
+                    -RepoRoot $RepoRoot `
+                    -Arguments @("update-ref", $tagRef, $candidateSha, $localCommit)
+            } else {
+                if (-not $fallbackBefore -or $fallbackBefore -ne $localCommit) {
+                    throw "Local tag '$tag' points to '$localCommit' without a matching recoverable fallback."
+                }
+                if (-not $fallbackAdvanceProven) {
+                    throw "Fallback recovery proof is missing before local tag '$tag' repair."
+                }
+                $null = Invoke-ReleasePublicationGit `
+                    -RepoRoot $RepoRoot `
+                    -Arguments @("update-ref", $tagRef, $candidateSha, $localCommit)
+            }
         }
     } elseif ($remoteBefore) {
         $null = Invoke-ReleasePublicationGit `
@@ -673,6 +1009,18 @@ function Invoke-ReleasePublicationTagPush {
             -Arguments @("update-ref", $tagRef, $candidateSha, ("0" * 40))
     }
 
+    if (-not $remoteBefore -and $fallbackBefore -eq $candidateSha) {
+        return [pscustomobject]@{
+            Tag = $tag
+            CandidateSha = $candidateSha
+            Created = $false
+            Pushed = $false
+            ExistingRun = $true
+            TriggerBranch = $fallbackBranch
+            TriggerKind = "release-branch"
+        }
+    }
+
     $pushed = $false
     if (-not $remoteBefore) {
         $push = Invoke-ReleasePublicationGit `
@@ -681,6 +1029,63 @@ function Invoke-ReleasePublicationTagPush {
             -AllowFailure
         if ($push.ExitCode -ne 0) {
             $raced = Get-PublicationRemoteTagCommit -RepoRoot $RepoRoot -Tag $tag
+            if (-not $raced) {
+                if ($fallbackBefore -and $fallbackBefore -ne $candidateSha -and
+                    -not $fallbackAdvanceProven) {
+                    Assert-PublicationFallbackAdvance `
+                        -RepoRoot $RepoRoot `
+                        -Version $Version `
+                        -PreviousCandidate $fallbackBefore `
+                        -CandidateSha $candidateSha
+                }
+                $tagBeforeFallback = Get-PublicationRemoteTagCommit `
+                    -RepoRoot $RepoRoot `
+                    -Tag $tag
+                if ($tagBeforeFallback) {
+                    if ($tagBeforeFallback -ne $candidateSha) {
+                        throw "A competing immutable tag '$tag' appeared before fallback publication."
+                    }
+                    return [pscustomobject]@{
+                        Tag = $tag
+                        CandidateSha = $candidateSha
+                        Created = $false
+                        Pushed = $false
+                        ExistingRun = $true
+                        TriggerBranch = $tag
+                        TriggerKind = "tag"
+                    }
+                }
+                $leaseExpected = if ($fallbackBefore) { $fallbackBefore } else { "" }
+                $fallbackLease = "--force-with-lease=${fallbackRef}:$leaseExpected"
+                $fallbackPush = Invoke-ReleasePublicationGit `
+                    -RepoRoot $RepoRoot `
+                    -Arguments @(
+                        "push", "--porcelain", $fallbackLease,
+                        "origin", "$candidateSha`:$fallbackRef"
+                    ) `
+                    -AllowFailure
+                $fallbackAfter = Get-PublicationRemoteBranchCommit `
+                    -RepoRoot $RepoRoot `
+                    -Branch $fallbackBranch
+                if ($fallbackAfter -ne $candidateSha) {
+                    throw "Tag push failed and the mutually exclusive '$fallbackBranch' publication fallback could not be created. Tag error: $($push.Output); fallback error: $($fallbackPush.Output)"
+                }
+                $tagAfterFallback = Get-PublicationRemoteTagCommit `
+                    -RepoRoot $RepoRoot `
+                    -Tag $tag
+                if ($tagAfterFallback) {
+                    throw "Remote tag '$tag' appeared concurrently with fallback '$fallbackBranch'; refusing to treat competing triggers as one publication."
+                }
+                return [pscustomobject]@{
+                    Tag = $tag
+                    CandidateSha = $candidateSha
+                    Created = -not [bool]$fallbackBefore
+                    Pushed = $fallbackPush.ExitCode -eq 0
+                    ExistingRun = $fallbackPush.ExitCode -ne 0
+                    TriggerBranch = $fallbackBranch
+                    TriggerKind = "release-branch"
+                }
+            }
             if ($raced -ne $candidateSha) {
                 throw "Could not create immutable remote tag '$tag': $($push.Output)"
             }
@@ -697,7 +1102,40 @@ function Invoke-ReleasePublicationTagPush {
         CandidateSha = $candidateSha
         Created = -not [bool]$remoteBefore
         Pushed = $pushed
+        ExistingRun = [bool]$remoteBefore
+        TriggerBranch = $tag
+        TriggerKind = "tag"
     }
+}
+
+function Get-ReleasePublicationGitHubToken {
+    [CmdletBinding()]
+    param([switch]$Require)
+
+    if (-not $script:releasePublicationGitHubTokenLoaded) {
+        $token = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            $token = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
+        }
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            $gh = Get-Command gh -ErrorAction SilentlyContinue
+            if ($gh) {
+                $tokenOutput = & $gh.Source auth token --hostname github.com 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $token = (($tokenOutput | ForEach-Object { $_.ToString() }) -join "").Trim()
+                }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($token) -and $token -match '\s') {
+            throw "GitHub publication token contains whitespace."
+        }
+        $script:releasePublicationGitHubToken = $token
+        $script:releasePublicationGitHubTokenLoaded = $true
+    }
+    if ($Require -and [string]::IsNullOrWhiteSpace($script:releasePublicationGitHubToken)) {
+        throw "Authenticated GitHub REST polling is required. Set GH_TOKEN/GITHUB_TOKEN or run 'gh auth login' before the release preflight."
+    }
+    return $script:releasePublicationGitHubToken
 }
 
 function Invoke-ReleasePublicationGitHubGet {
@@ -718,10 +1156,7 @@ function Invoke-ReleasePublicationGitHubGet {
         "X-GitHub-Api-Version" = "2026-03-10"
         "User-Agent" = "smart-explorer-release-publication"
     }
-    $token = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
-    if ([string]::IsNullOrWhiteSpace($token)) {
-        $token = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
-    }
+    $token = Get-ReleasePublicationGitHubToken
     if (-not [string]::IsNullOrWhiteSpace($token)) {
         $headers["Authorization"] = "Bearer $token"
     }
@@ -741,6 +1176,47 @@ function Invoke-ReleasePublicationGitHubGet {
             throw "GitHub public API GET failed with HTTP $status for '$ApiPath': $detail"
         }
         throw "GitHub public API GET failed for '$ApiPath': $detail"
+    }
+}
+
+function Invoke-ReleasePublicationGitHubPost {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$')]
+        [string]$RepositorySlug,
+        [Parameter(Mandatory = $true)][string]$ApiPath
+    )
+
+    if (-not $ApiPath.StartsWith('/') -or $ApiPath.StartsWith('//')) {
+        throw "GitHub API path must be a repository-relative absolute path."
+    }
+    $token = Get-ReleasePublicationGitHubToken -Require
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        Authorization = "Bearer $token"
+        "X-GitHub-Api-Version" = "2026-03-10"
+        "User-Agent" = "smart-explorer-release-publication"
+    }
+    $uri = "https://api.github.com/repos/$RepositorySlug$ApiPath"
+    try {
+        $null = Invoke-RestMethod `
+            -Method Post `
+            -Uri $uri `
+            -Headers $headers `
+            -ContentType "application/json" `
+            -Body '{}' `
+            -ErrorAction Stop
+    } catch {
+        $status = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $status = [int]$_.Exception.Response.StatusCode
+        }
+        $detail = ConvertTo-ReleasePublicationSafeText $_.Exception.Message
+        if ($status) {
+            throw "GitHub API POST failed with HTTP $status for '$ApiPath': $detail"
+        }
+        throw "GitHub API POST failed for '$ApiPath': $detail"
     }
 }
 
@@ -768,15 +1244,20 @@ function Wait-ReleasePublicationWorkflow {
         [Parameter(Mandatory = $true)]
         [ValidatePattern('^[0-9a-fA-F]{40,64}$')]
         [string]$CandidateSha,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9A-Za-z._/-]+$')]
+        [string]$TriggerBranch,
+        [switch]$RetryFailedOnce,
         [Parameter(Mandatory = $true)][datetimeoffset]$Deadline
     )
 
     $tag = "v$Version"
     $candidateSha = $CandidateSha.ToLowerInvariant()
-    $encodedTag = [uri]::EscapeDataString($tag)
+    $encodedBranch = [uri]::EscapeDataString($TriggerBranch)
     $encodedSha = [uri]::EscapeDataString($candidateSha)
-    $path = "/actions/workflows/build.yml/runs?event=push&branch=$encodedTag&head_sha=$encodedSha&per_page=100"
+    $path = "/actions/workflows/build.yml/runs?event=push&branch=$encodedBranch&head_sha=$encodedSha&per_page=100"
     $lastState = "not visible"
+    $retryFromAttempt = $null
     while ([datetimeoffset]::UtcNow -lt $Deadline) {
         $response = Invoke-ReleasePublicationGitHubGet `
             -RepositorySlug $RepositorySlug `
@@ -784,23 +1265,48 @@ function Wait-ReleasePublicationWorkflow {
         $matches = @($response.workflow_runs | Where-Object {
             $_.event -eq "push" -and
             $_.head_sha.ToLowerInvariant() -eq $candidateSha -and
-            $_.head_branch -eq $tag -and
+            $_.head_branch -eq $TriggerBranch -and
             $_.path -eq ".github/workflows/build.yml"
         })
         if ($matches.Count -gt 1) {
-            throw "More than one exact build.yml tag-push run exists for '$tag' at '$candidateSha'."
+            throw "More than one exact build.yml publication run exists for '$TriggerBranch' at '$candidateSha'."
         }
         if ($matches.Count -eq 1) {
             $run = $matches[0]
             $lastState = "$($run.status)/$($run.conclusion)"
             if ($run.status -eq "completed") {
                 if ($run.conclusion -ne "success") {
-                    throw "Exact build.yml tag run $($run.id) completed '$($run.conclusion)': $($run.html_url)"
+                    $attempt = [int]$run.run_attempt
+                    if ($RetryFailedOnce -and $attempt -eq 1 -and $null -eq $retryFromAttempt) {
+                        $rerunEndpoint = if ($run.conclusion -eq "failure") {
+                            "rerun-failed-jobs"
+                        } else {
+                            # Cancelled/timed-out runs may contain no failed job
+                            # eligible for rerun-failed-jobs. The static gate can
+                            # safely restage the same committed bytes, and its
+                            # artifact upload is explicitly overwrite-safe.
+                            "rerun"
+                        }
+                        Invoke-ReleasePublicationGitHubPost `
+                            -RepositorySlug $RepositorySlug `
+                            -ApiPath "/actions/runs/$($run.id)/$rerunEndpoint"
+                        $retryFromAttempt = $attempt
+                        $lastState = "retry requested for run $($run.id) attempt $attempt"
+                    } elseif ($null -ne $retryFromAttempt -and $attempt -le $retryFromAttempt) {
+                        $lastState = "waiting for retry of run $($run.id) attempt $retryFromAttempt"
+                    } else {
+                        throw "Exact build.yml publication run $($run.id) attempt $attempt completed '$($run.conclusion)': $($run.html_url)"
+                    }
+                    if (-not (Wait-ReleasePublicationDelay -Deadline $Deadline)) {
+                        break
+                    }
+                    continue
                 }
                 return [pscustomobject]@{
                     RunId = [long]$run.id
                     RunAttempt = [int]$run.run_attempt
                     Tag = $tag
+                    TriggerBranch = $TriggerBranch
                     CandidateSha = $candidateSha
                     Url = [string]$run.html_url
                     Conclusion = "success"
@@ -811,7 +1317,7 @@ function Wait-ReleasePublicationWorkflow {
             break
         }
     }
-    throw "Timed out waiting for exact build.yml push run for '$tag' at '$candidateSha' (last state: $lastState)."
+    throw "Timed out waiting for exact build.yml push run for '$TriggerBranch' at '$candidateSha' (last state: $lastState)."
 }
 
 function Wait-ReleasePublicationAssets {
@@ -958,7 +1464,6 @@ function Invoke-ReleasePublicationLinuxCliUpdate {
     $cli = Join-Path $installDir "se"
     $environment = @{
         SMART_EXPLORER_REPO = $RepositorySlug
-        SMART_EXPLORER_REF = $CandidateSha.ToLowerInvariant()
         SMART_EXPLORER_RELEASE_TAG = "v$Version"
         SMART_EXPLORER_REQUIRE_RELEASE_ASSETS = "1"
     }

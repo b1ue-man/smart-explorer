@@ -78,7 +78,11 @@ function Assert-SameSha256([string]$Left, [string]$Right) {
     }
 }
 
-function Assert-WindowsManifest([string]$FeedDirectory, [string]$ExpectedVersion) {
+function Assert-WindowsManifest(
+    [string]$FeedDirectory,
+    [string]$ExpectedVersion,
+    [string]$ExpectedSourceCommit
+) {
     $manifestPath = Join-Path $FeedDirectory "windows-build.manifest"
     Assert-NonEmptyFile $manifestPath
     $entries = @{}
@@ -94,6 +98,18 @@ function Assert-WindowsManifest([string]$FeedDirectory, [string]$ExpectedVersion
     }
     if ($entries["version"] -ne $ExpectedVersion) {
         throw "Windows build manifest version '$($entries["version"])' does not match '$ExpectedVersion'."
+    }
+    if ($ExpectedSourceCommit -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw "Expected Windows build source commit is invalid."
+    }
+    $ExpectedSourceCommit = $ExpectedSourceCommit.ToLowerInvariant()
+    $manifestSourceCommit = [string]$entries["source_commit"]
+    if ($manifestSourceCommit -notmatch '^[0-9a-fA-F]{40,64}$' -or
+        $manifestSourceCommit.ToLowerInvariant() -ne $expectedSourceCommit) {
+        throw "Windows build manifest source commit '$($entries["source_commit"])' does not match '$expectedSourceCommit'."
+    }
+    if ($entries.Count -ne 5) {
+        throw "Windows build manifest must contain exactly version, source_commit, and three payload hashes."
     }
     foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
         Assert-FeedHash $FeedDirectory $name
@@ -173,7 +189,8 @@ function Publish-CompleteRelease(
     [string]$StageRelease,
     [string]$StageFeed,
     [string]$VersionSource,
-    [string]$ExpectedVersion
+    [string]$ExpectedVersion,
+    [string]$ExpectedSourceCommit
 ) {
     $artifactSpecs = @(
         [pscustomobject]@{ Source = Join-Path $StageRelease "Smart Explorer.exe"; Destination = Join-Path $releaseRoot "Smart Explorer.exe" },
@@ -213,7 +230,7 @@ function Publish-CompleteRelease(
         }
 
         Copy-Item -LiteralPath $StageFeed -Destination $feedCandidate -Recurse
-        Assert-WindowsManifest $feedCandidate $ExpectedVersion
+        Assert-WindowsManifest $feedCandidate $ExpectedVersion $ExpectedSourceCommit
         foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
             Assert-FeedHash $feedCandidate $name
         }
@@ -228,7 +245,7 @@ function Publish-CompleteRelease(
         if ($publishedVersion -ne $ExpectedVersion) {
             throw "Published feed version '$publishedVersion' does not match '$ExpectedVersion'."
         }
-        Assert-WindowsManifest $feed $ExpectedVersion
+        Assert-WindowsManifest $feed $ExpectedVersion $ExpectedSourceCommit
         foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
             Assert-FeedHash $feed $name
         }
@@ -322,6 +339,12 @@ function Publish-CompleteRelease(
 
 function Invoke-WindowsReleaseBuild {
 $version = Get-NativeVersion
+$buildSourceCommit = (Invoke-ReleasePublicationGit `
+    -RepoRoot $repoRoot `
+    -Arguments @("rev-parse", "HEAD^{commit}")).StdOut.Trim().ToLowerInvariant()
+if ($buildSourceCommit -notmatch '^[0-9a-fA-F]{40,64}$') {
+    throw "Could not bind the complete Windows/WSL build to one source commit."
+}
 $action = if ($CheckEnvOnly) { "Checking" } else { "Building" }
 Write-Host "$action complete local release v$version ..."
 
@@ -442,7 +465,7 @@ try {
         Assert-NonEmptyFile $path
     }
     Assert-ContextDll $commandDll $peInspector
-    Assert-WindowsManifest $stageFeed $version
+    Assert-WindowsManifest $stageFeed $version $buildSourceCommit
     Assert-SameSha256 $portableApp (Join-Path $stageFeed "smart_explorer.exe")
     Assert-SameSha256 $portableUpdater (Join-Path $stageFeed "smart_explorer_updater.exe")
     Assert-SameSha256 $portableCli (Join-Path $stageFeed "se.exe")
@@ -474,7 +497,7 @@ try {
 
     Assert-NonEmptyFile $linuxInstaller
     Assert-NonEmptyFile $linuxShare
-    Assert-WindowsManifest $stageFeed $version
+    Assert-WindowsManifest $stageFeed $version $buildSourceCommit
     foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
         Assert-FeedHash $stageFeed $name
     }
@@ -490,13 +513,18 @@ try {
     }
 
     Set-Content -LiteralPath $versionStage -Value $version -Encoding ascii
-    Publish-CompleteRelease $stageRelease $stageFeed $versionStage $version
+    Publish-CompleteRelease `
+        $stageRelease `
+        $stageFeed `
+        $versionStage `
+        $version `
+        $buildSourceCommit
 
     $feedVersion = (Get-Content -LiteralPath (Join-Path $feed "version.txt") -TotalCount 1).Trim()
     if ($feedVersion -ne $version) {
         throw "Feed version '$feedVersion' does not match Cargo.toml version '$version'."
     }
-    Assert-WindowsManifest $feed $version
+    Assert-WindowsManifest $feed $version $buildSourceCommit
     foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
         Assert-FeedHash $feed $name
     }
@@ -569,13 +597,53 @@ function Get-RemoteMainVersion {
 
 function Set-NativeVersion([string]$Version) {
     $cargoToml = Join-Path $scriptRoot "Cargo.toml"
-    $text = [System.IO.File]::ReadAllText($cargoToml)
-    $pattern = [regex]::new('(?m)^version\s*=\s*"[^"]+"')
-    if (-not $pattern.IsMatch($text)) {
+    $cargoLock = Join-Path $scriptRoot "Cargo.lock"
+    $cargoText = [System.IO.File]::ReadAllText($cargoToml)
+    $cargoPattern = [regex]::new('(?m)^version\s*=\s*"([^"]+)"')
+    $cargoMatch = $cargoPattern.Match($cargoText)
+    if (-not $cargoMatch.Success) {
         throw "Could not update version in $cargoToml"
     }
-    $updated = $pattern.Replace($text, "version = `"$Version`"", 1)
-    [System.IO.File]::WriteAllText($cargoToml, $updated, [System.Text.UTF8Encoding]::new($false))
+    $cargoVersion = $cargoMatch.Groups[1].Value
+    if ($cargoVersion -ne $Version -and (Get-NextPatchVersion $cargoVersion) -ne $Version) {
+        throw "Cargo.toml version '$cargoVersion' cannot advance or resume '$Version'."
+    }
+
+    $lockText = [System.IO.File]::ReadAllText($cargoLock)
+    $lockPattern = [regex]::new(
+        '(?ms)(^\[\[package\]\]\r?\nname = "smart_explorer"\r?\nversion = ")([^"]+)(")'
+    )
+    $lockMatches = $lockPattern.Matches($lockText)
+    if ($lockMatches.Count -ne 1) {
+        throw "Cargo.lock must contain exactly one smart_explorer root package entry."
+    }
+    $lockVersion = $lockMatches[0].Groups[2].Value
+    if ($lockVersion -ne $Version -and (Get-NextPatchVersion $lockVersion) -ne $Version) {
+        throw "Cargo.lock root version '$lockVersion' cannot advance or resume '$Version'."
+    }
+
+    $updatedCargo = $cargoPattern.Replace($cargoText, "version = `"$Version`"", 1)
+    $updatedLock = $lockPattern.Replace(
+        $lockText,
+        { param($match) "$($match.Groups[1].Value)$Version$($match.Groups[3].Value)" },
+        1
+    )
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $stageId = "{0}-{1}" -f $PID, [guid]::NewGuid().ToString('N')
+    $lockStage = Join-Path $scriptRoot ".Cargo.lock.complete-release-version.$stageId"
+    $cargoStage = Join-Path $scriptRoot ".Cargo.toml.complete-release-version.$stageId"
+    try {
+        [System.IO.File]::WriteAllText($lockStage, $updatedLock, $encoding)
+        [System.IO.File]::WriteAllText($cargoStage, $updatedCargo, $encoding)
+        # Lock first: a crash between the two atomic same-directory renames is
+        # recovered by the next Bump/Resume call, while Cargo.toml still keeps
+        # the remote version decision unambiguous.
+        [System.IO.File]::Move($lockStage, $cargoLock, $true)
+        [System.IO.File]::Move($cargoStage, $cargoToml, $true)
+    } finally {
+        Remove-Item -LiteralPath $lockStage -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $cargoStage -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-NextPatchVersion([string]$Version) {
@@ -669,15 +737,33 @@ function Assert-GitReleasePreflight {
 }
 
 function Assert-NonInteractiveGitWriteAccess {
-    $probe = "refs/tags/smart-explorer-release-auth-preflight-$PID"
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    $tagRef = "refs/tags/v$Version"
+    $fallbackRef = "refs/heads/release/v$Version"
     $oldPrompt = $env:GIT_TERMINAL_PROMPT
     $oldGcmInteractive = $env:GCM_INTERACTIVE
     try {
         $env:GIT_TERMINAL_PROMPT = "0"
         $env:GCM_INTERACTIVE = "Never"
-        $result = Invoke-GitCaptured -ArgumentList @("push", "--dry-run", "origin", "HEAD:$probe") -AllowFailure
-        if ($result.ExitCode -ne 0) {
-            throw "Non-interactive Git write preflight failed: $($result.Output)"
+        $mainProbe = Invoke-GitCaptured `
+            -ArgumentList @("push", "--dry-run", "origin", "HEAD:refs/heads/main") `
+            -AllowFailure
+        if ($mainProbe.ExitCode -ne 0) {
+            throw "Non-interactive Git main write preflight failed: $($mainProbe.Output)"
+        }
+        $tagProbe = Invoke-GitCaptured `
+            -ArgumentList @("push", "--dry-run", "origin", "HEAD:$tagRef") `
+            -AllowFailure
+        $fallbackProbe = Invoke-GitCaptured `
+            -ArgumentList @("push", "--dry-run", "origin", "HEAD:$fallbackRef") `
+            -AllowFailure
+        if ($tagProbe.ExitCode -ne 0 -and $fallbackProbe.ExitCode -ne 0) {
+            throw "Neither the immutable tag nor release-branch publication trigger is writable non-interactively. Tag: $($tagProbe.Output); fallback: $($fallbackProbe.Output)"
         }
     } finally {
         $env:GIT_TERMINAL_PROMPT = $oldPrompt
@@ -754,6 +840,25 @@ function Assert-WindowsReleaseEnvironment {
         $makensis = $nsisCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     }
     if (-not $makensis) { throw "makensis.exe not found; a release without an installer is incomplete." }
+    $archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
+        ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
+    if (-not $archiveExtractor) {
+        $archiveCandidates = @(
+            "$env:ProgramFiles\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        )
+        $archivePath = $archiveCandidates |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+            Select-Object -First 1
+        if ($archivePath) {
+            $env:Path = "$(Split-Path -Parent $archivePath);$env:Path"
+            $archiveExtractor = Get-Command 7z.exe -CommandType Application -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $archiveExtractor) {
+        throw "7z is required to verify the exact installer payloads before tagging."
+    }
     $script:peInspector = @("llvm-objdump.exe", "objdump.exe", "dumpbin.exe") |
         ForEach-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
         Select-Object -First 1
@@ -774,18 +879,20 @@ function Assert-CommonReleasePreflight {
         throw "git is required for a complete release."
     }
     Assert-GitReleasePreflight
+    Assert-PublicationNoUntrackedBuildInputs -RepoRoot $repoRoot
     $script:githubRepository = Get-GitHubRepositorySlug
+    $null = Get-ReleasePublicationGitHubToken -Require
     $workflow = Invoke-GitHubGet "actions/workflows/$workflowFile"
     if (-not $workflow -or $workflow.state -ne "active") {
         throw "GitHub workflow $workflowFile is not active."
     }
-    Assert-NonInteractiveGitWriteAccess
+    $plan = Resolve-ReleasePlan
+    Assert-NonInteractiveGitWriteAccess -Version $plan.Version
     if (Test-RunningOnLinux) {
         Assert-LinuxReleaseEnvironment
     } else {
         Assert-WindowsReleaseEnvironment
     }
-    $plan = Resolve-ReleasePlan
     Write-Host "Release preflight OK: action=$($plan.Action), candidate=$($plan.Tag)."
     return $plan
 }
@@ -836,8 +943,10 @@ try {
     # Re-resolve under the cross-host lock so a concurrent remote tag cannot
     # turn the preflight decision into a second version or a rewritten tag.
     $plan = Resolve-ReleasePlan
-    if ($plan.Action -eq "Bump") {
+    if ($plan.Action -in @("Bump", "Resume")) {
         Set-NativeVersion $plan.Version
+    }
+    if ($plan.Action -eq "Bump") {
         Write-Host "Release version advanced once to $($plan.Version)."
     }
     $version = $plan.Version
@@ -857,8 +966,14 @@ try {
         }
         $commit = Invoke-ReleasePublicationCommit -RepoRoot $repoRoot -Version $version
         $candidateSha = $commit.CandidateSha
+        # Revalidate the committed shape and parent-bound manifest before any
+        # remote ref can expose this candidate.
+        $null = Assert-ReleasePublicationCandidate -RepoRoot $repoRoot -Version $version
         Invoke-ReleasePublicationMainPush -RepoRoot $repoRoot -CandidateSha $candidateSha
-        Invoke-ReleasePublicationTagPush -RepoRoot $repoRoot -Version $version -CandidateSha $candidateSha
+        $publicationTrigger = Invoke-ReleasePublicationTagPush `
+            -RepoRoot $repoRoot `
+            -Version $version `
+            -CandidateSha $candidateSha
     } else {
         $candidateSha = $plan.Candidate
         if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
@@ -866,6 +981,15 @@ try {
         }
         Invoke-ReleasePublicationMainPush -RepoRoot $repoRoot -CandidateSha $candidateSha
         Write-Host "Immutable $($plan.Tag) already targets $candidateSha; no tag is created or moved."
+        $fallbackBranch = "release/v$version"
+        $fallbackCandidate = Get-PublicationRemoteBranchCommit `
+            -RepoRoot $repoRoot `
+            -Branch $fallbackBranch
+        $publicationTrigger = [pscustomobject]@{
+            TriggerBranch = if ($fallbackCandidate -eq $candidateSha) { $fallbackBranch } else { $plan.Tag }
+            TriggerKind = if ($fallbackCandidate -eq $candidateSha) { "release-branch" } else { "tag" }
+            ExistingRun = $true
+        }
     }
 
     $deadline = [DateTime]::UtcNow.AddMinutes($PublicationTimeoutMinutes)
@@ -873,6 +997,8 @@ try {
         -RepositorySlug $script:githubRepository `
         -Version $version `
         -CandidateSha $candidateSha `
+        -TriggerBranch $publicationTrigger.TriggerBranch `
+        -RetryFailedOnce:([bool]$publicationTrigger.ExistingRun) `
         -Deadline $deadline
     Wait-ReleasePublicationAssets `
         -RepoRoot $repoRoot `

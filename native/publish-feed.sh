@@ -35,8 +35,13 @@ if [ "$(uname -s 2>/dev/null || echo unknown)" != "Linux" ]; then
   echo "On Windows use native\\publish-release-local.ps1." >&2
   exit 1
 fi
-for tool in cargo rustc rustup x86_64-w64-mingw32-gcc \
-  x86_64-w64-mingw32-objdump makensis sha256sum file install; do
+if [ "$check_env" != "1" ] && [ -z "${SMART_EXPLORER_RELEASE_LOCK_TOKEN:-}" ]; then
+  echo "A complete release may only run through native/publish-release-local.ps1." >&2
+  echo "Run 'pwsh native/publish-release-local.ps1' so one wrapper owns the version, lock, build, publication, and final verification." >&2
+  exit 1
+fi
+for tool in cargo rustc rustup git x86_64-w64-mingw32-gcc \
+  x86_64-w64-mingw32-objdump makensis sha256sum file install 7z; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Required release tool missing: $tool" >&2
     exit 1
@@ -48,6 +53,12 @@ if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
   echo "Invalid or missing native version: $version" >&2
   exit 1
 fi
+source_commit="$(git -C "$repo_root" rev-parse 'HEAD^{commit}')"
+if ! [[ "$source_commit" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+  echo "Could not bind the release build to one source commit." >&2
+  exit 1
+fi
+source_commit="${source_commit,,}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 
@@ -64,12 +75,6 @@ if [ "$check_env" = "1" ]; then
   "$script_dir/publish-linux-feed-wsl.sh" --check-env "${linux_release_args[@]}"
   echo "Complete Linux-host release environment OK for Smart Explorer $version."
   exit 0
-fi
-
-if [ -z "${SMART_EXPLORER_RELEASE_LOCK_TOKEN:-}" ]; then
-  echo "A complete release may only run through native/publish-release-local.ps1." >&2
-  echo "Run 'pwsh native/publish-release-local.ps1' so one wrapper owns the version, lock, build, publication, and final verification." >&2
-  exit 1
 fi
 
 mkdir -p "$rel"
@@ -161,7 +166,7 @@ echo "Building complete Smart Explorer v$version release ..."
 "$script_dir/build-agent-bundles.sh"
 
 rustup target add "$windows_target" >/dev/null
-cargo build --release --target "$windows_target" \
+cargo build --locked --release --target-dir "$script_dir/target" --target "$windows_target" \
   --bin smart_explorer --bin smart_explorer_updater --bin se
 
 SMART_EXPLORER_FEED_DIR="$feed_stage" \
@@ -170,11 +175,15 @@ SMART_EXPLORER_SHARE_DIR="$share_stage" \
 
 (
   cd "$repo_root/share-server"
-  cargo build --release --target "$windows_target" --bin se-share-server
+  cargo build --locked --release \
+    --target-dir "$repo_root/share-server/target" \
+    --target "$windows_target" --bin se-share-server
 )
 (
   cd "$script_dir/explorer-command"
-  cargo build --release --target "$windows_target"
+  cargo build --locked --release \
+    --target-dir "$script_dir/explorer-command/target" \
+    --target "$windows_target"
 )
 
 windows_dir="$script_dir/target/$windows_target/release"
@@ -209,6 +218,7 @@ done
 
 {
   printf 'version=%s\n' "$version"
+  printf 'source_commit=%s\n' "$source_commit"
   for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
     printf '%s=%s\n' "$payload" "$(sha256sum "$feed_stage/$payload" | awk '{print $1}')"
   done
@@ -253,6 +263,8 @@ file "$share_stage/se-share-server-linux" | grep -Eq 'statically linked|static-p
   done
 )
 test "$(sed -n 's/^version=//p' "$feed_stage/windows-build.manifest")" = "$version"
+test "$(sed -n 's/^source_commit=//p' "$feed_stage/windows-build.manifest")" = "$source_commit"
+test "$(awk 'NF { count++ } END { print count + 0 }' "$feed_stage/windows-build.manifest")" = "5"
 for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
   expected_manifest_line="$payload=$(sha256sum "$feed_stage/$payload" | awk '{print $1}')"
   test "$(grep -Fxc "$expected_manifest_line" "$feed_stage/windows-build.manifest")" = "1"
@@ -340,6 +352,8 @@ test "$(tr -d '\r\n' < "$feed/version.txt")" = "$version"
   done
 )
 test "$(sed -n 's/^version=//p' "$feed/windows-build.manifest")" = "$version"
+test "$(sed -n 's/^source_commit=//p' "$feed/windows-build.manifest")" = "$source_commit"
+test "$(awk 'NF { count++ } END { print count + 0 }' "$feed/windows-build.manifest")" = "5"
 for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
   expected_manifest_line="$payload=$(sha256sum "$feed/$payload" | awk '{print $1}')"
   test "$(grep -Fxc "$expected_manifest_line" "$feed/windows-build.manifest")" = "1"
