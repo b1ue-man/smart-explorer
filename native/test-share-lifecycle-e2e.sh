@@ -412,6 +412,9 @@ verify_release_transaction_scripts() {
     $assets = $wrapper.IndexOf("Wait-ReleasePublicationAssets", $workflow)
     $tagSha = $wrapper.IndexOf("`$publishedTagCommit = Get-RemoteTagCommit", $assets)
     $localCli = $wrapper.IndexOf("Invoke-ReleasePublicationLinuxCliUpdate", $tagSha)
+    $releaseLockCapture = $wrapper.LastIndexOf("`$lockToRelease = `$completeReleaseLock")
+    $releaseLockClear = $wrapper.LastIndexOf("`$script:completeReleaseLock = `$null")
+    $releaseLockExit = $wrapper.LastIndexOf("Exit-CompleteReleaseLock `$lockToRelease")
     if ($preflight -lt 0 -or $lock -le $preflight -or
         $versionBump -le $lock -or $firstCandidateCheck -le $versionBump -or
         $linuxBuild -le $firstCandidateCheck -or
@@ -420,7 +423,10 @@ verify_release_transaction_scripts() {
         $commit -le $secondCandidateCheck -or
         $committedCandidateCheck -le $commit -or $mainPush -le $committedCandidateCheck -or
         $tag -le $mainPush -or $workflow -le $tag -or $assets -le $workflow -or
-        $tagSha -le $assets -or $localCli -le $tagSha) {
+        $tagSha -le $assets -or $localCli -le $tagSha -or
+        $releaseLockCapture -le $localCli -or
+        $releaseLockClear -le $releaseLockCapture -or
+        $releaseLockExit -le $releaseLockClear) {
       throw "Complete release transaction stages are missing or out of order"
     }
     if (-not $wrapper.Contains("-RetryFailedOnce:")) {
