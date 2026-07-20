@@ -3,6 +3,8 @@ set -eu
 
 REPO="${SMART_EXPLORER_REPO:-b1ue-man/smart-explorer}"
 REF="${SMART_EXPLORER_REF:-main}"
+RELEASE_TAG="${SMART_EXPLORER_RELEASE_TAG:-latest}"
+REQUIRE_RELEASE_ASSETS="${SMART_EXPLORER_REQUIRE_RELEASE_ASSETS:-0}"
 INSTALL_DIR="${SMART_EXPLORER_INSTALL_DIR:-$HOME/.local/opt/smart-explorer}"
 BIN_DIR="${SMART_EXPLORER_BIN_DIR:-$HOME/.local/bin}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -11,7 +13,29 @@ ICON_DIR="$DATA_HOME/icons/hicolor/256x256/apps"
 APP_BIN="$INSTALL_DIR/smart_explorer"
 UPDATER_BIN="$INSTALL_DIR/smart_explorer_updater"
 CLI_BIN="$INSTALL_DIR/se"
-BASE_URL="https://github.com/$REPO/releases/latest/download"
+case "$RELEASE_TAG" in
+  latest) BASE_URL="https://github.com/$REPO/releases/latest/download" ;;
+  v[0-9]* )
+    case "$RELEASE_TAG" in
+      *[!0-9A-Za-z._-]*)
+        echo "smart-explorer install: invalid release tag: $RELEASE_TAG" >&2
+        exit 2
+        ;;
+    esac
+    BASE_URL="https://github.com/$REPO/releases/download/$RELEASE_TAG"
+    ;;
+  *)
+    echo "smart-explorer install: release tag must be 'latest' or begin with v: $RELEASE_TAG" >&2
+    exit 2
+    ;;
+esac
+case "$REQUIRE_RELEASE_ASSETS" in
+  0|1) ;;
+  *)
+    echo "smart-explorer install: SMART_EXPLORER_REQUIRE_RELEASE_ASSETS must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
 RAW_BASE_URL="https://raw.githubusercontent.com/$REPO/$REF"
 SRC_ARCHIVE_URL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
 if [ "$REF" = "main" ]; then
@@ -20,6 +44,7 @@ else
   UPDATE_SOURCE="https://github.com/$REPO/tree/$REF"
 fi
 TMP_DIR=""
+INSTALL_TEMP=""
 DRY_RUN=0
 CLI_ONLY=0
 if SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)"; then
@@ -38,6 +63,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 cleanup() {
+  if [ -n "$INSTALL_TEMP" ]; then
+    rm -f "$INSTALL_TEMP"
+  fi
   if [ -n "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
   fi
@@ -215,6 +243,9 @@ need mktemp
 need sha256sum
 need install
 need ln
+need mv
+need basename
+need dirname
 if ! have_cmd curl && ! have_cmd wget; then
   echo "smart-explorer install: install curl or wget first" >&2
   exit 1
@@ -222,7 +253,7 @@ fi
 TMP_DIR="$(mktemp -d)"
 
 release_assets_available() {
-  log "Trying latest GitHub Release assets from $BASE_URL ..."
+  log "Trying GitHub Release assets from $BASE_URL ..."
   if [ "$DRY_RUN" = 1 ]; then
     return 0
   fi
@@ -325,10 +356,10 @@ install_files() {
     run mkdir -p "$INSTALL_DIR" "$BIN_DIR"
   else
     run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
-    run install -m 755 "$src_dir/smart_explorer" "$APP_BIN"
-    run install -m 755 "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
+    install_executable_atomic "$src_dir/smart_explorer" "$APP_BIN"
+    install_executable_atomic "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
   fi
-  run install -m 755 "$src_dir/se" "$CLI_BIN"
+  install_executable_atomic "$src_dir/se" "$CLI_BIN"
   if [ "$DRY_RUN" = 1 ]; then
     log "dry-run: write $INSTALL_DIR/update_source.txt"
   else
@@ -369,14 +400,33 @@ DESKTOP
   fi
 }
 
+install_executable_atomic() {
+  source_path="$1"
+  destination_path="$2"
+  destination_dir=$(dirname "$destination_path")
+  destination_name=$(basename "$destination_path")
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: install -m 755 $source_path -> $destination_path (atomic rename)"
+    return 0
+  fi
+  INSTALL_TEMP=$(mktemp "$destination_dir/.$destination_name.install.XXXXXX")
+  install -m 755 "$source_path" "$INSTALL_TEMP"
+  mv -f "$INSTALL_TEMP" "$destination_path"
+  INSTALL_TEMP=""
+}
+
 if release_assets_available; then
   use_release_assets
   install_files "$TMP_DIR"
 else
+  if [ "$REQUIRE_RELEASE_ASSETS" = 1 ]; then
+    echo "smart-explorer install: required release assets are unavailable at $BASE_URL" >&2
+    exit 1
+  fi
   if [ "$CLI_ONLY" = 1 ]; then
-    log "Latest release does not have the Linux se asset; falling back to a source build."
+    log "Requested release does not have the Linux se asset; falling back to a source build."
   else
-    log "Latest release does not have Linux desktop assets yet; falling back to a source build."
+    log "Requested release does not have Linux desktop assets; falling back to a source build."
   fi
   install_system_packages
   build_dir="$(prepare_source_build)"
