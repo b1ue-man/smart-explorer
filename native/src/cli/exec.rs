@@ -249,6 +249,7 @@ fn select_target(selector: Option<&str>) -> Result<crate::share::PeerOpenTarget,
 
 fn target_choices(profiles: &crate::share::ShareProfiles) -> Vec<TargetChoice> {
     let mut choices = Vec::new();
+    let now = crate::share::core_now_secs();
     for contact in &profiles.direct_contacts {
         let endpoint = format!("share://direct/{}", contact.id);
         choices.push(TargetChoice {
@@ -264,7 +265,10 @@ fn target_choices(profiles: &crate::share::ShareProfiles) -> Vec<TargetChoice> {
                 contact.remote_device_id.clone().unwrap_or_default(),
                 contact.expected_fingerprint.clone(),
             ],
-            ready: contact.presence.is_some()
+            ready: contact
+                .presence
+                .as_ref()
+                .is_some_and(|presence| presence.is_current_at(now))
                 && contact.access_state == crate::share::DirectAccessState::Accepted,
         });
     }
@@ -285,7 +289,11 @@ fn target_choices(profiles: &crate::share::ShareProfiles) -> Vec<TargetChoice> {
                     member.fingerprint.clone(),
                     format!("{}/{}", room.name, member.device_name),
                 ],
-                ready: member.presence.is_some() && !member.blocked,
+                ready: member
+                    .presence
+                    .as_ref()
+                    .is_some_and(|presence| presence.is_current_at(now))
+                    && !member.blocked,
             });
         }
     }

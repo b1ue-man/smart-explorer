@@ -126,6 +126,15 @@ pub struct PeerPresence {
     pub proof: String,
 }
 
+impl PeerPresence {
+    /// A persisted presence is only routing evidence while its signed lifetime
+    /// is current. Identity pins and relation grants outlive this short-lived
+    /// network snapshot and are intentionally kept separately.
+    pub fn is_current_at(&self, now: i64) -> bool {
+        self.expires_at >= now
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectContact {
     pub id: String,

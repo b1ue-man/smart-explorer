@@ -122,6 +122,7 @@ impl ShareHost {
                         .find(|contact| contact.lookup_id == lookup_id)
                     {
                         contact.status = crate::share::ShareStatus::Offline;
+                        contact.presence = None;
                         changed = true;
                     }
                 }
@@ -253,6 +254,9 @@ impl ShareHost {
                             .find(|member| member.device_id == device_id)
                         {
                             member.status = crate::share::ShareStatus::Offline;
+                            member.relay_url.clear();
+                            member.candidates.clear();
+                            member.presence = None;
                             changed = true;
                         }
                     }
