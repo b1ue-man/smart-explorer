@@ -5,12 +5,31 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 se_bin="${SMART_EXPLORER_SE_BINARY:-$repo_root/native/target/debug/se}"
 server_bin="${SMART_EXPLORER_SHARE_SERVER_BINARY:-$repo_root/share-server/target/debug/se-share-server}"
 
+if [[ "${SMART_EXPLORER_BUILD_E2E_BINARIES:-0}" == 1 ]]; then
+  (
+    cd "$repo_root/native"
+    cargo build --locked --bin se
+  )
+fi
+
 command -v jq >/dev/null || {
   echo "share lifecycle E2E requires jq" >&2
   exit 1
 }
 command -v timeout >/dev/null || {
   echo "share lifecycle E2E requires GNU timeout" >&2
+  exit 1
+}
+command -v pwsh >/dev/null || {
+  echo "share lifecycle E2E requires PowerShell for release-script parsing" >&2
+  exit 1
+}
+command -v python3 >/dev/null || {
+  echo "share lifecycle E2E requires Python for workflow transaction validation" >&2
+  exit 1
+}
+python3 -c 'import yaml' >/dev/null 2>&1 || {
+  echo "share lifecycle E2E requires the Python yaml module for workflow validation" >&2
   exit 1
 }
 test -x "$se_bin" || {
@@ -59,6 +78,10 @@ prepare_client() {
 run_client() {
   local client="$1"
   shift
+  local relay_override=()
+  if [[ -s "$client/relay-url" ]]; then
+    relay_override=("SE_SHARE_RELAY_URL=$(<"$client/relay-url")")
+  fi
   timeout --foreground --signal=TERM --kill-after=5s 90s env \
     HOME="$client/home" \
     USERPROFILE="$client/home" \
@@ -67,7 +90,8 @@ run_client() {
     XDG_RUNTIME_DIR="$client/runtime" \
     APPDATA="$client/data" \
     LOCALAPPDATA="$client/data" \
-    SE_SHARE_RELAY_URL="http://127.0.0.1:$((signal_port + 1))" \
+    SE_SHARE_RELAY_ONLY=1 \
+    "${relay_override[@]}" \
     "$se_bin" "$@"
 }
 
@@ -77,6 +101,10 @@ run_client() {
 run_client_background() {
   local client="$1"
   shift
+  local relay_override=()
+  if [[ -s "$client/relay-url" ]]; then
+    relay_override=("SE_SHARE_RELAY_URL=$(<"$client/relay-url")")
+  fi
   exec env \
     HOME="$client/home" \
     USERPROFILE="$client/home" \
@@ -85,7 +113,8 @@ run_client_background() {
     XDG_RUNTIME_DIR="$client/runtime" \
     APPDATA="$client/data" \
     LOCALAPPDATA="$client/data" \
-    SE_SHARE_RELAY_URL="http://127.0.0.1:$((signal_port + 1))" \
+    SE_SHARE_RELAY_ONLY=1 \
+    "${relay_override[@]}" \
     "$se_bin" "$@"
 }
 
@@ -116,6 +145,608 @@ stop_daemon() {
   while [[ $SECONDS -lt $deadline ]] && [[ -n "$(daemon_pids "$client")" ]]; do
     sleep 0.05
   done
+  local remaining
+  remaining="$(daemon_pids "$client")"
+  if [[ -n "$remaining" ]]; then
+    echo "Share daemon did not stop for $client: $remaining" >&2
+    ps -o pid,ppid,stat,etime,cmd -p "${remaining//$'\n'/,}" >&2 || true
+    return 1
+  fi
+}
+
+wait_relay_route() {
+  local client="$1"
+  local expected_relay="$2"
+  local signal_state="${3:-connected}"
+  local deadline=$((SECONDS + 90))
+  local value=""
+  local connected_filter
+  case "$signal_state" in
+    connected) connected_filter='.worker.connected == true' ;;
+    disconnected) connected_filter='.worker.connected == false' ;;
+    any) connected_filter='true' ;;
+    *)
+      echo "invalid signaling state for relay wait: $signal_state" >&2
+      return 2
+      ;;
+  esac
+  while [[ $SECONDS -lt $deadline ]]; do
+    if value="$(run_client "$client" share status --json 2>/dev/null)" \
+      && jq -e --arg relay "$expected_relay" \
+        ".worker.reachable == true and
+         .worker.running == true and
+         $connected_filter and
+         ((.worker.relay_url | rtrimstr(\"/\")) == (\$relay | rtrimstr(\"/\"))) and
+         (.worker.candidates | length) == 0" >/dev/null <<<"$value"; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "relay-only route $expected_relay did not become ready for $client" >&2
+  [[ -z "$value" ]] || printf '%s\n' "$value" >&2
+  return 1
+}
+
+single_client_file() {
+  local client="$1"
+  local name="$2"
+  local matches=()
+  mapfile -t matches < <(find "$client" -type f -name "$name" -print)
+  if [[ ${#matches[@]} -ne 1 ]]; then
+    echo "expected one $name below $client, found ${#matches[@]}" >&2
+    return 1
+  fi
+  printf '%s\n' "${matches[0]}"
+}
+
+rewrite_direct_presence() {
+  local profile="$1"
+  local contact_id="$2"
+  local relay_url="$3"
+  local expires_at="$4"
+  local staged="$profile.route-stage"
+  jq -e \
+    --arg contact_id "$contact_id" \
+    --arg relay_url "$relay_url" \
+    --argjson expires_at "$expires_at" \
+    'if ([.direct_contacts[] | select(.id == $contact_id and .presence != null)] | length) != 1
+     then error("expected one persisted direct presence")
+     else .schema_version = 6
+       | (.direct_contacts[] | select(.id == $contact_id) | .presence.relay_url) = $relay_url
+       | (.direct_contacts[] | select(.id == $contact_id) | .presence.candidates) = []
+       | (.direct_contacts[] | select(.id == $contact_id) | .presence.expires_at) = $expires_at
+     end' "$profile" >"$staged"
+  mv "$staged" "$profile"
+}
+
+verify_release_transaction_scripts() {
+  bash -n \
+    "$repo_root/install-linux.sh" \
+    "$repo_root/native/publish-feed.sh" \
+    "$repo_root/native/test-share-lifecycle-e2e.sh"
+
+  SMART_EXPLORER_TASK_SUITE_ROOT="$repo_root" \
+    pwsh -NoProfile -NonInteractive -Command '
+    $ErrorActionPreference = "Stop"
+    $root = $env:SMART_EXPLORER_TASK_SUITE_ROOT
+    if ([string]::IsNullOrWhiteSpace($root)) {
+      throw "Task-suite repository root was not exported"
+    }
+    $paths = @(
+      (Join-Path $root "native/publish-release-local.ps1"),
+      (Join-Path $root "native/release-publication.ps1")
+    )
+    foreach ($path in $paths) {
+      $tokens = $null
+      $errors = $null
+      [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $path,
+        [ref]$tokens,
+        [ref]$errors
+      )
+      if ($errors.Count -ne 0) {
+        throw "PowerShell parser rejected ${path}: $($errors[0].Message)"
+      }
+    }
+    . (Join-Path $root "native/release-publication.ps1")
+    foreach ($name in @(
+      "Assert-PublicationInstallerPayloads",
+      "Assert-PublicationFallbackAdvance",
+      "Assert-PublicationNoUntrackedBuildInputs",
+      "Assert-ReleasePublicationCandidate",
+      "Get-PublicationExpectedSourceCommit",
+      "Get-ReleasePublicationGitHubToken",
+      "Invoke-ReleasePublicationGitHubPost",
+      "Invoke-ReleasePublicationCommit",
+      "Invoke-ReleasePublicationMainPush",
+      "Invoke-ReleasePublicationTagPush",
+      "Test-PublicationPendingReleaseChanges",
+      "Wait-ReleasePublicationWorkflow",
+      "Wait-ReleasePublicationAssets",
+      "Invoke-ReleasePublicationLinuxCliUpdate"
+    )) {
+      if (-not (Get-Command $name -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw "Release publication helper is missing $name"
+      }
+    }
+    Assert-PublicationNoUntrackedBuildInputs -RepoRoot $root
+    $currentVersion = Get-PublicationCargoVersion (Join-Path $root "native/Cargo.toml")
+    $expectedSource = Get-PublicationExpectedSourceCommit -RepoRoot $root -Version $currentVersion
+    $head = (Invoke-ReleasePublicationGit -RepoRoot $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim().ToLowerInvariant()
+    $subject = (Invoke-ReleasePublicationGit -RepoRoot $root -Arguments @("show", "-s", "--format=%s", "HEAD")).StdOut.Trim()
+    $independentSource = if (
+      $subject -eq "Release Smart Explorer v$currentVersion [release candidate]" -and
+      -not (Test-PublicationPendingReleaseChanges -RepoRoot $root -Version $currentVersion)
+    ) {
+      (Invoke-ReleasePublicationGit -RepoRoot $root -Arguments @("rev-parse", "HEAD^")).StdOut.Trim().ToLowerInvariant()
+    } else {
+      $head
+    }
+    if ($expectedSource -ne $independentSource) {
+      throw "Release build provenance does not bind the expected source commit"
+    }
+    $fixture = Join-Path ([IO.Path]::GetTempPath()) (
+      "se-release-provenance-" + [Guid]::NewGuid().ToString("N")
+    )
+    try {
+      $null = New-Item -ItemType Directory -Path (Join-Path $fixture "native") -Force
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("init", "--quiet")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("config", "user.name", "Task Suite")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("config", "user.email", "task-suite@example.invalid")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("config", "commit.gpgsign", "false")
+      Set-Content -LiteralPath (Join-Path $fixture "native/Cargo.toml") -Value "version = `"9.8.6`""
+      Set-Content -LiteralPath (Join-Path $fixture "source.txt") -Value "source"
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("add", "--", "native/Cargo.toml", "source.txt")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("commit", "-m", "source baseline", "--")
+      $sourceParent = (Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("rev-parse", "HEAD")).StdOut.Trim().ToLowerInvariant()
+
+      Set-Content -LiteralPath (Join-Path $fixture "native/Cargo.toml") -Value "version = `"9.8.7`""
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("add", "--", "native/Cargo.toml")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @(
+        "commit", "-m", "Release Smart Explorer v9.8.7 [release candidate]", "--"
+      )
+      $firstCandidate = (Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("rev-parse", "HEAD")).StdOut.Trim().ToLowerInvariant()
+      $cleanExpected = Get-PublicationExpectedSourceCommit -RepoRoot $fixture -Version "9.8.7"
+      if ($cleanExpected -ne $sourceParent) {
+        throw "Clean release candidate provenance does not bind its sole parent"
+      }
+
+      Add-Content -LiteralPath (Join-Path $fixture "native/Cargo.toml") -Value "# replacement build"
+      if (-not (Test-PublicationPendingReleaseChanges -RepoRoot $fixture -Version "9.8.7")) {
+        throw "Replacement release changes were not detected"
+      }
+      $replacementExpected = Get-PublicationExpectedSourceCommit -RepoRoot $fixture -Version "9.8.7"
+      if ($replacementExpected -ne $firstCandidate) {
+        throw "Replacement build provenance does not bind the interrupted candidate HEAD"
+      }
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("restore", "--worktree", "--", "native/Cargo.toml")
+
+      Set-Content -LiteralPath (Join-Path $fixture "source.txt") -Value "unexpected candidate source change"
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @("add", "--", "source.txt")
+      $null = Invoke-ReleasePublicationGit -RepoRoot $fixture -Arguments @(
+        "commit", "-m", "Release Smart Explorer v9.8.8 [release candidate]", "--"
+      )
+      $rejected = $false
+      try {
+        $null = Get-PublicationExpectedSourceCommit -RepoRoot $fixture -Version "9.8.8"
+      } catch {
+        $rejected = $_.Exception.Message -like "*non-release source changes*"
+      }
+      if (-not $rejected) {
+        throw "Local release candidate validation accepted a source-path commit"
+      }
+      $null = New-Item -ItemType Directory -Path (Join-Path $fixture ".cargo") -Force
+      Set-Content -LiteralPath (Join-Path $fixture ".cargo/config.toml") -Value "[build]"
+      $untrackedRejected = $false
+      try {
+        Assert-PublicationNoUntrackedBuildInputs -RepoRoot $fixture
+      } catch {
+        $untrackedRejected = $_.Exception.Message -like "*Untracked release build inputs*"
+      }
+      if (-not $untrackedRejected) {
+        throw "Untracked root Cargo configuration was accepted as a release build input"
+      }
+    } finally {
+      Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $assets = @(Get-PublicationReleaseAssetMap -RepoRoot $root -Version $currentVersion)
+    if ($assets.Count -ne 18) {
+      throw "Current release candidate does not map exactly 18 assets"
+    }
+    foreach ($asset in $assets) {
+      Assert-PublicationNonEmptyFile $asset.LocalPath
+    }
+    Assert-PublicationInstallerPayloads `
+      -RepoRoot $root `
+      -Installer (Join-Path $root "release-native/Smart Explorer Setup $currentVersion.exe") `
+      -Feed (Join-Path $root "release-native/update-feed")
+    foreach ($payload in @(
+      "smart_explorer.exe", "smart_explorer_updater.exe", "se.exe",
+      "smart_explorer", "smart_explorer_updater", "se"
+    )) {
+      $null = Assert-PublicationHashSidecar `
+        -Feed (Join-Path $root "release-native/update-feed") `
+        -PayloadName $payload
+    }
+    $lockText = Get-Content -LiteralPath (Join-Path $root "native/Cargo.lock") -Raw
+    $lockPattern = [regex]::new(
+      "(?ms)(^\[\[package\]\]\r?\nname = `"smart_explorer`"\r?\nversion = `")([^`"]+)(`")"
+    )
+    $lockMatches = $lockPattern.Matches($lockText)
+    if ($lockMatches.Count -ne 1 -or $lockMatches[0].Groups[2].Value -ne $currentVersion) {
+      throw "Cargo.lock does not expose one controllable smart_explorer root version"
+    }
+    $simulatedVersion = "9.8.7"
+    $simulatedLock = $lockPattern.Replace(
+      $lockText,
+      { param($match) "$($match.Groups[1].Value)$simulatedVersion$($match.Groups[3].Value)" },
+      1
+    )
+    $simulatedMatches = $lockPattern.Matches($simulatedLock)
+    if ($simulatedMatches.Count -ne 1 -or $simulatedMatches[0].Groups[2].Value -ne $simulatedVersion) {
+      throw "Controlled Cargo.lock root-version update is not deterministic"
+    }
+    $wrapper = Get-Content -LiteralPath (Join-Path $root "native/publish-release-local.ps1") -Raw
+    $preflight = $wrapper.IndexOf("`$preflightPlan = Assert-CommonReleasePreflight")
+    $lock = $wrapper.IndexOf("`$completeReleaseLock = Enter-CompleteReleaseLock")
+    $versionBump = $wrapper.IndexOf("Set-NativeVersion `$plan.Version", $lock)
+    $firstCandidateCheck = $wrapper.IndexOf(
+      "if (-not (Test-CompleteReleaseCandidateAvailable `$version))",
+      $lock
+    )
+    $linuxBuild = $wrapper.IndexOf("Invoke-LinuxCompleteReleaseBuild `$completeReleaseLock", $firstCandidateCheck)
+    $windowsBuild = $wrapper.IndexOf("Invoke-WindowsReleaseBuild", $firstCandidateCheck)
+    $secondCandidateCheck = $wrapper.IndexOf(
+      "if (-not (Test-CompleteReleaseCandidateAvailable `$version))",
+      $firstCandidateCheck + 1
+    )
+    $commit = $wrapper.IndexOf("`$commit = Invoke-ReleasePublicationCommit", $secondCandidateCheck)
+    $committedCandidateCheck = $wrapper.IndexOf(
+      "`$null = Assert-ReleasePublicationCandidate -RepoRoot `$repoRoot -Version `$version",
+      $commit
+    )
+    $mainPush = $wrapper.IndexOf("Invoke-ReleasePublicationMainPush", $committedCandidateCheck)
+    $tag = $wrapper.IndexOf("Invoke-ReleasePublicationTagPush", $mainPush)
+    $workflow = $wrapper.IndexOf("Wait-ReleasePublicationWorkflow", $tag)
+    $assets = $wrapper.IndexOf("Wait-ReleasePublicationAssets", $workflow)
+    $tagSha = $wrapper.IndexOf("`$publishedTagCommit = Get-RemoteTagCommit", $assets)
+    $localCli = $wrapper.IndexOf("Invoke-ReleasePublicationLinuxCliUpdate", $tagSha)
+    if ($preflight -lt 0 -or $lock -le $preflight -or
+        $versionBump -le $lock -or $firstCandidateCheck -le $versionBump -or
+        $linuxBuild -le $firstCandidateCheck -or
+        $windowsBuild -le $firstCandidateCheck -or
+        $secondCandidateCheck -le $linuxBuild -or $secondCandidateCheck -le $windowsBuild -or
+        $commit -le $secondCandidateCheck -or
+        $committedCandidateCheck -le $commit -or $mainPush -le $committedCandidateCheck -or
+        $tag -le $mainPush -or $workflow -le $tag -or $assets -le $workflow -or
+        $tagSha -le $assets -or $localCli -le $tagSha) {
+      throw "Complete release transaction stages are missing or out of order"
+    }
+    if (-not $wrapper.Contains("-RetryFailedOnce:")) {
+      throw "Tagged publication recovery does not reuse the existing workflow run"
+    }
+    if (-not $wrapper.Contains("`$buildSourceCommit") -or
+        -not $wrapper.Contains("Assert-WindowsManifest `$stageFeed `$version `$buildSourceCommit")) {
+      throw "Isolated Windows/WSL release staging is not bound to its captured source HEAD"
+    }
+    if (-not $wrapper.Contains(".Cargo.lock.complete-release-version.") -or
+        -not $wrapper.Contains(".Cargo.toml.complete-release-version.") -or
+        $wrapper.Contains(".complete-release-stage.version-")) {
+      throw "Version files are not staged beside their atomic replacement targets"
+    }
+    $publicationHelpers = Get-Content -LiteralPath (Join-Path $root "native/release-publication.ps1") -Raw
+    if (-not $publicationHelpers.Contains("`$run.conclusion -eq `"failure`"") -or
+        -not $publicationHelpers.Contains("`"rerun-failed-jobs`"") -or
+        -not $publicationHelpers.Contains("`"rerun`"")) {
+      throw "Publication recovery does not distinguish failed-job and run-wide retries"
+    }
+    function New-TaskSuiteWorkflowRun([string]$Conclusion, [int]$Attempt) {
+      return [pscustomobject]@{
+        event = "push"
+        head_sha = ("a" * 40)
+        head_branch = "v9.8.7"
+        path = ".github/workflows/build.yml"
+        id = 987654
+        status = "completed"
+        conclusion = $Conclusion
+        run_attempt = $Attempt
+        html_url = "https://example.invalid/run/987654"
+      }
+    }
+    function Invoke-ReleasePublicationGitHubGet {
+      param([string]$RepositorySlug, [string]$ApiPath, [switch]$AllowNotFound)
+      if ($script:taskSuiteRuns.Count -eq 0) {
+        throw "Task-suite workflow response queue is empty"
+      }
+      return [pscustomobject]@{
+        workflow_runs = @($script:taskSuiteRuns.Dequeue())
+      }
+    }
+    function Invoke-ReleasePublicationGitHubPost {
+      param([string]$RepositorySlug, [string]$ApiPath)
+      [void]$script:taskSuitePosts.Add($ApiPath)
+    }
+    function Wait-ReleasePublicationDelay {
+      param([datetimeoffset]$Deadline)
+      return $true
+    }
+    function Reset-TaskSuiteWorkflowMocks {
+      $script:taskSuiteRuns = [System.Collections.Generic.Queue[object]]::new()
+      $script:taskSuitePosts = [System.Collections.Generic.List[string]]::new()
+    }
+    $workflowArgs = @{
+      RepositorySlug = "owner/repository"
+      Version = "9.8.7"
+      CandidateSha = ("a" * 40)
+      TriggerBranch = "v9.8.7"
+      Deadline = [datetimeoffset]::UtcNow.AddMinutes(1)
+    }
+
+    Reset-TaskSuiteWorkflowMocks
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "failure" 1))
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "success" 2))
+    $failedJobRetry = Wait-ReleasePublicationWorkflow @workflowArgs -RetryFailedOnce
+    if ($failedJobRetry.RunAttempt -ne 2 -or $script:taskSuitePosts.Count -ne 1 -or
+        $script:taskSuitePosts[0] -ne "/actions/runs/987654/rerun-failed-jobs") {
+      throw "Failed publication jobs are not retried once on the same run"
+    }
+
+    Reset-TaskSuiteWorkflowMocks
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "cancelled" 1))
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "success" 2))
+    $cancelledRetry = Wait-ReleasePublicationWorkflow @workflowArgs -RetryFailedOnce
+    if ($cancelledRetry.RunAttempt -ne 2 -or $script:taskSuitePosts.Count -ne 1 -or
+        $script:taskSuitePosts[0] -ne "/actions/runs/987654/rerun") {
+      throw "Cancelled publication is not retried once on the same whole run"
+    }
+
+    Reset-TaskSuiteWorkflowMocks
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "failure" 1))
+    $retryWasRequired = $false
+    try {
+      $null = Wait-ReleasePublicationWorkflow @workflowArgs
+    } catch {
+      $retryWasRequired = $_.Exception.Message -like "*attempt 1 completed*failure*"
+    }
+    if (-not $retryWasRequired -or $script:taskSuitePosts.Count -ne 0) {
+      throw "Publication workflow retried without an explicit same-run recovery decision"
+    }
+
+    Reset-TaskSuiteWorkflowMocks
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "failure" 1))
+    $script:taskSuiteRuns.Enqueue((New-TaskSuiteWorkflowRun "failure" 2))
+    $secondFailureStopped = $false
+    try {
+      $null = Wait-ReleasePublicationWorkflow @workflowArgs -RetryFailedOnce
+    } catch {
+      $secondFailureStopped = $_.Exception.Message -like "*attempt 2 completed*failure*"
+    }
+    if (-not $secondFailureStopped -or $script:taskSuitePosts.Count -ne 1) {
+      throw "Publication workflow recovery is not bounded to one retry"
+    }
+
+    $script:taskSuiteFallbackCandidate = "a" * 40
+    $script:taskSuiteFallbackPrevious = "b" * 40
+    $script:taskSuiteFallbackEvents = [System.Collections.Generic.List[string]]::new()
+    $script:taskSuiteFallbackBranchReads = 0
+    $script:taskSuiteFallbackPushArguments = @()
+    function Get-PublicationRemoteTagCommit {
+      param([string]$RepoRoot, [string]$Tag)
+      [void]$script:taskSuiteFallbackEvents.Add("tag-read")
+      return $null
+    }
+    function Get-PublicationRemoteBranchCommit {
+      param([string]$RepoRoot, [string]$Branch)
+      [void]$script:taskSuiteFallbackEvents.Add("branch-read")
+      $script:taskSuiteFallbackBranchReads += 1
+      if ($script:taskSuiteFallbackBranchReads -eq 1) {
+        return $script:taskSuiteFallbackPrevious
+      }
+      return $script:taskSuiteFallbackCandidate
+    }
+    function Assert-PublicationFallbackAdvance {
+      param(
+        [string]$RepoRoot,
+        [string]$Version,
+        [string]$PreviousCandidate,
+        [string]$CandidateSha
+      )
+      if ($PreviousCandidate -ne $script:taskSuiteFallbackPrevious -or
+          $CandidateSha -ne $script:taskSuiteFallbackCandidate) {
+        throw "Fallback recovery proof received the wrong candidate boundary"
+      }
+      [void]$script:taskSuiteFallbackEvents.Add("fallback-proof")
+    }
+    function Invoke-ReleasePublicationGit {
+      param(
+        [string]$RepoRoot,
+        [string[]]$Arguments,
+        [switch]$AllowFailure
+      )
+      $result = [pscustomobject]@{
+        ExitCode = 0
+        StdOut = ""
+        StdErr = ""
+        Output = ""
+      }
+      if ($Arguments[0] -eq "rev-parse") {
+        $result.StdOut = $script:taskSuiteFallbackCandidate
+        return $result
+      }
+      if ($Arguments[0] -eq "show-ref") {
+        $result.ExitCode = 1
+        return $result
+      }
+      if ($Arguments[0] -eq "update-ref") {
+        [void]$script:taskSuiteFallbackEvents.Add("local-tag-update")
+        return $result
+      }
+      if ($Arguments[0] -eq "push" -and $Arguments[-1] -like "*refs/tags/*") {
+        [void]$script:taskSuiteFallbackEvents.Add("tag-push")
+        $result.ExitCode = 1
+        $result.Output = "tag push blocked"
+        return $result
+      }
+      if ($Arguments[0] -eq "push" -and $Arguments[-1] -like "*refs/heads/release/*") {
+        [void]$script:taskSuiteFallbackEvents.Add("fallback-push")
+        $script:taskSuiteFallbackPushArguments = @($Arguments)
+        return $result
+      }
+      $joinedArguments = $Arguments -join [char]32
+      throw "Unexpected mocked Git call: $joinedArguments"
+    }
+    $fallbackResult = Invoke-ReleasePublicationTagPush `
+      -RepoRoot $root `
+      -Version "9.8.7" `
+      -CandidateSha $script:taskSuiteFallbackCandidate
+    $expectedLease = "--force-with-lease=refs/heads/release/v9.8.7:$($script:taskSuiteFallbackPrevious)"
+    $proofIndex = $script:taskSuiteFallbackEvents.IndexOf("fallback-proof")
+    $localTagIndex = $script:taskSuiteFallbackEvents.IndexOf("local-tag-update")
+    $tagPushIndex = $script:taskSuiteFallbackEvents.IndexOf("tag-push")
+    $fallbackPushIndex = $script:taskSuiteFallbackEvents.IndexOf("fallback-push")
+    if ($fallbackResult.TriggerBranch -ne "release/v9.8.7" -or
+        $fallbackResult.ExistingRun -ne $false -or
+        $script:taskSuiteFallbackPushArguments -notcontains $expectedLease -or
+        $proofIndex -lt 0 -or $localTagIndex -le $proofIndex -or
+        $tagPushIndex -le $localTagIndex -or $fallbackPushIndex -le $tagPushIndex -or
+        ($script:taskSuiteFallbackEvents | Where-Object { $_ -eq "fallback-proof" }).Count -ne 1 -or
+        ($script:taskSuiteFallbackEvents | Where-Object { $_ -eq "tag-read" }).Count -lt 4) {
+      throw "Fallback publication is not durably proved and CAS-bound before its only trigger push"
+    }
+    foreach ($buildScript in @(
+      "native/publish-feed.sh",
+      "native/publish-linux-feed-wsl.sh",
+      "native/publish-update.ps1"
+    )) {
+      $buildText = Get-Content -LiteralPath (Join-Path $root $buildScript) -Raw
+      if ($buildText -notmatch "HEAD\^\{commit\}" -or
+          $buildText -match "head_subject|headSubject" -or
+          [regex]::Matches($buildText, "cargo build --locked").Count -gt
+            [regex]::Matches($buildText, "--target-dir").Count) {
+        throw "Release build provenance is not bound directly to current HEAD in $buildScript"
+      }
+      if ($buildScript -eq "native/publish-update.ps1" -and
+          ([regex]::Matches($buildText, "cargo build --locked").Count -gt
+            [regex]::Matches($buildText, "--target ").Count -or
+           $buildText -match "target\\release")) {
+        throw "Native Windows release outputs are not pinned to the detected host target"
+      }
+    }
+  '
+
+  python3 - "$repo_root/.github/workflows/build.yml" <<'PY'
+import pathlib
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert isinstance(workflow, dict)
+jobs = workflow.get("jobs", {})
+
+for name in (
+    "windows-native-tests",
+    "release-candidate",
+    "windows-gnu-release-e2e",
+    "publish-release",
+):
+    assert name in jobs, f"workflow job is missing: {name}"
+
+publish = jobs["publish-release"]
+assert publish.get("needs") == "release-candidate"
+publish_checkout = next(
+    step for step in publish.get("steps", [])
+    if step.get("uses") == "actions/checkout@v4"
+)
+assert publish_checkout.get("with", {}).get("fetch-depth") == 0
+publish_condition = publish.get("if", "")
+assert "refs/tags/v" in publish_condition
+assert "inputs.publish_release == true" in publish_condition
+assert "refs/heads/release/v" in publish_condition
+assert "verify_release_candidate" not in publish_condition
+assert "refs/heads/verify/v" not in publish_condition
+publish_text = repr(publish)
+assert "cargo " not in publish_text
+assert "test-share-lifecycle-e2e" not in publish_text
+assert "POST" in publish_text and "/git/refs" in publish_text
+
+candidate_steps = jobs["release-candidate"].get("steps", [])
+checkout = next(
+    step for step in candidate_steps
+    if step.get("uses") == "actions/checkout@v4"
+)
+assert checkout.get("with", {}).get("fetch-depth") == 0
+stage = next(
+    step for step in candidate_steps
+    if step.get("name") == "Verify and stage exact committed release candidate"
+)
+stage_text = stage.get("run", "")
+assert "cargo " not in stage_text
+assert "test-share-lifecycle-e2e" not in stage_text
+assert "changed_count" in stage_text
+assert "contains no release publication changes" in stage_text
+upload = next(
+    step for step in candidate_steps
+    if step.get("uses") == "actions/upload-artifact@v4"
+)
+assert upload.get("with", {}).get("overwrite") is True
+for step in candidate_steps:
+    if "E2E" not in step.get("name", ""):
+        continue
+    condition = step.get("if", "")
+    assert "inputs.verify_release_candidate == true" in condition
+    assert "refs/heads/verify/v" in condition
+    assert "refs/tags/v" not in condition
+    assert "inputs.publish_release == true" not in condition
+    assert "refs/heads/release/v" not in condition
+
+windows_exact = jobs["windows-gnu-release-e2e"]
+windows_condition = windows_exact.get("if", "")
+assert "inputs.verify_release_candidate == true" in windows_condition
+assert "refs/heads/verify/v" in windows_condition
+assert "refs/tags/v" not in windows_condition
+assert "inputs.publish_release == true" not in windows_condition
+assert "refs/heads/release/v" not in windows_condition
+windows_text = repr(windows_exact)
+assert windows_text.count("-PeerSeBinary $se") == 2
+assert "debug-peer" not in windows_text
+PY
+
+  grep -F 'cargo build --locked' "$repo_root/native/build-agent-bundles.sh" >/dev/null
+  grep -F 'cargo build --locked' "$repo_root/native/publish-feed.sh" >/dev/null
+  grep -F 'cargo build --locked' "$repo_root/native/publish-linux-feed-wsl.sh" >/dev/null
+  grep -F 'cargo build --locked' "$repo_root/native/publish-update.ps1" >/dev/null
+
+  local install_dry_run
+  install_dry_run="$(
+    SMART_EXPLORER_RELEASE_TAG=v9.8.7 \
+    SMART_EXPLORER_REQUIRE_RELEASE_ASSETS=1 \
+    SMART_EXPLORER_INSTALL_DIR="$root/release-check/install" \
+    SMART_EXPLORER_BIN_DIR="$root/release-check/bin" \
+      sh "$repo_root/install-linux.sh" --dry-run --cli-only 2>&1
+  )"
+  grep -F 'releases/download/v9.8.7' <<<"$install_dry_run" >/dev/null
+  grep -F '(atomic rename)' <<<"$install_dry_run" >/dev/null
+  if grep -F 'update_source.txt' <<<"$install_dry_run" >/dev/null; then
+    echo "CLI-only install unexpectedly rewrites the desktop update source" >&2
+    return 1
+  fi
+
+  set +e
+  local no_build_path="$root/release-check/no-build-path"
+  mkdir -p "$no_build_path"
+  ln -s "$(command -v dirname)" "$no_build_path/dirname"
+  ln -s "$(command -v uname)" "$no_build_path/uname"
+  SMART_EXPLORER_RELEASE_LOCK_TOKEN= \
+    PATH="$no_build_path" \
+    "$BASH" "$repo_root/native/publish-feed.sh" \
+      >"$root/direct-publish.stdout" 2>"$root/direct-publish.stderr"
+  local direct_publish_status=$?
+  set -e
+  [[ $direct_publish_status -ne 0 ]]
+  grep -F 'only run through native/publish-release-local.ps1' \
+    "$root/direct-publish.stderr" >/dev/null
 }
 
 wait_request_inbox() {
@@ -303,12 +934,22 @@ wait_child() {
   set -e
 }
 
+verify_release_transaction_scripts
+
 prepare_client "$client_a"
 prepare_client "$client_b"
 prepare_client "$client_c"
 prepare_client "$client_d"
 
 signal_port=$((31000 + ($$ % 12000)))
+relay_port=$((signal_port + 1))
+dead_signal_port=$((signal_port + 2))
+dead_relay_port=$((signal_port + 3))
+working_signal="127.0.0.1:$signal_port"
+dead_signal="127.0.0.1:$dead_signal_port"
+working_relay="http://127.0.0.1:$relay_port"
+dead_relay="http://127.0.0.1:$dead_relay_port"
+fallback_signal_config="$dead_signal,$working_signal"
 "$server_bin" "127.0.0.1:$signal_port" >"$server_log" 2>&1 &
 server_pid=$!
 sleep 0.5
@@ -319,12 +960,16 @@ direct_code_b="$(jq -er '.direct_code' <<<"$identity_b")"
 
 # Queue while the target is offline. The requester must report relay state,
 # never peer receipt, until B durably receives the signed envelope.
-run_client "$client_a" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_a" share configure --server "$fallback_signal_config" >/dev/null
+stop_daemon "$client_a"
+run_client "$client_a" share status --json >/dev/null
+wait_relay_route "$client_a" "$working_relay" >/dev/null
 add_output="$(run_client "$client_a" connections add-peer --code "$direct_code_b" --name Target --json)"
 peer_selector="$(jq -er '.selector' <<<"$add_output")"
 direct_endpoint="$(jq -er '.endpoint' <<<"$add_output")"
+contact_id="${direct_endpoint#share://direct/}"
 request_id="$(jq -er '.request_id' <<<"$add_output")"
-[[ -n "$peer_selector" && "$direct_endpoint" == share://direct/* && -n "$request_id" ]]
+[[ -n "$peer_selector" && -n "$contact_id" && "$direct_endpoint" == share://direct/* && -n "$request_id" ]]
 jq -e '
   .request.request_id == .request_id and
   .request.direction == "outgoing" and
@@ -340,7 +985,10 @@ wait_request_state "$client_a" "$request_id" '.relay.outcome == "target_offline"
 shown="$(run_client "$client_a" share request show --json)"
 jq -e --arg id "$request_id" '.request_id == $id' >/dev/null <<<"$shown"
 
-run_client "$client_b" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_b" share configure --server "$working_signal" >/dev/null
+stop_daemon "$client_b"
+run_client "$client_b" share status --json >/dev/null
+wait_relay_route "$client_b" "$working_relay" >/dev/null
 retry="$(run_client "$client_a" share request retry --json)"
 jq -e --arg id "$request_id" '.request.request_id == $id' >/dev/null <<<"$retry"
 
@@ -398,6 +1046,69 @@ exec_grants="$(run_client "$client_b" share grants exec --json)"
 jq -e 'length == 1 and .[0].enabled == false' >/dev/null <<<"$exec_grants"
 enabled="$(run_client "$client_b" share grants exec enable --yes --json)"
 jq -e '.persisted == true and .applied == true' >/dev/null <<<"$enabled"
+
+# Older saved connection profiles can retain a route after signaling changes.
+# With signaling intentionally unreachable, prove that expired and implausibly
+# far-future routes fail closed, then prove that a still-current legacy route
+# with an unusable relay alias recovers through this node's configured relay.
+stop_daemon "$client_a"
+profile_a="$(single_client_file "$client_a" share_profiles.json)"
+server_config_a="$(single_client_file "$client_a" share_server.txt)"
+cp "$profile_a" "$root/profile-a-before-route-recovery.json"
+printf '%s' "$dead_signal" >"$server_config_a"
+printf '%s' "$working_relay" >"$client_a/relay-url"
+
+rewrite_direct_presence "$profile_a" "$contact_id" "$dead_relay" 1
+run_client "$client_a" share status --json >/dev/null
+set +e
+run_client "$client_a" exec -- true \
+  >"$root/expired-exec.stdout" 2>"$root/expired-exec.stderr"
+expired_exec_status=$?
+run_client "$client_a" ls "$direct_endpoint" \
+  >"$root/expired-ls.stdout" 2>"$root/expired-ls.stderr"
+expired_ls_status=$?
+set -e
+[[ $expired_exec_status -ne 0 && $expired_ls_status -ne 0 ]]
+grep -F 'no ready Exec peer was found' "$root/expired-exec.stderr" >/dev/null
+
+stop_daemon "$client_a"
+too_far_future=$(( $(date +%s) + 3600 ))
+rewrite_direct_presence "$profile_a" "$contact_id" "$dead_relay" "$too_far_future"
+run_client "$client_a" share status --json >/dev/null
+set +e
+run_client "$client_a" exec -- true \
+  >"$root/future-exec.stdout" 2>"$root/future-exec.stderr"
+future_exec_status=$?
+run_client "$client_a" ls "$direct_endpoint" \
+  >"$root/future-ls.stdout" 2>"$root/future-ls.stderr"
+future_ls_status=$?
+set -e
+[[ $future_exec_status -ne 0 && $future_ls_status -ne 0 ]]
+grep -F 'no ready Exec peer was found' "$root/future-exec.stderr" >/dev/null
+
+stop_daemon "$client_a"
+current_legacy_expiry=$(( $(date +%s) + 600 ))
+rewrite_direct_presence "$profile_a" "$contact_id" "$dead_relay" "$current_legacy_expiry"
+run_client "$client_a" share status --json >/dev/null
+wait_relay_route "$client_a" "$working_relay" disconnected >/dev/null
+jq -e --arg contact_id "$contact_id" --arg relay "$dead_relay" '
+  [.direct_contacts[] |
+    select(.id == $contact_id and
+      .presence.relay_url == $relay and
+      (.presence.candidates | length) == 0)] | length == 1
+' "$profile_a" >/dev/null
+run_client "$client_a" ls "$direct_endpoint" >/dev/null
+legacy_transport="$(run_client "$client_a" share status --json)"
+jq -e 'any(.events[]?; contains(" via relay "))' \
+  >/dev/null <<<"$legacy_transport"
+legacy_exec="$(run_client "$client_a" exec "$direct_endpoint" -- sh -c 'printf LEGACY_RELAY_OK')"
+[[ "$legacy_exec" == LEGACY_RELAY_OK ]]
+
+stop_daemon "$client_a"
+rm -f "$client_a/relay-url"
+printf '%s' "$fallback_signal_config" >"$server_config_a"
+run_client "$client_a" share status --json >/dev/null
+wait_relay_route "$client_a" "$working_relay" >/dev/null
 
 # Learn the target home from the remote shell itself; every later target path
 # is derived from this earlier CLI output, never from the test harness layout.
@@ -600,7 +1311,10 @@ jq -e 'all(.[]; .kind != "direct")' >/dev/null <<<"$after_remove"
 # state.
 identity_c="$(run_client "$client_c" share identity --json)"
 direct_code_c="$(jq -er '.direct_code' <<<"$identity_c")"
-run_client "$client_c" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_c" share configure --server "$working_signal" >/dev/null
+stop_daemon "$client_c"
+run_client "$client_c" share status --json >/dev/null
+wait_relay_route "$client_c" "$working_relay" >/dev/null
 reject_add="$(run_client "$client_a" connections add-peer --code "$direct_code_c" --name RejectTarget --json)"
 reject_request_id="$(jq -er '.request_id' <<<"$reject_add")"
 reject_inbox="$(wait_request_inbox_json "$client_c")"
@@ -618,7 +1332,10 @@ run_client "$client_a" connections remove-peer >/dev/null
 # restarts prove the local dismissal tombstone remains durable and hidden.
 identity_d="$(run_client "$client_d" share identity --json)"
 direct_code_d="$(jq -er '.direct_code' <<<"$identity_d")"
-run_client "$client_d" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_d" share configure --server "$working_signal" >/dev/null
+stop_daemon "$client_d"
+run_client "$client_d" share status --json >/dev/null
+wait_relay_route "$client_d" "$working_relay" >/dev/null
 pending_add="$(run_client "$client_a" connections add-peer --code "$direct_code_d" --name TombstoneTarget --json)"
 pending_request_id="$(jq -er '.request_id' <<<"$pending_add")"
 pending_inbox="$(wait_request_inbox_json "$client_d")"
