@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, RelayUrl, Watcher as _};
 
@@ -51,7 +52,10 @@ impl EndpointRoutes {
             let online_revision = revision.clone();
             runtime.spawn(async move {
                 loop {
-                    if tokio::time::timeout(iroh::NET_REPORT_TIMEOUT, online_endpoint.online())
+                    if tokio::time::timeout(
+                        Duration::from_secs(iroh::NET_REPORT_TIMEOUT),
+                        online_endpoint.online(),
+                    )
                         .await
                         .is_ok()
                     {
