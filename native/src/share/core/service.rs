@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend::{PeerBackend, ShareIrohNode};
-use super::core::eio;
+use super::core::{eio, now_secs};
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
 use super::types::{
@@ -163,6 +163,12 @@ impl ShareService {
                     .presence
                     .clone()
                     .ok_or_else(|| "Direktgeraet ist nicht online".to_string())?;
+                if !presence.is_current_at(now_secs()) {
+                    return Err(
+                        "Direktgeraet ist nicht online (gespeicherte Presence ist abgelaufen)"
+                            .into(),
+                    );
+                }
                 let secret = ShareProfiles::direct_secret_checked(contact)?
                     .ok_or_else(|| "Direkt-Secret fehlt".to_string())?;
                 let expected_node_id = if contact.expected_node_id.trim().is_empty() {
@@ -198,6 +204,11 @@ impl ShareService {
                     .presence
                     .clone()
                     .ok_or_else(|| "Raumgeraet ist nicht online".to_string())?;
+                if !presence.is_current_at(now_secs()) {
+                    return Err(
+                        "Raumgeraet ist nicht online (gespeicherte Presence ist abgelaufen)".into(),
+                    );
+                }
                 let secret = ShareProfiles::room_secret_checked(room)?
                     .ok_or_else(|| "Raum-Secret fehlt".to_string())?;
                 Ok(PeerEndpoint {
