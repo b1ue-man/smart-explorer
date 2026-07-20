@@ -1020,8 +1020,11 @@ try {
     Write-Host "Complete Smart Explorer v$version release published and verified from $candidateSha."
     $releaseSucceeded = $true
 } finally {
+    $lockToRelease = $completeReleaseLock
     $script:completeReleaseLock = $null
-    Exit-CompleteReleaseLock $completeReleaseLock
+    if ($lockToRelease) {
+        Exit-CompleteReleaseLock $lockToRelease
+    }
 }
 
 if (-not $releaseSucceeded) {
