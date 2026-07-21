@@ -370,17 +370,17 @@ impl Backend for SftpBackend {
 }
 
 #[derive(Default)]
-struct CapturedExec {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-    exit_status: Option<u32>,
-    exit_signal: Option<String>,
+pub(super) struct CapturedExec {
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
+    pub(super) stdout_truncated: bool,
+    pub(super) stderr_truncated: bool,
+    pub(super) exit_status: Option<u32>,
+    pub(super) exit_signal: Option<String>,
 }
 
 impl CapturedExec {
-    fn finish(self) -> io::Result<String> {
+    pub(super) fn finish(self) -> io::Result<String> {
         if let Some(signal) = self.exit_signal.as_deref() {
             return Err(io::Error::other(format!(
                 "SSH remote command terminated by signal {signal}{}",
@@ -463,7 +463,7 @@ async fn capture_exec(channel: &mut russh::Channel<client::Msg>) -> io::Result<C
     }
 }
 
-fn append_bounded(target: &mut Vec<u8>, source: &[u8], limit: usize) -> bool {
+pub(super) fn append_bounded(target: &mut Vec<u8>, source: &[u8], limit: usize) -> bool {
     let remaining = limit.saturating_sub(target.len());
     target.extend_from_slice(&source[..source.len().min(remaining)]);
     source.len() > remaining

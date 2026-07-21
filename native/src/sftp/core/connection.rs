@@ -274,7 +274,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scripted_stale_generation_is_replaced_once() {
+    fn remote_drive_task_sftp_stale_generation_is_replaced_once() {
         let mut slot = GenerationSlot::new("first");
         let first = slot.current();
         first.mark_stale();
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn only_transport_failures_mark_a_generation_dead() {
+    fn remote_drive_task_sftp_only_transport_failures_retire_for_safe_replay() {
         assert_eq!(
             classify_io_error(&io::Error::new(io::ErrorKind::ConnectionReset, "reset")),
             FailureDisposition::dead()
@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_and_protocol_desync_retire_without_immediate_replay() {
+    fn remote_drive_task_sftp_timeout_retires_without_immediate_replay() {
         assert_eq!(
             classify_sftp_error(&SftpError::Timeout),
             FailureDisposition::suspect()
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn connect_deadline_bounds_a_blackholed_setup() {
+    fn remote_drive_task_sftp_connect_deadline_bounds_blackholed_setup() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()

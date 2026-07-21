@@ -126,7 +126,7 @@ async fn connect_tcp(host: &str, port: u16) -> io::Result<TcpStream> {
     staggered_connect(addresses).await
 }
 
-fn interleave_addresses(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
+pub(super) fn interleave_addresses(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
     let mut unique = Vec::with_capacity(addresses.len());
     for address in addresses {
         if !unique.contains(&address) {
@@ -228,7 +228,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_config_enables_bounded_keepalives() {
+    fn remote_drive_task_sftp_client_config_enables_bounded_keepalives() {
         let config = client_config();
 
         assert_eq!(config.keepalive_interval, Some(Duration::from_secs(15)));

@@ -30,6 +30,10 @@ mod session;
 #[path = "core/url.rs"]
 mod url;
 
+#[cfg(test)]
+#[path = "core/remote_drive_task_tests.rs"]
+mod remote_drive_task_tests;
+
 pub use backend::SftpBackend;
 pub use config::{SftpAuth, SftpConfig};
 pub use url::backend_from_url;

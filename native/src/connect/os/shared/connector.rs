@@ -22,9 +22,40 @@ pub fn spawn_connect(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AgentFallback {
+pub(super) enum AgentFallback {
     Allow,
     RequireConfined,
+}
+
+impl AgentFallback {
+    pub(super) fn for_mount(
+        protocol: Protocol,
+        root_security: crate::mount::MountRootSecurity,
+    ) -> Self {
+        if protocol == Protocol::Sftp && root_security == crate::mount::MountRootSecurity::Enforced
+        {
+            Self::RequireConfined
+        } else {
+            Self::Allow
+        }
+    }
+
+    pub(super) const fn permits_deploy_failure(self) -> bool {
+        matches!(self, Self::Allow)
+    }
+}
+
+pub(super) fn validate_sftp_agent_requirement(
+    use_agent: bool,
+    fallback: AgentFallback,
+) -> Result<(), &'static str> {
+    if fallback == AgentFallback::RequireConfined && !use_agent {
+        Err(
+            "Die technisch abgesicherte Laufwerk-Wurzel benoetigt fuer diese SFTP-Verbindung den aktivierten SSH-Agent. Alternativ kann im Laufwerk-Dialog die ausdrueckliche Vertrauensoption gewaehlt werden.",
+        )
+    } else {
+        Ok(())
+    }
 }
 
 fn opt(s: &str) -> Option<String> {
@@ -101,11 +132,8 @@ fn connect_sftp(
     port: u16,
     agent_fallback: AgentFallback,
 ) -> ConnectResult {
-    if agent_fallback == AgentFallback::RequireConfined && !form.use_agent {
-        return ConnectResult::Err(
-            "Die technisch abgesicherte Laufwerk-Wurzel benoetigt fuer diese SFTP-Verbindung den aktivierten SSH-Agent. Alternativ kann im Laufwerk-Dialog die ausdrueckliche Vertrauensoption gewaehlt werden."
-                .into(),
-        );
+    if let Err(error) = validate_sftp_agent_requirement(form.use_agent, agent_fallback) {
+        return ConnectResult::Err(error.into());
     }
     // A saved-connection secret (keyring) overrides an empty form field.
     let password = secret.clone().unwrap_or_else(|| form.password.clone());
@@ -148,7 +176,7 @@ fn connect_sftp(
                         let ver = agent.version().to_string();
                         (Arc::new(agent), Some(ver))
                     }
-                    Err(_error) if agent_fallback == AgentFallback::Allow => (be_arc, None),
+                    Err(_error) if agent_fallback.permits_deploy_failure() => (be_arc, None),
                     Err(error) => {
                         return ConnectResult::Err(format!(
                             "SSH-Agent fuer die abgesicherte Laufwerk-Wurzel konnte nicht gestartet werden: {error}"
@@ -316,13 +344,7 @@ pub(crate) fn open_saved_at_for_mount(
     path: &str,
     root_security: crate::mount::MountRootSecurity,
 ) -> Result<(BackendHandle, String), String> {
-    let agent_fallback = if c.protocol == Protocol::Sftp
-        && root_security == crate::mount::MountRootSecurity::Enforced
-    {
-        AgentFallback::RequireConfined
-    } else {
-        AgentFallback::Allow
-    };
+    let agent_fallback = AgentFallback::for_mount(c.protocol, root_security);
     open_saved_at_with_agent_fallback(c, path, agent_fallback)
 }
 

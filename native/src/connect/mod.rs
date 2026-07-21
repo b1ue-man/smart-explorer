@@ -29,3 +29,7 @@ pub use endpoint::{is_remote_url, saved_and_path};
 #[allow(unused_imports)]
 pub use persistence::build_saved;
 pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
+
+#[cfg(test)]
+#[path = "os/shared/remote_drive_task_tests.rs"]
+mod remote_drive_task_tests;

@@ -31,5 +31,8 @@ mod error_tests;
 #[path = "core/heartbeat_tests.rs"]
 mod heartbeat_tests;
 #[cfg(test)]
+#[path = "core/remote_drive_task_deploy_tests.rs"]
+mod remote_drive_task_deploy_tests;
+#[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

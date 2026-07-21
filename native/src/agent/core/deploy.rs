@@ -57,7 +57,11 @@ fn remote_sha256(inner: &dyn Backend, path: &str) -> io::Result<String> {
     sha256_reader(inner.open_read(path)?)
 }
 
-fn require_remote_sha256(inner: &dyn Backend, path: &str, expected: &str) -> io::Result<()> {
+pub(super) fn require_remote_sha256(
+    inner: &dyn Backend,
+    path: &str,
+    expected: &str,
+) -> io::Result<()> {
     let actual = remote_sha256(inner, path)?;
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
@@ -73,6 +77,13 @@ fn upload_suffix() -> io::Result<String> {
     let mut bytes = [0u8; 12];
     getrandom::getrandom(&mut bytes)?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub(super) fn agent_cache_path(dir: &str, expected_sha256: &str) -> String {
+    format!(
+        "{dir}/se-agent-p{}-{expected_sha256}",
+        agent_proto::PROTO_VERSION
+    )
 }
 
 fn open_verified_agent(
@@ -108,12 +119,7 @@ pub fn deploy_over_sftp(
     };
     let dir = format!("{}/.cache/smart-explorer", home.trim_end_matches('/'));
     let expected = sha256_hex(art.bytes);
-    let remote = format!(
-        "{}/se-agent-p{}-{}",
-        dir,
-        agent_proto::PROTO_VERSION,
-        expected
-    );
+    let remote = agent_cache_path(&dir, &expected);
 
     inner.mkdir_all(&dir)?;
     let installed = if inner.try_exists(&remote)? {
