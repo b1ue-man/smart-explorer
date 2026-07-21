@@ -15,7 +15,8 @@ impl App {
         let body_viewport = egui::Rect::from_min_max(
             egui::pos2(table_rect.left(), table_rect.top() + 24.0),
             table_rect.max,
-        );
+        )
+        .intersect(ui.clip_rect());
 
         let (primary_pressed, primary_down, primary_released, ptr_pos, ctrl_now, secondary_clicked) =
             ui.input(|i| {

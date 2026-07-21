@@ -142,6 +142,8 @@ mod table;
 mod table_accessibility;
 #[path = "core/table_interaction.rs"]
 mod table_interaction;
+#[path = "core/table_scroll.rs"]
+mod table_scroll;
 #[path = "core/temp_recovery_ui.rs"]
 mod temp_recovery_ui;
 #[cfg(test)]
