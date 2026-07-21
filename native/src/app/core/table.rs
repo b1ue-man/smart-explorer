@@ -4,6 +4,10 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn ui_table(&mut self, ui: &mut egui::Ui) {
+        super::table_scroll::show_horizontal_file_table(ui, |ui| self.ui_table_contents(ui));
+    }
+
+    fn ui_table_contents(&mut self, ui: &mut egui::Ui) {
         use egui_extras::{Column, TableBuilder};
 
         let prefix = self.root_prefix();
@@ -35,6 +39,7 @@ impl App {
         ];
 
         let mut builder = TableBuilder::new(ui)
+            .id_salt("file_table_columns")
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
