@@ -40,7 +40,7 @@ if [ "$check_env" != "1" ] && [ -z "${SMART_EXPLORER_RELEASE_LOCK_TOKEN:-}" ]; t
   echo "Run 'pwsh native/publish-release-local.ps1' so one wrapper owns the version, lock, build, publication, and final verification." >&2
   exit 1
 fi
-for tool in cargo rustc rustup git x86_64-w64-mingw32-gcc \
+for tool in cargo rustc rustup git curl x86_64-w64-mingw32-gcc \
   x86_64-w64-mingw32-objdump makensis sha256sum file install 7z; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Required release tool missing: $tool" >&2
@@ -59,6 +59,11 @@ if ! [[ "$source_commit" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
   exit 1
 fi
 source_commit="${source_commit,,}"
+dokany_msi="$("$script_dir/fetch-dokany-runtime.sh")"
+test -s "$dokany_msi" || {
+  echo "Pinned Dokany installer dependency missing: $dokany_msi" >&2
+  exit 1
+}
 # Canonical release resource limits are fixed rather than ambient defaults.
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
@@ -279,9 +284,21 @@ makensis \
   -DEXE_SRC="$windows_dir/smart_explorer.exe" \
   -DUPDATER_SRC="$windows_dir/smart_explorer_updater.exe" \
   -DCLI_SRC="$windows_dir/se.exe" \
+  -DDOKANY_MSI_SRC="$dokany_msi" \
   -DINSTALLER_OUT="$installer" \
   installer.nsi >/dev/null
 test -s "$installer" || { echo "Installer was not produced: $installer" >&2; exit 1; }
+installer_dokany_entry="\$PLUGINSDIR/$(basename "$dokany_msi")"
+embedded_dokany_size="$(7z e -so "$installer" "$installer_dokany_entry" | wc -c | tr -d '[:space:]')"
+embedded_dokany_sha256="$(7z e -so "$installer" "$installer_dokany_entry" | sha256sum | awk '{print $1}')"
+test "$embedded_dokany_size" = "$(wc -c < "$dokany_msi" | tr -d '[:space:]')" || {
+  echo "Installer contains the wrong Dokany MSI size." >&2
+  exit 1
+}
+test "$embedded_dokany_sha256" = "$(sha256sum "$dokany_msi" | awk '{print $1}')" || {
+  echo "Installer contains the wrong Dokany MSI hash." >&2
+  exit 1
+}
 
 # Publish every ancillary file with a rollback copy, swap the complete feed
 # directory, and move version.txt last. Builds and staged verification above do
