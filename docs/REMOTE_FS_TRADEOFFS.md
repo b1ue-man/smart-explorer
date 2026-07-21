@@ -43,7 +43,7 @@ against primary sources on **2026-07-21**.
 | Editor atomic-save | temp watcher must infer change | provider must correctly mirror placeholder rename lifecycle | explicit temp-file→atomic-replace callback, capability-gated |
 | Offline behavior | downloaded temp exists | depends on hydration/pinning and provider | already-open spool exists; uncached namespace still needs backend |
 | Platform scope | Windows and Linux | Windows/NTFS Cloud Files | Windows + Dokany runtime |
-| System dependency | none | Windows `cldflt.sys` + registered provider | external signed Dokany driver/runtime |
+| System dependency | none | Windows `cldflt.sys` + registered provider | signed Dokany driver/runtime; optional MSI embedded in recommended installer |
 | Backend requirement for RO | read/list/stat | complete sync-provider mapping | read/list/stat plus enforced exact-root confinement or explicit trusted-root admission |
 | Backend requirement for RW | ordinary upload plus conflict policy | complete sync lifecycle | RO admission plus exclusive `create + replace + namespace_replace` |
 
@@ -63,10 +63,15 @@ proxy. Cryptomator documents virtual-drive volume types separately from WebDAV:
 Dokany's project documentation describes its user-mode filesystem model: the
 installed driver forwards Windows I/O requests to application callbacks. The
 official 2.3.1 header defines API 231 and exposes independent library/driver
-version queries. Smart Explorer therefore loads only the external System32 DLL
+version queries. Smart Explorer therefore loads only the System32 DLL
 and requires both sides to report exactly 231. Official release drivers are
 signed, so no Developer Mode or `TESTSIGNING` is needed; installing the
-machine-wide runtime may still prompt for admin approval.
+machine-wide runtime may still prompt for admin approval. The recommended NSIS
+installer embeds the pinned official x64 MSI offline as a standard-selected
+optional component; Smart Explorer remains per-user and only that MSI step uses
+UAC. Portable and auto-updated copies can invoke the same secure pin with the
+GUI or `se drive install-runtime`. Silent setup requires explicit
+`/S /INSTALLDOKANY=1`, and Smart Explorer never uninstalls the shared runtime.
 
 Sources checked 2026-07-21:
 
@@ -91,6 +96,13 @@ flush synchronizes that file, uploads a complete sibling staging object, checks
 the opening remote baseline again, and promotes the staging object only through
 a backend-declared safe primitive. Clean entries are evicted after the final
 handle closes; dirty/conflicting entries survive for Retry and recovery.
+
+For the separate portable temp-copy workflow, the recovery marker is created
+atomically only after download succeeds. A real declared payload remains
+recoverable if an Electron/Obsidian single-instance launcher exits or an atomic
+save temporarily removes the path. Empty complete legacy manifests are cleaned;
+invalid state fails closed and genuine recovery is a notice rather than an app
+error.
 
 This supports both important editor families:
 
@@ -125,12 +137,18 @@ Root authority is evaluated separately from write semantics:
   remain active, but the server and concurrent writers become part of the
   trust boundary.
 
+A strict SFTP mount is therefore admitted only when its saved connection has
+Agent enabled and deployment plus the protocol-v9 `--serve-root` handshake
+succeeds. That path never silently changes to plain SFTP. Normal browsing may
+retain the already-established SFTP backend when Agent deployment fails; after
+a successful handshake, operations are not blindly replayed across transports.
+
 - Local and authenticated UNC operations, plus the Smart Explorer SSH Agent,
   provide exclusive staging create, replacement and namespace replacement.
-- Plain SFTP v3 is RW-capable only when the server advertises OpenSSH
-  `posix-rename@openssh.com` with version exactly `1`. OpenSSH defines that
-  request as POSIX `rename(oldpath, newpath)`; standard SFTP-v3
-  `SSH_FXP_RENAME` instead treats an existing destination as an error.
+- Plain SFTP deliberately reports no complete RW staged capability. Smart
+  Explorer keeps one SFTP-v3 subsystem and standard `SSH_FXP_RENAME` treats an
+  existing destination as an error; it does not open a second extension
+  subsystem or claim stat+rename/shell-command sequences are atomic.
 - A concrete Share export asks its remotely resolved backend for the same
   capabilities. Synthetic containers `/` and `/Verbindungen` are not writable
   namespace targets and stay RO.
@@ -146,7 +164,6 @@ RO.
 
 Sources checked 2026-07-21:
 
-- [OpenSSH SFTP extension announcement and `posix-rename@openssh.com`](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L399-L435)
 - [SFTP v3 rename semantics](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5)
 - [WebDAV `MOVE` and `Overwrite`](https://www.rfc-editor.org/rfc/rfc4918#section-9.9)
 - [Linux Landlock userspace API](https://docs.kernel.org/userspace-api/landlock.html)
@@ -179,6 +196,15 @@ that pathname later is unsafe without an identity-bound provider operation: a
 concurrent actor may have moved the owned object and reused the spelling. The
 current implementation retains such orphans rather than risk deleting foreign
 content; stable-ID/lease garbage collection is a future refinement.
+
+Mount recovery is persisted as `Clean`, `Required`, or `Unknown`. Local
+journal/spool state is audited under the exclusive cache lease before any
+remote connection is attempted, both at daemon startup and in the mount host;
+old or incomplete records that cannot prove clean remain `Unknown`. This keeps
+an SSH timeout from disguising recoverable local data and permits removal after
+a pre-mount failure only when the record is provably clean. The daemon launches
+the current executable with the exact private `--mount-host <id>` argument, so
+GUI and CLI do not depend on a separately named host binary.
 
 ## Filesystem surface limits
 

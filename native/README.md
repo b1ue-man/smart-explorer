@@ -21,7 +21,7 @@ Erreicht durch:
   in einem Syscall pro Eintrag (statt readdir + stat)
 - Rayon-basierte parallele Verzeichnis-Walker (Work-Stealing über alle Cores)
 - Channels (crossbeam) streamen Resultate batchweise (1024er-Pakete oder 60ms)
-- LTO + strip im Release-Build, panic = abort, codegen-units = 1
+- ThinLTO + strip im Release-Build, panic = abort, codegen-units = 8
 
 ## Build
 
@@ -58,7 +58,8 @@ autorisierte Backend-Wurzel als Dokany-Laufwerksbuchstaben. Er verwendet weder
 CfAPI noch Placeholder oder eine zweite Protokollimplementierung. Der Daemon
 löst gespeicherte Zugangsdaten und den aktiven Backend-/Fallback-Pfad auf,
 beschränkt ihn mit `RootedBackend` auf die ausgewählte Wurzel und reicht dem
-isolierten `se.exe --mount-host <id>` nur kurzlebige, getrennte
+isolierten, aus `std::env::current_exe()` gestarteten Prozess mit dem privaten
+`--mount-host <id>`-Argument nur kurzlebige, getrennte
 Loopback-Capabilities. Endpoint, Konto, Credentials, globale Daemon-Autorität
 und Backend-IDs verlassen diese Grenze nicht. Pfadtraversal, Symlink-/Reparse-
 Durchquerung, Windows-Gerätenamen, ADS-Syntax und case-kollidierende
@@ -76,10 +77,19 @@ auch für ein read-only Volume: Trusted-Root serialisiert und validiert jeden
 Smart-Explorer-Aufruf weiter, setzt aber einen vertrauenswürdigen Server und
 keinen gleichzeitig bösartig ausgetauschten Symlink/Junction voraus.
 
-Smart Explorer bindet Dokany nicht statisch und liefert es nicht aus. Die
-Runtime wird mit `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` nur als
-`%WINDIR%\System32\dokan2.dll` geladen; sowohl `DokanVersion()` als auch
-`DokanDriverVersion()` müssen exakt **231** melden. Unterstützt ist die externe
+Smart Explorer bindet Dokany nicht statisch. Der empfohlene NSIS-Installer
+bettet die exakt gepinnte offizielle `Dokan_x64.msi` als standardmäßig
+ausgewählte optionale Offline-Komponente ein; portable oder per Auto-Update
+aktualisierte Installationen laden denselben Pin über die GUI oder
+`se drive install-runtime`. Die Basis-App bleibt per-user, nur der systemweite
+MSI-Schritt läuft nach einer UAC-Bestätigung. Ein stilles Setup installiert die
+Runtime ausschließlich mit `/S /INSTALLDOKANY=1`, und der Smart-Explorer-
+Uninstaller entfernt Dokany nicht.
+
+Zur Laufzeit wird `dokan2.dll` mit
+`LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` nur aus
+`%WINDIR%\System32` geladen; sowohl `DokanVersion()` als auch
+`DokanDriverVersion()` müssen exakt **231** melden. Unterstützt ist die
 offizielle [Dokany-Version
 2.3.1](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000). Deren
 offizielle Builds enthalten signierte Treiber, weshalb weder Windows Developer
@@ -92,6 +102,7 @@ Bedienung:
 
 ```powershell
 se drive runtime
+se drive install-runtime
 se drive mount @prod:/srv --letter M
 se drive mount @prod:/notizen --letter N --read-write --label "Notizen"
 se drive mount sftp://host/srv --letter S --trust-remote-root
@@ -109,6 +120,19 @@ Share-Geräten; der globale Laufwerksmanager kann Mounts auswerfen oder nach
 Fehlern erneut verbinden. Nicht-Windows-Plattformen liefern für den Mount-Pfad
 bewusst `Unsupported`.
 
+Ein strikter SFTP-Mount wird nur aus einer gespeicherten Verbindung mit
+aktiviertem und erfolgreich gestartetem Agent zugelassen. Deployment- oder
+Handshake-Fehler werden für den Mount sichtbar zurückgegeben und dürfen nicht
+still zu plain SFTP wechseln; normales Browsing darf nur beim Agent-Deployment
+auf die bereits aufgebaute SFTP-Verbindung zurückfallen. Nach erfolgreichem
+Handshake werden fehlgeschlagene Agent-Operationen nicht blind über SFTP
+wiederholt. Der SSH-Verbindungsaufbau
+staffelt IPv6-/IPv4-Versuche mit 250 ms Versatz, behält den ursprünglichen Hostnamen
+für Known-Hosts und liefert typisierte Connect-/Handshake-/Exec-Timeouts.
+Remote-Ausgabe wird begrenzt. Das Agent-Artefakt wird nach seinem vollständigen
+SHA-256 benannt, vor dem Start und erneut nach einem Reconnect über SFTP gegen
+die eingebetteten Bytes verifiziert.
+
 ### Schreib- und Recovery-Modell
 
 Ein Backend wird nur dann read-write gemountet, wenn es für die exakte Wurzel
@@ -121,12 +145,12 @@ alle statischen `StagedWriteCapabilities` garantiert:
 | `namespace_replace` | `Temp-Datei → vorhandener Name` ist ein atomarer old-or-new Namespace-Replace |
 
 Diese Schreibgarantien sind von der Root-Isolation getrennt. Local/UNC und der
-Smart-Explorer-SSH-Agent melden alle drei Schreibprimitive. Plain
-SFTP meldet sie nur, wenn SFTP v3 exakt OpenSSH
-[`posix-rename@openssh.com` Version
-1](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L399-L435)
-aushandelt; normales `SSH_FXP_RENAME` darf nach SFTP v3 ein vorhandenes Ziel
-nicht ersetzen. Synthetische Peer-Container (`/`, `/Verbindungen`) melden keine
+Smart-Explorer-SSH-Agent melden alle drei Schreibprimitive. Plain SFTP meldet
+bewusst keine vollständige RW-Capability: ein einziges SFTP-v3-Subsystem nutzt
+Standard-`SSH_FXP_RENAME`, das ein vorhandenes Ziel nicht ersetzen darf. Eine
+zweite Extension-Session oder ein Stat-dann-Rename-Rennen wird nicht zur
+atomaren Garantie hochgestuft. Synthetische Peer-Container (`/`,
+`/Verbindungen`) melden keine
 Schreibgarantien; ein konkreter Export-Unterbaum fragt die Capability des dort
 aufgelösten Backends ab. Google Drive kann create/replace, aber keinen atomaren
 Namespace-Replace garantieren; WebDAV sowie FTP/FTPS garantieren derzeit nicht
@@ -134,9 +158,10 @@ das vollständige Set. Ob ein Ziel read-only überhaupt startet, entscheidet
 zusätzlich die obige Strict-/Trusted-Root-Zulassung. Weil beide Capabilities am
 aktiven Backend hinter dem vorhandenen Verbindungsweg hängen, kann ein Fallback
 den Strict- oder RW-Mount konservativ ablehnen, ohne den Mount-Kern oder die
-Credentials zu duplizieren. Primärquellen geprüft am 2026-07-21:
-[OpenSSH PROTOCOL](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L399-L435),
-[SFTP-v3-Rename-Semantik](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5).
+Credentials zu duplizieren. Für SFTP verlangt der strikte Modus den Agent und
+akzeptiert deshalb keinen stillen Agent→SFTP-Fallback. SFTP-v3-Semantik geprüft
+am 2026-07-21: [Abschnitt
+6.5](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5).
 
 Dateien werden beim ersten Öffnen vollständig in einen lokalen,
 mount-spezifischen Spool materialisiert. Der erste lokale Änderungsbyte wird vor
@@ -150,6 +175,21 @@ deckt Obsidian-artige Folgen aus wiederholtem Truncate/Write/Flush/Close und den
 Upload berührt das Ziel nicht; dirty, mehrdeutige oder konfliktbehaftete Zustände
 bleiben für `Retry` im Cache erhalten und verhindern einen scheinbar sauberen
 Abschluss.
+
+Vor einem Start prüft der Daemon den lokalen Mount-Cache unter einer exklusiven
+Lease, bevor er den Remote-Backendaufbau versucht. Persistierter Zustand ist
+explizit `Clean`, `Required` oder `Unknown`; alte Datensätze ohne beweisbaren
+Status werden als `Unknown` fail-closed behandelt. Nur `Clean` darf nach einem
+reinen Vor-Mount-Fehler als sauber entfernt werden. Dadurch verschleiert etwa
+ein SSH-Timeout kein lokales Recovery-Material.
+
+Auch der portable Doppelklick-Pfad ist crash-sicherer: der atomare
+`open-temp`-Marker entsteht erst nach erfolgreichem Download. Leere Legacy-
+Marker werden entfernt, ungültige Marker bleiben fail-closed, und echte
+wiederherstellbare Sitzungen sind Hinweise statt App-Fehler. Ein bereits
+beendeter Electron-/Obsidian-Launcher beweist keinen Editor-Abschluss; Temp-Datei
+und Marker bleiben über Single-Instance-Weiterleitung und ein vorübergehendes
+Verschwinden während atomarer Save-back-Zyklen erhalten.
 
 Die Baseline-Prüfung ist bewusst kein universelles serverseitiges Compare-and-
 Swap. Ohne conditional commit des konkreten Backends bleibt zwischen der

@@ -20,11 +20,15 @@ action in 0.5.73. The agent multiplexes every op over one channel, streams
 reads/writes natively, runs same-server copy/move in place, transfers whole
 folders in one session, searches huge remote trees server-side, and produces the
 sync signature (size+mtime, MD5 on demand) in one server pass — sync, the
-storage analysis and now hashing all run server-side with SFTP as the per-op
-fallback. The ONLY thing not exercised here is a real-server SSH smoke test (no
-SSH server in the build env) — covered by socket + real-musl-binary child-process
-tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
-`rclone`, and `ansible` deploy and drive a remote side. Date: 2026-06-18.
+storage analysis and now hashing all run server-side. Ordinary browsing may
+retain the established SFTP backend when Agent deployment fails; after a
+successful handshake, failed operations are surfaced rather than replayed. A
+strict SFTP drive mount requires a working Agent. A live Linux server
+smoke on 2026-07-21 proved IPv4/IPv6 reachability, public-key authentication,
+the exact content-addressed protocol-v9 payload and `--serve-root` startup.
+Full real-Windows Dokany/Obsidian certification remains D1 in `docs/TODO.md`.**
+Researched against how VS Code Remote-SSH, JetBrains Gateway, `rclone`, and
+`ansible` deploy and drive a remote side. Refreshed: 2026-07-21.
 
 ### Implementation status
 
@@ -41,26 +45,31 @@ tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
   read/write adapters over the channel stream); `agent::{deploy_over_sftp,
   remove_from_sftp, artifact_for, sh_quote}` (detect → probe → verified upload →
   `chmod` → launch → handshake). Compiles against the real russh 0.61 API on
-  host + windows-gnu; `sh_quote`/`artifact_for` unit-tested. **Not runtime-tested
-  (no SSH server in the build env).**
+  host + windows-gnu; `sh_quote`/`artifact_for` unit-tested. Live reachability,
+  public-key authentication, exact protocol-v9 artifact and `--serve-root`
+  launch were exercised on a Linux SSH server on 2026-07-21.
 - ✅ **Phase 4 — connect UX.** `use_agent` flag on `SavedConnection` (TSV field 9,
   backward-compatible: old 8-field lines → false) + `ConnectForm`; an opt-in
-  checkbox in the connect dialog (SFTP only); the SFTP connect path calls
-  `deploy_over_sftp` and falls back to plain SFTP on any error.
+  checkbox in the connect dialog (SFTP only); the normal browse connect path
+  calls `deploy_over_sftp` and falls back to plain SFTP on any error. A strict
+  SFTP drive instead requires this saved option and surfaces deployment failure.
 - ✅ **Phase 4b — runtime activation (0.5.65).** You don't have to decide at
   config time: an **"⚡ Agent aktivieren"** button on the *live* connection
   indicator deploys the agent on the already-established SFTP session (no
   reconnect — `RemoteState.sftp` keeps the concrete backend; deploy runs
   off-thread, then the backend is swapped to `AgentBackend` in place) and
   persists `use_agent=true` on the matching saved connection so it sticks.
-  Falls back silently on any error; the "⚡ Agent" badge then shows it's active.
+  Ordinary browsing retains plain SFTP on an error; the "⚡ Agent" badge appears
+  only after success. A later strict drive request still requires that success.
 - ✅ **Phase 5 — cross-compile + bundle.** A standalone minimal crate
   (`/se-agent`, rayon-only — no ring/TLS) cross-compiles to **static musl**
   without a musl C toolchain (rust-lld for aarch64). Built binaries are committed
   under `native/agent-bin/se-agent-{x86_64,aarch64}-linux-musl` (~0.5/0.4 MB,
   static, stripped) and embedded via `include_bytes!` in `artifact_for`. The
   deploy verifies the upload's SHA-256 against the bundled bytes (computed with
-  `sha2`, no hardcoded hash). Install path/probe keyed on `PROTO_VERSION`.
+  `sha2`, no hardcoded hash). The install path is keyed by `PROTO_VERSION` plus
+  the complete payload SHA-256, and its bytes are re-read through SFTP before
+  every exec and after reconnect.
 - ✅ **Phase 5b — status indicator.** `RemoteState.agent_version` (set from the
   handshake on deploy success) drives a "⚡ Agent" badge next to the connection
   indicator (hover shows the version).
@@ -73,10 +82,11 @@ tests instead.** Researched against how VS Code Remote-SSH, JetBrains Gateway,
   latency, which the agent eliminates — `list_dir` is one fast server-side
   round-trip and the `CachingBackend` already makes re-visits instant, so a
   speculative pre-list would add complexity for no measurable win.
-- ⬜ **Remaining: a real-server SSH smoke test only** (no SSH server in the build
-  env). The whole protocol/agent is otherwise covered by unit tests, an in-process
-  socket bridge, and a child-process test that drives the ACTUAL bundled musl
-  binary end to end.
+- ✅ **Live SSH transport smoke (2026-07-21):** IPv4/IPv6 reachability,
+  public-key authentication, exact protocol-v9 payload verification and
+  `--serve-root` startup succeeded on a real Linux server. The protocol remains
+  covered by the in-process socket bridge and bundled-musl child process; the
+  separate real Windows mounted-drive lifecycle stays open as D1.
 
 Regenerating both committed binaries after a `PROTO_VERSION`/shared-source bump:
 run `native/build-agent-bundles.sh` from the repository root (or
@@ -118,9 +128,11 @@ server you already SSH into.
   The agent is an SFTP *accelerator*, not a replacement for the VFS layer.
 - **Opt-in, per connection.** Never deploy a binary without explicit, visible
   consent (§6). Plain SFTP stays the default until the user enables the agent.
-- **Graceful fallback.** Any failure (no exec permission, unknown arch,
-  read-only `$HOME`, version/hash mismatch) silently falls back to plain SFTP
-  listing — the feature can only make browsing faster, never break it.
+- **Graceful browsing fallback.** Any failure (no exec permission, unknown
+  arch, read-only `$HOME`, version/hash mismatch) falls back to plain SFTP for
+  ordinary browsing and file operations. A strict SFTP drive mount instead
+  surfaces the failure because plain SFTP cannot enforce its selected root or
+  complete RW staged semantics.
 - **Not** a general remote shell, not a daemon that outlives the session, not a
   privilege-escalation tool. One unprivileged process, the user's own account,
   lifetime bound to the SSH channel.
@@ -143,9 +155,19 @@ channel. We keep the embedded tokio runtime that already drives russh; the
 the SFTP backend does (`rt.block_on` per op, or a dedicated request/response
 worker — see §4.3).
 
-Keeping the SFTP subsystem open **alongside** the agent channel lets us use SFTP
-for the byte-stream ops (`open_read`/`open_write`) and the agent only for
-metadata/walk/search — simplest split, and file transfer is already solved.
+Connection setup resolves once, deduplicates candidates, interleaves IPv6 and
+IPv4 and starts the next attempt after 250 ms. Host-key verification still uses
+the original hostname rather than a raced numeric address. Connect, SSH
+handshake, channel-open and exec-capture waits produce typed timeout failures;
+stdout and stderr capture are independently bounded to 64 KiB each so a hostile
+probe cannot grow memory without limit or hide its exit status/signal.
+
+The single SFTP subsystem remains open alongside the agent channel for
+bootstrap and verification. It is also the already-established backend used
+when optional Agent deployment fails before admission. Once the Agent
+handshake succeeds, reads, writes and mutations use the multiplexed Agent fast
+path as well as metadata/walk/search; failures are surfaced rather than replayed
+blindly. Strict SFTP mounts do not switch back to plain SFTP.
 
 ## 4. Components
 
@@ -175,7 +197,7 @@ enum Req {
     WalkTree { root: String },          // → full SizeNode tree (analytics)
     Search { root: String, query: SearchSpec },
     Stat { path: String },
-    // open_read/open_write stay on the SFTP subsystem (§3).
+    // read/write/mutations are implemented by later protocol versions too.
 }
 enum Resp {
     Hello { proto: u32, version: String },
@@ -194,10 +216,12 @@ as it arrives (ties into the existing analytics progress atomics).
 
 ### 4.3 `AgentBackend` (new, implements `vfs::Backend`)
 
-Wraps `(russh Handle, agent channel, SFTP session)`. `list_dir`, `stat` →
-request/response over the agent channel; `open_read`/`open_write` → delegate to
-an inner `SftpBackend`. Add two **optional** capability methods to the `Backend`
-trait (default `None`/unsupported, overridden only by `AgentBackend`):
+Wraps `(russh Handle, agent channel, SFTP session)`. The shipped protocol routes
+`list_dir`, `stat`, read/write, mutations, tree transfer, search and hashed walks
+through the multiplexed agent. The inner `SftpBackend` owns bootstrap and
+payload verification; it remains the connection-level fallback only if optional
+Agent deployment fails. The original design introduced optional
+capability methods to the `Backend` trait:
 
 ```rust
 fn walk_tree(&self, root: &str, p: &analytics::Progress) -> Option<analytics::SizeNode> { None }
@@ -213,7 +237,8 @@ search. This keeps every other call site untouched (the trait is the seam).
 - A per-connection toggle "⚡ Remote-Agent verwenden" (saved on the
   `SavedConnection`). When on, `connect` deploys (§5) and, on success, wraps the
   backend as `CachingBackend(AgentBackend{ inner: SftpBackend })`.
-- On deploy failure → notice + fall back to the plain `CachingBackend(Sftp)`.
+- On deploy failure → notice + fall back to the plain `CachingBackend(Sftp)` for
+  ordinary browsing; fail a strict SFTP drive request instead.
 - Status chip shows "● Agent v… aktiv" vs "● SFTP".
 
 ## 5. Deploy sequence (over the SSH `exec` channel)
@@ -223,14 +248,15 @@ search. This keeps every other call site untouched (the trait is the seam).
    PowerShell probe — phase 2.
 2. **Resolve** the matching bundled agent binary for `(os, arch)` (§7). Unknown
    target → abort to fallback.
-3. **Probe** the remote for an existing, matching agent: `exec
-   ~/.cache/smart-explorer/se-agent-<ver> --version`. If `proto`+`ver` match →
-   skip upload.
+3. **Resolve** the content-addressed final path
+   `~/.cache/smart-explorer/se-agent-p<proto>-<full-sha256>`. Re-read it over
+   SFTP and skip upload only when its full SHA-256 matches the embedded bytes.
 4. **Upload** (only if missing/stale) over SFTP to
-   `~/.cache/smart-explorer/se-agent-<ver>.tmp`, `fsync`, verify size + **SHA-256**
-   against the bundled hash, atomic `rename` into place, `chmod 0700`.
-5. **Launch:** open a fresh channel, `exec ~/.cache/.../se-agent-<ver> --serve`,
-   `Hello` handshake (proto check). Mismatch → re-upload once, else fallback.
+   an exclusive random temporary name, `fsync`, verify **SHA-256** against the
+   bundled bytes, promote into the content-addressed path, and `chmod 0700`.
+5. **Verify again and launch:** hash the final file through SFTP immediately
+   before a fresh exec channel runs it with `--serve`/`--serve-root`; complete
+   the `Hello` protocol-v9 handshake. Reconnect repeats the byte verification.
 
 `$HOME` resolution: `exec echo $HOME` (or SFTP realpath ".") once at connect.
 Read-only/quota’d home → fallback.
@@ -244,8 +270,11 @@ Remote-SSH does), but it must be **explicit and inspectable**:
 - **Opt-in only**, per connection, off by default. First enable shows a clear
   dialog: what gets uploaded, to where, that it runs as the user, and a link to
   this doc.
-- **Integrity:** the client ships the SHA-256 of each agent binary; verify after
-  upload before `chmod +x`. The agent never auto-updates itself.
+- **Integrity:** derive the full SHA-256 from each embedded agent binary, include
+  it in the remote filename, verify the exclusive upload and promoted file over
+  SFTP, and reverify immediately before every exec and after reconnect. A
+  matching version string alone is not trusted. The agent never auto-updates
+  itself.
 - **Least privilege:** unprivileged user process; no setuid; no listening
   socket (stdio over the existing channel only).
 - **Provenance:** binaries are built in our normal release pipeline and their
@@ -276,8 +305,8 @@ since it travels over the wire.
 
 - **Storage analysis:** from `O(dirs)` network round-trips to **one** remote
   walk + a streamed tree → the headline win (minutes → seconds on big trees).
-- **Browse:** one round-trip per folder as today, minus per-entry latency;
-  optional server-side prefetch makes drilling feel local.
+- **Browse:** one round-trip per folder as today, minus per-entry latency; the
+  listing cache handles revisits, so speculative prefetch was removed.
 - **Search/filter:** run over the in-memory remote tree; stream matches — was
   previously impossible without downloading the whole listing.
 
@@ -289,38 +318,39 @@ since it travels over the wire.
 2. **AgentBackend over a local child process.** Drive the agent as a spawned
    local process; implement `Backend` + `walk_tree`. Verify the analytics
    overlay runs through it against a local dir. Still no SSH.
-3. **SSH deploy + exec** (russh second channel, detect/upload/verify/launch,
-   handshake, fallback). The only part not testable in this sandbox.
+3. **SSH deploy + exec** (russh exec channel, detect/upload/verify/launch,
+   handshake, browsing fallback). The real-server transport slice was exercised
+   on 2026-07-21; full mounted-drive certification is tracked separately.
 4. **App UX:** per-connection toggle, consent dialog, status chip, cleanup.
 5. **Cross-compile matrix + release bundling + hashes.**
 6. **Server-side search/filter; chunked tree streaming with live progress;
-   prefetch.** Polish.
+   remove the superseded prefetch idea.** Polish.
 
-Phases 1–2 deliver the architecture and are **fully testable here**; 3 is the
-SSH-specific glue that needs a real server.
+Phases 1–2 deliver the architecture and are locally testable; phase 3 also has
+the 2026-07-21 live-server transport evidence.
 
-## 10. Open questions
+## 10. Resolved design choices and remaining platform scope
 
-- Reuse SFTP for byte streams (simplest, §3) vs. carry them on the agent
-  protocol too (one channel, but re-implements transfer)? → start with SFTP.
+- Reuse SFTP for byte streams vs. carry them on the agent protocol? → shipped
+  agent streaming; SFTP remains bootstrap, verification and the pre-admission
+  fallback for optional Agent deployment.
 - Tree encoding: custom binary writer (chosen) vs. a tiny dep. Keep it manual to
   avoid bloat and match `analytics`'s philosophy.
 - Multiplex all ops on one agent channel (request ids) vs. one channel per op.
   → one channel + u64 request ids, async-matched by the bridge worker.
-- Agent lifetime on flaky links: auto-relaunch on channel drop; idempotent
-  re-handshake.
+- Agent lifetime on flaky links → reconnect performs an idempotent handshake and
+  re-verifies the content-addressed payload before exec.
 - Windows servers: defer to phase 2 (different exec/quoting + no musl).
 
 ---
 
 # Deep-integration roadmap — make the agent the FAST PATH
 
-**Decision (your call):** SFTP stays the baseline for any connection; once the
-agent is deployed, route **everything** through it — read/write transfers,
-folder-bulk transfers, server-local copy/move, search, and sync — with SFTP as
-the automatic per-op fallback. Today the `AgentBackend` only overrides
-`list_dir`/`stat`/`walk_tree` and *delegates* byte/mutation ops to SFTP; this
-roadmap flips that so the agent implements them natively.
+**Delivered decision:** SFTP stays the bootstrap and deployment fallback; once
+the agent is deployed, route **everything** through it —
+read/write transfers, folder-bulk transfers, server-local copy/move, search,
+and sync. The strict mounted-drive path is the exception: admission requires the
+Agent and never silently degrades to plain SFTP.
 
 **Honest expectation on "faster/bigger transfers":** the real wins are
 **round-trip elimination** (server-local `cp`/`mv`, one-shot recursive transfer),
@@ -433,15 +463,21 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   wiring. This also unlocks content-hash dedup on remotes (hash without download).
 
 ## Cross-cutting (all phases)
-- **Fallback:** any agent op error → fall back to the inner SFTP op (per-op), as
-  today. The feature can only speed things up, never break them.
+- **Fallback:** optional ordinary browsing may retain the inner SFTP backend
+  when Agent deployment fails before admission. After the handshake, an Agent
+  operation failure is surfaced and not blindly replayed. Strict SFTP drive
+  mounts also surface deployment or Agent failure rather than silently changing
+  their security and staged-write guarantees.
 - **Progress + cancel:** stream byte/file counts into the existing copy/transfer
   progress UI; `Cancel{req_id}` wired to the cancel buttons.
-- **Security/versioning:** unchanged — opt-in deploy, SHA-256 integrity,
-  `PROTO_VERSION` re-deploy, `release/v*` bundled musl binaries.
+- **Security/versioning:** opt-in deploy, full-SHA content-addressed path and
+  pre-exec/reconnect verification, protocol-v9 handshake, bundled musl binaries.
 - **Testability:** phases 0–5 are locally testable (in-process child / socket);
-  phase 6's real sync needs a live server.
+  the 2026-07-21 live server additionally covers SSH reachability, public-key
+  authentication, the exact payload and `--serve-root` startup. Full mounted
+  Windows sync/editor behavior remains D1.
 
 **Sequencing:** 0 → 1 → 2 → 3 give "everything interactive goes through the
-agent" (open/save/copy/move/delete). 4 adds bulk folders, 5 search, 6 sync. Each
-is independently shippable and falls back to SFTP until done.
+agent" (open/save/copy/move/delete). 4 adds bulk folders, 5 search, 6 sync.
+Ordinary connections retain only the pre-admission deployment fallback; strict
+mounts do not.
