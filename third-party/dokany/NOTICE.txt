@@ -1,0 +1,20 @@
+Dokany optional runtime dependency
+==================================
+
+Smart Explorer can install the unmodified official Dokany x64 runtime MSI as
+an optional system-wide prerequisite for Windows remote-drive hosting.
+
+Version: 2.3.1.1000 (API 231)
+Upstream project: https://github.com/dokan-dev/dokany
+Exact source tag: https://github.com/dokan-dev/dokany/tree/v2.3.1.1000
+Source archive: https://github.com/dokan-dev/dokany/archive/refs/tags/v2.3.1.1000.tar.gz
+Official binary release: https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000
+
+According to the tagged upstream README, dokan2.dll, dokan2.sys, the network
+and FUSE libraries, and the installer are licensed under GNU LGPL v3; the
+Dokan control program and samples are licensed under the MIT License. Copies
+of GNU GPL v3, GNU LGPL v3, and the upstream MIT notice accompany this notice.
+
+Dokany is not part of Smart Explorer and is not removed by the Smart Explorer
+uninstaller because it is a shared machine-wide runtime that other programs
+may use. Smart Explorer loads the installed user-mode library dynamically.

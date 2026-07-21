@@ -371,6 +371,9 @@ if ($CheckEnvOnly) {
     if ($LASTEXITCODE -ne 0) {
         throw "cargo clippy is not available. Install clippy for the Windows Rust toolchain."
     }
+    $dokanyFetch = Join-Path $scriptRoot "fetch-dokany-runtime.ps1"
+    $dokanyMsi = (& $dokanyFetch | Select-Object -Last 1)
+    Assert-NonEmptyFile $dokanyMsi
 }
 $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
 if (-not $makensis) {
@@ -908,6 +911,12 @@ function Assert-WindowsReleaseEnvironment {
         $makensis = $nsisCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     }
     if (-not $makensis) { throw "makensis.exe not found; a release without an installer is incomplete." }
+    $dokanyFetch = Join-Path $scriptRoot "fetch-dokany-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $dokanyFetch -PathType Leaf)) {
+        throw "Dokany dependency fetcher missing: $dokanyFetch"
+    }
+    $dokanyMsi = (& $dokanyFetch | Select-Object -Last 1)
+    Assert-NonEmptyFile $dokanyMsi
     $archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
         ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
         Select-Object -First 1

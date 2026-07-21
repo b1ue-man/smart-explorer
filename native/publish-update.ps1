@@ -151,6 +151,35 @@ function Publish-FeedDirectoryTransaction(
     }
 }
 
+# Resolve and verify the one centrally pinned Dokany MSI before starting the
+# expensive native builds. The ignored target cache is shared by preflight and
+# release so the full build never redownloads an already verified dependency.
+$dokanyFetch = Join-Path $PSScriptRoot "fetch-dokany-runtime.ps1"
+if (-not (Test-Path -LiteralPath $dokanyFetch -PathType Leaf)) {
+    throw "Dokany dependency fetcher missing: $dokanyFetch"
+}
+$dokanyMsi = (& $dokanyFetch | Select-Object -Last 1)
+if ([string]::IsNullOrWhiteSpace($dokanyMsi)) {
+    throw "Dokany dependency fetcher returned no MSI path."
+}
+Assert-NonEmptyFile $dokanyMsi
+$archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
+    ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
+    Select-Object -First 1 |
+    ForEach-Object { $_.Source }
+if (-not $archiveExtractor) {
+    $archiveCandidates = @(
+        "$env:ProgramFiles\7-Zip\7z.exe",
+        "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+    )
+    $archiveExtractor = $archiveCandidates |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Select-Object -First 1
+}
+if (-not $archiveExtractor) {
+    throw "7z wird zum Prüfen der eingebetteten Dokany-Installerdateien benötigt."
+}
+
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
 $rustcVersion = (& rustc -vV | Out-String)
@@ -219,11 +248,29 @@ if ($makensis) {
     New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
     $installer = Join-Path $ReleaseOutput "Smart Explorer Setup $version.exe"
     Remove-Item $installer -Force -ErrorAction SilentlyContinue
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DUPDATER_SRC=$nativeUpdater" "/DCLI_SRC=$nativeCli" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DUPDATER_SRC=$nativeUpdater" "/DCLI_SRC=$nativeCli" "/DDOKANY_MSI_SRC=$dokanyMsi" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Installer-Build fehlgeschlagen: $installer"
     }
     Assert-NonEmptyFile $installer
+    $verifyDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("smart-explorer-installer-verify-{0}-{1}" -f $PID, [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $verifyDirectory | Out-Null
+        $dokanyEntry = '$PLUGINSDIR/' + [System.IO.Path]::GetFileName($dokanyMsi)
+        & $archiveExtractor e -y "-o$verifyDirectory" $installer $dokanyEntry | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Eingebettete Dokany-Dateien konnten nicht aus dem Installer gelesen werden."
+        }
+        $embeddedMsi = Join-Path $verifyDirectory ([System.IO.Path]::GetFileName($dokanyMsi))
+        Assert-NonEmptyFile $embeddedMsi
+        if ((Get-Item -LiteralPath $embeddedMsi).Length -ne (Get-Item -LiteralPath $dokanyMsi).Length -or
+            (Get-FileHash -LiteralPath $embeddedMsi -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $dokanyMsi -Algorithm SHA256).Hash) {
+            throw "Der Installer enthält nicht die verifizierte Dokany-MSI-Datei."
+        }
+    } finally {
+        Remove-Item -LiteralPath $verifyDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "Installer: $installer"
 } else {
     throw "makensis nicht gefunden - ein Release ohne Installer ist unvollstaendig"

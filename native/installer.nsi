@@ -1,4 +1,5 @@
-; Smart Explorer — per-user NSIS installer (no admin rights required).
+; Smart Explorer — per-user NSIS installer. The optional Dokany driver section
+; requests UAC separately; installing/updating the app itself remains per-user.
 ;
 ; Build (Linux/WSL/macOS cross or Windows):
 ;   makensis -DVERSION=x.y.z installer.nsi
@@ -7,6 +8,7 @@
 ;   makensis -DVERSION=x.y.z "-DUPDATER_SRC=target\release\smart_explorer_updater.exe" installer.nsi
 ;   makensis -DVERSION=x.y.z "-DCLI_SRC=target\release\se.exe" installer.nsi
 ; Silent install:  "Smart Explorer Setup x.y.z.exe" /S
+; Silent install with Dokany: ... /S /INSTALLDOKANY=1
 ;
 ; What it sets up so the app "just works":
 ;   * installs Smart Explorer.exe (per-user, %LOCALAPPDATA%\Programs)
@@ -33,6 +35,13 @@
 !ifndef INSTALLER_OUT
   !define INSTALLER_OUT "../release-native/Smart Explorer Setup ${VERSION}.exe"
 !endif
+!include "${__FILEDIR__}\dokany-runtime.nsh"
+!ifndef DOKANY_MSI_SRC
+  !define DOKANY_MSI_SRC "${__FILEDIR__}\target\installer-dependencies\${DOKANY_VERSION}\${DOKANY_MSI_FILENAME}"
+!endif
+
+!include "FileFunc.nsh"
+!include "Sections.nsh"
 
 !define APP_NAME "Smart Explorer"
 !define EXE_NAME "Smart Explorer.exe"
@@ -53,16 +62,21 @@ SetCompressor /SOLID lzma
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
+Var DokanyRuntimeReady
+Var DokanyNeedsReboot
+
 ; Liability notice the user must accept before installing.
 LicenseText "Bitte lesen und akzeptieren Sie die folgenden Hinweise."
 LicenseData "${__FILEDIR__}\..\DISCLAIMER.txt"
 LicenseForceSelection checkbox "Ich habe die Hinweise gelesen und akzeptiere sie"
 
 Page license
+Page components
 Page directory
 Page instfiles
 
-Section "Install"
+Section "Smart Explorer (erforderlich)" SEC_MAIN
+  SectionIn RO
   SetOutPath "$INSTDIR"
 
   ; Close ALL running instances before touching the exe. The auto-updater renames
@@ -118,6 +132,12 @@ Section "Install"
   cli_path_done:
 
   File "${__FILEDIR__}\..\LICENSE"
+  SetOutPath "$INSTDIR\licenses\Dokany"
+  File "/oname=NOTICE.txt" "${__FILEDIR__}\..\third-party\dokany\NOTICE.txt"
+  File "/oname=LICENSE-GPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-GPL-3.0.txt"
+  File "/oname=LICENSE-LGPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-LGPL-3.0.txt"
+  File "/oname=LICENSE-MIT.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-MIT.txt"
+  SetOutPath "$INSTDIR"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
   ; The app binds a dynamic local TCP port, so the rule is program-based.
@@ -165,10 +185,106 @@ Section "Install"
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 SectionEnd
 
+Section "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY
+  ; A runtime may have been installed while this installer was open. Recheck
+  ; with Smart Explorer's exact library/driver API probe before elevating.
+  Call CheckDokanyRuntime
+  StrCmp $DokanyRuntimeReady "1" dokany_done
+
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=${DOKANY_MSI_FILENAME}" "${DOKANY_MSI_SRC}"
+
+  ; Use the same Rust path as the GUI and portable CLI. It revalidates the
+  ; pinned size/SHA-256 and Authenticode signature, keeps a no-write/no-delete
+  ; handle open across elevation, and elevates only System32\msiexec.exe.
+  nsExec::ExecToStack '"$INSTDIR\${CLI_EXE_NAME}" drive install-runtime --msi "$PLUGINSDIR\${DOKANY_MSI_FILENAME}"'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" dokany_verify
+  StrCmp $0 "3010" dokany_reboot
+  StrCmp $0 "1641" dokany_restart_initiated
+  StrCmp $0 "1223" dokany_cancelled
+  StrCmp $0 "1602" dokany_cancelled
+
+  IfSilent dokany_abort 0
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany konnte nicht installiert werden (MSI-Exitcode $0). Smart Explorer wurde installiert, Remote-Laufwerke bleiben jedoch bis zu einer erfolgreichen Dokany-Installation deaktiviert."
+  Goto dokany_done
+
+  dokany_cancelled:
+    IfSilent dokany_abort 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Die Dokany-UAC-Abfrage wurde abgebrochen. Smart Explorer wurde installiert; Remote-Laufwerke benötigen weiterhin Dokany ${DOKANY_VERSION}."
+    Goto dokany_done
+
+  dokany_abort:
+    SetErrorLevel 1
+    Abort
+
+  dokany_reboot:
+    StrCpy $DokanyNeedsReboot "1"
+    SetRebootFlag true
+    Call CheckDokanyRuntime
+    IfSilent dokany_done 0
+    StrCmp $DokanyRuntimeReady "1" 0 +3
+      MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert. Windows Installer meldet, dass ein Neustart erforderlich ist."
+      Goto dokany_done
+    MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert, ist aber erst nach einem Windows-Neustart verfügbar."
+    Goto dokany_done
+
+  dokany_restart_initiated:
+    StrCpy $DokanyNeedsReboot "1"
+    SetRebootFlag true
+    Goto dokany_done
+
+  dokany_verify:
+    Call CheckDokanyRuntime
+    StrCmp $DokanyRuntimeReady "1" dokany_done
+    IfSilent dokany_abort 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany meldete eine erfolgreiche Installation, aber Smart Explorer konnte API ${DOKANY_API_VERSION} anschließend nicht bestätigen. Remote-Laufwerke bleiben deaktiviert; bitte Windows neu starten oder Dokany erneut installieren."
+
+  dokany_done:
+SectionEnd
+
+Function CheckDokanyRuntime
+  StrCpy $DokanyRuntimeReady "0"
+  IfFileExists "$INSTDIR\${CLI_EXE_NAME}" 0 check_dokany_done
+  nsExec::ExecToStack '"$INSTDIR\${CLI_EXE_NAME}" drive runtime'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" 0 check_dokany_done
+  StrCpy $DokanyRuntimeReady "1"
+  check_dokany_done:
+FunctionEnd
+
+Function .onInit
+  StrCpy $DokanyNeedsReboot "0"
+  Call CheckDokanyRuntime
+  StrCmp $DokanyRuntimeReady "1" dokany_already_ready
+
+  ; Component sections are selected by default for an interactive setup. A
+  ; silent app install must never introduce a hidden UAC prompt unless the
+  ; caller explicitly opted in with /INSTALLDOKANY=1.
+  IfSilent dokany_silent dokany_init_done
+  dokany_silent:
+    ${GetParameters} $0
+    StrCpy $1 ""
+    ${GetOptions} $0 "/INSTALLDOKANY=" $1
+    StrCmp $1 "1" dokany_init_done
+    !insertmacro UnselectSection ${SEC_DOKANY}
+    Goto dokany_init_done
+
+  dokany_already_ready:
+    !insertmacro UnselectSection ${SEC_DOKANY}
+    SectionSetText ${SEC_DOKANY} "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} (bereits passend installiert)"
+  dokany_init_done:
+FunctionEnd
+
 ; Launch the app after a normal (non-silent) install
 Function .onInstSuccess
-  IfSilent +2 0
+  StrCmp $DokanyNeedsReboot "1" launch_done
+  IfSilent launch_done 0
     Exec '"$INSTDIR\${EXE_NAME}"'
+  launch_done:
 FunctionEnd
 
 Section "Uninstall"
@@ -201,6 +317,12 @@ Section "Uninstall"
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"
   Delete "$INSTDIR\${CLI_EXE_NAME}"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\licenses\Dokany\NOTICE.txt"
+  Delete "$INSTDIR\licenses\Dokany\LICENSE-GPL-3.0.txt"
+  Delete "$INSTDIR\licenses\Dokany\LICENSE-LGPL-3.0.txt"
+  Delete "$INSTDIR\licenses\Dokany\LICENSE-MIT.txt"
+  RMDir "$INSTDIR\licenses\Dokany"
+  RMDir "$INSTDIR\licenses"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"
   Delete "$INSTDIR\update_source.txt"
