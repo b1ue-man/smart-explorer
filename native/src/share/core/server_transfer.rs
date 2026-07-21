@@ -12,6 +12,12 @@ use super::wire::{Ctrl, FsRequest, FsResponse};
 
 const STREAM_BUFFER_CHUNKS: usize = 2;
 
+#[derive(Clone, Copy)]
+pub(super) enum WriteMode {
+    Replace,
+    Create,
+}
+
 pub(super) async fn read_file(
     mut send: SendStream,
     path: String,
@@ -94,12 +100,13 @@ pub(super) async fn write_file(
     mut recv: RecvStream,
     path: String,
     exports: Arc<Mutex<ShareExportConfig>>,
+    mode: WriteMode,
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
     let worker = blocking::spawn("Share staged write", move || {
-        write_worker(path, exports, ready_tx, command_rx, done_tx)
+        write_worker(path, exports, mode, ready_tx, command_rx, done_tx)
     })
     .await?;
 
@@ -174,6 +181,7 @@ enum WriteCommand {
 fn write_worker(
     path: String,
     exports: Arc<Mutex<ShareExportConfig>>,
+    mode: WriteMode,
     ready: oneshot::Sender<io::Result<()>>,
     mut commands: mpsc::Receiver<WriteCommand>,
     done: oneshot::Sender<io::Result<()>>,
@@ -185,24 +193,35 @@ fn write_worker(
             return Ok(());
         }
     };
-    let staging = match crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer") {
-        Ok(path) => path,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return Ok(());
+    let opened = match mode {
+        WriteMode::Replace => {
+            crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer").and_then(
+                |staging| {
+                    target
+                        .backend
+                        .open_write_new(&staging)
+                        .map(|writer| (staging, writer, true))
+                },
+            )
         }
+        WriteMode::Create => target
+            .backend
+            .open_write_new(&target.path)
+            .map(|writer| (target.path.clone(), writer, false)),
     };
-    let writer = match target.backend.open_write(&staging) {
-        Ok(writer) => writer,
+    let (staging, writer, replace_after_upload) = match opened {
+        Ok(opened) => opened,
         Err(error) => {
-            let _ = target.backend.remove_file(&staging);
+            // An exclusive-open failure never transfers ownership of this
+            // spelling; deleting it could remove a concurrent case alias.
             let _ = ready.send(Err(error));
             return Ok(());
         }
     };
     if ready.send(Ok(())).is_err() {
         drop(writer);
-        let _ = target.backend.remove_file(&staging);
+        // This layer has no stable identity for the exclusively created item.
+        // A concurrent actor may have moved it and reused the spelling.
         return Ok(());
     }
 
@@ -225,7 +244,11 @@ fn write_worker(
                     break Err(error);
                 }
                 drop(output);
-                break crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path);
+                break if replace_after_upload {
+                    crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path)
+                } else {
+                    Ok(())
+                };
             }
             None => {
                 break Err(io::Error::new(
@@ -237,7 +260,8 @@ fn write_worker(
     };
     if result.is_err() {
         drop(writer.take());
-        let _ = target.backend.remove_file(&staging);
+        // Flush and promotion failures can be lost-ack outcomes. Retain the
+        // stage rather than risk unlinking a replacement by path.
     }
     let _ = done.send(result);
     Ok(())

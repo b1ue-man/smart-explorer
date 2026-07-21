@@ -109,6 +109,7 @@ impl App {
         if self.show_share {
             self.ui_share(ctx);
         }
+        self.ui_mount_windows(ctx);
         if self.remote_ctx.is_some() {
             self.ui_remote_ctx(ctx);
         }

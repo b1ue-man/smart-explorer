@@ -6,6 +6,7 @@ use super::metadata::{basename, to_vfs};
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use russh::client;
 use russh_sftp::client::error::Error as SftpError;
+use russh_sftp::protocol::{OpenFlags, Packet, StatusCode};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -157,6 +158,32 @@ impl SftpBackend {
             io_err(error)
         })
     }
+
+    fn posix_rename(&self, source: &str, destination: &str) -> io::Result<()> {
+        const POSIX_RENAME: &str = "posix-rename@openssh.com";
+
+        let generation = self.connection.current()?;
+        let session = generation.posix_rename().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "SFTP server did not advertise posix-rename@openssh.com version 1",
+            )
+        })?;
+        let data = encode_path_pair(source, destination)?;
+        self.rt
+            .block_on(session.extended(POSIX_RENAME, data))
+            .and_then(|packet| match packet {
+                Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
+                Packet::Status(status) => Err(SftpError::Status(status)),
+                _ => Err(SftpError::UnexpectedPacket),
+            })
+            .map_err(|error| {
+                // A missing mutation reply is ambiguous and must never be
+                // replayed on a replacement connection.
+                self.connection.note_sftp_error(&generation, &error);
+                io_err(error)
+            })
+    }
 }
 
 impl Backend for SftpBackend {
@@ -233,18 +260,47 @@ impl Backend for SftpBackend {
         }))
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        let generation = self.connection.current()?;
+        let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE;
+        let file = self
+            .rt
+            .block_on(generation.sftp().open_with_flags(path.to_string(), flags))
+            .map_err(|error| {
+                self.connection.note_sftp_error(&generation, &error);
+                io_err(error)
+            })?;
+        Ok(Box::new(SftpWriter {
+            rt: self.rt.clone(),
+            connection: self.connection.clone(),
+            generation,
+            file: Some(file),
+        }))
+    }
+
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.mutate_sftp(|generation| {
-            self.rt
-                .block_on(generation.sftp().rename(src.to_string(), dst.to_string()))
-        })
+        if self
+            .connection
+            .current()
+            .is_ok_and(|generation| generation.posix_rename().is_some())
+        {
+            self.posix_rename(src, dst)
+        } else {
+            self.mutate_sftp(|generation| {
+                self.rt
+                    .block_on(generation.sftp().rename(src.to_string(), dst.to_string()))
+            })
+        }
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         // russh-sftp speaks SFTP v3. SSH_FXP_RENAME in that protocol must fail
         // when newpath already exists, so the request itself is the atomic
         // no-replace gate rather than a racy client-side existence probe.
-        self.rename(src, dst)
+        self.mutate_sftp(|generation| {
+            self.rt
+                .block_on(generation.sftp().rename(src.to_string(), dst.to_string()))
+        })
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
@@ -301,4 +357,31 @@ impl Backend for SftpBackend {
         // until a real-server concurrency spike (plan §"open questions").
         1
     }
+
+    fn rename_overwrites(&self) -> bool {
+        self.connection
+            .current()
+            .is_ok_and(|generation| generation.posix_rename().is_some())
+    }
+
+    fn staged_write_capabilities(&self, _root: &str) -> crate::vfs::StagedWriteCapabilities {
+        let replace = self.rename_overwrites();
+        crate::vfs::StagedWriteCapabilities {
+            create: true,
+            replace,
+            namespace_replace: replace,
+        }
+    }
+}
+
+fn encode_path_pair(source: &str, destination: &str) -> io::Result<Vec<u8>> {
+    let mut encoded = Vec::with_capacity(source.len() + destination.len() + 8);
+    for path in [source, destination] {
+        let length = u32::try_from(path.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "SFTP rename path is too long")
+        })?;
+        encoded.extend_from_slice(&length.to_be_bytes());
+        encoded.extend_from_slice(path.as_bytes());
+    }
+    Ok(encoded)
 }

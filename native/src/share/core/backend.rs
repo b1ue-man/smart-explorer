@@ -71,6 +71,26 @@ impl PeerBackend {
         Ok(response)
     }
 
+    fn open_writer(
+        &self,
+        request: FsRequest,
+        operation: &'static str,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
+        let result = self.node.block_on(io_deadline::run(operation, async {
+            send_ctrl(&mut send, &Ctrl::Fs { req: request }).await?;
+            match recv_resp(&mut recv).await? {
+                FsResponse::Ready => Ok(()),
+                _ => Err(eio("unerwartete Antwort auf write")),
+            }
+        }));
+        if result.is_err() {
+            io_deadline::abort(&mut send, &mut recv);
+        }
+        result?;
+        Ok(super::peer_writer::writer(self.node.clone(), send, recv))
+    }
+
     pub(crate) fn exec(&self, req: ExecRequest) -> io::Result<ExecResult> {
         let started = Instant::now();
         let timeout = Duration::from_millis(req.timeout_ms.min(15 * 60 * 1_000))
@@ -181,29 +201,21 @@ impl Backend for PeerBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
-        let result = self
-            .node
-            .block_on(io_deadline::run("peer write open", async {
-                send_ctrl(
-                    &mut send,
-                    &Ctrl::Fs {
-                        req: FsRequest::Write {
-                            path: path.to_string(),
-                        },
-                    },
-                )
-                .await?;
-                match recv_resp(&mut recv).await? {
-                    FsResponse::Ready => Ok(()),
-                    _ => Err(eio("unerwartete Antwort auf write")),
-                }
-            }));
-        if result.is_err() {
-            io_deadline::abort(&mut send, &mut recv);
-        }
-        result?;
-        Ok(super::peer_writer::writer(self.node.clone(), send, recv))
+        self.open_writer(
+            FsRequest::Write {
+                path: path.to_string(),
+            },
+            "peer write open",
+        )
+    }
+
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_writer(
+            FsRequest::WriteNew {
+                path: path.to_string(),
+            },
+            "peer exclusive write open",
+        )
     }
 
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
@@ -283,15 +295,26 @@ impl Backend for PeerBackend {
         // to the resolved host backend through PromoteStaged instead.
         false
     }
+
+    fn staged_write_capabilities(&self, root: &str) -> crate::vfs::StagedWriteCapabilities {
+        match self.request(FsRequest::Capabilities {
+            path: root.to_string(),
+        }) {
+            Ok(FsResponse::Capabilities { capabilities }) => capabilities.into(),
+            _ => crate::vfs::StagedWriteCapabilities::default(),
+        }
+    }
 }
 
 fn fs_request_label(request: &FsRequest) -> &'static str {
     match request {
+        FsRequest::Capabilities { .. } => "capabilities",
         FsRequest::ListDir { .. } => "list_dir",
         FsRequest::Stat { .. } => "stat",
         FsRequest::WalkTree { .. } => "walk_tree",
         FsRequest::Read { .. } => "read",
         FsRequest::Write { .. } => "write",
+        FsRequest::WriteNew { .. } => "write_new",
         FsRequest::WriteDone => "write_done",
         FsRequest::MkdirAll { .. } => "mkdir_all",
         FsRequest::Rename { .. } => "rename",
@@ -305,6 +328,10 @@ fn fs_request_label(request: &FsRequest) -> &'static str {
 
 fn fs_response_summary(response: &FsResponse) -> String {
     match response {
+        FsResponse::Capabilities { capabilities } => format!(
+            "capabilities create={} replace={} namespace_replace={}",
+            capabilities.create, capabilities.replace, capabilities.namespace_replace
+        ),
         FsResponse::Entries { entries } => format!("{} Eintraege", entries.len()),
         FsResponse::Meta { meta } => format!("meta size={} dir={}", meta.size, meta.is_dir),
         FsResponse::WalkBatch {

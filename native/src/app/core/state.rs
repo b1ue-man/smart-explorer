@@ -336,6 +336,7 @@ pub struct App {
 
     /// Cached saved-connection list (avoids reading connections.txt per frame).
     pub(in crate::app) saved_connections: Vec<crate::creds::SavedConnection>,
+    pub(in crate::app) mount_ui: MountUiState,
 
     // ─── Two-way sync (bisync) + conflict resolution ─────────────────────
     pub(in crate::app) bisync_rx: Option<Receiver<crate::bisync::Outcome>>,

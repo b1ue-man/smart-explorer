@@ -112,6 +112,14 @@ impl Backend for LocalBackend {
             path,
         ))?))
     }
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        Ok(Box::new(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(local_platform::to_os(path))?,
+        ))
+    }
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
@@ -132,6 +140,9 @@ impl Backend for LocalBackend {
     }
     fn rename_overwrites(&self) -> bool {
         true // std::fs::rename atomically replaces an existing destination
+    }
+    fn staged_write_capabilities(&self, _root: &str) -> super::StagedWriteCapabilities {
+        super::StagedWriteCapabilities::complete()
     }
     fn is_local(&self) -> bool {
         true // a local disk read to hash a file is cheap (no network)

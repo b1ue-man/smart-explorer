@@ -159,8 +159,8 @@ impl Drop for AgentWriteStream {
     fn drop(&mut self) {
         if matches!(self.state, WriteState::Open) {
             // Dropping a writer is an abort, not an implicit commit. Wake the
-            // server-side receiver after setting cancellation so it removes
-            // its staged file instead of promoting a partial upload.
+            // server-side receiver after setting cancellation so it refuses
+            // promotion; cleanup remains subject to stable ownership proof.
             let _ = self.mux.send(self.id, Frame::Cancel);
             let _ = self.mux.send(self.id, Frame::End);
             self.mux.unregister(self.id);
@@ -217,9 +217,17 @@ impl AgentBackend {
     /// Begin a streamed write of `path`. Protocol-v6 makes this mandatory, so
     /// every transport, protocol, or remote failure is returned to the caller.
     pub(super) fn agent_open_write(&self, path: &str) -> io::Result<Box<dyn Write + Send>> {
+        self.agent_open_write_request(Frame::Write(path.to_string()))
+    }
+
+    pub(super) fn agent_open_write_new(&self, path: &str) -> io::Result<Box<dyn Write + Send>> {
+        self.agent_open_write_request(Frame::WriteNew(path.to_string()))
+    }
+
+    fn agent_open_write_request(&self, request: Frame) -> io::Result<Box<dyn Write + Send>> {
         let mux = self.connection.mutation_mux()?;
         let (id, rx) = mux.register();
-        if let Err(error) = mux.send(id, Frame::Write(path.to_string())) {
+        if let Err(error) = mux.send(id, request) {
             mux.unregister(id);
             return Err(error);
         }

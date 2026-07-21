@@ -139,11 +139,17 @@ impl Write for SftpWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         let rt = self.rt.clone();
-        let file = self
+        let mut file = self
             .file
-            .as_mut()
+            .take()
             .ok_or_else(|| io_err("Datei geschlossen"))?;
-        let result = rt.block_on(async { file.flush().await });
+        // Backend writers treat flush as the terminal commit boundary. Await
+        // both outstanding WRITE acknowledgements/fsync and SSH_FXP_CLOSE so a
+        // close failure cannot be hidden by Drop before staged promotion.
+        let result = rt.block_on(async {
+            file.flush().await?;
+            file.shutdown().await
+        });
         if let Err(error) = &result {
             self.connection.note_io_error(&self.generation, error);
         }

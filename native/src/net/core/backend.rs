@@ -86,6 +86,13 @@ impl Backend for UncBackend {
         }))
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        Ok(Box::new(UncWriter {
+            inner: self.local.open_write_new(path)?,
+            _connection: self.connection.clone(),
+        }))
+    }
+
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         self.local.copy_file(src, dst)
     }
@@ -120,6 +127,10 @@ impl Backend for UncBackend {
 
     fn rename_overwrites(&self) -> bool {
         self.local.rename_overwrites()
+    }
+
+    fn staged_write_capabilities(&self, root: &str) -> crate::vfs::StagedWriteCapabilities {
+        self.local.staged_write_capabilities(root)
     }
 
     fn is_local(&self) -> bool {

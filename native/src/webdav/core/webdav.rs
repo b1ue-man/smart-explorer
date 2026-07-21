@@ -345,6 +345,14 @@ impl Backend for WebdavBackend {
         false
     }
 
+    fn staged_write_capabilities(&self, _root: &str) -> crate::vfs::StagedWriteCapabilities {
+        crate::vfs::StagedWriteCapabilities {
+            create: true,
+            replace: false,
+            namespace_replace: false,
+        }
+    }
+
     fn provides_content_hash(&self) -> bool {
         // Nextcloud/ownCloud expose an MD5 via the `oc:checksums` PROPFIND prop
         // (parsed into `content_md5`) — a free content hash, no download. Servers

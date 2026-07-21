@@ -143,7 +143,7 @@ pub(crate) fn serve_backend(
                 let cancel = Arc::new(AtomicBool::new(false));
                 lock_or_recover(&cancels).insert(id, cancel.clone());
                 let rx = match &req {
-                    Frame::Write(_) | Frame::PutTree(_) => {
+                    Frame::Write(_) | Frame::WriteNew(_) | Frame::PutTree(_) => {
                         let (tx, rx) = transfer_channel();
                         lock_or_recover(&inbound).insert(id, tx);
                         Some(rx)
@@ -240,8 +240,20 @@ fn dispatch_backend(
             handle_read_backend(sink, id, &backend, &path, offset, len, cancel)
         }
         Frame::Write(path) => match inbound {
-            Some(rx) => handle_write_backend(sink, id, &backend, &path, rx, cancel),
+            Some(rx) => {
+                handle_write_backend(sink, id, &backend, &path, rx, cancel, WriteMode::Replace)
+            }
             None => emit(sink, id, &Frame::Err("write: no inbound channel".into())),
+        },
+        Frame::WriteNew(path) => match inbound {
+            Some(rx) => {
+                handle_write_backend(sink, id, &backend, &path, rx, cancel, WriteMode::Create)
+            }
+            None => emit(
+                sink,
+                id,
+                &Frame::Err("write-new: no inbound channel".into()),
+            ),
         },
         Frame::Copy { src, dst } => match backend.copy_file(&src, &dst) {
             Ok(_) => emit(sink, id, &Frame::Ok),
@@ -253,6 +265,20 @@ fn dispatch_backend(
         },
         Frame::RenameNoReplace { src, dst } => match backend.rename_no_replace(&src, &dst) {
             Ok(_) => emit(sink, id, &Frame::Ok),
+            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
+        },
+        Frame::Promote {
+            staged,
+            destination,
+        } => match backend.promote_staged(&staged, &destination) {
+            Ok(()) => emit(sink, id, &Frame::Ok),
+            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
+        },
+        Frame::PromoteNoReplace {
+            staged,
+            destination,
+        } => match backend.promote_staged_no_replace(&staged, &destination) {
+            Ok(()) => emit(sink, id, &Frame::Ok),
             Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
         },
         Frame::Remove { path, recursive } => {
@@ -296,6 +322,7 @@ fn vfs_to_wire(m: VfsMeta) -> WireMeta {
         is_symlink: m.is_symlink,
         size: m.size,
         mtime_ms: m.mtime_ms,
+        content_md5: m.content_md5,
     }
 }
 
@@ -337,10 +364,26 @@ fn handle_write_backend(
     path: &str,
     inbound: &Receiver<Frame>,
     cancel: &AtomicBool,
+    mode: WriteMode,
 ) -> io::Result<()> {
-    let staged = crate::vfs::unique_staging_path(&**backend, path, "daemon")?;
-    let mut writer = backend.open_write(&staged)?;
-    emit(sink, id, &Frame::Progress { done: 0, total: 0 })?;
+    let (staged, mut writer, replace_after_upload) = match mode {
+        WriteMode::Replace => {
+            let staged = crate::vfs::unique_staging_path(&**backend, path, "daemon")?;
+            let writer = backend.open_write_new(&staged)?;
+            (staged, writer, true)
+        }
+        WriteMode::Create => {
+            let writer = backend.open_write_new(path)?;
+            (path.to_string(), writer, false)
+        }
+    };
+    if let Err(error) = emit(sink, id, &Frame::Progress { done: 0, total: 0 }) {
+        drop(writer);
+        // The exclusive open transferred ownership at the backend boundary,
+        // but this generic layer has no stable item identity. Retain the entry:
+        // a concurrent actor may already have moved it and reused its spelling.
+        return Err(error);
+    }
     let transfer = loop {
         if cancel.load(Ordering::Relaxed) {
             break Err(io::Error::new(
@@ -366,14 +409,27 @@ fn handle_write_backend(
     };
     drop(writer);
     if let Err(error) = transfer {
-        let _ = backend.remove_file(&staged);
+        // A nested writer may have committed before its final acknowledgement
+        // was lost. Path-based cleanup could delete a replacement entry.
         return Err(error);
     }
-    if let Err(error) = crate::vfs::promote_staged_replace(&**backend, &staged, path) {
-        let _ = backend.remove_file(&staged);
+    let promotion = if replace_after_upload {
+        crate::vfs::promote_staged_replace(&**backend, &staged, path)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = promotion {
+        // Promotion responses are ambiguous across reconnects. Preserve the
+        // staging name as recovery evidence instead of deleting by spelling.
         return Err(error);
     }
     emit(sink, id, &Frame::Ok)
+}
+
+#[derive(Clone, Copy)]
+enum WriteMode {
+    Replace,
+    Create,
 }
 
 #[cfg(test)]

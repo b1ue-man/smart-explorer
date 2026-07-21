@@ -128,8 +128,9 @@ impl Write for PeerWriter {
 impl Drop for PeerWriter {
     fn drop(&mut self) {
         if matches!(self.state, WriterState::Open) {
-            // Stream drop/reset makes the host abandon and remove its staged
-            // file. Only an explicit flush sends WriteDone and promotes it.
+            // Stream drop/reset makes the host abandon the write without
+            // promotion. Only an explicit flush sends WriteDone; safe cleanup
+            // additionally requires stable ownership proof.
             drop(self.send.take());
             drop(self.recv.take());
         }

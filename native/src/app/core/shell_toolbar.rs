@@ -180,6 +180,14 @@ impl App {
                 ui.set_min_width(330.0);
                 self.ui_menu_connect(ui);
             });
+            if crate::mount::drive_mount_supported()
+                && ui
+                    .button("💽")
+                    .on_hover_text("Eingebundene Remote-Laufwerke verwalten")
+                    .clicked()
+            {
+                self.open_mount_manager();
+            }
             ui.menu_button("⇄ Sync", |ui| {
                 ui.set_min_width(330.0);
                 self.ui_menu_sync(ui);

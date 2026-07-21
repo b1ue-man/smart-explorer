@@ -2,7 +2,7 @@ use super::config::{SftpAuth, SftpConfig};
 use super::io_err;
 use super::known_hosts::known_hosts_accept;
 use russh::client;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{RawSftpSession, SftpSession};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,7 @@ impl client::Handler for Client {
 
 pub(super) async fn connect_async(
     cfg: &SftpConfig,
-) -> io::Result<(client::Handle<Client>, SftpSession)> {
+) -> io::Result<(client::Handle<Client>, SftpSession, Option<RawSftpSession>)> {
     let config = Arc::new(client_config());
     let host_key_error = Arc::new(std::sync::Mutex::new(None));
     let handler = Client {
@@ -107,7 +107,23 @@ pub(super) async fn connect_async(
     let sftp = SftpSession::new(channel.into_stream())
         .await
         .map_err(io_err)?;
-    Ok((session, sftp))
+    let posix_rename = open_posix_rename_session(&session).await;
+    Ok((session, sftp, posix_rename))
+}
+
+async fn open_posix_rename_session(session: &client::Handle<Client>) -> Option<RawSftpSession> {
+    const POSIX_RENAME: &str = "posix-rename@openssh.com";
+
+    let channel = session.channel_open_session().await.ok()?;
+    channel.request_subsystem(true, "sftp").await.ok()?;
+    let raw = RawSftpSession::new(channel.into_stream());
+    let version = raw.init().await.ok()?;
+    (version.version == 3
+        && version
+            .extensions
+            .get(POSIX_RENAME)
+            .is_some_and(|value| value == "1"))
+    .then_some(raw)
 }
 
 fn client_config() -> client::Config {

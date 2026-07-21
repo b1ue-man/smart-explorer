@@ -28,6 +28,12 @@ mod promotion;
 mod put_tree;
 #[path = "core/relative_path.rs"]
 mod relative_path;
+#[cfg(test)]
+#[path = "core/remote_drive_task_tests.rs"]
+mod remote_drive_task_tests;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/sandbox.rs"]
+mod sandbox;
 #[path = "os/shared/search.rs"]
 mod search;
 #[path = "core/server.rs"]
@@ -38,12 +44,16 @@ mod session;
 mod transfer;
 #[path = "core/types.rs"]
 mod types;
+#[path = "os/shared/write_new.rs"]
+mod write_new;
 
 pub use codec::{read_frame, write_frame};
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};
 pub use relative_path::ValidatedRelativePath;
+#[cfg(target_os = "linux")]
+pub use sandbox::restrict_filesystem;
 pub use server::serve;
 pub(crate) use transfer::{
     collect_local_tree, finish_local_tree_file, open_local_tree_file, LocalTreeEntry,

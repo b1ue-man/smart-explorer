@@ -55,6 +55,26 @@ mod job_supervisor;
 mod line;
 #[path = "os/shared/locks.rs"]
 mod locks;
+#[path = "os/shared/mount_client.rs"]
+mod mount_client;
+#[path = "os/shared/mount_error.rs"]
+mod mount_error;
+#[path = "os/shared/mount_manager.rs"]
+mod mount_manager;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/mount_process.rs"]
+mod mount_process;
+#[cfg(windows)]
+#[path = "os/windows/mount_process.rs"]
+mod mount_process;
+#[path = "os/shared/mount_proxy.rs"]
+mod mount_proxy;
+#[path = "os/shared/mount_registry.rs"]
+mod mount_registry;
+#[path = "os/shared/mount_request_gate.rs"]
+mod mount_request_gate;
+#[path = "os/shared/mount_source.rs"]
+mod mount_source;
 #[cfg(windows)]
 #[path = "os/windows/platform.rs"]
 mod platform;
@@ -63,6 +83,16 @@ mod platform;
 mod platform;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
+#[cfg(test)]
+#[path = "os/shared/request_workers_task_tests.rs"]
+mod request_workers_task_tests;
+#[path = "os/shared/rooted_backend.rs"]
+mod rooted_backend;
+#[path = "os/shared/rooted_backend_case.rs"]
+mod rooted_backend_case;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "os/shared/rooted_backend_task_tests.rs"]
+mod rooted_backend_task_tests;
 #[path = "os/shared/schedule.rs"]
 mod schedule;
 #[path = "os/shared/state.rs"]
@@ -80,6 +110,10 @@ pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
     refresh_share_worker_checked, request_daemon_replacement, send_share_command,
     ShareWorkerSnapshot,
+};
+pub use mount_client::{
+    connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
+    MountHostSession,
 };
 #[allow(unused_imports)]
 pub use platform::DriveInfo;

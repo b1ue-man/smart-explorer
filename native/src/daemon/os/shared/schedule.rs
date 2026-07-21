@@ -229,7 +229,7 @@ pub fn run_daemon() {
     loop {
         let controls = scheduling_controls();
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor);
+            stop_daemon(&mut job_supervisor, &share_host);
             return;
         }
         let enabled_now = crate::autostart::is_enabled();
@@ -259,7 +259,7 @@ pub fn run_daemon() {
         }
         share_host.tick();
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor);
+            stop_daemon(&mut job_supervisor, &share_host);
             return;
         }
         let now = now_secs();
@@ -468,8 +468,9 @@ fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, generation: &str) 
     }
 }
 
-fn stop_daemon(supervisor: &mut JobSupervisor) {
+fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost) {
     log("daemon stopping (stop requested or unreadable stop control)");
+    share_host.stop_mounts();
     for error in supervisor.cancel_and_join() {
         log(&error);
     }

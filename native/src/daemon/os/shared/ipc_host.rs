@@ -38,6 +38,7 @@ pub(crate) struct ShareHost {
     initialized: Arc<AtomicBool>,
     pub(super) exec_state: Arc<super::exec_state::ExecState>,
     exec_grant_lock: Arc<Mutex<()>>,
+    pub(super) mounts: super::mount_manager::MountManager,
 }
 
 pub(super) struct ShareHostState {
@@ -93,6 +94,7 @@ impl ShareHost {
             initialized: Arc::new(AtomicBool::new(false)),
             exec_state: Arc::new(super::exec_state::ExecState::new()),
             exec_grant_lock: Arc::new(Mutex::new(())),
+            mounts: super::mount_manager::MountManager::default(),
         }
     }
 
@@ -109,6 +111,7 @@ impl ShareHost {
     }
 
     pub(crate) fn tick(&self) {
+        self.mounts.tick();
         self.drain_events();
         let should_reload = self
             .state
@@ -120,6 +123,10 @@ impl ShareHost {
                 log(&format!("share worker reload failed: {error}"));
             }
         }
+    }
+
+    pub(crate) fn stop_mounts(&self) {
+        self.mounts.stop_all();
     }
 
     pub(crate) fn reload_now(&self) -> Result<bool, String> {

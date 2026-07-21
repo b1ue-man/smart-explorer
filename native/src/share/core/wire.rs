@@ -197,6 +197,33 @@ pub(crate) struct FsWalkNode {
     pub(crate) size: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsWriteCapabilities {
+    pub(crate) create: bool,
+    pub(crate) replace: bool,
+    pub(crate) namespace_replace: bool,
+}
+
+impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
+    fn from(value: crate::vfs::StagedWriteCapabilities) -> Self {
+        Self {
+            create: value.create,
+            replace: value.replace,
+            namespace_replace: value.namespace_replace,
+        }
+    }
+}
+
+impl From<FsWriteCapabilities> for crate::vfs::StagedWriteCapabilities {
+    fn from(value: FsWriteCapabilities) -> Self {
+        Self {
+            create: value.create,
+            replace: value.replace,
+            namespace_replace: value.namespace_replace,
+        }
+    }
+}
+
 /// A deliberately small, additive classification for filesystem failures.
 /// The message remains the source of detail; this kind exists only where a
 /// caller must make a safe control-flow decision.
@@ -211,11 +238,13 @@ pub(crate) enum FsErrorKind {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
+    Capabilities { path: String },
     ListDir { path: String },
     Stat { path: String },
     WalkTree { path: String },
     Read { path: String },
     Write { path: String },
+    WriteNew { path: String },
     WriteDone,
     MkdirAll { path: String },
     Rename { src: String, dst: String },
@@ -229,6 +258,9 @@ pub(crate) enum FsRequest {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "r", rename_all = "snake_case")]
 pub(crate) enum FsResponse {
+    Capabilities {
+        capabilities: FsWriteCapabilities,
+    },
     Entries {
         entries: Vec<FsMeta>,
     },

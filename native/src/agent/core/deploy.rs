@@ -1,7 +1,7 @@
 use super::backend::AgentBackend;
 use super::transport::AgentReconnect;
 use crate::agent_proto;
-use crate::vfs::BackendHandle;
+use crate::vfs::{Backend, BackendHandle};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -87,13 +87,23 @@ pub fn deploy_over_sftp(
         ))?;
     }
 
-    let serve_command = format!("{} --serve", sh_quote(&remote));
+    let serve_command = format!(
+        "{} --serve-root {}",
+        sh_quote(&remote),
+        sh_quote(&sftp.root_display())
+    );
     let reconnect_sftp = sftp.clone();
     let reconnect_command = serve_command.clone();
     let reconnect: AgentReconnect =
         Arc::new(move || reconnect_sftp.open_exec_streams(&reconnect_command));
     let (r, w) = sftp.open_exec_streams(&serve_command)?;
-    AgentBackend::from_streams_with_reconnect(r, w, inner, reconnect)
+    AgentBackend::from_root_confined_streams_with_reconnect(
+        r,
+        w,
+        inner,
+        reconnect,
+        sftp.root_display(),
+    )
 }
 
 /// Remove a deployed agent from a server.

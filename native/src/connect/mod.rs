@@ -21,6 +21,7 @@ mod types;
 #[allow(unused_imports)]
 pub use connector::open_saved_at;
 pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};
+pub(crate) use endpoint::parse_remote_url;
 #[allow(unused_imports)]
 pub use endpoint::{gdrive_endpoint, remote_endpoint};
 pub use endpoint::{is_remote_url, saved_and_path};

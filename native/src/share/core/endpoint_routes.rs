@@ -56,8 +56,8 @@ impl EndpointRoutes {
                         Duration::from_secs(iroh::NET_REPORT_TIMEOUT),
                         online_endpoint.online(),
                     )
-                        .await
-                        .is_ok()
+                    .await
+                    .is_ok()
                     {
                         // A home-relay URL can be selected before its registration
                         // handshake completes. Publish once more when it is usable.

@@ -356,6 +356,7 @@ impl App {
             sync_progress: None,
 
             saved_connections: crate::creds::load_connections(),
+            mount_ui: MountUiState::default(),
 
             bisync_rx: None,
             bisync_running: false,

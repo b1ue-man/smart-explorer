@@ -2,7 +2,7 @@ use super::config::SftpConfig;
 use super::session::{connect_async, Client};
 use russh::client;
 use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{RawSftpSession, SftpSession};
 use std::future::Future;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +15,7 @@ const SFTP_CONNECT_DEADLINE: Duration = Duration::from_secs(30);
 pub(super) struct SftpTransport {
     session: client::Handle<Client>,
     sftp: Arc<SftpSession>,
+    posix_rename: Option<Arc<RawSftpSession>>,
 }
 
 pub(super) struct Generation<T> {
@@ -70,6 +71,10 @@ impl SftpGeneration {
 
     pub(super) fn sftp(&self) -> &SftpSession {
         &self.value.sftp
+    }
+
+    pub(super) fn posix_rename(&self) -> Option<&RawSftpSession> {
+        self.value.posix_rename.as_deref()
     }
 }
 
@@ -157,10 +162,12 @@ impl SftpConnection {
 }
 
 fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpTransport> {
-    let (session, sftp) = block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
+    let (session, sftp, posix_rename) =
+        block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
     Ok(SftpTransport {
         session,
         sftp: Arc::new(sftp),
+        posix_rename: posix_rename.map(Arc::new),
     })
 }
 

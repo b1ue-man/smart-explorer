@@ -252,13 +252,7 @@ pub(crate) fn ensure_destination_parent_plain(destination: &Path) -> io::Result<
 /// directory destination and avoiding a probe/rename race for absent names.
 pub(crate) fn promote_staged_replace(staged: &Path, destination: &Path) -> io::Result<()> {
     ensure_destination_parent_plain(destination)?;
-    let staged_meta = std::fs::symlink_metadata(staged)?;
-    if !staged_meta.is_file() || super::local_platform::metadata_is_link_like(&staged_meta) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "agent staged promotion source must be a regular file",
-        ));
-    }
+    validate_staged_file(staged)?;
 
     match std::fs::symlink_metadata(destination) {
         Ok(meta) if meta.is_file() && !super::local_platform::metadata_is_link_like(&meta) => {
@@ -272,6 +266,24 @@ pub(crate) fn promote_staged_replace(staged: &Path, destination: &Path) -> io::R
             super::local_platform::rename_no_replace(staged, destination)
         }
         Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn promote_staged_no_replace(staged: &Path, destination: &Path) -> io::Result<()> {
+    ensure_destination_parent_plain(destination)?;
+    validate_staged_file(staged)?;
+    super::local_platform::rename_no_replace(staged, destination)
+}
+
+fn validate_staged_file(staged: &Path) -> io::Result<()> {
+    let staged_meta = std::fs::symlink_metadata(staged)?;
+    if staged_meta.is_file() && !super::local_platform::metadata_is_link_like(&staged_meta) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "agent staged promotion source must be a regular file",
+        ))
     }
 }
 

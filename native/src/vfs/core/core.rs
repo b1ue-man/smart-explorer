@@ -1,6 +1,8 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
+use super::capabilities::{RootConfinement, StagedWriteCapabilities};
+
 /// Which backend owns a path. A 1-byte `Copy` tag so it can ride on `FileEntry`
 /// (added when the first remote backend is wired) without touching the hot
 /// local walk.
@@ -127,6 +129,18 @@ pub trait Backend: Send + Sync {
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>>;
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>>;
 
+    /// Open a new regular file without replacing, truncating, or adopting an
+    /// existing namespace entry. Mounted writes use this for their private
+    /// upload staging object so a probe/create race cannot target another
+    /// actor's file. Backends must use one protocol/OS exclusive-create call.
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "backend has no atomic exclusive-create writer",
+        ))
+    }
+
     /// The local filename a download of `path` should be saved as. Defaults to
     /// `name`; backends that transform content on read (e.g. Google Drive
     /// exporting a Doc to .docx) override this to add the right extension.
@@ -209,6 +223,36 @@ pub trait Backend: Send + Sync {
     /// Local filesystems override this to true.
     fn rename_overwrites(&self) -> bool {
         false
+    }
+
+    /// Safe staged-write guarantees at `root`. `create` includes atomic
+    /// exclusive creation through `open_write_new`. Backends with path-dependent
+    /// exports (notably a Share peer) may inspect the requested subtree.
+    fn staged_write_capabilities(&self, _root: &str) -> StagedWriteCapabilities {
+        StagedWriteCapabilities {
+            create: false,
+            replace: self.rename_overwrites(),
+            namespace_replace: self.rename_overwrites(),
+        }
+    }
+
+    /// Whether every pathname below `root` has proven case-sensitive lookup
+    /// semantics. The conservative default is false: protocols such as SFTP
+    /// and generic peer transports can target either Unix-like or Windows
+    /// storage, and a local filesystem may itself be mounted case-folded.
+    ///
+    /// Callers may advertise case-sensitive filesystem behavior only when a
+    /// backend can make this guarantee for the exact exported root and retain
+    /// it across every reconnect or transport fallback for that backend.
+    fn case_sensitive_paths(&self, _root: &str) -> bool {
+        false
+    }
+
+    /// Whether every operation is technically confined to the exact selected
+    /// root even if a pathname is exchanged concurrently after validation.
+    /// The conservative default requires an explicit trusted-root opt-in.
+    fn root_confinement(&self, _root: &str) -> RootConfinement {
+        RootConfinement::Unverified
     }
 
     /// Open a file for reading by its backend-unique `id` when known (so the

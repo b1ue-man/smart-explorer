@@ -186,7 +186,7 @@ fn open_connection_at(
     Ok((backend, opened, None))
 }
 
-fn saved_shorthand(spec: &str) -> Result<Option<(SavedConnection, String)>, String> {
+pub(crate) fn saved_shorthand(spec: &str) -> Result<Option<(SavedConnection, String)>, String> {
     let Some(rest) = spec.strip_prefix('@') else {
         return Ok(None);
     };
