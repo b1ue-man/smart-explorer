@@ -21,8 +21,8 @@ use windows_sys::Win32::{
         WTD_UICONTEXT_INSTALL, WTD_UI_NONE,
     },
     Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_SEQUENTIAL_SCAN,
-        FILE_SHARE_READ,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_READ,
     },
     System::{
         Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
@@ -43,10 +43,25 @@ use super::runtime_install_download::PinnedMsi;
 pub(super) struct LockedMsi {
     file: File,
     path: PathBuf,
+    _parent_chain: Vec<File>,
 }
 
 impl LockedMsi {
     pub(super) fn open(path: &Path, pinned: &PinnedMsi) -> Result<Self, String> {
+        if !path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            return Err("Dokany-MSI-Pfad ist nicht absolut und normalisiert".into());
+        }
+        // `msiexec` receives a pathname rather than our already verified file
+        // handle. Keep every pathname ancestor open without share-delete so a
+        // same-user process cannot replace the verified path before elevation.
+        let parent_chain = lock_parent_chain(path)?;
         let mut file = OpenOptions::new()
             .read(true)
             .share_mode(FILE_SHARE_READ)
@@ -75,6 +90,7 @@ impl LockedMsi {
         Ok(Self {
             file,
             path: path.to_path_buf(),
+            _parent_chain: parent_chain,
         })
     }
 
@@ -181,6 +197,47 @@ impl LockedMsi {
         }
         Ok(exit_code)
     }
+}
+
+fn lock_parent_chain(path: &Path) -> Result<Vec<File>, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Dokany-MSI besitzt keinen sicheren Elternordner".to_string())?;
+    let mut directories = parent.ancestors().collect::<Vec<_>>();
+    directories.reverse();
+    let mut locked = Vec::with_capacity(directories.len());
+    for directory in directories {
+        // Drive and share roots cannot be renamed as ordinary children. Do not
+        // impose a share-mode lock on the volume root itself.
+        if directory.parent().is_none() {
+            continue;
+        }
+        let handle = OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(directory)
+            .map_err(|error| {
+                format!(
+                    "Dokany-MSI-Pfadkomponente absichern ({}): {error}",
+                    directory.display()
+                )
+            })?;
+        let metadata = handle.metadata().map_err(|error| {
+            format!(
+                "Dokany-MSI-Pfadkomponente pruefen ({}): {error}",
+                directory.display()
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(format!(
+                "Dokany-MSI-Pfad durchquert keinen direkten regulaeren Ordner: {}",
+                directory.display()
+            ));
+        }
+        locked.push(handle);
+    }
+    Ok(locked)
 }
 
 pub(super) enum ElevatedLaunchError {
