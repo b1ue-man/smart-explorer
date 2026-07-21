@@ -708,7 +708,11 @@ function Test-ReleaseMutablePath([string]$Path) {
 }
 
 function Get-TrackedChanges {
-    $status = Get-GitText @("status", "--porcelain=v1", "--untracked-files=no")
+    # Porcelain's leading index/worktree columns are significant. Get-GitText
+    # trims them and would turn ` M native/Cargo.lock` into an invalid path.
+    $status = (Invoke-GitCaptured -ArgumentList @(
+        "status", "--porcelain=v1", "--untracked-files=no"
+    )).StdOut
     $paths = [System.Collections.Generic.List[string]]::new()
     foreach ($line in ($status -split "`n")) {
         if ($line.Length -lt 4) { continue }
@@ -719,6 +723,61 @@ function Get-TrackedChanges {
         $paths.Add($path.Trim('"'))
     }
     return $paths.ToArray()
+}
+
+function Normalize-ReleaseFileText([string]$Text) {
+    return $Text.Replace("`r`n", "`n")
+}
+
+function Assert-ReleaseVersionRecoveryState {
+    $remoteCargo = (Invoke-GitCaptured -ArgumentList @(
+        "show", "origin/main:native/Cargo.toml"
+    )).StdOut
+    $remoteLock = (Invoke-GitCaptured -ArgumentList @(
+        "show", "origin/main:native/Cargo.lock"
+    )).StdOut
+    $localCargo = [System.IO.File]::ReadAllText((Join-Path $scriptRoot "Cargo.toml"))
+    $localLock = [System.IO.File]::ReadAllText((Join-Path $scriptRoot "Cargo.lock"))
+
+    $remoteVersion = Get-VersionFromCargoText $remoteCargo "origin/main:native/Cargo.toml"
+    $localVersion = Get-VersionFromCargoText $localCargo "native/Cargo.toml"
+    $nextVersion = Get-NextPatchVersion $remoteVersion
+    if ($localVersion -ne $remoteVersion -and $localVersion -ne $nextVersion) {
+        throw "Local Cargo.toml version '$localVersion' is not origin/main '$remoteVersion' or its next patch '$nextVersion'."
+    }
+
+    $cargoPattern = [regex]::new('(?m)^(version\s*=\s*")[^"]+(".*)$')
+    $expectedCargo = $cargoPattern.Replace(
+        $remoteCargo,
+        { param($match) "$($match.Groups[1].Value)$localVersion$($match.Groups[2].Value)" },
+        1
+    )
+    if ((Normalize-ReleaseFileText $localCargo) -cne
+        (Normalize-ReleaseFileText $expectedCargo)) {
+        throw "native/Cargo.toml contains recovery changes beyond the exact release version."
+    }
+
+    $lockPattern = [regex]::new(
+        '(?ms)(^\[\[package\]\]\r?\nname = "smart_explorer"\r?\nversion = ")([^"]+)(")'
+    )
+    $remoteLockMatches = $lockPattern.Matches($remoteLock)
+    $localLockMatches = $lockPattern.Matches($localLock)
+    if ($remoteLockMatches.Count -ne 1 -or $localLockMatches.Count -ne 1) {
+        throw "Cargo.lock must contain exactly one smart_explorer root package entry."
+    }
+    if ($remoteLockMatches[0].Groups[2].Value -ne $remoteVersion -or
+        $localLockMatches[0].Groups[2].Value -ne $localVersion) {
+        throw "Cargo.lock and Cargo.toml versions disagree during release recovery."
+    }
+    $expectedLock = $lockPattern.Replace(
+        $remoteLock,
+        { param($match) "$($match.Groups[1].Value)$localVersion$($match.Groups[3].Value)" },
+        1
+    )
+    if ((Normalize-ReleaseFileText $localLock) -cne
+        (Normalize-ReleaseFileText $expectedLock)) {
+        throw "native/Cargo.lock contains recovery changes beyond the exact root package version."
+    }
 }
 
 function Assert-GitReleasePreflight {
@@ -742,6 +801,7 @@ function Assert-GitReleasePreflight {
             throw "Tracked worktree change is outside release recovery state: $path"
         }
     }
+    Assert-ReleaseVersionRecoveryState
 }
 
 function Assert-NonInteractiveGitWriteAccess {

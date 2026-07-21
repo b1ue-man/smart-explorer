@@ -142,6 +142,9 @@ feed, bumping a version, committing, pushing, or tagging. Linux payload repair
 scripts are recovery diagnostics, not alternate complete-release entrypoints.
 A failed build may retain an isolated stage for diagnosis; never hand-promote
 it. Fix the cause and rerun the top wrapper for the same intended version.
+The recovery preflight accepts `Cargo.toml` and `Cargo.lock` only when their
+working copies differ from `origin/main` by that exact next patch version; any
+dependency, profile, or unrelated lockfile drift fails before a build starts.
 Before an immutable tag exists, the wrapper recovers that candidate instead of
 inventing another patch. Every build records its current source HEAD. Once the
 bounded release candidate is committed, the manifest must bind that commit's
