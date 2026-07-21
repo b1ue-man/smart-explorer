@@ -59,8 +59,12 @@ if ! [[ "$source_commit" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
   exit 1
 fi
 source_commit="${source_commit,,}"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+# Canonical release resource limits are fixed rather than ambient defaults.
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_PROFILE_RELEASE_LTO=thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+export CARGO_PROFILE_RELEASE_DEBUG=0
 
 linux_release_args=()
 if [ "$bootstrap_zig" != "1" ]; then

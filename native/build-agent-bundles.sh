@@ -4,6 +4,14 @@
 # never ship with stale committed binaries.
 set -euo pipefail
 
+# The canonical embedded-agent build is deliberately serialized. Keep these
+# limits local because this script is invoked directly from Windows through WSL.
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_PROFILE_RELEASE_LTO=thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+export CARGO_PROFILE_RELEASE_DEBUG=0
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
 agent_dir="$repo_root/se-agent"

@@ -14,6 +14,14 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# Keep every direct Windows release leaf within the canonical memory budget;
+# WSL does not reliably inherit custom Windows environment variables.
+$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_INCREMENTAL = "0"
+$env:CARGO_PROFILE_RELEASE_LTO = "thin"
+$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1"
+$env:CARGO_PROFILE_RELEASE_DEBUG = "0"
+
 # Version aus Cargo.toml lesen
 $version = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 Write-Host "Baue Version $version ..."

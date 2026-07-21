@@ -151,7 +151,10 @@ zbus = { version = "5.16", default-features = false, features = ["tokio", "block
 
 [profile.release]
 opt-level = 3
-lto = "fat"
+# Full LTO made the desktop crate exceed the memory available on supported
+# 8-GiB release hosts. Thin LTO preserves cross-crate optimization without the
+# monolithic LLVM peak.
+lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
