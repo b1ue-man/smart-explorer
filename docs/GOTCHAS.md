@@ -23,6 +23,14 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   report failure on exit 0. Run cargo via the Bash tool (`2>/dev/null`); do
   file/version/makensis steps as separate simple PS calls. Quote makensis args:
   `& $makensis "/DVERSION=x.y.z" "installer.nsi"`.
+- **Release builds must stay inside the memory budget.** The desktop crate once
+  exhausted an 8-GiB host with full LTO and displaced unrelated processes.
+  Keep ThinLTO, one codegen unit, `CARGO_BUILD_JOBS=1`, and non-incremental builds
+  pinned in every canonical release leaf. The top-level wrapper also routes the
+  large Linux tree through `native/run-release-memory-bounded.sh`, which uses a
+  4-GiB high/5-GiB hard cgroup limit plus at most 2 GiB of swap when systemd
+  scopes are available. Do not weaken or make these limits ambient overrides;
+  ordinary diagnostic builds may use separate Cargo settings.
 - **Embedded SSH-agent binaries retain source paths.** Unmapped Cargo registry
   paths make an otherwise identical static-musl agent differ between a local
   build and GitHub's `/home/runner` build, tripping the intentional exact-byte

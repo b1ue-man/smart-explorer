@@ -14,6 +14,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# The canonical release must remain safe on the 8-GiB builders used for local
+# publication. Pin these values instead of accepting ambient Cargo overrides.
+$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_INCREMENTAL = "0"
+$env:CARGO_PROFILE_RELEASE_LTO = "thin"
+$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1"
+$env:CARGO_PROFILE_RELEASE_DEBUG = "0"
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 $releaseRoot = Join-Path $repoRoot "release-native"
@@ -492,7 +500,7 @@ try {
         $linuxArgs = " --no-bootstrap-zig"
     }
     Invoke-Checked -ErrorMessage "Linux feed build failed." -Command {
-        & wsl.exe bash -lc "cd '$repoRootWsl' && SMART_EXPLORER_RELEASE_LOCK_TOKEN='$($releaseLock.Token)' SMART_EXPLORER_FEED_DIR='$stageReleaseWsl/update-feed' SMART_EXPLORER_SHARE_DIR='$stageReleaseWsl/share-server' native/publish-linux-feed-wsl.sh$linuxArgs"
+        & wsl.exe bash -lc "cd '$repoRootWsl' && SMART_EXPLORER_RELEASE_LOCK_TOKEN='$($releaseLock.Token)' SMART_EXPLORER_FEED_DIR='$stageReleaseWsl/update-feed' SMART_EXPLORER_SHARE_DIR='$stageReleaseWsl/share-server' native/run-release-memory-bounded.sh native/publish-linux-feed-wsl.sh$linuxArgs"
     }
 
     Assert-NonEmptyFile $linuxInstaller
@@ -901,7 +909,10 @@ function Invoke-LinuxCompleteReleaseBuild($ReleaseLock) {
     $oldToken = $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN
     try {
         $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN = $ReleaseLock.Token
-        $args = @((Join-Path $scriptRoot "publish-feed.sh"))
+        $args = @(
+            (Join-Path $scriptRoot "run-release-memory-bounded.sh"),
+            (Join-Path $scriptRoot "publish-feed.sh")
+        )
         if ($NoBootstrapZig) { $args += "--no-bootstrap-zig" }
         & bash @args
         if ($LASTEXITCODE -ne 0) {

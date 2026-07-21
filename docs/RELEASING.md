@@ -96,6 +96,16 @@ run an exact-candidate verification pipeline by hand first.
    Windows-GNU/Linux cross-build. Both paths inherit the same
    `release-native/.complete-release.lock`; a direct full invocation of
    `publish-feed.sh` is refused.
+
+   Every canonical Cargo leaf fixes `CARGO_BUILD_JOBS=1`, disables incremental
+   compilation, and uses ThinLTO with one codegen unit. These values are not
+   ambient tuning knobs: they keep simultaneous compiler and monolithic LLVM
+   peaks out of the release transaction. The large Linux build tree additionally
+   runs through `native/run-release-memory-bounded.sh`. When systemd scopes are
+   available it applies `MemoryHigh=4G`, `MemoryMax=5G`, and `MemorySwapMax=2G`,
+   so an exceptional compiler allocation can terminate only that build scope
+   rather than displace unrelated desktop processes. Hosts without a usable
+   scope print a warning and retain the compiler-level limits.
 3. The wrapper owns every remaining step. It bumps the patch version once,
    reuses that version after a pre-tag failure, builds and promotes the complete
    artifact set, verifies the six feed hashes, the installer's embedded
