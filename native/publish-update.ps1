@@ -19,7 +19,7 @@ Set-Location $PSScriptRoot
 $env:CARGO_BUILD_JOBS = "1"
 $env:CARGO_INCREMENTAL = "0"
 $env:CARGO_PROFILE_RELEASE_LTO = "thin"
-$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1"
+$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"
 $env:CARGO_PROFILE_RELEASE_DEBUG = "0"
 
 # Version aus Cargo.toml lesen
