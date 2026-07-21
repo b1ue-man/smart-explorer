@@ -4,6 +4,8 @@ Schneller nativer Datei-Explorer für Windows und Linux (Rust + egui). Filtert D
 über die gesamte Ordnertiefe (Name/Regex/Glob, Größe, Datum via Kalender, Typ),
 kopiert gefiltert mit Strukturerhalt (auch über die Windows-Zwischenablage in den
 Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextmenü.
+Breite Datei-/Detailspalten bleiben per horizontalem Scroll erreichbar, auch
+wenn ein Detailbereich die verfügbare Tabellenbreite verkleinert.
 
 **Remote/Cloud (ab 0.4.x):** durchsucht **SFTP**, **FTP/FTPS**, **WebDAV**
 (Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
@@ -28,6 +30,81 @@ UNC/SMB-Leases bis zum letzten Benutzer erhalten bleiben. Verbindungsaufbau und
 echte Inaktivitaet sind begrenzt, aber eine laufende Datenuebertragung wird
 nicht wegen ihrer Gesamtdauer geschlossen. Fehlgeschlagene Schreib-, Loesch-
 oder Umbenennungsoperationen werden dabei niemals blind wiederholt.
+
+**Remote als echtes Windows-Laufwerk (optional):** Eine gespeicherte Verbindung,
+Google Drive oder ein konkretes Share-Ziel kann mit einem Laufwerksbuchstaben in
+Explorer und normalen Programmen erscheinen – in derselben Art, wie Cryptomator
+einen Tresor als virtuelles Laufwerk bereitstellt. Das ist ein
+**Dokany-Dateisystem, ausdrücklich kein CfAPI-Sync-Root und kein
+Placeholder-Modell**. Smart Explorer bleibt der einzige Remote-Client: Das
+Laufwerk benutzt das bereits gewählte `Backend` einschließlich seiner
+Direkt-/Relay-/SSH-Verbindungswege und Fallbacks; Anmeldedaten und das eigentliche
+Remote-Ziel bleiben im Daemon und werden nicht an den isolierten
+Dateisystem-Host weitergereicht.
+
+Voraussetzung unter Windows ist die externe, offizielle
+[Dokany-2.3.1-Laufzeit (API 231)](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000).
+Smart Explorer bündelt weder Installer noch Treiber und lädt ausschließlich
+`%WINDIR%\System32\dokan2.dll`; DLL und Treiber müssen exakt API 231 melden. Die
+offizielle signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`,
+ihr systemweiter Installer kann aber einmalig eine Administratorbestätigung
+anfordern. Die normale Smart-Explorer-Installation bleibt davon unabhängig
+per-user und ohne Admin möglich. Stand der Primärquellenprüfung: 2026-07-21
+([Dokany-Projekt](https://github.com/dokan-dev/dokany),
+[API-Header 2.3.1](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)).
+
+In der GUI startet das Laufwerkssymbol neben einer gespeicherten Verbindung,
+Google Drive oder einem Share-Gerät den Dialog **Remote als Laufwerk**; das
+Toolbar-Laufwerkssymbol öffnet den Manager zum Auswerfen oder erneuten
+Verbinden. Der Terminal-Companion bietet dieselbe Steuerung:
+
+```powershell
+se drive runtime
+se drive mount @prod:/srv --letter M
+se drive mount @prod:/notizen --letter N --read-write
+se drive mount sftp://host/srv --letter S --trust-remote-root
+se drive list
+se drive unmount M:
+se drive retry <mount-id>
+```
+
+Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Der
+automatisch gestartete Linux-SSH-Agent bindet die exakte Wurzel vor seinen
+Worker-Threads mit Landlock ABI 3+; Google Drive bleibt durch seine
+Parent-ID-Navigation in der ausgewählten Provider-Hierarchie. Plain SFTP,
+Local/UNC, Share, WebDAV und FTP können einen Pfad dagegen nicht atomar gegen
+einen gleichzeitig ausgetauschten Symlink/Junction absichern. Sie benötigen
+deshalb die ausdrücklich zu bestätigende GUI-Option **Remote-Wurzel ohne
+technische Sandbox vertrauen** beziehungsweise `--trust-remote-root` – auch
+read-only. Smart Explorer validiert und serialisiert Pfade dort weiterhin,
+vertraut aber dem Server und anderen Schreibern während eines Zugriffs.
+
+Ohne `--read-write` ist das eingebundene Laufwerk absichtlich
+schreibgeschützt. Zusätzlich zur Root-Zulassung wird der Schreibmodus schon
+beim Einbinden abgelehnt, wenn das aktive Backend nicht alle drei Garantien
+`create`, `replace` und `namespace_replace` meldet. Dabei bedeutet `create`
+eine atomare exklusive Übernahme des zufälligen Staging-Namens, nicht einen
+Stat-dann-Create-Test. Der SSH-Agent sowie Local/UNC besitzen diese
+Schreibprimitive; plain SFTP nur, wenn der Server exakt OpenSSH
+[`posix-rename@openssh.com` v1](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L420-L435)
+aushandelt. Synthetische Share-Wurzeln wie `/` und `/Verbindungen` bleiben
+schreibgeschützt; ein konkret exportierter Unterbaum wird separat geprüft. Ein
+Transport-Fallback ist für den Laufwerkskern transparent, wird aber mit seinen
+tatsächlichen Root- und Schreibgarantien neu zugelassen. Ein Agent→SFTP-Fallback
+kann daher im strikten Modus oder für RW konservativ abgelehnt werden.
+
+Schreibzugriffe landen zuerst in einem lokalen **Whole-file-Spool**. Dadurch
+funktionieren auch wiederholte Editor-Zyklen wie bei Obsidian
+`truncate → write → flush → close` sowie `Temp-Datei → atomarer Replace`:
+Windows sieht nie eine halb hochgeladene Zieldatei. Vor dem Upload und nochmals
+direkt vor der Promotion vergleicht Smart Explorer die beim Öffnen erfasste
+Remote-Baseline (ID, Größe, Zeit und – sofern vorhanden – Inhalts-MD5). Nicht
+aufgelöste Änderungen und mehrdeutige Commit-Antworten bleiben im dauerhaften
+Recovery-Journal und werden als Konflikt angezeigt. Das ist kein serverseitiges
+CAS: Zwischen letzter Prüfung und Commit bleibt ohne bedingte Backend-Operation
+ein kleines TOCTOU-Fenster. Außerdem kostet jeder Flush einer geänderten Datei
+einen vollständigen Upload; Metadaten wie ACLs, Alternate Data Streams,
+benutzerdefinierte Zeiten/Attribute und Reparse Points werden nicht emuliert.
 
 **Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
 senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und
@@ -161,7 +238,9 @@ startet genau diese Payload vor der Veröffentlichung unter Xvfb.
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
 ```
 
-**Windows:** Kein Admin, kein Setup-Zwang. Zwei Wege:
+**Windows-Grundinstallation:** Kein Admin, kein Setup-Zwang. Die optionale
+Dokany-Laufzeit für echte Remote-Laufwerke ist davon getrennt und kann bei ihrer
+systemweiten Installation eine Administratorbestätigung anfordern. Zwei Wege:
 
 1. **Installer (empfohlen):** Die aktuelle
    **[`Smart Explorer Setup X.Y.Z.exe`](https://github.com/b1ue-man/smart-explorer/releases/latest)**

@@ -6,9 +6,11 @@ storage-analysis walk, search/filter) runs **locally on the server** and only
 the **results** stream back — instead of the client paying one network
 round-trip per directory.
 
-Status: **fully implemented & build-verified (host + windows-gnu); the agent is
-functional for Linux x86_64/aarch64 servers. The current wire/behavior version
-is protocol v6, with bounded frames/tree/search state and explicit cancellation.
+Status: **fully implemented; the agent is functional for Linux x86_64/aarch64
+servers. The current source wire/behavior version is protocol v9, with bounded
+frames/tree/search state, explicit cancellation, exclusive staged create, and
+an exact `--serve-root` mode that enters Landlock ABI 3+ after symlink-free
+`openat2` resolution (primary sources refreshed 2026-07-21).
 The historical rollout shipped P0 (then protocol v2) + P1 (read) in 0.5.69;
 P2 (write) + P3 (server-local copy/move/delete/mkdir) in 0.5.70; P4 (recursive
 bulk folder transfer) in 0.5.71;
