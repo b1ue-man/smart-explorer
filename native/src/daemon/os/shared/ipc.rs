@@ -152,12 +152,15 @@ pub(super) fn handle_client(
             id,
             session_token,
             status,
+            recovery,
             recovery_required,
             ..
-        } => match host
-            .mounts
-            .update_status(&id, &session_token, status, recovery_required)
-        {
+        } => match host.mounts.update_status(
+            &id,
+            &session_token,
+            status,
+            recovery.or_else(|| recovery_required.map(crate::mount::MountRecovery::from_required)),
+        ) {
             Ok(_) => write_response(&mut stream, &IpcResponse::Ok),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },

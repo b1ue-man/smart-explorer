@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use crate::creds::{Protocol, SavedConnection};
 use crate::mount::{
@@ -19,6 +22,8 @@ pub(super) struct DriveArgs {
 enum DriveCommand {
     #[command(about = "Check the required Dokany runtime and driver")]
     Runtime(OutputArgs),
+    #[command(about = "Install the pinned official Dokany runtime for Windows drives")]
+    InstallRuntime(InstallRuntimeArgs),
     #[command(about = "Mount a saved remote or Share peer as a Windows drive")]
     Mount(MountArgs),
     #[command(about = "List drives managed by Smart Explorer")]
@@ -27,6 +32,14 @@ enum DriveCommand {
     Unmount(SelectArgs),
     #[command(about = "Retry a failed managed drive")]
     Retry(SelectArgs),
+}
+
+#[derive(Args)]
+struct InstallRuntimeArgs {
+    #[arg(long, hide = true, value_name = "PATH")]
+    msi: Option<PathBuf>,
+    #[arg(long, help = "Print machine-readable JSON")]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -73,11 +86,27 @@ struct SelectArgs {
 pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
     match args.command {
         DriveCommand::Runtime(args) => runtime(args),
+        DriveCommand::InstallRuntime(args) => install_runtime(args),
         DriveCommand::Mount(args) => mount(args),
         DriveCommand::List(args) => list(args),
         DriveCommand::Unmount(args) => unmount(args),
         DriveCommand::Retry(args) => retry(args),
     }
+}
+
+fn install_runtime(args: InstallRuntimeArgs) -> Result<i32, String> {
+    let outcome = crate::mount::install_drive_runtime(args.msi.as_deref())?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&outcome).map_err(|error| error.to_string())?
+        );
+    } else if outcome.is_failure() {
+        eprintln!("dokany\tfailed\t{}", outcome.message());
+    } else {
+        println!("dokany\t{}", outcome.message());
+    }
+    Ok(outcome.exit_code())
 }
 
 fn runtime(args: OutputArgs) -> Result<i32, String> {

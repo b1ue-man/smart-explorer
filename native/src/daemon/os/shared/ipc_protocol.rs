@@ -227,6 +227,9 @@ pub(super) enum IpcRequest {
         /// status reports deliberately leave the daemon's conservative state
         /// unchanged.
         #[serde(default)]
+        recovery: Option<crate::mount::MountRecovery>,
+        /// Compatibility signal for the immediately preceding daemon/host.
+        #[serde(default)]
         recovery_required: Option<bool>,
     },
 }

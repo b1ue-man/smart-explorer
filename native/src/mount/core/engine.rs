@@ -2,6 +2,7 @@ use super::case_semantics::{identity_key, validate_backend_case_path};
 use super::journal::{DeletePhase, PersistedDelete, PersistedEntry};
 use super::path::{validate_windows_component, PathProjector, ProjectedPath};
 use super::spool::{prepare_spool_root, WholeFileSpool};
+use super::startup::validate_backend_root;
 use super::types::{
     BackendRoot, Baseline, DeleteToken, EntryCondition, HandleId, MountConfig, MountConflict,
     MountRuntimeConfig, NamespaceIntent,
@@ -56,23 +57,13 @@ impl MountEngine {
     ) -> io::Result<Self> {
         config.validate()?;
         let root = config.source.root().clone();
-        Self::open_at_root(config.runtime(), root, backend, spool_root.as_ref(), true)
-    }
-
-    /// Opens an engine inside the isolated filesystem host. Its Backend has
-    /// already been capability-rooted by the daemon, so account/source data is
-    /// deliberately absent and callback `/` maps only to that backend root.
-    pub fn open_host(
-        config: MountRuntimeConfig,
-        backend: BackendHandle,
-        spool_root: impl AsRef<Path>,
-    ) -> io::Result<Self> {
         Self::open_at_root(
-            config,
-            BackendRoot::parse("/")?,
+            config.runtime(),
+            root,
             backend,
             spool_root.as_ref(),
-            false,
+            true,
+            true,
         )
     }
 
@@ -196,21 +187,18 @@ impl MountEngine {
         Ok(entry)
     }
 
-    fn open_at_root(
+    pub(super) fn open_at_root(
         config: MountRuntimeConfig,
         root: BackendRoot,
         backend: BackendHandle,
         spool_root: &Path,
         verify_backend_ancestors: bool,
+        validate_remote: bool,
     ) -> io::Result<Self> {
         let projector = PathProjector::new(root);
         let case_sensitive_paths = backend.case_sensitive_paths(projector.root().as_str());
-        let root_meta = backend.stat(projector.root().as_str())?;
-        if !root_meta.is_dir || root_meta.is_symlink {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "configured mount root is not a plain directory",
-            ));
+        if validate_remote {
+            validate_backend_root(&*backend, projector.root().as_str())?;
         }
         let spool_root = prepare_spool_root(spool_root)?;
         let (spool, recovered) = WholeFileSpool::open(&spool_root, &config.id)?;
@@ -334,7 +322,9 @@ impl MountEngine {
             next_handle: AtomicU64::new(1),
             next_delete: AtomicU64::new(next_delete),
         };
-        engine.recover_pending_deletes()?;
+        if validate_remote {
+            engine.recover_pending_deletes()?;
+        }
         Ok(engine)
     }
 

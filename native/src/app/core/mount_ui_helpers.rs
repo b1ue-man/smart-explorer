@@ -28,8 +28,13 @@ pub(super) fn mount_status_alert(
         crate::mount::MountStatus::Conflict { path, detail, .. } => Some(format!(
             "Laufwerk \"{label}\": Der Remote-Status der Aenderung an {path} ist nicht abschliessend verifiziert; sie kann bereits gespeichert sein oder mit dem Remote-Stand kollidieren: {detail}. Die lokale Recovery-Kopie bleibt erhalten; Details stehen im Laufwerksmanager."
         )),
-        crate::mount::MountStatus::Failed { detail } if mount.recovery_required => Some(format!(
+        crate::mount::MountStatus::Failed { detail }
+            if mount.recovery == crate::mount::MountRecovery::Required => Some(format!(
             "Laufwerk \"{label}\" ist ausgefallen: {detail}. Nicht uebertragene Aenderungen bleiben im Recovery-Cache; Details stehen im Laufwerksmanager."
+        )),
+        crate::mount::MountStatus::Failed { detail }
+            if mount.recovery == crate::mount::MountRecovery::Unknown => Some(format!(
+            "Laufwerk \"{label}\" ist ausgefallen: {detail}. Der lokale Recovery-Status ist noch nicht verifiziert; der Cache bleibt bis zur erneuten Pruefung erhalten."
         )),
         crate::mount::MountStatus::Failed { detail } => Some(format!(
             "Laufwerk \"{label}\" konnte nicht bereitgestellt werden: {detail}. Der saubere Eintrag kann im Laufwerksmanager entfernt werden."
@@ -38,6 +43,14 @@ pub(super) fn mount_status_alert(
             "Laufwerk \"{label}\" konnte nicht bereitgestellt werden: {detail}. Details stehen im Laufwerksmanager."
         )),
         _ => None,
+    }
+}
+
+pub(super) fn recovery_label(recovery: crate::mount::MountRecovery) -> &'static str {
+    match recovery {
+        crate::mount::MountRecovery::Clean => "Recovery: sauber",
+        crate::mount::MountRecovery::Required => "Recovery: lokale Aenderungen vorhanden",
+        crate::mount::MountRecovery::Unknown => "Recovery: noch nicht verifiziert",
     }
 }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
 
-use crate::mount::{DriveSelection, MountId, MountSnapshot, MountStatus};
+use crate::mount::{DriveSelection, MountId, MountRecovery, MountSnapshot, MountStatus};
 use crate::vfs::BackendHandle;
 
 use super::{random_token, snapshot, MountEntry, MountManager};
@@ -180,7 +180,7 @@ impl MountManager {
             ) {
                 return;
             }
-            entry.recovery_required = true;
+            entry.recovery = MountRecovery::Unknown;
             entry.status = MountStatus::Failed {
                 detail: "Die private Laufwerk-Backend-Verbindung wurde unerwartet beendet; der Recovery-Cache bleibt erhalten"
                     .into(),
@@ -197,10 +197,10 @@ impl MountManager {
         id: &MountId,
         session_token: &str,
         status: MountStatus,
-        recovery_required: Option<bool>,
+        recovery: Option<MountRecovery>,
     ) -> Result<MountSnapshot, String> {
         validate_host_status(&status)?;
-        if recovery_required.is_some()
+        if recovery.is_some()
             && !matches!(
                 &status,
                 MountStatus::Mounting | MountStatus::Failed { .. } | MountStatus::Unmounted
@@ -231,10 +231,10 @@ impl MountManager {
             // A running filesystem may have accepted a write immediately
             // after Dokany mounted it. Preserve its cache until a closed host
             // explicitly proves that no retryable state remains.
-            entry.recovery_required = true;
+            entry.recovery = MountRecovery::Unknown;
         }
-        if let Some(recovery_required) = recovery_required {
-            entry.recovery_required = recovery_required;
+        if let Some(recovery) = recovery {
+            entry.recovery = recovery;
         }
         entry.status = status;
         Ok(snapshot(entry))

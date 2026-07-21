@@ -4,7 +4,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::mount::{MountConfig, MountId, MountSnapshot, MountStatus};
+use crate::mount::{MountConfig, MountId, MountRecovery, MountSnapshot, MountStatus};
 use crate::vfs::BackendHandle;
 
 use super::ipc_host::ShareHost;
@@ -17,6 +17,8 @@ pub(super) const STOP_GRACE: Duration = Duration::from_secs(330);
 mod entry_state;
 #[path = "mount_manager_host.rs"]
 mod host;
+#[path = "mount_manager_start_cache.rs"]
+mod start_cache;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
 
@@ -41,16 +43,18 @@ struct MountEntry {
     child: Option<Child>,
     backend_stream_active: bool,
     registry_recorded: bool,
-    recovery_required: bool,
+    recovery: MountRecovery,
 }
 
 impl Default for MountManager {
     fn default() -> Self {
         let (entries, registry_error) = match super::mount_registry::load() {
             Ok(configs) => {
+                let recovery = start_cache::audit_registered(&configs);
                 let entries = configs
                     .into_iter()
-                    .map(|config| {
+                    .zip(recovery)
+                    .map(|(config, recovery)| {
                         let key = config.id.as_str().to_string();
                         (
                             key,
@@ -68,7 +72,7 @@ impl Default for MountManager {
                                 child: None,
                                 backend_stream_active: false,
                                 registry_recorded: true,
-                                recovery_required: true,
+                                recovery,
                             },
                         )
                     })
@@ -111,29 +115,7 @@ impl MountManager {
         registry_recorded: bool,
     ) -> Result<MountSnapshot, String> {
         let key = config.id.as_str().to_string();
-        {
-            let mut state = self.state_guard()?;
-            if state.contains_key(&key) {
-                return Err("Diese Laufwerk-ID wird bereits verwaltet".into());
-            }
-            state.insert(
-                key.clone(),
-                MountEntry {
-                    config: config.clone(),
-                    status: MountStatus::Mounting,
-                    backend: None,
-                    capabilities: None,
-                    launch_token: None,
-                    session_token: None,
-                    backend_token: None,
-                    control: None,
-                    child: None,
-                    backend_stream_active: false,
-                    registry_recorded,
-                    recovery_required: registry_recorded,
-                },
-            );
-        }
+        start_cache::insert(self, &key, config.clone(), registry_recorded)?;
 
         #[cfg(not(windows))]
         {
@@ -150,19 +132,22 @@ impl MountManager {
 
         #[cfg(windows)]
         {
-            let backend =
-                match super::mount_source::resolve(&config.source, host).and_then(|backend| {
-                    super::rooted_backend::RootedBackend::new(
-                        backend,
-                        config.source.root(),
-                        config.mode,
-                        config.root_security,
-                    )
-                    .map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
-                }) {
-                    Ok(backend) => backend,
-                    Err(error) => return self.fail_start(&key, error),
-                };
+            let cache_root = match start_cache::prepare(self, &key, &config.id) {
+                Ok(path) => path,
+                Err(error) => return self.fail_start(&key, error),
+            };
+            let backend = match super::mount_source::resolve(&config, host).and_then(|backend| {
+                super::rooted_backend::RootedBackend::new(
+                    backend,
+                    config.source.root(),
+                    config.mode,
+                    config.root_security,
+                )
+                .map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
+            }) {
+                Ok(backend) => backend,
+                Err(error) => return self.fail_start(&key, error),
+            };
             let capabilities =
                 super::ipc_protocol::MountBackendCapabilities::from_backend(&backend);
             if config.mode == crate::mount::MountMode::ReadWrite {
@@ -194,14 +179,6 @@ impl MountManager {
             if !ipc_addr.ip().is_loopback() {
                 return self.fail_start(&key, "Laufwerk-IPC-Adresse ist nicht lokal".into());
             }
-            let cache_root = match crate::mount::prepare_spool_root(
-                &crate::support_dirs::app_data_dir().join("mount-cache"),
-            ) {
-                Ok(path) => path,
-                Err(error) => {
-                    return self.fail_start(&key, format!("Laufwerk-Cache absichern: {error}"))
-                }
-            };
             {
                 let mut state = self.state_guard()?;
                 let entry = state
@@ -268,7 +245,7 @@ impl MountManager {
                 if entry.backend_stream_active {
                     return Ok(snapshot(entry));
                 }
-                if entry.recovery_required {
+                if entry.recovery.requires_retention() {
                     return Ok(snapshot(entry));
                 }
                 if entry.registry_recorded {
@@ -318,7 +295,7 @@ impl MountManager {
             .get_mut(key)
             .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
         let Some(child) = entry.child.as_mut() else {
-            if !entry.recovery_required {
+            if entry.recovery.is_clean() {
                 finish_clean(entry);
             }
             return Ok(Some(snapshot(entry)));
@@ -378,7 +355,7 @@ impl MountManager {
         let entry = state
             .get_mut(key)
             .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-        if !entry.recovery_required {
+        if entry.recovery.is_clean() {
             finish_clean(entry);
         }
         Ok(snapshot(entry))
@@ -442,7 +419,7 @@ impl MountManager {
         for entry in state.values_mut() {
             if entry.child.is_none()
                 && !entry.backend_stream_active
-                && !entry.recovery_required
+                && entry.recovery.is_clean()
                 && matches!(entry.status, MountStatus::Unmounted)
             {
                 finish_clean(entry);

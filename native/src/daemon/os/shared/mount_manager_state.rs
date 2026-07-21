@@ -1,12 +1,12 @@
 use std::process::ExitStatus;
 
-use crate::mount::{MountSnapshot, MountStatus};
+use crate::mount::{MountRecovery, MountSnapshot, MountStatus};
 
 use super::MountEntry;
 
 pub(super) fn finish_exit(entry: &mut MountEntry, exit: ExitStatus) {
     clear_host_runtime(entry);
-    if exit.success() {
+    if exit.success() && entry.recovery.is_clean() {
         finish_clean(entry);
         return;
     }
@@ -18,16 +18,28 @@ pub(super) fn finish_exit(entry: &mut MountEntry, exit: ExitStatus) {
             | MountStatus::Conflict { .. }
     ) {
         entry.status = MountStatus::Failed {
-            detail: format!(
-                "Laufwerk-Host wurde mit nicht abgeschlossenem Recovery-Status beendet ({exit})"
-            ),
+            detail: exit_detail(entry.recovery, exit),
         };
+    }
+}
+
+fn exit_detail(recovery: MountRecovery, exit: ExitStatus) -> String {
+    match recovery {
+        MountRecovery::Clean => {
+            format!("Laufwerk-Host wurde vor der Laufwerk-Bereitschaft beendet ({exit}); der lokale Recovery-Cache ist sauber")
+        }
+        MountRecovery::Required => {
+            format!("Laufwerk-Host wurde beendet ({exit}); lokale Aenderungen bleiben fuer Retry im Recovery-Cache")
+        }
+        MountRecovery::Unknown => {
+            format!("Laufwerk-Host wurde beendet, bevor der lokale Recovery-Status verifiziert werden konnte ({exit}); der Cache bleibt bis zur erneuten Pruefung erhalten")
+        }
     }
 }
 
 pub(super) fn finish_clean(entry: &mut MountEntry) {
     clear_host_runtime(entry);
-    entry.recovery_required = false;
+    entry.recovery = MountRecovery::Clean;
     if entry.backend_stream_active {
         entry.status = MountStatus::Unmounted;
         return;
@@ -72,7 +84,8 @@ pub(super) fn snapshot(entry: &MountEntry) -> MountSnapshot {
     MountSnapshot {
         config: entry.config.clone(),
         status: entry.status.clone(),
-        recovery_required: entry.recovery_required,
+        recovery: entry.recovery,
+        recovery_required_compat: entry.recovery.requires_retention(),
     }
 }
 
