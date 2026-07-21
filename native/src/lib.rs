@@ -18,6 +18,7 @@ pub mod ftp;
 pub mod gdrive;
 pub mod icons;
 pub mod linemerge;
+pub mod mount;
 pub mod net;
 pub mod quickshare;
 pub mod rscan;
