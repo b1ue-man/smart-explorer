@@ -15,6 +15,7 @@ pub struct AgentBackend {
     pub(super) inner: BackendHandle,
     pub(super) connection: Arc<AgentConnection>,
     version: String,
+    root_confined: Option<String>,
 }
 
 fn operation_canceled(message: &'static str) -> io::Error {
@@ -28,7 +29,7 @@ impl AgentBackend {
         w: Box<dyn Write + Send>,
         inner: BackendHandle,
     ) -> io::Result<Self> {
-        Self::from_streams_inner((r, w), inner, None)
+        Self::from_streams_inner((r, w), inner, None, None)
     }
 
     pub(super) fn from_streams_with_reconnect(
@@ -37,7 +38,17 @@ impl AgentBackend {
         inner: BackendHandle,
         reconnect: AgentReconnect,
     ) -> io::Result<Self> {
-        Self::from_streams_inner((r, w), inner, Some(reconnect))
+        Self::from_streams_inner((r, w), inner, Some(reconnect), None)
+    }
+
+    pub(super) fn from_root_confined_streams_with_reconnect(
+        r: Box<dyn Read + Send>,
+        w: Box<dyn Write + Send>,
+        inner: BackendHandle,
+        reconnect: AgentReconnect,
+        root: String,
+    ) -> io::Result<Self> {
+        Self::from_streams_inner((r, w), inner, Some(reconnect), Some(root))
     }
 
     #[cfg(test)]
@@ -54,6 +65,7 @@ impl AgentBackend {
             inner,
             connection,
             version,
+            root_confined: None,
         })
     }
 
@@ -61,12 +73,14 @@ impl AgentBackend {
         streams: super::transport::AgentStreams,
         inner: BackendHandle,
         reconnect: Option<AgentReconnect>,
+        root_confined: Option<String>,
     ) -> io::Result<Self> {
         let (connection, version) = AgentConnection::new(streams, reconnect)?;
         Ok(AgentBackend {
             inner,
             connection,
             version,
+            root_confined,
         })
     }
 
@@ -184,7 +198,11 @@ impl Backend for AgentBackend {
     }
 
     fn supports_bulk_tree(&self) -> bool {
-        true
+        // The remote PutTree receiver currently spools under the system temp
+        // directory. A root-confined agent cannot write there under Landlock,
+        // so advertise the generic per-entry fallback until that spool lives
+        // inside the confined root.
+        self.root_confined.is_none()
     }
 
     fn get_tree(&self, root: &str, dst: &Path) -> VfsResult<u64> {
@@ -360,6 +378,10 @@ impl Backend for AgentBackend {
         self.agent_open_write(path)
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.agent_open_write_new(path)
+    }
+
     fn download_name(&self, path: &str, name: &str) -> String {
         self.inner.download_name(path, name)
     }
@@ -397,6 +419,20 @@ impl Backend for AgentBackend {
         }
     }
 
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.agent_unit_op(Frame::Promote {
+            staged: staged.to_string(),
+            destination: destination.to_string(),
+        })
+    }
+
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.agent_unit_op(Frame::PromoteNoReplace {
+            staged: staged.to_string(),
+            destination: destination.to_string(),
+        })
+    }
+
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         self.agent_unit_op(Frame::Remove {
             path: path.to_string(),
@@ -425,6 +461,18 @@ impl Backend for AgentBackend {
 
     fn rename_overwrites(&self) -> bool {
         true
+    }
+
+    fn staged_write_capabilities(&self, _root: &str) -> crate::vfs::StagedWriteCapabilities {
+        crate::vfs::StagedWriteCapabilities::complete()
+    }
+
+    fn root_confinement(&self, root: &str) -> crate::vfs::RootConfinement {
+        if self.root_confined.as_deref() == Some(root) {
+            crate::vfs::RootConfinement::Enforced
+        } else {
+            crate::vfs::RootConfinement::Unverified
+        }
     }
 
     fn is_local(&self) -> bool {

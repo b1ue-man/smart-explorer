@@ -162,6 +162,11 @@ impl Backend for CachingBackend {
         self.invalidate(path);
         self.inner.open_write(path)
     }
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        let writer = self.inner.open_write_new(path)?;
+        self.invalidate(path);
+        Ok(writer)
+    }
     fn download_name(&self, path: &str, name: &str) -> String {
         self.inner.download_name(path, name)
     }
@@ -219,6 +224,15 @@ impl Backend for CachingBackend {
     }
     fn rename_overwrites(&self) -> bool {
         self.inner.rename_overwrites()
+    }
+    fn staged_write_capabilities(&self, root: &str) -> super::StagedWriteCapabilities {
+        self.inner.staged_write_capabilities(root)
+    }
+    fn case_sensitive_paths(&self, root: &str) -> bool {
+        self.inner.case_sensitive_paths(root)
+    }
+    fn root_confinement(&self, root: &str) -> super::RootConfinement {
+        self.inner.root_confinement(root)
     }
     fn plan_dedupe_recursive(
         &self,

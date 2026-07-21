@@ -1,6 +1,6 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 6;
+pub const PROTO_VERSION: u32 = 9;
 
 /// Payload chunk size for streamed byte transfers.
 pub const CHUNK: usize = 256 * 1024;
@@ -17,6 +17,7 @@ pub struct WireMeta {
     pub is_symlink: bool,
     pub size: u64,
     pub mtime_ms: i64,
+    pub content_md5: Option<String>,
 }
 
 /// One node of the size tree.
@@ -71,6 +72,8 @@ pub enum Frame {
     },
     /// Begin writing `path`; client follows with `Data`* `End` -> `Ok`.
     Write(String),
+    /// Begin writing a new file; final promotion fails if `path` already exists.
+    WriteNew(String),
     /// A chunk of a byte stream.
     Data(Vec<u8>),
     Copy {
@@ -85,6 +88,17 @@ pub enum Frame {
     RenameNoReplace {
         src: String,
         dst: String,
+    },
+    /// Commit a complete staged file using the backend's safe replace
+    /// primitive. This must not degrade into an ordinary rename client-side.
+    Promote {
+        staged: String,
+        destination: String,
+    },
+    /// Commit a complete staged file only if the destination remains absent.
+    PromoteNoReplace {
+        staged: String,
+        destination: String,
     },
     Remove {
         path: String,

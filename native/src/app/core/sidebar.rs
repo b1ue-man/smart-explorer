@@ -34,6 +34,10 @@ impl App {
         let mut open_gdrive = false;
         let mut disc_gdrive = false;
         let mut open_share_target: Option<crate::share::PeerOpenTarget> = None;
+        let mut mount_saved: Option<crate::creds::SavedConnection> = None;
+        let mut mount_gdrive = false;
+        let mut mount_peer: Option<(crate::share::PeerOpenTarget, String)> = None;
+        let mount_supported = crate::mount::drive_mount_supported();
 
         // Active connection indicator + one-click disconnect.
         if let Some(rs) = &self.remote {
@@ -124,6 +128,14 @@ impl App {
                     {
                         disc_gdrive = true;
                     }
+                    if mount_supported
+                        && ui
+                            .small_button("▣")
+                            .on_hover_text("Google Drive als lokales Laufwerk einbinden")
+                            .clicked()
+                    {
+                        mount_gdrive = true;
+                    }
                 });
             });
         }
@@ -149,6 +161,14 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("×").on_hover_text("Entfernen").clicked() {
                         to_remove = Some(c.account());
+                    }
+                    if mount_supported
+                        && ui
+                            .small_button("▣")
+                            .on_hover_text("Als lokales Laufwerk einbinden")
+                            .clicked()
+                    {
+                        mount_saved = Some(c.clone());
                     }
                 });
             });
@@ -198,23 +218,37 @@ impl App {
                 });
             });
             for c in self.share_profiles.direct_contacts.clone() {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(format!("{} [{}]", c.display_name, c.status.label()))
-                                .small(),
+                ui.horizontal(|ui| {
+                    let target = crate::share::PeerOpenTarget::Direct {
+                        contact_id: c.id.clone(),
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(format!("{} [{}]", c.display_name, c.status.label()))
+                                    .small(),
+                            )
+                            .frame(false),
                         )
-                        .frame(false),
-                    )
-                    .on_hover_text(format!(
-                        "{} via Share-Server oeffnen",
-                        c.expected_fingerprint
-                    ))
-                    .clicked()
-                {
-                    open_share_target =
-                        Some(crate::share::PeerOpenTarget::Direct { contact_id: c.id });
-                }
+                        .on_hover_text(format!(
+                            "{} via Share-Server oeffnen",
+                            c.expected_fingerprint
+                        ))
+                        .clicked()
+                    {
+                        open_share_target = Some(target.clone());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if mount_supported
+                            && ui
+                                .small_button("▣")
+                                .on_hover_text("Direktgeraet als lokales Laufwerk einbinden")
+                                .clicked()
+                        {
+                            mount_peer = Some((target, c.display_name.clone()));
+                        }
+                    });
+                });
             }
 
             ui.add_space(6.0);
@@ -254,26 +288,40 @@ impl App {
                     .color(Color32::from_gray(150)),
                 );
                 for m in r.members {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(format!(
-                                    "  {} [{}]",
-                                    m.device_name,
-                                    m.status.label()
-                                ))
-                                .small(),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text(format!("{} via Raum oeffnen", m.fingerprint))
-                        .clicked()
-                    {
-                        open_share_target = Some(crate::share::PeerOpenTarget::RoomDevice {
+                    ui.horizontal(|ui| {
+                        let target = crate::share::PeerOpenTarget::RoomDevice {
                             room_id: r.id.clone(),
-                            device_id: m.device_id,
+                            device_id: m.device_id.clone(),
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(format!(
+                                        "  {} [{}]",
+                                        m.device_name,
+                                        m.status.label()
+                                    ))
+                                    .small(),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text(format!("{} via Raum oeffnen", m.fingerprint))
+                            .clicked()
+                        {
+                            open_share_target = Some(target.clone());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if mount_supported
+                                && ui
+                                    .small_button("▣")
+                                    .on_hover_text("Raumgeraet als lokales Laufwerk einbinden")
+                                    .clicked()
+                            {
+                                mount_peer =
+                                    Some((target, format!("{} - {}", r.name, m.device_name)));
+                            }
                         });
-                    }
+                    });
                 }
             }
         }
@@ -344,6 +392,15 @@ impl App {
         }
         if let Some(target) = open_share_target {
             self.open_share_target(target);
+        }
+        if let Some(connection) = mount_saved {
+            self.offer_mount_saved(&connection);
+        }
+        if mount_gdrive {
+            self.offer_mount_gdrive();
+        }
+        if let Some((target, label)) = mount_peer {
+            self.offer_mount_peer(target, label);
         }
     }
 }

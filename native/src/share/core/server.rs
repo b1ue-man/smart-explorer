@@ -146,6 +146,24 @@ async fn handle_peer_stream(
         _ => return Err(eio("Dateioperation erwartet")),
     };
     match req {
+        FsRequest::Capabilities { path } => {
+            match blocking_fs("Share filesystem capabilities", move || {
+                super::fs_capabilities::staged_write_capabilities(&path, &exports)
+            })
+            .await
+            {
+                Ok(capabilities) => {
+                    reply(
+                        &mut send,
+                        FsResponse::Capabilities {
+                            capabilities: capabilities.into(),
+                        },
+                    )
+                    .await
+                }
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
         FsRequest::ListDir { path } => match blocking_fs("Share list directory", move || {
             fs::list_dir(&path, &exports)
         })
@@ -163,7 +181,24 @@ async fn handle_peer_stream(
         FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, exports).await,
         FsRequest::Read { path } => super::server_transfer::read_file(send, path, exports).await,
         FsRequest::Write { path } => {
-            super::server_transfer::write_file(send, recv, path, exports).await
+            super::server_transfer::write_file(
+                send,
+                recv,
+                path,
+                exports,
+                super::server_transfer::WriteMode::Replace,
+            )
+            .await
+        }
+        FsRequest::WriteNew { path } => {
+            super::server_transfer::write_file(
+                send,
+                recv,
+                path,
+                exports,
+                super::server_transfer::WriteMode::Create,
+            )
+            .await
         }
         FsRequest::MkdirAll { path } => {
             simple(

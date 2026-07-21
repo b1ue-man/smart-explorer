@@ -77,7 +77,7 @@ pub fn gdrive_endpoint(path: &str) -> String {
 }
 
 /// Parse `proto://user@host:port/path` -> its parts (path keeps its leading `/`).
-pub(super) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16, String)> {
+pub(crate) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16, String)> {
     let s = s.trim();
     let (scheme, rest) = s.split_once("://")?;
     let proto = Protocol::parse(scheme)?;
@@ -91,10 +91,7 @@ pub(super) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16
         None => (String::new(), authority),
     };
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (
-            h.to_string(),
-            p.parse().unwrap_or_else(|_| proto.default_port()),
-        ),
+        Some((h, p)) => (h.to_string(), p.parse().ok()?),
         None => (hostport.to_string(), proto.default_port()),
     };
     Some((

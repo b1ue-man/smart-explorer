@@ -8,7 +8,8 @@ mod agent_proto;
 use std::io::Write;
 
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_default();
+    let mut arguments = std::env::args().skip(1);
+    let arg = arguments.next().unwrap_or_default();
     match arg.as_str() {
         "--version" | "-V" => {
             println!(
@@ -17,20 +18,40 @@ fn main() {
                 env!("CARGO_PKG_VERSION")
             );
         }
-        "--serve" | "" => {
-            // The serve loop dispatches requests on worker threads that all
-            // write through the (mutex-guarded) sink, so the writer must be
-            // `Send + 'static` → hand it the owned `Stdout` (locks per write
-            // internally) rather than a non-Send `StdoutLock`.
-            let stdin = std::io::stdin();
-            if let Err(e) = agent_proto::serve(stdin.lock(), std::io::stdout()) {
-                let _ = writeln!(std::io::stderr(), "se-agent: {e}");
+        "--serve-root" => {
+            let Some(root) = arguments.next() else {
+                let _ = writeln!(std::io::stderr(), "se-agent: --serve-root needs one path");
+                std::process::exit(2);
+            };
+            if arguments.next().is_some() {
+                let _ = writeln!(std::io::stderr(), "se-agent: unexpected extra argument");
+                std::process::exit(2);
+            }
+            if let Err(error) = agent_proto::restrict_filesystem(std::path::Path::new(&root)) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "se-agent: secure root confinement unavailable: {error}"
+                );
                 std::process::exit(1);
             }
+            serve();
         }
+        "--serve" | "" => serve(),
         other => {
             let _ = writeln!(std::io::stderr(), "se-agent: unknown argument {other:?}");
             std::process::exit(2);
         }
+    }
+}
+
+fn serve() {
+    // The serve loop dispatches requests on worker threads that all
+    // write through the (mutex-guarded) sink, so the writer must be
+    // `Send + 'static` → hand it the owned `Stdout` (locks per write
+    // internally) rather than a non-Send `StdoutLock`.
+    let stdin = std::io::stdin();
+    if let Err(e) = agent_proto::serve(stdin.lock(), std::io::stdout()) {
+        let _ = writeln!(std::io::stderr(), "se-agent: {e}");
+        std::process::exit(1);
     }
 }

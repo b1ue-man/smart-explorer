@@ -94,6 +94,7 @@ pub fn list_local(path: &str) -> std::io::Result<Vec<WireMeta>> {
             is_symlink: super::local_platform::metadata_is_link_like(&md),
             size: md.len(),
             mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
+            content_md5: None,
         });
     }
     Ok(out)
@@ -113,6 +114,7 @@ pub fn stat_local(path: &str) -> std::io::Result<WireMeta> {
         is_symlink: super::local_platform::metadata_is_link_like(&md),
         size: md.len(),
         mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
+        content_md5: None,
     })
 }
 

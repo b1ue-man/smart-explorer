@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 impl AgentBackend {
-    /// Run a single-shot mutation op that replies `Ok`/`Err`. Once protocol-v6
+    /// Run a single-shot mutation op that replies `Ok`/`Err`. Once protocol-v7
     /// has handshaken, a missing or malformed reply is an ambiguous remote
     /// completion and must never be retried through the wrapped backend.
     pub(super) fn agent_unit_op(&self, req: Frame) -> io::Result<()> {

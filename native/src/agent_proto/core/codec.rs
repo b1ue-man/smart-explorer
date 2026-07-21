@@ -36,6 +36,11 @@ fn put_str(b: &mut Vec<u8>, s: &str) {
     b.extend_from_slice(s.as_bytes());
 }
 
+fn put_tagged_str(b: &mut Vec<u8>, tag: u8, value: &str) {
+    b.push(tag);
+    put_str(b, value);
+}
+
 fn put_bytes(b: &mut Vec<u8>, s: &[u8]) {
     put_u32(b, s.len() as u32);
     b.extend_from_slice(s);
@@ -144,6 +149,7 @@ fn put_meta(b: &mut Vec<u8>, m: &WireMeta) {
     put_bool(b, m.is_symlink);
     put_u64(b, m.size);
     put_i64(b, m.mtime_ms);
+    put_opt_str(b, &m.content_md5);
 }
 
 fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
@@ -153,6 +159,7 @@ fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
         is_symlink: r.bool()?,
         size: r.u64()?,
         mtime_ms: r.i64()?,
+        content_md5: r.opt_str()?,
     })
 }
 
@@ -223,10 +230,8 @@ impl Frame {
                 put_u64(&mut b, *offset);
                 put_u64(&mut b, *len);
             }
-            Frame::Write(p) => {
-                b.push(10);
-                put_str(&mut b, p);
-            }
+            Frame::Write(p) => put_tagged_str(&mut b, 10, p),
+            Frame::WriteNew(p) => put_tagged_str(&mut b, 33, p),
             Frame::Data(d) => {
                 b.push(11);
                 put_bytes(&mut b, d);
@@ -323,10 +328,7 @@ impl Frame {
                 put_str(&mut b, e);
             }
             Frame::Cancel => b.push(27),
-            Frame::TryExists(p) => {
-                b.push(28);
-                put_str(&mut b, p);
-            }
+            Frame::TryExists(p) => put_tagged_str(&mut b, 28, p),
             Frame::Exists(exists) => {
                 b.push(29);
                 put_bool(&mut b, *exists);
@@ -335,6 +337,22 @@ impl Frame {
                 b.push(30);
                 put_str(&mut b, src);
                 put_str(&mut b, dst);
+            }
+            Frame::Promote {
+                staged,
+                destination,
+            } => {
+                b.push(31);
+                put_str(&mut b, staged);
+                put_str(&mut b, destination);
+            }
+            Frame::PromoteNoReplace {
+                staged,
+                destination,
+            } => {
+                b.push(32);
+                put_str(&mut b, staged);
+                put_str(&mut b, destination);
             }
         }
         validate_frame_len(b.len())?;
@@ -437,6 +455,15 @@ impl Frame {
                 src: r.string()?,
                 dst: r.string()?,
             },
+            31 => Frame::Promote {
+                staged: r.string()?,
+                destination: r.string()?,
+            },
+            32 => Frame::PromoteNoReplace {
+                staged: r.string()?,
+                destination: r.string()?,
+            },
+            33 => Frame::WriteNew(r.string()?),
             t => return Err(bad(&format!("unknown frame tag {t}"))),
         };
         if !r.is_finished() {

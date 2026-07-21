@@ -81,6 +81,8 @@ mod exec_types;
 mod framing;
 #[path = "core/fs.rs"]
 mod fs;
+#[path = "core/fs_capabilities.rs"]
+mod fs_capabilities;
 #[path = "core/fs_error.rs"]
 mod fs_error;
 #[path = "core/handshake_limits.rs"]

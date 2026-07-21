@@ -12,6 +12,7 @@ use super::put_tree::handle_put_tree;
 use super::search::handle_search;
 use super::session::{emit, Sink};
 use super::transfer::{copy_file_safe, handle_get_tree, handle_read, handle_write, remove_path};
+use super::write_new::handle_write_new;
 use super::{read_frame, Frame, PROTO_VERSION, TRANSFER_FRAME_BACKLOG};
 
 type InboundSender = SyncSender<Frame>;
@@ -203,7 +204,7 @@ pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()>
                 let cancel = Arc::new(AtomicBool::new(false));
                 lock_or_recover(&cancels).insert(id, cancel.clone());
                 let rx = match &req {
-                    Frame::Write(_) | Frame::PutTree(_) => {
+                    Frame::Write(_) | Frame::WriteNew(_) | Frame::PutTree(_) => {
                         let (tx, rx) = transfer_channel();
                         lock_or_recover(&inbound).insert(id, tx);
                         Some(rx)
@@ -284,8 +285,23 @@ fn dispatch(
         Frame::WalkTree(p) => handle_walk_tree(sink, id, &p, cancel),
         Frame::Read { path, offset, len } => handle_read(sink, id, &path, offset, len, cancel),
         Frame::Write(p) => match inbound {
-            Some(rx) => handle_write(sink, id, &p, rx, cancel),
+            Some(rx) => handle_write(
+                sink,
+                id,
+                &p,
+                rx,
+                cancel,
+                super::promotion::promote_staged_replace,
+            ),
             None => emit(sink, id, &Frame::Err("write: no inbound channel".into())),
+        },
+        Frame::WriteNew(p) => match inbound {
+            Some(rx) => handle_write_new(sink, id, &p, rx, cancel),
+            None => emit(
+                sink,
+                id,
+                &Frame::Err("write-new: no inbound channel".into()),
+            ),
         },
         Frame::Copy { src, dst } => match copy_file_safe(&src, &dst, id) {
             Ok(_) => emit(sink, id, &Frame::Ok),
@@ -301,6 +317,26 @@ fn dispatch(
                 Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
             }
         }
+        Frame::Promote {
+            staged,
+            destination,
+        } => match super::promotion::promote_staged_replace(
+            Path::new(&staged),
+            Path::new(&destination),
+        ) {
+            Ok(()) => emit(sink, id, &Frame::Ok),
+            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
+        },
+        Frame::PromoteNoReplace {
+            staged,
+            destination,
+        } => match super::promotion::promote_staged_no_replace(
+            Path::new(&staged),
+            Path::new(&destination),
+        ) {
+            Ok(()) => emit(sink, id, &Frame::Ok),
+            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
+        },
         Frame::Remove { path, recursive } => match remove_path(&path, recursive) {
             Ok(_) => emit(sink, id, &Frame::Ok),
             Err(e) => emit(sink, id, &Frame::Err(e.to_string())),

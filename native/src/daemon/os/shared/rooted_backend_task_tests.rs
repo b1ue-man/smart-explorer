@@ -1,0 +1,185 @@
+use super::rooted_backend::RootedBackend;
+use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
+use crate::vfs::{
+    Backend, BackendHandle, LocalBackend, RootConfinement, Scheme, StagedWriteCapabilities,
+    VfsMeta, VfsResult,
+};
+use std::io::{self, Read, Write};
+use std::sync::Arc;
+
+struct RootConfinedLocalBackend {
+    inner: LocalBackend,
+}
+
+impl Backend for RootConfinedLocalBackend {
+    fn scheme(&self) -> Scheme {
+        Scheme::Sftp
+    }
+
+    fn root_display(&self) -> String {
+        self.inner.root_display()
+    }
+
+    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.inner.list_dir(path)
+    }
+
+    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.inner.stat(path)
+    }
+
+    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        self.inner.open_read(path)
+    }
+
+    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write(path)
+    }
+
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_new(path)
+    }
+
+    fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
+        self.inner.rename(source, destination)
+    }
+
+    fn remove_file(&self, path: &str) -> VfsResult<()> {
+        self.inner.remove_file(path)
+    }
+
+    fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        self.inner.remove_dir(path)
+    }
+
+    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        self.inner.mkdir_all(path)
+    }
+
+    fn staged_write_capabilities(&self, _root: &str) -> StagedWriteCapabilities {
+        StagedWriteCapabilities::complete()
+    }
+
+    fn case_sensitive_paths(&self, _root: &str) -> bool {
+        true
+    }
+
+    fn root_confinement(&self, _root: &str) -> RootConfinement {
+        RootConfinement::Enforced
+    }
+}
+
+struct Fixture {
+    _directory: tempfile::TempDir,
+    root_path: std::path::PathBuf,
+    root: BackendRoot,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root_path = directory.path().join("selected-root");
+        std::fs::create_dir(&root_path).unwrap();
+        std::fs::write(root_path.join("note.md"), b"trusted contents").unwrap();
+        let root = BackendRoot::parse(&forward_slashes(&root_path)).unwrap();
+        Self {
+            _directory: directory,
+            root_path,
+            root,
+        }
+    }
+
+    fn unverified(&self) -> BackendHandle {
+        Arc::new(LocalBackend::new(self.root.as_str()))
+    }
+
+    fn confined(&self) -> BackendHandle {
+        Arc::new(RootConfinedLocalBackend {
+            inner: LocalBackend::new(self.root.as_str()),
+        })
+    }
+}
+
+#[test]
+fn remote_drive_task_enforced_root_rejects_unverified_backend() {
+    let fixture = Fixture::new();
+    let error = only_error(RootedBackend::new(
+        fixture.unverified(),
+        &fixture.root,
+        MountMode::ReadOnly,
+        MountRootSecurity::Enforced,
+    ));
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn remote_drive_task_trusted_root_accepts_unverified_backend() {
+    let fixture = Fixture::new();
+    let backend = RootedBackend::new(
+        fixture.unverified(),
+        &fixture.root,
+        MountMode::ReadOnly,
+        MountRootSecurity::Trusted,
+    )
+    .unwrap();
+
+    let root = backend.stat("/").unwrap();
+    assert!(root.is_dir);
+    let mut contents = String::new();
+    backend
+        .open_read("/note.md")
+        .unwrap()
+        .read_to_string(&mut contents)
+        .unwrap();
+    assert_eq!(contents, "trusted contents");
+}
+
+#[test]
+fn remote_drive_task_confined_projection_blocks_escape_and_preserves_exclusive_owner() {
+    let fixture = Fixture::new();
+    let outside = fixture._directory.path().join("outside.txt");
+    std::fs::write(&outside, b"outside owner").unwrap();
+    std::fs::write(fixture.root_path.join("claimed.stage"), b"first owner").unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.root_path.join("escape-link")).unwrap();
+
+    let backend = RootedBackend::new(
+        fixture.confined(),
+        &fixture.root,
+        MountMode::ReadWrite,
+        MountRootSecurity::Enforced,
+    )
+    .unwrap();
+
+    let traversal = only_error(backend.open_read("/../outside.txt"));
+    assert_eq!(traversal.kind(), io::ErrorKind::InvalidInput);
+    let linked = only_error(backend.open_read("/escape-link"));
+    assert_eq!(linked.kind(), io::ErrorKind::PermissionDenied);
+
+    let collision = only_error(backend.open_write_new("/claimed.stage"));
+    assert_eq!(collision.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        std::fs::read(fixture.root_path.join("claimed.stage")).unwrap(),
+        b"first owner"
+    );
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside owner");
+
+    let mut fresh = backend.open_write_new("/fresh.stage").unwrap();
+    fresh.write_all(b"new owner").unwrap();
+    fresh.flush().unwrap();
+    drop(fresh);
+    assert_eq!(
+        std::fs::read(fixture.root_path.join("fresh.stage")).unwrap(),
+        b"new owner"
+    );
+}
+
+fn only_error<T>(result: io::Result<T>) -> io::Error {
+    match result {
+        Ok(_) => panic!("operation unexpectedly succeeded"),
+        Err(error) => error,
+    }
+}
+
+fn forward_slashes(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}

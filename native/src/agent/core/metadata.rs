@@ -12,6 +12,6 @@ pub(super) fn wire_to_vfs(m: WireMeta) -> VfsMeta {
         hidden: false,
         system: false,
         id: None,
-        content_md5: None,
+        content_md5: m.content_md5,
     }
 }

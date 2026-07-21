@@ -2,6 +2,7 @@ mod completions;
 mod completions_requests;
 mod connections;
 mod doctor;
+mod drive;
 mod exec;
 mod ops;
 #[cfg(test)]
@@ -47,6 +48,8 @@ Examples:
   se cp -r @prod:/exports share://direct/peer-id/Drop
   se doctor --json
   se share status --json
+  se drive runtime
+  se drive mount @prod:/srv --letter M
   source <(se completions bash)";
 
 #[derive(Parser)]
@@ -68,6 +71,8 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     #[command(about = "Configure and manage headless Smart Explorer Share")]
     Share(share::ShareArgs),
+    #[command(about = "Mount selected remotes as Windows drive letters")]
+    Drive(drive::DriveArgs),
     #[command(about = "Manage saved remotes and Share contacts")]
     Connections(connections::ConnectionsArgs),
     #[command(about = "Generate live shell completion setup")]
@@ -179,6 +184,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     match cli.command {
         Command::Doctor(args) => doctor::run(args),
         Command::Share(args) => share::run(args),
+        Command::Drive(args) => drive::run(args),
         Command::Connections(args) => connections::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Ls(args) => {

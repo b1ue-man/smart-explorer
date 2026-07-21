@@ -18,6 +18,8 @@
 
 #[path = "core/cache.rs"]
 mod cache;
+#[path = "core/capabilities.rs"]
+mod capabilities;
 #[path = "core/core.rs"]
 mod core;
 #[path = "core/delete.rs"]
@@ -36,6 +38,7 @@ mod local_platform;
 mod promotion;
 
 pub use self::cache::CachingBackend;
+pub use self::capabilities::{RootConfinement, StagedWriteCapabilities};
 pub use self::core::{
     Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
     SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,

@@ -15,7 +15,7 @@ fn frame_roundtrip() {
         }],
     };
     let frames = [
-        Frame::Hello { proto: 7 },
+        Frame::Hello { proto: 8 },
         Frame::HelloOk {
             proto: 2,
             version: "0.1".into(),
@@ -27,6 +27,7 @@ fn frame_roundtrip() {
             is_symlink: false,
             size: 9,
             mtime_ms: 1,
+            content_md5: Some("0123456789abcdef0123456789abcdef".into()),
         }]),
         Frame::Stat("/x".into()),
         Frame::Meta(WireMeta {
@@ -35,6 +36,7 @@ fn frame_roundtrip() {
             is_symlink: false,
             size: 0,
             mtime_ms: 0,
+            content_md5: None,
         }),
         Frame::TryExists("/present".into()),
         Frame::Exists(true),
@@ -58,6 +60,14 @@ fn frame_roundtrip() {
         Frame::RenameNoReplace {
             src: "/a".into(),
             dst: "/b".into(),
+        },
+        Frame::Promote {
+            staged: "/a.stage".into(),
+            destination: "/a".into(),
+        },
+        Frame::PromoteNoReplace {
+            staged: "/b.stage".into(),
+            destination: "/b".into(),
         },
         Frame::Remove {
             path: "/x".into(),

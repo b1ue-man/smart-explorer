@@ -208,6 +208,20 @@ impl Backend for GDriveBackend {
         self.promote_staged_file_no_replace(staged, destination)
     }
 
+    fn staged_write_capabilities(&self, _root: &str) -> crate::vfs::StagedWriteCapabilities {
+        crate::vfs::StagedWriteCapabilities {
+            create: true,
+            replace: true,
+            // Drive updates an exact destination id and then cleans up the
+            // staging object; it is not one atomic namespace rename.
+            namespace_replace: false,
+        }
+    }
+
+    fn root_confinement(&self, _root: &str) -> crate::vfs::RootConfinement {
+        crate::vfs::RootConfinement::Enforced
+    }
+
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         self.trash(path)
     }

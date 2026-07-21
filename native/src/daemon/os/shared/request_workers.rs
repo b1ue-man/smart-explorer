@@ -1,8 +1,10 @@
 use std::io;
-use std::time::{Duration, Instant};
 
-const MAX_REQUEST_WORKERS: usize = 8;
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+// Mount clients admit at most eight live requests. Keep bounded completion
+// headroom because a client may receive the final response and release its
+// permit just before the serving worker removes bookkeeping and becomes
+// joinable; that harmless tail must not reject the next Explorer request.
+const MAX_REQUEST_WORKERS: usize = 16;
 
 #[derive(Default)]
 pub(super) struct RequestWorkers {
@@ -24,21 +26,20 @@ impl RequestWorkers {
     }
 
     pub(super) fn shutdown(&mut self) -> io::Result<()> {
-        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let mut errors = Vec::new();
-        while !self.handles.is_empty() {
-            errors.extend(self.reap());
-            if self.handles.is_empty() {
-                break;
+        // Never detach a request that may already have dispatched a remote
+        // mutation. The mount manager keeps this backend generation fenced
+        // until every worker has really returned, so a Retry cannot overlap
+        // an old write whose response was merely delayed or lost.
+        for handle in self.handles.drain(..) {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(error.to_string()),
+                Err(payload) => errors.push(format!(
+                    "daemon backend request worker panicked: {}",
+                    panic_message(&payload)
+                )),
             }
-            if Instant::now() >= deadline {
-                errors.push(format!(
-                    "{} daemon backend request worker(s) did not stop",
-                    self.handles.len()
-                ));
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
         }
         if errors.is_empty() {
             Ok(())
@@ -86,6 +87,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn shutdown_joins_completed_cleanup() {

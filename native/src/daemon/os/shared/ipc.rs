@@ -1,5 +1,7 @@
-use std::io;
-use std::net::TcpStream;
+use std::io::{self, Read};
+use std::net::{Shutdown, TcpStream};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::Duration;
 use std::time::Instant;
 
 use super::backend_server::serve_backend;
@@ -25,7 +27,7 @@ pub(super) fn handle_client(
     let mut line = String::new();
     read_pre_auth_line(&mut stream, &mut line, auth_deadline)?;
     let req: IpcRequest = serde_json::from_str(line.trim()).map_err(eio)?;
-    require_token(token, req.token())?;
+    require_request_auth(token, &req, &host)?;
     drop(pre_auth);
     clear_pre_auth_deadline(&stream)?;
     match req {
@@ -98,11 +100,133 @@ pub(super) fn handle_client(
                 found: super::exec_state::cancel(&host, &target),
             },
         ),
+        IpcRequest::StartMount { config, .. } => match host.mounts.start(config, &host) {
+            Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::StopMount { id, .. } => match host.mounts.stop(&id) {
+            Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::ListMounts { .. } => match host.mounts.list() {
+            Ok(mounts) => write_response(&mut stream, &IpcResponse::Mounts { mounts }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::RetryMount { id, .. } => match host.mounts.retry(&id, &host) {
+            Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::MountHostAttach {
+            id, launch_token, ..
+        } => match host.mounts.grant_host(&id, &launch_token) {
+            Ok(grant) => {
+                write_response(
+                    &mut stream,
+                    &IpcResponse::MountHostReady {
+                        config: grant.config,
+                        scheme: grant.scheme,
+                        capabilities: grant.capabilities,
+                        session_token: grant.session_token.clone(),
+                        backend_token: grant.backend_token,
+                    },
+                )?;
+                let stop = host
+                    .mounts
+                    .register_control(&id, &grant.session_token)
+                    .map_err(eio)?;
+                serve_mount_control(stream, host, id, stop)
+            }
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::MountHostBackend {
+            id, backend_token, ..
+        } => match host.mounts.take_backend(&id, &backend_token) {
+            Ok((backend, _generation_lease)) => {
+                write_response(&mut stream, &IpcResponse::Ok)?;
+                let read = stream.try_clone()?;
+                serve_backend(read, stream, backend)
+            }
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+        IpcRequest::MountHostStatus {
+            id,
+            session_token,
+            status,
+            recovery_required,
+            ..
+        } => match host
+            .mounts
+            .update_status(&id, &session_token, status, recovery_required)
+        {
+            Ok(_) => write_response(&mut stream, &IpcResponse::Ok),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+        },
+    }
+}
+
+fn require_request_auth(token: &str, req: &IpcRequest, host: &ShareHost) -> io::Result<()> {
+    if let Some(request_token) = req.daemon_token() {
+        return require_token(token, request_token);
+    }
+    let result = match req {
+        IpcRequest::MountHostAttach {
+            id, launch_token, ..
+        } => host.mounts.check_launch_token(id, launch_token),
+        IpcRequest::MountHostBackend {
+            id, backend_token, ..
+        } => host.mounts.check_backend_token(id, backend_token),
+        IpcRequest::MountHostStatus {
+            id, session_token, ..
+        } => host.mounts.check_session_token(id, session_token),
+        _ => Err("daemon IPC request has no authentication capability".into()),
+    };
+    result.map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))
+}
+
+fn serve_mount_control(
+    mut stream: TcpStream,
+    host: ShareHost,
+    id: crate::mount::MountId,
+    stop: Receiver<()>,
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let mut byte = [0u8; 1];
+    loop {
+        match stop.recv_timeout(Duration::from_millis(50)) {
+            Ok(()) => return write_response(&mut stream, &IpcResponse::MountHostStop),
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        match stream.read(&mut byte) {
+            Ok(0) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                let _ = host.mounts.stop(&id);
+                return Ok(());
+            }
+            Ok(_) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                let _ = host.mounts.stop(&id);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "mount host sent unexpected control data",
+                ));
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                let _ = host.mounts.stop(&id);
+                return Err(error);
+            }
+        }
     }
 }
 
 fn require_token(want: &str, got: &str) -> io::Result<()> {
-    if want == got {
+    if constant_time_eq(want, got) {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -110,6 +234,17 @@ fn require_token(want: &str, got: &str) -> io::Result<()> {
             "daemon IPC token rejected",
         ))
     }
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.as_bytes()
+        .iter()
+        .zip(right.as_bytes())
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
 }
 
 fn eio<E: std::fmt::Display>(error: E) -> io::Error {

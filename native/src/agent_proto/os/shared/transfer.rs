@@ -50,6 +50,7 @@ pub(crate) fn handle_write(
     path: &str,
     inbound: &Receiver<Frame>,
     cancel: &AtomicBool,
+    promote: fn(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let (tmp, mut f) = create_staged_file(path, "write", id)?;
     if let Err(error) = emit(sink, id, &Frame::Progress { done: 0, total: 0 }) {
@@ -100,7 +101,7 @@ pub(crate) fn handle_write(
         let _ = std::fs::remove_file(&tmp);
         return Err(error);
     }
-    if let Err(error) = promote_staged_replace(&tmp, Path::new(path)) {
+    if let Err(error) = promote(&tmp, Path::new(path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(error);
     }

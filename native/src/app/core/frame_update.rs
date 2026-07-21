@@ -72,6 +72,7 @@ impl App {
         self.drain_clip_prepare();
         self.drain_update();
         self.drain_connect();
+        self.drain_mount_ui(ctx);
         self.drain_sync();
         self.drain_bisync();
         self.drain_preview();
