@@ -42,14 +42,17 @@ Direkt-/Relay-/SSH-Verbindungswege und Fallbacks; Anmeldedaten und das eigentlic
 Remote-Ziel bleiben im Daemon und werden nicht an den isolierten
 Dateisystem-Host weitergereicht.
 
-Voraussetzung unter Windows ist die externe, offizielle
+Voraussetzung unter Windows ist die offizielle
 [Dokany-2.3.1-Laufzeit (API 231)](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000).
-Smart Explorer bündelt weder Installer noch Treiber und lädt ausschließlich
-`%WINDIR%\System32\dokan2.dll`; DLL und Treiber müssen exakt API 231 melden. Die
-offizielle signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`,
-ihr systemweiter Installer kann aber einmalig eine Administratorbestätigung
-anfordern. Die normale Smart-Explorer-Installation bleibt davon unabhängig
-per-user und ohne Admin möglich. Stand der Primärquellenprüfung: 2026-07-21
+Der empfohlene Smart-Explorer-Installer enthält die exakt gepinnte offizielle
+`Dokan_x64.msi` offline als standardmäßig ausgewählte optionale Komponente.
+Portable und per Auto-Update aktualisierte Installationen können dieselbe
+Runtime aus der GUI oder mit `se drive install-runtime` sicher nachinstallieren.
+Die Smart-Explorer-Basis bleibt eine per-user-Installation; nur der Windows
+Installer (`msiexec`) fordert für den systemweiten Treiber UAC an. Die offizielle
+signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`, und Smart
+Explorer lädt weiterhin ausschließlich `%WINDIR%\System32\dokan2.dll`; DLL und
+Treiber müssen exakt API 231 melden. Stand der Primärquellenprüfung: 2026-07-21
 ([Dokany-Projekt](https://github.com/dokan-dev/dokany),
 [API-Header 2.3.1](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)).
 
@@ -60,6 +63,7 @@ Verbinden. Der Terminal-Companion bietet dieselbe Steuerung:
 
 ```powershell
 se drive runtime
+se drive install-runtime
 se drive mount @prod:/srv --letter M
 se drive mount @prod:/notizen --letter N --read-write
 se drive mount sftp://host/srv --letter S --trust-remote-root
@@ -68,8 +72,15 @@ se drive unmount M:
 se drive retry <mount-id>
 ```
 
-Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Der
-automatisch gestartete Linux-SSH-Agent bindet die exakte Wurzel vor seinen
+Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Bei
+einem SFTP-Ziel verlangt ein solcher Mount eine gespeicherte Verbindung mit
+aktiviertem, erfolgreich gestartetem Linux-SSH-Agent; ein Agent-Fehler wird
+angezeigt und darf für den Laufwerksstart nicht still zu plain SFTP werden.
+Normales Browsing darf bei einem Agent-Deployment-Fehler weiterhin die bereits
+aufgebaute plain-SFTP-Verbindung verwenden. Nach erfolgreichem Agent-Handshake
+werden einzelne fehlgeschlagene Agent-Operationen dagegen nicht blind über
+SFTP wiederholt.
+Der Agent bindet die exakte Wurzel vor seinen
 Worker-Threads mit Landlock ABI 3+; Google Drive bleibt durch seine
 Parent-ID-Navigation in der ausgewählten Provider-Hierarchie. Plain SFTP,
 Local/UNC, Share, WebDAV und FTP können einen Pfad dagegen nicht atomar gegen
@@ -85,13 +96,22 @@ beim Einbinden abgelehnt, wenn das aktive Backend nicht alle drei Garantien
 `create`, `replace` und `namespace_replace` meldet. Dabei bedeutet `create`
 eine atomare exklusive Übernahme des zufälligen Staging-Namens, nicht einen
 Stat-dann-Create-Test. Der SSH-Agent sowie Local/UNC besitzen diese
-Schreibprimitive; plain SFTP nur, wenn der Server exakt OpenSSH
-[`posix-rename@openssh.com` v1](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L420-L435)
-aushandelt. Synthetische Share-Wurzeln wie `/` und `/Verbindungen` bleiben
+Schreibprimitive. Plain SFTP meldet sie bewusst nicht: Smart Explorer hält nur
+ein SFTP-v3-Subsystem offen und nutzt dessen Standard-Rename ohne Replace; eine
+zweite Extension-Verbindung oder ein Stat-dann-Rename-Rennen wird nicht als
+atomare Garantie ausgegeben. Synthetische Share-Wurzeln wie `/` und
+`/Verbindungen` bleiben
 schreibgeschützt; ein konkret exportierter Unterbaum wird separat geprüft. Ein
 Transport-Fallback ist für den Laufwerkskern transparent, wird aber mit seinen
-tatsächlichen Root- und Schreibgarantien neu zugelassen. Ein Agent→SFTP-Fallback
-kann daher im strikten Modus oder für RW konservativ abgelehnt werden.
+tatsächlichen Root- und Schreibgarantien neu zugelassen. Für einen strikten
+SFTP-Mount ist Agent→SFTP jedoch ausdrücklich kein zulässiger Fallback.
+
+Der SSH-Aufbau staffelt aufgelöste IPv6-/IPv4-Adressen abwechselnd mit 250 ms
+Versatz, behält den ursprünglichen Hostnamen für Known-Hosts-Prüfung bei und
+liefert typisierte Connect-/Handshake-/Exec-Zeitüberschreitungen. Diagnoseausgabe
+von Remote-Kommandos ist begrenzt. Der Agent liegt unter einem Namen mit seinem
+vollständigen SHA-256, wird vor jedem Start und nach einem Reconnect erneut über
+SFTP gegen die eingebetteten Bytes geprüft und erst dann ausgeführt.
 
 Schreibzugriffe landen zuerst in einem lokalen **Whole-file-Spool**. Dadurch
 funktionieren auch wiederholte Editor-Zyklen wie bei Obsidian
@@ -105,6 +125,15 @@ CAS: Zwischen letzter Prüfung und Commit bleibt ohne bedingte Backend-Operation
 ein kleines TOCTOU-Fenster. Außerdem kostet jeder Flush einer geänderten Datei
 einen vollständigen Upload; Metadaten wie ACLs, Alternate Data Streams,
 benutzerdefinierte Zeiten/Attribute und Reparse Points werden nicht emuliert.
+
+Der separate portable Doppelklick-Pfad legt seinen `open-temp`-Recovery-Marker
+erst nach einem vollständig erfolgreichen Download atomar an. Eine echte
+wiederherstellbare Sitzung erscheint beim Start als Hinweis statt als
+App-Fehler. Leere alte Marker werden bereinigt, ungültige Marker bleiben
+fail-closed erhalten. Ein kurzlebiger Electron-/Obsidian-Launcher gilt nicht als
+Editor-Ende: die Temp-Datei und ihr Marker bleiben für spätere Save-back-Zyklen
+erhalten, auch wenn die Datei während eines atomaren Editor-Saves vorübergehend
+verschwindet.
 
 **Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
 senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und
@@ -238,9 +267,9 @@ startet genau diese Payload vor der Veröffentlichung unter Xvfb.
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
 ```
 
-**Windows-Grundinstallation:** Kein Admin, kein Setup-Zwang. Die optionale
-Dokany-Laufzeit für echte Remote-Laufwerke ist davon getrennt und kann bei ihrer
-systemweiten Installation eine Administratorbestätigung anfordern. Zwei Wege:
+**Windows-Grundinstallation:** Die Smart-Explorer-Basis bleibt ohne Admin und
+ohne Setup-Zwang nutzbar. Die optionale systemweite Dokany-Laufzeit für echte
+Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
 
 1. **Installer (empfohlen):** Die aktuelle
    **[`Smart Explorer Setup X.Y.Z.exe`](https://github.com/b1ue-man/smart-explorer/releases/latest)**
@@ -251,10 +280,16 @@ systemweiten Installation eine Administratorbestätigung anfordern. Zwei Wege:
    Ordner in den Benutzer-`PATH` ein (sichtbar in neu geöffneten Terminals) — **und stellt die
    Update-Prüfung auf den Git-Feed ein. Neue Versionen werden automatisch geprüft
    und sicher bereitgestellt; installiert werden sie erst nach deiner Bestätigung.**
+   Die offline eingebettete Dokany-2.3.1-Komponente ist im normalen Setup
+   standardmäßig ausgewählt; nur dieser MSI-Schritt löst UAC aus. Ein stilles
+   Setup installiert Dokany dagegen nur mit `/S /INSTALLDOKANY=1`. Smart Explorer
+   entfernt eine installierte Dokany-Runtime beim Uninstall nicht.
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
-   [`se.exe`](release-native/se.exe) daneben.
+   [`se.exe`](release-native/se.exe) daneben. Falls das Laufwerksfeature Dokany
+   benötigt: in der GUI **Dokany installieren** wählen oder in PowerShell
+   `se drive install-runtime` ausführen.
 
 ## 🔄 Updates bekommen — *das hier eintragen*
 

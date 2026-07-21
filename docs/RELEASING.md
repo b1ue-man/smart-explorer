@@ -36,28 +36,61 @@ repository **public** (Settings → General → Danger Zone → Change visibilit
 the feed + Release downloads work for everyone. Until then, only a signed-in
 user can pull updates.
 
-## Dokany is a prerequisite, not a release artifact
+## Pinned Dokany installer dependency
 
-The optional Windows remote-drive feature uses the external official
-[Dokany 2.3.1/API 231
-runtime](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000). Do not
-copy `DokanSetup.exe`, `dokan2.dll`, `dokan2.sys`, the debug installer, or any
-other Dokany payload into the Smart Explorer installer, portable directory,
-update feed, manifest, or GitHub Release asset set. The application delay-loads
-only the already-installed `%WINDIR%\System32\dokan2.dll` and refuses a DLL or
-driver whose reported API is not exactly 231. Consequently, Dokany is not added
-to the release asset count and its absence must not make the Smart Explorer base
-installation or non-drive features fail.
+The optional Windows remote-drive feature uses the official [Dokany
+2.3.1/API 231 runtime](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000).
+The recommended NSIS installer embeds exactly one official dependency:
+`Dokan_x64.msi` is an optional, standard-selected offline component. The Smart
+Explorer application remains a per-user install; only this machine-wide MSI
+step asks for UAC. Silent NSIS installs must explicitly pass
+`/S /INSTALLDOKANY=1`; plain `/S` skips Dokany and never introduces an
+unexpected elevation. Smart Explorer's uninstaller removes its installed
+notices but never uninstalls or downgrades the shared Dokany runtime.
 
-The official project provides signed release drivers; users do not need
-Developer Mode or `TESTSIGNING`, although installing the machine-wide Dokany
-runtime can require administrator approval. This external-runtime policy and
-the version/API claim were checked against the
+`native/dokany-runtime.nsh` is the single manifest consumed by Rust, NSIS and
+both dependency fetchers. Its reviewed pin is:
+
+- version `2.3.1.1000`, API `231`, file `Dokan_x64.msi`;
+- `https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi`;
+- exactly `9,269,248` bytes; and
+- SHA-256 `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
+
+`native/fetch-dokany-runtime.ps1` and `.sh` fetch that exact pin into ignored
+build state and reject a size or hash mismatch. The complete release wrapper
+resolves it before the build, passes it to NSIS, then uses 7-Zip to extract the
+embedded MSI from the completed installer and compares its size and SHA-256
+again. This MSI remains inside the Windows installer: it is not a standalone
+update-feed payload or GitHub Release asset, and portable/auto-updated users get
+it on demand through the GUI or `se drive install-runtime`. `dokan2.dll`,
+`dokan2.sys`, `DokanSetup.exe`, debug installers and any unreviewed Dokany files
+must never be copied beside Smart Explorer or added as separate assets.
+
+The GUI/CLI downloader allows HTTPS only, at most two redirects, and only the
+exact source URL or GitHub's `release-assets.githubusercontent.com` host as the
+final URL. It caps the response at the pinned size plus one byte, then verifies
+exact size and SHA-256. On Windows it opens a direct regular, non-reparse MSI
+without write/delete sharing, hashes that locked handle, and verifies its
+Authenticode chain with `WinVerifyTrust` including revocation checks. It also
+opens every normalized parent below the stable volume/share root as a direct
+non-reparse directory handle without delete sharing. The file and parent-chain
+handles stay open while a UAC `runas` launch invokes the `msiexec.exe` resolved
+from System32, so the elevated reopen is bound to the verified pathname, with
+`/passive /norestart ADDLOCAL=DokanDriverFeature
+INSTALLDEVFILES=0`. An exit code 0 is not enough: the postcheck must load only
+`%WINDIR%\System32\dokan2.dll` and see exactly API 231 from both DLL and driver.
+An installed wrong API fails visibly rather than being overwritten silently.
+
+The official project provides signed release drivers, so users need neither
+Developer Mode nor `TESTSIGNING`. The application remains delay-loaded and its
+non-drive features must work without Dokany. Install the notice plus GPL-3.0,
+LGPL-3.0 and MIT texts from `third-party/dokany/` with Smart Explorer. These
+packaging, signature and API claims were checked against the
 [tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md)
 and [tagged header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
-on 2026-07-21. If the supported Dokany ABI changes, update source validation,
-user/native docs and this packaging exclusion together; never “fix” a runtime
-mismatch by shipping an unreviewed DLL beside the executable.
+on 2026-07-21. If the supported ABI or MSI changes, review and update the
+manifest, Rust validation, fetchers, installer, license notices and user/native
+documentation together.
 
 ## Cut a release
 
@@ -98,18 +131,19 @@ run an exact-candidate verification pipeline by hand first.
    `publish-feed.sh` is refused.
 
    Every canonical Cargo leaf fixes `CARGO_BUILD_JOBS=1`, disables incremental
-   compilation, and uses ThinLTO with one codegen unit. These values are not
+   compilation, and uses ThinLTO with eight codegen units. These values are not
    ambient tuning knobs: they keep simultaneous compiler and monolithic LLVM
    peaks out of the release transaction. The large Linux build tree additionally
    runs through `native/run-release-memory-bounded.sh`. When systemd scopes are
-   available it applies `MemoryHigh=4G`, `MemoryMax=5G`, and `MemorySwapMax=2G`,
+   available it applies `MemoryHigh=3G`, `MemoryMax=4G`, and `MemorySwapMax=1G`,
    so an exceptional compiler allocation can terminate only that build scope
    rather than displace unrelated desktop processes. Hosts without a usable
    scope print a warning and retain the compiler-level limits.
 3. The wrapper owns every remaining step. It bumps the patch version once,
    reuses that version after a pre-tag failure, builds and promotes the complete
    artifact set, verifies the six feed hashes, the installer's embedded
-   app/updater/`se` bytes, the manifest's exact source-parent binding, and the
+   app/updater/`se` bytes and pinned Dokany MSI, the manifest's exact
+   source-parent binding, and the
    exact 18 publication assets,
    rejects any build-time drift in tracked sub-workspace lockfiles,
    creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards

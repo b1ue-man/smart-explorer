@@ -25,10 +25,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `& $makensis "/DVERSION=x.y.z" "installer.nsi"`.
 - **Release builds must stay inside the memory budget.** The desktop crate once
   exhausted an 8-GiB host with full LTO and displaced unrelated processes.
-  Keep ThinLTO, one codegen unit, `CARGO_BUILD_JOBS=1`, and non-incremental builds
-  pinned in every canonical release leaf. The top-level wrapper also routes the
+  Keep ThinLTO, eight codegen units, `CARGO_BUILD_JOBS=1`, and non-incremental
+  builds pinned in every canonical release leaf. The top-level wrapper also routes the
   large Linux tree through `native/run-release-memory-bounded.sh`, which uses a
-  4-GiB high/5-GiB hard cgroup limit plus at most 2 GiB of swap when systemd
+  3-GiB high/4-GiB hard cgroup limit plus at most 1 GiB of swap when systemd
   scopes are available. Do not weaken or make these limits ambient overrides;
   ordinary diagnostic builds may use separate Cargo settings.
 - **Embedded SSH-agent binaries retain source paths.** Unmapped Cargo registry
@@ -82,26 +82,53 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Cloud Files sync-root registration, placeholders, hydration callbacks, or
   `cldflt.sys` state to this path. Cryptomator is the useful UX analogy; Smart
   Explorer owns the backend proxy and whole-file cache rather than a vault.
-- **Dokany is external and exact-versioned.** The supported runtime is the
-  official Dokany 2.3.1 release, whose header defines `DOKAN_VERSION 231`.
+- **Dokany is exact-versioned but the reviewed MSI is installer input.** The
+  supported runtime is the official Dokany 2.3.1 release, whose header defines
+  `DOKAN_VERSION 231`.
   Delay-load only `%WINDIR%\System32\dokan2.dll` with
   `LOAD_LIBRARY_SEARCH_SYSTEM32`, resolve the bounded symbol table, and require
   both `DokanVersion()` and `DokanDriverVersion()` to return exactly 231. Never
   search the application directory, current directory, `PATH`, registry, or a
   caller-controlled path, and never silently accept a merely ABI-compatible
-  older/newer driver. Smart Explorer does not bundle the DLL, driver, installer,
-  or a link-time Dokany import. The official project states that signed release
-  drivers are provided; use of that official runtime needs neither Developer
-  Mode nor `TESTSIGNING`, although its machine-wide installer can require
-  elevation. Primary sources checked 2026-07-21:
+  older/newer driver. There is no link-time Dokany import and no DLL or driver
+  beside the app. The recommended NSIS installer does, however, embed the
+  reviewed official `Dokan_x64.msi` as a standard-selected optional offline
+  component; portable/auto-updated users obtain the same pin through the GUI or
+  `se drive install-runtime`. Keep the base install per-user and invoke UAC only
+  for the system-wide MSI. Plain `/S` must skip it; only
+  `/S /INSTALLDOKANY=1` opts a silent setup in. Never uninstall the shared
+  Dokany runtime with Smart Explorer. The pin in `native/dokany-runtime.nsh` is
+  version `2.3.1.1000`, API 231,
+  `https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi`,
+  9,269,248 bytes, SHA-256
+  `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
+  The official project states that signed release drivers are provided; use of
+  that official runtime needs neither Developer Mode nor `TESTSIGNING`.
+  Primary sources checked 2026-07-21:
   [2.3.1 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000),
   [tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md),
   [tagged API header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
   [Dokan API](https://dokan-dev.github.io/dokany-doc/html/group___dokan.html).
+- **Treat the Dokany installer as hostile until every boundary passes.** Rust
+  permits HTTPS, at most two redirects, only the exact source URL or GitHub's
+  `release-assets.githubusercontent.com` final host, and at most pinned-size +
+  one byte. Require exact size/SHA-256; open only a non-reparse regular file
+  without write/delete sharing; hash that locked handle and pass the same handle
+  to `WinVerifyTrust` with chain revocation. Open each normalized parent below
+  the stable volume/share root as a direct non-reparse directory handle without
+  share-delete, and hold the file plus parent chain across launch so an attacker
+  cannot swap a pathname component before the elevated reopen. Then launch
+  System32 `msiexec.exe` through UAC `runas` with `/passive /norestart
+  ADDLOCAL=DokanDriverFeature INSTALLDEVFILES=0`. Exit 0 still requires the exact
+  API-231 DLL/driver postcheck. Release fetchers consume the same manifest, NSIS
+  embeds the verified MSI, and the release wrapper must extract and compare it.
+  Keep `third-party/dokany/` notices and GPL/LGPL/MIT texts installed, but do not
+  publish the MSI as a separate feed or Release asset.
 - **Keep the daemon/host authority split.** The daemon resolves the saved
   connection, credentials, active fallback and exact root. `RootedBackend`
   rejects traversal and link-like ancestors, strips provider object IDs and
-  sanitizes errors. The isolated `se.exe --mount-host <MountId>` receives a
+  sanitizes errors. The daemon spawns its current executable with the exact
+  private `--mount-host <MountId>` argument; that isolated process receives a
   rooted backend proxy over loopback using distinct one-use launch/backend
   capabilities plus a session capability; it must never receive the daemon's
   global token, account, endpoint, credential material, or unrestricted
@@ -119,21 +146,40 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   this capability as well as write semantics. Sources checked 2026-07-21:
   [Landlock API](https://docs.kernel.org/userspace-api/landlock.html),
   [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
+- **Strict SFTP mounts never inherit the browsing fallback.** A saved SFTP
+  connection must have Agent enabled, and deployment plus the protocol-v9
+  `--serve-root` handshake must succeed. Surface any failure; never silently
+  construct a plain-SFTP mount. Ordinary browsing may retain the established
+  SFTP backend only when Agent deployment itself fails; after a successful
+  handshake an operation error is surfaced, not replayed blindly. Address
+  candidates are deduplicated and interleaved
+  IPv6/IPv4 with 250-ms staggering while known-host identity remains the
+  original hostname. Keep typed connect/handshake/channel/exec timeouts and
+  stdout/stderr capture independently bounded to 64 KiB each. Keep one SFTP
+  subsystem for bootstrap, verification and fallback; exec channels run probes
+  and the agent.
+- **Agent identity is content-addressed, not merely version-addressed.** The
+  remote path includes protocol v9 plus the full SHA-256 of the embedded bytes.
+  Upload to an exclusive random temporary name, verify its SHA-256 through the
+  same SFTP subsystem, then promote/chmod. Re-read and hash the installed file
+  before every exec, including reconnect; a matching `--version` string alone
+  is insufficient.
 - **RW is a three-part contract, not a generic “backend can write” boolean.** A
   mounted root must prove `create`, `replace`, and `namespace_replace` before a
   read-write host starts. `create` means atomic exclusive ownership through
   `open_write_new`, never stat-then-create. Local/UNC and the SSH Agent
   implement all three write primitives, although Local/UNC still require the
   root trust opt-in above.
-  Plain SFTP implements them only when a second SFTP-v3 channel advertises
-  `posix-rename@openssh.com` with version exactly `1`; standard
-  `SSH_FXP_RENAME` is no-replace and must not be upgraded with a stat+rename
-  race or shell command. Synthetic Share containers `/` and `/Verbindungen`
-  are read-only; a concrete export delegates capability discovery to its exact
+  Plain SFTP deliberately reports no complete RW staged capability. Its single
+  SFTP-v3 subsystem uses standard `SSH_FXP_RENAME`, which is no-replace; do not
+  open a second extension subsystem or upgrade a stat+rename race or shell
+  command into an atomic guarantee. Synthetic Share containers `/` and
+  `/Verbindungen` are read-only; a concrete export delegates capability
+  discovery to its exact
   backend/root. A fallback can therefore change the safe answer and must make
   RW fail conservatively; RO remains possible only if the independent root
-  gate above also passes or trusted-root mode was explicit. Sources checked 2026-07-21:
-  [OpenSSH extension announcement and POSIX rename](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L399-L435),
+  gate above also passes or trusted-root mode was explicit. Source checked
+  2026-07-21:
   [SFTP-v3 rename](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5),
   [russh-sftp API surface](https://github.com/AspectUnk/russh-sftp).
 - **Application writes are whole-file transactions.** Materialize a regular
@@ -159,12 +205,25 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   if another actor moves the owned object and reuses that name. Retain it until
   a future stable-ID/lease garbage collector can prove identity; leaking one
   hidden stage is preferable to deleting foreign content.
-- **Recovery state outranks tidy shutdown.** Dirty/conflicting writes and
+- **Recovery state outranks tidy shutdown.** Persisted state is explicitly
+  `Clean`, `Required`, or `Unknown`; legacy records without trustworthy status
+  map to `Unknown`, never clean. Under the exclusive cache lease, audit local
+  journal/spool state at daemon startup and again in the host before opening the
+  remote backend. A connection timeout therefore cannot hide local recovery.
+  Dirty/conflicting writes and
   quarantined deletes remain under the mount ID in `mount-cache`; startup/Retry
   replays only provably safe work. An eject or host exit must not erase a spool
   merely because the callback returned. Preserve journal rotation/torn-tail
   validation, the exclusive reparse-safe cache lease, and path-wide
   delete-on-last-handle semantics.
+- **Portable `open-temp` recovery must survive Electron launchers.** Atomically
+  write a marker only after a successful download. Delete only complete empty
+  legacy manifests with no payload; malformed/truncated state fails closed, and
+  genuine sessions are startup notices rather than app errors. Never interpret
+  a finished `ShellExecute` launcher as editor completion: Obsidian may forward
+  to its existing single-instance process. A declared file remains recoverable
+  while temporarily absent during atomic save/delete/rename, and any `NotFound`
+  in that mutation path retains the prior marker.
 - **Remote latency is application latency.** Reads first materialize an entire
   file, and each changed flush uploads it entirely. Long callbacks use
   `DokanResetTimeout` every 30 seconds with a five-minute request timeout; the
