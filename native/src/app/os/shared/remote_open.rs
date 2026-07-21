@@ -5,8 +5,15 @@ use crate::app::shared_platform_helpers::ClipboardEffect;
 #[path = "remote_zip.rs"]
 mod zip;
 
-fn should_cleanup_missing_temp(mtime_ms: i64, process_finished: bool, dirty: bool) -> bool {
-    mtime_ms == 0 && process_finished && !dirty
+fn missing_temp_requires_recovery(mtime_ms: i64) -> bool {
+    mtime_ms == 0
+}
+
+fn failure_after_recovery_sync(message: String, remote_edits: &[RemoteEdit]) -> String {
+    match sync_recovery_manifest(remote_edits) {
+        Ok(()) => message,
+        Err(error) => format!("{message}; Wiederherstellungsmanifest aktualisieren: {error}"),
+    }
 }
 
 #[cfg(test)]
@@ -74,14 +81,6 @@ impl App {
             uploading: false,
             process: None,
         });
-        if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
-            self.remote_edits.retain(|edit| edit.temp != dest);
-            cleanup_temp_copy(&dest);
-            self.error_msg = Some(format!(
-                "Remote-Datei kann ohne Wiederherstellungsmanifest nicht sicher geöffnet werden: {error}"
-            ));
-            return;
-        }
         let (tx, rx) = unbounded();
         let dest_t = dest.clone();
         let spawn = std::thread::Builder::new()
@@ -106,8 +105,9 @@ impl App {
             Err(error) => {
                 self.remote_edits.retain(|edit| edit.temp != dest);
                 cleanup_temp_copy(&dest);
-                self.error_msg = Some(format!(
-                    "Remote-Datei konnte nicht geöffnet werden: {error}"
+                self.error_msg = Some(failure_after_recovery_sync(
+                    format!("Remote-Datei konnte nicht geöffnet werden: {error}"),
+                    &self.remote_edits,
                 ));
             }
         }
@@ -141,29 +141,52 @@ impl App {
                 Ok(Err(e)) => {
                     self.remote_edits.retain(|edit| edit.temp != temp);
                     cleanup_temp_copy(&temp);
-                    self.error_msg = Some(format!("Datei oeffnen: {}", e));
+                    self.error_msg = Some(failure_after_recovery_sync(
+                        format!("Datei oeffnen: {e}"),
+                        &self.remote_edits,
+                    ));
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => pending.push((rx, mode, temp)),
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     self.remote_edits.retain(|edit| edit.temp != temp);
                     cleanup_temp_copy(&temp);
-                    self.error_msg = Some("Remote-Datei-Download wurde unerwartet beendet.".into());
+                    self.error_msg = Some(failure_after_recovery_sync(
+                        "Remote-Datei-Download wurde unerwartet beendet.".into(),
+                        &self.remote_edits,
+                    ));
                 }
             }
         }
         self.file_open_rx = pending;
-        for (p, remote_mtime, mode, _temp) in to_open {
+        for (p, remote_mtime, mode, temp) in to_open {
             // Baseline the edit-watch to the freshly downloaded content so we
             // don't immediately re-upload it; only the user's saves count. Record
             // the remote's mtime so save-back can detect a concurrent change.
-            let pb = PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR));
-            let m = file_mtime_ms(&pb);
-            let process = self.launch_for_edit(&p, mode);
-            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == pb) {
+            // Publish the durable recovery manifest before handing the file to
+            // an editor that may immediately replace it (for example Obsidian).
+            let m = file_mtime_ms(&temp);
+            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
                 e.remote_known_mtime = remote_mtime;
                 e.dirty = false;
+            } else {
+                cleanup_temp_copy(&temp);
+                continue;
+            }
+            if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
+                self.remote_edits.retain(|edit| edit.temp != temp);
+                cleanup_temp_copy(&temp);
+                self.error_msg = Some(failure_after_recovery_sync(
+                    format!(
+                        "Remote-Datei kann ohne Wiederherstellungsmanifest nicht sicher geöffnet werden: {error}"
+                    ),
+                    &self.remote_edits,
+                ));
+                continue;
+            }
+            let process = self.launch_for_edit(&p, mode);
+            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
                 e.process = process;
             }
         }
@@ -180,14 +203,20 @@ impl App {
         }
         self.last_edit_poll = std::time::Instant::now();
         let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String, i64)> = Vec::new();
-        let mut cleanup_done: Vec<PathBuf> = Vec::new();
         let mut manifest_changed = false;
         for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
             let m = file_mtime_ms(&e.temp);
-            if m == 0 {
-                let process_finished = e.process.as_ref().map(|p| p.is_finished()).unwrap_or(false);
-                if should_cleanup_missing_temp(m, process_finished, e.dirty) {
-                    cleanup_done.push(e.temp.clone());
+            if missing_temp_requires_recovery(m) {
+                // ShellExecute may expose only a short-lived launcher for a
+                // single-instance editor. A missing path can also be the brief
+                // delete/rename phase of an atomic Obsidian save. Never delete
+                // the registered edit from either signal; retain recovery and
+                // require a stable reappearance before save-back.
+                if !e.dirty || e.baseline_mtime != 0 || e.seen_mtime != 0 {
+                    e.dirty = true;
+                    e.baseline_mtime = 0;
+                    e.seen_mtime = 0;
+                    manifest_changed = true;
                 }
                 continue;
             }
@@ -220,19 +249,12 @@ impl App {
                 e.seen_mtime = m;
             }
         }
-        if !cleanup_done.is_empty() {
-            for temp in &cleanup_done {
-                cleanup_temp_copy(temp);
-            }
-            self.remote_edits
-                .retain(|e| !cleanup_done.iter().any(|temp| temp == &e.temp));
-            manifest_changed = true;
-        }
-        if manifest_changed && !self.remote_edits.is_empty() {
-            if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
+        if manifest_changed {
+            if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
                 self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
             }
         }
+        let mut launch_manifest_changed = false;
         for (temp, be, remote, name, known) in launch {
             let (tx, rx) = unbounded();
             let expected_temp = temp.clone();
@@ -272,11 +294,17 @@ impl App {
                         edit.uploading = false;
                         edit.dirty = true;
                         edit.baseline_mtime = 0;
+                        launch_manifest_changed = true;
                     }
                     self.error_msg = Some(format!(
                         "Remote-Speichern konnte nicht gestartet werden: {error}"
                     ));
                 }
+            }
+        }
+        if launch_manifest_changed {
+            if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
+                self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
             }
         }
     }
@@ -348,8 +376,8 @@ impl App {
             }
         }
         self.edit_save_rx = pending;
-        if manifest_changed && !self.remote_edits.is_empty() {
-            if let Err(error) = preserve_session_temp(&self.remote_edits, false) {
+        if manifest_changed {
+            if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
                 self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
             }
         }

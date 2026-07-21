@@ -91,17 +91,15 @@ impl App {
             })
             .unwrap_or_default();
         let ui_state = UiState::load();
-        let mut startup_update_error = crate::updater::take_updater_error()
-            .map(|e| format!("Update-Helfer: {e}"))
-            .or_else(|| {
-                (recoverable_temp_sessions > 0).then(|| {
-                    format!(
-                        "{} wiederherstellbare Sitzung(en) mit möglicherweise ungespeicherten Remote-Dateien unter {} gefunden.",
-                        recoverable_temp_sessions,
-                        temp_root().display()
-                    )
-                })
-            });
+        let recovery_notice = (recoverable_temp_sessions > 0).then(|| {
+            format!(
+                "⚠ {} wiederherstellbare Sitzung(en) mit möglicherweise ungespeicherten Remote-Dateien gefunden — Verwaltung in den Einstellungen; Ordner: {}",
+                recoverable_temp_sessions,
+                temp_root().display()
+            )
+        });
+        let mut startup_update_error =
+            crate::updater::take_updater_error().map(|e| format!("Update-Helfer: {e}"));
         let (staged_update, staging_load_failed) = if just_updated {
             (None, false)
         } else {
@@ -221,17 +219,16 @@ impl App {
             copy_refresh_after: false,
 
             error_msg: startup_update_error,
-            notice: if just_updated {
-                Some((
-                    format!(
-                        "✓ Update installiert — Version {}",
-                        env!("CARGO_PKG_VERSION")
-                    ),
-                    std::time::Instant::now(),
-                ))
-            } else {
-                None
-            },
+            notice: recovery_notice
+                .or_else(|| {
+                    just_updated.then(|| {
+                        format!(
+                            "✓ Update installiert — Version {}",
+                            env!("CARGO_PKG_VERSION")
+                        )
+                    })
+                })
+                .map(|message| (message, std::time::Instant::now())),
             failed_paths: Vec::new(),
             app_errors: Vec::new(),
             last_logged_error: None,

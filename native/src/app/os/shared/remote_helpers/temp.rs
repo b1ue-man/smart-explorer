@@ -1,5 +1,6 @@
+use super::recovery_manifest::{stale_temp_disposition, StaleTempDisposition};
 use crate::app::app_models::TEMP_SESSION_PID_FILE;
-use crate::app::platform_helpers::{process_running, EditProcess};
+use crate::app::platform_helpers::EditProcess;
 use std::path::{Path, PathBuf};
 
 /// Root for all of this app's open/edit temp copies.
@@ -119,26 +120,17 @@ fn allocate_open_temp_path(root: &Path, name: &str) -> std::io::Result<PathBuf> 
 
 /// Remove leftover temp copies from previous sessions.
 pub(in crate::app) fn sweep_stale_temp() -> usize {
-    let cur = session_tag();
     let mut recoverable = 0usize;
     if let Ok(rd) = std::fs::read_dir(temp_root()) {
         for e in rd.flatten() {
-            if e.file_name().to_str() == Some(cur) {
-                continue;
-            }
-            if e.path().join(PRESERVE_MARKER).is_file() {
-                recoverable = recoverable.saturating_add(1);
-            } else {
-                match read_session_pid(&e.path()) {
-                    Some(pid) if process_running(pid) => {}
-                    Some(_) => {
-                        let _ = super::temp_delete::remove_owned_tree(&temp_root(), &e.path());
-                    }
-                    None => {
-                        // A missing/unreadable marker can belong to another live
-                        // instance whose marker write failed. Fail closed.
-                    }
+            match stale_temp_disposition(&e.path()) {
+                StaleTempDisposition::Cleanup => {
+                    let _ = super::temp_delete::remove_owned_tree(&temp_root(), &e.path());
                 }
+                StaleTempDisposition::Recovery => {
+                    recoverable = recoverable.saturating_add(1);
+                }
+                StaleTempDisposition::Ignore => {}
             }
         }
     }
@@ -148,29 +140,6 @@ pub(in crate::app) fn sweep_stale_temp() -> usize {
 /// Delete this session's temp copies on a clean exit.
 pub(in crate::app) fn cleanup_session_temp() {
     let _ = super::temp_delete::remove_owned_tree(&temp_root(), &session_temp_dir());
-}
-
-pub(in crate::app) fn preserve_session_temp(
-    remote_edits: &[RemoteEdit],
-    active_transfer: bool,
-) -> std::io::Result<()> {
-    let directory = session_temp_dir();
-    std::fs::create_dir_all(&directory)?;
-    let mut manifest = format!(
-        "Smart Explorer preserved this session because work may be unsaved.\nactive_transfer={}\n",
-        u8::from(active_transfer)
-    );
-    for edit in remote_edits {
-        manifest.push_str(&format!(
-            "\nname={}\nlocal={}\nremote={}\ndirty={}\nuploading={}\n",
-            edit.name.replace(['\r', '\n'], " "),
-            edit.temp.display(),
-            edit.remote_path.replace(['\r', '\n'], " "),
-            u8::from(edit.dirty),
-            u8::from(edit.uploading),
-        ));
-    }
-    std::fs::write(directory.join(PRESERVE_MARKER), manifest)
 }
 
 pub(in crate::app) fn cleanup_temp_copy(temp: &Path) {
