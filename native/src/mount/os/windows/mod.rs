@@ -15,9 +15,14 @@ mod handle_types;
 mod host;
 mod metadata;
 mod runtime;
+mod runtime_install;
+mod runtime_install_download;
+mod runtime_install_process;
 mod wide;
 
+pub(crate) use cache_lease::audit_recovery;
 pub(crate) use host::{preflight_runtime, run_mount_host};
+pub(crate) use runtime_install::install_runtime;
 
 pub(crate) use dokany_abi::{
     DokanFileInfo, DokanIoSecurityContext, DokanOperations, DokanOptions, NtStatus,

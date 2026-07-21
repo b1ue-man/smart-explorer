@@ -49,6 +49,7 @@ Examples:
   se doctor --json
   se share status --json
   se drive runtime
+  se drive install-runtime
   se drive mount @prod:/srv --letter M
   source <(se completions bash)";
 

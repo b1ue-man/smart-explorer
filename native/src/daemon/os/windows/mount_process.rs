@@ -1,6 +1,5 @@
 use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 pub(super) const MOUNT_TOKEN_ENV: &str = "SMART_EXPLORER_MOUNT_TOKEN";
@@ -15,7 +14,7 @@ pub(super) fn spawn(
 ) -> io::Result<Child> {
     use std::os::windows::process::CommandExt;
 
-    let executable = mount_host_executable()?;
+    let executable = std::env::current_exe()?;
     let mut command = Command::new(executable);
     command
         .arg("--mount-host")
@@ -29,24 +28,4 @@ pub(super) fn spawn(
         .stderr(Stdio::null())
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     command.spawn()
-}
-
-fn mount_host_executable() -> io::Result<PathBuf> {
-    let current = std::env::current_exe()?;
-    if current
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("se.exe"))
-    {
-        return Ok(current);
-    }
-    let se = current.with_file_name("se.exe");
-    if se.is_file() {
-        Ok(se)
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "se.exe fuer den isolierten Laufwerk-Host wurde nicht gefunden",
-        ))
-    }
 }

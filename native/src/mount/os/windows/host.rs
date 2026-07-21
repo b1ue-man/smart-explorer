@@ -6,7 +6,7 @@ use crate::{
     daemon::{connect_mount_host, MountHostSession},
     mount::{
         prepare_spool_root, DriveLetter, DriveSelection, EntryCondition, MountEngine, MountId,
-        MountMode, MountRuntimeConfig, MountStatus,
+        MountMode, MountRecovery, MountRuntimeConfig, MountStatus,
     },
 };
 
@@ -26,6 +26,40 @@ pub(crate) fn preflight_runtime() -> Result<DokanyRuntimeInfo, DokanyPreflightEr
 
 pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
     let session = Arc::new(connect_mount_host(id)?);
+    let config = session.config.clone();
+    let spool_root = prepare_spool_root(&session.cache_root).map_err(|_| {
+        report_failure(
+            &session,
+            "the isolated mount cache directory is unavailable",
+        )
+    })?;
+    let cache_lease = CacheLease::acquire(&spool_root, &config.id).map_err(|_| {
+        report_failure_with_recovery(
+            &session,
+            "the mounted-drive cache is already in use or its lease is unsafe",
+            MountRecovery::Unknown,
+        )
+    })?;
+    let engine = MountEngine::open_host_cache(
+        MountRuntimeConfig::new(config.id.clone(), config.mode),
+        Arc::clone(&session.backend),
+        &spool_root,
+    )
+    .map_err(|_| {
+        report_failure_with_recovery(
+            &session,
+            "the mounted-drive cache could not be recovered safely",
+            MountRecovery::Unknown,
+        )
+    })?;
+    let local_recovery = inspect_recovery(&engine).map_err(|_| {
+        report_failure_with_recovery(
+            &session,
+            "the mounted-drive cache could not report its recovery state",
+            MountRecovery::Unknown,
+        )
+    })?;
+    session.report_status_with_recovery(MountStatus::Mounting, Some(local_recovery))?;
     let runtime = match DokanyRuntime::preflight() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -36,46 +70,24 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
             return Err(detail);
         }
     };
-    let config = session.config.clone();
-    let spool_root = prepare_spool_root(&session.cache_root).map_err(|_| {
-        report_failure(
+    if let Err(error) = engine.prepare_host_remote() {
+        let detail = format!("mounted-drive remote root validation failed: {error}");
+        return Err(report_engine_failure(&session, &engine, &detail));
+    }
+    if let Err(error) = engine.retry_pending_changes() {
+        let detail = format!(
+            "cached mounted-drive changes could not be retried safely: {error}; keep the cache and use Retry after connectivity is restored"
+        );
+        return Err(report_engine_failure(&session, &engine, &detail));
+    }
+    let reconciled = inspect_recovery(&engine).map_err(|_| {
+        report_failure_with_recovery(
             &session,
-            "the isolated mount cache directory is unavailable",
+            "the mounted-drive cache could not report its reconciled recovery state",
+            MountRecovery::Unknown,
         )
     })?;
-    let cache_lease = CacheLease::acquire(&spool_root, &config.id).map_err(|_| {
-        report_failure(
-            &session,
-            "the mounted-drive cache is already in use or its lease is unsafe",
-        )
-    })?;
-    let engine = MountEngine::open_host(
-        MountRuntimeConfig::new(config.id.clone(), config.mode),
-        Arc::clone(&session.backend),
-        &spool_root,
-    )
-    .map_err(|_| {
-        report_failure(
-            &session,
-            "the mounted-drive cache could not be recovered safely",
-        )
-    })?;
-    engine.retry_pending_changes().map_err(|_| {
-        report_failure(
-            &session,
-            "cached mounted-drive changes could not be retried safely; keep the cache and use Retry after connectivity is restored",
-        )
-    })?;
-    let recovered = engine.dirty_entries().map_err(|_| {
-        report_failure(
-            &session,
-            "the mounted-drive cache could not report its recovery state",
-        )
-    })?;
-    // Tell the daemon what the secured journal actually contains. A clean
-    // pre-mount failure can then be removed, while recovered work remains
-    // owned even if no drive letter can be selected.
-    session.report_status_with_recovery(MountStatus::Mounting, Some(!recovered.is_empty()))?;
+    session.report_status_with_recovery(MountStatus::Mounting, Some(reconciled))?;
     let candidates =
         drive_candidates(config.drive).map_err(|message| report_failure(&session, message))?;
     let cache_root_wide = absolute_path_wide(&spool_root)
@@ -98,7 +110,7 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
     // Arm recovery ownership before Dokany may dispatch its first callback.
     // If creation itself fails, the branch below disarms only after proving
     // that the journal is still clean.
-    session.report_status_with_recovery(MountStatus::Mounting, Some(true))?;
+    session.report_status_with_recovery(MountStatus::Mounting, Some(MountRecovery::Unknown))?;
     let filesystem = match start_on_available_drive(&runtime, &mut storage, &candidates) {
         Ok(filesystem) => filesystem,
         Err(error) => {
@@ -272,16 +284,25 @@ fn close_and_finalize(
     match storage.context.engine.dirty_entries() {
         Ok(entries) if !entries.is_empty() => {
             let detail = recovery_detail(&entries);
-            Err(report_failure_with_recovery(session, &detail, true))
+            Err(report_failure_with_recovery(
+                session,
+                &detail,
+                MountRecovery::Required,
+            ))
         }
-        Err(_) => Err(report_failure(
+        Err(_) => Err(report_failure_with_recovery(
             session,
             "the mounted drive closed, but its recovery journal could not be inspected; keep the mount and use Retry",
+            MountRecovery::Unknown,
         )),
         Ok(_) => match prior_failure {
-            Some(detail) => Err(report_failure_with_recovery(session, detail, false)),
+            Some(detail) => Err(report_failure_with_recovery(
+                session,
+                detail,
+                MountRecovery::Clean,
+            )),
             None => session
-                .report_status_with_recovery(MountStatus::Unmounted, Some(false))
+                .report_status_with_recovery(MountStatus::Unmounted, Some(MountRecovery::Clean))
                 .map_err(|_| "the mounted drive closed, but its final status could not be recorded".to_string()),
         },
     }
@@ -349,13 +370,13 @@ fn report_failure(session: &MountHostSession, message: &str) -> String {
 fn report_failure_with_recovery(
     session: &MountHostSession,
     message: &str,
-    recovery_required: bool,
+    recovery: MountRecovery,
 ) -> String {
     let _ = session.report_status_with_recovery(
         MountStatus::Failed {
             detail: message.to_string(),
         },
-        Some(recovery_required),
+        Some(recovery),
     );
     message.to_string()
 }
@@ -366,7 +387,28 @@ fn report_pre_mount_failure(
     message: &str,
 ) -> String {
     match engine.dirty_entries() {
-        Ok(entries) => report_failure_with_recovery(session, message, !entries.is_empty()),
-        Err(_) => report_failure(session, message),
+        Ok(entries) if entries.is_empty() => {
+            report_failure_with_recovery(session, message, MountRecovery::Clean)
+        }
+        Ok(_) => report_failure_with_recovery(session, message, MountRecovery::Required),
+        Err(_) => report_failure_with_recovery(session, message, MountRecovery::Unknown),
     }
+}
+
+fn inspect_recovery(engine: &MountEngine) -> io::Result<MountRecovery> {
+    engine.dirty_entries().map(|entries| {
+        if entries.is_empty() {
+            MountRecovery::Clean
+        } else {
+            MountRecovery::Required
+        }
+    })
+}
+
+fn report_engine_failure(
+    session: &MountHostSession,
+    engine: &MountEngine,
+    message: &str,
+) -> String {
+    report_pre_mount_failure(session, engine, message)
 }

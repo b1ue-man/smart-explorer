@@ -323,16 +323,6 @@ pub enum MountStatus {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MountSnapshot {
-    pub config: MountConfig,
-    pub status: MountStatus,
-    /// True means an eject may stop the host but must retain registry/cache for
-    /// Retry or manual conflict recovery.
-    #[serde(default)]
-    pub recovery_required: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HandleId(pub(crate) u64);
 

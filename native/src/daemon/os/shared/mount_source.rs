@@ -1,12 +1,12 @@
-use crate::mount::{MountSource, PeerMountTarget};
+use crate::mount::{MountConfig, MountSource, PeerMountTarget};
 use crate::vfs::BackendHandle;
 
 use super::ipc_host::ShareHost;
 
 const GDRIVE_ACCOUNT: &str = "cloud:gdrive";
 
-pub(super) fn resolve(source: &MountSource, host: &ShareHost) -> Result<BackendHandle, String> {
-    match source {
+pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendHandle, String> {
+    match &config.source {
         MountSource::SavedRemote { account, root } => {
             let connections = crate::creds::load_connections_checked()
                 .map_err(|error| format!("Gespeicherte Verbindungen lesen: {error}"))?;
@@ -17,7 +17,8 @@ pub(super) fn resolve(source: &MountSource, host: &ShareHost) -> Result<BackendH
                     "Die fuer das Laufwerk gespeicherte Verbindung ist nicht mehr vorhanden"
                         .to_string()
                 })?;
-            crate::connect::open_saved_at(connection, root.as_str()).map(|(backend, _)| backend)
+            crate::connect::open_saved_at_for_mount(connection, root.as_str(), config.root_security)
+                .map(|(backend, _)| backend)
         }
         MountSource::GoogleDrive { account, root } => {
             if account != GDRIVE_ACCOUNT {

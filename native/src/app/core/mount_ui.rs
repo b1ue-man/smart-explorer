@@ -1,10 +1,11 @@
+use super::mount_runtime_ui::{install_controls, present_install_outcome};
 use super::mount_ui_helpers::{
-    bounded_label, drive_selection_label, mount_status_alert, status_label, upsert_mount,
+    bounded_label, drive_selection_label, mount_status_alert, recovery_label, status_label,
+    upsert_mount,
 };
 use super::prelude::*;
 use super::*;
 
-const DOKANY_RELEASE_URL: &str = "https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000";
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub(super) struct MountUiState {
@@ -28,6 +29,7 @@ struct MountDraft {
 enum MountUiResult {
     Snapshot(crate::mount::MountSnapshot),
     List(Vec<crate::mount::MountSnapshot>),
+    RuntimeInstalled(crate::mount::DriveRuntimeInstallOutcome),
 }
 
 impl Default for MountUiState {
@@ -163,6 +165,9 @@ impl App {
                             self.error_msg = Some(alert);
                         }
                     }
+                    MountUiResult::RuntimeInstalled(outcome) => {
+                        present_install_outcome(self, outcome);
+                    }
                 }
                 self.mount_ui.next_poll = Instant::now() + POLL_INTERVAL;
                 ctx.request_repaint();
@@ -207,6 +212,7 @@ impl App {
         let mut open = true;
         let mut cancel = false;
         let mut submit = false;
+        let mut install_runtime = false;
         egui::Window::new("Remote als Laufwerk")
             .open(&mut open)
             .collapsible(false)
@@ -267,7 +273,10 @@ impl App {
                 }
                 ui.separator();
                 ui.label("Voraussetzung: offizielle Dokany-2.3.1-Laufzeit (kein Entwicklermodus).");
-                ui.hyperlink_to("Dokany 2.3.1 herunterladen", DOKANY_RELEASE_URL);
+                let enabled = self.mount_ui.action_rx.is_none();
+                ui.horizontal(|ui| {
+                    install_runtime = install_controls(ui, enabled, "Manueller Download");
+                });
                 if let Some(busy) = &self.mount_ui.busy {
                     ui.horizontal(|ui| {
                         ui.add(egui::Spinner::new());
@@ -288,6 +297,13 @@ impl App {
                     }
                 });
             });
+        if install_runtime {
+            self.mount_ui.draft = Some(draft);
+            self.spawn_mount_action("Dokany wird sicher installiert", || {
+                crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
+            });
+            return;
+        }
         if cancel {
             open = false;
         }
@@ -339,6 +355,7 @@ impl App {
         }
         let mut open = true;
         let mut action: Option<(bool, crate::mount::MountId)> = None;
+        let mut install_runtime = false;
         egui::Window::new("Smart-Explorer-Laufwerke")
             .open(&mut open)
             .default_width(560.0)
@@ -359,6 +376,7 @@ impl App {
                             ui.label(status_label(&mount.status));
                         });
                         ui.label(format!("ID: {}", mount.config.id));
+                        ui.label(recovery_label(mount.recovery));
                         ui.horizontal(|ui| match &mount.status {
                             crate::mount::MountStatus::Failed { .. }
                             | crate::mount::MountStatus::RuntimeUnavailable { .. } => {
@@ -371,7 +389,7 @@ impl App {
                                 {
                                     action = Some((true, mount.config.id.clone()));
                                 }
-                                if !mount.recovery_required
+                                if mount.recovery.is_clean()
                                     && ui
                                         .add_enabled(
                                             self.mount_ui.action_rx.is_none(),
@@ -401,10 +419,17 @@ impl App {
                     });
                 }
                 ui.separator();
-                ui.hyperlink_to("Dokany-Laufzeit / Hilfe", DOKANY_RELEASE_URL);
+                let enabled = self.mount_ui.action_rx.is_none();
+                ui.horizontal(|ui| {
+                    install_runtime = install_controls(ui, enabled, "Dokany-Laufzeit / Hilfe");
+                });
             });
         self.mount_ui.show_manager = open;
-        if let Some((retry, id)) = action {
+        if install_runtime {
+            self.spawn_mount_action("Dokany wird sicher installiert", || {
+                crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
+            });
+        } else if let Some((retry, id)) = action {
             if retry {
                 self.spawn_mount_action("Laufwerk wird erneut verbunden", move || {
                     crate::daemon::retry_mount(id).map(MountUiResult::Snapshot)

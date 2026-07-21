@@ -21,6 +21,12 @@ pub fn spawn_connect(
     Ok(rx)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentFallback {
+    Allow,
+    RequireConfined,
+}
+
 fn opt(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
@@ -64,6 +70,14 @@ fn label_for(form: &ConnectForm, port: u16) -> String {
 }
 
 fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
+    do_connect_with_agent_fallback(form, secret, AgentFallback::Allow)
+}
+
+fn do_connect_with_agent_fallback(
+    form: ConnectForm,
+    secret: Option<String>,
+    agent_fallback: AgentFallback,
+) -> ConnectResult {
     let port = if form.port.trim().is_empty() {
         form.protocol.default_port()
     } else {
@@ -74,14 +88,25 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
     };
 
     match form.protocol {
-        Protocol::Sftp => connect_sftp(form, secret, port),
+        Protocol::Sftp => connect_sftp(form, secret, port, agent_fallback),
         Protocol::Ftp | Protocol::Ftps => connect_ftp(form, secret, port),
         Protocol::Webdav => connect_webdav(form, secret, port),
         Protocol::Share => connect_share(form, secret, port),
     }
 }
 
-fn connect_sftp(form: ConnectForm, secret: Option<String>, port: u16) -> ConnectResult {
+fn connect_sftp(
+    form: ConnectForm,
+    secret: Option<String>,
+    port: u16,
+    agent_fallback: AgentFallback,
+) -> ConnectResult {
+    if agent_fallback == AgentFallback::RequireConfined && !form.use_agent {
+        return ConnectResult::Err(
+            "Die technisch abgesicherte Laufwerk-Wurzel benoetigt fuer diese SFTP-Verbindung den aktivierten SSH-Agent. Alternativ kann im Laufwerk-Dialog die ausdrueckliche Vertrauensoption gewaehlt werden."
+                .into(),
+        );
+    }
     // A saved-connection secret (keyring) overrides an empty form field.
     let password = secret.clone().unwrap_or_else(|| form.password.clone());
     let passphrase = secret.clone().unwrap_or_else(|| form.passphrase.clone());
@@ -110,9 +135,9 @@ fn connect_sftp(form: ConnectForm, secret: Option<String>, port: u16) -> Connect
                 ));
             }
             let label = label_for(&form, port);
-            // Opt-in: try to deploy + use the SSH remote agent (#24). Any
-            // failure (no bundled binary, no exec right, ...) falls back to
-            // plain SFTP, so connecting never breaks.
+            // Browsing may retain the established plain-SFTP connection when
+            // the optional Agent cannot start. A strict mounted root must not
+            // silently lose its kernel-enforced confinement guarantee.
             let be_arc: Arc<crate::sftp::SftpBackend> = Arc::new(be);
             let sftp_handle = be_arc.clone(); // kept for later agent activation
             let account = Some(build_saved(&form, port).account());
@@ -123,7 +148,12 @@ fn connect_sftp(form: ConnectForm, secret: Option<String>, port: u16) -> Connect
                         let ver = agent.version().to_string();
                         (Arc::new(agent), Some(ver))
                     }
-                    Err(_) => (be_arc, None), // fall back to plain SFTP
+                    Err(_error) if agent_fallback == AgentFallback::Allow => (be_arc, None),
+                    Err(error) => {
+                        return ConnectResult::Err(format!(
+                            "SSH-Agent fuer die abgesicherte Laufwerk-Wurzel konnte nicht gestartet werden: {error}"
+                        ));
+                    }
                 }
             } else {
                 (be_arc, None)
@@ -278,13 +308,36 @@ pub fn open_saved_at(
     c: &crate::creds::SavedConnection,
     path: &str,
 ) -> Result<(BackendHandle, String), String> {
+    open_saved_at_with_agent_fallback(c, path, AgentFallback::Allow)
+}
+
+pub(crate) fn open_saved_at_for_mount(
+    c: &crate::creds::SavedConnection,
+    path: &str,
+    root_security: crate::mount::MountRootSecurity,
+) -> Result<(BackendHandle, String), String> {
+    let agent_fallback = if c.protocol == Protocol::Sftp
+        && root_security == crate::mount::MountRootSecurity::Enforced
+    {
+        AgentFallback::RequireConfined
+    } else {
+        AgentFallback::Allow
+    };
+    open_saved_at_with_agent_fallback(c, path, agent_fallback)
+}
+
+fn open_saved_at_with_agent_fallback(
+    c: &crate::creds::SavedConnection,
+    path: &str,
+    agent_fallback: AgentFallback,
+) -> Result<(BackendHandle, String), String> {
     if !c.protocol.is_url() {
         // Share: the UNC is browsed locally once authenticated.
         let secret = crate::creds::get_secret_checked(&c.account())
             .map_err(|error| format!("Gespeicherte Anmeldeinformation lesen: {error}"))?;
         let mut form = ConnectForm::from_saved(c);
         form.save = false;
-        match do_connect(form, secret) {
+        match do_connect_with_agent_fallback(form, secret, agent_fallback) {
             ConnectResult::Ok(conn) => {
                 let net = conn
                     .net
@@ -308,7 +361,7 @@ pub fn open_saved_at(
             path.to_string()
         };
         form.save = false;
-        match do_connect(form, secret) {
+        match do_connect_with_agent_fallback(form, secret, agent_fallback) {
             ConnectResult::Ok(conn) => match conn.remote {
                 Some(rs) => Ok((rs.backend, conn.target)),
                 None => Err("Endpoint ist keine Remote-Verbindung".into()),

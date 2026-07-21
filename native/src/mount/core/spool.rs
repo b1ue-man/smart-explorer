@@ -225,6 +225,21 @@ impl WholeFileSpool {
     }
 }
 
+pub(super) fn audit_recovery(
+    base: &Path,
+    mount_id: &MountId,
+) -> io::Result<super::recovery_state::MountRecovery> {
+    let (_spool, recovered) = WholeFileSpool::open(base, mount_id)?;
+    if recovered.entries.is_empty()
+        && recovered.deletes.is_empty()
+        && recovered.namespace_conflicts.is_empty()
+    {
+        Ok(super::recovery_state::MountRecovery::Clean)
+    } else {
+        Ok(super::recovery_state::MountRecovery::Required)
+    }
+}
+
 impl Drop for WholeFileSpool {
     fn drop(&mut self) {
         if let Ok(referenced) = self.referenced.lock() {

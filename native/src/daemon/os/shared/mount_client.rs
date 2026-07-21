@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::mount::{MountConfig, MountId, MountSnapshot, MountStatus};
+use crate::mount::{MountConfig, MountId, MountRecovery, MountSnapshot, MountStatus};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 
 use super::ipc_protocol::{
@@ -75,7 +75,7 @@ impl MountHostSession {
     pub(crate) fn report_status_with_recovery(
         &self,
         status: MountStatus,
-        recovery_required: Option<bool>,
+        recovery: Option<MountRecovery>,
     ) -> Result<(), String> {
         let mut stream = host_stream(self.ipc_addr, HOST_ATTACH_TIMEOUT)?;
         write_request(
@@ -84,7 +84,8 @@ impl MountHostSession {
                 id: self.id.clone(),
                 session_token: self.session_token.clone(),
                 status,
-                recovery_required,
+                recovery,
+                recovery_required: recovery.map(MountRecovery::requires_retention),
             },
         )
         .map_err(|error| format!("Laufwerk-Status senden: {error}"))?;

@@ -76,6 +76,8 @@ mod menus_sync;
 mod menus_sync_jobs;
 #[path = "core/merge_ui.rs"]
 mod merge_ui;
+#[path = "core/mount_runtime_ui.rs"]
+mod mount_runtime_ui;
 #[path = "core/mount_ui.rs"]
 mod mount_ui;
 #[path = "core/mount_ui_helpers.rs"]

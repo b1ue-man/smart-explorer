@@ -56,6 +56,21 @@ impl CacheLease {
     }
 }
 
+pub(crate) fn audit_recovery(
+    cache_root: &Path,
+    mount_id: &MountId,
+) -> io::Result<crate::mount::MountRecovery> {
+    match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(crate::mount::MountRecovery::Clean)
+        }
+        Err(error) => return Err(error),
+        Ok(_) => {}
+    }
+    let _lease = CacheLease::acquire(cache_root, mount_id)?;
+    crate::mount::spool::audit_recovery(cache_root, mount_id)
+}
+
 fn prepare_plain_directory(path: &Path) -> io::Result<File> {
     match fs::create_dir(path) {
         Ok(()) => {}

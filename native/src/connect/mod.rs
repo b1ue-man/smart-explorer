@@ -20,6 +20,7 @@ mod types;
 
 #[allow(unused_imports)]
 pub use connector::open_saved_at;
+pub(crate) use connector::open_saved_at_for_mount;
 pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};
 pub(crate) use endpoint::parse_remote_url;
 #[allow(unused_imports)]
