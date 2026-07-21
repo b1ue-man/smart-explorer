@@ -36,6 +36,29 @@ repository **public** (Settings → General → Danger Zone → Change visibilit
 the feed + Release downloads work for everyone. Until then, only a signed-in
 user can pull updates.
 
+## Dokany is a prerequisite, not a release artifact
+
+The optional Windows remote-drive feature uses the external official
+[Dokany 2.3.1/API 231
+runtime](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000). Do not
+copy `DokanSetup.exe`, `dokan2.dll`, `dokan2.sys`, the debug installer, or any
+other Dokany payload into the Smart Explorer installer, portable directory,
+update feed, manifest, or GitHub Release asset set. The application delay-loads
+only the already-installed `%WINDIR%\System32\dokan2.dll` and refuses a DLL or
+driver whose reported API is not exactly 231. Consequently, Dokany is not added
+to the release asset count and its absence must not make the Smart Explorer base
+installation or non-drive features fail.
+
+The official project provides signed release drivers; users do not need
+Developer Mode or `TESTSIGNING`, although installing the machine-wide Dokany
+runtime can require administrator approval. This external-runtime policy and
+the version/API claim were checked against the
+[tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md)
+and [tagged header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
+on 2026-07-21. If the supported Dokany ABI changes, update source validation,
+user/native docs and this packaging exclusion together; never “fix” a runtime
+mismatch by shipping an unreviewed DLL beside the executable.
+
 ## Cut a release
 
 The release is one terminal transaction, started only after the complete task

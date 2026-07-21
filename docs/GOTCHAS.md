@@ -65,6 +65,112 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   tab in around the `ui_table` call, then swapping back. Any new per-view state
   must decide: per-tab (add to `TabState` + `swap_with_tab`) or global.
 
+## Windows remote-drive integration
+
+### Dokany remote-drive boundary
+
+- **This is a real user-mode filesystem, not CfAPI.** The selected backend root
+  is exposed as a Windows drive letter through Dokany callbacks. Do not add a
+  Cloud Files sync-root registration, placeholders, hydration callbacks, or
+  `cldflt.sys` state to this path. Cryptomator is the useful UX analogy; Smart
+  Explorer owns the backend proxy and whole-file cache rather than a vault.
+- **Dokany is external and exact-versioned.** The supported runtime is the
+  official Dokany 2.3.1 release, whose header defines `DOKAN_VERSION 231`.
+  Delay-load only `%WINDIR%\System32\dokan2.dll` with
+  `LOAD_LIBRARY_SEARCH_SYSTEM32`, resolve the bounded symbol table, and require
+  both `DokanVersion()` and `DokanDriverVersion()` to return exactly 231. Never
+  search the application directory, current directory, `PATH`, registry, or a
+  caller-controlled path, and never silently accept a merely ABI-compatible
+  older/newer driver. Smart Explorer does not bundle the DLL, driver, installer,
+  or a link-time Dokany import. The official project states that signed release
+  drivers are provided; use of that official runtime needs neither Developer
+  Mode nor `TESTSIGNING`, although its machine-wide installer can require
+  elevation. Primary sources checked 2026-07-21:
+  [2.3.1 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000),
+  [tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md),
+  [tagged API header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
+  [Dokan API](https://dokan-dev.github.io/dokany-doc/html/group___dokan.html).
+- **Keep the daemon/host authority split.** The daemon resolves the saved
+  connection, credentials, active fallback and exact root. `RootedBackend`
+  rejects traversal and link-like ancestors, strips provider object IDs and
+  sanitizes errors. The isolated `se.exe --mount-host <MountId>` receives a
+  rooted backend proxy over loopback using distinct one-use launch/backend
+  capabilities plus a session capability; it must never receive the daemon's
+  global token, account, endpoint, credential material, or unrestricted
+  backend root. Keep `env_clear`, loopback validation, bounded frames and
+  fail-closed EOF behavior.
+- **Root authority and read/write mode are separate gates.** Strict mode is the
+  default even for read-only mounts. The deployed Linux Agent must launch with
+  the exact root via `--serve-root`, bind every root component with
+  `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, and enter Landlock ABI
+  3+ before worker threads start; ABI 2 cannot constrain `truncate`/`O_TRUNC`.
+  Google Drive's parent-ID hierarchy is also technically confined. Plain SFTP,
+  Local/UNC, Peer/Share, WebDAV and FTP need explicit trusted-root admission.
+  Trusted mode keeps serialized validation but cannot close an external
+  check-to-operation symlink/junction race. A fallback must be reevaluated for
+  this capability as well as write semantics. Sources checked 2026-07-21:
+  [Landlock API](https://docs.kernel.org/userspace-api/landlock.html),
+  [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
+- **RW is a three-part contract, not a generic “backend can write” boolean.** A
+  mounted root must prove `create`, `replace`, and `namespace_replace` before a
+  read-write host starts. `create` means atomic exclusive ownership through
+  `open_write_new`, never stat-then-create. Local/UNC and the SSH Agent
+  implement all three write primitives, although Local/UNC still require the
+  root trust opt-in above.
+  Plain SFTP implements them only when a second SFTP-v3 channel advertises
+  `posix-rename@openssh.com` with version exactly `1`; standard
+  `SSH_FXP_RENAME` is no-replace and must not be upgraded with a stat+rename
+  race or shell command. Synthetic Share containers `/` and `/Verbindungen`
+  are read-only; a concrete export delegates capability discovery to its exact
+  backend/root. A fallback can therefore change the safe answer and must make
+  RW fail conservatively; RO remains possible only if the independent root
+  gate above also passes or trusted-root mode was explicit. Sources checked 2026-07-21:
+  [OpenSSH extension announcement and POSIX rename](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL#L399-L435),
+  [SFTP-v3 rename](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5),
+  [russh-sftp API surface](https://github.com/AspectUnk/russh-sftp).
+- **Application writes are whole-file transactions.** Materialize a regular
+  file into the mount-specific local spool; persist the dirty record and sync
+  it before the first local mutation; on flush upload to a unique staging path;
+  then promote with the declared backend primitive. This is what makes repeated
+  Obsidian-style truncate/write/flush/close cycles and editor
+  temp-file-to-replacing-rename saves viable. A flush after every edit means a
+  complete remote upload after every edit. Never stream a partial editor write
+  directly onto the destination object.
+- **Conflict checks reduce risk; they are not universal CAS.** Compare the
+  opening baseline (provider ID, size, mtime, and content MD5 when supplied)
+  before staging and again immediately before promotion. Revalidate both
+  source and destination for replacing rename. Unless a backend exposes a
+  conditional commit, a small TOCTOU window remains between the last stat and
+  promotion. Do not document or code this as perfect concurrent-write
+  prevention. Never retry an ambiguously dispatched promotion: once a remote
+  namespace change may have committed, return filesystem success where Windows
+  requires it, surface `Conflict`, and retain the recovery journal/spool.
+- **Never unlink an ambiguously owned staging spelling.** After an exclusive
+  create crosses Agent/daemon/Peer boundaries, a lost Ready/final ACK or failed
+  promotion may leave a hidden stage. A check-then-unlink is still vulnerable
+  if another actor moves the owned object and reuses that name. Retain it until
+  a future stable-ID/lease garbage collector can prove identity; leaking one
+  hidden stage is preferable to deleting foreign content.
+- **Recovery state outranks tidy shutdown.** Dirty/conflicting writes and
+  quarantined deletes remain under the mount ID in `mount-cache`; startup/Retry
+  replays only provably safe work. An eject or host exit must not erase a spool
+  merely because the callback returned. Preserve journal rotation/torn-tail
+  validation, the exclusive reparse-safe cache lease, and path-wide
+  delete-on-last-handle semantics.
+- **Remote latency is application latency.** Reads first materialize an entire
+  file, and each changed flush uploads it entirely. Long callbacks use
+  `DokanResetTimeout` every 30 seconds with a five-minute request timeout; the
+  manager's stop grace exceeds that boundary. The reported free space is the
+  local spool's lower bound, not the remote quota. Keep unrelated files
+  parallel but serialize one file/namespace mutation.
+- **The surface is intentionally narrower than NTFS.** Windows file attributes
+  and timestamps cannot be set, ACL/security writes, alternate data streams,
+  open-by-ID and reparse-point access are unsupported, and remote symlinks are
+  hidden/rejected rather than followed. `GetFileSecurity` returns
+  `STATUS_NOT_IMPLEMENTED` so Dokany synthesizes a current-user descriptor.
+  Never fabricate durable remote semantics for metadata the backend cannot
+  preserve.
+
 ## Windows shell integration
 
 - **You cannot replace other apps' Open/Save dialogs system-wide.** No registered
