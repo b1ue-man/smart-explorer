@@ -1,10 +1,12 @@
 use super::{
-    BackendRoot, DriveSelection, FlushOutcome, MountConfig, MountEngine, MountId, MountMode,
-    MountSource, OpenDisposition, OpenFileOptions, RenameOutcome,
+    BackendRoot, DriveRuntimeInstallOutcome, DriveSelection, FlushOutcome, MountConfig,
+    MountEngine, MountId, MountMode, MountRecovery, MountRuntimeConfig, MountSnapshot, MountSource,
+    MountStatus, OpenDisposition, OpenFileOptions, RenameOutcome,
 };
-use crate::vfs::{Backend, BackendHandle, LocalBackend};
+use crate::vfs::{Backend, BackendHandle, LocalBackend, Scheme, VfsMeta};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 struct Fixture {
@@ -180,4 +182,164 @@ fn remote_drive_task_restart_retries_dirty_spool_and_pending_delete() -> io::Res
             .map_or(true, |name| !name.contains(".se-mount-delete-"))
     }));
     Ok(())
+}
+
+#[test]
+fn remote_drive_task_recovery_wire_state_is_conservative_and_compatible() -> io::Result<()> {
+    let fixture = Fixture::new("recovery-wire-state")?;
+    let snapshot = MountSnapshot {
+        config: fixture.config,
+        status: MountStatus::Unmounted,
+        recovery: MountRecovery::Required,
+        recovery_required_compat: true,
+    };
+    let current = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(current["recovery"], "Required");
+    assert_eq!(current["recovery_required"], true);
+
+    let mut legacy_required = current.clone();
+    legacy_required.as_object_mut().unwrap().remove("recovery");
+    assert_eq!(
+        serde_json::from_value::<MountSnapshot>(legacy_required)
+            .unwrap()
+            .recovery,
+        MountRecovery::Required
+    );
+
+    let mut legacy_clean = current.clone();
+    legacy_clean.as_object_mut().unwrap().remove("recovery");
+    legacy_clean["recovery_required"] = false.into();
+    assert_eq!(
+        serde_json::from_value::<MountSnapshot>(legacy_clean)
+            .unwrap()
+            .recovery,
+        MountRecovery::Clean
+    );
+
+    let mut absent = current.clone();
+    absent.as_object_mut().unwrap().remove("recovery");
+    absent.as_object_mut().unwrap().remove("recovery_required");
+    assert_eq!(
+        serde_json::from_value::<MountSnapshot>(absent)
+            .unwrap()
+            .recovery,
+        MountRecovery::Unknown
+    );
+
+    let mut new_wins = current;
+    new_wins["recovery"] = "Clean".into();
+    new_wins["recovery_required"] = true.into();
+    assert_eq!(
+        serde_json::from_value::<MountSnapshot>(new_wins)
+            .unwrap()
+            .recovery,
+        MountRecovery::Clean
+    );
+    assert!(!MountRecovery::Clean.requires_retention());
+    assert!(MountRecovery::Required.requires_retention());
+    assert!(MountRecovery::Unknown.requires_retention());
+    Ok(())
+}
+
+struct RemoteProbe {
+    stats: Arc<AtomicUsize>,
+}
+
+impl Backend for RemoteProbe {
+    fn scheme(&self) -> Scheme {
+        Scheme::Sftp
+    }
+
+    fn root_display(&self) -> String {
+        "/".into()
+    }
+
+    fn list_dir(&self, _path: &str) -> io::Result<Vec<VfsMeta>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn stat(&self, _path: &str) -> io::Result<VfsMeta> {
+        self.stats.fetch_add(1, Ordering::SeqCst);
+        Ok(VfsMeta {
+            name: "/".into(),
+            is_dir: true,
+            ..VfsMeta::default()
+        })
+    }
+
+    fn open_read(&self, _path: &str) -> io::Result<Box<dyn std::io::Read + Send>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn open_write(&self, _path: &str) -> io::Result<Box<dyn std::io::Write + Send>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn rename(&self, _src: &str, _dst: &str) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn remove_file(&self, _path: &str) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn remove_dir(&self, _path: &str) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+
+    fn mkdir_all(&self, _path: &str) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "unused"))
+    }
+}
+
+#[test]
+fn remote_drive_task_host_audits_local_cache_before_remote_root() -> io::Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let stats = Arc::new(AtomicUsize::new(0));
+    let backend: BackendHandle = Arc::new(RemoteProbe {
+        stats: stats.clone(),
+    });
+    let engine = MountEngine::open_host_cache(
+        MountRuntimeConfig::new(MountId::parse("local-first-recovery")?, MountMode::ReadOnly),
+        backend,
+        temporary.path(),
+    )?;
+    assert_eq!(stats.load(Ordering::SeqCst), 0);
+    engine.prepare_host_remote()?;
+    assert_eq!(stats.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn remote_drive_task_current_binary_mount_host_argument_is_exact() {
+    assert!(super::run_host_if_requested(&["--other".into()]).is_none());
+    assert!(super::run_host_if_requested(&["--mount-host".into()]).is_none());
+    let result =
+        super::run_host_if_requested(&["--mount-host".into(), "current-binary-host".into()]);
+    assert!(result.is_some());
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes() {
+    let cases = [
+        (0, false),
+        (3010, false),
+        (1641, false),
+        (1223, false),
+        (1602, false),
+        (1618, true),
+        (1603, true),
+        (1633, true),
+        (1654, true),
+        (9999, true),
+    ];
+    for (code, failure) in cases {
+        let outcome = DriveRuntimeInstallOutcome::from_msi_exit_code(code);
+        assert_eq!(
+            outcome.exit_code(),
+            if code == 9999 { 1 } else { code as i32 }
+        );
+        assert_eq!(outcome.is_failure(), failure);
+    }
 }

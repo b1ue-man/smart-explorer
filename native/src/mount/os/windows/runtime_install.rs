@@ -35,21 +35,12 @@ pub(crate) fn install_runtime(
         Err(ElevatedLaunchError::Other(error)) => return Err(error),
     };
 
-    match exit_code {
-        0 => {
-            DokanyRuntime::preflight().map_err(|error| {
-                format!(
-                    "Dokany-Installer war erfolgreich, aber API 231 ist danach nicht einsatzbereit: {error}"
-                )
-            })?;
-            Ok(DriveRuntimeInstallOutcome::Installed { code: 0 })
-        }
-        3010 => Ok(DriveRuntimeInstallOutcome::RebootRequired { code: 3010 }),
-        1641 => Ok(DriveRuntimeInstallOutcome::RestartInitiated { code: 1641 }),
-        1223 | 1602 => Ok(DriveRuntimeInstallOutcome::Cancelled { code: exit_code }),
-        1618 => Ok(DriveRuntimeInstallOutcome::AnotherInstallationRunning { code: 1618 }),
-        1603 => Ok(DriveRuntimeInstallOutcome::FatalInstallerError { code: 1603 }),
-        1633 | 1654 => Ok(DriveRuntimeInstallOutcome::UnsupportedPlatform { code: exit_code }),
-        code => Ok(DriveRuntimeInstallOutcome::UnexpectedFailure { code }),
+    if exit_code == 0 {
+        DokanyRuntime::preflight().map_err(|error| {
+            format!(
+                "Dokany-Installer war erfolgreich, aber API 231 ist danach nicht einsatzbereit: {error}"
+            )
+        })?;
     }
+    Ok(DriveRuntimeInstallOutcome::from_msi_exit_code(exit_code))
 }

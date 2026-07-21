@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+use eframe::egui;
+
 use super::App;
 
 const DOKANY_RELEASE_URL: &str = "https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000";

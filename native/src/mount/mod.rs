@@ -77,6 +77,19 @@ pub enum DriveRuntimeInstallOutcome {
 }
 
 impl DriveRuntimeInstallOutcome {
+    pub(crate) const fn from_msi_exit_code(code: u32) -> Self {
+        match code {
+            0 => Self::Installed { code: 0 },
+            3010 => Self::RebootRequired { code: 3010 },
+            1641 => Self::RestartInitiated { code: 1641 },
+            1223 | 1602 => Self::Cancelled { code },
+            1618 => Self::AnotherInstallationRunning { code: 1618 },
+            1603 => Self::FatalInstallerError { code: 1603 },
+            1633 | 1654 => Self::UnsupportedPlatform { code },
+            code => Self::UnexpectedFailure { code },
+        }
+    }
+
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::AlreadyReady | Self::Installed { .. } => 0,

@@ -397,3 +397,7 @@ fn require_safe_session_directory(directory: &Path) -> io::Result<()> {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "recovery_manifest_task_tests.rs"]
+mod task_tests;
