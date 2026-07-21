@@ -1,4 +1,5 @@
-use super::temp::{read_session_pid, session_tag, temp_root, PRESERVE_MARKER};
+use super::recovery_manifest::{stale_temp_disposition, StaleTempDisposition};
+use super::temp::{temp_root, PRESERVE_MARKER};
 use std::path::{Path, PathBuf};
 
 const MAX_RETAINED_SESSIONS: usize = 10_000;
@@ -33,7 +34,10 @@ pub(in crate::app) fn remove_recovery_session_controlled<F>(
 where
     F: FnMut(crate::vfs::RecursiveDeleteProgress),
 {
-    if !is_direct_child(&temp_root(), directory) || !is_recovery_directory(directory) {
+    if !is_direct_child(&temp_root(), directory)
+        || !is_recovery_directory(directory)
+        || stale_temp_disposition(directory) != StaleTempDisposition::Recovery
+    {
         return Err(crate::vfs::RecursiveDeleteFailure {
             error: std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -61,7 +65,6 @@ fn recovery_inventory() -> std::io::Result<RecoveryInventory> {
         }
         Err(error) => return Err(error),
     };
-    let current = session_tag();
     let mut inventory = RecoveryInventory {
         dirs: Vec::new(),
         total: 0,
@@ -69,11 +72,15 @@ fn recovery_inventory() -> std::io::Result<RecoveryInventory> {
     for entry in entries {
         let entry = entry?;
         let directory = entry.path();
-        if entry.file_name().to_str() == Some(current)
-            || !is_direct_child(&root, &directory)
-            || !is_recovery_directory(&directory)
-            || owner_is_live_or_unknown(&directory)
-        {
+        match stale_temp_disposition(&directory) {
+            StaleTempDisposition::Cleanup => {
+                let _ = super::temp_delete::remove_owned_tree(&root, &directory);
+                continue;
+            }
+            StaleTempDisposition::Recovery => {}
+            StaleTempDisposition::Ignore => continue,
+        }
+        if !is_direct_child(&root, &directory) || !is_recovery_directory(&directory) {
             continue;
         }
         inventory.total = inventory.total.saturating_add(1);
@@ -83,12 +90,6 @@ fn recovery_inventory() -> std::io::Result<RecoveryInventory> {
     }
     inventory.dirs.sort();
     Ok(inventory)
-}
-
-fn owner_is_live_or_unknown(directory: &Path) -> bool {
-    read_session_pid(directory)
-        .map(crate::app::platform_helpers::process_running)
-        .unwrap_or(true)
 }
 
 fn is_recovery_directory(directory: &Path) -> bool {
@@ -118,12 +119,5 @@ mod tests {
         assert!(is_direct_child(root, &root.join("session")));
         assert!(!is_direct_child(root, &root.join("session/child")));
         assert!(!is_direct_child(root, Path::new("/tmp/elsewhere")));
-    }
-
-    #[test]
-    fn missing_owner_marker_fails_closed() {
-        assert!(owner_is_live_or_unknown(Path::new(
-            "/definitely/missing/smart-explorer-session"
-        )));
     }
 }

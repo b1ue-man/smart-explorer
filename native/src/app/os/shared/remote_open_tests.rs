@@ -1,13 +1,11 @@
-use super::should_cleanup_missing_temp;
+use super::missing_temp_requires_recovery;
 
 #[test]
-fn finished_launcher_does_not_cleanup_existing_clean_temp() {
-    assert!(!should_cleanup_missing_temp(123, true, false));
+fn existing_temp_does_not_enter_missing_recovery_state() {
+    assert!(!missing_temp_requires_recovery(123));
 }
 
 #[test]
-fn missing_clean_temp_can_be_untracked_after_launcher_finishes() {
-    assert!(should_cleanup_missing_temp(0, true, false));
-    assert!(!should_cleanup_missing_temp(0, false, false));
-    assert!(!should_cleanup_missing_temp(0, true, true));
+fn missing_temp_is_retained_for_atomic_editor_save_recovery() {
+    assert!(missing_temp_requires_recovery(0));
 }

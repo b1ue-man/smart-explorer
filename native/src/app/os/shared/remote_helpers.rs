@@ -10,6 +10,8 @@ mod entries;
 mod progress;
 #[path = "remote_helpers/recovery.rs"]
 mod recovery;
+#[path = "remote_helpers/recovery_manifest.rs"]
+mod recovery_manifest;
 #[path = "remote_helpers/remote_copy.rs"]
 mod remote_copy;
 #[path = "remote_helpers/temp.rs"]
@@ -32,12 +34,13 @@ pub(in crate::app) use downloads::{
 pub(in crate::app) use recovery::{
     recovery_delete_plan, recovery_session_count, remove_recovery_session_controlled,
 };
+pub(in crate::app) use recovery_manifest::sync_recovery_manifest;
 pub(in crate::app) use remote_copy::copy_remote_paths_progress;
 #[cfg(test)]
 pub(in crate::app) use temp::safe_temp_name;
 pub(in crate::app) use temp::{
     cleanup_session_temp, cleanup_temp_copy, file_mtime_ms, init_temp_session, open_temp_path,
-    preserve_session_temp, temp_root, RemoteEdit, SaveResult,
+    temp_root, RemoteEdit, SaveResult,
 };
 pub(in crate::app) use uploads::{upload_file, upload_paths_progress};
 
