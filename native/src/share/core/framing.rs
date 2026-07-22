@@ -37,12 +37,20 @@ pub(super) async fn recv_ctrl_limited(recv: &mut RecvStream, max_frame: usize) -
 }
 
 pub(super) async fn recv_resp(recv: &mut RecvStream) -> io::Result<FsResponse> {
+    decode_resp(recv_resp_wire(recv).await?)
+}
+
+pub(super) async fn recv_resp_wire(recv: &mut RecvStream) -> io::Result<FsResponse> {
     match recv_ctrl(recv).await? {
-        Ctrl::FsResp {
-            resp: FsResponse::Err { kind, msg },
-        } => Err(super::fs_error::into_io(kind, msg)),
         Ctrl::FsResp { resp } => Ok(resp),
         _ => Err(eio("Peer sendet falsche Antwort")),
+    }
+}
+
+pub(super) fn decode_resp(resp: FsResponse) -> io::Result<FsResponse> {
+    match resp {
+        FsResponse::Err { kind, msg } => Err(super::fs_error::into_io(kind, msg)),
+        response => Ok(response),
     }
 }
 

@@ -2,11 +2,14 @@ use std::io;
 
 use super::wire::{FsErrorKind, FsResponse};
 
-/// Preserve the legacy message-only error for every failure except NotFound.
-/// That single typed case lets safety-sensitive existence probes distinguish
-/// absence from access, transport, and parsing failures.
+/// Preserve legacy message detail while typing the cases that callers need for
+/// safe control flow and fail-closed mount authorization.
 pub(super) fn response(error: &io::Error) -> FsResponse {
-    let kind = (error.kind() == io::ErrorKind::NotFound).then_some(FsErrorKind::NotFound);
+    let kind = match error.kind() {
+        io::ErrorKind::NotFound => Some(FsErrorKind::NotFound),
+        io::ErrorKind::PermissionDenied => Some(FsErrorKind::PermissionDenied),
+        _ => None,
+    };
     FsResponse::Err {
         kind,
         msg: error.to_string(),
@@ -23,6 +26,9 @@ pub(super) fn message(message: impl Into<String>) -> FsResponse {
 pub(super) fn into_io(kind: Option<FsErrorKind>, message: String) -> io::Error {
     match kind {
         Some(FsErrorKind::NotFound) => io::Error::new(io::ErrorKind::NotFound, message),
+        Some(FsErrorKind::PermissionDenied) => {
+            io::Error::new(io::ErrorKind::PermissionDenied, message)
+        }
         Some(FsErrorKind::Unknown) | None => io::Error::other(message),
     }
 }

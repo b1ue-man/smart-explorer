@@ -95,6 +95,20 @@ impl PeerMountLeaseClient {
         self.replace(None)
     }
 
+    /// Clears the local lease and returns it only when the issuing peer
+    /// advertises the release-capable token generation. Older peers use
+    /// unprefixed, connection-scoped tokens and do not understand ReleaseLease.
+    pub(super) fn take_releasable(&self) -> io::Result<Option<String>> {
+        self.token
+            .lock()
+            .map(|mut lease| {
+                lease
+                    .take()
+                    .filter(|token| token.starts_with(super::mount_lease::RELEASABLE_LEASE_PREFIX))
+            })
+            .map_err(|_| eio("Peer-Mount-Lease ist gesperrt"))
+    }
+
     fn replace(&self, lease: Option<String>) -> io::Result<()> {
         *self
             .token

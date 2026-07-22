@@ -1,144 +1,21 @@
 use std::io;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use iroh::endpoint::{RecvStream, SendStream};
+use iroh::endpoint::SendStream;
 use tokio::sync::mpsc;
 
-use super::backend::{recv_resp, reply, send_ctrl, PeerBackend};
+use super::backend::reply;
 use super::core::eio;
 use super::fs_access::FsAccess;
 use super::io_deadline;
 use super::walk_assembly::{
-    invalid, validate_name, TreeAssembler, WalkTotals, MAX_WALK_DEPTH, MAX_WALK_NAME_BYTES,
-    MAX_WALK_NODES, WALK_BATCH_NODES,
+    validate_name, WalkTotals, MAX_WALK_DEPTH, MAX_WALK_NAME_BYTES, MAX_WALK_NODES,
+    WALK_BATCH_NODES,
 };
-use super::wire::{Ctrl, FsRequest, FsResponse, FsWalkNode};
+use super::wire::{FsResponse, FsWalkNode};
 
-const CANCEL_POLL: Duration = Duration::from_millis(250);
-const WALK_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const WALK_RESPONSE_BUFFER: usize = 2;
-
-/// Run the PeerBackend's one-stream analytics walk. Every protocol, transport,
-/// cancellation, and validation failure remains an error; `Ok(None)` is
-/// reserved by the backend contract for implementations that are unsupported.
-pub(super) fn walk_peer(
-    backend: &PeerBackend,
-    root: &str,
-    on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-) -> io::Result<Option<crate::agent_proto::WireNode>> {
-    if !on_progress(0, 0) {
-        return Err(interrupted());
-    }
-    let (send, recv) = backend
-        .node
-        .open_stream(&backend.endpoint, &backend.identity)?;
-    let lease = backend.mount_lease_token()?;
-    backend
-        .node
-        .block_on(receive_walk(send, recv, root, lease, on_progress))
-        .map(Some)
-}
-
-async fn receive_walk(
-    mut send: SendStream,
-    mut recv: RecvStream,
-    root: &str,
-    lease: Option<String>,
-    on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-) -> io::Result<crate::agent_proto::WireNode> {
-    io_deadline::run(
-        "peer tree request",
-        send_ctrl(
-            &mut send,
-            &Ctrl::Fs {
-                req: FsRequest::WalkTree {
-                    path: root.to_string(),
-                },
-                lease,
-            },
-        ),
-    )
-    .await?;
-
-    let result = receive_walk_responses(&mut recv, on_progress).await;
-    if result.is_err() {
-        // STOP_SENDING immediately releases the server's flow-controlled walk;
-        // reset the unused request half as well so cancellation is unambiguous.
-        io_deadline::abort(&mut send, &mut recv);
-    }
-    result
-}
-
-async fn receive_walk_responses(
-    recv: &mut RecvStream,
-    on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-) -> io::Result<crate::agent_proto::WireNode> {
-    let mut tree = TreeAssembler::default();
-    let mut progress = (0u64, 0u64);
-    loop {
-        let resp = recv_response_checked(recv, progress, on_progress).await?;
-        match resp {
-            FsResponse::WalkBatch {
-                nodes,
-                files,
-                dirs,
-                bytes,
-            } => {
-                tree.push_batch(nodes, WalkTotals { files, dirs, bytes })?;
-                progress = (files, bytes);
-                if !on_progress(files, bytes) {
-                    return Err(interrupted());
-                }
-            }
-            FsResponse::WalkDone {
-                files,
-                dirs,
-                bytes,
-                nodes,
-            } => {
-                if !on_progress(files, bytes) {
-                    return Err(interrupted());
-                }
-                return tree.finish(WalkTotals { files, dirs, bytes }, nodes);
-            }
-            _ => return Err(invalid("unexpected response in peer tree walk")),
-        }
-    }
-}
-
-async fn recv_response_checked(
-    recv: &mut RecvStream,
-    progress: (u64, u64),
-    on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
-) -> io::Result<FsResponse> {
-    // Keep the same read future pinned across timer ticks: RecvStream's
-    // read_exact is not cancellation-safe once it has consumed a frame prefix.
-    let response = recv_resp(recv);
-    tokio::pin!(response);
-    let idle = tokio::time::sleep(WALK_IDLE_TIMEOUT);
-    tokio::pin!(idle);
-    let mut poll = tokio::time::interval(CANCEL_POLL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    poll.tick().await;
-    loop {
-        tokio::select! {
-            biased;
-            response = &mut response => return response,
-            _ = poll.tick() => {
-                if !on_progress(progress.0, progress.1) {
-                    return Err(interrupted());
-                }
-            }
-            _ = &mut idle => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "peer tree walk made no progress for 60 seconds",
-                ));
-            }
-        }
-    }
-}
 
 /// Serve a walk through the stream's selected filesystem access. A mount lease
 /// retains one backend/root; stateless browsing resolves current exports.
@@ -461,8 +338,4 @@ fn split_root(path: &str) -> (String, String) {
 
 fn child_path(parent: &str, name: &str) -> String {
     format!("{}/{}", parent.trim_end_matches('/'), name)
-}
-
-fn interrupted() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "peer tree walk canceled")
 }

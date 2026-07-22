@@ -8,7 +8,8 @@ use super::wire::FsMeta;
 
 /// Filesystem routing selected after stream authorization. Stateless browsing
 /// resolves the current export table per request; a mounted stream resolves
-/// only through its connection-bound lease and the backend retained by it.
+/// only through its principal/root/policy-bound lease and retained backend.
+/// Physical QUIC generations may change without changing that authority.
 #[derive(Clone)]
 pub(super) enum FsAccess {
     Dynamic(Arc<Mutex<ShareExportConfig>>),

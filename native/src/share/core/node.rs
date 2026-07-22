@@ -2,27 +2,22 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Instant;
 
-use iroh::endpoint::{presets, Connection, RecvStream, SendStream, VarInt};
+use iroh::endpoint::{presets, Connection, VarInt};
 use iroh::{Endpoint, RelayMode};
 use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
-use super::core::{eio, hmac_proof, random_token};
+use super::core::eio;
 use super::endpoint_routes::{EndpointRoutes, PublishedEndpointRoutes};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
-use super::framing::{recv_ctrl, send_ctrl};
 use super::handshake_limits::PeerHandshakeLimiter;
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::keepalive::iroh_transport_config;
-use super::session::{
-    endpoint_addr, relation_kind_id, session_key, session_payload, transport_label,
-};
+use super::session::endpoint_addr;
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
-use super::wire::{Ctrl, FsResponse, PeerHello};
 
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
@@ -33,8 +28,10 @@ pub(crate) struct ShareIrohNode {
     pub(super) endpoint: Endpoint,
     pub(super) auth: Arc<Mutex<ShareAuthState>>,
     pub(super) ev: crossbeam_channel::Sender<ShareEvent>,
-    sessions: Mutex<HashMap<String, Connection>>,
-    session_epoch: AtomicU64,
+    pub(super) sessions: Mutex<HashMap<String, Connection>>,
+    pub(super) session_connects: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    pub(super) session_epoch: AtomicU64,
+    pub(super) mount_leases: Arc<super::mount_lease::PeerMountLeases>,
     sharing_active: AtomicBool,
     incoming_sessions: Mutex<HashMap<u64, Connection>>,
     next_incoming_session: AtomicU64,
@@ -42,7 +39,7 @@ pub(crate) struct ShareIrohNode {
     exec_registry: Arc<ExecRegistry>,
     pub(super) handshake_slots: Arc<Semaphore>,
     pub(super) peer_handshake_slots: PeerHandshakeLimiter,
-    routes: EndpointRoutes,
+    pub(super) routes: EndpointRoutes,
 }
 
 impl ShareIrohNode {
@@ -82,7 +79,9 @@ impl ShareIrohNode {
             auth,
             ev,
             sessions: Mutex::new(HashMap::new()),
+            session_connects: Mutex::new(HashMap::new()),
             session_epoch: AtomicU64::new(0),
+            mount_leases: Arc::new(super::mount_lease::PeerMountLeases::default()),
             sharing_active: AtomicBool::new(true),
             incoming_sessions: Mutex::new(HashMap::new()),
             next_incoming_session: AtomicU64::new(0),
@@ -145,6 +144,10 @@ impl ShareIrohNode {
 
     pub(super) fn invalidate_sessions(&self) -> io::Result<usize> {
         self.session_epoch.fetch_add(1, Ordering::AcqRel);
+        let lease_clear = self.mount_leases.clear();
+        if let Ok(mut gates) = self.session_connects.lock() {
+            gates.retain(|_, gate| gate.strong_count() > 0);
+        }
         let mut connections: Vec<Connection> = self
             .sessions
             .lock()
@@ -166,6 +169,7 @@ impl ShareIrohNode {
                 b"authorization or export policy changed",
             );
         }
+        lease_clear?;
         Ok(count)
     }
 
@@ -190,203 +194,6 @@ impl ShareIrohNode {
         let invalidation = self.invalidate_sessions().map(|_| ());
         self.block_on(self.endpoint.close());
         invalidation
-    }
-
-    pub(super) fn open_stream(
-        &self,
-        endpoint: &PeerEndpoint,
-        identity: &ShareIdentity,
-    ) -> io::Result<(SendStream, RecvStream)> {
-        self.open_stream_until(
-            endpoint,
-            identity,
-            Instant::now() + io_deadline::PEER_OP_TIMEOUT,
-        )
-    }
-
-    pub(super) fn open_stream_until(
-        &self,
-        endpoint: &PeerEndpoint,
-        identity: &ShareIdentity,
-        deadline: Instant,
-    ) -> io::Result<(SendStream, RecvStream)> {
-        self.require_sharing_active()?;
-        let key = session_key(endpoint);
-        let cached = self.sessions.lock().ok().and_then(|s| s.get(&key).cloned());
-        let connection = if let Some(connection) = cached {
-            connection
-        } else {
-            let epoch = self.session_epoch.load(Ordering::Acquire);
-            let connection = self.connect_session_until(endpoint, identity, deadline)?;
-            self.cache_session(key.clone(), connection.clone(), epoch)?;
-            connection
-        };
-        let open_timeout = io_deadline::remaining(deadline, "peer stream open")?;
-        match self.block_on(io_deadline::run_for(
-            "peer stream open",
-            open_timeout,
-            async {
-                connection
-                    .open_bi()
-                    .await
-                    .map_err(io_deadline::disconnected)
-            },
-        )) {
-            Ok(streams) => Ok(streams),
-            Err(_) => {
-                // open_bi has not sent an operation payload, so replacing even
-                // a blackholed connection timeout is safe and cannot replay a
-                // mutation. Preserve a newer generation installed by another
-                // caller instead of deleting it with the failed cache entry.
-                let replacement = self.replacement_after_open_failure(
-                    &key,
-                    connection.stable_id(),
-                    endpoint,
-                    identity,
-                    deadline,
-                )?;
-                let reopen_timeout = io_deadline::remaining(deadline, "peer stream reopen")?;
-                self.block_on(io_deadline::run_for(
-                    "peer stream reopen",
-                    reopen_timeout,
-                    async {
-                        replacement
-                            .open_bi()
-                            .await
-                            .map_err(io_deadline::disconnected)
-                    },
-                ))
-            }
-        }
-    }
-
-    fn replacement_after_open_failure(
-        &self,
-        key: &str,
-        failed_id: usize,
-        endpoint: &PeerEndpoint,
-        identity: &ShareIdentity,
-        deadline: Instant,
-    ) -> io::Result<Connection> {
-        {
-            let mut sessions = self
-                .sessions
-                .lock()
-                .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?;
-            if let Some(current) = sessions.get(key) {
-                if current.stable_id() != failed_id {
-                    return Ok(current.clone());
-                }
-            }
-            sessions.remove(key);
-        }
-        let epoch = self.session_epoch.load(Ordering::Acquire);
-        let connection = self.connect_session_until(endpoint, identity, deadline)?;
-        self.cache_session(key.to_string(), connection.clone(), epoch)?;
-        Ok(connection)
-    }
-
-    fn cache_session(
-        &self,
-        key: String,
-        connection: Connection,
-        expected_epoch: u64,
-    ) -> io::Result<()> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?;
-        if self.session_epoch.load(Ordering::Acquire) != expected_epoch {
-            connection.close(
-                VarInt::from_u32(0x5345),
-                b"authorization changed during session handshake",
-            );
-            return Err(eio(
-                "Share-Autorisierung wurde waehrend des Handshakes geaendert",
-            ));
-        }
-        sessions.insert(key, connection);
-        Ok(())
-    }
-
-    pub(super) fn session_transport(&self, endpoint: &PeerEndpoint) -> Option<&'static str> {
-        let key = session_key(endpoint);
-        let connection = self.sessions.lock().ok()?.get(&key).cloned()?;
-        Some(transport_label(&connection))
-    }
-
-    fn connect_session_until(
-        &self,
-        endpoint: &PeerEndpoint,
-        identity: &ShareIdentity,
-        deadline: Instant,
-    ) -> io::Result<Connection> {
-        if let Some(expected) = endpoint.expected_node_id.as_deref() {
-            if !expected.trim().is_empty() && expected != endpoint.presence.node_id {
-                return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
-            }
-        }
-        let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
-        let (kind, relation_id) = relation_kind_id(endpoint);
-        let remote_device = endpoint.presence.device_id.clone();
-        let remote_node = endpoint.presence.node_id.clone();
-        let nonce = random_token(12).map_err(eio)?;
-        let payload = session_payload(
-            kind,
-            &relation_id,
-            &identity.device_id,
-            &remote_device,
-            &identity.node_id,
-            &remote_node,
-            &nonce,
-        );
-        let proof = hmac_proof(&endpoint.relation_secret, &payload);
-        let hello = PeerHello {
-            protocol_version: 3,
-            relation_kind: kind.to_string(),
-            relation_id,
-            device_id: identity.device_id.clone(),
-            public_key: identity.public_key.clone(),
-            node_id: identity.node_id.clone(),
-            session_nonce: nonce,
-            session_proof: proof,
-            requested_capabilities: vec!["fs".to_string(), "fs_walk_batches_v1".to_string()],
-        };
-        let started = Instant::now();
-        let timeout = io_deadline::remaining(deadline, "peer session handshake")?;
-        self.block_on(io_deadline::run_for(
-            "peer session handshake",
-            timeout,
-            async {
-                let connection = self
-                    .endpoint
-                    .connect(addr, ALPN)
-                    .await
-                    .map_err(io_deadline::disconnected)?;
-                let (mut send, mut recv) = connection
-                    .open_bi()
-                    .await
-                    .map_err(io_deadline::disconnected)?;
-                send_ctrl(&mut send, &Ctrl::PeerHello { hello }).await?;
-                match recv_ctrl(&mut recv).await? {
-                    Ctrl::PeerHelloOk => {
-                        let transport = transport_label(&connection);
-                        let _ = self.ev.send(ShareEvent::Status(format!(
-                            "Iroh-Session authentifiziert: {} via {} in {} ms",
-                            remote_device,
-                            transport,
-                            started.elapsed().as_millis()
-                        )));
-                        Ok(connection)
-                    }
-                    Ctrl::FsResp {
-                        resp: FsResponse::Err { msg, .. },
-                    } => Err(eio(msg)),
-                    _ => Err(eio("Peer akzeptiert die Iroh-Session nicht")),
-                }
-            },
-        ))
     }
 
     pub(super) fn connect_exec(&self, endpoint: &PeerEndpoint) -> io::Result<Connection> {

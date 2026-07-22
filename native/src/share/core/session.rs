@@ -16,6 +16,33 @@ pub(super) struct IncomingSession {
     hello: PeerHello,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct PeerPrincipal {
+    relation_kind: String,
+    relation_id: String,
+    device_id: String,
+    public_key: String,
+    node_id: String,
+}
+
+impl PeerPrincipal {
+    pub(super) fn new(
+        relation_kind: impl Into<String>,
+        relation_id: impl Into<String>,
+        device_id: impl Into<String>,
+        public_key: impl Into<String>,
+        node_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            relation_kind: relation_kind.into(),
+            relation_id: relation_id.into(),
+            device_id: device_id.into(),
+            public_key: public_key.into(),
+            node_id: node_id.into(),
+        }
+    }
+}
+
 pub(super) fn authenticate_incoming_session(
     hello: &PeerHello,
     remote_node: &str,
@@ -32,6 +59,16 @@ pub(super) fn authenticate_incoming_session(
 }
 
 impl IncomingSession {
+    pub(super) fn principal(&self) -> PeerPrincipal {
+        PeerPrincipal::new(
+            self.hello.relation_kind.clone(),
+            self.hello.relation_id.clone(),
+            self.hello.device_id.clone(),
+            self.hello.public_key.clone(),
+            self.hello.node_id.clone(),
+        )
+    }
+
     /// Re-evaluates the identity, grant, relation secret, and export policy for
     /// every accepted filesystem stream. The QUIC connection alone is never an
     /// authorization cache.

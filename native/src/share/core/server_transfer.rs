@@ -107,13 +107,15 @@ pub(super) async fn write_file(
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
-    let worker_authorization = lease_authorization.clone();
+    let expected_lease = lease_authorization
+        .as_ref()
+        .map(|authorization| authorization.token().to_string());
     let worker = blocking::spawn("Share staged write", move || {
         write_worker(
             path,
             access,
             mode,
-            worker_authorization,
+            lease_authorization,
             ready_tx,
             command_rx,
             done_tx,
@@ -160,11 +162,18 @@ pub(super) async fn write_file(
                 req: FsRequest::WriteDone,
                 lease,
             }) => {
-                if let Some(authorization) = lease_authorization.as_ref() {
-                    if let Err(error) = authorization.verify_token(lease.as_deref()) {
+                if let Some(expected) = expected_lease.as_deref() {
+                    if lease.as_deref() != Some(expected) {
                         drop(command_tx);
                         await_write_cleanup(&mut done_rx, &mut worker).await;
-                        return reply_err(&mut send, error).await;
+                        return reply_err(
+                            &mut send,
+                            io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "Peer-Mount-Lease fehlt beim Schreibabschluss",
+                            ),
+                        )
+                        .await;
                     }
                 }
                 if command_tx.send(WriteCommand::Finish).await.is_err() {

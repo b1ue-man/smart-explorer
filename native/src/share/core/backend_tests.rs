@@ -11,11 +11,14 @@ use super::framing::read_exact_error;
 use super::fs::{ShareExportConfig, SharedRoot};
 use super::identity::ShareIdentity;
 use super::session::relay_url_from_signal;
-use super::types::{DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope};
+use super::types::{
+    DirectAccessState, DirectContact, DirectGrantState, PeerEndpoint, PeerOpenTarget, PeerPresence,
+    ShareAuthState, ShareScope, ShareStatus,
+};
 use crate::vfs::Backend;
 
 #[test]
-fn iroh_direct_session_transfers_files() {
+fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
     let secret = vec![7u8; 32];
     let root = std::env::temp_dir().join(format!(
         "se-iroh-direct-{}-{}",
@@ -74,7 +77,7 @@ fn iroh_direct_session_transfers_files() {
     }));
 
     let node_b = ShareIrohNode::start("relay-disabled://test", &b, auth_b, tx_b).unwrap();
-    let node_a = ShareIrohNode::start("relay-disabled://test", &a, auth_a, tx_a).unwrap();
+    let node_a = ShareIrohNode::start("relay-disabled://test", &a, auth_a.clone(), tx_a).unwrap();
     let mut candidates = node_b.candidates();
     if let Some(port) = candidates
         .iter()
@@ -107,7 +110,38 @@ fn iroh_direct_session_transfers_files() {
         relation_secret: secret,
         expected_node_id: Some(b.node_id.clone()),
     };
-    let backend = PeerBackend::new(endpoint, a.clone(), node_a);
+    auth_a.lock().unwrap().direct_contacts = vec![DirectContact {
+        id: "contact-b".into(),
+        display_name: b.device_name.clone(),
+        lookup_id: b.direct_lookup_id.clone(),
+        expected_fingerprint: b.fingerprint.clone(),
+        expected_node_id: b.node_id.clone(),
+        remote_device_id: Some(b.device_id.clone()),
+        remote_public_key: Some(b.public_key.clone()),
+        auto_connect: true,
+        auto_open: false,
+        last_seen: None,
+        status: ShareStatus::Available,
+        last_error: None,
+        presence: Some(endpoint.presence.clone()),
+        access_state: DirectAccessState::Accepted,
+        request_sent_at: None,
+        accepted_at: Some(1),
+        accepted_public_key: Some(b.public_key.clone()),
+    }];
+    let mut stale_initial = endpoint.clone();
+    stale_initial.presence.expires_at = crate::share::core_now_secs() - 1;
+    let backend = PeerBackend::new_live(
+        stale_initial,
+        PeerOpenTarget::Direct {
+            contact_id: "contact-b".into(),
+        },
+        auth_a.clone(),
+        a.clone(),
+        node_a.clone(),
+    );
+
+    backend.mount_path_capabilities("/Gate").unwrap();
 
     let root_entries = backend.list_dir("/").unwrap();
     assert!(root_entries
@@ -179,6 +213,21 @@ fn iroh_direct_session_transfers_files() {
     assert!(root.join("renamed.txt").exists());
     backend.remove_file("/Gate/renamed.txt").unwrap();
     assert!(!root.join("renamed.txt").exists());
+
+    {
+        let mut state = auth_a.lock().unwrap();
+        let refreshed = state.direct_contacts[0].presence.as_mut().unwrap();
+        refreshed.expires_at = crate::share::core_now_secs() + 300;
+        refreshed.nonce = "refreshed-route".into();
+    }
+    assert!(node_a
+        .disconnect_outgoing_for_test(backend.initial_endpoint())
+        .unwrap());
+    assert_eq!(backend.stat("/Gate/new.txt").unwrap().size, 17);
+
+    node_b.invalidate_sessions().unwrap();
+    let revoked = backend.stat("/Gate/new.txt").unwrap_err();
+    assert_eq!(revoked.kind(), io::ErrorKind::PermissionDenied);
 
     let _ = fs::remove_dir_all(root);
 }

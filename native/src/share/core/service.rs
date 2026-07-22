@@ -107,7 +107,13 @@ impl ShareService {
     ) -> Result<(String, crate::vfs::BackendHandle, ShareStatus), String> {
         let endpoint = self.endpoint_for_target(target)?;
         let label = endpoint.label.clone();
-        let be = PeerBackend::new(endpoint, self.identity.clone(), self.iroh.clone());
+        let be = PeerBackend::new_live(
+            endpoint,
+            target.clone(),
+            self.auth.clone(),
+            self.identity.clone(),
+            self.iroh.clone(),
+        );
         be.probe_root().map_err(|e| e.to_string())?;
         let status = be.transport_status();
         Ok((label, Arc::new(be), status))
@@ -120,7 +126,13 @@ impl ShareService {
         deadline: Instant,
     ) -> Result<crate::vfs::MountPathCapabilities, String> {
         let endpoint = self.endpoint_for_target(target)?;
-        let backend = PeerBackend::new(endpoint, self.identity.clone(), self.iroh.clone());
+        let backend = PeerBackend::new_live(
+            endpoint,
+            target.clone(),
+            self.auth.clone(),
+            self.identity.clone(),
+            self.iroh.clone(),
+        );
         backend
             .probe_mount_path_capabilities_until(root, deadline)
             .map_err(|error| error.to_string())
@@ -132,7 +144,13 @@ impl ShareService {
         req: super::types::ExecRequest,
     ) -> Result<super::types::ExecResult, String> {
         let endpoint = self.endpoint_for_target(target)?;
-        let be = PeerBackend::new(endpoint, self.identity.clone(), self.iroh.clone());
+        let be = PeerBackend::new_live(
+            endpoint,
+            target.clone(),
+            self.auth.clone(),
+            self.identity.clone(),
+            self.iroh.clone(),
+        );
         be.exec(req).map_err(|e| e.to_string())
     }
 
