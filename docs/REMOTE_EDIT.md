@@ -190,15 +190,30 @@ connection roots as `/Verbindungen/<connection>`; the aggregate `/` is a
 synthetic read-only target. Selection triggers a real daemon-side probe against
 the active remote `PeerBackend`, rather than trusting locally cached capability
 metadata. Mount admission then obtains an exact-root lease bound to the
-authenticated QUIC connection. A direct-to-relay route change inside that
-connection preserves the lease. Replacing the connection invalidates it, so an
-already mounted drive reports the lost authorization and requires `Retry` or a
-remount; a new connection never silently inherits the old root authority.
+authenticated device principal, export identity and authorization epoch. A
+direct-to-relay route change or physical QUIC reconnect reacquires current
+Presence routes and preserves the lease while those facts remain unchanged. A
+different identity, root or policy epoch never inherits the old root authority:
+the mounted drive fails closed and requires `Retry` or a remount.
 Stopping a share or revoking/changing its authorization is the same synchronous
 admission barrier: new operations fail closed, active mount leases become
 invalid and a later re-share requires `Retry` or a remount. One operation that
 already passed admission may finish; multi-stage writes recheck authorization
 before flush and promotion.
+
+The daemon, not a GUI tab or the isolated filesystem host, owns the shared
+backend and live remote session. GUI, daemon and one mount host are thus the
+expected three processes for one drive; the host's private IPC does not open a
+second transport-specific remote implementation.
+
+Metadata preload is configurable from depth 0 through 4 and defaults to 2. The
+host synchronously fetches only a complete root snapshot before readiness, then
+fills deeper complete directory snapshots breadth-first in bounded 8-target
+batches and rotates 16 refresh targets every 20 seconds. This cache stores no
+file content and is capped at 4,096 directories, 50,000 entries, 32 MiB total
+and 4 MiB per directory; cold point stats have a separate five-second/4-MiB
+cache. Mutations invalidate affected snapshots. Open/create admission,
+conflict/overwrite checks and all namespace changes still consult live state.
 
 Consequently, a connection fallback does not need a second mount
 implementation. It can, however, change which write guarantees are available.
@@ -312,8 +327,10 @@ from the drive manager; retained recovery work remains available through
   actor could have moved the owned object and reused the name between a check
   and delete. Future cleanup needs a stable provider object ID or lease.
 - Network or fallback latency is visible to the calling application during
-  materialization and flush. Long Dokany callbacks renew a five-minute timeout,
-  but that prevents false timeout rather than making a slow remote fast.
+  materialization and flush. Metadata transport calls have absolute deadlines
+  and metadata callbacks do not repeatedly renew Dokany timeouts. Supervised
+  whole-file reads/writes and flushes may remain active while bytes progress,
+  without blindly replaying an ambiguous mutation.
 - The displayed free-space value is bounded by local spool capacity; a remote
   quota can still reject the eventual upload.
 - The volume supports the ordinary file operations needed for Explorer and

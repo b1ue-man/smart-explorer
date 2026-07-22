@@ -65,6 +65,12 @@ und Backend-IDs verlassen diese Grenze nicht. Pfadtraversal, Symlink-/Reparse-
 Durchquerung, Windows-Gerätenamen, ADS-Syntax und case-kollidierende
 Verzeichniseinträge werden fail-closed abgelehnt.
 
+Eine Einbindung besteht daher erwartungsgemäß aus GUI, langlebigem Daemon und
+einem isolierten Mount-Host. Der Daemon besitzt das gemeinsame `Backend` samt
+aktiver Remote-Sitzung; der Host nutzt nur die private lokale IPC. Ein
+geschlossener Remote-Tab beendet den Mount nicht, und die zwei Worker-Prozesse
+sind keine zusätzlich aufgebauten Remote-Verbindungen.
+
 `RootedBackend` akzeptiert standardmäßig nur eine technisch erzwungene
 Root-Capability. Der über SSH ausgerollte Linux-Agent startet dazu mit
 `--serve-root` und bindet die vollständige, symlinkfreie Root-Auflösung per
@@ -117,7 +123,7 @@ Bedienung:
 ```powershell
 se drive runtime
 se drive install-runtime
-se drive mount @prod:/srv --letter M
+se drive mount @prod:/srv --letter M --metadata-depth 2
 se drive mount @prod:/notizen --letter N --read-write --label "Notizen"
 se drive mount sftp://host/srv --letter S --trust-remote-root
 se drive list --json
@@ -134,17 +140,29 @@ Share-Geräten; der globale Laufwerksmanager kann Mounts auswerfen oder nach
 Fehlern erneut verbinden. Nicht-Windows-Plattformen liefern für den Mount-Pfad
 bewusst `Unsupported`.
 
+`--metadata-depth` und der entsprechende GUI-Regler akzeptieren 0 bis 4;
+Standard ist 2. Nur das vollständige Root-Snapshot wird synchron vor der
+Bereitschaft geladen. Tiefere vollständige Verzeichnis-Snapshots folgen danach
+breitensuchend in 8er-Batches, eine rotierende Auffrischung arbeitet alle
+20 Sekunden in begrenzten Batches. Der Cache enthält keine Dateiinhalte und ist
+auf 4.096 Verzeichnisse, 50.000 Einträge und 32 MiB insgesamt sowie 4 MiB pro
+Verzeichnis begrenzt; kalte Einzelabfragen nutzen zusätzlich höchstens 4 MiB
+für fünf Sekunden. Sicherheitsentscheidungen zu Open/Create/Replace und
+Konflikten bleiben Live-Abfragen, Mutationen invalidieren die betroffenen
+Snapshots.
+
 Für ein Share-Gerät werden konkrete lokale Exporte als `/Label` und gespeicherte
 Verbindungswurzeln als `/Verbindungen/<Verbindung>` angeboten; nur das
 aggregierte `/` ist eine synthetische read-only Auswahl. Die GUI lässt die
 Capability nicht aus lokalen Metadaten erraten, sondern fragt über IPC den
 Daemon und damit das tatsächlich aktive entfernte `PeerBackend` ab. Beim
-eigentlichen Mount stellt der Peer eine an die authentifizierte QUIC-Verbindung
-und die exakte Root gebundene Lease aus. Direkt- und Relay-Routing innerhalb
-dieser Verbindung teilen die Lease. Ersetzt ein Reconnect die Verbindung, ist
-die alte Lease ungültig und der Mount muss per `Retry` beziehungsweise Remount
-neu autorisiert werden. Dadurch kann ein Fallback die Root- oder RW-Garantie
-nicht unbemerkt abschwächen.
+eigentlichen Mount stellt der Peer eine an den authentifizierten Prinzipal, die
+exakte Root sowie Export- und Autorisierungs-Epoche gebundene Lease aus.
+Direkt-/Relay-Wechsel und physische QUIC-Reconnects beziehen aktuelle
+Presence-Routen und behalten diese Lease, solange Identität, Root und Policy
+gleich bleiben. Eine geänderte Identität, Root oder Autorisierungs-Epoche
+scheitert geschlossen und verlangt `Retry` beziehungsweise Remount. Dadurch
+kann ein Fallback die Root- oder RW-Garantie nicht unbemerkt abschwächen.
 
 Das Stoppen einer Freigabe oder das Entziehen beziehungsweise Ändern ihrer
 Autorisierung ist dieselbe synchrone Zulassungsbarriere: Neue Operationen werden
@@ -235,8 +253,10 @@ Die Baseline-Prüfung ist bewusst kein universelles serverseitiges Compare-and-
 Swap. Ohne conditional commit des konkreten Backends bleibt zwischen der
 letzten Prüfung und der atomaren Promotion ein kleines TOCTOU-Fenster. Jeder
 geänderte Flush überträgt die ganze Datei, sodass große Dateien und hohe Latenz
-direkt als Anwendungspause sichtbar werden; lange Callbacks verlängern ihren
-Dokany-Timeout alle 30 Sekunden auf fünf Minuten. Die angezeigte freie Kapazität
+direkt als Anwendungspause sichtbar werden. Metadaten-Callbacks besitzen feste
+Deadlines und verlängern den Dokany-Timeout nicht wiederholt; überwachte
+Whole-file-Schreib-/Flush-Callbacks dürfen für eine laufende Übertragung länger
+leben und werden niemals blind wiederholt. Die angezeigte freie Kapazität
 ist die lokale Spool-Kapazität, Remote-Quoten melden sich erst beim Commit.
 Setzen von ACLs/Security Descriptors, Creation/Access/Write-Time, beliebigen
 Dateiattributen, Alternate Data Streams und Reparse Points ist nicht
