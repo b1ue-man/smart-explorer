@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::SendStream;
 use tokio::sync::mpsc;
@@ -16,6 +16,7 @@ use super::walk_assembly::{
 use super::wire::{FsResponse, FsWalkNode};
 
 const WALK_RESPONSE_BUFFER: usize = 2;
+const CANCEL_POLL: Duration = Duration::from_millis(250);
 
 /// Serve a walk through the stream's selected filesystem access. A mount lease
 /// retains one backend/root; stateless browsing resolves current exports.

@@ -17,7 +17,7 @@ use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
 
 const MOUNT_CAPABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(40);
 
-pub(super) use super::framing::{recv_resp, recv_tagged, reply, send_ctrl};
+pub(super) use super::framing::{recv_tagged, reply, send_ctrl};
 pub(crate) use super::node::ShareIrohNode;
 
 pub struct PeerBackend {

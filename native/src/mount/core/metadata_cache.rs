@@ -286,7 +286,8 @@ impl MetadataCache {
         state
             .snapshot_cooldowns
             .retain(|_, retry_at| *retry_at > now);
-        let mut candidates = BinaryHeap::with_capacity(limit.saturating_add(1));
+        let mut candidates: BinaryHeap<(u8, String)> =
+            BinaryHeap::with_capacity(limit.saturating_add(1));
         for cached in state.directories.values() {
             let child_depth = cached.depth.saturating_add(1);
             for metadata in cached.entries.iter() {
