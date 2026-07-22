@@ -1500,9 +1500,9 @@
     "semantic_hash": "f998c4b2a0b0319b57a369e40b0eb936"
   },
   "daemon/mod.rs": {
-    "mtime": 1784706340.4482098,
-    "ast_hash": "b303dd54bc79b262f9cfdeb4a83f4150",
-    "semantic_hash": "b303dd54bc79b262f9cfdeb4a83f4150"
+    "mtime": 1784713716.8749835,
+    "ast_hash": "37554a7ee70948e186ba9e28231b4934",
+    "semantic_hash": "37554a7ee70948e186ba9e28231b4934"
   },
   "daemon/os/linux_os/ipc_storage.rs": {
     "mtime": 1783897377.695009,
@@ -1759,6 +1759,11 @@
     "ast_hash": "a92081bbe83a7f3ec71bff956ddbb4ca",
     "semantic_hash": "a92081bbe83a7f3ec71bff956ddbb4ca"
   },
+  "daemon/os/shared/mount_process_environment_task_tests.rs": {
+    "mtime": 1784713727.7902567,
+    "ast_hash": "98e0131c914065ba84ab16169915cd72",
+    "semantic_hash": "98e0131c914065ba84ab16169915cd72"
+  },
   "daemon/os/shared/mount_proxy.rs": {
     "mtime": 1784635640.1795938,
     "ast_hash": "aa4d68208457dd32a86508b268c03b6d",
@@ -1820,9 +1825,14 @@
     "semantic_hash": "5f73fad290d5f4236aa49374cbf8465c"
   },
   "daemon/os/windows/mount_process.rs": {
-    "mtime": 1784701933.6618924,
-    "ast_hash": "45fc3f8eac94a02cf3773db87d81e2ca",
-    "semantic_hash": "45fc3f8eac94a02cf3773db87d81e2ca"
+    "mtime": 1784713727.8212576,
+    "ast_hash": "7ab8ff29747587509070d007cab4b0c1",
+    "semantic_hash": "7ab8ff29747587509070d007cab4b0c1"
+  },
+  "daemon/os/windows/mount_process_environment.rs": {
+    "mtime": 1784713676.2349672,
+    "ast_hash": "94571b745f26dcf05ba8ec38210abcea",
+    "semantic_hash": "94571b745f26dcf05ba8ec38210abcea"
   },
   "daemon/os/windows/platform.rs": {
     "mtime": 1783825360.3494232,
