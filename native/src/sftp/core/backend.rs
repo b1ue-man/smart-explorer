@@ -156,13 +156,6 @@ impl SftpBackend {
         }
     }
 
-    fn safe_sftp<T>(
-        &self,
-        operation: impl Fn(&SftpGeneration) -> Result<T, SftpError>,
-    ) -> io::Result<T> {
-        self.safe_sftp_on(operation).map(|(_, value)| value)
-    }
-
     fn safe_sftp_on<T>(
         &self,
         operation: impl Fn(&SftpGeneration) -> Result<T, SftpError>,
@@ -210,10 +203,9 @@ impl Backend for SftpBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let dir = self.safe_sftp(|generation| {
-            self.rt
-                .block_on(generation.sftp().read_dir(path.to_string()))
-        })?;
+        let dir = self
+            .connection
+            .safe_metadata(|generation| Box::pin(generation.sftp().read_dir(path.to_string())))?;
         let mut out = Vec::new();
         for e in dir {
             let name = e.file_name();
@@ -224,18 +216,15 @@ impl Backend for SftpBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let meta = self.safe_sftp(|generation| {
-            self.rt
-                .block_on(generation.sftp().symlink_metadata(path.to_string()))
+        let meta = self.connection.safe_metadata(|generation| {
+            Box::pin(generation.sftp().symlink_metadata(path.to_string()))
         })?;
         Ok(to_vfs(basename(path), &meta))
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        self.safe_sftp(|generation| {
-            self.rt
-                .block_on(generation.sftp().try_exists(path.to_string()))
-        })
+        self.connection
+            .safe_metadata(|generation| Box::pin(generation.sftp().try_exists(path.to_string())))
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {

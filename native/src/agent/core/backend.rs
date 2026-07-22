@@ -11,6 +11,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
 pub struct AgentBackend {
     pub(super) inner: BackendHandle,
     pub(super) connection: Arc<AgentConnection>,
@@ -105,7 +107,7 @@ impl Backend for AgentBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         match self
             .connection
-            .safe_call(Frame::ListDir(path.to_string()))?
+            .safe_call_timeout(Frame::ListDir(path.to_string()), METADATA_REQUEST_TIMEOUT)?
         {
             Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
             Frame::Err(e) => Err(io::Error::other(e)),
@@ -117,7 +119,10 @@ impl Backend for AgentBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        match self.connection.safe_call(Frame::Stat(path.to_string()))? {
+        match self
+            .connection
+            .safe_call_timeout(Frame::Stat(path.to_string()), METADATA_REQUEST_TIMEOUT)?
+        {
             Frame::Meta(m) => Ok(wire_to_vfs(m)),
             Frame::Err(e) => Err(io::Error::other(e)),
             other => Err(io::Error::new(
@@ -130,7 +135,7 @@ impl Backend for AgentBackend {
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
         match self
             .connection
-            .safe_call(Frame::TryExists(path.to_string()))?
+            .safe_call_timeout(Frame::TryExists(path.to_string()), METADATA_REQUEST_TIMEOUT)?
         {
             Frame::Exists(exists) => Ok(exists),
             Frame::Err(error) => Err(io::Error::other(error)),

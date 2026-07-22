@@ -72,16 +72,34 @@ impl AgentConnection {
     /// dispatched an operation on it.
     pub(super) fn mux(self: &Arc<Self>) -> io::Result<Arc<Mux>> {
         let current = self.current_mux();
-        if !current.is_closed() {
+        if !current.is_closed() && !current.is_retired() {
             return Ok(current);
         }
-        self.replace_closed(&current)
+        self.replace_unusable(&current)
     }
 
-    /// Retry an idempotent one-request/one-response read at most once and only
-    /// when the observed generation is definitively closed.
-    pub(super) fn safe_call(self: &Arc<Self>, request: Frame) -> io::Result<Frame> {
-        self.retry_safe(|mux| mux.call(request.clone()))
+    /// Retry an idempotent one-request/one-response read at most once. A timed
+    /// out reconnectable generation stops accepting new requests but drains
+    /// its registered mutation streams while the retry uses a replacement.
+    /// A reconnect-less local proxy only unregisters the timed-out request.
+    pub(super) fn safe_call_timeout(
+        self: &Arc<Self>,
+        request: Frame,
+        timeout: Duration,
+    ) -> io::Result<Frame> {
+        let first = self.mux()?;
+        match self.metadata_attempt(&first, request.clone(), timeout) {
+            Ok(frame) => Ok(frame),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut && self.reconnect.is_some() => {
+                let replacement = self.replace_unusable(&first)?;
+                self.metadata_attempt(&replacement, request, timeout)
+            }
+            Err(_error) if first.is_closed() || first.is_retired() => {
+                let replacement = self.replace_unusable(&first)?;
+                self.metadata_attempt(&replacement, request, timeout)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn retry_safe<T>(
@@ -91,8 +109,8 @@ impl AgentConnection {
         let first = self.mux()?;
         match operation(&first) {
             Ok(value) => Ok(value),
-            Err(_error) if first.is_closed() => {
-                let replacement = self.replace_closed(&first)?;
+            Err(_error) if first.is_closed() || first.is_retired() => {
+                let replacement = self.replace_unusable(&first)?;
                 operation(&replacement)
             }
             Err(error) => Err(error),
@@ -105,6 +123,7 @@ impl AgentConnection {
         let mux = self.mux()?;
         match mux.call(request) {
             Ok(frame) => Ok((mux, frame)),
+            Err(error) if mux.is_retired() && !mux.is_closed() => Err(error),
             Err(error) => {
                 self.invalidate(&mux);
                 Err(error)
@@ -120,6 +139,21 @@ impl AgentConnection {
         mux.close();
     }
 
+    fn metadata_attempt(
+        &self,
+        mux: &Arc<Mux>,
+        request: Frame,
+        timeout: Duration,
+    ) -> io::Result<Frame> {
+        let result = mux.call_absolute_timeout(request, timeout);
+        if self.reconnect.is_some()
+            && matches!(&result, Err(error) if error.kind() == io::ErrorKind::TimedOut)
+        {
+            mux.retire();
+        }
+        result
+    }
+
     fn current_mux(&self) -> Arc<Mux> {
         self.state
             .lock()
@@ -129,21 +163,24 @@ impl AgentConnection {
             .clone()
     }
 
-    fn replace_closed(self: &Arc<Self>, observed: &Arc<Mux>) -> io::Result<Arc<Mux>> {
+    fn replace_unusable(self: &Arc<Self>, observed: &Arc<Mux>) -> io::Result<Arc<Mux>> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !Arc::ptr_eq(&state.current.mux, observed) && !state.current.mux.is_closed() {
+        if !Arc::ptr_eq(&state.current.mux, observed)
+            && !state.current.mux.is_closed()
+            && !state.current.mux.is_retired()
+        {
             return Ok(state.current.mux.clone());
         }
-        if !state.current.mux.is_closed() {
+        if !state.current.mux.is_closed() && !state.current.mux.is_retired() {
             return Ok(state.current.mux.clone());
         }
         let reconnect = self.reconnect.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "agent transport closed and reconnect is unavailable",
+                "agent transport closed or retired and reconnect is unavailable",
             )
         })?;
         let (mux, _) = establish(reconnect()?, self.heartbeat.deadline)?;
@@ -156,6 +193,14 @@ impl AgentConnection {
             return Err(error);
         }
         Ok(mux)
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_observed_for_test(
+        self: &Arc<Self>,
+        observed: &Arc<Mux>,
+    ) -> io::Result<Arc<Mux>> {
+        self.replace_unusable(observed)
     }
 
     fn start_heartbeat(self: &Arc<Self>, mux: Arc<Mux>, id: u64) -> io::Result<()> {
@@ -258,9 +303,19 @@ fn heartbeat_loop(
             mux.close();
             return;
         }
+        if mux.is_retired() {
+            if mux.is_closed() {
+                if let Some(connection) = connection.upgrade() {
+                    let _ = connection.replace_unusable(&mux);
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         if mux.is_closed() {
             if let Some(connection) = connection.upgrade() {
-                let _ = connection.replace_closed(&mux);
+                let _ = connection.replace_unusable(&mux);
             }
             return;
         }
@@ -286,12 +341,16 @@ fn heartbeat_loop(
             continue;
         }
 
+        if mux.is_retired() {
+            continue;
+        }
+
         // Closing the mux disconnects every pending operation visibly. The
         // replacement opens a fresh `se-agent --serve` channel; no request from
         // this generation is copied to it.
         mux.close();
         if let Some(connection) = connection.upgrade() {
-            let _ = connection.replace_closed(&mux);
+            let _ = connection.replace_unusable(&mux);
         }
         return;
     }
