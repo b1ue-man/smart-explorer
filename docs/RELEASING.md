@@ -39,7 +39,8 @@ user can pull updates.
 ## Pinned Dokany installer dependency
 
 The optional Windows remote-drive feature uses the official [Dokany
-2.3.1/API 231 runtime](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000).
+2.3.1.1000 runtime](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000),
+with DLL API 231 and kernel-driver protocol 0x190 (decimal 400).
 The recommended NSIS installer embeds exactly one official dependency:
 `Dokan_x64.msi` is an optional, standard-selected offline component. The Smart
 Explorer application remains a per-user install; only this machine-wide MSI
@@ -51,7 +52,8 @@ notices but never uninstalls or downgrades the shared Dokany runtime.
 `native/dokany-runtime.nsh` is the single manifest consumed by Rust, NSIS and
 both dependency fetchers. Its reviewed pin is:
 
-- version `2.3.1.1000`, API `231`, file `Dokan_x64.msi`;
+- version `2.3.1.1000`, DLL API `231`, driver protocol `0x190`/`400`, file
+  `Dokan_x64.msi`;
 - `https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi`;
 - exactly `9,269,248` bytes; and
 - SHA-256 `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
@@ -78,17 +80,22 @@ handles stay open while a UAC `runas` launch invokes the `msiexec.exe` resolved
 from System32, so the elevated reopen is bound to the verified pathname, with
 `/passive /norestart ADDLOCAL=DokanDriverFeature
 INSTALLDEVFILES=0`. An exit code 0 is not enough: the postcheck must load only
-`%WINDIR%\System32\dokan2.dll` and see exactly API 231 from both DLL and driver.
-An installed wrong API fails visibly rather than being overwritten silently.
+`%WINDIR%\System32\dokan2.dll`, see DLL API 231 from `DokanVersion()`, and see
+driver protocol 0x190/400 from `DokanDriverVersion()`. The GUI/CLI automatic
+path installs only for an absent runtime or an unavailable driver. A genuinely
+incompatible installed shared runtime fails with the exact observed API or
+protocol and is never automatically overwritten or downgraded.
 
 The official project provides signed release drivers, so users need neither
 Developer Mode nor `TESTSIGNING`. The application remains delay-loaded and its
 non-drive features must work without Dokany. Install the notice plus GPL-3.0,
 LGPL-3.0 and MIT texts from `third-party/dokany/` with Smart Explorer. These
-packaging, signature and API claims were checked against the
+packaging, signature and version-domain claims were checked against the
 [tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md)
-and [tagged header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
-on 2026-07-21. If the supported ABI or MSI changes, review and update the
+and [tagged API header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
+the [tagged driver header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h),
+and the [version-query implementation](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c)
+on 2026-07-22. If the supported ABI, driver protocol, or MSI changes, review and update the
 manifest, Rust validation, fetchers, installer, license notices and user/native
 documentation together.
 

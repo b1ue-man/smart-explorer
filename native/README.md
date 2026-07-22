@@ -70,33 +70,47 @@ Root-Capability. Der über SSH ausgerollte Linux-Agent startet dazu mit
 `--serve-root` und bindet die vollständige, symlinkfreie Root-Auflösung per
 `openat2` in eine Landlock-Domain (ABI **3+**, einschließlich Rename und
 Truncate), bevor Worker-Threads entstehen. Google Drive ist durch seine
-Parent-ID-Hierarchie confined. Plain SFTP, Local/UNC, Peer, WebDAV und FTP
-können einen externen Pfadaustausch nicht technisch ausschließen und brauchen
-deshalb die explizite GUI-Vertrauensoption oder `--trust-remote-root`. Das gilt
-auch für ein read-only Volume: Trusted-Root serialisiert und validiert jeden
+Parent-ID-Hierarchie confined. Plain SFTP, Local/UNC, WebDAV und FTP können
+einen externen Pfadaustausch nicht technisch ausschließen und brauchen deshalb
+die explizite GUI-Vertrauensoption oder `--trust-remote-root`. Das gilt auch für
+ein read-only Volume: Trusted-Root serialisiert und validiert jeden
 Smart-Explorer-Aufruf weiter, setzt aber einen vertrauenswürdigen Server und
-keinen gleichzeitig bösartig ausgetauschten Symlink/Junction voraus.
+keinen gleichzeitig bösartig ausgetauschten Symlink/Junction voraus. Peer ist
+kein pauschal `Unverified` markierter Sonderfall: Ein konkreter Share-Export
+übernimmt die Root-Capability seines daemonseitig aufgelösten Backends. Ein
+exportiertes Agent-Root kann deshalb `Enforced` bleiben; Local/UNC/plain SFTP
+bleiben auch hinter Peer wegen ihres TOCTOU-Fensters `Unverified`.
 
 Smart Explorer bindet Dokany nicht statisch. Der empfohlene NSIS-Installer
 bettet die exakt gepinnte offizielle `Dokan_x64.msi` als standardmäßig
 ausgewählte optionale Offline-Komponente ein; portable oder per Auto-Update
 aktualisierte Installationen laden denselben Pin über die GUI oder
-`se drive install-runtime`. Die Basis-App bleibt per-user, nur der systemweite
+`se drive install-runtime`. `dokany-runtime.nsh` bindet dafür die offizielle
+2.3.1.1000-URL, exakt 9.269.248 Bytes und SHA-256
+`69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
+Die Basis-App bleibt per-user, nur der systemweite
 MSI-Schritt läuft nach einer UAC-Bestätigung. Ein stilles Setup installiert die
 Runtime ausschließlich mit `/S /INSTALLDOKANY=1`, und der Smart-Explorer-
-Uninstaller entfernt Dokany nicht.
+Uninstaller entfernt Dokany nicht. Der Downloader bindet URL, Größe und SHA-256,
+prüft den gesperrt geöffneten MSI samt Authenticode-Kette und startet erst dann
+System32-`msiexec` per UAC. Automatisch installiert wird bei fehlender Runtime
+oder nicht verfügbarem Treiber; eine vorhandene inkompatible shared Runtime wird
+nicht automatisch ersetzt oder herabgestuft.
 
 Zur Laufzeit wird `dokan2.dll` mit
 `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` nur aus
-`%WINDIR%\System32` geladen; sowohl `DokanVersion()` als auch
-`DokanDriverVersion()` müssen exakt **231** melden. Unterstützt ist die
-offizielle [Dokany-Version
-2.3.1](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000). Deren
+`%WINDIR%\System32` geladen. `DokanVersion()` muss die DLL-API **231** melden;
+`DokanDriverVersion()` fragt über `FSCTL_GET_VERSION` das getrennte
+Kernel-Treiberprotokoll ab und muss **0x190** (dezimal **400**) melden.
+Unterstützt ist die offizielle [Dokany-Version
+2.3.1.1000](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000). Deren
 offizielle Builds enthalten signierte Treiber, weshalb weder Windows Developer
 Mode noch `TESTSIGNING` nötig ist; die systemweite Runtime-Installation kann
-Adminrechte verlangen. Primärquellen geprüft am 2026-07-21:
+Adminrechte verlangen. Primärquellen geprüft am 2026-07-22:
 [Dokany README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md),
-[2.3.1-Header mit `DOKAN_VERSION 231`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h).
+[API-Header mit `DOKAN_VERSION 231`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
+[Treiber-Header mit `DOKAN_DRIVER_VERSION 0x0000190`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h),
+[`DokanVersion`/`DokanDriverVersion`-Implementierung](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c).
 
 Bedienung:
 
@@ -119,6 +133,24 @@ das Laufwerkssymbol an gespeicherten Verbindungen, Google Drive und
 Share-Geräten; der globale Laufwerksmanager kann Mounts auswerfen oder nach
 Fehlern erneut verbinden. Nicht-Windows-Plattformen liefern für den Mount-Pfad
 bewusst `Unsupported`.
+
+Für ein Share-Gerät werden konkrete lokale Exporte als `/Label` und gespeicherte
+Verbindungswurzeln als `/Verbindungen/<Verbindung>` angeboten; nur das
+aggregierte `/` ist eine synthetische read-only Auswahl. Die GUI lässt die
+Capability nicht aus lokalen Metadaten erraten, sondern fragt über IPC den
+Daemon und damit das tatsächlich aktive entfernte `PeerBackend` ab. Beim
+eigentlichen Mount stellt der Peer eine an die authentifizierte QUIC-Verbindung
+und die exakte Root gebundene Lease aus. Direkt- und Relay-Routing innerhalb
+dieser Verbindung teilen die Lease. Ersetzt ein Reconnect die Verbindung, ist
+die alte Lease ungültig und der Mount muss per `Retry` beziehungsweise Remount
+neu autorisiert werden. Dadurch kann ein Fallback die Root- oder RW-Garantie
+nicht unbemerkt abschwächen.
+
+Das Stoppen einer Freigabe oder das Entziehen beziehungsweise Ändern ihrer
+Autorisierung ist dieselbe synchrone Zulassungsbarriere: Neue Operationen werden
+abgewiesen, aktive Peer-Mount-Leases werden ungültig und nach erneuter Freigabe
+ist `Retry` oder ein Remount nötig. Bereits zugelassene Einzeloperationen dürfen
+abschließen; mehrphasige Writes prüfen vor Flush und Promotion erneut.
 
 Ein strikter SFTP-Mount wird nur aus einer gespeicherten Verbindung mit
 aktiviertem und erfolgreich gestartetem Agent zugelassen. Deployment- oder
@@ -149,10 +181,11 @@ Smart-Explorer-SSH-Agent melden alle drei Schreibprimitive. Plain SFTP meldet
 bewusst keine vollständige RW-Capability: ein einziges SFTP-v3-Subsystem nutzt
 Standard-`SSH_FXP_RENAME`, das ein vorhandenes Ziel nicht ersetzen darf. Eine
 zweite Extension-Session oder ein Stat-dann-Rename-Rennen wird nicht zur
-atomaren Garantie hochgestuft. Synthetische Peer-Container (`/`,
-`/Verbindungen`) melden keine
-Schreibgarantien; ein konkreter Export-Unterbaum fragt die Capability des dort
-aufgelösten Backends ab. Google Drive kann create/replace, aber keinen atomaren
+atomaren Garantie hochgestuft. Für Share sind `/Label` und
+`/Verbindungen/<Verbindung>` konkrete Export-Wurzeln; das aggregierte `/` ist
+synthetisch und meldet keine Schreibgarantien. Jeder konkrete Unterbaum fragt
+die Capability seines entfernten, daemonseitig aufgelösten Backends ab. Google
+Drive kann create/replace, aber keinen atomaren
 Namespace-Replace garantieren; WebDAV sowie FTP/FTPS garantieren derzeit nicht
 das vollständige Set. Ob ein Ziel read-only überhaupt startet, entscheidet
 zusätzlich die obige Strict-/Trusted-Root-Zulassung. Weil beide Capabilities am
@@ -182,6 +215,13 @@ explizit `Clean`, `Required` oder `Unknown`; alte Datensätze ohne beweisbaren
 Status werden als `Unknown` fail-closed behandelt. Nur `Clean` darf nach einem
 reinen Vor-Mount-Fehler als sauber entfernt werden. Dadurch verschleiert etwa
 ein SSH-Timeout kein lokales Recovery-Material.
+
+Die Host-Diagnose erhält den terminalen Recovery-/Konfliktstatus und ergänzt
+eine größenbegrenzte Prozessursache. Benutzer sehen damit getrennte
+DLL-API-/Treiberprotokoll-Mismatches, Root- oder RW-Ablehnungen, ungültige
+Peer-Leases und vorhandenes Recovery-Material statt nur `exit code: 1`. Nur ein
+beweisbar sauberer Manager-Eintrag darf entfernt werden; ein erhaltener
+Recovery-Eintrag bleibt über `Retry` wiederaufnehmbar.
 
 Auch der portable Doppelklick-Pfad ist crash-sicherer: der atomare
 `open-temp`-Marker entsteht erst nach erfolgreichem Download. Leere Legacy-

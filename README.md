@@ -43,7 +43,8 @@ Remote-Ziel bleiben im Daemon und werden nicht an den isolierten
 Dateisystem-Host weitergereicht.
 
 Voraussetzung unter Windows ist die offizielle
-[Dokany-2.3.1-Laufzeit (API 231)](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000).
+[Dokany-2.3.1.1000-Laufzeit](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000)
+mit DLL-API **231** und Kernel-Treiberprotokoll **0x190** (dezimal **400**).
 Der empfohlene Smart-Explorer-Installer enthält die exakt gepinnte offizielle
 `Dokan_x64.msi` offline als standardmäßig ausgewählte optionale Komponente.
 Portable und per Auto-Update aktualisierte Installationen können dieselbe
@@ -51,10 +52,18 @@ Runtime aus der GUI oder mit `se drive install-runtime` sicher nachinstallieren.
 Die Smart-Explorer-Basis bleibt eine per-user-Installation; nur der Windows
 Installer (`msiexec`) fordert für den systemweiten Treiber UAC an. Die offizielle
 signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`, und Smart
-Explorer lädt weiterhin ausschließlich `%WINDIR%\System32\dokan2.dll`; DLL und
-Treiber müssen exakt API 231 melden. Stand der Primärquellenprüfung: 2026-07-21
+Explorer lädt weiterhin ausschließlich `%WINDIR%\System32\dokan2.dll`.
+`DokanVersion()` muss die DLL-API 231 melden; `DokanDriverVersion()` fragt das
+getrennte Kernel-Protokoll ab und muss 0x190/400 melden. Eine fehlende Runtime
+beziehungsweise ein nicht verfügbarer Treiber kann automatisch installiert
+werden. Eine bereits vorhandene, tatsächlich inkompatible gemeinsam genutzte
+Runtime wird dagegen nicht automatisch ersetzt oder herabgestuft, sondern mit
+dem konkret abweichenden Wert gemeldet. Stand der Primärquellenprüfung:
+2026-07-22
 ([Dokany-Projekt](https://github.com/dokan-dev/dokany),
-[API-Header 2.3.1](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)).
+[API-Header mit `DOKAN_VERSION 231`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
+[Treiber-Header mit `DOKAN_DRIVER_VERSION 0x0000190`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h),
+[`DokanVersion`/`DokanDriverVersion`-Implementierung](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c)).
 
 In der GUI startet das Laufwerkssymbol neben einer gespeicherten Verbindung,
 Google Drive oder einem Share-Gerät den Dialog **Remote als Laufwerk**; das
@@ -83,12 +92,18 @@ SFTP wiederholt.
 Der Agent bindet die exakte Wurzel vor seinen
 Worker-Threads mit Landlock ABI 3+; Google Drive bleibt durch seine
 Parent-ID-Navigation in der ausgewählten Provider-Hierarchie. Plain SFTP,
-Local/UNC, Share, WebDAV und FTP können einen Pfad dagegen nicht atomar gegen
-einen gleichzeitig ausgetauschten Symlink/Junction absichern. Sie benötigen
-deshalb die ausdrücklich zu bestätigende GUI-Option **Remote-Wurzel ohne
-technische Sandbox vertrauen** beziehungsweise `--trust-remote-root` – auch
-read-only. Smart Explorer validiert und serialisiert Pfade dort weiterhin,
-vertraut aber dem Server und anderen Schreibern während eines Zugriffs.
+Local/UNC, WebDAV und FTP können einen Pfad dagegen nicht atomar gegen einen
+gleichzeitig ausgetauschten Symlink/Junction absichern. Sie benötigen deshalb
+die ausdrücklich zu bestätigende GUI-Option **Remote-Wurzel ohne technische
+Sandbox vertrauen** beziehungsweise `--trust-remote-root` – auch read-only.
+Smart Explorer validiert und serialisiert Pfade dort weiterhin, vertraut aber
+dem Server und anderen Schreibern während eines Zugriffs. Bei einem Share-/Peer-
+Ziel wird nicht pauschal diese schwächere Einstufung angenommen: Smart Explorer
+prüft den konkret exportierten Unterbaum daemonseitig. Ein Peer-Export eines
+Agent-confined Backends kann so `Enforced` und – bei allen drei
+Schreibgarantien – RW bleiben; ein exportiertes Local-/UNC-/plain-SFTP-Ziel
+bleibt wegen seines Check-to-operation-TOCTOU `Unverified` und braucht die
+explizite Vertrauensfreigabe.
 
 Ohne `--read-write` ist das eingebundene Laufwerk absichtlich
 schreibgeschützt. Zusätzlich zur Root-Zulassung wird der Schreibmodus schon
@@ -99,12 +114,24 @@ Stat-dann-Create-Test. Der SSH-Agent sowie Local/UNC besitzen diese
 Schreibprimitive. Plain SFTP meldet sie bewusst nicht: Smart Explorer hält nur
 ein SFTP-v3-Subsystem offen und nutzt dessen Standard-Rename ohne Replace; eine
 zweite Extension-Verbindung oder ein Stat-dann-Rename-Rennen wird nicht als
-atomare Garantie ausgegeben. Synthetische Share-Wurzeln wie `/` und
-`/Verbindungen` bleiben
-schreibgeschützt; ein konkret exportierter Unterbaum wird separat geprüft. Ein
-Transport-Fallback ist für den Laufwerkskern transparent, wird aber mit seinen
-tatsächlichen Root- und Schreibgarantien neu zugelassen. Für einen strikten
-SFTP-Mount ist Agent→SFTP jedoch ausdrücklich kein zulässiger Fallback.
+atomare Garantie ausgegeben. Für Share-Geräte sind `/Label` und
+`/Verbindungen/<Verbindung>` konkrete mountbare Wurzeln; das aggregierte `/` ist
+synthetisch und bleibt read-only. Vor der Auswahl fragt die GUI über den Daemon
+das echte entfernte Peer-Backend ab. Der gestartete Mount erhält anschließend
+eine an die authentifizierte QUIC-Verbindung und genau diese Wurzel gebundene
+Lease. Ein Wechsel zwischen Direkt- und Relay-Pfad innerhalb derselben
+Verbindung ändert sie nicht; eine vollständig erneuerte Verbindung invalidiert
+sie und verlangt `Retry` beziehungsweise erneutes Einbinden. Ein Fallback wird
+vor dem Mount mit seinen tatsächlichen Root- und Schreibgarantien zugelassen und
+schwächt RW nie still zu unsicherem Schreiben. Für einen strikten SFTP-Mount ist
+Agent→SFTP ausdrücklich kein zulässiger Fallback.
+
+Auch das Stoppen einer Freigabe oder das Entziehen beziehungsweise Ändern ihrer
+Autorisierung sperrt neue Operationen synchron und macht aktive Peer-Mount-
+Leases ungültig. Nach einer erneuten Freigabe ist deshalb ebenfalls `Retry` oder
+ein Remount nötig. Eine bereits zugelassene Einzeloperation darf noch
+abschließen; mehrphasige Schreibvorgänge prüfen die Autorisierung vor Flush und
+Promotion erneut.
 
 Der SSH-Aufbau staffelt aufgelöste IPv6-/IPv4-Adressen abwechselnd mit 250 ms
 Versatz, behält den ursprünglichen Hostnamen für Known-Hosts-Prüfung bei und
@@ -134,6 +161,15 @@ fail-closed erhalten. Ein kurzlebiger Electron-/Obsidian-Launcher gilt nicht als
 Editor-Ende: die Temp-Datei und ihr Marker bleiben für spätere Save-back-Zyklen
 erhalten, auch wenn die Datei während eines atomaren Editor-Saves vorübergehend
 verschwindet.
+
+Fehlschläge des Laufwerk-Hosts bleiben handlungsorientiert: Smart Explorer
+nennt getrennt eine inkompatible DLL-API beziehungsweise ein inkompatibles
+Treiberprotokoll, eine abgelehnte Root-/RW-Garantie, erforderliches Remount nach
+einer erneuerten Peer-Verbindung oder erhaltenes Recovery-Material. Zusätzlich
+wird die begrenzte Ursache des Host-Prozesses angehängt, statt nur einen
+generischen Exit-Code zu zeigen. Ein nachweislich sauberer Eintrag kann im
+Laufwerksmanager entfernt werden; für erhaltenes Recovery-Material bleibt
+`Retry` der Wiederaufnahmeweg.
 
 **Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
 senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und
@@ -280,7 +316,7 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    Ordner in den Benutzer-`PATH` ein (sichtbar in neu geöffneten Terminals) — **und stellt die
    Update-Prüfung auf den Git-Feed ein. Neue Versionen werden automatisch geprüft
    und sicher bereitgestellt; installiert werden sie erst nach deiner Bestätigung.**
-   Die offline eingebettete Dokany-2.3.1-Komponente ist im normalen Setup
+   Die offline eingebettete Dokany-2.3.1.1000-Komponente ist im normalen Setup
    standardmäßig ausgewählt; nur dieser MSI-Schritt löst UAC aus. Ein stilles
    Setup installiert Dokany dagegen nur mit `/S /INSTALLDOKANY=1`. Smart Explorer
    entfernt eine installierte Dokany-Runtime beim Uninstall nicht.
@@ -289,7 +325,10 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
    [`se.exe`](release-native/se.exe) daneben. Falls das Laufwerksfeature Dokany
    benötigt: in der GUI **Dokany installieren** wählen oder in PowerShell
-   `se drive install-runtime` ausführen.
+   `se drive install-runtime` ausführen. Der Download ist auf die veröffentlichte
+   URL, Dateigröße und SHA-256 festgelegt, wird per Authenticode geprüft und
+   fordert erst für `msiexec` UAC an. Eine erkannte inkompatible gemeinsam
+   genutzte Dokany-Version wird nicht automatisch ersetzt.
 
 ## 🔄 Updates bekommen — *das hier eintragen*
 

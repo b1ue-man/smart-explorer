@@ -76,8 +76,9 @@ registered sync root. Dokany supplies the signed kernel bridge and invokes a
 user-mode filesystem's callbacks; that is the mechanism needed for a normal
 drive letter without writing a Smart Explorer kernel driver.
 
-Smart Explorer supports the official [Dokany 2.3.1
-release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000), API 231.
+Smart Explorer supports the official [Dokany 2.3.1.1000
+release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000), with
+DLL API 231 and kernel-driver protocol 0x190 (decimal 400).
 The recommended NSIS installer embeds the pinned official x64 MSI offline as a
 standard-selected optional component. Smart Explorer itself remains per-user;
 only the machine-wide MSI invokes UAC. Silent installation deliberately skips
@@ -89,7 +90,8 @@ pin.
 The single source of dependency truth is
 [`native/dokany-runtime.nsh`](../native/dokany-runtime.nsh):
 
-- version `2.3.1.1000`, API `231`, filename `Dokan_x64.msi`;
+- version `2.3.1.1000`, DLL API `231`, driver protocol `0x190`/`400`, filename
+  `Dokan_x64.msi`;
 - URL `https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi`;
 - exact size `9,269,248` bytes; and
 - SHA-256 `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
@@ -106,8 +108,11 @@ delete sharing. The file and parent-chain handles remain held while the UAC
 `runas` process starts `%WINDIR%\System32\msiexec.exe`, binding the pathname
 that the elevated process reopens, with `/passive /norestart
 ADDLOCAL=DokanDriverFeature INSTALLDEVFILES=0`. Exit code 0 is accepted only
-after `%WINDIR%\System32\dokan2.dll` and the driver both report exactly API 231.
-An already installed wrong API is reported rather than overwritten silently.
+after `DokanVersion()` reports DLL API 231 and `DokanDriverVersion()` reports
+kernel protocol 0x190/400. The automatic GUI/CLI path installs only when the
+runtime is absent or the driver is unavailable. An already installed genuinely
+incompatible shared runtime is reported with the observed value rather than
+overwritten or downgraded silently.
 
 The release fetchers `native/fetch-dokany-runtime.{ps1,sh}` verify the same
 manifest before NSIS embeds the MSI, and the release wrapper extracts it again
@@ -117,14 +122,18 @@ beside Smart Explorer's notices; the MSI itself is not a separate update-feed or
 GitHub Release asset.
 
 At runtime Smart Explorer delay-loads only
-`%WINDIR%\System32\dokan2.dll` and requires both the DLL and driver to report
-exactly API 231. The official project provides signed release drivers, so the
-official runtime needs neither Developer Mode nor Windows `TESTSIGNING`.
+`%WINDIR%\System32\dokan2.dll`. The two version domains are intentionally
+checked independently: `DokanVersion()` must return DLL API 231, while
+`DokanDriverVersion()` queries the kernel and must return protocol 0x190/400.
+The official project provides signed release drivers, so the official runtime
+needs neither Developer Mode nor Windows `TESTSIGNING`.
 
-Primary sources checked 2026-07-21:
+Primary sources checked 2026-07-22:
 
 - [Dokany tagged README: architecture, signed releases and installer](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md)
-- [Dokany 2.3.1 header: `DOKAN_VERSION 231`, `DokanVersion`, `DokanDriverVersion`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
+- [Dokany API header: `DOKAN_VERSION 231`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
+- [Dokany driver header: `DOKAN_DRIVER_VERSION 0x0000190`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h)
+- [Implementation of `DokanVersion()` and the driver query](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c)
 - [Dokany callback/API documentation](https://dokan-dev.github.io/dokany-doc/html/group___dokan.html)
 
 ## Authority and transport boundary
@@ -149,19 +158,39 @@ provider parent IDs. These are the strict-mode paths checked on 2026-07-21
 against the [Landlock userspace API](https://docs.kernel.org/userspace-api/landlock.html)
 and [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
 
-Plain SFTP, Local/UNC, Peer/Share, WebDAV and FTP cannot atomically bind a prior
-path validation to a later protocol operation when another actor can exchange
-a symlink, junction or directory. They therefore require the explicit GUI
-choice **Remote-Wurzel ohne technische Sandbox vertrauen** or CLI
+Plain SFTP, Local/UNC, WebDAV and FTP cannot atomically bind a prior path
+validation to a later protocol operation when another actor can exchange a
+symlink, junction or directory. They therefore require the explicit GUI choice
+**Remote-Wurzel ohne technische Sandbox vertrauen** or CLI
 `--trust-remote-root`, even for RO. Trusted mode still rejects traversal,
 link-like observations, unsafe Windows names and case collisions and serializes
 Smart Explorer operations; it explicitly trusts the server and concurrent
-writers during each check-to-operation interval.
+writers during each check-to-operation interval. Peer/Share propagates the
+answer of its concrete remotely resolved backend instead of flattening every
+export to `Unverified`: an Agent-confined export can remain `Enforced`, while
+Local/UNC/plain SFTP remains `Unverified` through Peer for the same TOCTOU
+reason.
+
+Share drive discovery offers concrete local exports as `/Label` and saved
+connection roots as `/Verbindungen/<connection>`; the aggregate `/` is a
+synthetic read-only target. Selection triggers a real daemon-side probe against
+the active remote `PeerBackend`, rather than trusting locally cached capability
+metadata. Mount admission then obtains an exact-root lease bound to the
+authenticated QUIC connection. A direct-to-relay route change inside that
+connection preserves the lease. Replacing the connection invalidates it, so an
+already mounted drive reports the lost authorization and requires `Retry` or a
+remount; a new connection never silently inherits the old root authority.
+Stopping a share or revoking/changing its authorization is the same synchronous
+admission barrier: new operations fail closed, active mount leases become
+invalid and a later re-share requires `Retry` or a remount. One operation that
+already passed admission may finish; multi-stage writes recheck authorization
+before flush and promotion.
 
 Consequently, a connection fallback does not need a second mount
 implementation. It can, however, change which write guarantees are available.
 The daemon reevaluates root confinement and write guarantees on the active
-fallback before starting. Losing write primitives can still leave an RO option;
+fallback before starting. Losing write primitives never silently weakens an RW
+mount and can still leave an explicitly chosen RO option;
 losing strict root confinement requires explicit trusted-root admission even
 for RO. SFTP is stricter: a strict SFTP mount requires a saved connection whose
 Agent option is enabled and whose Agent deployment and handshake succeeded.
@@ -197,7 +226,8 @@ Current backend result:
 | local filesystem or authenticated UNC | no; explicit trusted-root mode | yes |
 | deployed Smart Explorer SSH Agent | yes, with `--serve-root` and Landlock ABI 3+ | yes |
 | plain SFTP v3 | no; explicit trusted-root mode | no complete capability; standard SFTP-v3 rename is no-replace |
-| concrete or synthetic Share target | no; explicit trusted-root mode | concrete export only if its resolved backend/root reports all three; synthetic containers no |
+| concrete Share export (`/Label` or `/Verbindungen/<connection>`) | inherited from its remotely resolved backend/root | inherited; RW only if that backend/root reports all three |
+| synthetic Share root `/` | no; read-only aggregate only | no |
 | Google Drive | yes, provider parent-ID hierarchy | no: create/replace exist, but no atomic namespace replace |
 | WebDAV, FTP/FTPS | no; explicit trusted-root mode | no complete guarantee at present |
 
@@ -245,6 +275,14 @@ remote connection. Thus an SSH timeout cannot hide local unsaved data. Only a
 provably `Clean` entry may be offered for removal after a pre-mount failure;
 `Required` and `Unknown` are retained for recovery.
 
+The manager preserves that terminal recovery/conflict status and appends a
+bounded mount-host process cause. Errors therefore distinguish a DLL API 231
+mismatch from a driver-protocol 0x190/400 mismatch, identify strict-root or staged-RW
+admission failures, report an invalidated Peer lease as a Retry/remount action,
+and say when local recovery data must be retained. A clean entry can be removed
+from the drive manager; retained recovery work remains available through
+`Retry`. An exit code alone is not treated as the diagnosis.
+
 ## Honest limits
 
 - This is whole-file caching, not ranged remote I/O. First open downloads the
@@ -268,7 +306,8 @@ provably `Clean` entry may be offered for removal after a pre-mount failure;
   editors, not the complete NTFS surface. Setting ACL/security descriptors,
   timestamps, arbitrary attributes, Alternate Data Streams, open-by-ID and
   reparse points is unsupported. Remote symlinks are not followed.
-- A real Windows + Dokany + Explorer + Obsidian smoke test remains required; see
+- A real Windows + Dokany 2.3.1.1000 (DLL API 231, driver protocol 0x190/400) +
+  Explorer + Obsidian smoke test remains required; see
   `docs/TODO.md`. Cross-compilation cannot validate driver/callback lifecycle or
   real application behavior.
 
