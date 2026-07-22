@@ -148,6 +148,20 @@ credentials, endpoint/account metadata, global daemon authority nor
 unrestricted provider IDs; it receives separate one-use launch/backend loopback
 capabilities plus a session capability for one rooted backend.
 
+On Windows the host also keeps a deny-by-default process environment. It clears
+all inherited variables, obtains the shared system Windows directory directly
+through `GetSystemWindowsDirectoryW`, and exposes that trusted value only as
+`SystemRoot` and `WINDIR` beside the three private mount bootstrap values. This
+lets Winsock expand registered provider paths such as `%SystemRoot%\System32\…`
+for the private loopback IPC without inheriting `PATH`, credentials, proxy,
+profile, SSH or cloud variables from the GUI/daemon. This boundary was checked
+2026-07-22 against Microsoft's
+[`WSCGetProviderPath`](https://learn.microsoft.com/en-us/windows/win32/api/ws2spi/nf-ws2spi-wscgetproviderpath),
+[`GetSystemWindowsDirectoryW`](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemwindowsdirectoryw),
+and [Winsock error-code](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2)
+documentation. Error 10106 occurs at this provider-load boundary, before the
+separate Dokany runtime preflight.
+
 The default root policy is independently fail-closed for both RO and RW. A
 backend may claim `RootConfinement::Enforced` only when every operation is
 technically bound to the exact selected hierarchy. The deployed Linux SSH
