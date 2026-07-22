@@ -21,6 +21,7 @@ pub(super) struct Mux {
     pub(super) pending: PendingMap,
     pub(super) closed: Arc<AtomicBool>,
     pub(super) next_id: AtomicU64,
+    retired: AtomicBool,
     activity: Arc<Activity>,
     stall_timeout: Duration,
 }
@@ -67,6 +68,7 @@ impl Mux {
             pending,
             closed,
             next_id: AtomicU64::new(1),
+            retired: AtomicBool::new(false),
             activity: Arc::new(Activity::new()),
             stall_timeout,
         }
@@ -80,26 +82,25 @@ impl Mux {
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !self.closed.load(Ordering::Acquire) {
+        if !self.closed.load(Ordering::Acquire) && !self.retired.load(Ordering::Acquire) {
             p.insert(id, tx);
         }
         (id, rx)
     }
 
     pub(super) fn unregister(&self, id: u64) {
-        self.pending
+        let mut pending = self
+            .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&id);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.remove(&id);
+        if pending.is_empty() && self.retired.load(Ordering::Acquire) {
+            self.closed.store(true, Ordering::Release);
+        }
     }
 
     pub(super) fn send(&self, id: u64, frame: Frame) -> io::Result<()> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "agent transport closed",
-            ));
-        }
+        self.ensure_request_active(id)?;
         let mut routed = (id, frame);
         let mut last_activity = self.activity.last_activity();
         let mut deadline = Instant::now() + self.stall_timeout;
@@ -137,6 +138,23 @@ impl Mux {
         self.closed.load(Ordering::Acquire)
     }
 
+    pub(super) fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire)
+    }
+
+    /// Stop accepting new requests while allowing every already-registered
+    /// stream to drain. The final unregister closes the generation.
+    pub(super) fn retire(&self) {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.retired.store(true, Ordering::Release);
+        if pending.is_empty() {
+            self.closed.store(true, Ordering::Release);
+        }
+    }
+
     pub(super) fn close(&self) {
         close_transport(&self.closed, &self.pending);
     }
@@ -160,6 +178,73 @@ impl Mux {
         })();
         self.unregister(id);
         r
+    }
+
+    /// One request with a fixed wall-clock deadline. Unlike the streaming
+    /// inactivity timeout, unrelated frames on this transport never extend
+    /// the request's lifetime.
+    pub(super) fn call_absolute_timeout(&self, req: Frame, timeout: Duration) -> io::Result<Frame> {
+        let deadline = Instant::now() + timeout;
+        let (id, rx) = self.register();
+        let result = (|| {
+            self.send_before(id, req, deadline)?;
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(frame) => Ok(frame),
+                Err(RecvTimeoutError::Timeout) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "agent request absolute timeout",
+                )),
+                Err(RecvTimeoutError::Disconnected) => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "agent stream closed",
+                )),
+            }
+        })();
+        self.unregister(id);
+        result
+    }
+
+    fn send_before(&self, id: u64, frame: Frame, deadline: Instant) -> io::Result<()> {
+        self.ensure_request_active(id)?;
+        match self.out.send_timeout(
+            (id, frame),
+            deadline.saturating_duration_since(Instant::now()),
+        ) {
+            Ok(()) => Ok(()),
+            Err(SendTimeoutError::Timeout(_)) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "agent request queue absolute timeout",
+            )),
+            Err(SendTimeoutError::Disconnected(_)) => {
+                self.close();
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "agent writer gone",
+                ))
+            }
+        }
+    }
+
+    fn ensure_request_active(&self, id: u64) -> io::Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "agent transport closed",
+            ));
+        }
+        if self.retired.load(Ordering::Acquire)
+            && !self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(&id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "agent transport generation retired",
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn call_inactivity_timeout(
@@ -313,6 +398,30 @@ mod tests {
             sender.try_send(Frame::Ok),
             Err(TrySendError::Disconnected(Frame::Ok))
         ));
+    }
+
+    #[test]
+    fn remote_drive_task_retired_mux_drains_existing_and_rejects_new_requests() {
+        let (out, out_rx) = make_out_channel();
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let mux = Mux::new_with_stall_timeout(out, pending, closed, Duration::from_secs(30));
+        let (existing_id, existing_rx) = mux.register();
+
+        mux.retire();
+        assert!(mux.is_retired());
+        assert!(!mux.is_closed());
+        mux.send(existing_id, Frame::Ok).unwrap();
+        assert_eq!(out_rx.recv().unwrap(), (existing_id, Frame::Ok));
+
+        let (new_id, new_rx) = mux.register();
+        assert!(new_rx.recv().is_err());
+        assert!(mux.send(new_id, Frame::Ok).is_err());
+        assert!(!mux.is_closed());
+
+        mux.unregister(existing_id);
+        assert!(mux.is_closed());
+        assert!(existing_rx.recv().is_err());
     }
 
     #[test]

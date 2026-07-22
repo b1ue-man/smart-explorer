@@ -1,75 +1,38 @@
 use super::config::SftpConfig;
 use super::session::{connect_async, Client};
+#[path = "reconnect_gate.rs"]
+mod reconnect_gate;
+use self::reconnect_gate::{AbsoluteDeadline, Generation, ReconnectAccess, ReconnectGate};
 use russh::client;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use std::future::Future;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
 const SFTP_CONNECT_DEADLINE: Duration = Duration::from_secs(30);
+const SFTP_METADATA_DEADLINE: Duration = Duration::from_secs(20);
+
+pub(super) type SftpMetadataFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, SftpError>> + 'a>>;
 
 pub(super) struct SftpTransport {
     session: client::Handle<Client>,
     sftp: Arc<SftpSession>,
 }
 
-pub(super) struct Generation<T> {
-    value: T,
-    stale: AtomicBool,
-}
-
-impl<T> Generation<T> {
-    fn new(value: T) -> Self {
-        Self {
-            value,
-            stale: AtomicBool::new(false),
-        }
-    }
-
-    fn mark_stale(&self) {
-        self.stale.store(true, Ordering::Release);
-    }
-
-    fn is_stale(&self) -> bool {
-        self.stale.load(Ordering::Acquire)
-    }
-}
-
-struct GenerationSlot<T> {
-    current: Arc<Generation<T>>,
-}
-
-impl<T> GenerationSlot<T> {
-    fn new(value: T) -> Self {
-        Self {
-            current: Arc::new(Generation::new(value)),
-        }
-    }
-
-    fn current(&self) -> Arc<Generation<T>> {
-        self.current.clone()
-    }
-
-    fn replace(&mut self, value: T) -> Arc<Generation<T>> {
-        let generation = Arc::new(Generation::new(value));
-        self.current = generation.clone();
-        generation
-    }
-}
-
 pub(super) type SftpGeneration = Generation<SftpTransport>;
 
 impl SftpGeneration {
     pub(super) fn session(&self) -> &client::Handle<Client> {
-        &self.value.session
+        &self.value().session
     }
 
     pub(super) fn sftp(&self) -> &SftpSession {
-        &self.value.sftp
+        &self.value().sftp
     }
 }
 
@@ -78,7 +41,7 @@ pub(super) struct SftpConnection {
     // Authentication material is retained only so a dead generation can be
     // replaced without asking the UI for credentials again.
     config: Arc<SftpConfig>,
-    state: Mutex<GenerationSlot<SftpTransport>>,
+    reconnect: ReconnectGate<SftpTransport>,
 }
 
 impl SftpConnection {
@@ -94,7 +57,7 @@ impl SftpConnection {
         Ok(Arc::new(Self {
             runtime,
             config,
-            state: Mutex::new(GenerationSlot::new(transport)),
+            reconnect: ReconnectGate::new(transport),
         }))
     }
 
@@ -102,21 +65,64 @@ impl SftpConnection {
         self.runtime.clone()
     }
 
+    /// Run an idempotent metadata request under a fixed deadline. A proven
+    /// dead transport may be reconnected and replayed once; a deadline only
+    /// makes the generation suspect, so it is retired without replay.
+    pub(super) fn safe_metadata<T>(
+        &self,
+        operation: impl for<'a> Fn(&'a SftpGeneration) -> SftpMetadataFuture<'a, T>,
+    ) -> io::Result<T> {
+        let deadline = AbsoluteDeadline::after(SFTP_METADATA_DEADLINE);
+        let mut generation = self.current_until(deadline)?;
+        for attempt in 0..2 {
+            match block_on_sftp_operation(&self.runtime, deadline, operation(&generation)) {
+                Ok(Ok(value)) => return Ok(value),
+                Ok(Err(error)) => {
+                    let retry_safe = self.note_sftp_error(&generation, &error);
+                    if attempt == 0 && retry_safe {
+                        generation = self.current_until(deadline)?;
+                        continue;
+                    }
+                    return Err(super::io_err(error));
+                }
+                Err(error) => {
+                    self.note_io_error(&generation, &error);
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded SFTP metadata attempts")
+    }
+
     /// Return a usable generation. Reconnection happens before an operation is
     /// dispatched and is serialized so concurrent observers install one
     /// replacement rather than independent SSH sessions.
     pub(super) fn current(&self) -> io::Result<Arc<SftpGeneration>> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let current = state.current();
-        if !current.is_stale() && !current.session().is_closed() {
-            return Ok(current);
+        self.current_with_deadline(None)
+    }
+
+    fn current_until(&self, deadline: AbsoluteDeadline) -> io::Result<Arc<SftpGeneration>> {
+        self.current_with_deadline(Some(deadline))
+    }
+
+    fn current_with_deadline(
+        &self,
+        deadline: Option<AbsoluteDeadline>,
+    ) -> io::Result<Arc<SftpGeneration>> {
+        match self.reconnect.acquire(deadline, |generation| {
+            !generation.is_stale() && !generation.value().session.is_closed()
+        })? {
+            ReconnectAccess::Current(generation) => Ok(generation),
+            ReconnectAccess::Reconnect(reconnect) => {
+                let replacement = match deadline {
+                    Some(deadline) => {
+                        connect_transport_until(&self.runtime, &self.config, deadline)
+                    }
+                    None => connect_transport(&self.runtime, &self.config),
+                };
+                reconnect.finish_until(deadline, replacement)
+            }
         }
-        current.mark_stale();
-        let replacement = connect_transport(&self.runtime, &self.config)?;
-        Ok(state.replace(replacement))
     }
 
     pub(super) fn mark_stale(&self, generation: &SftpGeneration) {
@@ -164,6 +170,23 @@ fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpT
     })
 }
 
+fn connect_transport_until(
+    runtime: &Runtime,
+    config: &SftpConfig,
+    deadline: AbsoluteDeadline,
+) -> io::Result<SftpTransport> {
+    let (session, sftp) = block_on_absolute(
+        runtime,
+        deadline,
+        "transport reconnect",
+        connect_async(config),
+    )??;
+    Ok(SftpTransport {
+        session,
+        sftp: Arc::new(sftp),
+    })
+}
+
 fn block_on_connect<F, T>(runtime: &Runtime, deadline: Duration, future: F) -> io::Result<T>
 where
     F: Future<Output = io::Result<T>>,
@@ -176,6 +199,40 @@ where
             )
         })?
     })
+}
+
+fn block_on_sftp_operation<F, T>(
+    runtime: &Runtime,
+    deadline: AbsoluteDeadline,
+    future: F,
+) -> io::Result<Result<T, SftpError>>
+where
+    F: Future<Output = Result<T, SftpError>>,
+{
+    block_on_absolute(runtime, deadline, "metadata operation", future)
+}
+
+fn block_on_absolute<F, T>(
+    runtime: &Runtime,
+    deadline: AbsoluteDeadline,
+    stage: &str,
+    future: F,
+) -> io::Result<T>
+where
+    F: Future<Output = T>,
+{
+    deadline.remaining(stage)?;
+    let expires = tokio::time::Instant::from_std(deadline.expires());
+    let value = runtime.block_on(async {
+        tokio::time::timeout_at(expires, future)
+            .await
+            .map_err(|_| deadline.timeout(stage))
+    })?;
+    // Tokio intentionally lets an immediately-ready future win even when its
+    // deadline has just elapsed. Recheck here so this synchronous API never
+    // reports a response after the shared metadata budget expired.
+    deadline.remaining(stage)?;
+    Ok(value)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,21 +332,34 @@ mod tests {
 
     #[test]
     fn remote_drive_task_sftp_stale_generation_is_replaced_once() {
-        let mut slot = GenerationSlot::new("first");
-        let first = slot.current();
+        let gate = ReconnectGate::new("first");
+        let first = match gate.acquire(None, |_| true).unwrap() {
+            ReconnectAccess::Current(generation) => generation,
+            ReconnectAccess::Reconnect(_) => panic!("fresh generation must be current"),
+        };
         first.mark_stale();
 
-        let replacement = if slot.current().is_stale() {
-            slot.replace("second")
-        } else {
-            panic!("scripted first generation must be stale");
+        let reconnect = match gate
+            .acquire(None, |generation| !generation.is_stale())
+            .unwrap()
+        {
+            ReconnectAccess::Reconnect(reconnect) => reconnect,
+            ReconnectAccess::Current(_) => panic!("stale generation must be replaced"),
         };
-        assert_eq!(replacement.value, "second");
+        let replacement = reconnect.finish_until(None, Ok("second")).unwrap();
+        assert_eq!(*replacement.value(), "second");
 
         // A late failure from generation one cannot poison generation two.
         first.mark_stale();
-        assert!(!slot.current().is_stale());
-        assert!(Arc::ptr_eq(&replacement, &slot.current()));
+        let current = match gate
+            .acquire(None, |generation| !generation.is_stale())
+            .unwrap()
+        {
+            ReconnectAccess::Current(generation) => generation,
+            ReconnectAccess::Reconnect(_) => panic!("replacement must remain current"),
+        };
+        assert!(!current.is_stale());
+        assert!(Arc::ptr_eq(&replacement, &current));
     }
 
     #[test]
@@ -337,5 +407,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn remote_drive_task_sftp_metadata_future_has_absolute_deadline() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let error = block_on_sftp_operation(
+            &runtime,
+            AbsoluteDeadline::after(Duration::from_millis(20)),
+            std::future::pending::<Result<(), SftpError>>(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(classify_io_error(&error), FailureDisposition::suspect());
     }
 }
