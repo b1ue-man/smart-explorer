@@ -1,4 +1,5 @@
-//! Minimal Dokany 2.3.1 (API 231) ABI used by the dynamic runtime loader.
+//! Minimal Dokany 2.3.1 (library API 231, driver protocol `0x190`) ABI used by
+//! the dynamic runtime loader.
 //!
 //! This is intentionally not a link-time binding: linking `dokan2.lib` would
 //! prevent every Smart Explorer executable from starting when Dokany is not
@@ -6,7 +7,9 @@
 //! `dokan-dev/dokany` tag `v2.3.1.1000` (`dokan/dokan.h`) and the MIT-licensed
 //! `dokan-dev/dokan-rust` source at commit
 //! `ce2ec8565591d21ed5b58f8233e9d81a730823ad`. The latter targets API 230;
-//! Dokany's tagged 2.3.1 header is the source of truth for API 231.
+//! Dokany's tagged 2.3.1 `dokan/dokan.h` is the source of truth for library API
+//! 231, while `sys/public.h` defines the independent driver protocol as
+//! `0x190` (decimal 400).
 
 use std::ffi::c_void;
 
@@ -15,7 +18,11 @@ use windows_sys::Win32::{
     Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, WIN32_FIND_DATAW, WIN32_FIND_STREAM_DATA},
 };
 
-pub(crate) const DOKANY_API_VERSION: u32 = 231;
+pub(crate) const DOKANY_LIBRARY_API_VERSION: u32 = crate::mount::DOKANY_LIBRARY_API_VERSION;
+// Retained for the pinned-manifest verifier and existing Windows adapter API.
+pub(crate) const DOKANY_API_VERSION: u32 = DOKANY_LIBRARY_API_VERSION;
+pub(crate) const DOKANY_DRIVER_PROTOCOL_VERSION: u32 =
+    crate::mount::DOKANY_DRIVER_PROTOCOL_VERSION;
 pub(crate) const DOKANY_DLL_NAME: &str = "dokan2.dll";
 pub(crate) const VOLUME_SECURITY_DESCRIPTOR_MAX_SIZE: usize = 16 * 1024;
 
@@ -55,7 +62,7 @@ pub(crate) struct DokanOptions {
 impl Default for DokanOptions {
     fn default() -> Self {
         Self {
-            version: DOKANY_API_VERSION as u16,
+            version: DOKANY_LIBRARY_API_VERSION as u16,
             single_thread: 0,
             options: 0,
             global_context: 0,

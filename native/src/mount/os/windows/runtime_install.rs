@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::mount::DriveRuntimeInstallOutcome;
+use crate::mount::{
+    DriveRuntimeInstallOutcome, DOKANY_DRIVER_PROTOCOL_VERSION, DOKANY_LIBRARY_API_VERSION,
+};
 
 use super::{
     runtime::{DokanyPreflightError, DokanyRuntime},
@@ -38,7 +40,7 @@ pub(crate) fn install_runtime(
     if exit_code == 0 {
         DokanyRuntime::preflight().map_err(|error| {
             format!(
-                "Dokany-Installer war erfolgreich, aber API 231 ist danach nicht einsatzbereit: {error}"
+                "Dokany-Installer war erfolgreich, aber DLL-API {DOKANY_LIBRARY_API_VERSION} / Treiberprotokoll {DOKANY_DRIVER_PROTOCOL_VERSION} ist danach nicht einsatzbereit: {error}"
             )
         })?;
     }

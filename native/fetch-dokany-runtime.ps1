@@ -31,6 +31,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $version = Get-ManifestValue "DOKANY_VERSION"
 $apiVersion = Get-ManifestValue "DOKANY_API_VERSION"
+$driverProtocolVersion = Get-ManifestValue "DOKANY_DRIVER_PROTOCOL_VERSION"
 $filename = Get-ManifestValue "DOKANY_MSI_FILENAME"
 $url = Get-ManifestValue "DOKANY_MSI_URL"
 $sizeText = Get-ManifestValue "DOKANY_MSI_SIZE"
@@ -41,6 +42,9 @@ if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
 }
 if ($apiVersion -notmatch '^[1-9][0-9]*$') {
     throw "Invalid Dokany API version in manifest: $apiVersion"
+}
+if ($driverProtocolVersion -notmatch '^[1-9][0-9]*$') {
+    throw "Invalid Dokany driver protocol version in manifest: $driverProtocolVersion"
 }
 if ($filename -notmatch '^[A-Za-z0-9._-]+\.msi$') {
     throw "Unsafe Dokany MSI filename in manifest: $filename"

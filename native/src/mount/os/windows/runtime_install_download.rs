@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use super::DOKANY_API_VERSION;
+use super::{DOKANY_API_VERSION, DOKANY_DRIVER_PROTOCOL_VERSION};
 
 const PINNED_MANIFEST: &str = include_str!("../../../../dokany-runtime.nsh");
 const RELEASE_ASSET_HOST: &str = "https://release-assets.githubusercontent.com/";
@@ -40,6 +40,7 @@ impl Drop for MsiArtifact {
 pub(super) fn pinned_msi() -> Result<PinnedMsi, String> {
     let version = manifest_value("DOKANY_VERSION")?;
     let api = manifest_value("DOKANY_API_VERSION")?;
+    let driver_protocol = manifest_value("DOKANY_DRIVER_PROTOCOL_VERSION")?;
     let file_name = manifest_value("DOKANY_MSI_FILENAME")?;
     let url = manifest_value("DOKANY_MSI_URL")?;
     let size = manifest_value("DOKANY_MSI_SIZE")?
@@ -50,6 +51,7 @@ pub(super) fn pinned_msi() -> Result<PinnedMsi, String> {
     let expected_url =
         format!("https://github.com/dokan-dev/dokany/releases/download/v{version}/{file_name}");
     if api.parse::<u32>().ok() != Some(DOKANY_API_VERSION)
+        || driver_protocol.parse::<u32>().ok() != Some(DOKANY_DRIVER_PROTOCOL_VERSION)
         || version.split('.').count() != 4
         || !version.split('.').all(|part| part.parse::<u32>().is_ok())
         || file_name != "Dokan_x64.msi"
