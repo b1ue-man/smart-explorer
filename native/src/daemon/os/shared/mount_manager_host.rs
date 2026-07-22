@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver};
 use crate::mount::{DriveSelection, MountId, MountRecovery, MountSnapshot, MountStatus};
 use crate::vfs::BackendHandle;
 
-use super::{random_token, snapshot, MountEntry, MountManager};
+use super::{clear_backend_runtime, random_token, snapshot, MountEntry, MountManager};
 
 pub(in crate::daemon) struct HostGrant {
     pub(in crate::daemon) config: super::super::ipc_protocol::MountHostConfig,
@@ -119,11 +119,14 @@ impl MountManager {
         }
         let stopping = matches!(
             entry.status,
-            MountStatus::Unmounting | MountStatus::Unmounted
-        );
+            MountStatus::Unmounting
+                | MountStatus::Unmounted
+                | MountStatus::RuntimeUnavailable { .. }
+        ) || entry.host_terminal_failure
+            || entry.pending_host_failure.is_some();
         entry.control = Some(send.clone());
         if stopping {
-            let _ = send.send(());
+            let _ = send.try_send(());
         }
         Ok(receive)
     }
@@ -171,21 +174,31 @@ impl MountManager {
                 return;
             };
             entry.backend_stream_active = false;
+            clear_backend_runtime(entry);
             if matches!(
                 entry.status,
-                MountStatus::Unmounting
-                    | MountStatus::Unmounted
-                    | MountStatus::RuntimeUnavailable { .. }
-                    | MountStatus::Failed { .. }
+                MountStatus::Unmounting | MountStatus::Unmounted
             ) {
                 return;
             }
-            entry.recovery = MountRecovery::Unknown;
-            entry.status = MountStatus::Failed {
-                detail: "Die private Laufwerk-Backend-Verbindung wurde unerwartet beendet; der Recovery-Cache bleibt erhalten"
-                    .into(),
-            };
-            entry.control.clone()
+            let host_reported_terminal =
+                matches!(entry.status, MountStatus::RuntimeUnavailable { .. })
+                    || entry.host_terminal_failure;
+            if host_reported_terminal {
+                // The authenticated host already supplied the actionable
+                // failure and, where applicable, an exact recovery boundary.
+                // Ask it to stop without weakening that evidence.
+                entry.control.clone()
+            } else {
+                entry.recovery = MountRecovery::Unknown;
+                // The process stderr fallback usually arrives a few instructions
+                // later. Keep this internal so polling cannot expose two failures
+                // for one host generation.
+                entry.pending_host_failure.get_or_insert_with(|| {
+                    "Die private Laufwerk-Backend-Verbindung wurde unerwartet beendet".into()
+                });
+                entry.control.clone()
+            }
         };
         if let Some(control) = control {
             let _ = control.try_send(());
@@ -236,6 +249,11 @@ impl MountManager {
         if let Some(recovery) = recovery {
             entry.recovery = recovery;
         }
+        let terminal_failure = host_status_is_terminal(&status, recovery.is_some());
+        if terminal_failure {
+            entry.pending_host_failure = None;
+        }
+        entry.host_terminal_failure = terminal_failure;
         entry.status = status;
         Ok(snapshot(entry))
     }
@@ -312,3 +330,12 @@ fn host_transition_allowed(current: &MountStatus, next: &MountStatus) -> bool {
         MountStatus::Unmounted => true,
     }
 }
+
+fn host_status_is_terminal(status: &MountStatus, has_recovery_boundary: bool) -> bool {
+    matches!(status, MountStatus::RuntimeUnavailable { .. })
+        || (matches!(status, MountStatus::Failed { .. }) && has_recovery_boundary)
+}
+
+#[cfg(test)]
+#[path = "mount_manager_host_task_tests.rs"]
+mod task_tests;

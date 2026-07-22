@@ -81,6 +81,8 @@ mod exec_types;
 mod framing;
 #[path = "core/fs.rs"]
 mod fs;
+#[path = "core/fs_access.rs"]
+mod fs_access;
 #[path = "core/fs_capabilities.rs"]
 mod fs_capabilities;
 #[path = "core/fs_error.rs"]
@@ -119,8 +121,16 @@ mod legacy_direct_request_tests;
 mod legacy_direct_request_validation;
 #[path = "core/line.rs"]
 mod line;
+#[path = "core/mount_lease.rs"]
+mod mount_lease;
+#[path = "core/mount_lease_client.rs"]
+mod mount_lease_client;
 #[path = "core/node.rs"]
 mod node;
+#[path = "core/node_accept.rs"]
+mod node_accept;
+#[path = "core/peer_fs_logging.rs"]
+mod peer_fs_logging;
 #[path = "core/peer_read.rs"]
 mod peer_read;
 #[path = "core/peer_writer.rs"]
@@ -139,6 +149,9 @@ mod profile_persistence;
 mod profile_store;
 #[path = "core/profiles.rs"]
 mod profiles;
+#[cfg(test)]
+#[path = "core/remote_drive_task_mount_lease_tests.rs"]
+mod remote_drive_task_mount_lease_tests;
 #[path = "core/server.rs"]
 mod server;
 #[path = "core/server_transfer.rs"]
@@ -288,6 +301,9 @@ mod direct_lifecycle_tests;
 #[cfg(test)]
 #[path = "core/direct_protocol_tests.rs"]
 mod direct_protocol_tests;
+#[cfg(test)]
+#[path = "core/remote_drive_task_stop_tests.rs"]
+mod remote_drive_task_stop_tests;
 #[cfg(test)]
 #[path = "core/service_tests.rs"]
 mod service_tests;

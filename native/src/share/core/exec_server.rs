@@ -29,6 +29,7 @@ pub(super) async fn handle_connection(
     handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&connection)?;
+    node.require_sharing_active()?;
     let remote_node = connection.remote_id().to_string();
     let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
     // The server must write the fresh challenge first. Opening the stream here

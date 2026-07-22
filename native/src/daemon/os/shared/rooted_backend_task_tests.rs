@@ -1,14 +1,16 @@
 use super::rooted_backend::RootedBackend;
 use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
 use crate::vfs::{
-    Backend, BackendHandle, LocalBackend, RootConfinement, Scheme, StagedWriteCapabilities,
-    VfsMeta, VfsResult,
+    Backend, BackendHandle, LocalBackend, MountPathCapabilities, RootConfinement, Scheme,
+    StagedWriteCapabilities, VfsMeta, VfsResult,
 };
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 struct RootConfinedLocalBackend {
     inner: LocalBackend,
+    mount_capability_probes: Arc<AtomicUsize>,
 }
 
 impl Backend for RootConfinedLocalBackend {
@@ -57,7 +59,7 @@ impl Backend for RootConfinedLocalBackend {
     }
 
     fn staged_write_capabilities(&self, _root: &str) -> StagedWriteCapabilities {
-        StagedWriteCapabilities::complete()
+        panic!("mount setup must use the combined capability snapshot")
     }
 
     fn case_sensitive_paths(&self, _root: &str) -> bool {
@@ -65,7 +67,15 @@ impl Backend for RootConfinedLocalBackend {
     }
 
     fn root_confinement(&self, _root: &str) -> RootConfinement {
-        RootConfinement::Enforced
+        panic!("mount setup must use the combined capability snapshot")
+    }
+
+    fn mount_path_capabilities(&self, _root: &str) -> VfsResult<MountPathCapabilities> {
+        self.mount_capability_probes.fetch_add(1, Ordering::SeqCst);
+        Ok(MountPathCapabilities {
+            staged_write: StagedWriteCapabilities::complete(),
+            root_confinement: RootConfinement::Enforced,
+        })
     }
 }
 
@@ -96,6 +106,7 @@ impl Fixture {
     fn confined(&self) -> BackendHandle {
         Arc::new(RootConfinedLocalBackend {
             inner: LocalBackend::new(self.root.as_str()),
+            mount_capability_probes: Arc::new(AtomicUsize::new(0)),
         })
     }
 }
@@ -132,6 +143,34 @@ fn remote_drive_task_trusted_root_accepts_unverified_backend() {
         .read_to_string(&mut contents)
         .unwrap();
     assert_eq!(contents, "trusted contents");
+}
+
+#[test]
+fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() {
+    let fixture = Fixture::new();
+    let probes = Arc::new(AtomicUsize::new(0));
+    let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
+        inner: LocalBackend::new(fixture.root.as_str()),
+        mount_capability_probes: probes.clone(),
+    });
+
+    let backend = RootedBackend::new(
+        inner,
+        &fixture.root,
+        MountMode::ReadWrite,
+        MountRootSecurity::Enforced,
+    )
+    .unwrap();
+
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        backend.mount_path_capabilities("/").unwrap(),
+        MountPathCapabilities {
+            staged_write: StagedWriteCapabilities::complete(),
+            root_confinement: RootConfinement::Enforced,
+        }
+    );
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
 }
 
 #[test]

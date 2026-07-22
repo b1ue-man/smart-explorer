@@ -67,9 +67,9 @@ impl CommandOutcome {
         }
     }
 
-    fn stop() -> Self {
+    fn stop(result: io::Result<()>) -> Self {
         Self {
-            result: Ok(ShareCmdResult::Applied),
+            result: result.map(|()| ShareCmdResult::Applied),
             should_stop: true,
             should_reconnect: false,
             published: false,
@@ -191,7 +191,7 @@ pub(super) fn run_connected_command(
             *principal,
             policy,
         )),
-        ShareCmd::Stop => CommandOutcome::stop(),
+        ShareCmd::Stop => CommandOutcome::stop(runtime.iroh.stop_sharing()),
         ShareCmd::LeaveRoom { room_id } => CommandOutcome::connected(
             send_line(runtime.signal, &ClientMsg::LeaveRoom { room_id }),
             false,
@@ -291,7 +291,7 @@ pub(super) fn run_offline_command(
             *principal,
             policy,
         )),
-        ShareCmd::Stop => CommandOutcome::stop(),
+        ShareCmd::Stop => CommandOutcome::stop(runtime.iroh.stop_sharing()),
         ShareCmd::LeaveRoom { .. }
         | ShareCmd::RequestDirect { .. }
         | ShareCmd::AnswerLegacyDirectRequest { .. } => CommandOutcome::local(Err(eio(

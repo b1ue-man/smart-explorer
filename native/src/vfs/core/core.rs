@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
-use super::capabilities::{RootConfinement, StagedWriteCapabilities};
+use super::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 
 /// Which backend owns a path. A 1-byte `Copy` tag so it can ride on `FileEntry`
 /// (added when the first remote backend is wired) without touching the hot
@@ -253,6 +253,16 @@ pub trait Backend: Send + Sync {
     /// The conservative default requires an explicit trusted-root opt-in.
     fn root_confinement(&self, _root: &str) -> RootConfinement {
         RootConfinement::Unverified
+    }
+
+    /// Resolve the mount-specific write and root guarantees as one snapshot.
+    /// Static backends can derive it from their individual declarations;
+    /// dynamic proxy backends override this with one fallible remote probe.
+    fn mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {
+        Ok(MountPathCapabilities {
+            staged_write: self.staged_write_capabilities(root),
+            root_confinement: self.root_confinement(root),
+        })
     }
 
     /// Open a file for reading by its backend-unique `id` when known (so the

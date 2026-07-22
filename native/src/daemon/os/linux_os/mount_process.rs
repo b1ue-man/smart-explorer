@@ -1,6 +1,7 @@
 use std::io;
 use std::net::SocketAddr;
-use std::process::Child;
+
+use super::mount_host_process::MountHostProcess;
 
 pub(super) const MOUNT_TOKEN_ENV: &str = "SMART_EXPLORER_MOUNT_TOKEN";
 pub(super) const MOUNT_IPC_ADDR_ENV: &str = "SMART_EXPLORER_MOUNT_IPC_ADDR";
@@ -11,7 +12,7 @@ pub(super) fn spawn(
     _launch_token: &str,
     _ipc_addr: SocketAddr,
     _cache_root: &std::path::Path,
-) -> io::Result<Child> {
+) -> io::Result<MountHostProcess> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "Virtuelle Smart-Explorer-Laufwerke werden nur unter Windows unterstuetzt",

@@ -82,7 +82,19 @@ connector="$repo_root/native/src/connect/os/shared/connector.rs"
 mount_manager="$repo_root/native/src/daemon/os/shared/mount_manager.rs"
 mount_source="$repo_root/native/src/daemon/os/shared/mount_source.rs"
 mount_process="$repo_root/native/src/daemon/os/windows/mount_process.rs"
+mount_host_process="$repo_root/native/src/daemon/os/shared/mount_host_process.rs"
+rooted_backend="$repo_root/native/src/daemon/os/shared/rooted_backend.rs"
 remote_open="$repo_root/native/src/app/os/shared/remote_open.rs"
+peer_backend="$repo_root/native/src/share/core/backend.rs"
+peer_lease="$repo_root/native/src/share/core/mount_lease.rs"
+peer_mod="$repo_root/native/src/share/mod.rs"
+peer_node="$repo_root/native/src/share/core/node.rs"
+peer_node_accept="$repo_root/native/src/share/core/node_accept.rs"
+peer_server="$repo_root/native/src/share/core/server.rs"
+peer_service="$repo_root/native/src/share/core/service.rs"
+peer_wire="$repo_root/native/src/share/core/wire.rs"
+peer_mount_ui="$repo_root/native/src/app/core/mount_peer_roots.rs"
+ipc_protocol="$repo_root/native/src/daemon/os/shared/ipc_protocol.rs"
 runtime_download="$repo_root/native/src/mount/os/windows/runtime_install_download.rs"
 runtime_process="$repo_root/native/src/mount/os/windows/runtime_install_process.rs"
 installer="$repo_root/native/installer.nsi"
@@ -110,8 +122,25 @@ assert_before "$mount_manager" 'start_cache::prepare(self, &key, &config.id)' 's
 
 assert_contains "$mount_process" 'std::env::current_exe()?'
 assert_absent "$mount_process" 'with_file_name("se.exe")'
+assert_contains "$mount_process" 'MountHostProcess::capture_piped_stderr(command.spawn()?)'
+assert_contains "$mount_host_process" 'MOUNT_HOST_STDERR_LIMIT'
 assert_contains "$repo_root/native/src/main.rs" 'run_host_if_requested(&arguments)'
 assert_contains "$repo_root/native/src/bin/se.rs" 'run_host_if_requested(&arguments)'
+
+assert_contains "$rooted_backend" 'inner.mount_path_capabilities(root.as_str())?'
+assert_contains "$peer_backend" 'Ctrl::Fs { req, lease }'
+assert_contains "$peer_server" 'let mount_leases = Arc::new(PeerMountLeases::default());'
+assert_contains "$peer_server" 'node.filesystem_authorization_epoch()'
+assert_contains "$peer_lease" 'self.authorization_epoch != authorization_epoch'
+assert_before "$peer_service" 'self.iroh.stop_sharing()' 'let send_result = self.cmds.send'
+assert_contains "$peer_mod" '#[path = "core/node_accept.rs"]'
+assert_contains "$peer_node" 'if !self.sharing_active.swap(false, Ordering::AcqRel)'
+assert_contains "$peer_node" 'self.require_sharing_active()?;'
+assert_before "$peer_node_accept" 'if node.require_sharing_active().is_err()' 'incoming.refuse();'
+assert_contains "$peer_wire" 'MOUNT_PATH_CAPABILITY_CONTRACT_VERSION'
+assert_contains "$peer_mount_ui" 'crate::daemon::probe_share_mount_capabilities'
+assert_contains "$ipc_protocol" 'ProbeShareMount {'
+assert_contains "$ipc_protocol" 'MountPathCapabilities {'
 
 assert_contains "$remote_open" 'Publish the durable recovery manifest before handing the file to'
 assert_before "$remote_open" 'if let Err(error) = sync_recovery_manifest(&self.remote_edits)' 'let process = self.launch_for_edit(&p, mode)'
@@ -121,9 +150,11 @@ assert_contains "$repo_root/native/src/app/core/table.rs" 'show_horizontal_file_
 
 assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_VERSION "2.3.1.1000"'
 assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_API_VERSION "231"'
+assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_DRIVER_PROTOCOL_VERSION "400"'
 assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_MSI_SIZE "9269248"'
 assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_MSI_SHA256 "69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465"'
 assert_contains "$repo_root/native/dokany-runtime.nsh" '!define DOKANY_MSI_URL "https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi"'
+assert_contains "$runtime_download" 'manifest_value("DOKANY_DRIVER_PROTOCOL_VERSION")?'
 assert_contains "$runtime_download" '.take(pinned.size.saturating_add(1))'
 assert_contains "$runtime_download" 'https://release-assets.githubusercontent.com/'
 assert_contains "$runtime_download" '.redirects(2)'
@@ -138,7 +169,7 @@ assert_contains "$runtime_process" '.join("msiexec.exe")'
 assert_contains "$runtime_process" 'OsStr::new("runas")'
 assert_contains "$runtime_process" '/passive /norestart ADDLOCAL=DokanDriverFeature INSTALLDEVFILES=0'
 
-assert_contains "$installer" 'Section "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY'
+assert_contains "$installer" 'Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY'
 test "$(grep -Fc 'SectionIn RO' "$installer")" -eq 1
 assert_contains "$installer" 'Call CheckDokanyRuntime'
 assert_contains "$installer" 'drive install-runtime --msi'

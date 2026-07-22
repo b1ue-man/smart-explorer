@@ -1,32 +1,23 @@
+use super::mount_peer_roots::PeerMountDiscovery;
 use super::mount_runtime_ui::{install_controls, present_install_outcome};
-use super::mount_ui_helpers::{
-    bounded_label, drive_selection_label, mount_status_alert, recovery_label, status_label,
-    upsert_mount,
-};
+use super::mount_ui_draft::MountDraft;
+use super::mount_ui_helpers::{mount_status_alert, recovery_label, status_label, upsert_mount};
 use super::prelude::*;
 use super::*;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub(super) struct MountUiState {
-    draft: Option<MountDraft>,
-    show_manager: bool,
-    mounts: Vec<crate::mount::MountSnapshot>,
-    action_rx: Option<Receiver<Result<MountUiResult, String>>>,
-    busy: Option<String>,
-    next_poll: Instant,
+    pub(super) draft: Option<MountDraft>,
+    pub(super) show_manager: bool,
+    pub(super) mounts: Vec<crate::mount::MountSnapshot>,
+    pub(super) action_rx: Option<Receiver<Result<MountUiResult, String>>>,
+    pub(super) peer_discovery_rx: Option<Receiver<Result<PeerMountDiscovery, String>>>,
+    pub(super) busy: Option<String>,
+    pub(super) next_poll: Instant,
 }
 
-struct MountDraft {
-    source: crate::mount::MountSource,
-    source_label: String,
-    volume_label: String,
-    drive: crate::mount::DriveSelection,
-    read_write: bool,
-    trust_remote_root: bool,
-}
-
-enum MountUiResult {
+pub(super) enum MountUiResult {
     Snapshot(crate::mount::MountSnapshot),
     List(Vec<crate::mount::MountSnapshot>),
     RuntimeInstalled(crate::mount::DriveRuntimeInstallOutcome),
@@ -39,6 +30,7 @@ impl Default for MountUiState {
             show_manager: false,
             mounts: Vec::new(),
             action_rx: None,
+            peer_discovery_rx: None,
             busy: None,
             next_poll: Instant::now(),
         }
@@ -46,77 +38,38 @@ impl Default for MountUiState {
 }
 
 impl App {
-    pub(in crate::app) fn offer_mount_saved(&mut self, connection: &crate::creds::SavedConnection) {
-        let root = match mount_root(&connection.root) {
-            Ok(root) => root,
-            Err(error) => {
-                self.error_msg = Some(format!("Laufwerkswurzel: {error}"));
-                return;
-            }
-        };
-        self.open_mount_draft(
-            crate::mount::MountSource::SavedRemote {
-                account: connection.account(),
-                root,
-            },
-            connection.display(),
-        );
-    }
-
-    pub(in crate::app) fn offer_mount_gdrive(&mut self) {
-        let Ok(root) = crate::mount::BackendRoot::parse("/") else {
-            self.error_msg = Some("Google-Drive-Wurzel ist ungueltig".into());
-            return;
-        };
-        self.open_mount_draft(
-            crate::mount::MountSource::GoogleDrive {
-                account: "cloud:gdrive".into(),
-                root,
-            },
-            "Google Drive".into(),
-        );
-    }
-
-    pub(in crate::app) fn offer_mount_peer(
-        &mut self,
-        target: crate::share::PeerOpenTarget,
-        label: String,
-    ) {
-        let target = match target {
-            crate::share::PeerOpenTarget::Direct { contact_id } => {
-                crate::mount::PeerMountTarget::Direct { contact_id }
-            }
-            crate::share::PeerOpenTarget::RoomDevice { room_id, device_id } => {
-                crate::mount::PeerMountTarget::RoomDevice { room_id, device_id }
-            }
-        };
-        let Ok(root) = crate::mount::BackendRoot::parse("/") else {
-            self.error_msg = Some("Share-Wurzel ist ungueltig".into());
-            return;
-        };
-        self.open_mount_draft(crate::mount::MountSource::Peer { target, root }, label);
-    }
-
     pub(in crate::app) fn open_mount_manager(&mut self) {
         self.mount_ui.show_manager = true;
         self.mount_ui.next_poll = Instant::now();
     }
 
-    fn open_mount_draft(&mut self, source: crate::mount::MountSource, label: String) {
-        // Explorer exposes the volume label outside Smart Explorer. Do not use
-        // endpoint, account, root, room, or contact text as its default.
-        let volume_label = "Smart Explorer".to_string();
-        self.mount_ui.draft = Some(MountDraft {
-            source,
-            source_label: label,
-            volume_label,
-            drive: crate::mount::DriveSelection::Automatic,
-            read_write: false,
-            trust_remote_root: false,
-        });
-    }
-
     pub(in crate::app) fn drain_mount_ui(&mut self, ctx: &egui::Context) {
+        let peer_discovery = self
+            .mount_ui
+            .peer_discovery_rx
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match peer_discovery {
+            Some(Ok(Ok(discovery))) => {
+                self.mount_ui.peer_discovery_rx = None;
+                self.open_peer_mount_draft(discovery);
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(error))) => {
+                self.mount_ui.peer_discovery_rx = None;
+                self.error_msg = Some(format!("Laufwerk: {error}"));
+                ctx.request_repaint();
+            }
+            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.mount_ui.peer_discovery_rx = None;
+                self.error_msg = Some("Peer-Freigabepruefung wurde ohne Ergebnis beendet".into());
+            }
+            Some(Err(crossbeam_channel::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            }
+            None => {}
+        }
+
         let received = self
             .mount_ui
             .action_rx
@@ -203,150 +156,6 @@ impl App {
     pub(in crate::app) fn ui_mount_windows(&mut self, ctx: &egui::Context) {
         self.ui_mount_draft(ctx);
         self.ui_mount_manager(ctx);
-    }
-
-    fn ui_mount_draft(&mut self, ctx: &egui::Context) {
-        let Some(mut draft) = self.mount_ui.draft.take() else {
-            return;
-        };
-        let mut open = true;
-        let mut cancel = false;
-        let mut submit = false;
-        let mut install_runtime = false;
-        egui::Window::new("Remote als Laufwerk")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(RichText::new(&draft.source_label).strong());
-                ui.label(format!("Remote-Wurzel: {}", draft.source.root().as_str()));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Laufwerksbuchstabe:");
-                    egui::ComboBox::from_id_salt("mount_drive_letter")
-                        .selected_text(drive_selection_label(draft.drive))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut draft.drive,
-                                crate::mount::DriveSelection::Automatic,
-                                "Automatisch",
-                            );
-                            for letter in ('D'..='Z')
-                                .filter_map(|letter| crate::mount::DriveLetter::parse(letter).ok())
-                            {
-                                ui.selectable_value(
-                                    &mut draft.drive,
-                                    crate::mount::DriveSelection::Letter(letter),
-                                    letter.to_string(),
-                                );
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.text_edit_singleline(&mut draft.volume_label);
-                });
-                ui.checkbox(&mut draft.read_write, "Schreibzugriff erlauben");
-                if draft.read_write {
-                    ui.colored_label(
-                        Color32::from_rgb(255, 190, 90),
-                        "Editor-Saves werden als ganze Datei konfliktgeprueft ueber Smart Explorer hochgeladen.",
-                    );
-                    ui.label(
-                        "Das Remote-Backend muss sichere Datei-Promotionen unterstuetzen; andernfalls bleibt die Aenderung im Recovery-Cache.",
-                    );
-                } else {
-                    ui.label("Standard: schreibgeschuetzt.");
-                }
-                ui.checkbox(
-                    &mut draft.trust_remote_root,
-                    "Remote-Wurzel ohne technische Sandbox vertrauen",
-                )
-                .on_hover_text(
-                    "Nur aktivieren, wenn Server und andere Writer vertrauenswuerdig sind. Smart Explorer prueft Pfade weiterhin, kann Protokollzugriffe dann aber nicht atomar gegen Symlink-/Junction-Rennen absichern.",
-                );
-                if draft.trust_remote_root {
-                    ui.colored_label(
-                        Color32::from_rgb(255, 150, 90),
-                        "Vertrauensmodus: Ein anderer Writer am Remote kann die ausgewaehlte Wurzel waehrend eines Pfadzugriffs veraendern.",
-                    );
-                }
-                ui.separator();
-                ui.label("Voraussetzung: offizielle Dokany-2.3.1-Laufzeit (kein Entwicklermodus).");
-                let enabled = self.mount_ui.action_rx.is_none();
-                ui.horizontal(|ui| {
-                    install_runtime = install_controls(ui, enabled, "Manueller Download");
-                });
-                if let Some(busy) = &self.mount_ui.busy {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new());
-                        ui.label(busy);
-                    });
-                }
-                ui.horizontal(|ui| {
-                    let valid =
-                        !draft.volume_label.trim().is_empty() && self.mount_ui.action_rx.is_none();
-                    if ui
-                        .add_enabled(valid, egui::Button::new("Einbinden"))
-                        .clicked()
-                    {
-                        submit = true;
-                    }
-                    if ui.button("Abbrechen").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-        if install_runtime {
-            self.mount_ui.draft = Some(draft);
-            self.spawn_mount_action("Dokany wird sicher installiert", || {
-                crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
-            });
-            return;
-        }
-        if cancel {
-            open = false;
-        }
-        if submit {
-            let mode = if draft.read_write {
-                crate::mount::MountMode::ReadWrite
-            } else {
-                crate::mount::MountMode::ReadOnly
-            };
-            let root_security = if draft.trust_remote_root {
-                crate::mount::MountRootSecurity::Trusted
-            } else {
-                crate::mount::MountRootSecurity::Enforced
-            };
-            let config = crate::mount::MountId::new_random()
-                .and_then(|id| {
-                    crate::mount::MountConfig::new(
-                        id,
-                        draft.source.clone(),
-                        draft.drive,
-                        mode,
-                        bounded_label(&draft.volume_label),
-                    )
-                })
-                .map(|config| config.with_root_security(root_security))
-                .map_err(|error| error.to_string());
-            match config {
-                Ok(config) => {
-                    // Keep the choices editable until the daemon has accepted
-                    // the mount (for example it may conservatively reject RW).
-                    self.mount_ui.draft = Some(draft);
-                    self.spawn_mount_action("Remote wird verbunden", move || {
-                        crate::daemon::start_mount(config).map(MountUiResult::Snapshot)
-                    });
-                }
-                Err(error) => {
-                    self.error_msg = Some(format!("Laufwerk: {error}"));
-                    self.mount_ui.draft = Some(draft);
-                }
-            }
-        } else if open {
-            self.mount_ui.draft = Some(draft);
-        }
     }
 
     fn ui_mount_manager(&mut self, ctx: &egui::Context) {
@@ -442,7 +251,7 @@ impl App {
         }
     }
 
-    fn spawn_mount_action(
+    pub(super) fn spawn_mount_action(
         &mut self,
         label: impl Into<String>,
         action: impl FnOnce() -> Result<MountUiResult, String> + Send + 'static,
@@ -460,8 +269,4 @@ impl App {
             let _ = sender.send(result);
         });
     }
-}
-
-fn mount_root(path: &str) -> Result<crate::mount::BackendRoot, String> {
-    crate::mount::BackendRoot::parse(&path.replace('\\', "/")).map_err(|error| error.to_string())
 }

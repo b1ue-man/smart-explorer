@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::{RecvStream, SendStream, VarInt};
 
@@ -14,6 +14,17 @@ pub(super) fn abort(send: &mut SendStream, recv: &mut RecvStream) {
 
 pub(super) fn disconnected(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::NotConnected, error.to_string())
+}
+
+pub(super) fn remaining(deadline: Instant, operation: &str) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{operation} exceeded its absolute deadline"),
+            )
+        })
 }
 
 pub(super) async fn run<T, F>(operation: &str, future: F) -> io::Result<T>

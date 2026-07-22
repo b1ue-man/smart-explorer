@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
 use crate::vfs::{
-    Backend, BackendHandle, DeleteDisposition, RootConfinement, Scheme, StagedWriteCapabilities,
-    VfsMeta, VfsResult,
+    Backend, BackendHandle, DeleteDisposition, MountPathCapabilities, RootConfinement, Scheme,
+    StagedWriteCapabilities, VfsMeta, VfsResult,
 };
 
 use super::mount_error::{encode as sanitize_error, encoded as coded_error};
@@ -32,7 +32,8 @@ impl RootedBackend {
         mode: MountMode,
         root_security: MountRootSecurity,
     ) -> io::Result<BackendHandle> {
-        let root_confinement = inner.root_confinement(root.as_str());
+        let mount_capabilities = inner.mount_path_capabilities(root.as_str())?;
+        let root_confinement = mount_capabilities.root_confinement;
         if root_security == MountRootSecurity::Enforced && !root_confinement.is_enforced() {
             return Err(permission_denied(
                 "backend does not technically enforce the selected mount root; explicit trusted-root mode is required",
@@ -41,7 +42,7 @@ impl RootedBackend {
         // A kernel/provider-confined backend may intentionally be unable to
         // inspect ancestors above its root (Landlock does exactly this). Its
         // capability already covers them; only revalidate the selected root.
-        let root_ancestors = if root_confinement.is_enforced() {
+        let root_ancestors = if root_confinement.is_enforced() || inner.scheme() == Scheme::Peer {
             vec![root.as_str().to_string()]
         } else {
             root_ancestor_chain(root.as_str())?
@@ -51,7 +52,7 @@ impl RootedBackend {
             validate_windows_components(&components(root.as_str())?)?;
         }
         let staged_write = if mode == MountMode::ReadWrite {
-            inner.staged_write_capabilities(root.as_str())
+            mount_capabilities.staged_write
         } else {
             StagedWriteCapabilities::default()
         };
@@ -334,6 +335,13 @@ impl Backend for RootedBackend {
 
     fn root_confinement(&self, _root: &str) -> RootConfinement {
         self.root_confinement
+    }
+
+    fn mount_path_capabilities(&self, _root: &str) -> VfsResult<MountPathCapabilities> {
+        Ok(MountPathCapabilities {
+            staged_write: self.staged_write,
+            root_confinement: self.root_confinement,
+        })
     }
 
     fn open_read_id(&self, path: &str, _id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {

@@ -12,12 +12,14 @@ use super::framing::{
     MAX_REQUEST_CTRL_FRAME,
 };
 use super::fs::{self, ShareExportConfig};
+use super::fs_access::FsAccess;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
+use super::mount_lease::{run_authorized, MountLeaseAuthorization, PeerMountLeases};
 use super::node::ShareIrohNode;
 use super::session::{authenticate_incoming_session, IncomingSession};
 use super::types::{ExecRequest, ShareEvent};
-use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::wire::{Ctrl, FsRequest, FsResponse, MOUNT_PATH_CAPABILITY_CONTRACT_VERSION};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -27,6 +29,7 @@ pub(super) async fn handle_connection(
     handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&conn)?;
+    node.require_sharing_active()?;
     let remote_node = conn.remote_id().to_string();
     let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
     let (mut send, mut recv) = tokio::time::timeout_at(handshake_deadline, conn.accept_bi())
@@ -87,6 +90,7 @@ pub(super) async fn handle_connection(
     )));
     let session = Arc::new(session);
     let exec_slots = super::exec::peer_slots(&remote_node);
+    let mount_leases = Arc::new(PeerMountLeases::default());
     loop {
         let (send, recv) = match conn.accept_bi().await {
             Ok(streams) => streams,
@@ -95,9 +99,20 @@ pub(super) async fn handle_connection(
         let session = session.clone();
         let auth = node.auth.clone();
         let exec_slots = exec_slots.clone();
+        let mount_leases = mount_leases.clone();
         let node = node.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_peer_stream(send, recv, session, auth, exec_slots).await {
+            if let Err(error) = handle_peer_stream(
+                send,
+                recv,
+                session,
+                auth,
+                node.clone(),
+                exec_slots,
+                mount_leases,
+            )
+            .await
+            {
                 node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
             }
         });
@@ -109,7 +124,9 @@ async fn handle_peer_stream(
     mut recv: RecvStream,
     session: Arc<IncomingSession>,
     auth: Arc<Mutex<super::types::ShareAuthState>>,
+    node: Arc<ShareIrohNode>,
     exec_slots: Arc<AtomicUsize>,
+    mount_leases: Arc<PeerMountLeases>,
 ) -> io::Result<()> {
     if let Err(error) = session.authorize(&auth) {
         return io_deadline::run("Share authorization rejection", reply_err(&mut send, error))
@@ -120,8 +137,9 @@ async fn handle_peer_stream(
         recv_ctrl_limited(&mut recv, MAX_REQUEST_CTRL_FRAME),
     )
     .await?;
+    node.require_sharing_active()?;
     let exports = match session.authorize(&auth) {
-        Ok(exports) => Arc::new(Mutex::new(exports)),
+        Ok(exports) => exports,
         Err(error) => {
             return io_deadline::run("Share authorization rejection", async {
                 match ctrl {
@@ -140,53 +158,66 @@ async fn handle_peer_stream(
             .await;
         }
     };
-    let req = match ctrl {
-        Ctrl::Fs { req } => req,
+    let (req, requested_lease) = match ctrl {
+        Ctrl::Fs { req, lease } => (req, lease),
         Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, exec_slots).await,
         _ => return Err(eio("Dateioperation erwartet")),
     };
+    let req = match req {
+        FsRequest::Capabilities {
+            path,
+            acquire_lease,
+        } => {
+            return handle_capabilities(
+                &mut send,
+                path,
+                acquire_lease,
+                exports,
+                node.filesystem_authorization_epoch(),
+                mount_leases,
+            )
+            .await;
+        }
+        req => req,
+    };
+    let (access, write_authorization) = match requested_lease {
+        Some(token) => {
+            match mount_leases.authorize(&token, &exports, node.filesystem_authorization_epoch()) {
+                Ok(lease) => (
+                    FsAccess::mounted(lease.clone()),
+                    Some(MountLeaseAuthorization::new(
+                        token, lease, session, auth, node,
+                    )),
+                ),
+                Err(error) => return reply_err(&mut send, error).await,
+            }
+        }
+        None => (FsAccess::dynamic(exports), None),
+    };
     match req {
-        FsRequest::Capabilities { path } => {
-            match blocking_fs("Share filesystem capabilities", move || {
-                super::fs_capabilities::staged_write_capabilities(&path, &exports)
-            })
-            .await
-            {
-                Ok(capabilities) => {
-                    reply(
-                        &mut send,
-                        FsResponse::Capabilities {
-                            capabilities: capabilities.into(),
-                        },
-                    )
-                    .await
-                }
+        FsRequest::Capabilities { .. } => Err(eio("Capabilities wurden doppelt verarbeitet")),
+        FsRequest::ListDir { path } => {
+            match blocking_fs("Share list directory", move || access.list_dir(&path)).await {
+                Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
                 Err(error) => reply_err(&mut send, error).await,
             }
         }
-        FsRequest::ListDir { path } => match blocking_fs("Share list directory", move || {
-            fs::list_dir(&path, &exports)
-        })
-        .await
-        {
-            Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
         FsRequest::Stat { path } => {
-            match blocking_fs("Share stat", move || fs::stat(&path, &exports)).await {
+            match blocking_fs("Share stat", move || access.stat(&path)).await {
                 Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
                 Err(error) => reply_err(&mut send, error).await,
             }
         }
-        FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, exports).await,
-        FsRequest::Read { path } => super::server_transfer::read_file(send, path, exports).await,
+        FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, access).await,
+        FsRequest::Read { path } => super::server_transfer::read_file(send, path, access).await,
         FsRequest::Write { path } => {
             super::server_transfer::write_file(
                 send,
                 recv,
                 path,
-                exports,
+                access,
                 super::server_transfer::WriteMode::Replace,
+                write_authorization.clone(),
             )
             .await
         }
@@ -195,8 +226,9 @@ async fn handle_peer_stream(
                 send,
                 recv,
                 path,
-                exports,
+                access,
                 super::server_transfer::WriteMode::Create,
+                write_authorization.clone(),
             )
             .await
         }
@@ -204,14 +236,17 @@ async fn handle_peer_stream(
             simple(
                 &mut send,
                 path,
-                exports,
+                access,
+                write_authorization.clone(),
                 "Share create directory",
                 |target| target.backend.mkdir_all(&target.path),
             )
             .await
         }
         FsRequest::Rename { src, dst } => match blocking_fs("Share rename", move || {
-            fs::rename(&src, &dst, &exports, false)
+            run_authorized(write_authorization.as_ref(), || {
+                access.rename(&src, &dst, false)
+            })
         })
         .await
         {
@@ -220,7 +255,9 @@ async fn handle_peer_stream(
         },
         FsRequest::RenameNoReplace { src, dst } => {
             match blocking_fs("Share no-replace rename", move || {
-                fs::rename(&src, &dst, &exports, true)
+                run_authorized(write_authorization.as_ref(), || {
+                    access.rename(&src, &dst, true)
+                })
             })
             .await
             {
@@ -232,7 +269,9 @@ async fn handle_peer_stream(
             staged,
             destination,
         } => match blocking_fs("Share promote staged file", move || {
-            fs::promote_staged(&staged, &destination, &exports)
+            run_authorized(write_authorization.as_ref(), || {
+                access.promote_staged(&staged, &destination)
+            })
         })
         .await
         {
@@ -241,12 +280,12 @@ async fn handle_peer_stream(
         },
         FsRequest::CopyFile { src, dst } => {
             let result = blocking_fs("Share copy file", move || {
-                let source = fs::resolve(&src, &exports)?;
-                let destination = fs::resolve(&dst, &exports)?;
-                if source.mount_key != destination.mount_key {
-                    return Err(eio("Quelle und Ziel liegen nicht auf derselben Freigabe"));
-                }
-                source.backend.copy_file(&source.path, &destination.path)
+                run_authorized(write_authorization.as_ref(), || {
+                    let source = access.resolve(&src)?;
+                    let destination = access.resolve(&dst)?;
+                    access.require_same_backend(&source, &destination)?;
+                    source.backend.copy_file(&source.path, &destination.path)
+                })
             })
             .await;
             match result {
@@ -255,22 +294,72 @@ async fn handle_peer_stream(
             }
         }
         FsRequest::RemoveFile { path } => {
-            simple(&mut send, path, exports, "Share remove file", |target| {
-                target.backend.remove_file(&target.path)
-            })
+            simple(
+                &mut send,
+                path,
+                access,
+                write_authorization.clone(),
+                "Share remove file",
+                |target| target.backend.remove_file(&target.path),
+            )
             .await
         }
         FsRequest::RemoveDir { path } => {
             simple(
                 &mut send,
                 path,
-                exports,
+                access,
+                write_authorization.clone(),
                 "Share remove directory",
                 |target| fs::remove_dir_recursive(&*target.backend, &target.path),
             )
             .await
         }
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
+    }
+}
+
+async fn handle_capabilities(
+    send: &mut SendStream,
+    path: String,
+    acquire_lease: bool,
+    exports: ShareExportConfig,
+    authorization_epoch: u64,
+    mount_leases: Arc<PeerMountLeases>,
+) -> io::Result<()> {
+    let result = blocking_fs("Share filesystem capabilities", move || {
+        let snapshot = Arc::new(Mutex::new(exports.clone()));
+        let resolved = super::fs_capabilities::resolve_mount_capabilities(&path, &snapshot)?;
+        let Some(resolved) = resolved else {
+            return Ok(FsResponse::Capabilities {
+                capabilities: Default::default(),
+                contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
+                root_confined: false,
+                lease: None,
+            });
+        };
+        if !acquire_lease {
+            let root_confined = resolved.lease_root_confined();
+            return Ok(FsResponse::Capabilities {
+                capabilities: resolved.capabilities.staged_write.into(),
+                contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
+                root_confined,
+                lease: None,
+            });
+        }
+        let grant = mount_leases.acquire(resolved, exports, authorization_epoch)?;
+        let capabilities = grant.lease.capabilities();
+        Ok(FsResponse::Capabilities {
+            capabilities: capabilities.staged_write.into(),
+            contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
+            root_confined: capabilities.root_confinement.is_enforced(),
+            lease: Some(grant.token),
+        })
+    })
+    .await;
+    match result {
+        Ok(response) => reply(send, response).await,
+        Err(error) => reply_err(send, error).await,
     }
 }
 
@@ -305,7 +394,8 @@ async fn handle_exec_stream(
 async fn simple<F>(
     send: &mut SendStream,
     path: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
+    authorization: Option<MountLeaseAuthorization>,
     label: &'static str,
     operation: F,
 ) -> io::Result<()>
@@ -313,7 +403,9 @@ where
     F: FnOnce(fs::ResolvedTarget) -> io::Result<()> + Send + 'static,
 {
     match blocking_fs(label, move || {
-        fs::resolve(&path, &exports).and_then(operation)
+        run_authorized(authorization.as_ref(), || {
+            access.resolve(&path).and_then(operation)
+        })
     })
     .await
     {

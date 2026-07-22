@@ -7,6 +7,11 @@ use super::direct_protocol::{
 use super::types::{ExecRequest, ExecResult, PeerPresence};
 
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
+pub(crate) const MOUNT_PATH_CAPABILITY_CONTRACT_VERSION: u8 = 1;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -238,21 +243,58 @@ pub(crate) enum FsErrorKind {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
-    Capabilities { path: String },
-    ListDir { path: String },
-    Stat { path: String },
-    WalkTree { path: String },
-    Read { path: String },
-    Write { path: String },
-    WriteNew { path: String },
+    Capabilities {
+        path: String,
+        /// Mount hosts request a connection-bound root lease. Browsing and UI
+        /// probes leave this false so a capability inspection cannot consume
+        /// the server's bounded lease table.
+        #[serde(default, skip_serializing_if = "is_false")]
+        acquire_lease: bool,
+    },
+    ListDir {
+        path: String,
+    },
+    Stat {
+        path: String,
+    },
+    WalkTree {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Write {
+        path: String,
+    },
+    WriteNew {
+        path: String,
+    },
     WriteDone,
-    MkdirAll { path: String },
-    Rename { src: String, dst: String },
-    RenameNoReplace { src: String, dst: String },
-    PromoteStaged { staged: String, destination: String },
-    CopyFile { src: String, dst: String },
-    RemoveFile { path: String },
-    RemoveDir { path: String },
+    MkdirAll {
+        path: String,
+    },
+    Rename {
+        src: String,
+        dst: String,
+    },
+    RenameNoReplace {
+        src: String,
+        dst: String,
+    },
+    PromoteStaged {
+        staged: String,
+        destination: String,
+    },
+    CopyFile {
+        src: String,
+        dst: String,
+    },
+    RemoveFile {
+        path: String,
+    },
+    RemoveDir {
+        path: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -260,6 +302,14 @@ pub(crate) enum FsRequest {
 pub(crate) enum FsResponse {
     Capabilities {
         capabilities: FsWriteCapabilities,
+        /// Additive protocol-v3 fields. Legacy peers omit them and therefore
+        /// deserialize to contract zero, no lease, and an unconfined root.
+        #[serde(default)]
+        contract_version: u8,
+        #[serde(default)]
+        root_confined: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<String>,
     },
     Entries {
         entries: Vec<FsMeta>,
@@ -294,13 +344,33 @@ pub(crate) enum FsResponse {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "c", rename_all = "snake_case")]
 pub(crate) enum Ctrl {
-    PeerHello { hello: PeerHello },
+    PeerHello {
+        hello: PeerHello,
+    },
     PeerHelloOk,
-    Ping { nonce: String },
-    Pong { nonce: String },
-    Fs { req: FsRequest },
-    FsResp { resp: FsResponse },
-    Exec { req: ExecRequest },
-    ExecResp { result: ExecResult },
-    ExecErr { msg: String },
+    Ping {
+        nonce: String,
+    },
+    Pong {
+        nonce: String,
+    },
+    Fs {
+        req: FsRequest,
+        /// Opaque mount-root lease, scoped by the server to this QUIC
+        /// connection. Older clients omit it and retain stateless browsing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<String>,
+    },
+    FsResp {
+        resp: FsResponse,
+    },
+    Exec {
+        req: ExecRequest,
+    },
+    ExecResp {
+        result: ExecResult,
+    },
+    ExecErr {
+        msg: String,
+    },
 }

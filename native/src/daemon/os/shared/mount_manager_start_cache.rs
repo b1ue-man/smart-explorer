@@ -64,6 +64,8 @@ pub(super) fn insert(
             control: None,
             child: None,
             backend_stream_active: false,
+            pending_host_failure: None,
+            host_terminal_failure: false,
             registry_recorded,
             recovery: MountRecovery::Unknown,
         },

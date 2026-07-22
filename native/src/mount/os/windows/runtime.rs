@@ -161,17 +161,19 @@ impl DokanyRuntime {
         let api = Api::resolve(&module)?;
         let library_api = unsafe { (api.version)() };
         let driver_protocol = unsafe { (api.driver_protocol_version)() };
-        validate_dokany_version_domains(library_api, driver_protocol).map_err(|error| match error {
-            DokanyVersionCompatibilityError::LibraryApiMismatch { expected, found } => {
-                DokanyPreflightError::LibraryApiMismatch { expected, found }
-            }
-            DokanyVersionCompatibilityError::DriverUnavailable => {
-                DokanyPreflightError::DriverUnavailable
-            }
-            DokanyVersionCompatibilityError::DriverProtocolMismatch { expected, found } => {
-                DokanyPreflightError::DriverProtocolMismatch { expected, found }
-            }
-        })?;
+        validate_dokany_version_domains(library_api, driver_protocol).map_err(
+            |error| match error {
+                DokanyVersionCompatibilityError::LibraryApiMismatch { expected, found } => {
+                    DokanyPreflightError::LibraryApiMismatch { expected, found }
+                }
+                DokanyVersionCompatibilityError::DriverUnavailable => {
+                    DokanyPreflightError::DriverUnavailable
+                }
+                DokanyVersionCompatibilityError::DriverProtocolMismatch { expected, found } => {
+                    DokanyPreflightError::DriverProtocolMismatch { expected, found }
+                }
+            },
+        )?;
 
         unsafe { (api.init)() };
         Ok(Self {

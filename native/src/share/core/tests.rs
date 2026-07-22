@@ -72,6 +72,7 @@ fn sanitize_strips_separators() {
 fn ctrl_roundtrips() {
     let o = Ctrl::Fs {
         req: FsRequest::ListDir { path: "/".into() },
+        lease: None,
     };
     let j = serde_json::to_vec(&o).unwrap();
     assert!(matches!(

@@ -36,6 +36,7 @@ struct Mount {
     target: MountTarget,
 }
 
+#[derive(Clone)]
 pub(crate) struct ResolvedTarget {
     pub(crate) backend: BackendHandle,
     pub(crate) path: String,
@@ -243,10 +244,10 @@ fn snapshot(exports: &Arc<Mutex<ShareExportConfig>>) -> ShareExportConfig {
 }
 
 fn local_mounts(cfg: &ShareExportConfig) -> Vec<Mount> {
-    let mut used = Vec::new();
-    if cfg.include_connections {
-        used.push(CONNECTIONS_MOUNT.to_string());
-    }
+    // Reserve the protocol container unconditionally. Otherwise a local root
+    // named `Verbindungen` is advertised when the container is disabled, but
+    // `resolve` still interprets that spelling as the synthetic container.
+    let mut used = vec![CONNECTIONS_MOUNT.to_string()];
     cfg.roots
         .iter()
         .filter_map(|r| {
@@ -305,7 +306,7 @@ fn clean_mount_label(label: &str) -> String {
     }
 }
 
-fn split_clean(path: &str) -> io::Result<Vec<String>> {
+pub(super) fn split_clean(path: &str) -> io::Result<Vec<String>> {
     let mut out = Vec::new();
     for p in path.trim().trim_matches('/').split('/') {
         if p.is_empty() {
@@ -319,7 +320,7 @@ fn split_clean(path: &str) -> io::Result<Vec<String>> {
     Ok(out)
 }
 
-fn join_under(root: &str, rest: &[String]) -> String {
+pub(super) fn join_under(root: &str, rest: &[String]) -> String {
     let root = root.replace('\\', "/");
     if rest.is_empty() {
         return norm_root(&root);
@@ -328,7 +329,7 @@ fn join_under(root: &str, rest: &[String]) -> String {
     format!("{}/{}", base.trim_end_matches('/'), rest.join("/"))
 }
 
-fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
+pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
     let root_norm = norm_root(root);
     let root_os = to_os_path(&root_norm);
     let root_canon = std::fs::canonicalize(&root_os)

@@ -111,6 +111,42 @@ impl MountBackendCapabilities {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(super) struct MountPathCapabilitiesWire {
+    pub(super) staged_write_create: bool,
+    pub(super) staged_write_replace: bool,
+    pub(super) staged_namespace_replace: bool,
+    pub(super) root_confined: bool,
+}
+
+impl From<crate::vfs::MountPathCapabilities> for MountPathCapabilitiesWire {
+    fn from(value: crate::vfs::MountPathCapabilities) -> Self {
+        Self {
+            staged_write_create: value.staged_write.create,
+            staged_write_replace: value.staged_write.replace,
+            staged_namespace_replace: value.staged_write.namespace_replace,
+            root_confined: value.root_confinement.is_enforced(),
+        }
+    }
+}
+
+impl From<MountPathCapabilitiesWire> for crate::vfs::MountPathCapabilities {
+    fn from(value: MountPathCapabilitiesWire) -> Self {
+        Self {
+            staged_write: crate::vfs::StagedWriteCapabilities {
+                create: value.staged_write_create,
+                replace: value.staged_write_replace,
+                namespace_replace: value.staged_namespace_replace,
+            },
+            root_confinement: if value.root_confined {
+                crate::vfs::RootConfinement::Enforced
+            } else {
+                crate::vfs::RootConfinement::Unverified
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MountHostConfig {
     pub id: crate::mount::MountId,
@@ -179,6 +215,11 @@ pub(super) enum IpcRequest {
         token: String,
         target: crate::share::PeerOpenTarget,
     },
+    ProbeShareMount {
+        token: String,
+        target: crate::share::PeerOpenTarget,
+        root: String,
+    },
     ExecShare {
         token: String,
         target: crate::share::PeerOpenTarget,
@@ -243,6 +284,7 @@ impl IpcRequest {
             | Self::MutateExecGrant { token, .. }
             | Self::DrainShareEvents { token }
             | Self::OpenShare { token, .. }
+            | Self::ProbeShareMount { token, .. }
             | Self::ExecShare { token, .. }
             | Self::ExecStream { token, .. }
             | Self::ExecJobs { token }
@@ -276,6 +318,9 @@ pub(super) enum IpcResponse {
     OpenOk {
         label: String,
         status: crate::share::ShareStatus,
+    },
+    MountPathCapabilities {
+        capabilities: MountPathCapabilitiesWire,
     },
     ShareEvents {
         snapshot: Box<ShareWorkerSnapshot>,

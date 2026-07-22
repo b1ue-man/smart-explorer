@@ -1,6 +1,6 @@
 use super::{
     bound_snapshot_for_ipc, encoded_response_len, read_response, IpcRequest, IpcResponse,
-    ShareWorkerSnapshot, MAX_IPC_LINE,
+    MountPathCapabilitiesWire, ShareWorkerSnapshot, MAX_IPC_LINE,
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -189,6 +189,47 @@ fn exec_grant_ipc_reports_durable_and_runtime_state() {
             assert!(!result.applied);
             assert_eq!(result.revision, 7);
             assert_eq!(result.retry_state, ExecGrantRetryState::PendingApply);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[test]
+fn remote_drive_task_peer_mount_capability_ipc_roundtrips_one_snapshot() {
+    let target = crate::share::PeerOpenTarget::Direct {
+        contact_id: "contact-a".into(),
+    };
+    let request = IpcRequest::ProbeShareMount {
+        token: "daemon-token".into(),
+        target: target.clone(),
+        root: "/Docs".into(),
+    };
+    let json = serde_json::to_string(&request).unwrap();
+    match serde_json::from_str::<IpcRequest>(&json).unwrap() {
+        IpcRequest::ProbeShareMount {
+            token,
+            target: decoded_target,
+            root,
+        } => {
+            assert_eq!(token, "daemon-token");
+            assert_eq!(decoded_target, target);
+            assert_eq!(root, "/Docs");
+        }
+        _ => panic!("wrong peer mount capability request"),
+    }
+
+    let expected = crate::vfs::MountPathCapabilities {
+        staged_write: crate::vfs::StagedWriteCapabilities::complete(),
+        root_confinement: crate::vfs::RootConfinement::Enforced,
+    };
+    let response = IpcResponse::MountPathCapabilities {
+        capabilities: MountPathCapabilitiesWire::from(expected),
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    match serde_json::from_str::<IpcResponse>(&json).unwrap() {
+        IpcResponse::MountPathCapabilities { capabilities } => {
+            let decoded: crate::vfs::MountPathCapabilities = capabilities.into();
+            assert_eq!(decoded, expected);
         }
         other => panic!("unexpected response: {other:?}"),
     }

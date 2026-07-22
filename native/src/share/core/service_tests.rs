@@ -304,7 +304,7 @@ fn presence_binds_node_id_and_relay_url() {
     ));
 }
 
-fn test_service() -> ShareService {
+pub(super) fn test_service() -> ShareService {
     let (cmd_tx, _cmd_rx) = unbounded();
     let (ev_tx, ev_rx) = unbounded();
     let identity = test_identity("device-a", "Device A", "lookup-local");

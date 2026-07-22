@@ -21,8 +21,7 @@ use windows_sys::Win32::{
 pub(crate) const DOKANY_LIBRARY_API_VERSION: u32 = crate::mount::DOKANY_LIBRARY_API_VERSION;
 // Retained for the pinned-manifest verifier and existing Windows adapter API.
 pub(crate) const DOKANY_API_VERSION: u32 = DOKANY_LIBRARY_API_VERSION;
-pub(crate) const DOKANY_DRIVER_PROTOCOL_VERSION: u32 =
-    crate::mount::DOKANY_DRIVER_PROTOCOL_VERSION;
+pub(crate) const DOKANY_DRIVER_PROTOCOL_VERSION: u32 = crate::mount::DOKANY_DRIVER_PROTOCOL_VERSION;
 pub(crate) const DOKANY_DLL_NAME: &str = "dokan2.dll";
 pub(crate) const VOLUME_SECURITY_DESCRIPTOR_MAX_SIZE: usize = 16 * 1024;
 

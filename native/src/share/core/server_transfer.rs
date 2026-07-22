@@ -1,5 +1,4 @@
 use std::io::{self, Read, Write};
-use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{RecvStream, SendStream};
 use tokio::sync::{mpsc, oneshot};
@@ -7,7 +6,9 @@ use tokio::sync::{mpsc, oneshot};
 use super::blocking;
 use super::core::eio;
 use super::framing::{recv_tagged, reply, reply_err, send_tagged, TAG_DATA};
-use super::fs::{self, ShareExportConfig};
+use super::fs;
+use super::fs_access::FsAccess;
+use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
 const STREAM_BUFFER_CHUNKS: usize = 2;
@@ -21,12 +22,12 @@ pub(super) enum WriteMode {
 pub(super) async fn read_file(
     mut send: SendStream,
     path: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let worker = blocking::spawn("Share read", move || {
-        read_worker(path, exports, ready_tx, data_tx)
+        read_worker(path, access, ready_tx, data_tx)
     })
     .await?;
 
@@ -44,11 +45,11 @@ pub(super) async fn read_file(
 
 fn read_worker(
     path: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
     ready: oneshot::Sender<io::Result<u64>>,
     chunks: mpsc::Sender<io::Result<Vec<u8>>>,
 ) -> io::Result<()> {
-    let target = match fs::resolve(&path, &exports) {
+    let target = match access.resolve(&path) {
         Ok(target) => target,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -99,14 +100,24 @@ pub(super) async fn write_file(
     mut send: SendStream,
     mut recv: RecvStream,
     path: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
     mode: WriteMode,
+    lease_authorization: Option<MountLeaseAuthorization>,
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
+    let worker_authorization = lease_authorization.clone();
     let worker = blocking::spawn("Share staged write", move || {
-        write_worker(path, exports, mode, ready_tx, command_rx, done_tx)
+        write_worker(
+            path,
+            access,
+            mode,
+            worker_authorization,
+            ready_tx,
+            command_rx,
+            done_tx,
+        )
     })
     .await?;
 
@@ -147,7 +158,15 @@ pub(super) async fn write_file(
         match serde_json::from_slice::<Ctrl>(&payload).map_err(eio) {
             Ok(Ctrl::Fs {
                 req: FsRequest::WriteDone,
+                lease,
             }) => {
+                if let Some(authorization) = lease_authorization.as_ref() {
+                    if let Err(error) = authorization.verify_token(lease.as_deref()) {
+                        drop(command_tx);
+                        await_write_cleanup(&mut done_rx, &mut worker).await;
+                        return reply_err(&mut send, error).await;
+                    }
+                }
                 if command_tx.send(WriteCommand::Finish).await.is_err() {
                     let error = await_write_error(&mut done_rx, &mut worker).await;
                     return reply_err(&mut send, error).await;
@@ -180,36 +199,35 @@ enum WriteCommand {
 
 fn write_worker(
     path: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
     mode: WriteMode,
+    lease_authorization: Option<MountLeaseAuthorization>,
     ready: oneshot::Sender<io::Result<()>>,
     mut commands: mpsc::Receiver<WriteCommand>,
     done: oneshot::Sender<io::Result<()>>,
 ) -> io::Result<()> {
-    let target = match fs::resolve(&path, &exports) {
-        Ok(target) => target,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return Ok(());
-        }
-    };
-    let opened = match mode {
-        WriteMode::Replace => {
-            crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer").and_then(
-                |staging| {
-                    target
-                        .backend
-                        .open_write_new(&staging)
-                        .map(|writer| (staging, writer, true))
-                },
-            )
-        }
-        WriteMode::Create => target
-            .backend
-            .open_write_new(&target.path)
-            .map(|writer| (target.path.clone(), writer, false)),
-    };
-    let (staging, writer, replace_after_upload) = match opened {
+    // Opening the private stage/new target is the first mutation admission.
+    let prepared = run_authorized(lease_authorization.as_ref(), || {
+        let target = access.resolve(&path)?;
+        let opened = match mode {
+            WriteMode::Replace => {
+                crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer").and_then(
+                    |staging| {
+                        target
+                            .backend
+                            .open_write_new(&staging)
+                            .map(|writer| (staging, writer, true))
+                    },
+                )
+            }
+            WriteMode::Create => target
+                .backend
+                .open_write_new(&target.path)
+                .map(|writer| (target.path.clone(), writer, false)),
+        }?;
+        Ok((target, opened))
+    });
+    let (target, (staging, writer, replace_after_upload)) = match prepared {
         Ok(opened) => opened,
         Err(error) => {
             // An exclusive-open failure never transfers ownership of this
@@ -237,18 +255,20 @@ fn write_worker(
                 }
             }
             Some(WriteCommand::Finish) => {
-                let Some(mut output) = writer.take() else {
-                    break Err(eio("Schreibkanal ist geschlossen"));
-                };
-                if let Err(error) = output.flush() {
-                    break Err(error);
-                }
-                drop(output);
-                break if replace_after_upload {
-                    crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path)
-                } else {
-                    Ok(())
-                };
+                // A multi-phase write is admitted again at its commit boundary:
+                // a revoke since writer creation prevents flush/promotion.
+                break run_authorized(lease_authorization.as_ref(), || {
+                    let Some(mut output) = writer.take() else {
+                        return Err(eio("Schreibkanal ist geschlossen"));
+                    };
+                    output.flush()?;
+                    drop(output);
+                    if replace_after_upload {
+                        crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path)
+                    } else {
+                        Ok(())
+                    }
+                });
             }
             None => {
                 break Err(io::Error::new(

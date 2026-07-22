@@ -38,7 +38,7 @@ mod local_platform;
 mod promotion;
 
 pub use self::cache::CachingBackend;
-pub use self::capabilities::{RootConfinement, StagedWriteCapabilities};
+pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 pub use self::core::{
     Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
     SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
