@@ -12,8 +12,9 @@ The earlier version of this note compared only the first two and concluded that
 a mount was synonymous with placeholders. That was too broad. The implemented
 third option is intentionally closer to Cryptomator/rclone full-cache behavior:
 Explorer sees a drive, while application I/O is absorbed into a complete local
-spool before Smart Explorer publishes anything remotely. Research refreshed
-against primary sources on **2026-07-21**.
+spool before Smart Explorer publishes anything remotely. The Dokany primary
+sources were refreshed on **2026-07-22**; the other cited protocol sources retain
+their individual check dates below.
 
 ## Decision
 
@@ -29,8 +30,9 @@ against primary sources on **2026-07-21**.
   namespace replacement.
 - Independently default root authority to **strict confinement**. The deployed
   SSH Agent (Landlock ABI 3+ after symlink-free `openat2` root resolution) and
-  Google Drive's parent-ID hierarchy qualify. Other protocols need an explicit
-  trusted-root choice for RO or RW.
+  Google Drive's parent-ID hierarchy qualify. Protocol paths without technical
+  confinement need an explicit trusted-root choice for RO or RW; Peer/Share
+  inherits the concrete exported backend/root result.
 
 ## What the options actually provide
 
@@ -61,11 +63,12 @@ proxy. Cryptomator documents virtual-drive volume types separately from WebDAV:
 2026-07-21).
 
 Dokany's project documentation describes its user-mode filesystem model: the
-installed driver forwards Windows I/O requests to application callbacks. The
-official 2.3.1 header defines API 231 and exposes independent library/driver
-version queries. Smart Explorer therefore loads only the System32 DLL
-and requires both sides to report exactly 231. Official release drivers are
-signed, so no Developer Mode or `TESTSIGNING` is needed; installing the
+installed driver forwards Windows I/O requests to application callbacks. In the
+official 2.3.1.1000 runtime, `DokanVersion()` reports DLL API 231, while
+`DokanDriverVersion()` queries the independent kernel protocol 0x190 (decimal
+400). Smart Explorer loads only the System32 DLL and checks those two version
+domains separately. Official release drivers are signed, so no Developer Mode
+or `TESTSIGNING` is needed; installing the
 machine-wide runtime may still prompt for admin approval. The recommended NSIS
 installer embeds the pinned official x64 MSI offline as a standard-selected
 optional component; Smart Explorer remains per-user and only that MSI step uses
@@ -73,11 +76,22 @@ UAC. Portable and auto-updated copies can invoke the same secure pin with the
 GUI or `se drive install-runtime`. Silent setup requires explicit
 `/S /INSTALLDOKANY=1`, and Smart Explorer never uninstalls the shared runtime.
 
-Sources checked 2026-07-21:
+The automatic installer accepts only the [pinned official
+`Dokan_x64.msi` URL](https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi),
+exactly 9,269,248 bytes, and SHA-256
+`69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
+It validates Authenticode while holding the non-reparse file and parent path,
+then requests UAC only for System32 `msiexec`. It can repair an absent runtime
+or unavailable driver; it deliberately does not replace or downgrade a
+genuinely incompatible installed shared runtime.
 
-- [Dokany 2.3.1 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000)
+Sources checked 2026-07-22:
+
+- [Dokany 2.3.1.1000 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000)
 - [Dokany tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md)
 - [Dokany tagged API header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h)
+- [Dokany tagged driver header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h)
+- [Dokany version-query implementation](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c)
 - [Dokany API documentation](https://dokan-dev.github.io/dokany-doc/html/group___dokan.html)
 
 ## Why whole-file caching is necessary
@@ -131,11 +145,28 @@ Root authority is evaluated separately from write semantics:
   whole root path, and Landlock ABI 3+ confines reads, writes, rename and
   truncate before worker threads start.
 - Google Drive descendant lookup stays in its provider parent-ID namespace.
-- Plain SFTP, Local/UNC, Peer/Share, WebDAV and FTP remain unverified against an
-  external path-component swap. They mount only after the explicit
+- Plain SFTP, Local/UNC, WebDAV and FTP remain unverified against an external
+  path-component swap. They mount only after the explicit
   `--trust-remote-root`/GUI choice, including RO. Validation and serialization
   remain active, but the server and concurrent writers become part of the
   trust boundary.
+- Peer/Share inherits the result of its concrete remotely resolved backend/root.
+  An Agent-confined export can therefore remain `Enforced`; exporting
+  Local/UNC/plain SFTP does not remove its TOCTOU window and remains
+  `Unverified`.
+
+Share discovery exposes concrete local exports as `/Label` and saved connection
+roots as `/Verbindungen/<connection>`; the aggregate `/` is a synthetic RO
+target. The GUI asks the daemon to probe the active remote `PeerBackend` rather
+than trusting local metadata. At mount time the peer issues a capability lease
+bound to that exact root and authenticated QUIC connection. Switching between a
+direct and relay route inside one connection preserves it, but replacing the
+connection invalidates the lease and requires Retry/remount. A fallback is
+therefore admitted with its current guarantees and cannot silently weaken RW.
+Stopping the share or revoking/changing its authorization synchronously rejects
+new operations and invalidates active mount leases; a later re-share requires
+Retry/remount. An already admitted single operation may finish, while
+multi-stage writes recheck authorization before flush and promotion.
 
 A strict SFTP mount is therefore admitted only when its saved connection has
 Agent enabled and deployment plus the protocol-v9 `--serve-root` handshake
@@ -149,9 +180,9 @@ a successful handshake, operations are not blindly replayed across transports.
   Explorer keeps one SFTP-v3 subsystem and standard `SSH_FXP_RENAME` treats an
   existing destination as an error; it does not open a second extension
   subsystem or claim stat+rename/shell-command sequences are atomic.
-- A concrete Share export asks its remotely resolved backend for the same
-  capabilities. Synthetic containers `/` and `/Verbindungen` are not writable
-  namespace targets and stay RO.
+- A concrete Share export (`/Label` or `/Verbindungen/<connection>`) asks its
+  remotely resolved backend for the same capabilities. The synthetic aggregate
+  `/` is not a writable namespace target and stays RO.
 - Google Drive can safely stage a create/update but cannot promise one atomic
   pathname replacement for editor temp-rename; WebDAV `MOVE Overwrite:T` and
   the current FTP/FTPS surface likewise do not supply the full contract.
@@ -206,6 +237,12 @@ a pre-mount failure only when the record is provably clean. The daemon launches
 the current executable with the exact private `--mount-host <id>` argument, so
 GUI and CLI do not depend on a separately named host binary.
 
+Drive-manager errors retain the terminal recovery/conflict state and append a
+bounded mount-host process cause. They distinguish DLL API 231 from kernel
+protocol 0x190/400 mismatches, name strict-root or staged-RW rejection, turn an
+invalidated Peer lease into a Retry/remount instruction, and preserve any local
+recovery data. A raw host exit code is supplemental context, not the diagnosis.
+
 ## Filesystem surface limits
 
 The drive targets ordinary Explorer and editor operations, including open,
@@ -222,7 +259,8 @@ and delete-on-close. It does not emulate all NTFS metadata:
 - uncached files need a live backend, and a first open downloads the full file.
 
 The remaining acceptance gap is a real Windows machine running the official
-Dokany 2.3.1 runtime, Explorer and Obsidian. That smoke must cover repeated
+Dokany 2.3.1.1000 runtime with DLL API 231 and driver protocol 0x190/400,
+Explorer and Obsidian. That smoke must cover repeated
 flushes, temp-file replacement, external conflict, retry/reconnect and eject; it
 is tracked as live work in `docs/TODO.md` and cannot be inferred from a GNU
 cross-build.

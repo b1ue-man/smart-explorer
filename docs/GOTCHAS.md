@@ -83,11 +83,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `cldflt.sys` state to this path. Cryptomator is the useful UX analogy; Smart
   Explorer owns the backend proxy and whole-file cache rather than a vault.
 - **Dokany is exact-versioned but the reviewed MSI is installer input.** The
-  supported runtime is the official Dokany 2.3.1 release, whose header defines
-  `DOKAN_VERSION 231`.
+  supported runtime is the official Dokany 2.3.1.1000 release. Its library
+  header defines `DOKAN_VERSION 231`, while its kernel interface header defines
+  the distinct `DOKAN_DRIVER_VERSION 0x0000190` (decimal 400).
   Delay-load only `%WINDIR%\System32\dokan2.dll` with
-  `LOAD_LIBRARY_SEARCH_SYSTEM32`, resolve the bounded symbol table, and require
-  both `DokanVersion()` and `DokanDriverVersion()` to return exactly 231. Never
+  `LOAD_LIBRARY_SEARCH_SYSTEM32`, resolve the bounded symbol table, require
+  `DokanVersion()` to return DLL API 231, and require `DokanDriverVersion()` to
+  return kernel protocol 0x190/400. Never
   search the application directory, current directory, `PATH`, registry, or a
   caller-controlled path, and never silently accept a merely ABI-compatible
   older/newer driver. There is no link-time Dokany import and no DLL or driver
@@ -98,16 +100,18 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   for the system-wide MSI. Plain `/S` must skip it; only
   `/S /INSTALLDOKANY=1` opts a silent setup in. Never uninstall the shared
   Dokany runtime with Smart Explorer. The pin in `native/dokany-runtime.nsh` is
-  version `2.3.1.1000`, API 231,
+  version `2.3.1.1000`, DLL API 231, driver protocol 0x190/400,
   `https://github.com/dokan-dev/dokany/releases/download/v2.3.1.1000/Dokan_x64.msi`,
   9,269,248 bytes, SHA-256
   `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
   The official project states that signed release drivers are provided; use of
   that official runtime needs neither Developer Mode nor `TESTSIGNING`.
-  Primary sources checked 2026-07-21:
-  [2.3.1 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000),
+  Primary sources checked 2026-07-22:
+  [2.3.1.1000 release](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000),
   [tagged README](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/README.md),
   [tagged API header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/dokan.h),
+  [tagged driver header](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h),
+  [version-query implementation](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c),
   [Dokan API](https://dokan-dev.github.io/dokany-doc/html/group___dokan.html).
 - **Treat the Dokany installer as hostile until every boundary passes.** Rust
   permits HTTPS, at most two redirects, only the exact source URL or GitHub's
@@ -120,7 +124,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   cannot swap a pathname component before the elevated reopen. Then launch
   System32 `msiexec.exe` through UAC `runas` with `/passive /norestart
   ADDLOCAL=DokanDriverFeature INSTALLDEVFILES=0`. Exit 0 still requires the exact
-  API-231 DLL/driver postcheck. Release fetchers consume the same manifest, NSIS
+  DLL-API-231 and driver-protocol-0x190/400 postcheck. The automatic GUI/CLI path
+  runs only for an absent runtime or unavailable driver; it must not replace or
+  downgrade a genuinely incompatible installed shared runtime. Release fetchers
+  consume the same manifest, NSIS
   embeds the verified MSI, and the release wrapper must extract and compare it.
   Keep `third-party/dokany/` notices and GPL/LGPL/MIT texts installed, but do not
   publish the MSI as a separate feed or Release asset.
@@ -134,16 +141,31 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   global token, account, endpoint, credential material, or unrestricted
   backend root. Keep `env_clear`, loopback validation, bounded frames and
   fail-closed EOF behavior.
+- **Peer roots require a live daemon probe and a connection-bound lease.** Offer
+  concrete Share roots as `/Label` and `/Verbindungen/<connection>`; the
+  aggregate `/` is synthetic and read-only. GUI discovery must ask the daemon's
+  active remote `PeerBackend`, not infer guarantees from local labels. Mount
+  admission obtains a lease bound to the authenticated QUIC connection and the
+  exact root. Direct/relay route changes inside that connection preserve it;
+  replacing the connection invalidates it and requires Retry/remount. Never let
+  a new connection inherit an old root capability. Stopping a share or
+  revoking/changing its authorization is a synchronous admission barrier: new
+  operations fail closed, active leases become invalid and a later re-share
+  requires Retry/remount. One already admitted operation may finish;
+  multi-stage writes must recheck before flush and promotion.
 - **Root authority and read/write mode are separate gates.** Strict mode is the
   default even for read-only mounts. The deployed Linux Agent must launch with
   the exact root via `--serve-root`, bind every root component with
   `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, and enter Landlock ABI
   3+ before worker threads start; ABI 2 cannot constrain `truncate`/`O_TRUNC`.
   Google Drive's parent-ID hierarchy is also technically confined. Plain SFTP,
-  Local/UNC, Peer/Share, WebDAV and FTP need explicit trusted-root admission.
-  Trusted mode keeps serialized validation but cannot close an external
-  check-to-operation symlink/junction race. A fallback must be reevaluated for
-  this capability as well as write semantics. Sources checked 2026-07-21:
+  Local/UNC, WebDAV and FTP need explicit trusted-root admission. Peer/Share
+  propagates the concrete remote backend/root result: an Agent-confined export
+  can remain `Enforced`, while Local/UNC/plain SFTP remains `Unverified` through
+  Peer because its check-to-operation race is unchanged. Trusted mode keeps
+  serialized validation but cannot close that external symlink/junction race.
+  A fallback must be reevaluated for this capability as well as write semantics.
+  Sources checked 2026-07-21:
   [Landlock API](https://docs.kernel.org/userspace-api/landlock.html),
   [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
 - **Strict SFTP mounts never inherit the browsing fallback.** A saved SFTP
@@ -173,11 +195,11 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Plain SFTP deliberately reports no complete RW staged capability. Its single
   SFTP-v3 subsystem uses standard `SSH_FXP_RENAME`, which is no-replace; do not
   open a second extension subsystem or upgrade a stat+rename race or shell
-  command into an atomic guarantee. Synthetic Share containers `/` and
-  `/Verbindungen` are read-only; a concrete export delegates capability
-  discovery to its exact
-  backend/root. A fallback can therefore change the safe answer and must make
-  RW fail conservatively; RO remains possible only if the independent root
+  command into an atomic guarantee. The aggregate Share root `/` is read-only;
+  concrete `/Label` and `/Verbindungen/<connection>` exports delegate capability
+  discovery to their exact backend/root. A fallback can therefore change the
+  safe answer and must make RW fail conservatively rather than weaken it
+  silently; RO remains possible only if the independent root
   gate above also passes or trusted-root mode was explicit. Source checked
   2026-07-21:
   [SFTP-v3 rename](https://datatracker.ietf.org/doc/html/draft-spaghetti-sshm-filexfer#section-6.5),
@@ -216,6 +238,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   merely because the callback returned. Preserve journal rotation/torn-tail
   validation, the exclusive reparse-safe cache lease, and path-wide
   delete-on-last-handle semantics.
+- **A host exit code is not an actionable diagnosis.** Preserve the mount
+  host's terminal recovery/conflict status and append only bounded stderr/process
+  context. Surface DLL API and driver-protocol mismatches independently, name
+  strict-root or staged-RW admission failures, map an invalid Peer lease to
+  Retry/remount, and say when recovery data must remain. Only a provably clean
+  drive-manager entry may be offered for removal.
 - **Portable `open-temp` recovery must survive Electron launchers.** Atomically
   write a marker only after a successful download. Delete only complete empty
   legacy manifests with no payload; malformed/truncated state fails closed, and
