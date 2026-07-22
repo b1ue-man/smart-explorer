@@ -71,6 +71,12 @@ mod mount_process;
 #[cfg(windows)]
 #[path = "os/windows/mount_process.rs"]
 mod mount_process;
+#[cfg(any(windows, test))]
+#[path = "os/windows/mount_process_environment.rs"]
+mod mount_process_environment;
+#[cfg(test)]
+#[path = "os/shared/mount_process_environment_task_tests.rs"]
+mod mount_process_environment_task_tests;
 #[path = "os/shared/mount_proxy.rs"]
 mod mount_proxy;
 #[path = "os/shared/mount_registry.rs"]

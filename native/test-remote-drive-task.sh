@@ -82,6 +82,7 @@ connector="$repo_root/native/src/connect/os/shared/connector.rs"
 mount_manager="$repo_root/native/src/daemon/os/shared/mount_manager.rs"
 mount_source="$repo_root/native/src/daemon/os/shared/mount_source.rs"
 mount_process="$repo_root/native/src/daemon/os/windows/mount_process.rs"
+mount_process_environment="$repo_root/native/src/daemon/os/windows/mount_process_environment.rs"
 mount_host_process="$repo_root/native/src/daemon/os/shared/mount_host_process.rs"
 rooted_backend="$repo_root/native/src/daemon/os/shared/rooted_backend.rs"
 remote_open="$repo_root/native/src/app/os/shared/remote_open.rs"
@@ -122,7 +123,17 @@ assert_before "$mount_manager" 'start_cache::prepare(self, &key, &config.id)' 's
 
 assert_contains "$mount_process" 'std::env::current_exe()?'
 assert_absent "$mount_process" 'with_file_name("se.exe")'
+assert_contains "$mount_process" 'GetSystemWindowsDirectoryW'
+assert_contains "$mount_process" 'MAX_WINDOWS_DIRECTORY_UNITS'
 assert_contains "$mount_process" 'MountHostProcess::capture_piped_stderr(command.spawn()?)'
+assert_contains "$mount_process_environment" '.env_clear()'
+assert_contains "$mount_process_environment" '.env("SystemRoot", system_windows_directory)'
+assert_contains "$mount_process_environment" '.env("WINDIR", system_windows_directory)'
+assert_before "$mount_process_environment" '.env_clear()' '.env("SystemRoot", system_windows_directory)'
+assert_before "$mount_process_environment" '.env("WINDIR", system_windows_directory)' '.env(MOUNT_TOKEN_ENV, launch_token)'
+assert_absent "$mount_process_environment" 'std::env::var_os('
+assert_absent "$mount_process_environment" '.env("PATH"'
+assert_absent "$mount_process_environment" '.env("TEMP"'
 assert_contains "$mount_host_process" 'MOUNT_HOST_STDERR_LIMIT'
 assert_contains "$repo_root/native/src/main.rs" 'run_host_if_requested(&arguments)'
 assert_contains "$repo_root/native/src/bin/se.rs" 'run_host_if_requested(&arguments)'
