@@ -55,11 +55,51 @@ pub use types::{
 };
 pub(crate) use windows_case::{validate_windows_case_component, windows_ordinal_key};
 
+pub(crate) const DOKANY_LIBRARY_API_VERSION: u32 = 231;
+pub(crate) const DOKANY_DRIVER_PROTOCOL_VERSION: u32 = 0x0000_0190;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DokanyVersionCompatibilityError {
+    LibraryApiMismatch { expected: u32, found: u32 },
+    DriverUnavailable,
+    DriverProtocolMismatch { expected: u32, found: u32 },
+}
+
+/// Validates the two independent Dokany version domains without loading any
+/// Windows components, so compatibility policy can be tested cross-platform.
+pub(crate) const fn validate_dokany_version_domains(
+    library_api: u32,
+    driver_protocol: u32,
+) -> Result<(), DokanyVersionCompatibilityError> {
+    if library_api != DOKANY_LIBRARY_API_VERSION {
+        return Err(DokanyVersionCompatibilityError::LibraryApiMismatch {
+            expected: DOKANY_LIBRARY_API_VERSION,
+            found: library_api,
+        });
+    }
+    if driver_protocol == 0 {
+        return Err(DokanyVersionCompatibilityError::DriverUnavailable);
+    }
+    if driver_protocol != DOKANY_DRIVER_PROTOCOL_VERSION {
+        return Err(DokanyVersionCompatibilityError::DriverProtocolMismatch {
+            expected: DOKANY_DRIVER_PROTOCOL_VERSION,
+            found: driver_protocol,
+        });
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct DriveRuntimeInfo {
+    /// Legacy machine-output field retained for patch-release compatibility.
     pub required_api: u32,
+    pub required_library_api: u32,
     pub library_api: u32,
+    /// Legacy name retained for compatibility; this value is the driver
+    /// protocol revision returned by `DokanDriverVersion()`.
     pub driver_api: u32,
+    pub required_driver_protocol: u32,
+    pub driver_protocol: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -105,10 +145,12 @@ impl DriveRuntimeInstallOutcome {
 
     pub fn message(&self) -> String {
         match self {
-            Self::AlreadyReady => "Dokany 2.3.1 (API 231) ist bereits einsatzbereit.".into(),
-            Self::Installed { .. } => {
-                "Dokany 2.3.1 wurde installiert und ist einsatzbereit.".into()
-            }
+            Self::AlreadyReady => format!(
+                "Dokany 2.3.1 (DLL-API {DOKANY_LIBRARY_API_VERSION}, Treiberprotokoll {DOKANY_DRIVER_PROTOCOL_VERSION}) ist bereits einsatzbereit."
+            ),
+            Self::Installed { .. } => format!(
+                "Dokany 2.3.1 (DLL-API {DOKANY_LIBRARY_API_VERSION}, Treiberprotokoll {DOKANY_DRIVER_PROTOCOL_VERSION}) wurde installiert und ist einsatzbereit."
+            ),
             Self::RebootRequired { .. } => {
                 "Dokany wurde installiert. Windows muss neu gestartet werden.".into()
             }
@@ -152,9 +194,12 @@ pub fn drive_runtime_info() -> Result<DriveRuntimeInfo, String> {
     {
         let info = os::windows::preflight_runtime().map_err(|error| error.to_string())?;
         return Ok(DriveRuntimeInfo {
-            required_api: os::windows::DOKANY_API_VERSION,
+            required_api: info.required_library_api,
+            required_library_api: info.required_library_api,
             library_api: info.library_api,
-            driver_api: info.driver_api,
+            driver_api: info.driver_protocol,
+            required_driver_protocol: info.required_driver_protocol,
+            driver_protocol: info.driver_protocol,
         });
     }
     #[cfg(not(windows))]

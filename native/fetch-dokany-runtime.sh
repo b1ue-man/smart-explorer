@@ -43,6 +43,7 @@ manifest_value() {
 
 version="$(manifest_value DOKANY_VERSION)"
 api_version="$(manifest_value DOKANY_API_VERSION)"
+driver_protocol_version="$(manifest_value DOKANY_DRIVER_PROTOCOL_VERSION)"
 filename="$(manifest_value DOKANY_MSI_FILENAME)"
 url="$(manifest_value DOKANY_MSI_URL)"
 expected_size="$(manifest_value DOKANY_MSI_SIZE)"
@@ -54,6 +55,10 @@ expected_sha256="$(manifest_value DOKANY_MSI_SHA256)"
 }
 [[ "$api_version" =~ ^[1-9][0-9]*$ ]] || {
   echo "Invalid Dokany API version in manifest: $api_version" >&2
+  exit 1
+}
+[[ "$driver_protocol_version" =~ ^[1-9][0-9]*$ ]] || {
+  echo "Invalid Dokany driver protocol version in manifest: $driver_protocol_version" >&2
   exit 1
 }
 [[ "$filename" =~ ^[A-Za-z0-9._-]+\.msi$ ]] || {

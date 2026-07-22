@@ -118,8 +118,14 @@ fn runtime(args: OutputArgs) -> Result<i32, String> {
         );
     } else {
         println!(
-            "dokany\tready\trequired={}\tlibrary={}\tdriver={}",
-            info.required_api, info.library_api, info.driver_api
+            "dokany\tready\trequired={}\tlibrary={}\tdriver={}\trequired_library_api={}\tlibrary_api={}\trequired_driver_protocol={}\tdriver_protocol={}",
+            info.required_api,
+            info.library_api,
+            info.driver_api,
+            info.required_library_api,
+            info.library_api,
+            info.required_driver_protocol,
+            info.driver_protocol
         );
     }
     Ok(0)

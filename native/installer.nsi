@@ -185,9 +185,9 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 SectionEnd
 
-Section "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY
+Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY
   ; A runtime may have been installed while this installer was open. Recheck
-  ; with Smart Explorer's exact library/driver API probe before elevating.
+  ; with Smart Explorer's exact library-API/driver-protocol probe before elevating.
   Call CheckDokanyRuntime
   StrCmp $DokanyRuntimeReady "1" dokany_done
 
@@ -240,7 +240,7 @@ Section "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} für Remote-Laufwe
     Call CheckDokanyRuntime
     StrCmp $DokanyRuntimeReady "1" dokany_done
     IfSilent dokany_abort 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany meldete eine erfolgreiche Installation, aber Smart Explorer konnte API ${DOKANY_API_VERSION} anschließend nicht bestätigen. Remote-Laufwerke bleiben deaktiviert; bitte Windows neu starten oder Dokany erneut installieren."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany meldete eine erfolgreiche Installation, aber Smart Explorer konnte DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} anschließend nicht bestätigen. Remote-Laufwerke bleiben deaktiviert; bitte Windows neu starten oder Dokany erneut installieren."
 
   dokany_done:
 SectionEnd
@@ -275,7 +275,7 @@ Function .onInit
 
   dokany_already_ready:
     !insertmacro UnselectSection ${SEC_DOKANY}
-    SectionSetText ${SEC_DOKANY} "Dokany ${DOKANY_VERSION} / API ${DOKANY_API_VERSION} (bereits passend installiert)"
+    SectionSetText ${SEC_DOKANY} "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} (bereits passend installiert)"
   dokany_init_done:
 FunctionEnd
 

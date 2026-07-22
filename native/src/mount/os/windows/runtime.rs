@@ -15,10 +15,12 @@ use windows_sys::Win32::{
     System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32},
 };
 
+use crate::mount::{validate_dokany_version_domains, DokanyVersionCompatibilityError};
+
 use super::dokany_abi::{
-    DokanFileInfo, DokanHandle, DokanOperations, DokanOptions, NtStatus, DOKANY_API_VERSION,
-    DOKANY_DLL_NAME, DRIVER_INSTALL_ERROR, DRIVE_LETTER_ERROR, ERROR, MOUNT_ERROR,
-    MOUNT_POINT_ERROR, START_ERROR, SUCCESS, VERSION_ERROR,
+    DokanFileInfo, DokanHandle, DokanOperations, DokanOptions, NtStatus, DOKANY_DLL_NAME,
+    DOKANY_DRIVER_PROTOCOL_VERSION, DOKANY_LIBRARY_API_VERSION, DRIVER_INSTALL_ERROR,
+    DRIVE_LETTER_ERROR, ERROR, MOUNT_ERROR, MOUNT_POINT_ERROR, START_ERROR, SUCCESS, VERSION_ERROR,
 };
 
 const DOKANY_DLL_WIDE: &[u16] = &[
@@ -49,8 +51,10 @@ type NtStatusFromWin32Fn = unsafe extern "system" fn(u32) -> NtStatus;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DokanyRuntimeInfo {
+    pub(crate) required_library_api: u32,
     pub(crate) library_api: u32,
-    pub(crate) driver_api: u32,
+    pub(crate) required_driver_protocol: u32,
+    pub(crate) driver_protocol: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,9 +63,9 @@ pub(crate) enum DokanyPreflightError {
     RuntimeArchitectureMismatch,
     RuntimeLoadFailed { win32_error: u32 },
     RuntimeSymbolMissing { symbol: &'static str },
-    RuntimeApiMismatch { expected: u32, found: u32 },
+    LibraryApiMismatch { expected: u32, found: u32 },
     DriverUnavailable,
-    DriverApiMismatch { expected: u32, found: u32 },
+    DriverProtocolMismatch { expected: u32, found: u32 },
 }
 
 impl fmt::Display for DokanyPreflightError {
@@ -83,17 +87,17 @@ impl fmt::Display for DokanyPreflightError {
                 formatter,
                 "the installed {DOKANY_DLL_NAME} is missing required API symbol {symbol}"
             ),
-            Self::RuntimeApiMismatch { expected, found } => write!(
+            Self::LibraryApiMismatch { expected, found } => write!(
                 formatter,
-                "Dokany user-mode API mismatch: required {expected}, found {found}"
+                "Dokany library API mismatch: required {expected}, found {found}"
             ),
             Self::DriverUnavailable => write!(
                 formatter,
                 "the Dokany driver is not installed, not running, or not reachable"
             ),
-            Self::DriverApiMismatch { expected, found } => write!(
+            Self::DriverProtocolMismatch { expected, found } => write!(
                 formatter,
-                "Dokany driver API mismatch: required {expected}, found {found}"
+                "Dokany driver protocol mismatch: required {expected}, found {found}"
             ),
         }
     }
@@ -149,29 +153,25 @@ pub(crate) struct DokanyRuntime {
 }
 
 impl DokanyRuntime {
-    /// Loads only the System32 copy, validates exact API 231 on both sides, and
-    /// initializes Dokany. No DLL access occurs before this explicit call.
+    /// Loads only the System32 copy, validates library API 231 and driver
+    /// protocol `0x190`, then initializes Dokany. No DLL access occurs before
+    /// this explicit call.
     pub(crate) fn preflight() -> Result<Self, DokanyPreflightError> {
         let module = LoadedModule::system32()?;
         let api = Api::resolve(&module)?;
         let library_api = unsafe { (api.version)() };
-        if library_api != DOKANY_API_VERSION {
-            return Err(DokanyPreflightError::RuntimeApiMismatch {
-                expected: DOKANY_API_VERSION,
-                found: library_api,
-            });
-        }
-
-        let driver_api = unsafe { (api.driver_version)() };
-        if driver_api == 0 {
-            return Err(DokanyPreflightError::DriverUnavailable);
-        }
-        if driver_api != DOKANY_API_VERSION {
-            return Err(DokanyPreflightError::DriverApiMismatch {
-                expected: DOKANY_API_VERSION,
-                found: driver_api,
-            });
-        }
+        let driver_protocol = unsafe { (api.driver_protocol_version)() };
+        validate_dokany_version_domains(library_api, driver_protocol).map_err(|error| match error {
+            DokanyVersionCompatibilityError::LibraryApiMismatch { expected, found } => {
+                DokanyPreflightError::LibraryApiMismatch { expected, found }
+            }
+            DokanyVersionCompatibilityError::DriverUnavailable => {
+                DokanyPreflightError::DriverUnavailable
+            }
+            DokanyVersionCompatibilityError::DriverProtocolMismatch { expected, found } => {
+                DokanyPreflightError::DriverProtocolMismatch { expected, found }
+            }
+        })?;
 
         unsafe { (api.init)() };
         Ok(Self {
@@ -179,8 +179,10 @@ impl DokanyRuntime {
                 _module: module,
                 api,
                 info: DokanyRuntimeInfo {
+                    required_library_api: DOKANY_LIBRARY_API_VERSION,
                     library_api,
-                    driver_api,
+                    required_driver_protocol: DOKANY_DRIVER_PROTOCOL_VERSION,
+                    driver_protocol,
                 },
             }),
         })
@@ -321,7 +323,7 @@ struct Api {
     init: InitFn,
     shutdown: ShutdownFn,
     version: VersionFn,
-    driver_version: VersionFn,
+    driver_protocol_version: VersionFn,
     create_file_system: CreateFileSystemFn,
     is_file_system_running: IsFileSystemRunningFn,
     wait_for_file_system_closed: WaitForFileSystemClosedFn,
@@ -344,7 +346,7 @@ impl Api {
             init: symbol!("DokanInit", InitFn),
             shutdown: symbol!("DokanShutdown", ShutdownFn),
             version: symbol!("DokanVersion", VersionFn),
-            driver_version: symbol!("DokanDriverVersion", VersionFn),
+            driver_protocol_version: symbol!("DokanDriverVersion", VersionFn),
             create_file_system: symbol!("DokanCreateFileSystem", CreateFileSystemFn),
             is_file_system_running: symbol!("DokanIsFileSystemRunning", IsFileSystemRunningFn),
             wait_for_file_system_closed: symbol!(
