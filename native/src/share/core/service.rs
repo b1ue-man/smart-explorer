@@ -30,6 +30,11 @@ impl ShareService {
     pub fn cmd(&self, c: ShareCmd) -> Result<ShareCmdResult, String> {
         const ACK_TIMEOUT: Duration = Duration::from_secs(5);
         let is_stop = matches!(&c, ShareCmd::Stop);
+        let stop_barrier = if is_stop {
+            self.iroh.stop_sharing().map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        };
         let (acknowledge, acknowledged) = bounded(1);
         let expires_at = Instant::now() + ACK_TIMEOUT;
         let send_result = self.cmds.send(PendingShareCmd {
@@ -37,7 +42,7 @@ impl ShareService {
             acknowledgement: acknowledge,
             expires_at,
         });
-        let result = match send_result {
+        let command_result = match send_result {
             Ok(()) => match acknowledged.recv_timeout(ACK_TIMEOUT) {
                 Ok(result) => result,
                 Err(error) => Err(format!("Share-Kommando nicht bestaetigt: {error}")),
@@ -45,6 +50,13 @@ impl ShareService {
             Err(error) => Err(format!(
                 "Share-Kommando konnte nicht zugestellt werden: {error}"
             )),
+        };
+        let result = match (stop_barrier, command_result) {
+            (Ok(()), result) => result,
+            (Err(barrier), Ok(_)) => Err(format!("Share-Stopbarriere: {barrier}")),
+            (Err(barrier), Err(command)) => {
+                Err(format!("Share-Stopbarriere: {barrier}; {command}"))
+            }
         };
         if is_stop {
             self.stopped.store(true, Ordering::Relaxed);
@@ -99,6 +111,19 @@ impl ShareService {
         be.probe_root().map_err(|e| e.to_string())?;
         let status = be.transport_status();
         Ok((label, Arc::new(be), status))
+    }
+
+    pub(crate) fn probe_mount_capabilities_for_target_until(
+        &self,
+        target: &PeerOpenTarget,
+        root: &str,
+        deadline: Instant,
+    ) -> Result<crate::vfs::MountPathCapabilities, String> {
+        let endpoint = self.endpoint_for_target(target)?;
+        let backend = PeerBackend::new(endpoint, self.identity.clone(), self.iroh.clone());
+        backend
+            .probe_mount_path_capabilities_until(root, deadline)
+            .map_err(|error| error.to_string())
     }
 
     pub fn exec_for_target(
@@ -322,9 +347,7 @@ impl Clone for ShareService {
 impl Drop for ShareService {
     fn drop(&mut self) {
         if self.owner {
-            self.iroh
-                .exec_registry()
-                .cancel_all(super::exec_registry::ExecCancelReason::WorkerStopping);
+            let _ = self.iroh.stop_sharing();
             self.stopped.store(true, Ordering::Relaxed);
         }
     }

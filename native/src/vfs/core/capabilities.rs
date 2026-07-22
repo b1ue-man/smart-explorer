@@ -8,6 +8,16 @@ pub struct StagedWriteCapabilities {
     pub namespace_replace: bool,
 }
 
+/// One coherent capability snapshot for exposing an exact backend path as a
+/// mounted filesystem. Backends whose active implementation can change while
+/// resolving a path (notably a Share peer) override `Backend`'s combined probe
+/// so both guarantees describe the same resolved target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MountPathCapabilities {
+    pub staged_write: StagedWriteCapabilities,
+    pub root_confinement: RootConfinement,
+}
+
 impl StagedWriteCapabilities {
     pub const fn complete() -> Self {
         Self {

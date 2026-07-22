@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::{RecvStream, SendStream};
@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 use super::backend::{recv_resp, reply, send_ctrl, PeerBackend};
 use super::core::eio;
-use super::fs::{self, ShareExportConfig};
+use super::fs_access::FsAccess;
 use super::io_deadline;
 use super::walk_assembly::{
     invalid, validate_name, TreeAssembler, WalkTotals, MAX_WALK_DEPTH, MAX_WALK_NAME_BYTES,
@@ -33,9 +33,10 @@ pub(super) fn walk_peer(
     let (send, recv) = backend
         .node
         .open_stream(&backend.endpoint, &backend.identity)?;
+    let lease = backend.mount_lease_token()?;
     backend
         .node
-        .block_on(receive_walk(send, recv, root, on_progress))
+        .block_on(receive_walk(send, recv, root, lease, on_progress))
         .map(Some)
 }
 
@@ -43,6 +44,7 @@ async fn receive_walk(
     mut send: SendStream,
     mut recv: RecvStream,
     root: &str,
+    lease: Option<String>,
     on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
 ) -> io::Result<crate::agent_proto::WireNode> {
     io_deadline::run(
@@ -53,6 +55,7 @@ async fn receive_walk(
                 req: FsRequest::WalkTree {
                     path: root.to_string(),
                 },
+                lease,
             },
         ),
     )
@@ -137,17 +140,16 @@ async fn recv_response_checked(
     }
 }
 
-/// Serve a walk only through the virtual share filesystem. `fs::stat` and
-/// `fs::list_dir` resolve every directory against the authenticated export
-/// roots, so no client-provided native path reaches a backend directly.
+/// Serve a walk through the stream's selected filesystem access. A mount lease
+/// retains one backend/root; stateless browsing resolves current exports.
 pub(super) async fn serve_walk(
     mut send: SendStream,
     root: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
 ) -> io::Result<()> {
     let (responses, mut response_rx) = mpsc::channel(WALK_RESPONSE_BUFFER);
     let worker = super::blocking::spawn("Share tree walk", move || {
-        walk_worker(root, exports, responses)
+        walk_worker(root, access, responses)
     })
     .await?;
     while let Some(response) = response_rx.recv().await {
@@ -163,10 +165,10 @@ pub(super) async fn serve_walk(
 
 fn walk_worker(
     root: String,
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
     responses: mpsc::Sender<io::Result<FsResponse>>,
 ) -> io::Result<()> {
-    let mut walker = match ServerWalker::new(root, exports) {
+    let mut walker = match ServerWalker::new(root, access) {
         Ok(walker) => walker,
         Err(error) => {
             let _ = responses.blocking_send(Err(error));
@@ -279,7 +281,7 @@ pub(super) enum WalkEvent {
 }
 
 pub(super) struct ServerWalker {
-    exports: Arc<Mutex<ShareExportConfig>>,
+    access: FsAccess,
     work: Vec<WalkWork>,
     next_id: u64,
     reserved: usize,
@@ -287,11 +289,11 @@ pub(super) struct ServerWalker {
 }
 
 impl ServerWalker {
-    pub(super) fn new(root: String, exports: Arc<Mutex<ShareExportConfig>>) -> io::Result<Self> {
+    pub(super) fn new(root: String, access: impl Into<FsAccess>) -> io::Result<Self> {
         let (parent_path, name) = split_root(&root);
         validate_name(&name, true)?;
         Ok(Self {
-            exports,
+            access: access.into(),
             work: vec![WalkWork::Enter(DirSeed {
                 id: 0,
                 parent: None,
@@ -313,7 +315,7 @@ impl ServerWalker {
             match work {
                 WalkWork::Enter(dir) => {
                     let path = dir.path();
-                    let meta = fs::stat(&path, &self.exports)?;
+                    let meta = self.access.stat(&path)?;
                     if meta.is_symlink {
                         if dir.parent.is_none() {
                             return Err(eio("share walk root is a symlink/reparse point"));
@@ -323,7 +325,7 @@ impl ServerWalker {
                     if !meta.is_dir {
                         return Err(eio("share walk directory changed during scan"));
                     }
-                    let entries = fs::list_dir(&path, &self.exports)?;
+                    let entries = self.access.list_dir(&path)?;
                     self.work.push(WalkWork::Entries {
                         dir,
                         path: path.into(),

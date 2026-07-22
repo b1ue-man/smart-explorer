@@ -1,7 +1,9 @@
 use super::{
-    BackendRoot, DriveRuntimeInstallOutcome, DriveSelection, FlushOutcome, MountConfig,
-    MountEngine, MountId, MountMode, MountRecovery, MountRuntimeConfig, MountSnapshot, MountSource,
-    MountStatus, OpenDisposition, OpenFileOptions, RenameOutcome,
+    validate_dokany_version_domains, BackendRoot, DokanyVersionCompatibilityError,
+    DriveRuntimeInstallOutcome, DriveSelection, FlushOutcome, MountConfig, MountEngine, MountId,
+    MountMode, MountRecovery, MountRuntimeConfig, MountSnapshot, MountSource, MountStatus,
+    OpenDisposition, OpenFileOptions, RenameOutcome, DOKANY_DRIVER_PROTOCOL_VERSION,
+    DOKANY_LIBRARY_API_VERSION,
 };
 use crate::vfs::{Backend, BackendHandle, LocalBackend, Scheme, VfsMeta};
 use std::io;
@@ -342,4 +344,29 @@ fn remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes() {
         );
         assert_eq!(outcome.is_failure(), failure);
     }
+}
+
+#[test]
+fn remote_drive_task_dokany_library_and_driver_versions_use_separate_domains() {
+    assert_eq!(DOKANY_LIBRARY_API_VERSION, 231);
+    assert_eq!(DOKANY_DRIVER_PROTOCOL_VERSION, 400);
+    assert_eq!(validate_dokany_version_domains(231, 400), Ok(()));
+    assert_eq!(
+        validate_dokany_version_domains(400, 400),
+        Err(DokanyVersionCompatibilityError::LibraryApiMismatch {
+            expected: 231,
+            found: 400,
+        })
+    );
+    assert_eq!(
+        validate_dokany_version_domains(231, 0),
+        Err(DokanyVersionCompatibilityError::DriverUnavailable)
+    );
+    assert_eq!(
+        validate_dokany_version_domains(231, 231),
+        Err(DokanyVersionCompatibilityError::DriverProtocolMismatch {
+            expected: 400,
+            found: 231,
+        })
+    );
 }

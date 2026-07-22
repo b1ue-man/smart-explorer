@@ -76,10 +76,14 @@ mod menus_sync;
 mod menus_sync_jobs;
 #[path = "core/merge_ui.rs"]
 mod merge_ui;
+#[path = "core/mount_peer_roots.rs"]
+mod mount_peer_roots;
 #[path = "core/mount_runtime_ui.rs"]
 mod mount_runtime_ui;
 #[path = "core/mount_ui.rs"]
 mod mount_ui;
+#[path = "core/mount_ui_draft.rs"]
+mod mount_ui_draft;
 #[path = "core/mount_ui_helpers.rs"]
 mod mount_ui_helpers;
 #[path = "core/omni_accel.rs"]

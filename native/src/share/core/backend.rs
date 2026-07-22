@@ -12,6 +12,8 @@ use super::session::relation_kind_id;
 use super::types::{ExecRequest, ExecResult, PeerEndpoint, ShareEvent, ShareStatus};
 use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
 
+const MOUNT_CAPABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(40);
+
 pub(super) use super::framing::{recv_resp, recv_tagged, reply, send_ctrl};
 pub(crate) use super::node::ShareIrohNode;
 
@@ -19,6 +21,7 @@ pub struct PeerBackend {
     pub(super) endpoint: PeerEndpoint,
     pub(super) identity: ShareIdentity,
     pub(super) node: Arc<ShareIrohNode>,
+    mount_lease: super::mount_lease_client::PeerMountLeaseClient,
 }
 
 impl PeerBackend {
@@ -31,6 +34,7 @@ impl PeerBackend {
             endpoint,
             identity,
             node,
+            mount_lease: Default::default(),
         }
     }
 
@@ -49,16 +53,46 @@ impl PeerBackend {
             .unwrap_or(ShareStatus::Connected)
     }
 
+    pub(super) fn mount_lease_token(&self) -> io::Result<Option<String>> {
+        self.mount_lease.current()
+    }
+
     fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
-        let operation = fs_request_label(&req);
+        let lease = self.mount_lease.current()?;
+        self.request_with_lease_until(req, lease, Instant::now() + io_deadline::PEER_OP_TIMEOUT)
+    }
+
+    fn request_unleased_until(&self, req: FsRequest, deadline: Instant) -> io::Result<FsResponse> {
+        self.request_with_lease_until(req, None, deadline)
+    }
+
+    fn request_with_lease_until(
+        &self,
+        req: FsRequest,
+        lease: Option<String>,
+        deadline: Instant,
+    ) -> io::Result<FsResponse> {
+        let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
-        let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
-        let result = self
-            .node
-            .block_on(io_deadline::run("peer filesystem request", async {
-                send_ctrl(&mut send, &Ctrl::Fs { req }).await?;
+        let (mut send, mut recv) =
+            self.node
+                .open_stream_until(&self.endpoint, &self.identity, deadline)?;
+        let request_timeout = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "peer filesystem request exceeded its absolute deadline",
+                )
+            })?;
+        let result = self.node.block_on(io_deadline::run_for(
+            "peer filesystem request",
+            request_timeout,
+            async {
+                send_ctrl(&mut send, &Ctrl::Fs { req, lease }).await?;
                 recv_resp(&mut recv).await
-            }));
+            },
+        ));
         if result.is_err() {
             io_deadline::abort(&mut send, &mut recv);
         }
@@ -66,7 +100,7 @@ impl PeerBackend {
         let _ = self.node.ev.send(ShareEvent::Status(format!(
             "Share-Op {operation}: {} ms, {}",
             started.elapsed().as_millis(),
-            fs_response_summary(&response)
+            super::peer_fs_logging::response_summary(&response)
         )));
         Ok(response)
     }
@@ -76,9 +110,17 @@ impl PeerBackend {
         request: FsRequest,
         operation: &'static str,
     ) -> VfsResult<Box<dyn Write + Send>> {
+        let lease = self.mount_lease.current()?;
         let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
         let result = self.node.block_on(io_deadline::run(operation, async {
-            send_ctrl(&mut send, &Ctrl::Fs { req: request }).await?;
+            send_ctrl(
+                &mut send,
+                &Ctrl::Fs {
+                    req: request,
+                    lease: lease.clone(),
+                },
+            )
+            .await?;
             match recv_resp(&mut recv).await? {
                 FsResponse::Ready => Ok(()),
                 _ => Err(eio("unerwartete Antwort auf write")),
@@ -88,7 +130,12 @@ impl PeerBackend {
             io_deadline::abort(&mut send, &mut recv);
         }
         result?;
-        Ok(super::peer_writer::writer(self.node.clone(), send, recv))
+        Ok(super::peer_writer::writer(
+            self.node.clone(),
+            send,
+            recv,
+            lease,
+        ))
     }
 
     pub(crate) fn exec(&self, req: ExecRequest) -> io::Result<ExecResult> {
@@ -118,6 +165,46 @@ impl PeerBackend {
             response.timed_out
         )));
         Ok(response)
+    }
+
+    pub(crate) fn probe_mount_path_capabilities(
+        &self,
+        root: &str,
+    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
+        self.probe_mount_path_capabilities_until(
+            root,
+            Instant::now() + MOUNT_CAPABILITY_PROBE_TIMEOUT,
+        )
+    }
+
+    pub(crate) fn probe_mount_path_capabilities_until(
+        &self,
+        root: &str,
+        deadline: Instant,
+    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
+        self.query_mount_path_capabilities(root, false, deadline)
+    }
+
+    fn query_mount_path_capabilities(
+        &self,
+        root: &str,
+        acquire_lease: bool,
+        deadline: Instant,
+    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
+        if acquire_lease {
+            // A failed replacement must never leave an older root token active
+            // for a caller that asked to mount a different path.
+            self.mount_lease.clear()?;
+        }
+        let response = self.request_unleased_until(
+            FsRequest::Capabilities {
+                path: root.to_string(),
+                acquire_lease,
+            },
+            deadline,
+        )?;
+        self.mount_lease
+            .accept_capabilities(response, acquire_lease)
     }
 }
 
@@ -170,6 +257,7 @@ impl Backend for PeerBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        let lease = self.mount_lease.current()?;
         let (mut send, mut recv) = self.node.open_stream(&self.endpoint, &self.identity)?;
         let result = self
             .node
@@ -180,6 +268,7 @@ impl Backend for PeerBackend {
                         req: FsRequest::Read {
                             path: path.to_string(),
                         },
+                        lease,
                     },
                 )
                 .await?;
@@ -297,62 +386,17 @@ impl Backend for PeerBackend {
     }
 
     fn staged_write_capabilities(&self, root: &str) -> crate::vfs::StagedWriteCapabilities {
-        match self.request(FsRequest::Capabilities {
-            path: root.to_string(),
-        }) {
-            Ok(FsResponse::Capabilities { capabilities }) => capabilities.into(),
-            _ => crate::vfs::StagedWriteCapabilities::default(),
-        }
+        self.probe_mount_path_capabilities(root)
+            .map(|capabilities| capabilities.staged_write)
+            .unwrap_or_default()
     }
-}
 
-fn fs_request_label(request: &FsRequest) -> &'static str {
-    match request {
-        FsRequest::Capabilities { .. } => "capabilities",
-        FsRequest::ListDir { .. } => "list_dir",
-        FsRequest::Stat { .. } => "stat",
-        FsRequest::WalkTree { .. } => "walk_tree",
-        FsRequest::Read { .. } => "read",
-        FsRequest::Write { .. } => "write",
-        FsRequest::WriteNew { .. } => "write_new",
-        FsRequest::WriteDone => "write_done",
-        FsRequest::MkdirAll { .. } => "mkdir_all",
-        FsRequest::Rename { .. } => "rename",
-        FsRequest::RenameNoReplace { .. } => "rename_no_replace",
-        FsRequest::PromoteStaged { .. } => "promote_staged",
-        FsRequest::CopyFile { .. } => "copy_file",
-        FsRequest::RemoveFile { .. } => "remove_file",
-        FsRequest::RemoveDir { .. } => "remove_dir",
-    }
-}
-
-fn fs_response_summary(response: &FsResponse) -> String {
-    match response {
-        FsResponse::Capabilities { capabilities } => format!(
-            "capabilities create={} replace={} namespace_replace={}",
-            capabilities.create, capabilities.replace, capabilities.namespace_replace
-        ),
-        FsResponse::Entries { entries } => format!("{} Eintraege", entries.len()),
-        FsResponse::Meta { meta } => format!("meta size={} dir={}", meta.size, meta.is_dir),
-        FsResponse::WalkBatch {
-            nodes,
-            files,
-            dirs,
-            bytes,
-        } => format!(
-            "walk nodes={} files={files} dirs={dirs} bytes={bytes}",
-            nodes.len()
-        ),
-        FsResponse::WalkDone {
-            files,
-            dirs,
-            bytes,
-            nodes,
-        } => format!("walk done nodes={nodes} files={files} dirs={dirs} bytes={bytes}"),
-        FsResponse::Data { size } => format!("{size} bytes"),
-        FsResponse::Ready => "bereit".into(),
-        FsResponse::Ok => "ok".into(),
-        FsResponse::Err { msg, .. } => format!("fehler={msg}"),
+    fn mount_path_capabilities(&self, root: &str) -> VfsResult<crate::vfs::MountPathCapabilities> {
+        self.query_mount_path_capabilities(
+            root,
+            true,
+            Instant::now() + io_deadline::PEER_OP_TIMEOUT,
+        )
     }
 }
 

@@ -13,11 +13,13 @@ pub(super) fn writer(
     node: Arc<ShareIrohNode>,
     send: SendStream,
     recv: RecvStream,
+    lease: Option<String>,
 ) -> Box<dyn Write + Send> {
     Box::new(PeerWriter {
         node,
         send: Some(send),
         recv: Some(recv),
+        lease,
         state: WriterState::Open,
     })
 }
@@ -32,6 +34,7 @@ struct PeerWriter {
     node: Arc<ShareIrohNode>,
     send: Option<SendStream>,
     recv: Option<RecvStream>,
+    lease: Option<String>,
     state: WriterState,
 }
 
@@ -57,6 +60,7 @@ impl PeerWriter {
                     &mut send,
                     &Ctrl::Fs {
                         req: FsRequest::WriteDone,
+                        lease: self.lease.clone(),
                     },
                 )
                 .await?;

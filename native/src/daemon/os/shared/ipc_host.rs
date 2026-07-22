@@ -18,6 +18,8 @@ pub(super) mod direct_events;
 pub(super) mod exec_grant_journal;
 #[path = "ipc_host_legacy_events.rs"]
 pub(super) mod legacy_events;
+#[path = "ipc_host_mount_probe.rs"]
+mod mount_probe;
 #[path = "ipc_host_profile_merge.rs"]
 pub(super) mod profile_merge;
 #[path = "ipc_host_stop.rs"]

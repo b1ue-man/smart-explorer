@@ -59,8 +59,12 @@ mod locks;
 mod mount_client;
 #[path = "os/shared/mount_error.rs"]
 mod mount_error;
+#[path = "os/shared/mount_host_process.rs"]
+mod mount_host_process;
 #[path = "os/shared/mount_manager.rs"]
 mod mount_manager;
+#[path = "os/shared/mount_probe_client.rs"]
+mod mount_probe_client;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/mount_process.rs"]
 mod mount_process;
@@ -115,6 +119,7 @@ pub use mount_client::{
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
     MountHostSession,
 };
+pub use mount_probe_client::probe_share_mount_capabilities;
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
 pub use schedule::run_daemon;

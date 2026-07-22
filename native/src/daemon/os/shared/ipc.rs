@@ -70,6 +70,17 @@ pub(super) fn handle_client(
             }
             Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
         },
+        IpcRequest::ProbeShareMount { target, root, .. } => {
+            match host.probe_share_mount_capabilities(target, &root) {
+                Ok(capabilities) => write_response(
+                    &mut stream,
+                    &IpcResponse::MountPathCapabilities {
+                        capabilities: capabilities.into(),
+                    },
+                ),
+                Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+            }
+        }
         IpcRequest::ExecShare { target, req, .. } => match host.exec_share(target, req) {
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecResult { result }),
             Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),

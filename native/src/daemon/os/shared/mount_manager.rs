@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::process::Child;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -22,7 +21,9 @@ mod start_cache;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
 
-use entry_state::{finish_clean, finish_exit, random_token, removable, snapshot};
+use entry_state::{
+    clear_backend_runtime, finish_clean, finish_exit, random_token, removable, snapshot,
+};
 
 #[derive(Clone)]
 pub(super) struct MountManager {
@@ -40,8 +41,14 @@ struct MountEntry {
     session_token: Option<String>,
     backend_token: Option<String>,
     control: Option<SyncSender<()>>,
-    child: Option<Child>,
+    child: Option<super::mount_host_process::MountHostProcess>,
     backend_stream_active: bool,
+    // Daemon-side failures stay pending until process finalization. A public
+    // terminal detail while a child exists is therefore host-reported.
+    pending_host_failure: Option<String>,
+    // Only a host-reported Failed status carrying an explicit recovery
+    // boundary is terminal. Callback failures deliberately omit that boundary.
+    host_terminal_failure: bool,
     registry_recorded: bool,
     recovery: MountRecovery,
 }
@@ -71,6 +78,8 @@ impl Default for MountManager {
                                 control: None,
                                 child: None,
                                 backend_stream_active: false,
+                                pending_host_failure: None,
+                                host_terminal_failure: false,
                                 registry_recorded: true,
                                 recovery,
                             },
@@ -210,6 +219,8 @@ impl MountManager {
         entry.backend = None;
         entry.capabilities = None;
         entry.launch_token = None;
+        entry.pending_host_failure = None;
+        entry.host_terminal_failure = false;
         entry.status = MountStatus::Failed { detail };
         Ok(snapshot(entry))
     }
@@ -300,18 +311,16 @@ impl MountManager {
             }
             return Ok(Some(snapshot(entry)));
         };
-        match child.try_wait() {
+        let observation = child.try_wait();
+        match observation {
             Ok(Some(exit)) => {
-                entry.child = None;
                 finish_exit(entry, exit);
                 Ok(Some(snapshot(entry)))
             }
             Ok(None) => Ok(None),
             Err(error) => {
-                entry.status = MountStatus::Failed {
-                    detail: format!("Laufwerk-Hoststatus lesen: {error}"),
-                };
-                Ok(None)
+                entry_state::terminate_after_observation_error(entry, &error);
+                Ok(Some(snapshot(entry)))
             }
         }
     }
@@ -326,6 +335,27 @@ impl MountManager {
         };
         if let Some(mut child) = child {
             if let Err(error) = child.kill() {
+                match child.try_wait() {
+                    Ok(Some(exit)) => {
+                        let mut state = self.state_guard()?;
+                        let entry = state
+                            .get_mut(key)
+                            .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
+                        finish_exit(entry, exit);
+                        return Ok(snapshot(entry));
+                    }
+                    Ok(None) => {}
+                    Err(observe_error) => {
+                        if let Ok(mut state) = self.state_guard() {
+                            if let Some(entry) = state.get_mut(key) {
+                                entry.child = Some(child);
+                            }
+                        }
+                        return Err(format!(
+                            "Laufwerk-Host beenden: {error}; Abschlussstatus lesen: {observe_error}"
+                        ));
+                    }
+                }
                 if let Ok(mut state) = self.state_guard() {
                     if let Some(entry) = state.get_mut(key) {
                         entry.child = Some(child);
@@ -390,9 +420,7 @@ impl MountManager {
     }
 
     pub(super) fn tick(&self) {
-        // Registry updates are read-modify-write transactions. Share the same
-        // lifecycle lock as Start/Stop/Retry so a clean-exit removal cannot
-        // race and overwrite a newly persisted mount.
+        // Serialize registry cleanup with the Start/Stop/Retry lifecycle.
         let Ok(_lifecycle) = self.lifecycle.try_lock() else {
             return;
         };
@@ -403,16 +431,14 @@ impl MountManager {
             let Some(child) = entry.child.as_mut() else {
                 continue;
             };
-            match child.try_wait() {
+            let observation = child.try_wait();
+            match observation {
                 Ok(Some(exit)) => {
-                    entry.child = None;
                     finish_exit(entry, exit);
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    entry.status = MountStatus::Failed {
-                        detail: format!("Laufwerk-Hoststatus lesen: {error}"),
-                    };
+                    entry_state::terminate_after_observation_error(entry, &error);
                 }
             }
         }

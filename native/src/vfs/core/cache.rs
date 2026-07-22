@@ -234,6 +234,9 @@ impl Backend for CachingBackend {
     fn root_confinement(&self, root: &str) -> super::RootConfinement {
         self.inner.root_confinement(root)
     }
+    fn mount_path_capabilities(&self, root: &str) -> VfsResult<super::MountPathCapabilities> {
+        self.inner.mount_path_capabilities(root)
+    }
     fn plan_dedupe_recursive(
         &self,
         root: &str,

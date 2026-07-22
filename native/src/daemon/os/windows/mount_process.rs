@@ -1,6 +1,8 @@
 use std::io;
 use std::net::SocketAddr;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use super::mount_host_process::MountHostProcess;
 
 pub(super) const MOUNT_TOKEN_ENV: &str = "SMART_EXPLORER_MOUNT_TOKEN";
 pub(super) const MOUNT_IPC_ADDR_ENV: &str = "SMART_EXPLORER_MOUNT_IPC_ADDR";
@@ -11,7 +13,7 @@ pub(super) fn spawn(
     launch_token: &str,
     ipc_addr: SocketAddr,
     cache_root: &std::path::Path,
-) -> io::Result<Child> {
+) -> io::Result<MountHostProcess> {
     use std::os::windows::process::CommandExt;
 
     let executable = std::env::current_exe()?;
@@ -25,7 +27,7 @@ pub(super) fn spawn(
         .env(MOUNT_CACHE_DIR_ENV, cache_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    command.spawn()
+    MountHostProcess::capture_piped_stderr(command.spawn()?)
 }
