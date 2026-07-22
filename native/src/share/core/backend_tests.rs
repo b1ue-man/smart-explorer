@@ -142,11 +142,15 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
     );
 
     backend.mount_path_capabilities("/Gate").unwrap();
+    let original_generation = node_a
+        .outgoing_generation_for_test(backend.initial_endpoint())
+        .unwrap()
+        .expect("capability probe must establish one reusable session");
 
-    let root_entries = backend.list_dir("/").unwrap();
+    let root_entries = backend.list_dir("/Gate").unwrap();
     assert!(root_entries
         .iter()
-        .any(|entry| entry.name == "Gate" && entry.is_dir));
+        .any(|entry| entry.name == "hello.txt" && !entry.is_dir));
     let mut text = String::new();
     backend
         .open_read("/Gate/hello.txt")
@@ -213,6 +217,13 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
     assert!(root.join("renamed.txt").exists());
     backend.remove_file("/Gate/renamed.txt").unwrap();
     assert!(!root.join("renamed.txt").exists());
+    assert_eq!(
+        node_a
+            .outgoing_generation_for_test(backend.initial_endpoint())
+            .unwrap(),
+        Some(original_generation),
+        "filesystem calls must multiplex over the mounted session",
+    );
 
     {
         let mut state = auth_a.lock().unwrap();
@@ -224,6 +235,13 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         .disconnect_outgoing_for_test(backend.initial_endpoint())
         .unwrap());
     assert_eq!(backend.stat("/Gate/new.txt").unwrap().size, 17);
+    assert_ne!(
+        node_a
+            .outgoing_generation_for_test(backend.initial_endpoint())
+            .unwrap(),
+        Some(original_generation),
+        "a physical reconnect must replace the transport without remounting",
+    );
 
     node_b.invalidate_sessions().unwrap();
     let revoked = backend.stat("/Gate/new.txt").unwrap_err();

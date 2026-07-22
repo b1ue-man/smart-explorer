@@ -80,14 +80,40 @@ sftp_backend="$repo_root/native/src/sftp/core/backend.rs"
 agent_deploy="$repo_root/native/src/agent/core/deploy.rs"
 connector="$repo_root/native/src/connect/os/shared/connector.rs"
 mount_manager="$repo_root/native/src/daemon/os/shared/mount_manager.rs"
+ipc_host="$repo_root/native/src/daemon/os/shared/ipc_host.rs"
 mount_source="$repo_root/native/src/daemon/os/shared/mount_source.rs"
 mount_process="$repo_root/native/src/daemon/os/windows/mount_process.rs"
 mount_process_environment="$repo_root/native/src/daemon/os/windows/mount_process_environment.rs"
 mount_host_process="$repo_root/native/src/daemon/os/shared/mount_host_process.rs"
 rooted_backend="$repo_root/native/src/daemon/os/shared/rooted_backend.rs"
+rooted_backend_gate="$repo_root/native/src/daemon/os/shared/rooted_backend_gate.rs"
 remote_open="$repo_root/native/src/app/os/shared/remote_open.rs"
+mount_types="$repo_root/native/src/mount/core/types.rs"
+metadata_policy="$repo_root/native/src/mount/core/metadata_policy.rs"
+metadata_cache="$repo_root/native/src/mount/core/metadata_cache.rs"
+metadata_loading="$repo_root/native/src/mount/core/metadata_loading.rs"
+mount_metadata="$repo_root/native/src/mount/core/metadata.rs"
+mount_host="$repo_root/native/src/mount/os/windows/host.rs"
+metadata_refresh="$repo_root/native/src/mount/os/windows/metadata_refresh.rs"
+metadata_callbacks="$repo_root/native/src/mount/os/windows/callbacks_metadata.rs"
+open_callbacks="$repo_root/native/src/mount/os/windows/callbacks_open.rs"
+io_callbacks="$repo_root/native/src/mount/os/windows/callbacks_io.rs"
+mutation_callbacks="$repo_root/native/src/mount/os/windows/callbacks_mutation.rs"
+mount_file_io="$repo_root/native/src/mount/core/file_io.rs"
+mount_mutations="$repo_root/native/src/mount/core/mutations.rs"
+mount_delete="$repo_root/native/src/mount/core/delete.rs"
+mount_replace="$repo_root/native/src/mount/core/replace.rs"
+mount_ui_draft="$repo_root/native/src/app/core/mount_ui_draft.rs"
+drive_cli="$repo_root/native/src/cli/drive.rs"
 peer_backend="$repo_root/native/src/share/core/backend.rs"
 peer_lease="$repo_root/native/src/share/core/mount_lease.rs"
+peer_lease_release="$repo_root/native/src/share/core/peer_lease_release.rs"
+peer_lease_cleanup="$repo_root/native/src/share/core/mount_lease_cleanup.rs"
+peer_endpoint_source="$repo_root/native/src/share/core/peer_endpoint_source.rs"
+peer_node_sessions="$repo_root/native/src/share/core/node_sessions.rs"
+peer_request="$repo_root/native/src/share/core/peer_request.rs"
+peer_telemetry="$repo_root/native/src/share/core/peer_telemetry.rs"
+peer_session="$repo_root/native/src/share/core/session.rs"
 peer_mod="$repo_root/native/src/share/mod.rs"
 peer_node="$repo_root/native/src/share/core/node.rs"
 peer_node_accept="$repo_root/native/src/share/core/node_accept.rs"
@@ -96,6 +122,11 @@ peer_service="$repo_root/native/src/share/core/service.rs"
 peer_wire="$repo_root/native/src/share/core/wire.rs"
 peer_mount_ui="$repo_root/native/src/app/core/mount_peer_roots.rs"
 ipc_protocol="$repo_root/native/src/daemon/os/shared/ipc_protocol.rs"
+agent_backend="$repo_root/native/src/agent/core/backend.rs"
+agent_mux="$repo_root/native/src/agent/core/mux.rs"
+agent_transport="$repo_root/native/src/agent/core/transport.rs"
+sftp_connection="$repo_root/native/src/sftp/core/connection.rs"
+sftp_reconnect_gate="$repo_root/native/src/sftp/core/reconnect_gate.rs"
 runtime_download="$repo_root/native/src/mount/os/windows/runtime_install_download.rs"
 runtime_process="$repo_root/native/src/mount/os/windows/runtime_install_process.rs"
 installer="$repo_root/native/installer.nsi"
@@ -120,6 +151,8 @@ assert_contains "$connector" 'AgentFallback::RequireConfined'
 assert_contains "$connector" 'agent_fallback.permits_deploy_failure()'
 assert_contains "$mount_source" 'open_saved_at_for_mount(connection, root.as_str(), config.root_security)'
 assert_before "$mount_manager" 'start_cache::prepare(self, &key, &config.id)' 'super::mount_source::resolve(&config, host)'
+assert_contains "$ipc_host" 'pub(super) mounts: super::mount_manager::MountManager'
+assert_contains "$mount_manager" 'child: Option<super::mount_host_process::MountHostProcess>'
 
 assert_contains "$mount_process" 'std::env::current_exe()?'
 assert_absent "$mount_process" 'with_file_name("se.exe")'
@@ -139,8 +172,80 @@ assert_contains "$repo_root/native/src/main.rs" 'run_host_if_requested(&argument
 assert_contains "$repo_root/native/src/bin/se.rs" 'run_host_if_requested(&arguments)'
 
 assert_contains "$rooted_backend" 'inner.mount_path_capabilities(root.as_str())?'
-assert_contains "$peer_backend" 'Ctrl::Fs { req, lease }'
-assert_contains "$peer_server" 'let mount_leases = Arc::new(PeerMountLeases::default());'
+assert_contains "$rooted_backend" 'operation: super::rooted_backend_gate::OperationGate'
+assert_contains "$rooted_backend_gate" 'pub(super) struct OperationGate(RwLock<()>);'
+
+# The mount host owns one transport-independent Backend for its whole process
+# lifetime. Only root metadata is synchronous; deeper snapshots stay bounded
+# and are filled/refreshed by the one background worker after Dokany is ready.
+assert_contains "$mount_types" 'pub metadata: MountMetadataPolicy'
+assert_contains "$mount_types" '#[serde(default)]'
+assert_contains "$metadata_policy" 'DEFAULT_METADATA_PRELOAD_DEPTH: u8 = 2'
+assert_contains "$metadata_policy" 'MAX_METADATA_PRELOAD_DEPTH: u8 = 4'
+assert_contains "$drive_cli" 'MountMetadataPolicy::new(args.metadata_depth)'
+assert_contains "$mount_ui_draft" '0..=crate::mount::MAX_METADATA_PRELOAD_DEPTH'
+assert_contains "$mount_ui_draft" '.map(|config| config.with_metadata_policy(metadata))'
+assert_contains "$mount_ui_draft" 'crate::mount::install_drive_runtime(None)'
+assert_contains "$ipc_protocol" 'pub metadata: crate::mount::MountMetadataPolicy'
+assert_contains "$metadata_loading" 'METADATA_PRELOAD_BATCH: usize = 8'
+assert_contains "$metadata_loading" 'METADATA_REFRESH_BATCH: usize = 16'
+assert_contains "$metadata_loading" 'self.load_directory_cached(&root, 0)'
+assert_contains "$metadata_refresh" 'REFRESH_INTERVAL: Duration = Duration::from_secs(20)'
+assert_contains "$metadata_refresh" '.preload_metadata_batch_while(|| is_stopped(&stop))'
+assert_contains "$metadata_refresh" '.refresh_metadata_while(|| is_stopped(&stop))'
+assert_contains "$metadata_cache" 'MAX_CACHED_DIRECTORIES: usize = 4_096'
+assert_contains "$metadata_cache" 'MAX_CACHED_ENTRIES: usize = 50_000'
+assert_contains "$metadata_cache" 'MAX_CACHED_BYTES: usize = 32 * 1024 * 1024'
+assert_contains "$metadata_cache" 'MAX_CACHED_DIRECTORY_BYTES: usize = 4 * 1024 * 1024'
+assert_contains "$metadata_cache" 'entries: Arc<[VfsMeta]>'
+assert_contains "$metadata_cache" 'generation: u64'
+assert_contains "$mount_metadata" 'io::Result<Arc<[VfsMeta]>>'
+assert_contains "$metadata_loading" 'self.metadata_cache.generation()? != generation'
+assert_contains "$metadata_callbacks" 'context.engine.list_dir_cached(path)?'
+assert_contains "$metadata_callbacks" 'context.engine.stat_cached(path)?'
+assert_absent "$metadata_callbacks" 'guard_long_with_context'
+for safety_file in \
+    "$open_callbacks" \
+    "$io_callbacks" \
+    "$mutation_callbacks" \
+    "$mount_file_io" \
+    "$mount_mutations" \
+    "$mount_delete" \
+    "$mount_replace"; do
+    assert_absent "$safety_file" 'stat_cached('
+    assert_absent "$safety_file" 'list_dir_cached('
+done
+assert_contains "$mount_file_io" 'self.invalidate_metadata(&state.remote_path, false);'
+assert_contains "$mount_mutations" 'self.invalidate_metadata(source.backend(), true);'
+assert_contains "$mount_delete" 'self.invalidate_metadata(&delete.original_path, true);'
+assert_contains "$mount_replace" 'self.invalidate_metadata(destination_path.backend(), true);'
+assert_before "$mount_host" 'engine.preload_metadata()' 'start_on_available_drive(&runtime'
+assert_before "$mount_host" 'start_on_available_drive(&runtime' 'storage.start_metadata_refresh()'
+assert_before "$mount_host" 'storage.request_metadata_refresh_stop();' 'filesystem.close();'
+assert_before "$mount_host" 'filesystem.close();' 'storage.join_metadata_refresh();'
+assert_before "$mount_host" 'drop(engine);' 'drop(cache_lease);'
+
+assert_contains "$peer_request" 'Ctrl::Fs { req, lease }'
+assert_contains "$peer_node" 'mount_leases: Arc::new(super::mount_lease::PeerMountLeases::default())'
+assert_contains "$peer_node" 'pub(super) sessions: Mutex<HashMap<String, Connection>>'
+assert_contains "$peer_node_sessions" 'if let Some(connection) = self.healthy_cached_session(key)?'
+assert_contains "$peer_node_sessions" 'Some(current) if current.stable_id() == failed_generation => sessions.remove(key)'
+assert_absent "$peer_node_sessions" 'failed.close('
+assert_contains "$peer_session" 'format!("{kind}:{relation_id}:{}", endpoint.presence.node_id)'
+assert_absent "$peer_session" 'format!("{kind}:{relation_id}:{}:{}", endpoint.presence.node_id'
+assert_contains "$peer_endpoint_source" 'validate_identity(initial, &presence)?'
+assert_contains "$peer_endpoint_source" 'Presence is routing evidence, not the lifetime of an'
+assert_contains "$peer_backend" 'lease_request_id:'
+assert_contains "$peer_lease" 'RELEASABLE_LEASE_PREFIX: &str = "se-mount-v2."'
+assert_contains "$peer_lease" 'MAX_MOUNT_LEASES_PER_PRINCIPAL: usize = 4'
+assert_contains "$peer_lease" 'MAX_MOUNT_LEASES_TOTAL: usize = 16'
+assert_contains "$peer_lease_release" 'BEST_EFFORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5)'
+assert_contains "$peer_lease_release" 'MAX_RELEASE_WORKERS: usize = 4'
+assert_contains "$peer_lease_cleanup" 'super::blocking::run("Share dispose legacy mount leases"'
+assert_contains "$peer_request" 'IDEMPOTENT_CONTROL_BUDGET: Duration = Duration::from_secs(40)'
+assert_contains "$peer_request" 'FsRequest::ListDir { .. } | FsRequest::Stat { .. }'
+assert_contains "$peer_request" 'FsRequest::ReleaseLease => matches!(response, FsResponse::Ok)'
+assert_contains "$peer_telemetry" 'let _ = events.try_send(event);'
 assert_contains "$peer_server" 'node.filesystem_authorization_epoch()'
 assert_contains "$peer_lease" 'self.authorization_epoch != authorization_epoch'
 assert_before "$peer_service" 'self.iroh.stop_sharing()' 'let send_result = self.cmds.send'
@@ -152,6 +257,22 @@ assert_contains "$peer_wire" 'MOUNT_PATH_CAPABILITY_CONTRACT_VERSION'
 assert_contains "$peer_mount_ui" 'crate::daemon::probe_share_mount_capabilities'
 assert_contains "$ipc_protocol" 'ProbeShareMount {'
 assert_contains "$ipc_protocol" 'MountPathCapabilities {'
+
+# Metadata requests have bounded recovery and may move to a replacement
+# transport generation. Mutations already in flight drain on the old one and
+# are never replayed implicitly.
+assert_contains "$agent_backend" 'METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(20)'
+assert_contains "$agent_transport" 'pub(super) fn safe_call_timeout('
+assert_contains "$agent_transport" 'self.reconnect.is_some()'
+assert_contains "$agent_transport" 'mux.retire();'
+assert_contains "$agent_transport" 'pub(super) fn mutation_call('
+assert_contains "$agent_mux" 'retired: AtomicBool'
+assert_contains "$agent_mux" 'if pending.is_empty() && self.retired.load(Ordering::Acquire)'
+assert_contains "$sftp_connection" 'SFTP_METADATA_DEADLINE: Duration = Duration::from_secs(20)'
+assert_contains "$sftp_connection" 'let deadline = AbsoluteDeadline::after(SFTP_METADATA_DEADLINE);'
+assert_contains "$sftp_connection" 'tokio::time::timeout_at(expires, future)'
+assert_contains "$sftp_reconnect_gate" 'pub(super) struct ReconnectGate<T>'
+assert_contains "$sftp_reconnect_gate" 'pub(super) struct AbsoluteDeadline'
 
 assert_contains "$remote_open" 'Publish the durable recovery manifest before handing the file to'
 assert_before "$remote_open" 'if let Err(error) = sync_recovery_manifest(&self.remote_edits)' 'let process = self.launch_for_edit(&p, mode)'

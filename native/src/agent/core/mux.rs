@@ -355,7 +355,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn closing_transport_disconnects_existing_and_new_requests() {
+    fn remote_drive_task_closing_transport_disconnects_existing_and_new_requests() {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_stream_is_bounded_and_receiver_drop_unblocks_sender() {
+    fn remote_drive_task_registered_stream_is_bounded_and_receiver_drop_unblocks_sender() {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn stalled_writer_queue_times_out_and_disconnects_pending_operations() {
+    fn remote_drive_task_stalled_writer_queue_times_out_and_disconnects_pending_operations() {
         let (out, _undrained) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_releases_a_router_waiting_on_backpressure() {
+    fn remote_drive_task_unregister_releases_a_router_waiting_on_backpressure() {
         let (out, _out_rx) = make_out_channel();
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));

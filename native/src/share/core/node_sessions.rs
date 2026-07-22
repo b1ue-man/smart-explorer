@@ -273,6 +273,20 @@ impl ShareIrohNode {
     }
 
     #[cfg(test)]
+    pub(super) fn outgoing_generation_for_test(
+        &self,
+        endpoint: &PeerEndpoint,
+    ) -> io::Result<Option<usize>> {
+        let key = session_key(endpoint);
+        Ok(self
+            .sessions
+            .lock()
+            .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?
+            .get(&key)
+            .map(Connection::stable_id))
+    }
+
+    #[cfg(test)]
     pub(super) fn disconnect_outgoing_for_test(&self, endpoint: &PeerEndpoint) -> io::Result<bool> {
         let key = session_key(endpoint);
         let generation = self

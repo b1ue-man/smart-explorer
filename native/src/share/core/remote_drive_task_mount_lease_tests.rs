@@ -206,7 +206,7 @@ fn remote_drive_task_peer_mount_lease_is_principal_root_config_and_epoch_bound()
     );
     leases.authorize(&renewed.token, &principal, &fixture.exports, 999, 8)?;
 
-    let other_principal = principal("device-b");
+    let other_principal = self::principal("device-b");
     assert_eq!(
         only_error(leases.authorize(&renewed.token, &other_principal, &fixture.exports, 999, 8,))
             .kind(),

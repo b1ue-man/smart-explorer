@@ -2,8 +2,8 @@ use super::{
     validate_dokany_version_domains, BackendRoot, DokanyVersionCompatibilityError,
     DriveRuntimeInstallOutcome, DriveSelection, FlushOutcome, MountConfig, MountEngine, MountId,
     MountMode, MountRecovery, MountRuntimeConfig, MountSnapshot, MountSource, MountStatus,
-    OpenDisposition, OpenFileOptions, RenameOutcome, DOKANY_DRIVER_PROTOCOL_VERSION,
-    DOKANY_LIBRARY_API_VERSION,
+    NamespaceOutcome, OpenDisposition, OpenFileOptions, RenameOutcome,
+    DOKANY_DRIVER_PROTOCOL_VERSION, DOKANY_LIBRARY_API_VERSION,
 };
 use crate::vfs::{Backend, BackendHandle, LocalBackend, Scheme, VfsMeta};
 use std::io;
@@ -67,6 +67,59 @@ fn write_full(engine: &MountEngine, handle: super::HandleId, bytes: &[u8]) -> io
     assert_eq!(engine.write(handle, 0, bytes)?, bytes.len());
     assert_eq!(engine.flush(handle)?, FlushOutcome::Committed);
     engine.close(handle)
+}
+
+fn cached_root_names(engine: &MountEngine) -> io::Result<Vec<String>> {
+    let mut names = engine
+        .list_dir(r"\")?
+        .into_iter()
+        .map(|metadata| metadata.name)
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+
+fn assert_cached_missing(engine: &MountEngine, callback_path: &str) -> io::Result<()> {
+    let error = engine.stat_cached(callback_path).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    Ok(())
+}
+
+#[test]
+fn remote_drive_task_mutations_invalidate_warm_directory_and_point_metadata() -> io::Result<()> {
+    let fixture = Fixture::new("metadata-mutation-invalidation")?;
+    let engine = fixture.engine()?;
+
+    // Every mutation below starts with a complete root snapshot already warm.
+    assert!(cached_root_names(&engine)?.is_empty());
+
+    let created = engine.open_file(
+        r"\created.txt",
+        OpenFileOptions {
+            writable: true,
+            disposition: OpenDisposition::CreateNew,
+        },
+    )?;
+    write_full(&engine, created, b"fresh")?;
+    assert_eq!(cached_root_names(&engine)?, ["created.txt"]);
+    assert_eq!(engine.stat_cached(r"\created.txt")?.size, 5);
+
+    assert_eq!(engine.mkdir(r"\Folder")?, NamespaceOutcome::Complete);
+    assert_eq!(cached_root_names(&engine)?, ["Folder", "created.txt"]);
+    assert!(engine.stat_cached(r"\Folder")?.is_dir);
+
+    assert_eq!(
+        engine.rename(r"\created.txt", r"\renamed.txt", false)?,
+        RenameOutcome::Complete
+    );
+    assert_eq!(cached_root_names(&engine)?, ["Folder", "renamed.txt"]);
+    assert_cached_missing(&engine, r"\created.txt")?;
+    assert_eq!(engine.stat_cached(r"\renamed.txt")?.size, 5);
+
+    engine.delete(r"\renamed.txt", false)?;
+    assert_eq!(cached_root_names(&engine)?, ["Folder"]);
+    assert_cached_missing(&engine, r"\renamed.txt")?;
+    Ok(())
 }
 
 #[test]
