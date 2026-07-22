@@ -1,5 +1,7 @@
 use super::case_semantics::{identity_key, validate_backend_case_path};
 use super::journal::{DeletePhase, PersistedDelete, PersistedEntry};
+use super::metadata_cache::MetadataCache;
+use super::metadata_point_cache::MetadataPointCache;
 use super::path::{validate_windows_component, PathProjector, ProjectedPath};
 use super::spool::{prepare_spool_root, WholeFileSpool};
 use super::startup::validate_backend_root;
@@ -27,6 +29,9 @@ pub struct MountEngine {
     pub(super) handles: Mutex<HashMap<HandleId, OpenHandle>>,
     pub(super) deletes: Mutex<HashMap<DeleteToken, PersistedDelete>>,
     pub(super) namespace_conflicts: Mutex<HashMap<String, NamespaceIntent>>,
+    pub(super) metadata_cache: MetadataCache,
+    pub(super) metadata_points: MetadataPointCache,
+    pub(super) metadata_epoch: AtomicU64,
     pub(super) next_handle: AtomicU64,
     pub(super) next_delete: AtomicU64,
 }
@@ -195,6 +200,7 @@ impl MountEngine {
         verify_backend_ancestors: bool,
         validate_remote: bool,
     ) -> io::Result<Self> {
+        config.metadata.validate()?;
         let projector = PathProjector::new(root);
         let case_sensitive_paths = backend.case_sensitive_paths(projector.root().as_str());
         if validate_remote {
@@ -306,6 +312,8 @@ impl MountEngine {
                 }
             }
         }
+        let metadata_cache = MetadataCache::new(projector.root().as_str(), case_sensitive_paths);
+        let metadata_points = MetadataPointCache::new(case_sensitive_paths);
         let engine = Self {
             config,
             backend,
@@ -319,6 +327,9 @@ impl MountEngine {
             handles: Mutex::new(HashMap::new()),
             deletes: Mutex::new(deletes),
             namespace_conflicts: Mutex::new(namespace_conflicts),
+            metadata_cache,
+            metadata_points,
+            metadata_epoch: AtomicU64::new(0),
             next_handle: AtomicU64::new(1),
             next_delete: AtomicU64::new(next_delete),
         };

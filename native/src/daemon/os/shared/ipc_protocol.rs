@@ -152,6 +152,8 @@ pub struct MountHostConfig {
     pub id: crate::mount::MountId,
     pub drive: crate::mount::DriveSelection,
     pub mode: crate::mount::MountMode,
+    #[serde(default)]
+    pub metadata: crate::mount::MountMetadataPolicy,
     pub label: String,
 }
 
@@ -161,6 +163,7 @@ impl From<&crate::mount::MountConfig> for MountHostConfig {
             id: config.id.clone(),
             drive: config.drive,
             mode: config.mode,
+            metadata: config.metadata,
             label: config.label.clone(),
         }
     }

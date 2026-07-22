@@ -14,6 +14,7 @@ mod handle_state;
 mod handle_types;
 mod host;
 mod metadata;
+mod metadata_refresh;
 mod runtime;
 mod runtime_install;
 mod runtime_install_download;

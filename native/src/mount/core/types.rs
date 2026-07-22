@@ -2,6 +2,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::io;
 
+use super::metadata_policy::MountMetadataPolicy;
+
 const MAX_ID_LEN: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -239,6 +241,8 @@ pub struct MountConfig {
     pub mode: MountMode,
     #[serde(default)]
     pub root_security: MountRootSecurity,
+    #[serde(default)]
+    pub metadata: MountMetadataPolicy,
     pub label: String,
 }
 
@@ -256,6 +260,7 @@ impl MountConfig {
             drive,
             mode,
             root_security: MountRootSecurity::Enforced,
+            metadata: MountMetadataPolicy::default(),
             label: label.into(),
         };
         config.validate()?;
@@ -264,6 +269,7 @@ impl MountConfig {
 
     pub fn validate(&self) -> io::Result<()> {
         self.source.validate()?;
+        self.metadata.validate()?;
         if self.label.chars().count() > 128
             || self
                 .label
@@ -279,11 +285,17 @@ impl MountConfig {
         MountRuntimeConfig {
             id: self.id.clone(),
             mode: self.mode,
+            metadata: self.metadata,
         }
     }
 
     pub fn with_root_security(mut self, root_security: MountRootSecurity) -> Self {
         self.root_security = root_security;
+        self
+    }
+
+    pub fn with_metadata_policy(mut self, metadata: MountMetadataPolicy) -> Self {
+        self.metadata = metadata;
         self
     }
 }
@@ -294,11 +306,22 @@ impl MountConfig {
 pub struct MountRuntimeConfig {
     pub id: MountId,
     pub mode: MountMode,
+    #[serde(default)]
+    pub metadata: MountMetadataPolicy,
 }
 
 impl MountRuntimeConfig {
     pub fn new(id: MountId, mode: MountMode) -> Self {
-        Self { id, mode }
+        Self {
+            id,
+            mode,
+            metadata: MountMetadataPolicy::default(),
+        }
+    }
+
+    pub fn with_metadata_policy(mut self, metadata: MountMetadataPolicy) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 

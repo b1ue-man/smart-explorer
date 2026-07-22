@@ -109,10 +109,12 @@ impl MountEngine {
             }
             return Ok(token);
         }
-        if let Err(error) = self
+        let quarantine_result = self
             .backend
-            .rename_no_replace(&delete.original_path, &delete.quarantine_path)
-        {
+            .rename_no_replace(&delete.original_path, &delete.quarantine_path);
+        self.invalidate_metadata(&delete.original_path, true);
+        self.invalidate_metadata(&delete.quarantine_path, true);
+        if let Err(error) = quarantine_result {
             let source_exists = self.backend.try_exists(&delete.original_path);
             let quarantine_exists = self.backend.try_exists(&delete.quarantine_path);
             match (source_exists, quarantine_exists) {
@@ -219,6 +221,8 @@ impl MountEngine {
                 ));
             }
         }
+        self.invalidate_metadata(&delete.original_path, true);
+        self.invalidate_metadata(&delete.quarantine_path, true);
         self.clear_restored_entry(token)?;
         self.spool.forget_delete(token.0)?;
         lock(&self.deletes)?.remove(&token);
@@ -244,6 +248,8 @@ impl MountEngine {
                 "unresolved delete quarantine requires explicit recovery",
             ));
         }
+        self.invalidate_metadata(&delete.original_path, true);
+        self.invalidate_metadata(&delete.quarantine_path, true);
         match self.backend.stat(&delete.quarantine_path) {
             Ok(meta) => {
                 if meta.is_symlink || meta.is_dir != delete.is_directory {

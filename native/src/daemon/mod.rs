@@ -100,6 +100,8 @@ mod request_workers_task_tests;
 mod rooted_backend;
 #[path = "os/shared/rooted_backend_case.rs"]
 mod rooted_backend_case;
+#[path = "os/shared/rooted_backend_gate.rs"]
+mod rooted_backend_gate;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "os/shared/rooted_backend_task_tests.rs"]
 mod rooted_backend_task_tests;

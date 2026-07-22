@@ -1,0 +1,180 @@
+use super::case_semantics::identity_key;
+use crate::vfs::VfsMeta;
+use std::collections::HashMap;
+use std::io;
+use std::mem::size_of;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+const MAX_POINT_STATS: usize = 4_096;
+const MAX_POINT_BYTES: usize = 4 * 1024 * 1024;
+const POINT_STAT_TTL: Duration = Duration::from_secs(5);
+
+struct CachedPoint {
+    metadata: VfsMeta,
+    bytes: usize,
+    expires_at: Instant,
+    last_touch: u64,
+}
+
+#[derive(Default)]
+struct PointState {
+    entries: HashMap<String, CachedPoint>,
+    bytes: usize,
+    clock: u64,
+}
+
+pub(super) struct MetadataPointCache {
+    case_sensitive: bool,
+    state: Mutex<PointState>,
+}
+
+impl MetadataPointCache {
+    pub(super) fn new(case_sensitive: bool) -> Self {
+        Self {
+            case_sensitive,
+            state: Mutex::new(PointState::default()),
+        }
+    }
+
+    pub(super) fn get(&self, path: &str) -> io::Result<Option<VfsMeta>> {
+        let key = self.key(path);
+        let mut state = self.lock_state()?;
+        if state
+            .entries
+            .get(&key)
+            .is_some_and(|cached| cached.expires_at <= Instant::now())
+        {
+            remove(&mut state, &key);
+            return Ok(None);
+        }
+        state.clock = state.clock.saturating_add(1);
+        let touch = state.clock;
+        let Some(cached) = state.entries.get_mut(&key) else {
+            return Ok(None);
+        };
+        cached.last_touch = touch;
+        Ok(Some(cached.metadata.clone()))
+    }
+
+    pub(super) fn install(&self, path: &str, metadata: VfsMeta) -> io::Result<()> {
+        let bytes = path.len().saturating_add(meta_bytes(&metadata));
+        if bytes > MAX_POINT_BYTES {
+            return Ok(());
+        }
+        let key = self.key(path);
+        let mut state = self.lock_state()?;
+        remove(&mut state, &key);
+        prune_expired(&mut state);
+        while state.entries.len() >= MAX_POINT_STATS
+            || state.bytes.saturating_add(bytes) > MAX_POINT_BYTES
+        {
+            let victim = state
+                .entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.last_touch)
+                .map(|(key, _)| key.clone());
+            let Some(victim) = victim else {
+                return Ok(());
+            };
+            remove(&mut state, &victim);
+        }
+        state.clock = state.clock.saturating_add(1);
+        let last_touch = state.clock;
+        state.bytes += bytes;
+        state.entries.insert(
+            key,
+            CachedPoint {
+                metadata,
+                bytes,
+                expires_at: Instant::now() + POINT_STAT_TTL,
+                last_touch,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn invalidate(&self, path: &str, recursive: bool) -> io::Result<()> {
+        let mut state = self.lock_state()?;
+        let key = self.key(path);
+        let prefix = format!("{}/", key.trim_end_matches('/'));
+        let removed = state
+            .entries
+            .keys()
+            .filter(|candidate| *candidate == &key || (recursive && candidate.starts_with(&prefix)))
+            .cloned()
+            .collect::<Vec<_>>();
+        for candidate in removed {
+            remove(&mut state, &candidate);
+        }
+        if let Some((parent, _)) = parent_and_name(path) {
+            remove(&mut state, &self.key(parent));
+        }
+        Ok(())
+    }
+
+    pub(super) fn reconcile_directory(&self, path: &str) -> io::Result<()> {
+        let mut state = self.lock_state()?;
+        let key = self.key(path);
+        let removed = state
+            .entries
+            .keys()
+            .filter(|candidate| {
+                *candidate == &key
+                    || parent_and_name(candidate).is_some_and(|(parent, _)| self.key(parent) == key)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for candidate in removed {
+            remove(&mut state, &candidate);
+        }
+        Ok(())
+    }
+
+    fn key(&self, path: &str) -> String {
+        identity_key(self.case_sensitive, path)
+    }
+
+    fn lock_state(&self) -> io::Result<std::sync::MutexGuard<'_, PointState>> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("mount point metadata cache is unavailable"))
+    }
+}
+
+fn prune_expired(state: &mut PointState) {
+    let now = Instant::now();
+    let expired = state
+        .entries
+        .iter()
+        .filter(|(_, cached)| cached.expires_at <= now)
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    for key in expired {
+        remove(state, &key);
+    }
+}
+
+fn remove(state: &mut PointState, key: &str) {
+    if let Some(cached) = state.entries.remove(key) {
+        state.bytes = state.bytes.saturating_sub(cached.bytes);
+    }
+}
+
+fn meta_bytes(metadata: &VfsMeta) -> usize {
+    size_of::<VfsMeta>()
+        .saturating_add(metadata.name.len())
+        .saturating_add(metadata.id.as_ref().map_or(0, String::len))
+        .saturating_add(metadata.content_md5.as_ref().map_or(0, String::len))
+}
+
+fn parent_and_name(path: &str) -> Option<(&str, &str)> {
+    if path.is_empty() || path == "/" {
+        return None;
+    }
+    match path.rsplit_once('/') {
+        Some(("", name)) if !name.is_empty() => Some(("/", name)),
+        Some((parent, name)) if !parent.is_empty() && !name.is_empty() => Some((parent, name)),
+        _ => None,
+    }
+}

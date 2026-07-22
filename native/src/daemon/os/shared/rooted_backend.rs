@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
 use crate::vfs::{
@@ -22,7 +22,7 @@ pub(super) struct RootedBackend {
     staged_write: StagedWriteCapabilities,
     case_sensitive_paths: bool,
     root_confinement: RootConfinement,
-    operation: Mutex<()>,
+    operation: super::rooted_backend_gate::OperationGate,
 }
 
 impl RootedBackend {
@@ -71,10 +71,10 @@ impl RootedBackend {
             staged_write,
             case_sensitive_paths,
             root_confinement,
-            operation: Mutex::new(()),
+            operation: super::rooted_backend_gate::OperationGate::new(),
         };
         {
-            let _operation = backend.operation_guard()?;
+            let _operation = backend.operation.read()?;
             let mapped = backend.checked_existing("/")?;
             let metadata = backend.inner.stat(&mapped)?;
             if metadata.is_symlink || !metadata.is_dir {
@@ -132,12 +132,6 @@ impl RootedBackend {
             Ok(())
         }
     }
-
-    fn operation_guard(&self) -> io::Result<MutexGuard<'_, ()>> {
-        self.operation
-            .lock()
-            .map_err(|_| coded_error(io::ErrorKind::Other))
-    }
 }
 
 impl Backend for RootedBackend {
@@ -154,7 +148,7 @@ impl Backend for RootedBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.read()?;
         self.inner
             .list_dir(&self.checked_existing(path)?)
             .map(|entries| entries.into_iter().map(sanitize_metadata).collect())
@@ -162,7 +156,7 @@ impl Backend for RootedBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.read()?;
         let mut metadata = self
             .inner
             .stat(&self.checked_existing(path)?)
@@ -175,13 +169,13 @@ impl Backend for RootedBackend {
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.read()?;
         let mapped = self.checked_destination(path)?;
         self.inner.try_exists(&mapped).map_err(sanitize_error)
     }
 
     fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.read()?;
         let _ = self.checked_existing(path)?;
         // Provider object IDs are global capabilities on some backends. Never
         // expose them to, or accept them back from, the mount helper.
@@ -189,7 +183,7 @@ impl Backend for RootedBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.read()?;
         let reader = self
             .inner
             .open_read(&self.checked_existing(path)?)
@@ -198,7 +192,7 @@ impl Backend for RootedBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(path)?;
         let writer = self
@@ -209,7 +203,7 @@ impl Backend for RootedBackend {
     }
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(path)?;
         let writer = self
@@ -220,7 +214,7 @@ impl Backend for RootedBackend {
     }
 
     fn download_name(&self, path: &str, name: &str) -> String {
-        let Ok(_operation) = self.operation_guard() else {
+        let Ok(_operation) = self.operation.read() else {
             return name.to_string();
         };
         self.checked_existing(path)
@@ -229,7 +223,7 @@ impl Backend for RootedBackend {
     }
 
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(dst)?;
         let src = self.checked_existing(src)?;
@@ -238,7 +232,7 @@ impl Backend for RootedBackend {
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(src)?;
         Self::require_child(dst)?;
@@ -248,7 +242,7 @@ impl Backend for RootedBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(src)?;
         Self::require_child(dst)?;
@@ -260,7 +254,7 @@ impl Backend for RootedBackend {
     }
 
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(staged)?;
         Self::require_child(destination)?;
@@ -272,7 +266,7 @@ impl Backend for RootedBackend {
     }
 
     fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(staged)?;
         Self::require_child(destination)?;
@@ -284,7 +278,7 @@ impl Backend for RootedBackend {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(path)?;
         self.inner
@@ -293,7 +287,7 @@ impl Backend for RootedBackend {
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(path)?;
         self.inner
@@ -302,7 +296,7 @@ impl Backend for RootedBackend {
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        let _operation = self.operation_guard()?;
+        let _operation = self.operation.write()?;
         self.require_write()?;
         self.inner
             .mkdir_all(&self.checked_destination(path)?)

@@ -12,6 +12,7 @@ pub(super) struct MountDraft {
     source_label: String,
     volume_label: String,
     drive: crate::mount::DriveSelection,
+    metadata_depth: u8,
     read_write: bool,
     trust_remote_root: bool,
     pub(super) peer: Option<PeerDraft>,
@@ -78,6 +79,7 @@ impl App {
             source_label: label,
             volume_label: "Smart Explorer".into(),
             drive: crate::mount::DriveSelection::Automatic,
+            metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
             read_write: false,
             trust_remote_root: false,
             peer: None,
@@ -101,6 +103,7 @@ impl App {
             source_label: discovery.label,
             volume_label: "Smart Explorer".into(),
             drive: crate::mount::DriveSelection::Automatic,
+            metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
             read_write: false,
             trust_remote_root: false,
             peer: Some(PeerDraft {
@@ -131,6 +134,7 @@ impl App {
                 render_root_choice(ui, &mut draft, ctx);
                 ui.add_space(6.0);
                 render_drive_choice(ui, &mut draft);
+                render_metadata_choice(ui, &mut draft);
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut draft.volume_label);
@@ -214,15 +218,18 @@ impl App {
         } else {
             crate::mount::MountRootSecurity::Enforced
         };
-        let config = crate::mount::MountId::new_random()
-            .and_then(|id| {
-                crate::mount::MountConfig::new(
-                    id,
-                    draft.source.clone(),
-                    draft.drive,
-                    mode,
-                    bounded_label(&draft.volume_label),
-                )
+        let config = crate::mount::MountMetadataPolicy::new(draft.metadata_depth)
+            .and_then(|metadata| {
+                crate::mount::MountId::new_random().and_then(|id| {
+                    crate::mount::MountConfig::new(
+                        id,
+                        draft.source.clone(),
+                        draft.drive,
+                        mode,
+                        bounded_label(&draft.volume_label),
+                    )
+                    .map(|config| config.with_metadata_policy(metadata))
+                })
             })
             .map(|config| config.with_root_security(root_security))
             .map_err(|error| error.to_string());
@@ -296,6 +303,27 @@ fn render_drive_choice(ui: &mut egui::Ui, draft: &mut MountDraft) {
                     );
                 }
             });
+    });
+}
+
+fn render_metadata_choice(ui: &mut egui::Ui, draft: &mut MountDraft) {
+    ui.horizontal(|ui| {
+        ui.label("Ordnerstruktur vorladen:");
+        ui.add(
+            egui::Slider::new(
+                &mut draft.metadata_depth,
+                0..=crate::mount::MAX_METADATA_PRELOAD_DEPTH,
+            )
+            .integer()
+            .custom_formatter(|value, _| match value as u8 {
+                0 => "nur bei Bedarf".into(),
+                1 => "Wurzel".into(),
+                depth => format!("{depth} Ebenen"),
+            }),
+        )
+        .on_hover_text(
+            "Metadaten werden begrenzt im Speicher gehalten; Dateiinhalte und Sicherheitspruefungen bleiben live.",
+        );
     });
 }
 

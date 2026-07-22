@@ -20,7 +20,7 @@ use super::{
 pub(super) use super::handle_types::{HandleSnapshot, NodeHandle};
 
 pub(super) struct CallbackContext {
-    pub(super) engine: MountEngine,
+    pub(super) engine: Arc<MountEngine>,
     pub(super) runtime: DokanyRuntime,
     pub(super) read_only: bool,
     pub(super) case_sensitive_paths: bool,
@@ -35,7 +35,7 @@ pub(super) struct CallbackContext {
 
 impl CallbackContext {
     pub(super) fn new(
-        engine: MountEngine,
+        engine: Arc<MountEngine>,
         runtime: DokanyRuntime,
         session: Arc<MountHostSession>,
         selected_drive: DriveLetter,
