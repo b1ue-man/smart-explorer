@@ -63,6 +63,13 @@ struct MountArgs {
         help = "Trust the selected root when the active backend cannot provide race-proof root confinement"
     )]
     trust_remote_root: bool,
+    #[arg(
+        long,
+        default_value = "2",
+        value_parser = clap::value_parser!(u8).range(0..=4),
+        help = "Preload directory metadata to this depth; 0 caches only opened folders"
+    )]
+    metadata_depth: u8,
     #[arg(long, value_name = "TEXT", help = "Windows volume label")]
     label: Option<String>,
     #[arg(long, help = "Print machine-readable JSON")]
@@ -147,6 +154,8 @@ fn mount(args: MountArgs) -> Result<i32, String> {
     } else {
         crate::mount::MountRootSecurity::Enforced
     };
+    let metadata = crate::mount::MountMetadataPolicy::new(args.metadata_depth)
+        .map_err(|error| format!("invalid metadata preload policy: {error}"))?;
     let config = MountConfig::new(
         MountId::new_random().map_err(|error| error.to_string())?,
         source,
@@ -154,6 +163,7 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         mode,
         label,
     )
+    .map(|config| config.with_metadata_policy(metadata))
     .map(|config| config.with_root_security(root_security))
     .map_err(|error| format!("invalid drive configuration: {error}"))?;
     let started = crate::daemon::start_mount(config)?;

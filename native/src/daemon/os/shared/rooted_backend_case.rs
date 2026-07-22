@@ -22,11 +22,14 @@ pub(super) fn resolve(
             continue;
         }
         let is_final = index + 1 == requested_components.len();
-        let candidate = if case_sensitive {
-            join(&current, requested)
+        let (candidate, listed_metadata) = if case_sensitive {
+            (join(&current, requested), None)
         } else {
             match unique_child(backend, &current, requested)? {
-                Some(name) => join(&current, &name),
+                Some(metadata) => {
+                    let candidate = join(&current, &metadata.name);
+                    (candidate, Some(metadata))
+                }
                 None if allow_missing => {
                     missing = true;
                     current = join(&current, requested);
@@ -35,14 +38,23 @@ pub(super) fn resolve(
                 None => return Err(not_found()),
             }
         };
-        match backend.stat(&candidate) {
-            Ok(metadata) => validate_entry(&metadata, is_final)?,
-            Err(stat_error) => match backend.try_exists(&candidate) {
-                Ok(false) if allow_missing => missing = true,
-                Ok(false) => return Err(not_found()),
-                Ok(true) => return Err(stat_error),
-                Err(probe_error) => return Err(probe_error),
-            },
+        if let Some(metadata) = listed_metadata {
+            // Case-folded lookup already had to list this exact parent. Reuse
+            // that entry's type/link facts instead of a second remote stat.
+            // Enforced confinement remains the backend's independent contract;
+            // trusted-root backends already cannot make this lookup atomic
+            // against external namespace races.
+            validate_entry(&metadata, is_final)?;
+        } else {
+            match backend.stat(&candidate) {
+                Ok(metadata) => validate_entry(&metadata, is_final)?,
+                Err(stat_error) => match backend.try_exists(&candidate) {
+                    Ok(false) if allow_missing => missing = true,
+                    Ok(false) => return Err(not_found()),
+                    Ok(true) => return Err(stat_error),
+                    Err(probe_error) => return Err(probe_error),
+                },
+            }
         }
         current = candidate;
     }
@@ -71,7 +83,7 @@ fn unique_child(
     backend: &BackendHandle,
     parent: &str,
     requested: &str,
-) -> io::Result<Option<String>> {
+) -> io::Result<Option<crate::vfs::VfsMeta>> {
     let key = crate::mount::windows_ordinal_key(requested);
     let mut matched = None;
     for metadata in backend.list_dir(parent)? {
@@ -79,7 +91,7 @@ fn unique_child(
             continue;
         }
         validate_child_name(&metadata.name)?;
-        if matched.replace(metadata.name).is_some() {
+        if matched.replace(metadata).is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "backend contains case-colliding child names",

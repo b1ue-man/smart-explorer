@@ -1,4 +1,11 @@
-use std::{io, os::windows::ffi::OsStrExt, path::Path, ptr::null, sync::Arc, time::Duration};
+use std::{
+    io,
+    os::windows::ffi::OsStrExt,
+    path::Path,
+    ptr::null,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
 
@@ -10,6 +17,7 @@ use crate::{
     },
 };
 
+use super::metadata_refresh::MetadataRefreshWorker;
 use super::{
     cache_lease::CacheLease, callback_context::CallbackContext,
     callback_status::CALLBACK_TIMEOUT_MS, callbacks, wide::encode_mount_point, DokanOperations,
@@ -41,7 +49,8 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
         )
     })?;
     let engine = MountEngine::open_host_cache(
-        MountRuntimeConfig::new(config.id.clone(), config.mode),
+        MountRuntimeConfig::new(config.id.clone(), config.mode)
+            .with_metadata_policy(config.metadata),
         Arc::clone(&session.backend),
         &spool_root,
     )
@@ -80,6 +89,10 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
         );
         return Err(report_engine_failure(&session, &engine, &detail));
     }
+    if let Err(error) = engine.preload_metadata() {
+        let detail = format!("mounted-drive root metadata preload failed: {error}");
+        return Err(report_engine_failure(&session, &engine, &detail));
+    }
     let reconciled = inspect_recovery(&engine).map_err(|_| {
         report_failure_with_recovery(
             &session,
@@ -96,8 +109,9 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
         .first()
         .copied()
         .ok_or_else(|| report_failure(&session, "no Windows drive letter is available"))?;
+    let engine = Arc::new(engine);
     let context = Box::new(CallbackContext::new(
-        engine,
+        Arc::clone(&engine),
         runtime.clone(),
         Arc::clone(&session),
         initial_drive,
@@ -121,16 +135,22 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
             ));
         }
     };
+    if let Err(error) = storage.start_metadata_refresh() {
+        let detail = format!("mounted-drive metadata refresh could not start: {error}");
+        return close_and_finalize(filesystem, &storage, &session, Some(&detail));
+    }
     let result = run_until_stopped(filesystem, &storage, &session);
     // Make the host-lifetime ownership boundary explicit: dirty-entry
     // inspection and engine teardown complete before another host may open it.
     drop(storage);
+    drop(engine);
     drop(cache_lease);
     result
 }
 
 struct CallbackStorage {
     context: Box<CallbackContext>,
+    metadata_refresh: Mutex<Option<MetadataRefreshWorker>>,
     options: Box<DokanOptions>,
     operations: Box<DokanOperations>,
     mount_point: Vec<u16>,
@@ -155,9 +175,39 @@ impl CallbackStorage {
         options.global_context = (&*context as *const CallbackContext) as usize as u64;
         Self {
             context,
+            metadata_refresh: Mutex::new(None),
             options,
             operations: Box::new(callbacks::operations()),
             mount_point: Vec::new(),
+        }
+    }
+
+    fn start_metadata_refresh(&self) -> io::Result<()> {
+        let mut worker = self
+            .metadata_refresh
+            .lock()
+            .map_err(|_| io::Error::other("metadata refresh worker state is unavailable"))?;
+        if worker.is_none() {
+            *worker = Some(MetadataRefreshWorker::start(Arc::clone(
+                &self.context.engine,
+            ))?);
+        }
+        Ok(())
+    }
+
+    fn request_metadata_refresh_stop(&self) {
+        if let Ok(worker) = self.metadata_refresh.lock() {
+            if let Some(worker) = worker.as_ref() {
+                worker.request_stop();
+            }
+        }
+    }
+
+    fn join_metadata_refresh(&self) {
+        if let Ok(mut worker) = self.metadata_refresh.lock() {
+            if let Some(worker) = worker.take() {
+                worker.join();
+            }
         }
     }
 
@@ -276,11 +326,16 @@ fn close_and_finalize(
     filesystem: DokanyFileSystem,
     storage: &CallbackStorage,
     session: &MountHostSession,
-    prior_failure: Option<&'static str>,
+    prior_failure: Option<&str>,
 ) -> Result<(), String> {
+    storage.request_metadata_refresh_stop();
     // DokanCloseHandle is the callback lifetime boundary. Only inspect the
     // engine once Dokany can no longer mutate its retryable journal state.
     filesystem.close();
+    // Closing Dokany first prevents a slow background target from keeping the
+    // drive visible. The worker observes cancellation between remote targets;
+    // join still owns its engine before recovery inspection begins.
+    storage.join_metadata_refresh();
     match storage.context.engine.dirty_entries() {
         Ok(entries) if !entries.is_empty() => {
             let detail = recovery_detail(&entries);

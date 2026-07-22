@@ -175,10 +175,12 @@ impl MountEngine {
             .persist_entry(&state.with_condition(EntryCondition::Dirty))?;
         state.condition = EntryCondition::Dirty;
         let mut ambiguous_promotion = None;
-        if let Err(error) = self
+        let promotion_result = self
             .backend
-            .promote_staged(source.backend(), destination_path.backend())
-        {
+            .promote_staged(source.backend(), destination_path.backend());
+        self.invalidate_metadata(source.backend(), true);
+        self.invalidate_metadata(destination_path.backend(), true);
+        if let Err(error) = promotion_result {
             let source_after = self.observe_path(source.backend());
             let destination_after = self.observe_path(destination_path.backend());
             let pre_state_intact = source_after.matches(&current_baseline, Some(false))

@@ -9,7 +9,7 @@ use crate::mount::{DriveLetter, MountStatus};
 
 use super::{
     callback_context::{context_key, NodeHandle},
-    callback_status::{guard_long_with_context, guard_with_context, insufficient_buffer, win32},
+    callback_status::{guard_with_context, insufficient_buffer, win32},
     dokany_abi::FillFindData,
     metadata::{file_information, find_data, reject_open_symlink},
     wide::{read_wide, write_wide},
@@ -27,7 +27,7 @@ pub(super) unsafe extern "system" fn get_file_information(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_long_with_context(file_info, |context| {
+        guard_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             let meta = match context_key(file_info)
                 .ok()
@@ -35,7 +35,7 @@ pub(super) unsafe extern "system" fn get_file_information(
                 .map(|snapshot| snapshot.node)
             {
                 Some(NodeHandle::File(handle)) => context.engine.stat_handle(handle)?,
-                _ => context.engine.stat(&path)?,
+                _ => context.engine.stat_cached(&path)?,
             };
             let information =
                 file_information(&meta, &path, context.volume_serial, context.read_only)?;
@@ -57,7 +57,7 @@ pub(super) unsafe extern "system" fn find_files(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_long_with_context(file_info, |context| {
+        guard_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             find_entries(context, &path, None, fill, file_info)
         })
@@ -71,7 +71,7 @@ pub(super) unsafe extern "system" fn find_files_with_pattern(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_long_with_context(file_info, |context| {
+        guard_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             let pattern = read_wide(search_pattern)?;
             find_entries(context, &path, Some(&pattern), fill, file_info)
@@ -205,18 +205,26 @@ fn find_entries(
     fill: FillFindData,
     file_info: *mut DokanFileInfo,
 ) -> super::callback_status::CallbackResult {
-    let directory = context.engine.stat(path)?;
+    // Loading a missing directory snapshot also captures its own metadata;
+    // ask for that first so a cold FindFiles callback does not issue a
+    // separate point-stat immediately before the same directory fetch.
+    let entries = context.engine.list_dir_cached(path)?;
+    let directory = context.engine.stat_cached(path)?;
     reject_open_symlink(&directory)?;
     if !directory.is_dir {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "path is not a directory").into());
     }
-    for special in [".", ".."] {
-        if matches_pattern(context, pattern, special) {
-            let mut data = find_data(&directory, special, context.read_only, true)?;
-            fill_entry(fill, &mut data, file_info)?;
+    if !is_mount_root(path) {
+        for special in [".", ".."] {
+            if matches_pattern(context, pattern, special) {
+                let mut data = find_data(&directory, special, context.read_only, true)?;
+                if fill_entry(fill, &mut data, file_info) == FillDisposition::Full {
+                    return Ok(());
+                }
+            }
         }
     }
-    for entry in context.engine.list_dir(path)? {
+    for entry in entries.iter() {
         // Dokany would treat FILE_ATTRIBUTE_REPARSE_POINT as usable only when
         // GetReparsePoint is implemented. Hiding a link is safer than exposing
         // a path Windows could mistake for a traversable reparse point.
@@ -224,8 +232,10 @@ fn find_entries(
             continue;
         }
         if matches_pattern(context, pattern, &entry.name) {
-            let mut data = find_data(&entry, &entry.name, context.read_only, false)?;
-            fill_entry(fill, &mut data, file_info)?;
+            let mut data = find_data(entry, &entry.name, context.read_only, false)?;
+            if fill_entry(fill, &mut data, file_info) == FillDisposition::Full {
+                return Ok(());
+            }
         }
     }
     Ok(())
@@ -250,17 +260,53 @@ fn matches_pattern(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FillDisposition {
+    Continue,
+    Full,
+}
+
 fn fill_entry(
     fill: FillFindData,
     data: &mut WIN32_FIND_DATAW,
     file_info: *mut DokanFileInfo,
-) -> super::callback_status::CallbackResult {
-    if unsafe { fill(data, file_info) } != 0 {
-        return Err(insufficient_buffer());
+) -> FillDisposition {
+    fill_disposition(unsafe { fill(data, file_info) })
+}
+
+fn fill_disposition(result: i32) -> FillDisposition {
+    // FillFindData reports a full caller buffer with a nonzero return. Dokany
+    // expects enumeration to stop successfully in that case.
+    if result == 0 {
+        FillDisposition::Continue
+    } else {
+        FillDisposition::Full
     }
-    Ok(())
+}
+
+fn is_mount_root(path: &str) -> bool {
+    path.trim_matches(|character| matches!(character, '\\' | '/'))
+        .is_empty()
 }
 
 fn nul_terminated(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_drive_task_dokany_root_omits_dot_entries() {
+        assert!(is_mount_root("\\"));
+        assert!(is_mount_root("/"));
+        assert!(!is_mount_root("\\folder"));
+    }
+
+    #[test]
+    fn remote_drive_task_dokany_full_find_buffer_stops_successfully() {
+        assert_eq!(fill_disposition(0), FillDisposition::Continue);
+        assert_eq!(fill_disposition(1), FillDisposition::Full);
+    }
 }

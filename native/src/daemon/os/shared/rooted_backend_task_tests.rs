@@ -11,6 +11,8 @@ use std::sync::Arc;
 struct RootConfinedLocalBackend {
     inner: LocalBackend,
     mount_capability_probes: Arc<AtomicUsize>,
+    stat_calls: Arc<AtomicUsize>,
+    case_sensitive: bool,
 }
 
 impl Backend for RootConfinedLocalBackend {
@@ -27,6 +29,7 @@ impl Backend for RootConfinedLocalBackend {
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.stat_calls.fetch_add(1, Ordering::SeqCst);
         self.inner.stat(path)
     }
 
@@ -63,7 +66,7 @@ impl Backend for RootConfinedLocalBackend {
     }
 
     fn case_sensitive_paths(&self, _root: &str) -> bool {
-        true
+        self.case_sensitive
     }
 
     fn root_confinement(&self, _root: &str) -> RootConfinement {
@@ -107,6 +110,8 @@ impl Fixture {
         Arc::new(RootConfinedLocalBackend {
             inner: LocalBackend::new(self.root.as_str()),
             mount_capability_probes: Arc::new(AtomicUsize::new(0)),
+            stat_calls: Arc::new(AtomicUsize::new(0)),
+            case_sensitive: true,
         })
     }
 }
@@ -152,6 +157,8 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
     let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
         inner: LocalBackend::new(fixture.root.as_str()),
         mount_capability_probes: probes.clone(),
+        stat_calls: Arc::new(AtomicUsize::new(0)),
+        case_sensitive: true,
     });
 
     let backend = RootedBackend::new(
@@ -171,6 +178,31 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
         }
     );
     assert_eq!(probes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn remote_drive_task_case_lookup_reuses_listing_metadata() {
+    let fixture = Fixture::new();
+    let stats = Arc::new(AtomicUsize::new(0));
+    let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
+        inner: LocalBackend::new(fixture.root.as_str()),
+        mount_capability_probes: Arc::new(AtomicUsize::new(0)),
+        stat_calls: stats.clone(),
+        case_sensitive: false,
+    });
+    let backend = RootedBackend::new(
+        inner,
+        &fixture.root,
+        MountMode::ReadOnly,
+        MountRootSecurity::Enforced,
+    )
+    .unwrap();
+    let before = stats.load(Ordering::SeqCst);
+
+    let metadata = backend.stat("/NOTE.MD").unwrap();
+
+    assert_eq!(metadata.name, "note.md");
+    assert_eq!(stats.load(Ordering::SeqCst) - before, 2);
 }
 
 #[test]

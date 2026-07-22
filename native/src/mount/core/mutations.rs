@@ -37,6 +37,7 @@ impl MountEngine {
         };
         self.persist_namespace_intent(&intent)?;
         let mutation_error = self.backend.mkdir_all(path.backend()).err();
+        self.invalidate_metadata(path.backend(), false);
         let result = match (mutation_error, self.backend.stat(path.backend())) {
             (None, Ok(created)) if created.is_dir && !created.is_symlink => {
                 self.forget_namespace_conflict(path.backend())?;
@@ -177,6 +178,8 @@ impl MountEngine {
                 drop(state);
                 entries.remove(&self.cache_key(source.backend()));
                 entries.insert(self.cache_key(destination.backend()), entry.clone());
+                self.invalidate_metadata(source.backend(), false);
+                self.invalidate_metadata(destination.backend(), false);
                 return Ok(RenameOutcome::Complete);
             }
         }
@@ -263,10 +266,12 @@ impl MountEngine {
         };
         self.persist_namespace_intent(&intent)?;
         let mut ambiguous_dispatch = None;
-        if let Err(error) = self
+        let rename_result = self
             .backend
-            .rename_no_replace(source.backend(), destination.backend())
-        {
+            .rename_no_replace(source.backend(), destination.backend());
+        self.invalidate_metadata(source.backend(), true);
+        self.invalidate_metadata(destination.backend(), true);
+        if let Err(error) = rename_result {
             let source_after = self.observe_path(source.backend());
             let destination_after = self.observe_path(destination.backend());
             let pre_state_intact = source_after.matches(&source_baseline, Some(source_meta.is_dir))

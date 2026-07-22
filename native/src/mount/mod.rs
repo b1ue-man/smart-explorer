@@ -16,6 +16,14 @@ mod file_io;
 mod journal;
 #[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core/metadata_cache.rs"]
+mod metadata_cache;
+#[path = "core/metadata_loading.rs"]
+mod metadata_loading;
+#[path = "core/metadata_point_cache.rs"]
+mod metadata_point_cache;
+#[path = "core/metadata_policy.rs"]
+mod metadata_policy;
 #[path = "core/mutations.rs"]
 mod mutations;
 #[path = "core/namespace_recovery.rs"]
@@ -38,12 +46,23 @@ mod types;
 mod windows_case;
 
 #[cfg(all(test, not(windows)))]
+#[path = "core/metadata_cache_task_tests.rs"]
+mod metadata_cache_task_tests;
+
+#[cfg(all(test, not(windows)))]
+#[path = "core/metadata_snapshot_task_tests.rs"]
+mod metadata_snapshot_task_tests;
+
+#[cfg(all(test, not(windows)))]
 #[path = "core/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;
 
 pub(crate) mod os;
 
 pub use engine::MountEngine;
+pub use metadata_policy::{
+    MountMetadataPolicy, DEFAULT_METADATA_PRELOAD_DEPTH, MAX_METADATA_PRELOAD_DEPTH,
+};
 pub use path::{PathProjector, ProjectedPath};
 pub use recovery_state::{MountRecovery, MountSnapshot};
 pub use spool::prepare_spool_root;

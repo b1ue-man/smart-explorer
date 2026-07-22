@@ -1,11 +1,9 @@
-use super::engine::{
-    invalid_data, lock, not_found, parent_path, read_lock, EntryState, MountEngine,
-};
-use super::path::validate_windows_component;
+use super::engine::{lock, not_found, parent_path, read_lock, EntryState, MountEngine};
 use super::types::{Baseline, HandleId};
 use crate::vfs::VfsMeta;
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
 impl MountEngine {
     pub fn stat(&self, callback_path: &str) -> io::Result<VfsMeta> {
@@ -21,6 +19,21 @@ impl MountEngine {
         self.backend.stat(path.backend())
     }
 
+    /// Metadata-only lookup for Dokany query callbacks. Namespace admission,
+    /// create/open dispositions, and every mutation continue to use `stat`.
+    pub(crate) fn stat_cached(&self, callback_path: &str) -> io::Result<VfsMeta> {
+        let _namespace = read_lock(&self.namespace)?;
+        let path = self.project_checked(callback_path)?;
+        if let Some(entry) = self.entry_for_path(path.backend())? {
+            let state = lock(&entry.state)?;
+            if state.delete_token.is_some() {
+                return Err(not_found(path.backend()));
+            }
+            return self.entry_meta(&state);
+        }
+        self.cached_remote_stat(path.backend())
+    }
+
     /// Metadata for the object addressed by an already-open file handle. This
     /// deliberately survives a delete-sharing namespace replace, where the
     /// old handle remains valid but its former pathname names a new object.
@@ -31,32 +44,22 @@ impl MountEngine {
     }
 
     pub fn list_dir(&self, callback_path: &str) -> io::Result<Vec<VfsMeta>> {
+        self.list_dir_cached(callback_path)
+            .map(|entries| entries.to_vec())
+    }
+
+    pub(crate) fn list_dir_cached(&self, callback_path: &str) -> io::Result<Arc<[VfsMeta]>> {
         let _namespace = read_lock(&self.namespace)?;
         let path = self.project_checked(callback_path)?;
-        let directory = self.backend.stat(path.backend())?;
-        if !directory.is_dir || directory.is_symlink {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "mounted directory must be a plain directory",
-            ));
-        }
-        let mut listed = self.backend.list_dir(path.backend())?;
-        let mut names = HashMap::<String, usize>::new();
-        for (index, meta) in listed.iter().enumerate() {
-            validate_windows_component(&meta.name)
-                .map_err(|error| invalid_data(error.to_string()))?;
-            if !self.case_sensitive_paths() {
-                crate::mount::validate_windows_case_component(&meta.name)
-                    .map_err(|error| invalid_data(error.to_string()))?;
-            }
-            let identity = self.name_key(&meta.name);
-            if names.insert(identity, index).is_some() {
-                return Err(invalid_data(
-                    "backend contains non-unique child names under mount case semantics",
-                ));
-            }
-        }
+        let depth = path
+            .relative()
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .count()
+            .min(u8::MAX as usize) as u8;
+        let listed = self.cached_remote_directory(path.backend(), depth)?;
         let entries = lock(&self.entries)?.values().cloned().collect::<Vec<_>>();
+        let mut overlays = Vec::new();
         for entry in entries {
             let state = lock(&entry.state)?;
             if state.delete_token.is_some()
@@ -64,7 +67,17 @@ impl MountEngine {
             {
                 continue;
             }
-            let meta = self.entry_meta(&state)?;
+            overlays.push(self.entry_meta(&state)?);
+        }
+        if overlays.is_empty() {
+            return Ok(listed);
+        }
+        let mut listed = listed.to_vec();
+        let mut names = HashMap::<String, usize>::new();
+        for (index, meta) in listed.iter().enumerate() {
+            names.insert(self.name_key(&meta.name), index);
+        }
+        for meta in overlays {
             let identity = self.name_key(&meta.name);
             if let Some(index) = names.get(&identity).copied() {
                 listed[index] = meta;
@@ -73,7 +86,7 @@ impl MountEngine {
                 listed.push(meta);
             }
         }
-        Ok(listed)
+        Ok(listed.into())
     }
 
     fn entry_meta(&self, state: &EntryState) -> io::Result<VfsMeta> {
