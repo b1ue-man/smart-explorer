@@ -140,19 +140,31 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   capabilities plus a session capability; it must never receive the daemon's
   global token, account, endpoint, credential material, or unrestricted
   backend root. Keep `env_clear`, loopback validation, bounded frames and
-  fail-closed EOF behavior.
-- **Peer roots require a live daemon probe and a connection-bound lease.** Offer
+  fail-closed EOF behavior. GUI + daemon + one isolated mount host is the
+  expected process set for one drive: the daemon owns the shared `Backend` and
+  active remote session, so closing a GUI tab must not terminate the mount.
+- **Peer roots require a live daemon probe and a principal/root lease.** Offer
   concrete Share roots as `/Label` and `/Verbindungen/<connection>`; the
   aggregate `/` is synthetic and read-only. GUI discovery must ask the daemon's
   active remote `PeerBackend`, not infer guarantees from local labels. Mount
-  admission obtains a lease bound to the authenticated QUIC connection and the
-  exact root. Direct/relay route changes inside that connection preserve it;
-  replacing the connection invalidates it and requires Retry/remount. Never let
-  a new connection inherit an old root capability. Stopping a share or
+  admission obtains a lease bound to the authenticated device principal, exact
+  root, export identity and authorization epoch. Direct/relay route changes and
+  physical QUIC reconnects reacquire current Presence routes and preserve that
+  lease. Never let a different identity, root or policy epoch inherit the old
+  capability; those changes require Retry/remount. Stopping a share or
   revoking/changing its authorization is a synchronous admission barrier: new
   operations fail closed, active leases become invalid and a later re-share
   requires Retry/remount. One already admitted operation may finish;
   multi-stage writes must recheck before flush and promotion.
+- **Cache metadata, never safety decisions or file content.** Mount metadata
+  depth defaults to 2 and is configurable from 0 through 4 in the GUI or with
+  `--metadata-depth`. Load only the complete root snapshot synchronously; fill
+  deeper complete snapshots breadth-first in bounded 8-target batches and
+  rotate at most 16 refresh targets every 20 seconds. Keep the directory cache
+  within 4,096 directories, 50,000 entries, 32 MiB total and 4 MiB per
+  directory; the five-second point-stat cache has a separate 4-MiB bound.
+  Mutations invalidate affected paths. Open/create admission, conflict checks,
+  replacement and all write decisions must continue to query live state.
 - **Root authority and read/write mode are separate gates.** Strict mode is the
   default even for read-only mounts. The deployed Linux Agent must launch with
   the exact root via `--serve-root`, bind every root component with
@@ -253,11 +265,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   while temporarily absent during atomic save/delete/rename, and any `NotFound`
   in that mutation path retains the prior marker.
 - **Remote latency is application latency.** Reads first materialize an entire
-  file, and each changed flush uploads it entirely. Long callbacks use
-  `DokanResetTimeout` every 30 seconds with a five-minute request timeout; the
-  manager's stop grace exceeds that boundary. The reported free space is the
-  local spool's lower bound, not the remote quota. Keep unrelated files
-  parallel but serialize one file/namespace mutation.
+  file, and each changed flush uploads it entirely. Metadata requests have
+  absolute transport deadlines and metadata callbacks do not repeatedly reset
+  Dokany's timeout. Supervised whole-file read/write/flush callbacks may stay
+  alive while bytes make progress, but ambiguous mutations are never replayed.
+  The reported free space is the local spool's lower bound, not the remote
+  quota. Keep unrelated files parallel but serialize one file/namespace
+  mutation.
 - **The surface is intentionally narrower than NTFS.** Windows file attributes
   and timestamps cannot be set, ACL/security writes, alternate data streams,
   open-by-ID and reparse-point access are unsupported, and remote symlinks are

@@ -42,6 +42,13 @@ Direkt-/Relay-/SSH-Verbindungswege und Fallbacks; Anmeldedaten und das eigentlic
 Remote-Ziel bleiben im Daemon und werden nicht an den isolierten
 Dateisystem-Host weitergereicht.
 
+Eine laufende Einbindung besitzt deshalb erwartungsgemäß drei Prozesse: GUI,
+den langlebigen Smart-Explorer-Daemon und genau einen isolierten Mount-Host.
+Der Daemon besitzt das gemeinsame `Backend` und dessen aktive Sitzung; der
+Mount-Host spricht ausschließlich über private lokale IPC mit ihm. Das
+Schließen eines Remote-Tabs beendet die Laufwerksverbindung nicht und die
+beiden Hintergrundprozesse sind keine separat neu verbundenen Remotes.
+
 Voraussetzung unter Windows ist die offizielle
 [Dokany-2.3.1.1000-Laufzeit](https://github.com/dokan-dev/dokany/releases/tag/v2.3.1.1000)
 mit DLL-API **231** und Kernel-Treiberprotokoll **0x190** (dezimal **400**).
@@ -73,13 +80,23 @@ Verbinden. Der Terminal-Companion bietet dieselbe Steuerung:
 ```powershell
 se drive runtime
 se drive install-runtime
-se drive mount @prod:/srv --letter M
+se drive mount @prod:/srv --letter M --metadata-depth 2
 se drive mount @prod:/notizen --letter N --read-write
 se drive mount sftp://host/srv --letter S --trust-remote-root
 se drive list
 se drive unmount M:
 se drive retry <mount-id>
 ```
+
+Die Metadaten-Tiefe ist in GUI und CLI von 0 bis 4 einstellbar und standardmäßig
+2. Vor der Laufwerksbereitschaft lädt Smart Explorer nur ein vollständiges
+Root-Snapshot; tiefere vollständige Verzeichnis-Snapshots folgen danach
+breitensuchend in kleinen Hintergrund-Batches und werden rotierend alle
+20 Sekunden erneuert. Das cached ausschließlich Namen und Dateimetadaten, nie
+Inhalte: maximal 4.096 Verzeichnisse, 50.000 Einträge, 32 MiB insgesamt und
+4 MiB pro Verzeichnis, ergänzt um einen kurzlebigen 4-MiB-Punktcache.
+Öffnen/Erstellen, Konfliktprüfungen und Mutationen fragen weiterhin live ab;
+lokale Änderungen invalidieren betroffene Snapshots sofort.
 
 Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Bei
 einem SFTP-Ziel verlangt ein solcher Mount eine gespeicherte Verbindung mit
@@ -118,13 +135,16 @@ atomare Garantie ausgegeben. Für Share-Geräte sind `/Label` und
 `/Verbindungen/<Verbindung>` konkrete mountbare Wurzeln; das aggregierte `/` ist
 synthetisch und bleibt read-only. Vor der Auswahl fragt die GUI über den Daemon
 das echte entfernte Peer-Backend ab. Der gestartete Mount erhält anschließend
-eine an die authentifizierte QUIC-Verbindung und genau diese Wurzel gebundene
-Lease. Ein Wechsel zwischen Direkt- und Relay-Pfad innerhalb derselben
-Verbindung ändert sie nicht; eine vollständig erneuerte Verbindung invalidiert
-sie und verlangt `Retry` beziehungsweise erneutes Einbinden. Ein Fallback wird
-vor dem Mount mit seinen tatsächlichen Root- und Schreibgarantien zugelassen und
-schwächt RW nie still zu unsicherem Schreiben. Für einen strikten SFTP-Mount ist
-Agent→SFTP ausdrücklich kein zulässiger Fallback.
+eine an den authentifizierten Geräte-Prinzipal, die exakte Wurzel sowie Export-
+und Autorisierungs-Epoche gebundene Lease. Direkt-/Relay-Wechsel und ein
+physischer QUIC-Reconnect sind nur Transportwechsel: Smart Explorer löst dafür
+aktuelle Presence-Routen auf und verwendet dieselbe Lease weiter, solange
+Identität, Wurzel und Policy unverändert sind. Eine andere Identität, Wurzel
+oder Autorisierungs-Epoche scheitert dagegen geschlossen und verlangt `Retry`
+beziehungsweise erneutes Einbinden. Ein Fallback wird vor dem Mount mit seinen
+tatsächlichen Root- und Schreibgarantien zugelassen und schwächt RW nie still zu
+unsicherem Schreiben. Für einen strikten SFTP-Mount ist Agent→SFTP ausdrücklich
+kein zulässiger Fallback.
 
 Auch das Stoppen einer Freigabe oder das Entziehen beziehungsweise Ändern ihrer
 Autorisierung sperrt neue Operationen synchron und macht aktive Peer-Mount-
@@ -165,7 +185,7 @@ verschwindet.
 Fehlschläge des Laufwerk-Hosts bleiben handlungsorientiert: Smart Explorer
 nennt getrennt eine inkompatible DLL-API beziehungsweise ein inkompatibles
 Treiberprotokoll, eine abgelehnte Root-/RW-Garantie, erforderliches Remount nach
-einer erneuerten Peer-Verbindung oder erhaltenes Recovery-Material. Zusätzlich
+einer geänderten Peer-Identität/Policy oder erhaltenes Recovery-Material. Zusätzlich
 wird die begrenzte Ursache des Host-Prozesses angehängt, statt nur einen
 generischen Exit-Code zu zeigen. Ein nachweislich sauberer Eintrag kann im
 Laufwerksmanager entfernt werden; für erhaltenes Recovery-Material bleibt

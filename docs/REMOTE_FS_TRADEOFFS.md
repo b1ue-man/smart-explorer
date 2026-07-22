@@ -159,14 +159,31 @@ Share discovery exposes concrete local exports as `/Label` and saved connection
 roots as `/Verbindungen/<connection>`; the aggregate `/` is a synthetic RO
 target. The GUI asks the daemon to probe the active remote `PeerBackend` rather
 than trusting local metadata. At mount time the peer issues a capability lease
-bound to that exact root and authenticated QUIC connection. Switching between a
-direct and relay route inside one connection preserves it, but replacing the
-connection invalidates the lease and requires Retry/remount. A fallback is
+bound to the authenticated device principal, exact root, export identity and
+authorization epoch. Switching between direct and relay routes or replacing a
+physical QUIC connection reacquires current Presence routes and preserves the
+lease while those authorization facts stay unchanged. A different identity,
+root or policy epoch fails closed and requires Retry/remount. A fallback is
 therefore admitted with its current guarantees and cannot silently weaken RW.
 Stopping the share or revoking/changing its authorization synchronously rejects
 new operations and invalidates active mount leases; a later re-share requires
 Retry/remount. An already admitted single operation may finish, while
 multi-stage writes recheck authorization before flush and promotion.
+
+The daemon owns the shared backend and its live connection independently of GUI
+tab lifetime; the isolated mount host receives only a private local proxy.
+GUI, daemon and one mount host are therefore the expected three processes for
+one drive, not three separately connected remote clients.
+
+Mount metadata depth defaults to 2 and is configurable from 0 to 4. Readiness
+loads one complete root snapshot synchronously; deeper complete directory
+snapshots are filled breadth-first in bounded 8-target batches, with a rotating
+16-target refresh every 20 seconds. Only names and metadata are cached: 4,096
+directories, 50,000 entries, 32 MiB total, 4 MiB per directory, plus a separate
+five-second/4-MiB point-stat cache. Mutations invalidate affected paths, while
+open/create admission, overwrite/conflict checks and every mutation continue to
+use live backend state. This reduces Explorer request storms without weakening
+the existing staged-write guarantees.
 
 A strict SFTP mount is therefore admitted only when its saved connection has
 Agent enabled and deployment plus the protocol-v9 `--serve-root` handshake
