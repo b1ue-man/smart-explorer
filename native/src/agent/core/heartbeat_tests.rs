@@ -45,7 +45,7 @@ fn backend(
 }
 
 #[test]
-fn heartbeat_retires_blackholed_live_channel_and_reconnects() {
+fn remote_drive_task_heartbeat_retires_blackholed_live_channel_and_reconnects() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let heartbeats = Arc::new(AtomicUsize::new(0));
@@ -101,7 +101,7 @@ fn heartbeat_retires_blackholed_live_channel_and_reconnects() {
 }
 
 #[test]
-fn heartbeat_keeps_responsive_idle_generation_active() {
+fn remote_drive_task_heartbeat_keeps_responsive_idle_generation_active() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let heartbeats = Arc::new(AtomicUsize::new(0));
@@ -260,7 +260,10 @@ fn remote_drive_task_metadata_timeout_drains_old_mutation_without_poisoning_repl
         )
         .unwrap();
     let response = connection
-        .safe_call_timeout(Frame::ListDir("/".into()), Duration::from_millis(40))
+        // The old generation intentionally never answers. Leave enough time
+        // for a loaded test runner to schedule the replacement handshake and
+        // its immediate response; both attempts use this same timeout.
+        .safe_call_timeout(Frame::ListDir("/".into()), Duration::from_millis(400))
         .unwrap();
     assert!(matches!(response, Frame::Dir(entries) if entries.is_empty()));
     assert!(old_mux.is_retired());

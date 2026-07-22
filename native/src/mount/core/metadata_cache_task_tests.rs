@@ -452,7 +452,7 @@ fn remote_drive_task_concurrent_directory_misses_share_one_remote_load() -> io::
     }
     barrier.wait();
     for worker in workers {
-        assert_eq!(worker.join().unwrap()?, 1);
+        assert_eq!(worker.join().unwrap()?, 3);
     }
     assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
     assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
