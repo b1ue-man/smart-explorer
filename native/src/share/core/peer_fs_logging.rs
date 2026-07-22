@@ -3,6 +3,7 @@ use super::wire::{FsRequest, FsResponse};
 pub(super) fn request_label(request: &FsRequest) -> &'static str {
     match request {
         FsRequest::Capabilities { .. } => "capabilities",
+        FsRequest::ReleaseLease => "release_lease",
         FsRequest::ListDir { .. } => "list_dir",
         FsRequest::Stat { .. } => "stat",
         FsRequest::WalkTree { .. } => "walk_tree",

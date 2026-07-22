@@ -123,16 +123,30 @@ mod legacy_direct_request_validation;
 mod line;
 #[path = "core/mount_lease.rs"]
 mod mount_lease;
+#[path = "core/mount_lease_cleanup.rs"]
+mod mount_lease_cleanup;
 #[path = "core/mount_lease_client.rs"]
 mod mount_lease_client;
 #[path = "core/node.rs"]
 mod node;
 #[path = "core/node_accept.rs"]
 mod node_accept;
+#[path = "core/node_sessions.rs"]
+mod node_sessions;
+#[path = "core/peer_endpoint_source.rs"]
+mod peer_endpoint_source;
 #[path = "core/peer_fs_logging.rs"]
 mod peer_fs_logging;
+#[path = "core/peer_lease_release.rs"]
+mod peer_lease_release;
 #[path = "core/peer_read.rs"]
 mod peer_read;
+#[path = "core/peer_request.rs"]
+mod peer_request;
+#[path = "core/peer_telemetry.rs"]
+mod peer_telemetry;
+#[path = "core/peer_walk.rs"]
+mod peer_walk;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
 #[cfg(target_os = "linux")]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use iroh::endpoint::{RecvStream, SendStream};
 
 use super::core::eio;
-use super::framing::{recv_resp, send_ctrl, send_tagged, TAG_DATA};
+use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged, TAG_DATA};
 use super::fs;
 use super::node::ShareIrohNode;
 use super::wire::{Ctrl, FsRequest, FsResponse};
@@ -14,12 +14,16 @@ pub(super) fn writer(
     send: SendStream,
     recv: RecvStream,
     lease: Option<String>,
+    session_key: String,
+    generation: usize,
 ) -> Box<dyn Write + Send> {
     Box::new(PeerWriter {
         node,
         send: Some(send),
         recv: Some(recv),
         lease,
+        session_key,
+        generation,
         state: WriterState::Open,
     })
 }
@@ -35,6 +39,8 @@ struct PeerWriter {
     send: Option<SendStream>,
     recv: Option<RecvStream>,
     lease: Option<String>,
+    session_key: String,
+    generation: usize,
     state: WriterState,
 }
 
@@ -64,25 +70,45 @@ impl PeerWriter {
                     },
                 )
                 .await?;
-                match recv_resp(&mut recv).await? {
-                    FsResponse::Ok => {
-                        send.finish().map_err(eio)?;
-                        Ok(())
-                    }
-                    _ => Err(eio("unerwartete Antwort auf Schreib-Ende")),
-                }
+                recv_resp_wire(&mut recv).await
             }));
         match result {
-            Ok(()) => {
-                self.state = WriterState::Committed;
-                Ok(())
-            }
-            Err(error) => {
-                super::io_deadline::abort(&mut send, &mut recv);
-                self.state = WriterState::Failed(error.kind(), error.to_string());
-                Err(error)
-            }
+            Ok(response) => match decode_resp(response) {
+                Ok(FsResponse::Ok) => match send.finish().map_err(eio) {
+                    Ok(()) => {
+                        self.state = WriterState::Committed;
+                        Ok(())
+                    }
+                    Err(error) => Err(self.fail_stream_parts(&mut send, &mut recv, error)),
+                },
+                Ok(_) => Err(self.fail_stream_parts(
+                    &mut send,
+                    &mut recv,
+                    eio("unerwartete Antwort auf Schreib-Ende"),
+                )),
+                Err(error) => Err(self.remember_failure(error)),
+            },
+            Err(error) => Err(self.fail_stream_parts(&mut send, &mut recv, error)),
         }
+    }
+
+    fn remember_failure(&mut self, error: io::Error) -> io::Error {
+        self.state = WriterState::Failed(error.kind(), error.to_string());
+        error
+    }
+
+    fn fail_stream_parts(
+        &mut self,
+        send: &mut SendStream,
+        recv: &mut RecvStream,
+        error: io::Error,
+    ) -> io::Error {
+        super::io_deadline::abort(send, recv);
+        let _ = self
+            .node
+            .invalidate_outgoing_session(&self.session_key, self.generation);
+        self.state = WriterState::Failed(error.kind(), error.to_string());
+        error
     }
 
     fn fail_open_stream(&mut self, error: io::Error) -> io::Error {
@@ -91,6 +117,9 @@ impl PeerWriter {
         }
         self.send.take();
         self.recv.take();
+        let _ = self
+            .node
+            .invalidate_outgoing_session(&self.session_key, self.generation);
         self.state = WriterState::Failed(error.kind(), error.to_string());
         error
     }

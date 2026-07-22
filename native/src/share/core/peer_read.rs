@@ -14,6 +14,8 @@ pub(super) fn reader(
     recv: RecvStream,
     size: u64,
     data_tag: u8,
+    session_key: String,
+    generation: usize,
 ) -> Box<dyn Read + Send> {
     Box::new(PeerReader {
         node,
@@ -23,6 +25,8 @@ pub(super) fn reader(
         buf: Vec::new(),
         pos: 0,
         terminal: None,
+        session_key,
+        generation,
     })
 }
 
@@ -34,6 +38,8 @@ struct PeerReader {
     buf: Vec<u8>,
     pos: usize,
     terminal: Option<(io::ErrorKind, String)>,
+    session_key: String,
+    generation: usize,
 }
 
 impl Read for PeerReader {
@@ -81,6 +87,9 @@ impl Read for PeerReader {
 impl PeerReader {
     fn close_with(&mut self, error: io::Error) -> io::Error {
         let _ = self.recv.stop(PEER_ABORT_CODE);
+        let _ = self
+            .node
+            .invalidate_outgoing_session(&self.session_key, self.generation);
         self.buf.clear();
         self.pos = 0;
         self.terminal = Some((error.kind(), error.to_string()));
