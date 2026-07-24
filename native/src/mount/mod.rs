@@ -28,6 +28,8 @@ mod metadata_policy;
 mod mutations;
 #[path = "core/namespace_recovery.rs"]
 mod namespace_recovery;
+#[path = "core/open_handle.rs"]
+mod open_handle;
 #[path = "core/path.rs"]
 mod path;
 #[path = "core/recovery.rs"]
@@ -52,6 +54,10 @@ mod metadata_cache_task_tests;
 #[cfg(all(test, not(windows)))]
 #[path = "core/metadata_snapshot_task_tests.rs"]
 mod metadata_snapshot_task_tests;
+
+#[cfg(all(test, not(windows)))]
+#[path = "core/navigation_cache_task_tests.rs"]
+mod navigation_cache_task_tests;
 
 #[cfg(all(test, not(windows)))]
 #[path = "core/remote_drive_task_tests.rs"]

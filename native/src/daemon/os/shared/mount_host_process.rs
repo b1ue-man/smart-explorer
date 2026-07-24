@@ -1,8 +1,14 @@
 use std::io;
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+#[cfg(windows)]
+use super::mount_job::{MountHostChild, MountHostJob};
+
+#[cfg(not(windows))]
+use std::process::Child as MountHostChild;
 
 #[cfg(any(windows, test))]
 pub(super) const MOUNT_HOST_STDERR_LIMIT: usize = 16 * 1024;
@@ -15,7 +21,9 @@ const LAUNCHER_PREFIXES: [&str; 2] = [
 ];
 
 pub(super) struct MountHostProcess {
-    child: Child,
+    child: MountHostChild,
+    #[cfg(windows)]
+    _job: MountHostJob,
     stderr_capture: Arc<Mutex<CapturedStderr>>,
     stderr_done: Receiver<()>,
 }
@@ -27,17 +35,12 @@ pub(super) struct MountHostExit {
 
 impl MountHostProcess {
     #[cfg(windows)]
-    pub(super) fn capture_piped_stderr(mut child: Child) -> io::Result<Self> {
-        let stderr = match child.stderr.take() {
-            Some(stderr) => stderr,
-            None => {
-                terminate_incomplete_child(&mut child);
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Laufwerk-Host stderr pipe fehlt",
-                ));
-            }
-        };
+    pub(super) fn capture_piped_stderr(
+        child: MountHostChild,
+        stderr: std::fs::File,
+        job: MountHostJob,
+    ) -> io::Result<Self> {
+        let mut child = child;
         let stderr_capture = Arc::new(Mutex::new(CapturedStderr::default()));
         let thread_capture = Arc::clone(&stderr_capture);
         let (done_send, stderr_done) = std::sync::mpsc::sync_channel(1);
@@ -53,6 +56,7 @@ impl MountHostProcess {
         }
         Ok(Self {
             child,
+            _job: job,
             stderr_capture,
             stderr_done,
         })
@@ -121,7 +125,7 @@ impl CapturedStderr {
 }
 
 #[cfg(windows)]
-fn drain_stderr(mut stderr: std::process::ChildStderr, capture: &Arc<Mutex<CapturedStderr>>) {
+fn drain_stderr(mut stderr: std::fs::File, capture: &Arc<Mutex<CapturedStderr>>) {
     use std::io::Read;
 
     let mut chunk = [0u8; 4096];
@@ -193,7 +197,7 @@ fn retain_utf8_tail(value: &mut String, limit: usize) {
 }
 
 #[cfg(windows)]
-fn terminate_incomplete_child(child: &mut Child) {
+fn terminate_incomplete_child(child: &mut MountHostChild) {
     let _ = child.kill();
     let _ = child.wait();
 }

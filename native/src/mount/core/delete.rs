@@ -400,7 +400,7 @@ impl MountEngine {
     ) -> io::Result<()> {
         if lock(&self.handles)?
             .values()
-            .any(|handle| std::sync::Arc::ptr_eq(&handle.entry, entry))
+            .any(|handle| handle.references(entry))
         {
             return Ok(());
         }

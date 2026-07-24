@@ -2,17 +2,21 @@ use super::case_semantics::identity_key;
 use crate::vfs::VfsMeta;
 use std::collections::{BinaryHeap, HashMap};
 use std::io;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
+#[path = "metadata_cache_load.rs"]
+mod load_support;
 #[path = "metadata_cache_support.rs"]
 mod support;
+use load_support::{invalidate_descendants, invalidate_paths, invalidate_slot};
+pub(super) use load_support::{LoadSlot, MetadataLookup};
 use support::*;
 
 const MAX_CACHED_DIRECTORIES: usize = 4_096;
-const MAX_CACHED_ENTRIES: usize = 50_000;
-const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
-const MAX_CACHED_DIRECTORY_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_CACHED_ENTRIES: usize = 50_000;
+const MAX_CACHED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CACHED_DIRECTORY_BYTES: usize = MAX_CACHED_BYTES;
 const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
@@ -20,6 +24,7 @@ struct CachedDirectory {
     path: String,
     metadata: VfsMeta,
     entries: Arc<[VfsMeta]>,
+    entry_index: Arc<HashMap<String, usize>>,
     depth: u8,
     entry_count: usize,
     byte_count: usize,
@@ -44,7 +49,7 @@ pub(super) struct MetadataCache {
     root: String,
     case_sensitive: bool,
     state: Mutex<CacheState>,
-    loads: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    loads: Mutex<HashMap<String, Weak<LoadSlot>>>,
 }
 
 impl MetadataCache {
@@ -57,35 +62,31 @@ impl MetadataCache {
         }
     }
 
-    pub(super) fn stat(&self, path: &str) -> io::Result<Option<VfsMeta>> {
+    pub(super) fn stat(&self, path: &str) -> io::Result<MetadataLookup> {
         let mut state = self.lock_state()?;
-        let key = self.key(path);
-        let touch = tick(&mut state);
-        if let Some((parent, name)) = parent_and_name(path) {
-            let parent_key = self.key(parent);
-            let name_key = self.key(name);
-            if let Some(cached) = state.directories.get_mut(&parent_key) {
-                cached.last_touch = touch;
-                cached.last_access = touch;
-                return Ok(cached
-                    .entries
-                    .iter()
-                    .find(|metadata| self.key(&metadata.name) == name_key)
-                    .cloned());
-            }
-        }
-        let Some(cached) = state.directories.get_mut(&key) else {
-            return Ok(None);
-        };
-        cached.last_touch = touch;
-        cached.last_access = touch;
-        Ok(Some(cached.metadata.clone()))
+        Ok(lookup_metadata(&mut state, path, self.case_sensitive))
     }
 
     pub(super) fn directory(&self, path: &str) -> io::Result<Option<Arc<[VfsMeta]>>> {
         let mut state = self.lock_state()?;
         let key = self.key(path);
         let touch = tick(&mut state);
+        if let Some((parent, name)) = parent_and_name(path) {
+            let parent_key = self.key(parent);
+            let name_key = self.key(name);
+            if let Some(parent) = state.directories.get_mut(&parent_key) {
+                parent.last_touch = touch;
+                parent.last_access = touch;
+                let is_plain_directory = parent
+                    .entry_index
+                    .get(&name_key)
+                    .and_then(|index| parent.entries.get(*index))
+                    .is_some_and(|metadata| metadata.is_dir && !metadata.is_symlink);
+                if !is_plain_directory {
+                    return Ok(None);
+                }
+            }
+        }
         let Some(cached) = state.directories.get_mut(&key) else {
             return Ok(None);
         };
@@ -113,19 +114,55 @@ impl MetadataCache {
         entries: Arc<[VfsMeta]>,
         depth: u8,
     ) -> io::Result<bool> {
+        self.install_directory_at_revision(path, metadata, entries, depth, None)
+    }
+
+    pub(super) fn install_directory_if_current(
+        &self,
+        path: &str,
+        metadata: VfsMeta,
+        entries: Arc<[VfsMeta]>,
+        depth: u8,
+        slot: &LoadSlot,
+        revision: u64,
+    ) -> io::Result<bool> {
+        self.install_directory_at_revision(path, metadata, entries, depth, Some((slot, revision)))
+    }
+
+    fn install_directory_at_revision(
+        &self,
+        path: &str,
+        metadata: VfsMeta,
+        entries: Arc<[VfsMeta]>,
+        depth: u8,
+        admission: Option<(&LoadSlot, u64)>,
+    ) -> io::Result<bool> {
         let entry_count = entries.len().saturating_add(1);
-        let byte_count = path
+        let metadata_bytes = path
             .len()
+            .saturating_mul(2)
             .saturating_add(meta_bytes(&metadata))
             .saturating_add(entries.iter().fold(0usize, |total, metadata| {
                 total.saturating_add(meta_bytes(metadata))
             }));
-        if entry_count > MAX_CACHED_ENTRIES || byte_count > MAX_CACHED_DIRECTORY_BYTES {
+        if entry_count > MAX_CACHED_ENTRIES || metadata_bytes > MAX_CACHED_DIRECTORY_BYTES {
             return Ok(false);
         }
-        let mut state = self.lock_state()?;
+        let (entry_index, index_bytes) = build_entry_index(&entries, self.case_sensitive)?;
+        let byte_count = metadata_bytes
+            .saturating_add(index_bytes)
+            .saturating_add(std::mem::size_of::<CachedDirectory>());
+        if byte_count > MAX_CACHED_DIRECTORY_BYTES {
+            return Ok(false);
+        }
         let key = self.key(path);
         let root_key = self.key(&self.root);
+        let mut loads = self.lock_loads()?;
+        invalidate_descendants(&mut loads, &key);
+        let mut state = self.lock_state()?;
+        if admission.is_some_and(|(slot, revision)| slot.revision() != revision) {
+            return Ok(false);
+        }
         let previous = state.directories.get(&key).cloned();
         let last_access = previous.as_ref().map_or(0, |cached| cached.last_access);
         let available_entries = state
@@ -166,6 +203,7 @@ impl MetadataCache {
                 path: path.to_string(),
                 metadata,
                 entries: Arc::clone(&entries),
+                entry_index,
                 depth,
                 entry_count,
                 byte_count,
@@ -181,10 +219,13 @@ impl MetadataCache {
     }
 
     pub(super) fn invalidate(&self, path: &str, recursive: bool) -> io::Result<()> {
-        let mut state = self.lock_state()?;
-        state.generation = state.generation.saturating_add(1);
         let key = self.key(path);
         let prefix = format!("{}/", key.trim_end_matches('/'));
+        let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
+        let mut loads = self.lock_loads()?;
+        invalidate_paths(&mut loads, &key, &prefix, recursive, parent_key.as_deref());
+        let mut state = self.lock_state()?;
+        state.generation = state.generation.saturating_add(1);
         let directory_keys = state
             .directories
             .keys()
@@ -194,7 +235,6 @@ impl MetadataCache {
         for candidate in directory_keys {
             remove_directory(&mut state, &candidate);
         }
-        let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
         state.snapshot_cooldowns.retain(|candidate, _| {
             candidate != &key
                 && !(recursive && candidate.starts_with(&prefix))
@@ -343,19 +383,16 @@ impl MetadataCache {
         Ok(())
     }
 
-    pub(super) fn load_guard(&self, path: &str) -> io::Result<Arc<Mutex<()>>> {
+    pub(super) fn load_slot(&self, path: &str) -> io::Result<Arc<LoadSlot>> {
         let key = self.key(path);
-        let mut loads = self
-            .loads
-            .lock()
-            .map_err(|_| io::Error::other("metadata load table is unavailable"))?;
-        loads.retain(|_, guard| guard.strong_count() > 0);
-        if let Some(guard) = loads.get(&key).and_then(Weak::upgrade) {
-            return Ok(guard);
+        let mut loads = self.lock_loads()?;
+        load_support::retain_active_loads(&mut loads);
+        if let Some(slot) = loads.get(&key).and_then(Weak::upgrade) {
+            return Ok(slot);
         }
-        let guard = Arc::new(Mutex::new(()));
-        loads.insert(key, Arc::downgrade(&guard));
-        Ok(guard)
+        let slot = Arc::new(LoadSlot::new());
+        loads.insert(key, Arc::downgrade(&slot));
+        Ok(slot)
     }
 
     pub(super) fn revision(&self, path: &str) -> io::Result<Option<u64>> {
@@ -374,6 +411,26 @@ impl MetadataCache {
         let mut state = self.lock_state()?;
         state.generation = state.generation.saturating_add(1);
         Ok(())
+    }
+
+    pub(super) fn note_path_observation(&self, path: &str) -> io::Result<()> {
+        let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
+        let key = self.key(path);
+        let mut loads = self.lock_loads()?;
+        invalidate_descendants(&mut loads, &key);
+        if let Some(parent_key) = parent_key.as_ref() {
+            invalidate_slot(&mut loads, parent_key);
+        }
+        let mut state = self.lock_state()?;
+        state.generation = state.generation.saturating_add(1);
+        if let Some(parent_key) = parent_key {
+            remove_directory(&mut state, &parent_key);
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_listing(&self, entries: &[VfsMeta]) -> io::Result<()> {
+        validate_listing(entries)
     }
 
     #[cfg(test)]
@@ -395,5 +452,11 @@ impl MetadataCache {
         self.state
             .lock()
             .map_err(|_| io::Error::other("mount metadata cache is unavailable"))
+    }
+
+    fn lock_loads(&self) -> io::Result<MutexGuard<'_, HashMap<String, Weak<LoadSlot>>>> {
+        self.loads
+            .lock()
+            .map_err(|_| io::Error::other("metadata load table is unavailable"))
     }
 }

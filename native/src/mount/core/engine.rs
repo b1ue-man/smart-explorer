@@ -2,6 +2,7 @@ use super::case_semantics::{identity_key, validate_backend_case_path};
 use super::journal::{DeletePhase, PersistedDelete, PersistedEntry};
 use super::metadata_cache::MetadataCache;
 use super::metadata_point_cache::MetadataPointCache;
+pub(super) use super::open_handle::{OpenHandle, OpenHandleKind};
 use super::path::{validate_windows_component, PathProjector, ProjectedPath};
 use super::spool::{prepare_spool_root, WholeFileSpool};
 use super::startup::validate_backend_root;
@@ -47,11 +48,6 @@ pub(super) struct EntryState {
     pub condition: EntryCondition,
     pub delete_token: Option<u64>,
     pub delete_committed: bool,
-}
-
-pub(super) struct OpenHandle {
-    pub entry: Arc<Entry>,
-    pub writable: bool,
 }
 
 impl MountEngine {
@@ -131,7 +127,7 @@ impl MountEngine {
         };
         if lock(&self.handles)?
             .values()
-            .any(|opened| Arc::ptr_eq(&opened.entry, &entry))
+            .any(|opened| opened.references(&entry))
         {
             return Ok(false);
         }

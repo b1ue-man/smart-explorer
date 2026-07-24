@@ -25,11 +25,23 @@ const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FILE_OPEN_BY_FILE_ID: u32 = 0x0000_2000;
 const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const FILE_READ_DATA: u32 = 0x0000_0001;
 const FILE_WRITE_DATA: u32 = 0x0000_0002;
 const FILE_APPEND_DATA: u32 = 0x0000_0004;
+const FILE_WRITE_EA: u32 = 0x0000_0010;
+const FILE_EXECUTE: u32 = 0x0000_0020;
+const FILE_DELETE_CHILD: u32 = 0x0000_0040;
+const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+const DELETE: u32 = 0x0001_0000;
+const WRITE_DAC: u32 = 0x0004_0000;
+const WRITE_OWNER: u32 = 0x0008_0000;
 const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 const GENERIC_ALL: u32 = 0x1000_0000;
+const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
+const GENERIC_READ: u32 = 0x8000_0000;
+const SYNCHRONIZE: u32 = 0x0010_0000;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
@@ -48,7 +60,13 @@ pub(super) unsafe extern "system" fn create_file(
         guard_long_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             validate_create_flags(file_attributes, create_options)?;
-            let existing = match context.engine.stat(&path) {
+            let cache_safe =
+                cache_safe_namespace_open(desired_access, create_disposition, create_options);
+            let existing = match if cache_safe {
+                context.engine.stat_cached(&path)
+            } else {
+                context.engine.stat(&path)
+            } {
                 Ok(meta) => Some(meta),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error.into()),
@@ -81,7 +99,7 @@ pub(super) unsafe extern "system" fn create_file(
                 open_regular_file(
                     context,
                     path,
-                    existing.is_some(),
+                    existing.as_ref(),
                     desired_access,
                     create_disposition,
                     create_options,
@@ -150,26 +168,37 @@ fn open_directory(
 fn open_regular_file(
     context: &CallbackContext,
     path: String,
-    exists: bool,
+    existing: Option<&crate::vfs::VfsMeta>,
     desired_access: u32,
     disposition: u32,
     create_options: u32,
     share_access: u32,
     file_info: *mut DokanFileInfo,
 ) -> CallbackResult {
+    let exists = existing.is_some();
     let writable = desired_access
         & (FILE_WRITE_DATA | FILE_APPEND_DATA | MAXIMUM_ALLOWED | GENERIC_WRITE | GENERIC_ALL)
         != 0;
     let requested_disposition = disposition;
     let disposition = disposition_for_file(requested_disposition, exists, writable)?;
     let reservation = context.reserve_handle(&path, false, desired_access, share_access)?;
-    let engine_handle = context.engine.open_file(
-        &path,
-        OpenFileOptions {
-            writable,
-            disposition,
-        },
-    )?;
+    let engine_handle =
+        if disposition == OpenDisposition::OpenExisting && !requires_file_data(desired_access) {
+            context.engine.open_metadata_file(
+                &path,
+                existing
+                    .cloned()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))?,
+            )?
+        } else {
+            context.engine.open_file(
+                &path,
+                OpenFileOptions {
+                    writable,
+                    disposition,
+                },
+            )?
+        };
     let delete_on_close = create_options & FILE_DELETE_ON_CLOSE != 0;
     if let Err(error) = reservation.bind(NodeHandle::File(engine_handle)) {
         let _ = context.engine.close(engine_handle);
@@ -194,6 +223,54 @@ fn open_regular_file(
     }
     opened_existing(exists, requested_disposition)
 }
+
+const fn cache_safe_namespace_open(desired_access: u32, disposition: u32, options: u32) -> bool {
+    const MUTATING_ACCESS: u32 = FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | FILE_WRITE_EA
+        | FILE_DELETE_CHILD
+        | FILE_WRITE_ATTRIBUTES
+        | DELETE
+        | WRITE_DAC
+        | WRITE_OWNER
+        | MAXIMUM_ALLOWED
+        | GENERIC_WRITE
+        | GENERIC_ALL;
+    disposition == FILE_OPEN
+        && options & FILE_DELETE_ON_CLOSE == 0
+        && desired_access & MUTATING_ACCESS == 0
+}
+
+const fn requires_file_data(desired_access: u32) -> bool {
+    desired_access
+        & (FILE_READ_DATA
+            | FILE_WRITE_DATA
+            | FILE_APPEND_DATA
+            | FILE_EXECUTE
+            | MAXIMUM_ALLOWED
+            | GENERIC_READ
+            | GENERIC_WRITE
+            | GENERIC_EXECUTE
+            | GENERIC_ALL)
+        != 0
+}
+
+// These assertions are compiled by the Windows boundary check. They bind the
+// raw kernel access masks used by Explorer to the metadata-only route without
+// requiring a live Dokany driver in the task suite.
+const _: () = {
+    let explorer_metadata = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+    assert!(cache_safe_namespace_open(explorer_metadata, FILE_OPEN, 0));
+    assert!(!requires_file_data(explorer_metadata));
+    assert!(!cache_safe_namespace_open(
+        explorer_metadata,
+        FILE_OPEN,
+        FILE_DELETE_ON_CLOSE
+    ));
+    assert!(!cache_safe_namespace_open(DELETE, FILE_OPEN, 0));
+    assert!(requires_file_data(FILE_READ_DATA));
+    assert!(requires_file_data(GENERIC_READ));
+};
 
 fn clear_context(file_info: *mut DokanFileInfo) {
     unsafe {

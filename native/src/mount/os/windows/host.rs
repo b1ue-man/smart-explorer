@@ -110,16 +110,25 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
         .copied()
         .ok_or_else(|| report_failure(&session, "no Windows drive letter is available"))?;
     let engine = Arc::new(engine);
-    let context = Box::new(CallbackContext::new(
-        Arc::clone(&engine),
-        runtime.clone(),
-        Arc::clone(&session),
-        initial_drive,
-        config.mode == MountMode::ReadOnly,
-        config.label,
-        super::metadata::volume_serial(config.id.as_str()),
-        cache_root_wide,
-    ));
+    let context = Box::new(
+        CallbackContext::new(
+            Arc::clone(&engine),
+            runtime.clone(),
+            Arc::clone(&session),
+            initial_drive,
+            config.mode == MountMode::ReadOnly,
+            config.label,
+            super::metadata::volume_serial(config.id.as_str()),
+            cache_root_wide,
+        )
+        .map_err(|error| {
+            report_engine_failure(
+                &session,
+                &engine,
+                &format!("mounted-drive callback supervisor could not start: {error}"),
+            )
+        })?,
+    );
     let mut storage = CallbackStorage::new(context, config.mode == MountMode::ReadOnly);
     // Arm recovery ownership before Dokany may dispatch its first callback.
     // If creation itself fails, the branch below disarms only after proving
@@ -329,13 +338,20 @@ fn close_and_finalize(
     prior_failure: Option<&str>,
 ) -> Result<(), String> {
     storage.request_metadata_refresh_stop();
+    let shutdown_watchdog = super::shutdown_watchdog::ShutdownWatchdog::start("dokan-close");
     // DokanCloseHandle is the callback lifetime boundary. Only inspect the
     // engine once Dokany can no longer mutate its retryable journal state.
     filesystem.close();
     // Closing Dokany first prevents a slow background target from keeping the
     // drive visible. The worker observes cancellation between remote targets;
     // join still owns its engine before recovery inspection begins.
+    if let Some(watchdog) = shutdown_watchdog.as_ref() {
+        watchdog.set_phase("metadata-refresh");
+    }
     storage.join_metadata_refresh();
+    let watchdog_failed = shutdown_watchdog.is_some_and(|watchdog| !watchdog.finish());
+    let prior_failure = prior_failure.or(watchdog_failed
+        .then_some("the mounted drive shutdown watchdog stopped after an internal failure"));
     match storage.context.engine.dirty_entries() {
         Ok(entries) if !entries.is_empty() => {
             let detail = recovery_detail(&entries);

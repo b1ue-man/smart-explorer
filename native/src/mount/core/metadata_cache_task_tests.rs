@@ -186,7 +186,7 @@ fn remote_drive_task_preload_is_complete_depth_bounded_and_keeps_admission_live(
     assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     assert_eq!(engine.preload_metadata_batch()?, 1);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     assert_eq!(
         engine
             .list_dir(r"\")?
@@ -201,14 +201,14 @@ fn remote_drive_task_preload_is_complete_depth_bounded_and_keeps_admission_live(
     );
     assert_eq!(engine.stat_cached(r"\Alpha\note.md")?.size, 12);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
 
     assert_eq!(engine.stat(r"\Alpha\note.md")?.size, 12);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 3);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
     let (directories, entries, bytes) = engine.metadata_cache_usage()?;
     assert_eq!(directories, 2);
     assert!(entries >= 4);
-    assert!(bytes > 0 && bytes <= 32 * 1024 * 1024);
+    assert!(bytes > 0 && bytes <= 16 * 1024 * 1024);
     Ok(())
 }
 
@@ -233,9 +233,10 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
     assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     assert_eq!(engine.preload_metadata_batch()?, 8);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 9);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 9);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     assert_eq!(engine.preload_metadata_batch()?, 5);
     assert_eq!(engine.preload_metadata_batch()?, 0);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     let loaded = backend
         .list_paths
         .lock()
@@ -275,14 +276,14 @@ fn remote_drive_task_background_preload_honors_stop_between_targets() -> io::Res
         1
     );
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     Ok(())
 }
 
 #[test]
 fn remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
-    let oversized_name = "x".repeat(4 * 1024 * 1024);
+    let oversized_name = "x".repeat(8 * 1024 * 1024);
     assert!(!cache.install_directory(
         "/",
         directory("/"),
@@ -306,7 +307,12 @@ fn remote_drive_task_mutation_keeps_unrelated_snapshot_backoff() -> io::Result<(
 #[test]
 fn remote_drive_task_refresh_prioritizes_recently_accessed_directory() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
-    assert!(cache.install_directory("/", directory("/"), Vec::new().into(), 0)?);
+    assert!(cache.install_directory(
+        "/",
+        directory("/"),
+        vec![directory("Alpha"), directory("Beta")].into(),
+        0,
+    )?);
     assert!(cache.install_directory("/Alpha", directory("Alpha"), Vec::new().into(), 1)?);
     assert!(cache.install_directory("/Beta", directory("Beta"), Vec::new().into(), 1)?);
     assert!(cache.directory("/Beta")?.is_some());
@@ -340,10 +346,10 @@ fn remote_drive_task_failed_background_preload_reports_no_progress() -> io::Resu
         .remove("/Alpha");
     assert_eq!(engine.preload_metadata_batch()?, 0);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     assert_eq!(engine.preload_metadata_batch()?, 0);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

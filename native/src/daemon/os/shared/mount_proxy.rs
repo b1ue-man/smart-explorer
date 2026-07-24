@@ -40,17 +40,17 @@ impl Backend for MountProxy {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let _permit = self.gate.enter()?;
+        let _permit = self.gate.enter_metadata()?;
         decode(self.inner.list_dir(path))
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let _permit = self.gate.enter()?;
+        let _permit = self.gate.enter_metadata()?;
         decode(self.inner.stat(path))
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        let _permit = self.gate.enter()?;
+        let _permit = self.gate.enter_metadata()?;
         decode(self.inner.try_exists(path))
     }
 

@@ -76,7 +76,7 @@ impl MountEngine {
 
         let destination_is_open = lock(&self.handles)?
             .values()
-            .any(|opened| Arc::ptr_eq(&opened.entry, &entry));
+            .any(|opened| opened.references(&entry));
         if destination_is_open && !shared_destination_is_open {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,

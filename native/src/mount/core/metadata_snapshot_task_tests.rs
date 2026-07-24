@@ -1,4 +1,5 @@
-use super::metadata_cache::MetadataCache;
+use super::metadata_cache::{MetadataCache, MetadataLookup};
+use super::metadata_point_cache::MetadataPointCache;
 use super::{MountEngine, MountId, MountMetadataPolicy, MountMode, MountRuntimeConfig};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
@@ -16,6 +17,40 @@ fn remote_drive_task_cached_enumerations_share_one_immutable_snapshot() -> io::R
     let second = cache.directory("/")?.expect("root snapshot");
     assert!(Arc::ptr_eq(&entries, &first));
     assert!(Arc::ptr_eq(&first, &second));
+    Ok(())
+}
+
+#[test]
+fn remote_drive_task_parent_snapshot_recursively_reconciles_point_metadata() -> io::Result<()> {
+    let cache = MetadataCache::new("/", true);
+    let points = MetadataPointCache::new(true);
+    let mut linked = directory("Linked");
+    linked.is_symlink = true;
+    let initial: Arc<[VfsMeta]> = vec![
+        directory("Kept"),
+        directory("Removed"),
+        directory("Changed"),
+        directory("Linked"),
+    ]
+    .into();
+    assert!(cache.install_directory("/", directory("/"), initial, 0)?);
+    for directory in ["Kept", "Removed", "Changed", "Linked"] {
+        points.install(&format!("/{directory}/deep.txt"), file("deep.txt", 1))?;
+    }
+
+    let refreshed: Arc<[VfsMeta]> = vec![directory("Kept"), file("Changed", 2), linked].into();
+    assert!(cache.install_directory("/", directory("/"), Arc::clone(&refreshed), 0,)?);
+    points.reconcile_directory("/", &refreshed)?;
+
+    assert!(points.get("/Kept/deep.txt")?.is_some());
+    for path in ["/Removed/deep.txt", "/Changed/deep.txt", "/Linked/deep.txt"] {
+        assert!(points.get(path)?.is_none());
+        assert!(matches!(cache.stat(path)?, MetadataLookup::KnownMissing));
+    }
+    assert!(matches!(
+        cache.stat("/Kept/deep.txt")?,
+        MetadataLookup::Uncached
+    ));
     Ok(())
 }
 
@@ -186,7 +221,7 @@ fn remote_drive_task_global_snapshot_admission_evicts_within_hard_limits() -> io
     let (directories, entries, bytes) = cache.usage()?;
     assert!(directories <= 4_096);
     assert!(entries <= 50_000);
-    assert!(bytes <= 32 * 1024 * 1024);
+    assert!(bytes <= 16 * 1024 * 1024);
     assert!(cache.directory("/")?.is_some(), "root snapshot is pinned");
     Ok(())
 }
