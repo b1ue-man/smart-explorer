@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+report_suite_failure() {
+    local status=$?
+    echo "remote-drive task suite failed at line ${BASH_LINENO[0]}: $BASH_COMMAND" >&2
+    exit "$status"
+}
+trap report_suite_failure ERR
+
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_TEST_DEBUG=0
@@ -11,6 +18,10 @@ windows_target="x86_64-pc-windows-gnu"
 
 command -v cargo >/dev/null 2>&1 || {
     echo "cargo is required" >&2
+    exit 1
+}
+command -v rg >/dev/null 2>&1 || {
+    echo "ripgrep is required" >&2
     exit 1
 }
 
@@ -37,8 +48,8 @@ assert_before() {
     local first=$2
     local second=$3
     local first_line second_line
-    first_line="$(grep -nF -- "$first" "$file" | head -1 | cut -d: -f1)"
-    second_line="$(grep -nF -- "$second" "$file" | head -1 | cut -d: -f1)"
+    first_line="$(grep -nF -- "$first" "$file" | head -1 | cut -d: -f1 || true)"
+    second_line="$(grep -nF -- "$second" "$file" | head -1 | cut -d: -f1 || true)"
     if [ -z "$first_line" ] || [ -z "$second_line" ] || [ "$first_line" -ge "$second_line" ]; then
         echo "expected '$first' before '$second' in $file" >&2
         exit 1
@@ -73,6 +84,100 @@ case "$memory_settings" in
         exit 1
         ;;
 esac
+grep -Fxq '  -p MemoryHigh=1792M' "$repo_root/native/run-task-memory-bounded.sh"
+grep -Fxq '  -p MemoryMax=2G' "$repo_root/native/run-task-memory-bounded.sh"
+grep -Fxq '  -p MemorySwapMax=256M' "$repo_root/native/run-task-memory-bounded.sh"
+assert_contains "$repo_root/native/run-task-memory-bounded.sh" \
+    'memory_max_path="/sys/fs/cgroup${cgroup_path%/}/memory.max"'
+assert_contains "$repo_root/native/run-task-memory-bounded.sh" \
+    '[ "$memory_max" -le 2147483648 ]'
+assert_contains "$repo_root/native/run-task-memory-bounded.sh" \
+    '--expand-environment=no'
+assert_contains "$repo_root/native/run-task-memory-bounded.sh" \
+    'sh -c "$memory_scope_guard" task-memory-scope "$@"'
+grep -Fq 'No usable aggregate cgroup memory boundary is available; refusing to run.' \
+    "$repo_root/native/run-task-memory-bounded.sh"
+assert_absent "$repo_root/native/run-task-memory-bounded.sh" 'ulimit -v'
+assert_absent "$repo_root/native/run-task-memory-bounded.sh" 'setsid'
+
+fake_systemd_dir="$(mktemp -d)"
+cleanup_fake_systemd() {
+    rm -rf "$fake_systemd_dir"
+}
+trap cleanup_fake_systemd EXIT
+mkdir "$fake_systemd_dir/bin"
+cat > "$fake_systemd_dir/bin/systemd-run" <<'FAKE_SYSTEMD_RUN'
+#!/usr/bin/env bash
+set -euo pipefail
+has_hard_limit=false
+has_soft_limit=false
+has_no_expand=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --user|--scope|--quiet|--collect)
+            shift
+            ;;
+        --expand-environment=no)
+            has_no_expand=true
+            shift
+            ;;
+        -p)
+            case "$2" in
+                MemoryMax=2G) has_hard_limit=true ;;
+                MemoryHigh=*|MemorySwapMax=*|OOMPolicy=*) has_soft_limit=true ;;
+            esac
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+if [ "$has_hard_limit" != true ] || [ "$has_soft_limit" = true ] || \
+    [ "$has_no_expand" != true ]; then
+    exit 1
+fi
+if [ "${1:-}" != sh ] || [ "${2:-}" != -c ] || [[ "${3:-}" != *memory.max* ]]; then
+    exit 1
+fi
+sh -n -c "$3"
+if [[ "$3" == *'exec "$@"'* ]]; then
+    if [ "${FAKE_SYSTEMD_RUN_MODE:-hard}" = reject-guard ]; then
+        exit 1
+    fi
+    shift 4
+    exec "$@"
+fi
+exit 0
+FAKE_SYSTEMD_RUN
+chmod +x "$fake_systemd_dir/bin/systemd-run"
+if ! hard_scope_result="$(PATH="$fake_systemd_dir/bin:$PATH" \
+    "$repo_root/native/run-task-memory-bounded.sh" \
+    bash -c 'printf hard-scope-command-ran')"; then
+    rm -rf "$fake_systemd_dir"
+    echo "hard-only task memory scope probe failed" >&2
+    exit 1
+fi
+case "$hard_scope_result" in
+    *'Task memory scope: user cgroup (hard max 2G).'*'hard-scope-command-ran'*) ;;
+    *)
+        echo "hard-only task memory scope was not selected: $hard_scope_result" >&2
+        exit 1
+        ;;
+esac
+scope_reject_sentinel="$fake_systemd_dir/scope-command-ran"
+if PATH="$fake_systemd_dir/bin:$PATH" FAKE_SYSTEMD_RUN_MODE=reject-guard \
+    "$repo_root/native/run-task-memory-bounded.sh" \
+    touch "$scope_reject_sentinel" >/dev/null 2>&1; then
+    echo "task memory wrapper accepted an ineffective cgroup scope" >&2
+    exit 1
+fi
+if [ -e "$scope_reject_sentinel" ]; then
+    echo "task command ran without an effective cgroup memory limit" >&2
+    exit 1
+fi
+cleanup_fake_systemd
+trap - EXIT
 
 echo "remote-drive task suite: source and installer invariants"
 sftp_session="$repo_root/native/src/sftp/core/session.rs"
@@ -83,17 +188,28 @@ mount_manager="$repo_root/native/src/daemon/os/shared/mount_manager.rs"
 ipc_host="$repo_root/native/src/daemon/os/shared/ipc_host.rs"
 mount_source="$repo_root/native/src/daemon/os/shared/mount_source.rs"
 mount_process="$repo_root/native/src/daemon/os/windows/mount_process.rs"
+mount_job="$repo_root/native/src/daemon/os/windows/mount_job.rs"
+mount_launch="$repo_root/native/src/daemon/os/windows/mount_launch.rs"
 mount_process_environment="$repo_root/native/src/daemon/os/windows/mount_process_environment.rs"
 mount_host_process="$repo_root/native/src/daemon/os/shared/mount_host_process.rs"
+mount_request_gate="$repo_root/native/src/daemon/os/shared/mount_request_gate.rs"
+mount_proxy="$repo_root/native/src/daemon/os/shared/mount_proxy.rs"
 rooted_backend="$repo_root/native/src/daemon/os/shared/rooted_backend.rs"
 rooted_backend_gate="$repo_root/native/src/daemon/os/shared/rooted_backend_gate.rs"
+vfs_cache="$repo_root/native/src/vfs/core/cache.rs"
+vfs_cache_writer="$repo_root/native/src/vfs/core/cache_writer.rs"
 remote_open="$repo_root/native/src/app/os/shared/remote_open.rs"
 mount_types="$repo_root/native/src/mount/core/types.rs"
 metadata_policy="$repo_root/native/src/mount/core/metadata_policy.rs"
 metadata_cache="$repo_root/native/src/mount/core/metadata_cache.rs"
+metadata_cache_load="$repo_root/native/src/mount/core/metadata_cache_load.rs"
 metadata_loading="$repo_root/native/src/mount/core/metadata_loading.rs"
 mount_metadata="$repo_root/native/src/mount/core/metadata.rs"
 mount_host="$repo_root/native/src/mount/os/windows/host.rs"
+shutdown_watchdog="$repo_root/native/src/mount/os/windows/shutdown_watchdog.rs"
+callback_context="$repo_root/native/src/mount/os/windows/callback_context.rs"
+callback_status="$repo_root/native/src/mount/os/windows/callback_status.rs"
+callback_timeout="$repo_root/native/src/mount/os/windows/callback_timeout.rs"
 metadata_refresh="$repo_root/native/src/mount/os/windows/metadata_refresh.rs"
 metadata_callbacks="$repo_root/native/src/mount/os/windows/callbacks_metadata.rs"
 open_callbacks="$repo_root/native/src/mount/os/windows/callbacks_open.rs"
@@ -103,6 +219,7 @@ mount_file_io="$repo_root/native/src/mount/core/file_io.rs"
 mount_mutations="$repo_root/native/src/mount/core/mutations.rs"
 mount_delete="$repo_root/native/src/mount/core/delete.rs"
 mount_replace="$repo_root/native/src/mount/core/replace.rs"
+agent_codec="$repo_root/native/src/agent_proto/core/codec.rs"
 mount_ui_draft="$repo_root/native/src/app/core/mount_ui_draft.rs"
 drive_cli="$repo_root/native/src/cli/drive.rs"
 peer_backend="$repo_root/native/src/share/core/backend.rs"
@@ -154,16 +271,26 @@ assert_before "$mount_manager" 'start_cache::prepare(self, &key, &config.id)' 's
 assert_contains "$ipc_host" 'pub(super) mounts: super::mount_manager::MountManager'
 assert_contains "$mount_manager" 'child: Option<super::mount_host_process::MountHostProcess>'
 
-assert_contains "$mount_process" 'std::env::current_exe()?'
+assert_contains "$mount_launch" 'std::env::current_exe()?'
 assert_absent "$mount_process" 'with_file_name("se.exe")'
 assert_contains "$mount_process" 'GetSystemWindowsDirectoryW'
 assert_contains "$mount_process" 'MAX_WINDOWS_DIRECTORY_UNITS'
-assert_contains "$mount_process" 'MountHostProcess::capture_piped_stderr(command.spawn()?)'
+assert_contains "$mount_process" 'MountHostProcess::capture_piped_stderr('
+assert_contains "$mount_process" 'launched.child'
+assert_contains "$mount_process" 'launched.stderr'
+assert_contains "$mount_process" 'launched.job'
+assert_contains "$mount_job" 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'
+assert_contains "$mount_launch" 'PROC_THREAD_ATTRIBUTE_JOB_LIST'
+assert_contains "$mount_launch" 'CREATE_SUSPENDED'
+assert_contains "$mount_launch" 'ResumeThread(thread_handle.raw())'
+assert_before "$mount_launch" 'PROC_THREAD_ATTRIBUTE_JOB_LIST as usize' 'CreateProcessW('
+assert_absent "$mount_process" 'command.spawn()'
+assert_absent "$mount_job" 'AssignProcessToJobObject'
+assert_contains "$mount_host_process" '_job: MountHostJob'
 assert_contains "$mount_process_environment" '.env_clear()'
-assert_contains "$mount_process_environment" '.env("SystemRoot", system_windows_directory)'
-assert_contains "$mount_process_environment" '.env("WINDIR", system_windows_directory)'
-assert_before "$mount_process_environment" '.env_clear()' '.env("SystemRoot", system_windows_directory)'
-assert_before "$mount_process_environment" '.env("WINDIR", system_windows_directory)' '.env(MOUNT_TOKEN_ENV, launch_token)'
+assert_contains "$mount_process_environment" '("SystemRoot", system_windows_directory.to_os_string())'
+assert_contains "$mount_process_environment" '("WINDIR", system_windows_directory.to_os_string())'
+assert_before "$mount_process_environment" '.env_clear()' '.envs(values('
 assert_absent "$mount_process_environment" 'std::env::var_os('
 assert_absent "$mount_process_environment" '.env("PATH"'
 assert_absent "$mount_process_environment" '.env("TEMP"'
@@ -171,9 +298,28 @@ assert_contains "$mount_host_process" 'MOUNT_HOST_STDERR_LIMIT'
 assert_contains "$repo_root/native/src/main.rs" 'run_host_if_requested(&arguments)'
 assert_contains "$repo_root/native/src/bin/se.rs" 'run_host_if_requested(&arguments)'
 
-assert_contains "$rooted_backend" 'inner.mount_path_capabilities(root.as_str())?'
+assert_contains "$rooted_backend" 'raw_inner.mount_path_capabilities(root.as_str())?'
+assert_contains "$rooted_backend" 'CachingBackend::with_child_key('
+assert_contains "$rooted_backend" '(&self.inner, Some(self.case_cache.as_ref()))'
+assert_contains "$rooted_backend" 'revalidate_root.then_some(&self.raw_inner)'
+assert_contains "$rooted_backend" '.raw_inner'
+assert_contains "$rooted_backend" '.stat(&self.checked_existing(path)?)'
 assert_contains "$rooted_backend" 'operation: super::rooted_backend_gate::OperationGate'
 assert_contains "$rooted_backend_gate" 'pub(super) struct OperationGate(RwLock<()>);'
+assert_contains "$vfs_cache" 'entry_index: Arc<EntryIndex>'
+assert_contains "$vfs_cache" 'pub(crate) fn unique_child('
+assert_contains "$vfs_cache" 'if cache.generation != generation {'
+assert_before "$vfs_cache" 'let metadata_bytes = cached_metadata_bytes' 'cache_index::build'
+assert_contains "$vfs_cache" 'self.invalidate_ancestors(path);'
+assert_contains "$vfs_cache_writer" 'drop(inner);'
+writer_drop_block="$(sed -n '/impl Drop for InvalidatingWriter/,/^}/p' "$vfs_cache_writer")"
+case "$writer_drop_block" in
+    *$'drop(inner);\n            self.invalidate();'*) ;;
+    *)
+        echo "writer cache invalidation must follow underlying writer drop" >&2
+        exit 1
+        ;;
+esac
 
 # The mount host owns one transport-independent Backend for its whole process
 # lifetime. Only root metadata is synchronous; deeper snapshots stay bounded
@@ -195,17 +341,28 @@ assert_contains "$metadata_refresh" '.preload_metadata_batch_while(|| is_stopped
 assert_contains "$metadata_refresh" '.refresh_metadata_while(|| is_stopped(&stop))'
 assert_contains "$metadata_cache" 'MAX_CACHED_DIRECTORIES: usize = 4_096'
 assert_contains "$metadata_cache" 'MAX_CACHED_ENTRIES: usize = 50_000'
-assert_contains "$metadata_cache" 'MAX_CACHED_BYTES: usize = 32 * 1024 * 1024'
-assert_contains "$metadata_cache" 'MAX_CACHED_DIRECTORY_BYTES: usize = 4 * 1024 * 1024'
+assert_contains "$metadata_cache" 'MAX_CACHED_BYTES: usize = 16 * 1024 * 1024'
+assert_contains "$metadata_cache" 'entry_index: Arc<HashMap<String, usize>>'
 assert_contains "$metadata_cache" 'entries: Arc<[VfsMeta]>'
-assert_contains "$metadata_cache" 'generation: u64'
+assert_contains "$metadata_cache_load" 'pub(in crate::mount) enum MetadataLookup'
+assert_contains "$metadata_cache_load" 'KnownMissing'
+assert_contains "$metadata_cache_load" 'revision: AtomicU64'
 assert_contains "$mount_metadata" 'io::Result<Arc<[VfsMeta]>>'
-assert_contains "$metadata_loading" 'self.metadata_cache.generation()? != generation'
+assert_contains "$mount_metadata" 'self.metadata_cache.validate_listing(&listed)?;'
+assert_contains "$metadata_loading" 'self.directory_metadata_hint(path)?'
+assert_contains "$metadata_loading" 'install_directory_if_current'
+assert_absent "$metadata_loading" 'self.metadata_cache.generation()? != generation'
 assert_contains "$metadata_callbacks" 'context.engine.list_dir_cached(path)?'
 assert_contains "$metadata_callbacks" 'context.engine.stat_cached(path)?'
-assert_absent "$metadata_callbacks" 'guard_long_with_context'
+test "$(grep -Fc 'guard_long_with_context(file_info' "$metadata_callbacks")" -eq 3
+assert_contains "$open_callbacks" 'context.engine.stat_cached(&path)'
+assert_contains "$open_callbacks" 'context.engine.open_metadata_file('
+assert_contains "$open_callbacks" 'let explorer_metadata = FILE_READ_ATTRIBUTES | SYNCHRONIZE;'
+assert_contains "$open_callbacks" 'assert!(!requires_file_data(explorer_metadata));'
+assert_contains "$mount_file_io" 'OpenHandleKind::Metadata(metadata)'
+assert_contains "$agent_codec" 'MAX_DIRECTORY_ENTRIES: usize = 50_000'
+assert_contains "$agent_codec" 'directory frame exceeds the entry limit'
 for safety_file in \
-    "$open_callbacks" \
     "$io_callbacks" \
     "$mutation_callbacks" \
     "$mount_file_io" \
@@ -215,6 +372,7 @@ for safety_file in \
     assert_absent "$safety_file" 'stat_cached('
     assert_absent "$safety_file" 'list_dir_cached('
 done
+assert_absent "$open_callbacks" 'list_dir_cached('
 assert_contains "$mount_file_io" 'self.invalidate_metadata(&state.remote_path, false);'
 assert_contains "$mount_mutations" 'self.invalidate_metadata(source.backend(), true);'
 assert_contains "$mount_delete" 'self.invalidate_metadata(&delete.original_path, true);'
@@ -224,6 +382,29 @@ assert_before "$mount_host" 'start_on_available_drive(&runtime' 'storage.start_m
 assert_before "$mount_host" 'storage.request_metadata_refresh_stop();' 'filesystem.close();'
 assert_before "$mount_host" 'filesystem.close();' 'storage.join_metadata_refresh();'
 assert_before "$mount_host" 'drop(engine);' 'drop(cache_lease);'
+assert_contains "$mount_host" 'ShutdownWatchdog::start("dokan-close")'
+assert_contains "$shutdown_watchdog" 'mount shutdown still blocked:'
+assert_contains "$mount_request_gate" 'METADATA_GATE_TIMEOUT: Duration = Duration::from_secs(10)'
+assert_contains "$mount_request_gate" 'MAX_METADATA_PRIORITY_BURST: usize = 8'
+assert_contains "$mount_request_gate" 'state.metadata_burst >= MAX_METADATA_PRIORITY_BURST'
+test "$(grep -Fc 'enter_metadata()?' "$mount_proxy")" -eq 3
+assert_contains "$callback_timeout" '.name("mount-timeout-supervisor".into())'
+assert_contains "$callback_timeout" 'runtime.reset_timeout('
+assert_contains "$callback_timeout" 'MAX_SUPERVISED_CALLBACKS: usize = 4_096'
+assert_contains "$callback_timeout" 'fail_all(&worker);'
+assert_contains "$callback_timeout" 'struct ResetClaim {'
+assert_contains "$callback_timeout" 'state.failed = true;'
+assert_contains "$callback_context" '|| self.timeouts.failed()'
+assert_contains "$callback_timeout" 'min_by_key(|(deadline, _)| *deadline)'
+assert_absent "$callback_timeout" 'let mut due = Vec::new()'
+timeout_reset_region="$(sed -n '/let file_info = claim.request.file_info;/,/runtime.reset_timeout(/p' "$callback_timeout")"
+printf '%s\n' "$timeout_reset_region" | grep -Fq 'drop(state);'
+assert_absent "$callback_timeout" 'eprintln!'
+assert_absent "$shutdown_watchdog" 'eprintln!'
+assert_absent "$callback_status" 'std::thread::Builder::new()'
+assert_contains "$callback_status" 'std::panic::catch_unwind'
+assert_contains "$callback_status" 'acknowledged.get().unwrap_or(STATUS_UNHANDLED_EXCEPTION)'
+assert_contains "$repo_root/native/Cargo.toml" 'panic = "unwind"'
 
 assert_contains "$peer_request" 'Ctrl::Fs { req, lease }'
 assert_contains "$peer_node" 'mount_leases: Arc::new(super::mount_lease::PeerMountLeases::default())'
@@ -324,7 +505,8 @@ for shell_script in \
     "$repo_root/native/publish-feed.sh" \
     "$repo_root/native/publish-linux-feed-wsl.sh" \
     "$repo_root/native/build-agent-bundles.sh" \
-    "$repo_root/native/run-release-memory-bounded.sh"; do
+    "$repo_root/native/run-release-memory-bounded.sh" \
+    "$repo_root/native/run-task-memory-bounded.sh"; do
     bash -n "$shell_script"
 done
 if command -v pwsh >/dev/null 2>&1; then
@@ -346,22 +528,36 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 
 echo "remote-drive task suite: native behavior"
+native_test_log="$(mktemp)"
+agent_test_log="$(mktemp)"
+cleanup_test_logs() {
+    rm -f "$native_test_log" "$agent_test_log"
+}
+trap cleanup_test_logs EXIT
 (
     cd "$repo_root/native"
-    "$repo_root/native/run-release-memory-bounded.sh" \
+    "$repo_root/native/run-task-memory-bounded.sh" \
         cargo test --locked --lib remote_drive_task_ -- --test-threads=1
-)
+) | tee "$native_test_log"
+grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$native_test_log" || {
+    echo "native remote-drive filter did not execute any task tests" >&2
+    exit 1
+}
 
 echo "remote-drive task suite: confined agent process"
 (
     cd "$repo_root/se-agent"
-    "$repo_root/native/run-release-memory-bounded.sh" \
+    "$repo_root/native/run-task-memory-bounded.sh" \
         cargo test --locked --test remote_drive_task remote_drive_task_agent_ -- --test-threads=1
-)
+) | tee "$agent_test_log"
+grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$agent_test_log" || {
+    echo "agent remote-drive filter did not execute any task tests" >&2
+    exit 1
+}
 
 echo "remote-drive task suite: Windows host boundary"
 (
     cd "$repo_root/native"
-    "$repo_root/native/run-release-memory-bounded.sh" \
+    "$repo_root/native/run-task-memory-bounded.sh" \
         cargo check --locked --bin smart_explorer --bin se --target "$windows_target"
 )
