@@ -2,10 +2,9 @@ use std::ffi::OsString;
 use std::io;
 use std::net::SocketAddr;
 use std::os::windows::ffi::OsStringExt;
-use std::process::{Command, Stdio};
 
 use super::mount_host_process::MountHostProcess;
-use super::mount_process_environment;
+use super::{mount_launch, mount_process_environment};
 use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 
 pub(super) use mount_process_environment::{
@@ -21,25 +20,21 @@ pub(super) fn spawn(
     ipc_addr: SocketAddr,
     cache_root: &std::path::Path,
 ) -> io::Result<MountHostProcess> {
-    use std::os::windows::process::CommandExt;
-
-    let executable = std::env::current_exe()?;
     let system_windows_directory = system_windows_directory()?;
-    let mut command = Command::new(executable);
-    mount_process_environment::configure(
-        &mut command,
+    let launched = mount_launch::launch(
         mount_id,
         &system_windows_directory,
         launch_token,
         ipc_addr,
         cache_root,
-    );
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    MountHostProcess::capture_piped_stderr(command.spawn()?)
+    )
+    .map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Laufwerk-Host abgesichert starten: {error}"),
+        )
+    })?;
+    MountHostProcess::capture_piped_stderr(launched.child, launched.stderr, launched.job)
 }
 
 fn system_windows_directory() -> io::Result<OsString> {

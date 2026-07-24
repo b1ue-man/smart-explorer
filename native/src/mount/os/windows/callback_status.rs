@@ -1,12 +1,8 @@
 use std::{
+    cell::Cell,
     io,
     panic::AssertUnwindSafe,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Condvar, Mutex,
-    },
-    thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use windows_sys::Win32::Foundation::{
@@ -25,7 +21,7 @@ use super::{
 };
 
 pub(super) const CALLBACK_TIMEOUT_MS: u32 = 300_000;
-const RESET_INTERVAL: Duration = Duration::from_secs(30);
+const SLOW_CALLBACK: Duration = Duration::from_millis(500);
 
 pub(super) enum CallbackFailure {
     Io(io::Error),
@@ -45,7 +41,7 @@ pub(super) unsafe fn guard_with_context<F>(file_info: *mut DokanFileInfo, operat
 where
     F: FnOnce(&CallbackContext) -> CallbackResult,
 {
-    unsafe { guard_impl(file_info, false, operation) }
+    unsafe { guard_caught(file_info, false, operation) }
 }
 
 pub(super) unsafe fn guard_long_with_context<F>(
@@ -55,10 +51,10 @@ pub(super) unsafe fn guard_long_with_context<F>(
 where
     F: FnOnce(&CallbackContext) -> CallbackResult,
 {
-    unsafe { guard_impl(file_info, true, operation) }
+    unsafe { guard_caught(file_info, true, operation) }
 }
 
-unsafe fn guard_impl<F>(
+unsafe fn guard_caught<F>(
     file_info: *mut DokanFileInfo,
     keep_timeout_alive: bool,
     operation: F,
@@ -66,6 +62,30 @@ unsafe fn guard_impl<F>(
 where
     F: FnOnce(&CallbackContext) -> CallbackResult,
 {
+    let acknowledged = Cell::new(None);
+    match std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+        guard_impl(file_info, keep_timeout_alive, operation, &acknowledged)
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            unsafe { stop_after_boundary_panic(file_info) };
+            // A teardown panic must not turn an already acknowledged remote
+            // commit into a replayable Windows error.
+            acknowledged.get().unwrap_or(STATUS_UNHANDLED_EXCEPTION)
+        }
+    }
+}
+
+unsafe fn guard_impl<F>(
+    file_info: *mut DokanFileInfo,
+    keep_timeout_alive: bool,
+    operation: F,
+    acknowledged: &Cell<Option<NtStatus>>,
+) -> NtStatus
+where
+    F: FnOnce(&CallbackContext) -> CallbackResult,
+{
+    let started = Instant::now();
     let context = match std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
         context_from_file_info(file_info)
     })) {
@@ -74,9 +94,15 @@ where
         Err(_) => return STATUS_UNHANDLED_EXCEPTION,
     };
     let keepalive = if keep_timeout_alive {
-        match TimeoutKeepalive::start(context, file_info) {
+        match context.supervise_timeout(file_info) {
             Ok(keepalive) => Some(keepalive),
-            Err(error) => return io_status(context, &error),
+            Err(error) => {
+                context.report(MountStatus::Failed {
+                    detail: format!("mounted-drive callback supervision is unavailable: {error}"),
+                });
+                context.request_stop();
+                return io_status(context, &error);
+            }
         }
     } else {
         None
@@ -95,11 +121,16 @@ where
             STATUS_UNHANDLED_EXCEPTION
         }
     };
+    acknowledged.set(Some(status));
     if keepalive.is_some_and(|keepalive| !keepalive.finish()) {
         context.report(MountStatus::Failed {
             detail: "Dokany could not extend a running remote filesystem request".into(),
         });
         context.request_stop();
+    }
+    let elapsed = started.elapsed();
+    if elapsed >= SLOW_CALLBACK {
+        context.report_slow_callback(if keep_timeout_alive { "long" } else { "short" }, elapsed);
     }
     // Timeout supervision is diagnostic after the operation has completed. It
     // must never turn an acknowledged remote commit into a Windows failure
@@ -111,15 +142,29 @@ pub(super) unsafe fn void_guard_long<F>(file_info: *mut DokanFileInfo, operation
 where
     F: FnOnce(&CallbackContext) -> io::Result<()>,
 {
+    if std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+        void_guard_long_impl(file_info, operation)
+    }))
+    .is_err()
+    {
+        unsafe { stop_after_boundary_panic(file_info) };
+    }
+}
+
+unsafe fn void_guard_long_impl<F>(file_info: *mut DokanFileInfo, operation: F)
+where
+    F: FnOnce(&CallbackContext) -> io::Result<()>,
+{
+    let started = Instant::now();
     let context = match std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
         context_from_file_info(file_info)
     })) {
         Ok(Ok(context)) => context,
         _ => return,
     };
-    let keepalive = TimeoutKeepalive::start(context, file_info);
+    let keepalive = context.supervise_timeout(file_info);
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| operation(context)));
-    let keepalive_ok = keepalive.is_ok_and(TimeoutKeepalive::finish);
+    let keepalive_ok = keepalive.is_ok_and(|lease| lease.finish());
     if !keepalive_ok {
         context.report(MountStatus::Failed {
             detail: "Dokany could not supervise a running finalization request".into(),
@@ -141,115 +186,18 @@ where
             context.request_stop();
         }
     }
-}
-
-struct TimeoutKeepalive {
-    state: Arc<TimeoutKeepaliveState>,
-    thread: Option<JoinHandle<()>>,
-}
-
-struct TimeoutKeepaliveState {
-    stop: Mutex<bool>,
-    wake: Condvar,
-    failed: AtomicBool,
-}
-
-impl TimeoutKeepalive {
-    fn start(context: &CallbackContext, file_info: *mut DokanFileInfo) -> io::Result<Self> {
-        if file_info.is_null() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing Dokany request for timeout keepalive",
-            ));
-        }
-        let state = Arc::new(TimeoutKeepaliveState {
-            stop: Mutex::new(false),
-            wake: Condvar::new(),
-            failed: AtomicBool::new(false),
-        });
-        let worker_state = Arc::clone(&state);
-        let runtime = context.runtime.clone();
-        let file_info_address = file_info as usize;
-        let thread = std::thread::Builder::new()
-            .name("mount-timeout-keepalive".into())
-            .spawn(move || keepalive_loop(runtime, file_info_address, worker_state))?;
-        Ok(Self {
-            state,
-            thread: Some(thread),
-        })
-    }
-
-    fn finish(mut self) -> bool {
-        self.stop_and_join()
-    }
-
-    fn stop_and_join(&mut self) -> bool {
-        match self.state.stop.lock() {
-            Ok(mut stop) => *stop = true,
-            Err(poisoned) => *poisoned.into_inner() = true,
-        }
-        self.state.wake.notify_all();
-        let joined = self
-            .thread
-            .take()
-            .map(|thread| thread.join().is_ok())
-            .unwrap_or(true);
-        joined && !self.state.failed.load(Ordering::Acquire)
+    let elapsed = started.elapsed();
+    if elapsed >= SLOW_CALLBACK {
+        context.report_slow_callback("finalize", elapsed);
     }
 }
 
-impl Drop for TimeoutKeepalive {
-    fn drop(&mut self) {
-        let _ = self.stop_and_join();
-    }
-}
-
-fn keepalive_loop(
-    runtime: super::DokanyRuntime,
-    file_info_address: usize,
-    state: Arc<TimeoutKeepaliveState>,
-) {
-    let mut stop = match state.stop.lock() {
-        Ok(stop) => stop,
-        Err(_) => {
-            state.failed.store(true, Ordering::Release);
-            return;
+unsafe fn stop_after_boundary_panic(file_info: *mut DokanFileInfo) {
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+        if let Ok(context) = context_from_file_info(file_info) {
+            context.request_stop();
         }
-    };
-    loop {
-        if *stop {
-            return;
-        }
-        let (next_stop, timeout) = match state.wake.wait_timeout(stop, RESET_INTERVAL) {
-            Ok(waited) => waited,
-            Err(_) => {
-                state.failed.store(true, Ordering::Release);
-                return;
-            }
-        };
-        stop = next_stop;
-        if *stop {
-            return;
-        }
-        if !timeout.timed_out() {
-            continue;
-        }
-        drop(stop);
-        let reset = unsafe {
-            runtime.reset_timeout(CALLBACK_TIMEOUT_MS, file_info_address as *mut DokanFileInfo)
-        };
-        if !reset {
-            state.failed.store(true, Ordering::Release);
-            return;
-        }
-        stop = match state.stop.lock() {
-            Ok(stop) => stop,
-            Err(_) => {
-                state.failed.store(true, Ordering::Release);
-                return;
-            }
-        };
-    }
+    }));
 }
 
 pub(super) fn win32(error: u32) -> CallbackFailure {

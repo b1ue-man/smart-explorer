@@ -1,7 +1,7 @@
 use std::{
-    io,
+    io::{self, Write},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard,
     },
 };
@@ -12,6 +12,7 @@ use crate::{
 };
 
 use super::{
+    callback_timeout::{CallbackTimeoutLease, CallbackTimeoutSupervisor},
     handle_reservation::{HandleReservation, RenameReservation},
     handle_state::HandleTable,
     DokanFileInfo, DokanyRuntime,
@@ -31,6 +32,8 @@ pub(super) struct CallbackContext {
     handles: HandleTable,
     selected_drive: Mutex<DriveLetter>,
     stop_requested: AtomicBool,
+    timeouts: CallbackTimeoutSupervisor,
+    slow_reports: AtomicUsize,
 }
 
 impl CallbackContext {
@@ -43,9 +46,10 @@ impl CallbackContext {
         label: String,
         volume_serial: u32,
         cache_root_wide: Vec<u16>,
-    ) -> Self {
+    ) -> io::Result<Self> {
         let case_sensitive_paths = engine.case_sensitive_paths();
-        Self {
+        let timeouts = CallbackTimeoutSupervisor::start(runtime.clone())?;
+        Ok(Self {
             engine,
             runtime,
             read_only,
@@ -57,7 +61,9 @@ impl CallbackContext {
             handles: HandleTable::new(case_sensitive_paths),
             selected_drive: Mutex::new(selected_drive),
             stop_requested: AtomicBool::new(false),
-        }
+            timeouts,
+            slow_reports: AtomicUsize::new(0),
+        })
     }
 
     pub(super) fn reserve_handle(
@@ -138,7 +144,31 @@ impl CallbackContext {
     }
 
     pub(super) fn stop_requested(&self) -> bool {
-        self.stop_requested.load(Ordering::Acquire)
+        self.stop_requested.load(Ordering::Acquire) || self.timeouts.failed()
+    }
+
+    pub(super) fn supervise_timeout(
+        &self,
+        file_info: *mut DokanFileInfo,
+    ) -> io::Result<CallbackTimeoutLease<'_>> {
+        self.timeouts.register(file_info)
+    }
+
+    pub(super) fn report_slow_callback(&self, class: &str, elapsed: std::time::Duration) {
+        const MAX_REPORTS: usize = 32;
+        if self
+            .slow_reports
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < MAX_REPORTS).then_some(current + 1)
+            })
+            .is_ok()
+        {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "mount callback slow: class={class}, elapsed_ms={}",
+                elapsed.as_millis()
+            );
+        }
     }
 
     fn lock_selected_drive(&self) -> io::Result<MutexGuard<'_, DriveLetter>> {

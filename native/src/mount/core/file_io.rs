@@ -1,13 +1,13 @@
 use super::engine::{
     baseline_from_meta, invalid_data, lock, not_found, read_lock, require_regular, write_lock,
-    Entry, EntryState, MountEngine, OpenHandle,
+    Entry, EntryState, MountEngine, OpenHandle, OpenHandleKind,
 };
 use super::path::ProjectedPath;
 use super::types::{
     Baseline, EntryCondition, FlushOutcome, HandleId, MountConflict, MountMode, OpenDisposition,
     OpenFileOptions,
 };
-use crate::vfs::unique_staging_path;
+use crate::vfs::{unique_staging_path, VfsMeta};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -45,25 +45,33 @@ impl MountEngine {
         ) {
             self.truncate_entry(&entry, 0)?;
         }
-        let raw = self
-            .next_handle
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "mount handle space exhausted"))?;
-        let handle = HandleId(raw);
-        lock(&self.handles)?.insert(
-            handle,
-            OpenHandle {
-                entry,
-                writable: options.writable,
-            },
-        );
-        Ok(handle)
+        self.insert_handle(OpenHandleKind::Materialized(entry), options.writable)
+    }
+
+    /// Opens a regular file for attributes/control operations without fetching
+    /// its contents into the whole-file spool. Dokany passes already-expanded
+    /// kernel access rights, so a handle created here must never service data
+    /// I/O; a later data open receives its own materialized handle.
+    pub(crate) fn open_metadata_file(
+        &self,
+        callback_path: &str,
+        metadata: VfsMeta,
+    ) -> io::Result<HandleId> {
+        require_regular(&metadata)?;
+        let _namespace = read_lock(&self.namespace)?;
+        let path = self.projector.project(callback_path)?;
+        self.validate_projected_case(&path)?;
+        if path.relative().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "mount root is not a regular file",
+            ));
+        }
+        self.insert_handle(OpenHandleKind::Metadata(metadata), false)
     }
 
     pub fn read(&self, handle: HandleId, offset: u64, output: &mut [u8]) -> io::Result<usize> {
-        let entry = self.handle(handle)?.entry;
+        let entry = self.handle(handle)?.materialized_entry()?;
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
         file.seek(SeekFrom::Start(offset))?;
@@ -78,7 +86,8 @@ impl MountEngine {
                 "file handle is read-only",
             ));
         }
-        let mut state = lock(&opened.entry.state)?;
+        let entry = opened.materialized_entry()?;
+        let mut state = lock(&entry.state)?;
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         file.seek(SeekFrom::Start(offset))?;
@@ -93,7 +102,8 @@ impl MountEngine {
                 "file handle is read-only",
             ));
         }
-        let mut state = lock(&opened.entry.state)?;
+        let entry = opened.materialized_entry()?;
+        let mut state = lock(&entry.state)?;
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         file.seek(SeekFrom::End(0))?;
@@ -101,7 +111,7 @@ impl MountEngine {
     }
 
     pub fn len(&self, handle: HandleId) -> io::Result<u64> {
-        let entry = self.handle(handle)?.entry;
+        let entry = self.handle(handle)?.materialized_entry()?;
         let state = lock(&entry.state)?;
         Ok(self
             .spool
@@ -118,11 +128,15 @@ impl MountEngine {
                 "file handle is read-only",
             ));
         }
-        self.truncate_entry(&opened.entry, length)
+        self.truncate_entry(&opened.materialized_entry()?, length)
     }
 
     pub fn flush(&self, handle: HandleId) -> io::Result<FlushOutcome> {
-        self.flush_entry(&self.handle(handle)?.entry)
+        let opened = self.handle(handle)?;
+        match opened.kind {
+            OpenHandleKind::Materialized(entry) => self.flush_entry(&entry),
+            OpenHandleKind::Metadata(_) => Ok(FlushOutcome::NoChanges),
+        }
     }
 
     pub fn close(&self, handle: HandleId) -> io::Result<()> {
@@ -130,7 +144,10 @@ impl MountEngine {
         let opened = lock(&self.handles)?
             .remove(&handle)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown mount handle"))?;
-        self.cleanup_committed_entry(&opened.entry)
+        match opened.kind {
+            OpenHandleKind::Materialized(entry) => self.cleanup_committed_entry(&entry),
+            OpenHandleKind::Metadata(_) => Ok(()),
+        }
     }
 
     pub(super) fn materialize(
@@ -379,13 +396,22 @@ impl MountEngine {
 
     pub(super) fn handle(&self, handle: HandleId) -> io::Result<OpenHandle> {
         let handles = lock(&self.handles)?;
-        let opened = handles
+        handles
             .get(&handle)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown mount handle"))?;
-        Ok(OpenHandle {
-            entry: opened.entry.clone(),
-            writable: opened.writable,
-        })
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown mount handle"))
+    }
+
+    fn insert_handle(&self, kind: OpenHandleKind, writable: bool) -> io::Result<HandleId> {
+        let raw = self
+            .next_handle
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| io::Error::other("mount handle space exhausted"))?;
+        let handle = HandleId(raw);
+        lock(&self.handles)?.insert(handle, OpenHandle { kind, writable });
+        Ok(handle)
     }
 
     fn truncate_entry(&self, entry: &Arc<Entry>, length: u64) -> io::Result<()> {

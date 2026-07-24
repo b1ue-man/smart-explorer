@@ -1,9 +1,22 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use super::{
     Backend, BackendHandle, DeleteDisposition, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta,
     VfsResult,
 };
+
+#[path = "cache_index.rs"]
+mod cache_index;
+#[path = "cache_support.rs"]
+mod cache_support;
+#[path = "cache_writer.rs"]
+mod cache_writer;
+use cache_index::{ChildKey, EntryIndex};
+use cache_support::*;
+use cache_writer::InvalidatingWriter;
 
 /// Wraps any backend with a short-TTL **directory-listing cache** so interactive
 /// browsing (back/forward, re-visiting a folder, rapid drilling) doesn't re-list
@@ -11,18 +24,48 @@ use super::{
 /// `invalidate_cache()` clears everything (explicit refresh). NOT used by sync -
 /// sync re-opens a fresh backend per run and walks each folder once, so a cache
 /// would only add staleness with no hit benefit.
+const CACHE_TTL: Duration = Duration::from_secs(20);
+// Keep both UI and mounted browsing caches on a fixed metadata budget. A
+// single wide directory is admitted only when it fits the global entry/byte
+// limits; older directories are evicted by access recency.
+const MAX_CACHED_DIRECTORIES: usize = 4_096;
+const MAX_CACHED_ENTRIES: usize = 50_000;
+const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
+
+struct CachedDirectory {
+    stored_at: Instant,
+    entries: Arc<[VfsMeta]>,
+    entry_index: Arc<EntryIndex>,
+    entry_count: usize,
+    byte_count: usize,
+    last_touch: u64,
+}
+
+#[derive(Default)]
+pub(super) struct CacheState {
+    directories: HashMap<String, CachedDirectory>,
+    entries: usize,
+    bytes: usize,
+    clock: u64,
+    generation: u64,
+}
+
 pub struct CachingBackend {
     inner: BackendHandle,
-    ttl: std::time::Duration,
-    cache: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<VfsMeta>)>>,
+    cache: Arc<Mutex<CacheState>>,
+    child_key: ChildKey,
 }
 
 impl CachingBackend {
     pub fn new(inner: BackendHandle) -> Self {
+        Self::with_child_key(inner, cache_index::exact_child_key)
+    }
+
+    pub(crate) fn with_child_key(inner: BackendHandle, child_key: fn(&str) -> String) -> Self {
         Self {
             inner,
-            ttl: std::time::Duration::from_secs(20),
-            cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            cache: Arc::new(Mutex::new(CacheState::default())),
+            child_key,
         }
     }
 
@@ -65,39 +108,132 @@ impl CachingBackend {
 
     fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
         let (parent, name) = Self::parent_and_name(key)?;
-        let c = self.cache.lock().ok()?;
-        let (at, entries) = c.get(&parent)?;
-        if at.elapsed() >= self.ttl {
+        let mut cache = self.cache.lock().ok()?;
+        let expired = cache
+            .directories
+            .get(&parent)
+            .is_some_and(|cached| cached.stored_at.elapsed() >= CACHE_TTL);
+        if expired {
+            remove_directory(&mut cache, &parent);
             return None;
         }
-        let mut matches = entries.iter().filter(|m| m.name == name);
-        let first = matches.next()?.clone();
-        matches.next().is_none().then_some(first)
+        let touch = tick(&mut cache);
+        let cached = cache.directories.get_mut(&parent)?;
+        cached.last_touch = touch;
+        let key = (self.child_key)(name);
+        cache_index::lookup(&cached.entries, &cached.entry_index, &key)
+            .ok()
+            .flatten()
     }
 
     fn invalidate(&self, path: &str) {
-        if let Ok(mut c) = self.cache.lock() {
-            let key = Self::norm(path);
-            c.remove(&key);
-            if let Some(parent) = Self::parent_of(&key) {
-                c.remove(&parent); // entry added/removed/renamed changes the parent listing
-            }
-        }
+        invalidate_shared(&self.cache, path);
     }
 
     fn invalidate_prefix(&self, path: &str) {
-        if let Ok(mut c) = self.cache.lock() {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.generation = cache.generation.wrapping_add(1);
             let key = Self::norm(path);
             let child_prefix = if key == "/" {
                 "/".to_string()
             } else {
                 format!("{key}/")
             };
-            c.retain(|cached, _| cached != &key && !cached.starts_with(&child_prefix));
+            let removed = cache
+                .directories
+                .keys()
+                .filter(|cached| *cached == &key || cached.starts_with(&child_prefix))
+                .cloned()
+                .collect::<Vec<_>>();
+            for cached in removed {
+                remove_directory(&mut cache, &cached);
+            }
             if let Some(parent) = Self::parent_of(&key) {
-                c.remove(&parent);
+                remove_directory(&mut cache, &parent);
             }
         }
+    }
+
+    fn invalidate_ancestors(&self, path: &str) {
+        cache_support::invalidate_ancestors(&self.cache, path);
+    }
+
+    fn directory_snapshot(&self, path: &str) -> VfsResult<Arc<[VfsMeta]>> {
+        let key = Self::norm(path);
+        let generation = match self.cache.lock() {
+            Ok(mut cache) => {
+                let expired = cache
+                    .directories
+                    .get(&key)
+                    .is_some_and(|cached| cached.stored_at.elapsed() >= CACHE_TTL);
+                if expired {
+                    remove_directory(&mut cache, &key);
+                } else {
+                    let touch = tick(&mut cache);
+                    if let Some(cached) = cache.directories.get_mut(&key) {
+                        cached.last_touch = touch;
+                        return Ok(Arc::clone(&cached.entries));
+                    }
+                }
+                cache.generation
+            }
+            Err(_) => return Ok(Arc::<[VfsMeta]>::from(self.inner.list_dir(path)?)),
+        };
+        let entries = Arc::<[VfsMeta]>::from(self.inner.list_dir(path)?);
+        let entry_count = entries.len().saturating_add(1);
+        if entry_count <= MAX_CACHED_ENTRIES {
+            let metadata_bytes = cached_metadata_bytes(&key, &entries);
+            if metadata_bytes <= MAX_CACHED_BYTES {
+                let (entry_index, index_bytes) = cache_index::build(&entries, self.child_key);
+                let byte_count = cached_bytes(metadata_bytes, index_bytes);
+                if byte_count <= MAX_CACHED_BYTES {
+                    let entry_index = Arc::new(entry_index);
+                    if let Ok(mut cache) = self.cache.lock() {
+                        if cache.generation != generation {
+                            return Ok(entries);
+                        }
+                        purge_expired(&mut cache);
+                        remove_directory(&mut cache, &key);
+                        evict_until(&mut cache, entry_count, byte_count);
+                        if cache.directories.len() < MAX_CACHED_DIRECTORIES
+                            && fits(&cache, entry_count, byte_count)
+                        {
+                            let last_touch = tick(&mut cache);
+                            cache.entries += entry_count;
+                            cache.bytes += byte_count;
+                            cache.directories.insert(
+                                key,
+                                CachedDirectory {
+                                    stored_at: Instant::now(),
+                                    entries: Arc::clone(&entries),
+                                    entry_index,
+                                    entry_count,
+                                    byte_count,
+                                    last_touch,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Resolves one child from the retained snapshot without cloning or
+    /// rescanning a wide directory on every path component.
+    pub(crate) fn unique_child(&self, parent: &str, requested: &str) -> VfsResult<Option<VfsMeta>> {
+        let entries = self.directory_snapshot(parent)?;
+        let key = Self::norm(parent);
+        let requested_key = (self.child_key)(requested);
+        if let Ok(mut cache) = self.cache.lock() {
+            let touch = tick(&mut cache);
+            if let Some(cached) = cache.directories.get_mut(&key) {
+                cached.last_touch = touch;
+                return cache_index::lookup(&cached.entries, &cached.entry_index, &requested_key);
+            }
+        }
+        cache_index::scan(&entries, requested, self.child_key)
     }
 }
 
@@ -113,25 +249,7 @@ impl Backend for CachingBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let key = Self::norm(path);
-        if let Ok(c) = self.cache.lock() {
-            if let Some((at, v)) = c.get(&key) {
-                if at.elapsed() < self.ttl {
-                    return Ok(v.clone());
-                }
-            }
-        }
-        let v = self.inner.list_dir(path)?;
-        if let Ok(mut c) = self.cache.lock() {
-            // Bound memory: a full-tree analytics scan can list thousands of
-            // dirs; drop everything once the map gets large rather than grow it
-            // unbounded (browsing only needs a small working set).
-            if c.len() >= 4096 {
-                c.clear();
-            }
-            c.insert(key, (std::time::Instant::now(), v.clone()));
-        }
-        Ok(v)
+        Ok(self.directory_snapshot(path)?.to_vec())
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
@@ -160,12 +278,33 @@ impl Backend for CachingBackend {
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         // A new file may appear in the parent listing once written.
         self.invalidate(path);
-        self.inner.open_write(path)
+        let writer = match self.inner.open_write(path) {
+            Ok(writer) => writer,
+            Err(error) => {
+                self.invalidate(path);
+                return Err(error);
+            }
+        };
+        Ok(Box::new(InvalidatingWriter::new(
+            writer,
+            Arc::clone(&self.cache),
+            path,
+        )))
     }
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let writer = self.inner.open_write_new(path)?;
         self.invalidate(path);
-        Ok(writer)
+        let writer = match self.inner.open_write_new(path) {
+            Ok(writer) => writer,
+            Err(error) => {
+                self.invalidate(path);
+                return Err(error);
+            }
+        };
+        Ok(Box::new(InvalidatingWriter::new(
+            writer,
+            Arc::clone(&self.cache),
+            path,
+        )))
     }
     fn download_name(&self, path: &str, name: &str) -> String {
         self.inner.download_name(path, name)
@@ -216,7 +355,7 @@ impl Backend for CachingBackend {
     }
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         let r = self.inner.mkdir_all(path);
-        self.invalidate(path);
+        self.invalidate_ancestors(path);
         r
     }
     fn parallelism(&self) -> usize {
@@ -273,8 +412,12 @@ impl Backend for CachingBackend {
         self.inner.changes_since(root, cursor)
     }
     fn invalidate_cache(&self) {
-        if let Ok(mut c) = self.cache.lock() {
-            c.clear();
+        if let Ok(mut cache) = self.cache.lock() {
+            let generation = cache.generation.wrapping_add(1);
+            *cache = CacheState {
+                generation,
+                ..CacheState::default()
+            };
         }
     }
     fn delete_disposition(&self) -> DeleteDisposition {

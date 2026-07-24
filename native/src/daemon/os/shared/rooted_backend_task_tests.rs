@@ -10,14 +10,17 @@ use std::sync::Arc;
 
 struct RootConfinedLocalBackend {
     inner: LocalBackend,
+    scheme: Scheme,
     mount_capability_probes: Arc<AtomicUsize>,
     stat_calls: Arc<AtomicUsize>,
+    list_calls: Arc<AtomicUsize>,
     case_sensitive: bool,
+    root_confinement: RootConfinement,
 }
 
 impl Backend for RootConfinedLocalBackend {
     fn scheme(&self) -> Scheme {
-        Scheme::Sftp
+        self.scheme
     }
 
     fn root_display(&self) -> String {
@@ -25,6 +28,7 @@ impl Backend for RootConfinedLocalBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
         self.inner.list_dir(path)
     }
 
@@ -77,7 +81,7 @@ impl Backend for RootConfinedLocalBackend {
         self.mount_capability_probes.fetch_add(1, Ordering::SeqCst);
         Ok(MountPathCapabilities {
             staged_write: StagedWriteCapabilities::complete(),
-            root_confinement: RootConfinement::Enforced,
+            root_confinement: self.root_confinement,
         })
     }
 }
@@ -109,9 +113,12 @@ impl Fixture {
     fn confined(&self) -> BackendHandle {
         Arc::new(RootConfinedLocalBackend {
             inner: LocalBackend::new(self.root.as_str()),
+            scheme: Scheme::Sftp,
             mount_capability_probes: Arc::new(AtomicUsize::new(0)),
             stat_calls: Arc::new(AtomicUsize::new(0)),
+            list_calls: Arc::new(AtomicUsize::new(0)),
             case_sensitive: true,
+            root_confinement: RootConfinement::Enforced,
         })
     }
 }
@@ -156,9 +163,12 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
     let probes = Arc::new(AtomicUsize::new(0));
     let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
         inner: LocalBackend::new(fixture.root.as_str()),
+        scheme: Scheme::Sftp,
         mount_capability_probes: probes.clone(),
         stat_calls: Arc::new(AtomicUsize::new(0)),
+        list_calls: Arc::new(AtomicUsize::new(0)),
         case_sensitive: true,
+        root_confinement: RootConfinement::Enforced,
     });
 
     let backend = RootedBackend::new(
@@ -181,14 +191,18 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
 }
 
 #[test]
-fn remote_drive_task_case_lookup_reuses_listing_metadata() {
+fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live() {
     let fixture = Fixture::new();
     let stats = Arc::new(AtomicUsize::new(0));
+    let lists = Arc::new(AtomicUsize::new(0));
     let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
         inner: LocalBackend::new(fixture.root.as_str()),
+        scheme: Scheme::Sftp,
         mount_capability_probes: Arc::new(AtomicUsize::new(0)),
         stat_calls: stats.clone(),
+        list_calls: lists.clone(),
         case_sensitive: false,
+        root_confinement: RootConfinement::Enforced,
     });
     let backend = RootedBackend::new(
         inner,
@@ -197,12 +211,72 @@ fn remote_drive_task_case_lookup_reuses_listing_metadata() {
         MountRootSecurity::Enforced,
     )
     .unwrap();
-    let before = stats.load(Ordering::SeqCst);
+    let stats_before_reads = stats.load(Ordering::SeqCst);
+    let lists_before_reads = lists.load(Ordering::SeqCst);
 
     let metadata = backend.stat("/NOTE.MD").unwrap();
+    std::fs::write(
+        fixture.root_path.join("note.md"),
+        b"externally changed and longer contents",
+    )
+    .unwrap();
+    let repeated = backend.stat("/note.md").unwrap();
 
     assert_eq!(metadata.name, "note.md");
-    assert_eq!(stats.load(Ordering::SeqCst) - before, 2);
+    assert_eq!(repeated.name, "note.md");
+    assert_ne!(
+        metadata.size, repeated.size,
+        "final stat must bypass the cache"
+    );
+    assert_eq!(
+        stats.load(Ordering::SeqCst) - stats_before_reads,
+        2,
+        "each final stat remains a live backend observation"
+    );
+    assert_eq!(
+        lists.load(Ordering::SeqCst) - lists_before_reads,
+        1,
+        "case resolution and final stat reuse one bounded parent listing"
+    );
+}
+
+#[test]
+fn remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root() {
+    let fixture = Fixture::new();
+    let stats = Arc::new(AtomicUsize::new(0));
+    let lists = Arc::new(AtomicUsize::new(0));
+    let inner: BackendHandle = Arc::new(RootConfinedLocalBackend {
+        inner: LocalBackend::new(fixture.root.as_str()),
+        scheme: Scheme::Peer,
+        mount_capability_probes: Arc::new(AtomicUsize::new(0)),
+        stat_calls: stats.clone(),
+        list_calls: lists.clone(),
+        case_sensitive: false,
+        root_confinement: RootConfinement::Unverified,
+    });
+    let backend = RootedBackend::new(
+        inner,
+        &fixture.root,
+        MountMode::ReadOnly,
+        MountRootSecurity::Trusted,
+    )
+    .unwrap();
+    let stats_before_reads = stats.load(Ordering::SeqCst);
+    let lists_before_reads = lists.load(Ordering::SeqCst);
+
+    assert_eq!(backend.stat("/NOTE.MD").unwrap().name, "note.md");
+    assert_eq!(backend.stat("/note.md").unwrap().name, "note.md");
+
+    assert_eq!(
+        stats.load(Ordering::SeqCst) - stats_before_reads,
+        4,
+        "trusted reads revalidate the root and observe the final target live"
+    );
+    assert_eq!(
+        lists.load(Ordering::SeqCst) - lists_before_reads,
+        1,
+        "trusted case resolution must reuse the shared listing cache"
+    );
 }
 
 #[test]
@@ -242,6 +316,42 @@ fn remote_drive_task_confined_projection_blocks_escape_and_preserves_exclusive_o
         std::fs::read(fixture.root_path.join("fresh.stage")).unwrap(),
         b"new owner"
     );
+
+    assert!(!backend
+        .list_dir("/")
+        .unwrap()
+        .iter()
+        .any(|entry| entry.name == "nested"));
+    backend.mkdir_all("/nested/child").unwrap();
+    assert!(backend
+        .list_dir("/")
+        .unwrap()
+        .iter()
+        .any(|entry| entry.name == "nested"));
+}
+
+#[test]
+fn remote_drive_task_case_colliding_listing_fails_closed() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root_path.join("NOTE.md"), b"collision").unwrap();
+    let backend = RootedBackend::new(
+        Arc::new(RootConfinedLocalBackend {
+            inner: LocalBackend::new(fixture.root.as_str()),
+            scheme: Scheme::Sftp,
+            mount_capability_probes: Arc::new(AtomicUsize::new(0)),
+            stat_calls: Arc::new(AtomicUsize::new(0)),
+            list_calls: Arc::new(AtomicUsize::new(0)),
+            case_sensitive: false,
+            root_confinement: RootConfinement::Enforced,
+        }),
+        &fixture.root,
+        MountMode::ReadOnly,
+        MountRootSecurity::Enforced,
+    )
+    .unwrap();
+
+    let error = backend.stat("/note.md").unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
 
 fn only_error<T>(result: io::Result<T>) -> io::Error {

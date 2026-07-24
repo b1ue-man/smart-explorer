@@ -4,43 +4,35 @@ use super::node_codec::{decode_node, validate_node};
 use super::relative_path::ValidatedRelativePath;
 use super::types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK};
 
-/// Reject absurd frame lengths from a corrupt/hostile stream before allocating.
 pub(super) const MAX_FRAME: usize = 64 * 1024 * 1024;
+pub(super) const MAX_DIRECTORY_ENTRIES: usize = 50_000;
 
 pub(super) fn validate_frame_len(len: usize) -> io::Result<()> {
-    if len > MAX_FRAME {
-        Err(bad("frame too large"))
-    } else {
-        Ok(())
-    }
+    (len <= MAX_FRAME)
+        .then_some(())
+        .ok_or_else(|| bad("frame too large"))
 }
 
 fn put_u32(b: &mut Vec<u8>, v: u32) {
     b.extend_from_slice(&v.to_le_bytes());
 }
-
 fn put_u64(b: &mut Vec<u8>, v: u64) {
     b.extend_from_slice(&v.to_le_bytes());
 }
-
 fn put_i64(b: &mut Vec<u8>, v: i64) {
     b.extend_from_slice(&v.to_le_bytes());
 }
-
 fn put_bool(b: &mut Vec<u8>, v: bool) {
     b.push(v as u8);
 }
-
 fn put_str(b: &mut Vec<u8>, s: &str) {
     put_u32(b, s.len() as u32);
     b.extend_from_slice(s.as_bytes());
 }
-
 fn put_tagged_str(b: &mut Vec<u8>, tag: u8, value: &str) {
     b.push(tag);
     put_str(b, value);
 }
-
 fn put_bytes(b: &mut Vec<u8>, s: &[u8]) {
     put_u32(b, s.len() as u32);
     b.extend_from_slice(s);
@@ -178,6 +170,9 @@ impl Frame {
         match self {
             Frame::Data(data) if data.len() > CHUNK => {
                 return Err(bad("data frame exceeds the protocol chunk size"))
+            }
+            Frame::Dir(entries) if entries.len() > MAX_DIRECTORY_ENTRIES => {
+                return Err(bad("directory frame exceeds the entry limit"))
             }
             Frame::Tree(node) => validate_node(node)?,
             Frame::TreeEntry { rel, .. } => {
@@ -372,6 +367,9 @@ impl Frame {
             3 => Frame::ListDir(r.string()?),
             4 => {
                 let n = r.u32()? as usize;
+                if n > MAX_DIRECTORY_ENTRIES {
+                    return Err(bad("directory frame exceeds the entry limit"));
+                }
                 let mut v = Vec::with_capacity(n.min(4096));
                 for _ in 0..n {
                     v.push(get_meta(&mut r)?);

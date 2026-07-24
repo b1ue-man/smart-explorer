@@ -9,7 +9,7 @@ use crate::mount::{DriveLetter, MountStatus};
 
 use super::{
     callback_context::{context_key, NodeHandle},
-    callback_status::{guard_with_context, insufficient_buffer, win32},
+    callback_status::{guard_long_with_context, guard_with_context, insufficient_buffer, win32},
     dokany_abi::FillFindData,
     metadata::{file_information, find_data, reject_open_symlink},
     wide::{read_wide, write_wide},
@@ -27,7 +27,7 @@ pub(super) unsafe extern "system" fn get_file_information(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             let meta = match context_key(file_info)
                 .ok()
@@ -57,7 +57,7 @@ pub(super) unsafe extern "system" fn find_files(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             find_entries(context, &path, None, fill, file_info)
         })
@@ -71,7 +71,7 @@ pub(super) unsafe extern "system" fn find_files_with_pattern(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             let pattern = read_wide(search_pattern)?;
             find_entries(context, &path, Some(&pattern), fill, file_info)

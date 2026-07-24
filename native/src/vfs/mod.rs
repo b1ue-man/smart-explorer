@@ -60,5 +60,8 @@ mod delete_tests;
 #[path = "core/promotion_tests.rs"]
 mod promotion_tests;
 #[cfg(test)]
+#[path = "core/remote_drive_task_cache_tests.rs"]
+mod remote_drive_task_cache_tests;
+#[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

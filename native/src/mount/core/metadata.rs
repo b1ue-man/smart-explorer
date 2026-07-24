@@ -1,4 +1,6 @@
-use super::engine::{lock, not_found, parent_path, read_lock, EntryState, MountEngine};
+use super::engine::{
+    lock, not_found, parent_path, read_lock, EntryState, MountEngine, OpenHandleKind,
+};
 use super::types::{Baseline, HandleId};
 use crate::vfs::VfsMeta;
 use std::collections::HashMap;
@@ -19,8 +21,9 @@ impl MountEngine {
         self.backend.stat(path.backend())
     }
 
-    /// Metadata-only lookup for Dokany query callbacks. Namespace admission,
-    /// create/open dispositions, and every mutation continue to use `stat`.
+    /// Metadata-only lookup for Dokany query callbacks and non-mutating
+    /// open-existing admission. Creates, overwrite/delete dispositions, and
+    /// every mutation continue to use `stat`.
     pub(crate) fn stat_cached(&self, callback_path: &str) -> io::Result<VfsMeta> {
         let _namespace = read_lock(&self.namespace)?;
         let path = self.project_checked(callback_path)?;
@@ -38,9 +41,13 @@ impl MountEngine {
     /// deliberately survives a delete-sharing namespace replace, where the
     /// old handle remains valid but its former pathname names a new object.
     pub fn stat_handle(&self, handle: HandleId) -> io::Result<VfsMeta> {
-        let entry = self.handle(handle)?.entry;
-        let state = lock(&entry.state)?;
-        self.entry_meta(&state)
+        match self.handle(handle)?.kind {
+            OpenHandleKind::Materialized(entry) => {
+                let state = lock(&entry.state)?;
+                self.entry_meta(&state)
+            }
+            OpenHandleKind::Metadata(metadata) => Ok(metadata),
+        }
     }
 
     pub fn list_dir(&self, callback_path: &str) -> io::Result<Vec<VfsMeta>> {
@@ -86,6 +93,7 @@ impl MountEngine {
                 listed.push(meta);
             }
         }
+        self.metadata_cache.validate_listing(&listed)?;
         Ok(listed.into())
     }
 

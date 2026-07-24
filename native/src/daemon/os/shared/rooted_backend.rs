@@ -3,20 +3,30 @@ use std::sync::Arc;
 
 use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
 use crate::vfs::{
-    Backend, BackendHandle, DeleteDisposition, MountPathCapabilities, RootConfinement, Scheme,
-    StagedWriteCapabilities, VfsMeta, VfsResult,
+    Backend, BackendHandle, CachingBackend, DeleteDisposition, MountPathCapabilities,
+    RootConfinement, Scheme, StagedWriteCapabilities, VfsMeta, VfsResult,
 };
 
 use super::mount_error::{encode as sanitize_error, encoded as coded_error};
+use super::rooted_backend_io::{sanitize_metadata, SanitizedReader, SanitizedWriter};
+use super::rooted_backend_paths::{
+    canonical_virtual_components, components, permission_denied, root_ancestor_chain,
+    validate_windows_components,
+};
 
 /// A daemon-side authorization boundary for the untrusted mount helper.
 /// Every helper path is a canonical virtual `/...` path and is mapped beneath
 /// one selected backend root. The original endpoint and account never cross
 /// the process boundary.
 pub(super) struct RootedBackend {
+    // Read resolution may use short-lived metadata, while security-sensitive
+    // root and mutation checks always retain the uncached source handle.
     inner: BackendHandle,
+    case_cache: Arc<CachingBackend>,
+    raw_inner: BackendHandle,
     root: String,
     root_ancestors: Vec<String>,
+    revalidate_root: bool,
     read_only: bool,
     windows_paths: bool,
     staged_write: StagedWriteCapabilities,
@@ -27,12 +37,12 @@ pub(super) struct RootedBackend {
 
 impl RootedBackend {
     pub(super) fn new(
-        inner: BackendHandle,
+        raw_inner: BackendHandle,
         root: &BackendRoot,
         mode: MountMode,
         root_security: MountRootSecurity,
     ) -> io::Result<BackendHandle> {
-        let mount_capabilities = inner.mount_path_capabilities(root.as_str())?;
+        let mount_capabilities = raw_inner.mount_path_capabilities(root.as_str())?;
         let root_confinement = mount_capabilities.root_confinement;
         if root_security == MountRootSecurity::Enforced && !root_confinement.is_enforced() {
             return Err(permission_denied(
@@ -42,12 +52,13 @@ impl RootedBackend {
         // A kernel/provider-confined backend may intentionally be unable to
         // inspect ancestors above its root (Landlock does exactly this). Its
         // capability already covers them; only revalidate the selected root.
-        let root_ancestors = if root_confinement.is_enforced() || inner.scheme() == Scheme::Peer {
+        let root_ancestors = if root_confinement.is_enforced() || raw_inner.scheme() == Scheme::Peer
+        {
             vec![root.as_str().to_string()]
         } else {
             root_ancestor_chain(root.as_str())?
         };
-        let windows_paths = inner.is_local();
+        let windows_paths = raw_inner.is_local();
         if windows_paths {
             validate_windows_components(&components(root.as_str())?)?;
         }
@@ -60,12 +71,33 @@ impl RootedBackend {
         // case-sensitive claim accidentally. Protocol backends may opt in only
         // after proving the semantics for this exact root.
         let case_sensitive_paths = !windows_paths
-            && inner.scheme() != Scheme::Peer
-            && inner.case_sensitive_paths(root.as_str());
+            && raw_inner.scheme() != Scheme::Peer
+            && raw_inner.case_sensitive_paths(root.as_str());
+        let root_metadata = super::rooted_backend_case::validate_root(&raw_inner, &root_ancestors)
+            .map_err(sanitize_error)?;
+        if root_metadata.is_symlink || !root_metadata.is_dir {
+            return Err(permission_denied(
+                "mount root must be an existing plain directory",
+            ));
+        }
+        let revalidate_root =
+            root_security == MountRootSecurity::Trusted || !root_confinement.is_enforced();
+        let case_cache = Arc::new(if case_sensitive_paths {
+            CachingBackend::new(Arc::clone(&raw_inner))
+        } else {
+            CachingBackend::with_child_key(
+                Arc::clone(&raw_inner),
+                crate::mount::windows_ordinal_key,
+            )
+        });
+        let inner: BackendHandle = case_cache.clone();
         let backend = Self {
             inner,
+            case_cache,
+            raw_inner,
             root: root.as_str().to_string(),
             root_ancestors,
+            revalidate_root,
             read_only: mode == MountMode::ReadOnly,
             windows_paths,
             staged_write,
@@ -73,28 +105,27 @@ impl RootedBackend {
             root_confinement,
             operation: super::rooted_backend_gate::OperationGate::new(),
         };
-        {
-            let _operation = backend.operation.read()?;
-            let mapped = backend.checked_existing("/")?;
-            let metadata = backend.inner.stat(&mapped)?;
-            if metadata.is_symlink || !metadata.is_dir {
-                return Err(permission_denied(
-                    "mount root must be an existing plain directory",
-                ));
-            }
-        }
         Ok(Arc::new(backend))
     }
 
     fn checked_existing(&self, virtual_path: &str) -> io::Result<String> {
-        self.checked(virtual_path, false)
+        self.checked(virtual_path, false, false)
     }
 
     fn checked_destination(&self, virtual_path: &str) -> io::Result<String> {
-        self.checked(virtual_path, true)
+        self.checked(virtual_path, true, true)
     }
 
-    fn checked(&self, virtual_path: &str, allow_missing: bool) -> io::Result<String> {
+    fn checked_existing_for_write(&self, virtual_path: &str) -> io::Result<String> {
+        self.checked(virtual_path, false, true)
+    }
+
+    fn checked(
+        &self,
+        virtual_path: &str,
+        allow_missing: bool,
+        for_write: bool,
+    ) -> io::Result<String> {
         (|| {
             let virtual_components = canonical_virtual_components(virtual_path)?;
             if !self.case_sensitive_paths {
@@ -105,8 +136,15 @@ impl RootedBackend {
             if self.windows_paths {
                 validate_windows_components(&virtual_components)?;
             }
+            let (resolver, case_cache) = if for_write {
+                (&self.raw_inner, None)
+            } else {
+                (&self.inner, Some(self.case_cache.as_ref()))
+            };
             super::rooted_backend_case::resolve(
-                &self.inner,
+                resolver,
+                case_cache,
+                self.revalidate_root.then_some(&self.raw_inner),
                 &self.root,
                 &self.root_ancestors,
                 &virtual_components,
@@ -158,7 +196,7 @@ impl Backend for RootedBackend {
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let _operation = self.operation.read()?;
         let mut metadata = self
-            .inner
+            .raw_inner
             .stat(&self.checked_existing(path)?)
             .map(sanitize_metadata)
             .map_err(sanitize_error)?;
@@ -226,7 +264,7 @@ impl Backend for RootedBackend {
         let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(dst)?;
-        let src = self.checked_existing(src)?;
+        let src = self.checked_existing_for_write(src)?;
         let dst = self.checked_destination(dst)?;
         self.inner.copy_file(&src, &dst).map_err(sanitize_error)
     }
@@ -236,7 +274,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(src)?;
         Self::require_child(dst)?;
-        let src = self.checked_existing(src)?;
+        let src = self.checked_existing_for_write(src)?;
         let dst = self.checked_destination(dst)?;
         self.inner.rename(&src, &dst).map_err(sanitize_error)
     }
@@ -246,7 +284,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(src)?;
         Self::require_child(dst)?;
-        let src = self.checked_existing(src)?;
+        let src = self.checked_existing_for_write(src)?;
         let dst = self.checked_destination(dst)?;
         self.inner
             .rename_no_replace(&src, &dst)
@@ -258,7 +296,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(staged)?;
         Self::require_child(destination)?;
-        let staged = self.checked_existing(staged)?;
+        let staged = self.checked_existing_for_write(staged)?;
         let destination = self.checked_destination(destination)?;
         self.inner
             .promote_staged(&staged, &destination)
@@ -270,7 +308,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(staged)?;
         Self::require_child(destination)?;
-        let staged = self.checked_existing(staged)?;
+        let staged = self.checked_existing_for_write(staged)?;
         let destination = self.checked_destination(destination)?;
         self.inner
             .promote_staged_no_replace(&staged, &destination)
@@ -282,7 +320,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(path)?;
         self.inner
-            .remove_file(&self.checked_existing(path)?)
+            .remove_file(&self.checked_existing_for_write(path)?)
             .map_err(sanitize_error)
     }
 
@@ -291,7 +329,7 @@ impl Backend for RootedBackend {
         self.require_write()?;
         Self::require_child(path)?;
         self.inner
-            .remove_dir(&self.checked_existing(path)?)
+            .remove_dir(&self.checked_existing_for_write(path)?)
             .map_err(sanitize_error)
     }
 
@@ -359,133 +397,5 @@ impl Backend for RootedBackend {
 
     fn invalidate_cache(&self) {
         self.inner.invalidate_cache();
-    }
-}
-
-fn canonical_virtual_components(path: &str) -> io::Result<Vec<String>> {
-    if path == "/" {
-        return Ok(Vec::new());
-    }
-    if !path.starts_with('/') || path.ends_with('/') || path.contains("//") {
-        return Err(invalid("mount path must be a canonical absolute path"));
-    }
-    components(path)
-}
-
-fn components(path: &str) -> io::Result<Vec<String>> {
-    path.split('/')
-        .filter(|component| !component.is_empty())
-        .map(|component| {
-            if matches!(component, "." | "..")
-                || component.contains('\\')
-                || component.contains('\0')
-            {
-                Err(invalid("mount path contains an unsafe component"))
-            } else {
-                Ok(component.to_string())
-            }
-        })
-        .collect()
-}
-
-fn root_ancestor_chain(root: &str) -> io::Result<Vec<String>> {
-    let parts = components(root)?;
-    if root.starts_with("//") {
-        if parts.len() < 2 {
-            return Err(invalid("UNC mount root requires server and share"));
-        }
-        let mut current = format!("//{}/{}", parts[0], parts[1]);
-        let mut chain = vec![current.clone()];
-        for component in parts.iter().skip(2) {
-            current = join(&current, component);
-            chain.push(current.clone());
-        }
-        Ok(chain)
-    } else {
-        let mut current = "/".to_string();
-        let mut chain = vec![current.clone()];
-        for component in parts {
-            current = join(&current, &component);
-            chain.push(current.clone());
-        }
-        Ok(chain)
-    }
-}
-
-fn validate_windows_components(components: &[String]) -> io::Result<()> {
-    for component in components {
-        if (component.ends_with('.') || component.ends_with(' '))
-            || component.contains(':')
-            || component.chars().any(|character| character < ' ')
-        {
-            return Err(invalid(
-                "mount path is unsafe under Windows path normalization",
-            ));
-        }
-        let stem = component
-            .split('.')
-            .next()
-            .unwrap_or(component)
-            .to_ascii_uppercase();
-        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-            || stem
-                .strip_prefix("COM")
-                .or_else(|| stem.strip_prefix("LPT"))
-                .is_some_and(|suffix| {
-                    suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9')
-                });
-        if reserved {
-            return Err(invalid("mount path uses a reserved Windows device name"));
-        }
-    }
-    Ok(())
-}
-
-fn join(parent: &str, child: &str) -> String {
-    if parent == "/" {
-        format!("/{child}")
-    } else {
-        format!("{}/{child}", parent.trim_end_matches('/'))
-    }
-}
-
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
-}
-
-fn permission_denied(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, message)
-}
-
-fn sanitize_metadata(mut metadata: VfsMeta) -> VfsMeta {
-    metadata.id = None;
-    metadata.content_md5 = metadata.content_md5.and_then(|hash| {
-        (hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            .then(|| hash.to_ascii_lowercase())
-    });
-    metadata
-}
-
-struct SanitizedReader {
-    inner: Box<dyn Read + Send>,
-}
-
-impl Read for SanitizedReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buffer).map_err(sanitize_error)
-    }
-}
-
-struct SanitizedWriter {
-    inner: Box<dyn Write + Send>,
-}
-
-impl Write for SanitizedWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.inner.write(buffer).map_err(sanitize_error)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush().map_err(sanitize_error)
     }
 }

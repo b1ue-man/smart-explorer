@@ -1,4 +1,4 @@
-use crate::vfs::BackendHandle;
+use crate::vfs::{BackendHandle, CachingBackend};
 use std::io;
 
 /// Resolves one helper-owned virtual path below its authorized backend root.
@@ -7,13 +7,17 @@ use std::io;
 /// child, and the backend's preserved spelling is used for every operation.
 pub(super) fn resolve(
     backend: &BackendHandle,
+    case_cache: Option<&CachingBackend>,
+    root_validator: Option<&BackendHandle>,
     root: &str,
     root_ancestors: &[String],
     requested_components: &[String],
     allow_missing: bool,
     case_sensitive: bool,
 ) -> io::Result<String> {
-    validate_root(backend, root_ancestors)?;
+    if let Some(root_validator) = root_validator {
+        validate_root(root_validator, root_ancestors)?;
+    }
     let mut current = root.to_string();
     let mut missing = false;
     for (index, requested) in requested_components.iter().enumerate() {
@@ -25,7 +29,7 @@ pub(super) fn resolve(
         let (candidate, listed_metadata) = if case_sensitive {
             (join(&current, requested), None)
         } else {
-            match unique_child(backend, &current, requested)? {
+            match unique_child(backend, case_cache, &current, requested)? {
                 Some(metadata) => {
                     let candidate = join(&current, &metadata.name);
                     (candidate, Some(metadata))
@@ -61,7 +65,11 @@ pub(super) fn resolve(
     Ok(current)
 }
 
-fn validate_root(backend: &BackendHandle, ancestors: &[String]) -> io::Result<()> {
+pub(super) fn validate_root(
+    backend: &BackendHandle,
+    ancestors: &[String],
+) -> io::Result<crate::vfs::VfsMeta> {
+    let mut root_metadata = None;
     for ancestor in ancestors {
         let metadata = backend.stat(ancestor)?;
         if metadata.is_symlink {
@@ -75,15 +83,29 @@ fn validate_root(backend: &BackendHandle, ancestors: &[String]) -> io::Result<()
                 "mount root ancestor is not a directory",
             ));
         }
+        root_metadata = Some(metadata);
     }
-    Ok(())
+    root_metadata.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "mount root validation requires at least one path",
+        )
+    })
 }
 
 fn unique_child(
     backend: &BackendHandle,
+    case_cache: Option<&CachingBackend>,
     parent: &str,
     requested: &str,
 ) -> io::Result<Option<crate::vfs::VfsMeta>> {
+    if let Some(case_cache) = case_cache {
+        let matched = case_cache.unique_child(parent, requested)?;
+        if let Some(metadata) = matched.as_ref() {
+            validate_child_name(&metadata.name)?;
+        }
+        return Ok(matched);
+    }
     let key = crate::mount::windows_ordinal_key(requested);
     let mut matched = None;
     for metadata in backend.list_dir(parent)? {

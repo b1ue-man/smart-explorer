@@ -1,6 +1,6 @@
 use super::case_semantics::identity_key;
 use crate::vfs::VfsMeta;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::mem::size_of;
 use std::sync::Mutex;
@@ -113,15 +113,33 @@ impl MetadataPointCache {
         Ok(())
     }
 
-    pub(super) fn reconcile_directory(&self, path: &str) -> io::Result<()> {
+    pub(super) fn reconcile_directory(&self, path: &str, entries: &[VfsMeta]) -> io::Result<()> {
         let mut state = self.lock_state()?;
         let key = self.key(path);
+        let prefix = if key == "/" {
+            "/".to_string()
+        } else {
+            format!("{key}/")
+        };
+        let plain_directories = entries
+            .iter()
+            .filter(|metadata| metadata.is_dir && !metadata.is_symlink)
+            .map(|metadata| self.key(&metadata.name))
+            .collect::<HashSet<_>>();
         let removed = state
             .entries
             .keys()
             .filter(|candidate| {
-                *candidate == &key
-                    || parent_and_name(candidate).is_some_and(|(parent, _)| self.key(parent) == key)
+                if *candidate == &key {
+                    return true;
+                }
+                let Some(relative) = candidate.strip_prefix(&prefix) else {
+                    return false;
+                };
+                match relative.split_once('/') {
+                    None => true,
+                    Some((child, _)) => !plain_directories.contains(child),
+                }
             })
             .cloned()
             .collect::<Vec<_>>();

@@ -61,6 +61,12 @@ mod mount_client;
 mod mount_error;
 #[path = "os/shared/mount_host_process.rs"]
 mod mount_host_process;
+#[cfg(windows)]
+#[path = "os/windows/mount_job.rs"]
+mod mount_job;
+#[cfg(windows)]
+#[path = "os/windows/mount_launch.rs"]
+mod mount_launch;
 #[path = "os/shared/mount_manager.rs"]
 mod mount_manager;
 #[path = "os/shared/mount_probe_client.rs"]
@@ -102,6 +108,10 @@ mod rooted_backend;
 mod rooted_backend_case;
 #[path = "os/shared/rooted_backend_gate.rs"]
 mod rooted_backend_gate;
+#[path = "os/shared/rooted_backend_io.rs"]
+mod rooted_backend_io;
+#[path = "os/shared/rooted_backend_paths.rs"]
+mod rooted_backend_paths;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "os/shared/rooted_backend_task_tests.rs"]
 mod rooted_backend_task_tests;
