@@ -58,7 +58,7 @@ impl CallbackContext {
             volume_serial,
             cache_root_wide,
             session,
-            handles: HandleTable::new(case_sensitive_paths),
+            handles: HandleTable::new(case_sensitive_paths, read_only),
             selected_drive: Mutex::new(selected_drive),
             stop_requested: AtomicBool::new(false),
             timeouts,

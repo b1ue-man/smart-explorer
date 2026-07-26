@@ -12,6 +12,13 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+/// A fetched whole-file spool copy that is not yet visible in the entry map.
+struct PreparedMaterialization {
+    spool_name: String,
+    baseline: Baseline,
+    condition: EntryCondition,
+}
+
 impl MountEngine {
     pub fn open_file(&self, callback_path: &str, options: OpenFileOptions) -> io::Result<HandleId> {
         let creates_or_truncates = matches!(
@@ -36,13 +43,32 @@ impl MountEngine {
         }
         let path_guard = self.materialization_guard(reserved_path.backend())?;
         let _path_reservation = lock(&path_guard)?;
-        let _namespace = read_lock(&self.namespace)?;
-        let path = self.project_checked(callback_path)?;
-        let entry = self.materialize(&path, options.disposition)?;
-        if matches!(
+        let truncates = matches!(
             options.disposition,
             OpenDisposition::TruncateExisting | OpenDisposition::CreateAlways
-        ) {
+        );
+        let path = {
+            let _namespace = read_lock(&self.namespace)?;
+            let path = self.project_checked(callback_path)?;
+            if let Some(entry) = self.materialize_cached(&path, options.disposition)? {
+                if truncates {
+                    self.truncate_entry(&entry, 0)?;
+                }
+                return self.insert_handle(OpenHandleKind::Materialized(entry), options.writable);
+            }
+            path
+        };
+        // The whole-file fetch can take minutes; running it outside the
+        // namespace lock keeps closes and renames (writers) from queuing
+        // behind it and, transitively, stalling every other callback. The
+        // per-path materialization guard still serializes this path, and
+        // installation revalidates against concurrent namespace changes.
+        let prepared = self.materialize_fetch(&path, options.disposition)?;
+        let entry = {
+            let _namespace = read_lock(&self.namespace)?;
+            self.materialize_install(&path, prepared, options.disposition)?
+        };
+        if truncates {
             self.truncate_entry(&entry, 0)?;
         }
         self.insert_handle(OpenHandleKind::Materialized(entry), options.writable)
@@ -75,7 +101,19 @@ impl MountEngine {
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
         file.seek(SeekFrom::Start(offset))?;
-        file.read(output)
+        // Windows callers treat a short count as end-of-file, so fill the
+        // buffer until the spool is exhausted rather than returning one
+        // arbitrary partial read.
+        let mut total = 0;
+        while total < output.len() {
+            match file.read(&mut output[total..]) {
+                Ok(0) => break,
+                Ok(read) => total += read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(total)
     }
 
     pub fn write(&self, handle: HandleId, offset: u64, input: &[u8]) -> io::Result<usize> {
@@ -91,7 +129,10 @@ impl MountEngine {
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         file.seek(SeekFrom::Start(offset))?;
-        file.write(input)
+        // A silently short write would be reported to Windows as success for
+        // the smaller count and the remainder would never be retried.
+        file.write_all(input)?;
+        Ok(input.len())
     }
 
     pub fn append(&self, handle: HandleId, input: &[u8]) -> io::Result<usize> {
@@ -107,7 +148,8 @@ impl MountEngine {
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         file.seek(SeekFrom::End(0))?;
-        file.write(input)
+        file.write_all(input)?;
+        Ok(input.len())
     }
 
     pub fn len(&self, handle: HandleId) -> io::Result<u64> {
@@ -140,36 +182,68 @@ impl MountEngine {
     }
 
     pub fn close(&self, handle: HandleId) -> io::Result<()> {
-        let _namespace = write_lock(&self.namespace)?;
         let opened = lock(&self.handles)?
             .remove(&handle)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown mount handle"))?;
         match opened.kind {
-            OpenHandleKind::Materialized(entry) => self.cleanup_committed_entry(&entry),
+            OpenHandleKind::Materialized(entry) => {
+                // Only materialized closes need the namespace write lock (for
+                // spool cleanup racing renames). Metadata handles — the bulk
+                // of Explorer traffic — must not queue a writer behind long
+                // read-holding callbacks and stall the whole drive.
+                let _namespace = write_lock(&self.namespace)?;
+                self.cleanup_committed_entry(&entry)
+            }
             OpenHandleKind::Metadata(_) => Ok(()),
         }
     }
 
+    /// Combined materialization for callers that already hold a namespace
+    /// lock for their whole operation (the replacing-rename path).
     pub(super) fn materialize(
         &self,
         path: &ProjectedPath,
         disposition: OpenDisposition,
     ) -> io::Result<Arc<Entry>> {
-        let cache_key = self.cache_key(path.backend());
-        if let Some(entry) = self.entry_for_path(path.backend())? {
-            let state = lock(&entry.state)?;
-            if disposition == OpenDisposition::CreateNew {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "file already exists",
-                ));
-            }
-            if state.delete_token.is_some() {
-                return Err(not_found(path.backend()));
-            }
-            drop(state);
+        if let Some(entry) = self.materialize_cached(path, disposition)? {
             return Ok(entry);
         }
+        let prepared = self.materialize_fetch(path, disposition)?;
+        self.materialize_install(path, prepared, disposition)
+    }
+
+    /// The lock-free fast path: an already-cached entry, with the same
+    /// disposition admission the combined path applies.
+    fn materialize_cached(
+        &self,
+        path: &ProjectedPath,
+        disposition: OpenDisposition,
+    ) -> io::Result<Option<Arc<Entry>>> {
+        let Some(entry) = self.entry_for_path(path.backend())? else {
+            return Ok(None);
+        };
+        let state = lock(&entry.state)?;
+        if disposition == OpenDisposition::CreateNew {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "file already exists",
+            ));
+        }
+        if state.delete_token.is_some() {
+            return Err(not_found(path.backend()));
+        }
+        drop(state);
+        Ok(Some(entry))
+    }
+
+    /// Downloads (or prepares) the whole-file spool copy. Requires no
+    /// namespace lock: installation revalidates the namespace afterwards, and
+    /// the post-transfer stat detects remote drift.
+    fn materialize_fetch(
+        &self,
+        path: &ProjectedPath,
+        disposition: OpenDisposition,
+    ) -> io::Result<PreparedMaterialization> {
         let remote = match self.backend.stat(path.backend()) {
             Ok(meta) => Some(meta),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -220,18 +294,45 @@ impl MountEngine {
             }
             Ok((baseline, EntryCondition::Clean))
         })();
-        let (baseline, condition) = match prepared {
-            Ok(prepared) => prepared,
+        match prepared {
+            Ok((baseline, condition)) => Ok(PreparedMaterialization {
+                spool_name: allocated.name,
+                baseline,
+                condition,
+            }),
             Err(error) => {
                 let _ = self.spool.remove_file(&allocated.name);
+                Err(error)
+            }
+        }
+    }
+
+    /// Installs a fetched spool copy. The caller must hold a namespace lock;
+    /// a concurrent entry or delete that appeared while fetching ran unlocked
+    /// wins, and the redundant spool copy is discarded.
+    fn materialize_install(
+        &self,
+        path: &ProjectedPath,
+        prepared: PreparedMaterialization,
+        disposition: OpenDisposition,
+    ) -> io::Result<Arc<Entry>> {
+        let cache_key = self.cache_key(path.backend());
+        match self.materialize_cached(path, disposition) {
+            Ok(Some(existing)) => {
+                self.spool.remove_file(&prepared.spool_name)?;
+                return Ok(existing);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = self.spool.remove_file(&prepared.spool_name);
                 return Err(error);
             }
-        };
+        }
         let state = EntryState {
             remote_path: path.backend().to_string(),
-            spool_name: allocated.name,
-            baseline,
-            condition,
+            spool_name: prepared.spool_name,
+            baseline: prepared.baseline,
+            condition: prepared.condition,
             delete_token: None,
             delete_committed: false,
         };

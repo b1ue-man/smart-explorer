@@ -50,15 +50,17 @@ pub(super) struct HandleTable {
     namespace_transition: Mutex<()>,
     next_context: AtomicU64,
     case_sensitive_paths: bool,
+    read_only_mount: bool,
 }
 
 impl HandleTable {
-    pub(super) fn new(case_sensitive_paths: bool) -> Self {
+    pub(super) fn new(case_sensitive_paths: bool, read_only_mount: bool) -> Self {
         Self {
             state: Mutex::new(State::default()),
             namespace_transition: Mutex::new(()),
             next_context: AtomicU64::new(1),
             case_sensitive_paths,
+            read_only_mount,
         }
     }
 
@@ -71,12 +73,29 @@ impl HandleTable {
     ) -> io::Result<HandleReservation<'_>> {
         let transition = self.lock_transition()?;
         let path = self.path_key(path);
-        let key = {
+        let (key, granted_access) = {
             let mut state = self.lock_state()?;
             if state.pending_deletes.contains_key(&path) {
                 return Err(sharing_violation("mounted path is pending deletion"));
             }
-            check_share_compatibility(&state, &path, desired_access, share_access)?;
+            // MAXIMUM_ALLOWED resolves like on NTFS: the largest grant the
+            // volume mode and current sharing state permit, degrading to a
+            // read-only grant instead of failing the open outright. The
+            // record stores only concrete rights so later share checks and
+            // delete admission see what was actually granted.
+            let granted_access = if crate::mount::requests_maximum_allowed(desired_access) {
+                let full = crate::mount::maximum_allowed_full_grant(desired_access);
+                if !self.read_only_mount
+                    && check_share_compatibility(&state, &path, full, share_access).is_ok()
+                {
+                    full
+                } else {
+                    crate::mount::maximum_allowed_read_grant(desired_access)
+                }
+            } else {
+                desired_access
+            };
+            check_share_compatibility(&state, &path, granted_access, share_access)?;
             let key = self.allocate_key(&state)?;
             state.handles.insert(
                 key,
@@ -84,7 +103,7 @@ impl HandleTable {
                     node: None,
                     path,
                     is_directory,
-                    desired_access,
+                    desired_access: granted_access,
                     share_access,
                     share_active: true,
                     namespace_attached: true,
@@ -92,9 +111,9 @@ impl HandleTable {
                     delete_committed: false,
                 },
             );
-            key
+            (key, granted_access)
         };
-        Ok(HandleReservation::new(self, key, transition))
+        Ok(HandleReservation::new(self, key, transition, granted_access))
     }
 
     pub(super) fn snapshot(&self, key: u64) -> io::Result<HandleSnapshot> {

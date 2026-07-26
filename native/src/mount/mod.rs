@@ -44,6 +44,8 @@ mod spool;
 mod startup;
 #[path = "core/types.rs"]
 mod types;
+#[path = "core/windows_access.rs"]
+mod windows_access;
 #[path = "core/windows_case.rs"]
 mod windows_case;
 
@@ -77,6 +79,10 @@ pub use types::{
     HandleId, MountConfig, MountConflict, MountId, MountMode, MountRootSecurity,
     MountRuntimeConfig, MountSource, MountStatus, NamespaceOutcome, OpenDisposition,
     OpenFileOptions, PeerMountTarget, RenameOutcome,
+};
+#[cfg_attr(not(windows), allow(unused_imports))]
+pub(crate) use windows_access::{
+    maximum_allowed_full_grant, maximum_allowed_read_grant, requests_maximum_allowed,
 };
 pub(crate) use windows_case::{validate_windows_case_component, windows_ordinal_key};
 
