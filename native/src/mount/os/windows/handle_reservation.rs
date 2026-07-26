@@ -7,15 +7,22 @@ use super::{handle_access::invalid_handle, handle_state::HandleTable, handle_typ
 pub(super) struct HandleReservation<'a> {
     table: &'a HandleTable,
     key: u64,
+    granted_access: u32,
     transition: Option<MutexGuard<'a, ()>>,
     committed: bool,
 }
 
 impl<'a> HandleReservation<'a> {
-    pub(super) fn new(table: &'a HandleTable, key: u64, transition: MutexGuard<'a, ()>) -> Self {
+    pub(super) fn new(
+        table: &'a HandleTable,
+        key: u64,
+        transition: MutexGuard<'a, ()>,
+        granted_access: u32,
+    ) -> Self {
         Self {
             table,
             key,
+            granted_access,
             transition: Some(transition),
             committed: false,
         }
@@ -23,6 +30,12 @@ impl<'a> HandleReservation<'a> {
 
     pub(super) fn key(&self) -> u64 {
         self.key
+    }
+
+    /// The concrete access rights stored for this handle after
+    /// MAXIMUM_ALLOWED resolution.
+    pub(super) fn granted_access(&self) -> u32 {
+        self.granted_access
     }
 
     pub(super) fn bind(&self, node: NodeHandle) -> io::Result<()> {

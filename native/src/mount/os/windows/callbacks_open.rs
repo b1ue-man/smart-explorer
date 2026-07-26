@@ -60,8 +60,12 @@ pub(super) unsafe extern "system" fn create_file(
         guard_long_with_context(file_info, |context| {
             let path = read_wide(file_name)?;
             validate_create_flags(file_attributes, create_options)?;
-            let cache_safe =
-                cache_safe_namespace_open(desired_access, create_disposition, create_options);
+            let cache_safe = cache_safe_namespace_open(
+                desired_access,
+                create_disposition,
+                create_options,
+                context.read_only,
+            );
             let existing = match if cache_safe {
                 context.engine.stat_cached(&path)
             } else {
@@ -176,14 +180,18 @@ fn open_regular_file(
     file_info: *mut DokanFileInfo,
 ) -> CallbackResult {
     let exists = existing.is_some();
-    let writable = desired_access
-        & (FILE_WRITE_DATA | FILE_APPEND_DATA | MAXIMUM_ALLOWED | GENERIC_WRITE | GENERIC_ALL)
+    // Reservation resolves MAXIMUM_ALLOWED into concrete rights (a read-only
+    // grant on read-only mounts or blocked sharing), so writability and the
+    // data/metadata route are decided from what was actually granted.
+    let reservation = context.reserve_handle(&path, false, desired_access, share_access)?;
+    let granted_access = reservation.granted_access();
+    let writable = granted_access
+        & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE | GENERIC_ALL)
         != 0;
     let requested_disposition = disposition;
     let disposition = disposition_for_file(requested_disposition, exists, writable)?;
-    let reservation = context.reserve_handle(&path, false, desired_access, share_access)?;
     let engine_handle =
-        if disposition == OpenDisposition::OpenExisting && !requires_file_data(desired_access) {
+        if disposition == OpenDisposition::OpenExisting && !requires_file_data(granted_access) {
             context.engine.open_metadata_file(
                 &path,
                 existing
@@ -224,7 +232,12 @@ fn open_regular_file(
     opened_existing(exists, requested_disposition)
 }
 
-const fn cache_safe_namespace_open(desired_access: u32, disposition: u32, options: u32) -> bool {
+const fn cache_safe_namespace_open(
+    desired_access: u32,
+    disposition: u32,
+    options: u32,
+    read_only_mount: bool,
+) -> bool {
     const MUTATING_ACCESS: u32 = FILE_WRITE_DATA
         | FILE_APPEND_DATA
         | FILE_WRITE_EA
@@ -236,9 +249,16 @@ const fn cache_safe_namespace_open(desired_access: u32, disposition: u32, option
         | MAXIMUM_ALLOWED
         | GENERIC_WRITE
         | GENERIC_ALL;
+    // MAXIMUM_ALLOWED resolves to a read-only grant on a read-only mount, so
+    // it cannot make such an open mutating.
+    let mutating = if read_only_mount {
+        MUTATING_ACCESS & !MAXIMUM_ALLOWED
+    } else {
+        MUTATING_ACCESS
+    };
     disposition == FILE_OPEN
         && options & FILE_DELETE_ON_CLOSE == 0
-        && desired_access & MUTATING_ACCESS == 0
+        && desired_access & mutating == 0
 }
 
 const fn requires_file_data(desired_access: u32) -> bool {
@@ -260,14 +280,30 @@ const fn requires_file_data(desired_access: u32) -> bool {
 // requiring a live Dokany driver in the task suite.
 const _: () = {
     let explorer_metadata = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
-    assert!(cache_safe_namespace_open(explorer_metadata, FILE_OPEN, 0));
+    assert!(cache_safe_namespace_open(explorer_metadata, FILE_OPEN, 0, false));
     assert!(!requires_file_data(explorer_metadata));
     assert!(!cache_safe_namespace_open(
         explorer_metadata,
         FILE_OPEN,
-        FILE_DELETE_ON_CLOSE
+        FILE_DELETE_ON_CLOSE,
+        false
     ));
-    assert!(!cache_safe_namespace_open(DELETE, FILE_OPEN, 0));
+    assert!(!cache_safe_namespace_open(DELETE, FILE_OPEN, 0, false));
+    assert!(!cache_safe_namespace_open(DELETE, FILE_OPEN, 0, true));
+    // Explorer's ubiquitous MAXIMUM_ALLOWED namespace queries stay on the
+    // cached metadata route when the mount cannot be written anyway.
+    assert!(cache_safe_namespace_open(
+        MAXIMUM_ALLOWED | SYNCHRONIZE,
+        FILE_OPEN,
+        0,
+        true
+    ));
+    assert!(!cache_safe_namespace_open(
+        MAXIMUM_ALLOWED | SYNCHRONIZE,
+        FILE_OPEN,
+        0,
+        false
+    ));
     assert!(requires_file_data(FILE_READ_DATA));
     assert!(requires_file_data(GENERIC_READ));
 };
