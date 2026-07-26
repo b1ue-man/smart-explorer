@@ -137,10 +137,9 @@ run an exact-candidate verification pipeline by hand first.
    `release-native/.complete-release.lock`; a direct full invocation of
    `publish-feed.sh` is refused.
 
-   Every canonical Cargo leaf fixes `CARGO_BUILD_JOBS=1`, disables incremental
-   compilation, and uses ThinLTO with eight codegen units. These values are not
-   ambient tuning knobs: they keep simultaneous compiler and monolithic LLVM
-   peaks out of the release transaction. The large Linux build tree additionally
+   Every canonical Cargo leaf uses all logical CPU workers, disables incremental
+   compilation and cross-crate LTO, and uses 16 codegen units. These values are
+   fixed by the release scripts. The large Linux build tree additionally
    runs through `native/run-release-memory-bounded.sh`. When systemd scopes are
    available it applies `MemoryHigh=3G`, `MemoryMax=4G`, and `MemorySwapMax=1G`,
    so an exceptional compiler allocation can terminate only that build scope

@@ -61,16 +61,16 @@ for release_leaf in \
     native/publish-feed.sh \
     native/publish-linux-feed-wsl.sh \
     native/build-agent-bundles.sh; do
-    grep -Fxq 'export CARGO_BUILD_JOBS=1' "$repo_root/$release_leaf"
-    grep -Fxq 'export CARGO_PROFILE_RELEASE_LTO=thin' "$repo_root/$release_leaf"
-    grep -Fxq 'export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8' "$repo_root/$release_leaf"
+    grep -Fxq 'export CARGO_BUILD_JOBS="$(nproc)"' "$repo_root/$release_leaf"
+    grep -Fxq 'export CARGO_PROFILE_RELEASE_LTO=off' "$repo_root/$release_leaf"
+    grep -Fxq 'export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16' "$repo_root/$release_leaf"
 done
 grep -Fq 'lto = "thin"' "$repo_root/native/Cargo.toml"
 grep -Fq 'codegen-units = 8' "$repo_root/native/Cargo.toml"
-grep -Fq '$env:CARGO_BUILD_JOBS = "1"' "$repo_root/native/publish-release-local.ps1"
-grep -Fq '$env:CARGO_PROFILE_RELEASE_LTO = "thin"' "$repo_root/native/publish-update.ps1"
-grep -Fq '$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"' "$repo_root/native/publish-update.ps1"
-grep -Fq '$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"' "$repo_root/native/publish-release-local.ps1"
+grep -Fq '$env:CARGO_BUILD_JOBS = [Environment]::ProcessorCount.ToString()' "$repo_root/native/publish-release-local.ps1"
+grep -Fq '$env:CARGO_PROFILE_RELEASE_LTO = "off"' "$repo_root/native/publish-update.ps1"
+grep -Fq '$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"' "$repo_root/native/publish-update.ps1"
+grep -Fq '$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"' "$repo_root/native/publish-release-local.ps1"
 test "$(grep -Fc 'run-release-memory-bounded.sh' "$repo_root/native/publish-release-local.ps1")" -eq 2
 grep -Fxq '  -p MemoryHigh=3G' "$repo_root/native/run-release-memory-bounded.sh"
 grep -Fxq '  -p MemoryMax=4G' "$repo_root/native/run-release-memory-bounded.sh"
@@ -78,7 +78,7 @@ grep -Fxq '  -p MemorySwapMax=1G' "$repo_root/native/run-release-memory-bounded.
 memory_settings="$("$repo_root/native/run-release-memory-bounded.sh" \
     bash -c 'printf "%s:%s:%s:%s:%s" "$CARGO_BUILD_JOBS" "$CARGO_PROFILE_RELEASE_LTO" "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" "$CARGO_PROFILE_TEST_DEBUG" "$CARGO_PROFILE_DEV_DEBUG"')"
 case "$memory_settings" in
-    *"1:thin:8:0:0") ;;
+    *"$(nproc):off:16:0:0") ;;
     *)
         echo "unexpected release memory settings: $memory_settings" >&2
         exit 1

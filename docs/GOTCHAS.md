@@ -25,11 +25,11 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `& $makensis "/DVERSION=x.y.z" "installer.nsi"`.
 - **Release builds must stay inside the memory budget.** The desktop crate once
   exhausted an 8-GiB host with full LTO and displaced unrelated processes.
-  Keep ThinLTO, eight codegen units, `CARGO_BUILD_JOBS=1`, and non-incremental
-  builds pinned in every canonical release leaf. The top-level wrapper also routes the
+  Keep cross-crate LTO disabled, 16 codegen units, all logical CPU workers, and
+  non-incremental builds pinned in every canonical release leaf. The top-level wrapper also routes the
   large Linux tree through `native/run-release-memory-bounded.sh`, which uses a
   3-GiB high/4-GiB hard cgroup limit plus at most 1 GiB of swap when systemd
-  scopes are available. Do not weaken or make these limits ambient overrides;
+  scopes are available. Do not make these limits ambient overrides;
   ordinary diagnostic builds may use separate Cargo settings.
 - **Embedded SSH-agent binaries retain source paths.** Unmapped Cargo registry
   paths make an otherwise identical static-musl agent differ between a local
