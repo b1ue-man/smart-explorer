@@ -4,12 +4,12 @@
 # never ship with stale committed binaries.
 set -euo pipefail
 
-# Use all logical CPUs; the parent release wrapper still supplies the aggregate
-# memory boundary for WSL release leaves.
-export CARGO_BUILD_JOBS="$(nproc)"
+# The canonical embedded-agent build is deliberately serialized. Keep these
+# limits local because this script is invoked directly from Windows through WSL.
+export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO=off
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+export CARGO_PROFILE_RELEASE_LTO=thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
 export CARGO_PROFILE_RELEASE_DEBUG=0
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

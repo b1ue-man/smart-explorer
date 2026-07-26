@@ -16,10 +16,10 @@ set -euo pipefail
 
 # This leaf is also callable from the Windows/WSL release path, where Cargo
 # settings from the parent PowerShell process are not reliably inherited.
-export CARGO_BUILD_JOBS="$(nproc)"
+export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO=off
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+export CARGO_PROFILE_RELEASE_LTO=thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
 export CARGO_PROFILE_RELEASE_DEBUG=0
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

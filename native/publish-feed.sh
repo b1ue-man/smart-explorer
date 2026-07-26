@@ -64,11 +64,11 @@ test -s "$dokany_msi" || {
   echo "Pinned Dokany installer dependency missing: $dokany_msi" >&2
   exit 1
 }
-# Use all logical CPUs while retaining the wrapper's aggregate memory boundary.
-export CARGO_BUILD_JOBS="$(nproc)"
+# Canonical release resource limits are fixed rather than ambient defaults.
+export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO=off
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+export CARGO_PROFILE_RELEASE_LTO=thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
 export CARGO_PROFILE_RELEASE_DEBUG=0
 
 linux_release_args=()
