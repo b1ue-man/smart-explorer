@@ -312,7 +312,7 @@ assert_contains "$vfs_cache" 'if cache.generation != generation {'
 assert_before "$vfs_cache" 'let metadata_bytes = cached_metadata_bytes' 'cache_index::build'
 assert_contains "$vfs_cache" 'self.invalidate_ancestors(path);'
 assert_contains "$vfs_cache_writer" 'drop(inner);'
-writer_drop_block="$(sed -n '/impl Drop for InvalidatingWriter/,/^}/p' "$vfs_cache_writer")"
+writer_drop_block="$(sed -n '/impl Drop for InvalidatingWriter/,/^}/p' "$vfs_cache_writer" | tr -d '\r')"
 case "$writer_drop_block" in
     *$'drop(inner);\n            self.invalidate();'*) ;;
     *)
