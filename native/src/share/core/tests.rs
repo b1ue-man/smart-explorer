@@ -116,12 +116,12 @@ fn typed_not_found_error_remains_readable_by_legacy_peer() {
 }
 
 #[test]
-fn fs_error_wire_tolerates_future_error_kind() {
-    let encoded = br#"{"r":"err","kind":"permission_denied","msg":"denied"}"#;
+fn remote_drive_task_fs_error_wire_tolerates_future_error_kind() {
+    let encoded = br#"{"r":"err","kind":"future_error_kind","msg":"future failure"}"#;
     match serde_json::from_slice::<FsResponse>(encoded).unwrap() {
         FsResponse::Err { kind, msg } => {
             assert_eq!(kind, Some(FsErrorKind::Unknown));
-            assert_eq!(msg, "denied");
+            assert_eq!(msg, "future failure");
         }
         _ => panic!("error response expected"),
     }
