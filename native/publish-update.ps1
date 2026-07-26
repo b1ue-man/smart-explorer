@@ -74,7 +74,7 @@ function Assert-NonEmptyFile([string]$Path) {
 
 function Write-AsciiLf([string]$Path, [string[]]$Lines) {
     $content = ($Lines -join "`n") + "`n"
-    [System.IO.File]::WriteAllText($Path, $content, [System.Text.ASCIIEncoding]::new($false))
+    [System.IO.File]::WriteAllText($Path, $content, [System.Text.Encoding]::ASCII)
 }
 
 function Write-Sha256File([string]$Path) {
