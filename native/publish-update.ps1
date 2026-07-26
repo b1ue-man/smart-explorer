@@ -16,10 +16,10 @@ Set-Location $PSScriptRoot
 
 # Keep every direct Windows release leaf within the canonical memory budget;
 # WSL does not reliably inherit custom Windows environment variables.
-$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_BUILD_JOBS = [Environment]::ProcessorCount.ToString()
 $env:CARGO_INCREMENTAL = "0"
-$env:CARGO_PROFILE_RELEASE_LTO = "thin"
-$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"
+$env:CARGO_PROFILE_RELEASE_LTO = "off"
+$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
 $env:CARGO_PROFILE_RELEASE_DEBUG = "0"
 
 # Version aus Cargo.toml lesen

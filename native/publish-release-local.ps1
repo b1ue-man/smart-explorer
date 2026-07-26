@@ -14,12 +14,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# The canonical release must remain safe on the 8-GiB builders used for local
-# publication. Pin these values instead of accepting ambient Cargo overrides.
-$env:CARGO_BUILD_JOBS = "1"
+# Use every logical CPU while keeping the existing memory boundary around WSL
+# release leaves. Disable cross-crate LTO to avoid the long serial link phase.
+$env:CARGO_BUILD_JOBS = [Environment]::ProcessorCount.ToString()
 $env:CARGO_INCREMENTAL = "0"
-$env:CARGO_PROFILE_RELEASE_LTO = "thin"
-$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"
+$env:CARGO_PROFILE_RELEASE_LTO = "off"
+$env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
 $env:CARGO_PROFILE_RELEASE_DEBUG = "0"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

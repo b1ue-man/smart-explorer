@@ -21,8 +21,9 @@ Erreicht durch:
   in einem Syscall pro Eintrag (statt readdir + stat)
 - Rayon-basierte parallele Verzeichnis-Walker (Work-Stealing über alle Cores)
 - Channels (crossbeam) streamen Resultate batchweise (1024er-Pakete oder 60ms)
-- ThinLTO + strip im Release-Build, `panic = unwind` fuer die abgesicherte
-  Dokany-Callback-Grenze, codegen-units = 8
+- CPU-paralleler Release-Build ohne Cross-Crate-LTO, mit `strip`,
+  `panic = unwind` fuer die abgesicherte Dokany-Callback-Grenze und
+  16 Codegen-Einheiten
 
 ## Build
 
