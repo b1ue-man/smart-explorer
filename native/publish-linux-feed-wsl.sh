@@ -40,6 +40,7 @@ check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
 zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.15.2}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
+export ZIG_GLOBAL_CACHE_DIR="${SMART_EXPLORER_ZIG_CACHE_DIR:-$HOME/.cache/zig/$zig_version}"
 # Keep linker-heavy Cargo output on WSL's native filesystem. Building it under
 # /mnt/c can leave parallel Zig linkers blocked in Windows filesystem I/O.
 linux_target_dir="${SMART_EXPLORER_LINUX_TARGET_DIR:-$HOME/.cache/smart-explorer/linux-target}"
