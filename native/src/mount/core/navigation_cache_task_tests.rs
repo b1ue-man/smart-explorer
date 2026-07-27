@@ -276,7 +276,7 @@ fn remote_drive_task_directory_snapshot_rejects_entry_and_byte_overflow() -> io:
 }
 
 #[test]
-fn remote_drive_task_metadata_handle_never_downloads_or_allocates_a_spool() -> io::Result<()> {
+fn remote_drive_task_metadata_handle_downloads_only_on_first_data_access() -> io::Result<()> {
     let temporary = tempfile::tempdir()?;
     let backend = NavigationBackend::new(false);
     let mount_id = "metadata-only-handle";
@@ -285,17 +285,26 @@ fn remote_drive_task_metadata_handle_never_downloads_or_allocates_a_spool() -> i
     let files = temporary.path().join(mount_id).join("files");
     assert_eq!(spool_file_count(&files)?, 0);
 
-    let handle = engine.open_metadata_file(r"\note.md", metadata.clone())?;
+    let handle = engine.open_metadata_file(r"\note.md", metadata.clone(), false)?;
+    // Pure metadata traffic never transfers the file or allocates a spool.
     assert_eq!(backend.open_reads.load(Ordering::SeqCst), 0);
     assert_eq!(engine.stat_handle(handle)?.name, metadata.name);
     assert_eq!(engine.stat_handle(handle)?.size, 12);
+    assert_eq!(engine.len(handle)?, 12);
     assert_eq!(engine.flush(handle)?, FlushOutcome::NoChanges);
-    let error = engine.read(handle, 0, &mut [0; 1]).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    engine.close(handle)?;
-
     assert_eq!(backend.open_reads.load(Ordering::SeqCst), 0);
     assert_eq!(spool_file_count(&files)?, 0);
+
+    // The first data access upgrades the handle with exactly one transfer;
+    // later reads are served from the spool.
+    let mut buffer = [0u8; 6];
+    assert_eq!(engine.read(handle, 0, &mut buffer)?, 6);
+    assert_eq!(&buffer, b"remote");
+    assert_eq!(backend.open_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.read(handle, 7, &mut buffer)?, 6);
+    assert_eq!(&buffer, b"conten");
+    assert_eq!(backend.open_reads.load(Ordering::SeqCst), 1);
+    engine.close(handle)?;
     Ok(())
 }
 

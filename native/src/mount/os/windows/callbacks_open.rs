@@ -25,11 +25,9 @@ const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FILE_OPEN_BY_FILE_ID: u32 = 0x0000_2000;
 const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-const FILE_READ_DATA: u32 = 0x0000_0001;
 const FILE_WRITE_DATA: u32 = 0x0000_0002;
 const FILE_APPEND_DATA: u32 = 0x0000_0004;
 const FILE_WRITE_EA: u32 = 0x0000_0010;
-const FILE_EXECUTE: u32 = 0x0000_0020;
 const FILE_DELETE_CHILD: u32 = 0x0000_0040;
 const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
 const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
@@ -38,9 +36,7 @@ const WRITE_DAC: u32 = 0x0004_0000;
 const WRITE_OWNER: u32 = 0x0008_0000;
 const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 const GENERIC_ALL: u32 = 0x1000_0000;
-const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
-const GENERIC_READ: u32 = 0x8000_0000;
 const SYNCHRONIZE: u32 = 0x0010_0000;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
@@ -190,23 +186,27 @@ fn open_regular_file(
         != 0;
     let requested_disposition = disposition;
     let disposition = disposition_for_file(requested_disposition, exists, writable)?;
-    let engine_handle =
-        if disposition == OpenDisposition::OpenExisting && !requires_file_data(granted_access) {
-            context.engine.open_metadata_file(
-                &path,
-                existing
-                    .cloned()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))?,
-            )?
-        } else {
-            context.engine.open_file(
-                &path,
-                OpenFileOptions {
-                    writable,
-                    disposition,
-                },
-            )?
-        };
+    // Every open-existing handle starts lazy: the engine fetches the file on
+    // its first actual data operation. CreateFile returns immediately, and
+    // metadata-only shell traffic never occupies a backend transfer slot —
+    // uniform across every remote protocol behind the VFS interface.
+    let engine_handle = if disposition == OpenDisposition::OpenExisting {
+        context.engine.open_metadata_file(
+            &path,
+            existing
+                .cloned()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))?,
+            writable,
+        )?
+    } else {
+        context.engine.open_file(
+            &path,
+            OpenFileOptions {
+                writable,
+                disposition,
+            },
+        )?
+    };
     let delete_on_close = create_options & FILE_DELETE_ON_CLOSE != 0;
     if let Err(error) = reservation.bind(NodeHandle::File(engine_handle)) {
         let _ = context.engine.close(engine_handle);
@@ -261,27 +261,12 @@ const fn cache_safe_namespace_open(
         && desired_access & mutating == 0
 }
 
-const fn requires_file_data(desired_access: u32) -> bool {
-    desired_access
-        & (FILE_READ_DATA
-            | FILE_WRITE_DATA
-            | FILE_APPEND_DATA
-            | FILE_EXECUTE
-            | MAXIMUM_ALLOWED
-            | GENERIC_READ
-            | GENERIC_WRITE
-            | GENERIC_EXECUTE
-            | GENERIC_ALL)
-        != 0
-}
-
 // These assertions are compiled by the Windows boundary check. They bind the
-// raw kernel access masks used by Explorer to the metadata-only route without
-// requiring a live Dokany driver in the task suite.
+// raw kernel access masks used by Explorer to the cached namespace route
+// without requiring a live Dokany driver in the task suite.
 const _: () = {
     let explorer_metadata = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
     assert!(cache_safe_namespace_open(explorer_metadata, FILE_OPEN, 0, false));
-    assert!(!requires_file_data(explorer_metadata));
     assert!(!cache_safe_namespace_open(
         explorer_metadata,
         FILE_OPEN,
@@ -304,8 +289,6 @@ const _: () = {
         0,
         false
     ));
-    assert!(requires_file_data(FILE_READ_DATA));
-    assert!(requires_file_data(GENERIC_READ));
 };
 
 fn clear_context(file_info: *mut DokanFileInfo) {

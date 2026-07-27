@@ -123,6 +123,38 @@ fn remote_drive_task_mutations_invalidate_warm_directory_and_point_metadata() ->
 }
 
 #[test]
+fn remote_drive_task_lazy_writable_handle_commits_on_flush() -> io::Result<()> {
+    let fixture = Fixture::new("lazy-writable-handle")?;
+    std::fs::write(fixture.remote.join("doc.txt"), b"original")?;
+    let engine = fixture.engine()?;
+
+    // An open-existing handle starts lazy even when granted write access.
+    let metadata = engine.stat(r"\doc.txt")?;
+    let handle = engine.open_metadata_file(r"\doc.txt", metadata, true)?;
+    assert_eq!(engine.len(handle)?, 8);
+
+    // The first write fetches the current contents, then edits the spool.
+    assert_eq!(engine.write(handle, 0, b"UPDATED!")?, 8);
+    assert_eq!(engine.flush(handle)?, FlushOutcome::Committed);
+    engine.close(handle)?;
+    assert_eq!(std::fs::read(fixture.remote.join("doc.txt"))?, b"UPDATED!");
+
+    // A truncating open of an existing file keeps the remote baseline for
+    // conflict detection without transferring the discarded contents.
+    let replaced = engine.open_file(
+        r"\doc.txt",
+        OpenFileOptions {
+            writable: true,
+            disposition: OpenDisposition::CreateAlways,
+        },
+    )?;
+    assert_eq!(engine.len(replaced)?, 0);
+    write_full(&engine, replaced, b"short")?;
+    assert_eq!(std::fs::read(fixture.remote.join("doc.txt"))?, b"short");
+    Ok(())
+}
+
+#[test]
 fn remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files() -> io::Result<()> {
     let fixture = Fixture::new("obsidian-save-cycle")?;
     let note = fixture.remote.join("note.md");

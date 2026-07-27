@@ -46,7 +46,7 @@ impl MountEngine {
                 let state = lock(&entry.state)?;
                 self.entry_meta(&state)
             }
-            OpenHandleKind::Metadata(metadata) => Ok(metadata),
+            OpenHandleKind::Metadata { meta, .. } => Ok(meta),
         }
     }
 
