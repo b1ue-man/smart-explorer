@@ -34,54 +34,25 @@ impl MountEngine {
                 "mount is read-only",
             ));
         }
-        let reserved_path = self.projector.project(callback_path)?;
-        if reserved_path.relative().is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "mount root is not a regular file",
-            ));
-        }
-        let path_guard = self.materialization_guard(reserved_path.backend())?;
-        let _path_reservation = lock(&path_guard)?;
         let truncates = matches!(
             options.disposition,
             OpenDisposition::TruncateExisting | OpenDisposition::CreateAlways
         );
-        let path = {
-            let _namespace = read_lock(&self.namespace)?;
-            let path = self.project_checked(callback_path)?;
-            if let Some(entry) = self.materialize_cached(&path, options.disposition)? {
-                if truncates {
-                    self.truncate_entry(&entry, 0)?;
-                }
-                return self.insert_handle(OpenHandleKind::Materialized(entry), options.writable);
-            }
-            path
-        };
-        // The whole-file fetch can take minutes; running it outside the
-        // namespace lock keeps closes and renames (writers) from queuing
-        // behind it and, transitively, stalling every other callback. The
-        // per-path materialization guard still serializes this path, and
-        // installation revalidates against concurrent namespace changes.
-        let prepared = self.materialize_fetch(&path, options.disposition)?;
-        let entry = {
-            let _namespace = read_lock(&self.namespace)?;
-            self.materialize_install(&path, prepared, options.disposition)?
-        };
+        let entry = self.materialize_at(callback_path, options.disposition)?;
         if truncates {
             self.truncate_entry(&entry, 0)?;
         }
         self.insert_handle(OpenHandleKind::Materialized(entry), options.writable)
     }
 
-    /// Opens a regular file for attributes/control operations without fetching
-    /// its contents into the whole-file spool. Dokany passes already-expanded
-    /// kernel access rights, so a handle created here must never service data
-    /// I/O; a later data open receives its own materialized handle.
+    /// Opens a regular file without fetching its contents into the whole-file
+    /// spool. The first data operation upgrades the handle in place, so pure
+    /// metadata and namespace traffic never occupies a backend transfer slot.
     pub(crate) fn open_metadata_file(
         &self,
         callback_path: &str,
         metadata: VfsMeta,
+        writable: bool,
     ) -> io::Result<HandleId> {
         require_regular(&metadata)?;
         let _namespace = read_lock(&self.namespace)?;
@@ -93,11 +64,79 @@ impl MountEngine {
                 "mount root is not a regular file",
             ));
         }
-        self.insert_handle(OpenHandleKind::Metadata(metadata), false)
+        self.insert_handle(
+            OpenHandleKind::Metadata {
+                callback_path: callback_path.to_string(),
+                meta: metadata,
+            },
+            writable,
+        )
+    }
+
+    /// Serialized staged materialization for one path: cached fast path under
+    /// the namespace lock, whole-file fetch outside it, revalidated install.
+    fn materialize_at(
+        &self,
+        callback_path: &str,
+        disposition: OpenDisposition,
+    ) -> io::Result<Arc<Entry>> {
+        let reserved_path = self.projector.project(callback_path)?;
+        if reserved_path.relative().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "mount root is not a regular file",
+            ));
+        }
+        let path_guard = self.materialization_guard(reserved_path.backend())?;
+        let _path_reservation = lock(&path_guard)?;
+        let path = {
+            let _namespace = read_lock(&self.namespace)?;
+            let path = self.project_checked(callback_path)?;
+            if let Some(entry) = self.materialize_cached(&path, disposition)? {
+                return Ok(entry);
+            }
+            path
+        };
+        // The whole-file fetch can take minutes; running it outside the
+        // namespace lock keeps closes and renames (writers) from queuing
+        // behind it and, transitively, stalling every other callback. The
+        // per-path materialization guard still serializes this path, and
+        // installation revalidates against concurrent namespace changes.
+        let prepared = self.materialize_fetch(&path, disposition)?;
+        let _namespace = read_lock(&self.namespace)?;
+        self.materialize_install(&path, prepared, disposition)
+    }
+
+    /// Returns the materialized entry for a handle, fetching the remote file
+    /// on first data access of a lazily opened handle.
+    fn ensure_materialized(&self, handle: HandleId) -> io::Result<Arc<Entry>> {
+        let opened = self.handle(handle)?;
+        let callback_path = match opened.kind {
+            OpenHandleKind::Materialized(entry) => return Ok(entry),
+            OpenHandleKind::Metadata { callback_path, .. } => callback_path,
+        };
+        let entry = self.materialize_at(&callback_path, OpenDisposition::OpenExisting)?;
+        let mut handles = lock(&self.handles)?;
+        match handles.get_mut(&handle) {
+            Some(current) => match &current.kind {
+                // Another data operation upgraded the handle while this one
+                // was fetching; both raced on the same path guard, so they
+                // resolved to the same cached entry.
+                OpenHandleKind::Materialized(existing) => Ok(Arc::clone(existing)),
+                OpenHandleKind::Metadata { .. } => {
+                    current.kind = OpenHandleKind::Materialized(Arc::clone(&entry));
+                    Ok(entry)
+                }
+            },
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "mount handle closed during its first data access",
+            )),
+        }
     }
 
     pub fn read(&self, handle: HandleId, offset: u64, output: &mut [u8]) -> io::Result<usize> {
-        let entry = self.handle(handle)?.materialized_entry()?;
+        let entry = self.ensure_materialized(handle)?;
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
         file.seek(SeekFrom::Start(offset))?;
@@ -124,7 +163,8 @@ impl MountEngine {
                 "file handle is read-only",
             ));
         }
-        let entry = opened.materialized_entry()?;
+        drop(opened);
+        let entry = self.ensure_materialized(handle)?;
         let mut state = lock(&entry.state)?;
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
@@ -143,7 +183,8 @@ impl MountEngine {
                 "file handle is read-only",
             ));
         }
-        let entry = opened.materialized_entry()?;
+        drop(opened);
+        let entry = self.ensure_materialized(handle)?;
         let mut state = lock(&entry.state)?;
         self.mark_dirty(&mut state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
@@ -153,31 +194,36 @@ impl MountEngine {
     }
 
     pub fn len(&self, handle: HandleId) -> io::Result<u64> {
-        let entry = self.handle(handle)?.materialized_entry()?;
-        let state = lock(&entry.state)?;
-        Ok(self
-            .spool
-            .open_file(&state.spool_name, false)?
-            .metadata()?
-            .len())
+        match self.handle(handle)?.kind {
+            OpenHandleKind::Materialized(entry) => {
+                let state = lock(&entry.state)?;
+                Ok(self
+                    .spool
+                    .open_file(&state.spool_name, false)?
+                    .metadata()?
+                    .len())
+            }
+            // Length queries must not force a whole-file transfer.
+            OpenHandleKind::Metadata { meta, .. } => Ok(meta.size),
+        }
     }
 
     pub fn truncate(&self, handle: HandleId, length: u64) -> io::Result<()> {
-        let opened = self.handle(handle)?;
-        if !opened.writable {
+        if !self.handle(handle)?.writable {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "file handle is read-only",
             ));
         }
-        self.truncate_entry(&opened.materialized_entry()?, length)
+        let entry = self.ensure_materialized(handle)?;
+        self.truncate_entry(&entry, length)
     }
 
     pub fn flush(&self, handle: HandleId) -> io::Result<FlushOutcome> {
         let opened = self.handle(handle)?;
         match opened.kind {
             OpenHandleKind::Materialized(entry) => self.flush_entry(&entry),
-            OpenHandleKind::Metadata(_) => Ok(FlushOutcome::NoChanges),
+            OpenHandleKind::Metadata { .. } => Ok(FlushOutcome::NoChanges),
         }
     }
 
@@ -194,7 +240,7 @@ impl MountEngine {
                 let _namespace = write_lock(&self.namespace)?;
                 self.cleanup_committed_entry(&entry)
             }
-            OpenHandleKind::Metadata(_) => Ok(()),
+            OpenHandleKind::Metadata { .. } => Ok(()),
         }
     }
 
@@ -273,6 +319,17 @@ impl MountEngine {
             })?;
             require_regular(meta)?;
             let baseline = baseline_from_meta(meta);
+            if matches!(
+                disposition,
+                OpenDisposition::TruncateExisting | OpenDisposition::CreateAlways
+            ) {
+                // The caller discards the current contents immediately, so
+                // transferring them first would only waste the backend slot.
+                // The recorded baseline still guards the eventual flush
+                // against a concurrent remote edit.
+                allocated.file.sync_data()?;
+                return Ok((baseline, EntryCondition::Dirty));
+            }
             let mut reader = self
                 .backend
                 .open_read_id(path.backend(), meta.id.as_deref())?;

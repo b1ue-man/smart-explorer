@@ -8,7 +8,7 @@ use crate::mount::{FlushOutcome, MountStatus};
 
 use super::{
     callback_context::{context_key, NodeHandle},
-    callback_status::{guard_long_with_context, guard_with_context, win32},
+    callback_status::{guard_long_with_context, win32},
     DokanFileInfo, NtStatus,
 };
 
@@ -21,7 +21,9 @@ pub(super) unsafe extern "system" fn read_file(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        // Long guard: the first data access of a lazily opened handle fetches
+        // the whole file, which needs timeout supervision.
+        guard_long_with_context(file_info, |context| {
             initialize_count(read_length)?;
             let offset = nonnegative_offset(offset)?;
             let key = context_key(file_info)?;
@@ -46,7 +48,7 @@ pub(super) unsafe extern "system" fn write_file(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             initialize_count(written_length)?;
             let key = context_key(file_info)?;
             let snapshot = context.snapshot(key)?;
@@ -147,7 +149,7 @@ pub(super) unsafe extern "system" fn set_end_of_file(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             let size = nonnegative_offset(size)?;
             let key = context_key(file_info)?;
             let snapshot = context.snapshot(key)?;
@@ -166,7 +168,7 @@ pub(super) unsafe extern "system" fn set_allocation_size(
     file_info: *mut DokanFileInfo,
 ) -> NtStatus {
     unsafe {
-        guard_with_context(file_info, |context| {
+        guard_long_with_context(file_info, |context| {
             let size = nonnegative_offset(size)?;
             let key = context_key(file_info)?;
             let snapshot = context.snapshot(key)?;
