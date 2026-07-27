@@ -336,6 +336,14 @@ if [ "$check_env" = "1" ]; then
   exit 0
 fi
 
+# Zig's first link for a libc target populates shared compiler-runtime cache
+# entries. Warm them serially before Cargo launches parallel linker processes.
+printf 'int main(void) { return 0; }\n' | \
+  "$tool_dir/zigcc-gnu" -x c - -o "$tool_dir/zig-warmup-gnu"
+printf 'int main(void) { return 0; }\n' | \
+  "$tool_dir/zigcc-musl" -x c - -o "$tool_dir/zig-warmup-musl"
+rm -f "$tool_dir/zig-warmup-gnu" "$tool_dir/zig-warmup-musl"
+
 echo "Building Linux desktop app for $linux_gui_target ..."
 cargo build --locked --release \
   --target-dir "$linux_target_dir" \
