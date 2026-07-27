@@ -38,7 +38,7 @@ build_share_server=1
 check_env=0
 check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
-zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.16.0}"
+zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.15.2}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
 # Keep linker-heavy Cargo output on WSL's native filesystem. Building it under
 # /mnt/c can leave parallel Zig linkers blocked in Windows filesystem I/O.
