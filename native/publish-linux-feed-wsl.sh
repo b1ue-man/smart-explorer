@@ -16,10 +16,10 @@ set -euo pipefail
 
 # This leaf is also callable from the Windows/WSL release path, where Cargo
 # settings from the parent PowerShell process are not reliably inherited.
-export CARGO_BUILD_JOBS=1
+export CARGO_BUILD_JOBS="$(nproc)"
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO=thin
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
+export CARGO_PROFILE_RELEASE_LTO=off
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 export CARGO_PROFILE_RELEASE_DEBUG=0
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +40,10 @@ check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
 zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.16.0}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
+# Keep linker-heavy Cargo output on WSL's native filesystem. Building it under
+# /mnt/c can leave parallel Zig linkers blocked in Windows filesystem I/O.
+linux_target_dir="${SMART_EXPLORER_LINUX_TARGET_DIR:-$HOME/.cache/smart-explorer/linux-target}"
+share_target_dir="${SMART_EXPLORER_SHARE_TARGET_DIR:-$HOME/.cache/smart-explorer/share-target}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -319,12 +323,10 @@ if [ "$check_env" = "1" ]; then
     echo "rustfmt is missing from the active Rust toolchain." >&2
     exit 1
   }
-  cargo clippy --version >/dev/null
   "$zig_bin" version >/dev/null
   echo "cargo: $(cargo --version)"
   echo "rustc: $(rustc --version)"
   echo "rustfmt: $(rustfmt --version)"
-  echo "clippy: $(cargo clippy --version)"
   echo "Linux GUI target: $linux_gui_target"
   echo "Linux static target: $linux_static_target"
   echo "zig: $("$zig_bin" version)"
@@ -335,17 +337,17 @@ fi
 
 echo "Building Linux desktop app for $linux_gui_target ..."
 cargo build --locked --release \
-  --target-dir "$script_dir/target" \
+  --target-dir "$linux_target_dir" \
   --target "$linux_gui_target" --bin smart_explorer
 if [ "$check_gui" = "1" ]; then
   "$script_dir/test-linux-gui-startup.sh" \
-    "target/$linux_gui_target/release/smart_explorer"
+    "$linux_target_dir/$linux_gui_target/release/smart_explorer"
   echo "Targeted Linux GUI build/start check passed; no feed files were changed."
   exit 0
 fi
 echo "Building static Linux updater and CLI for $linux_static_target ..."
 cargo build --locked --release \
-  --target-dir "$script_dir/target" \
+  --target-dir "$linux_target_dir" \
   --target "$linux_static_target" --bin smart_explorer_updater --bin se
 
 feed_parent="$(dirname "$feed")"
@@ -365,9 +367,9 @@ if [ "$write_version" = "1" ]; then
   rm -f "$feed_candidate/version.txt"
 fi
 
-install -m 0755 "target/$linux_gui_target/release/smart_explorer" "$feed_candidate/smart_explorer"
-install -m 0755 "target/$linux_static_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
-install -m 0755 "target/$linux_static_target/release/se" "$feed_candidate/se"
+install -m 0755 "$linux_target_dir/$linux_gui_target/release/smart_explorer" "$feed_candidate/smart_explorer"
+install -m 0755 "$linux_target_dir/$linux_static_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
+install -m 0755 "$linux_target_dir/$linux_static_target/release/se" "$feed_candidate/se"
 
 mkdir -p "$(dirname "$share_out")"
 feed_abs="$(cd "$feed_parent" && pwd)/$feed_name"
@@ -387,18 +389,18 @@ if [ "$build_share_server" = "1" ] && [ -d "$repo_root/share-server" ]; then
   (
     cd "$repo_root/share-server"
     cargo build --locked --release \
-      --target-dir "$repo_root/share-server/target" \
+      --target-dir "$share_target_dir" \
       --target "$linux_static_target" --bin se-share-server
   )
   if [ "$share_in_feed" = "1" ]; then
     install -m 0755 \
-      "$repo_root/share-server/target/$linux_static_target/release/se-share-server" \
+      "$share_target_dir/$linux_static_target/release/se-share-server" \
       "$feed_candidate/se-share-server-linux"
   else
     mkdir -p "$share_out"
     share_stage="$(mktemp "$share_parent/.se-share-server-linux.stage.XXXXXX")"
     install -m 0755 \
-      "$repo_root/share-server/target/$linux_static_target/release/se-share-server" \
+      "$share_target_dir/$linux_static_target/release/se-share-server" \
       "$share_stage"
   fi
 elif [ "$build_share_server" = "1" ]; then
@@ -416,7 +418,6 @@ fi
   sha256sum -c se.sha256
 )
 
-"$script_dir/test-linux-gui-startup.sh" "$feed_candidate/smart_explorer"
 file "$feed_candidate/smart_explorer_updater" | grep -Eq 'statically linked|static-pie linked'
 file "$feed_candidate/se" | grep -Eq 'statically linked|static-pie linked'
 if [ "$build_share_server" = "1" ]; then
