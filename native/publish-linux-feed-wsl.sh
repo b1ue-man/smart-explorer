@@ -38,7 +38,7 @@ build_share_server=1
 check_env=0
 check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
-zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.15.2}"
+zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.14.1}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
 export ZIG_GLOBAL_CACHE_DIR="${SMART_EXPLORER_ZIG_CACHE_DIR:-$HOME/.cache/zig/$zig_version}"
 # Keep linker-heavy Cargo output on WSL's native filesystem. Building it under
