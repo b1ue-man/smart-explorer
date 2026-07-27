@@ -4,26 +4,24 @@ use crate::mount::MountEngine;
 
 use super::{handle_access::invalid_handle, handle_state::HandleTable, handle_types::NodeHandle};
 
+/// A reserved-but-unbound handle record. It deliberately does NOT hold the
+/// table's namespace-transition lock: a reservation stays open across the
+/// engine's whole-file materialization, and holding that lock here would
+/// serialize every CreateFile on the drive behind one slow transfer. Delete
+/// and rename bookkeeping observe the already-inserted record instead.
 pub(super) struct HandleReservation<'a> {
     table: &'a HandleTable,
     key: u64,
     granted_access: u32,
-    transition: Option<MutexGuard<'a, ()>>,
     committed: bool,
 }
 
 impl<'a> HandleReservation<'a> {
-    pub(super) fn new(
-        table: &'a HandleTable,
-        key: u64,
-        transition: MutexGuard<'a, ()>,
-        granted_access: u32,
-    ) -> Self {
+    pub(super) fn new(table: &'a HandleTable, key: u64, granted_access: u32) -> Self {
         Self {
             table,
             key,
             granted_access,
-            transition: Some(transition),
             committed: false,
         }
     }
@@ -49,7 +47,7 @@ impl<'a> HandleReservation<'a> {
     ) -> io::Result<u64> {
         let path = self.table.reserved_path(self.key)?;
         self.table
-            .request_delete_locked(engine, self.key, &path, is_directory)?;
+            .request_delete(engine, self.key, &path, is_directory)?;
         Ok(self.finish())
     }
 
@@ -59,7 +57,6 @@ impl<'a> HandleReservation<'a> {
 
     fn finish(&mut self) -> u64 {
         self.committed = true;
-        self.transition.take();
         self.key
     }
 }

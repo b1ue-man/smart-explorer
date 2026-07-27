@@ -71,7 +71,11 @@ impl HandleTable {
         desired_access: u32,
         share_access: u32,
     ) -> io::Result<HandleReservation<'_>> {
-        let transition = self.lock_transition()?;
+        // The transition lock only spans the check-and-insert below. It must
+        // not be carried inside the returned reservation: the caller keeps
+        // the reservation open across whole-file materialization, and every
+        // other CreateFile on the drive would serialize behind it.
+        let _transition = self.lock_transition()?;
         let path = self.path_key(path);
         let (key, granted_access) = {
             let mut state = self.lock_state()?;
@@ -113,7 +117,7 @@ impl HandleTable {
             );
             (key, granted_access)
         };
-        Ok(HandleReservation::new(self, key, transition, granted_access))
+        Ok(HandleReservation::new(self, key, granted_access))
     }
 
     pub(super) fn snapshot(&self, key: u64) -> io::Result<HandleSnapshot> {
