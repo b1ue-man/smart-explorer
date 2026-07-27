@@ -38,13 +38,17 @@ build_share_server=1
 check_env=0
 check_gui=0
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
-zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.14.1}"
+zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.16.0}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
 export ZIG_GLOBAL_CACHE_DIR="${SMART_EXPLORER_ZIG_CACHE_DIR:-$HOME/.cache/zig/$zig_version}"
 # Keep linker-heavy Cargo output on WSL's native filesystem. Building it under
 # /mnt/c can leave parallel Zig linkers blocked in Windows filesystem I/O.
 linux_target_dir="${SMART_EXPLORER_LINUX_TARGET_DIR:-$HOME/.cache/smart-explorer/linux-target}"
 share_target_dir="${SMART_EXPLORER_SHARE_TARGET_DIR:-$HOME/.cache/smart-explorer/share-target}"
+use_system_linkers=0
+if [ "$(stat -f -c '%T' /root 2>/dev/null || true)" = "wslfs" ]; then
+  use_system_linkers=1
+fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -234,18 +238,25 @@ download_zig() {
   printf '%s\n' "$dir/zig"
 }
 
-zig_bin="$(find_zig || true)"
-if [ -z "$zig_bin" ]; then
-  if [ "$bootstrap_zig" = "1" ]; then
-    zig_bin="$(download_zig)"
-  else
-    echo "zig not found. Install zig or rerun without --no-bootstrap-zig." >&2
-    exit 1
+zig_bin=""
+if [ "$use_system_linkers" = "0" ]; then
+  zig_bin="$(find_zig || true)"
+  if [ -z "$zig_bin" ]; then
+    if [ "$bootstrap_zig" = "1" ]; then
+      zig_bin="$(download_zig)"
+    else
+      echo "zig not found. Install zig or rerun without --no-bootstrap-zig." >&2
+      exit 1
+    fi
   fi
+else
+  command -v gcc >/dev/null 2>&1 || { echo "gcc is required under WSL1." >&2; exit 1; }
+  command -v musl-gcc >/dev/null 2>&1 || { echo "musl-gcc is required under WSL1 (install musl-tools)." >&2; exit 1; }
 fi
 
 tool_dir="$(mktemp -d "${TMPDIR:-/tmp}/smart-explorer-release.XXXXXX")"
 
+if [ "$use_system_linkers" = "0" ]; then
 cat > "$tool_dir/zigcc-gnu" <<EOF
 #!/usr/bin/env bash
 set -e
@@ -278,6 +289,38 @@ cat > "$tool_dir/zigar" <<EOF
 #!/usr/bin/env bash
 exec "$zig_bin" ar "\$@"
 EOF
+else
+cat > "$tool_dir/zigcc-gnu" <<'EOF'
+#!/usr/bin/env bash
+set -e
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --target=x86_64-unknown-linux-gnu|--target=x86_64-unknown-linux-musl) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec gcc "${args[@]}"
+EOF
+
+cat > "$tool_dir/zigcc-musl" <<'EOF'
+#!/usr/bin/env bash
+set -e
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --target=x86_64-unknown-linux-gnu|--target=x86_64-unknown-linux-musl) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec musl-gcc "${args[@]}"
+EOF
+
+cat > "$tool_dir/zigar" <<'EOF'
+#!/usr/bin/env bash
+exec ar "$@"
+EOF
+fi
 
 host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 real_rust_lld="$(rustc --print sysroot)/lib/rustlib/$host_triple/bin/rust-lld"
@@ -324,13 +367,19 @@ if [ "$check_env" = "1" ]; then
     echo "rustfmt is missing from the active Rust toolchain." >&2
     exit 1
   }
-  "$zig_bin" version >/dev/null
+  if [ "$use_system_linkers" = "0" ]; then
+    "$zig_bin" version >/dev/null
+  fi
   echo "cargo: $(cargo --version)"
   echo "rustc: $(rustc --version)"
   echo "rustfmt: $(rustfmt --version)"
   echo "Linux GUI target: $linux_gui_target"
   echo "Linux static target: $linux_static_target"
-  echo "zig: $("$zig_bin" version)"
+  if [ "$use_system_linkers" = "0" ]; then
+    echo "zig: $("$zig_bin" version)"
+  else
+    echo "WSL1 system linkers: $(gcc --version | head -1); $(musl-gcc --version | head -1)"
+  fi
   echo "rust-lld: $real_rust_lld"
   echo "release environment OK"
   exit 0
