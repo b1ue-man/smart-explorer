@@ -3,6 +3,15 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 const METADATA_GATE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Transfers queue behind long whole-file fetches on backends that allow one
+/// in-flight request. Every waiting callback occupies a Dokany dispatcher
+/// thread, so an unbounded wait lets one slow transfer starve the entire
+/// drive — including fully cached metadata. A bounded wait fails the queued
+/// transfer with a retryable timeout instead and keeps the drive responsive.
+/// The budget is short: even bounded waiters hold dispatcher threads, so it
+/// must drain a routine queue but never pin the pool for minutes behind one
+/// long download.
+const TRANSFER_GATE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_METADATA_PRIORITY_BURST: usize = 8;
 
 /// Bounds the mount host's in-flight requests before they enter the agent
@@ -32,14 +41,28 @@ impl MountRequestGate {
     }
 
     pub(super) fn enter(self: &Arc<Self>) -> io::Result<MountRequestPermit> {
+        self.enter_until(Instant::now() + TRANSFER_GATE_TIMEOUT)
+    }
+
+    fn enter_until(self: &Arc<Self>, deadline: Instant) -> io::Result<MountRequestPermit> {
         let mut state = self.state.lock().map_err(|_| {
             io::Error::other("mounted-drive backend concurrency state is unavailable")
         })?;
         state.transfer_waiters = state.transfer_waiters.saturating_add(1);
         while !transfer_can_enter(&state, self.limit) {
-            state = self.wake.wait(state).map_err(|_| {
+            let now = Instant::now();
+            if now >= deadline {
+                state.transfer_waiters = state.transfer_waiters.saturating_sub(1);
+                self.wake.notify_all();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "mounted-drive transfer waited too long for the remote backend",
+                ));
+            }
+            let waited = self.wake.wait_timeout(state, deadline - now).map_err(|_| {
                 io::Error::other("mounted-drive backend concurrency state is unavailable")
             })?;
+            state = waited.0;
         }
         state.transfer_waiters = state.transfer_waiters.saturating_sub(1);
         state.active += 1;
@@ -181,6 +204,27 @@ mod task_tests {
         );
         metadata.join().unwrap()?;
         transfer.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn remote_drive_task_transfer_gate_times_out_instead_of_starving_the_drive() -> io::Result<()> {
+        let gate = MountRequestGate::new(1);
+        let _occupied = gate.enter()?;
+        let started = Instant::now();
+        let error = gate
+            .enter_until(started + Duration::from_millis(25))
+            .err()
+            .ok_or_else(|| io::Error::other("transfer wait unexpectedly succeeded"))?;
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // The failed waiter must not leave a stale counter that would block
+        // later metadata priority decisions.
+        let state = gate
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("test gate poisoned"))?;
+        assert_eq!(state.transfer_waiters, 0);
         Ok(())
     }
 
