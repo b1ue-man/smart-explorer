@@ -7,24 +7,37 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
+enum StatOverlay {
+    Cached(VfsMeta),
+    Remote(String),
+}
+
 impl MountEngine {
     pub fn stat(&self, callback_path: &str) -> io::Result<VfsMeta> {
-        let _namespace = read_lock(&self.namespace)?;
-        let path = self.project_checked(callback_path)?;
-        if let Some(entry) = self.entry_for_path(path.backend())? {
-            let state = lock(&entry.state)?;
-            if state.delete_token.is_some() {
-                return Err(not_found(path.backend()));
-            }
-            return self.entry_meta(&state);
-        }
-        self.backend.stat(path.backend())
+        let path = match self.stat_overlay(callback_path)? {
+            StatOverlay::Cached(meta) => return Ok(meta),
+            StatOverlay::Remote(path) => path,
+        };
+        // The remote fetch runs outside the namespace lock: a stalled backend
+        // request must wedge only this lookup, never queue a writer that
+        // blocks every other callback on the drive.
+        self.backend.stat(&path)
     }
 
     /// Metadata-only lookup for Dokany query callbacks and non-mutating
     /// open-existing admission. Creates, overwrite/delete dispositions, and
     /// every mutation continue to use `stat`.
     pub(crate) fn stat_cached(&self, callback_path: &str) -> io::Result<VfsMeta> {
+        let path = match self.stat_overlay(callback_path)? {
+            StatOverlay::Cached(meta) => return Ok(meta),
+            StatOverlay::Remote(path) => path,
+        };
+        self.cached_remote_stat(&path)
+    }
+
+    /// The lock-holding prefix both stat flavors share: projection plus the
+    /// local materialized-entry overlay.
+    fn stat_overlay(&self, callback_path: &str) -> io::Result<StatOverlay> {
         let _namespace = read_lock(&self.namespace)?;
         let path = self.project_checked(callback_path)?;
         if let Some(entry) = self.entry_for_path(path.backend())? {
@@ -32,9 +45,9 @@ impl MountEngine {
             if state.delete_token.is_some() {
                 return Err(not_found(path.backend()));
             }
-            return self.entry_meta(&state);
+            return self.entry_meta(&state).map(StatOverlay::Cached);
         }
-        self.cached_remote_stat(path.backend())
+        Ok(StatOverlay::Remote(path.backend().to_string()))
     }
 
     /// Metadata for the object addressed by an already-open file handle. This
@@ -56,15 +69,34 @@ impl MountEngine {
     }
 
     pub(crate) fn list_dir_cached(&self, callback_path: &str) -> io::Result<Arc<[VfsMeta]>> {
-        let _namespace = read_lock(&self.namespace)?;
-        let path = self.project_checked(callback_path)?;
-        let depth = path
-            .relative()
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .count()
-            .min(u8::MAX as usize) as u8;
+        let (path, depth) = {
+            let _namespace = read_lock(&self.namespace)?;
+            let path = self.project_checked(callback_path)?;
+            let depth = path
+                .relative()
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .count()
+                .min(u8::MAX as usize) as u8;
+            if let Some(listed) = self.metadata_cache.directory(path.backend())? {
+                return self.overlay_listing(&path, listed);
+            }
+            (path, depth)
+        };
+        // A cold directory needs a remote listing; like whole-file fetches it
+        // must run outside the namespace lock so a slow or stalled backend
+        // wedges only this folder. The per-directory load slot serializes
+        // duplicate fetches and installation revalidates the snapshot.
         let listed = self.cached_remote_directory(path.backend(), depth)?;
+        let _namespace = read_lock(&self.namespace)?;
+        self.overlay_listing(&path, listed)
+    }
+
+    fn overlay_listing(
+        &self,
+        path: &super::path::ProjectedPath,
+        listed: Arc<[VfsMeta]>,
+    ) -> io::Result<Arc<[VfsMeta]>> {
         let entries = lock(&self.entries)?.values().cloned().collect::<Vec<_>>();
         let mut overlays = Vec::new();
         for entry in entries {

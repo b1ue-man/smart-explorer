@@ -90,7 +90,8 @@ impl HandleTable {
             let granted_access = if crate::mount::requests_maximum_allowed(desired_access) {
                 let full = crate::mount::maximum_allowed_full_grant(desired_access);
                 if !self.read_only_mount
-                    && check_share_compatibility(&state, &path, full, share_access).is_ok()
+                    && (is_directory
+                        || check_share_compatibility(&state, &path, full, share_access).is_ok())
                 {
                     full
                 } else {
@@ -99,7 +100,17 @@ impl HandleTable {
             } else {
                 desired_access
             };
-            check_share_compatibility(&state, &path, granted_access, share_access)?;
+            // Windows does not reject DIRECTORY opens for share-mode conflicts:
+            // working-directory handles (share read+write), shell browse
+            // handles, and change-notification handles coexist with any
+            // granted access. Directory share modes still matter — but only
+            // when a delete or rename consults them. Enforcing open-time
+            // compatibility here made every CreateProcess working-directory
+            // open fail ("Der Verzeichnisname ist ungültig") as soon as any
+            // shell handle held a delete-capable grant on the folder.
+            if !is_directory {
+                check_share_compatibility(&state, &path, granted_access, share_access)?;
+            }
             let key = self.allocate_key(&state)?;
             state.handles.insert(
                 key,
