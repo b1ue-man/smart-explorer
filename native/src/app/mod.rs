@@ -100,6 +100,10 @@ mod platform_helpers;
 #[cfg(not(windows))]
 #[path = "os/linux_os.rs"]
 mod platform_helpers;
+#[cfg(windows)]
+const OPEN_WITH_CHOOSER_SUPPORTED: bool = true;
+#[cfg(not(windows))]
+const OPEN_WITH_CHOOSER_SUPPORTED: bool = false;
 #[path = "core/prefs_tabs.rs"]
 mod prefs_tabs;
 #[path = "core/prelude.rs"]
@@ -114,6 +118,8 @@ mod reclaim_core;
 mod reclaim_results_ui;
 #[path = "core/reclaim_ui.rs"]
 mod reclaim_ui;
+#[path = "core/remote_context_menu.rs"]
+mod remote_context_menu;
 #[path = "os/shared/remote_helpers.rs"]
 mod remote_helpers;
 #[path = "os/shared/remote_open.rs"]
