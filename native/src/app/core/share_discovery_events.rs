@@ -3,6 +3,7 @@ use super::share_discovery_state::{
     DiscoveryUiAction, DiscoveryUiKind,
 };
 use super::App;
+use eframe::egui;
 
 const DISCOVERY_COMMAND_CAPACITY: usize = 8;
 
@@ -33,7 +34,8 @@ pub(in crate::app) struct DiscoveryCommandDispatcher {
 
 impl DiscoveryCommandDispatcher {
     pub(in crate::app) fn new() -> Self {
-        let (request_tx, request_rx) = crossbeam_channel::bounded(DISCOVERY_COMMAND_CAPACITY);
+        let (request_tx, request_rx) =
+            crossbeam_channel::bounded::<DiscoveryCommandRequest>(DISCOVERY_COMMAND_CAPACITY);
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         let spawned = std::thread::Builder::new()
             .name("share-discovery-command".into())

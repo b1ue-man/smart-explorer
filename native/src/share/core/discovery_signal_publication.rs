@@ -4,9 +4,7 @@ use super::core::now_secs;
 use super::discovery_signal_commands::{
     offer_state_event, send_discovery_event, DiscoverySignalRuntime,
 };
-use super::discovery_signal_types::{
-    DiscoveryAdvertisement, DiscoveryEvent, DiscoveryOfferStopReason,
-};
+use super::discovery_signal_types::{DiscoveryAdvertisement, DiscoveryOfferStopReason};
 use super::discovery_signal_validation::validate_advertisement;
 use super::signal_connection::SignalConnection;
 use super::types::ShareEvent;

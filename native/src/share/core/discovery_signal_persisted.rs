@@ -19,7 +19,9 @@ impl DiscoverySignalRuntime {
         self.state
             .exchanges
             .get_mut(exchange_id)
-            .ok_or("Discovery-Austausch verschwand vor dem Commit-Senden")
+            .ok_or_else(|| {
+                "Discovery-Austausch verschwand vor dem Commit-Senden".to_string()
+            })
             .and_then(|exchange| {
                 exchange.accept_port_packet(packet.kind)?;
                 exchange.record_payload(canonical_payload_text_len(packet.payload.len()))

@@ -29,6 +29,7 @@ impl PeerMountLeaseClient {
             contract_version,
             root_confined,
             lease,
+            storage_snapshot_v1: _,
         } = response
         else {
             return Err(eio("unerwartete Antwort auf capabilities"));

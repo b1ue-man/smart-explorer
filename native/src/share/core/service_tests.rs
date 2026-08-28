@@ -1,5 +1,6 @@
 use super::backend::ShareIrohNode;
 use super::core::public_fingerprint;
+use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
 use super::service::ShareService;
@@ -322,6 +323,9 @@ pub(super) fn test_service() -> ShareService {
         authorization_epoch: 0,
     }));
     let iroh = ShareIrohNode::start("127.0.0.1:0", &identity, auth.clone(), ev_tx).unwrap();
+    let reciprocal = Arc::new(DirectReciprocalCoordinator::detached_for_task_test(0));
+    iroh.install_direct_repair_coordinator(&reciprocal)
+        .unwrap();
     ShareService {
         events: ev_rx,
         cmds: cmd_tx,
@@ -330,6 +334,7 @@ pub(super) fn test_service() -> ShareService {
         auth,
         iroh,
         stopped: Arc::new(AtomicBool::new(false)),
+        reciprocal,
         server: "127.0.0.1:0".into(),
         owner: true,
     }
