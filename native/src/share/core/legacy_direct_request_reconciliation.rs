@@ -222,16 +222,17 @@ impl ShareProfiles {
             .iter_mut()
             .filter(|entry| entry.peer.device_id == device_id)
         {
-            entry.identity_conflict = live_legacy_identity_claim(entry)
-                && (pins.iter().any(|(public_key, node_id, fingerprint)| {
-                    *public_key != entry.peer.public_key
-                        || *node_id != entry.peer.node_id
-                        || *fingerprint != entry.peer.fingerprint
-                }) || grant.is_some_and(|(public_key, node_id, fingerprint)| {
-                    public_key != entry.peer.public_key
-                        || node_id != entry.peer.node_id
-                        || fingerprint != entry.peer.fingerprint
-                }));
+            // Keep the mismatch visible on the rejected request that records it;
+            // rejection removes a live claim, not the conflict evidence itself.
+            entry.identity_conflict = pins.iter().any(|(public_key, node_id, fingerprint)| {
+                *public_key != entry.peer.public_key
+                    || *node_id != entry.peer.node_id
+                    || *fingerprint != entry.peer.fingerprint
+            }) || grant.is_some_and(|(public_key, node_id, fingerprint)| {
+                public_key != entry.peer.public_key
+                    || node_id != entry.peer.node_id
+                    || fingerprint != entry.peer.fingerprint
+            });
         }
     }
 
