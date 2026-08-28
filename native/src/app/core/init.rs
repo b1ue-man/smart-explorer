@@ -441,6 +441,7 @@ impl App {
             share_worker_running: false,
             share_worker_relay_url: String::new(),
             share_worker_candidates: Vec::new(),
+            share_discovery: super::share_discovery_state::DiscoveryUiState::default(),
             quickshare: None,
             qs_devices: Vec::new(),
             quickshare_error: None,

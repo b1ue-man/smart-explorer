@@ -12,10 +12,66 @@ mod backend;
 mod blocking;
 #[path = "core/connection_events.rs"]
 mod connection_events;
+#[path = "core/configuration_runtime.rs"]
+mod configuration_runtime;
 #[path = "core/crypto.rs"]
 mod core;
 #[path = "os/shared/direct_actions.rs"]
 mod direct_actions;
+#[path = "core/direct_reciprocal_coordinator.rs"]
+mod direct_reciprocal_coordinator;
+#[path = "core/direct_reciprocal_session.rs"]
+mod direct_reciprocal_session;
+#[path = "core/direct_reciprocal_store.rs"]
+mod direct_reciprocal_store;
+#[path = "core/direct_reciprocal_transport.rs"]
+mod direct_reciprocal_transport;
+#[path = "core/direct_reciprocal_wire.rs"]
+mod direct_reciprocal_wire;
+#[path = "os/shared/direct_repair_store_adapter.rs"]
+mod direct_repair_store_adapter;
+#[path = "core/discovery_bundle.rs"]
+mod discovery_bundle;
+#[path = "core/discovery_domain.rs"]
+mod discovery_domain;
+#[path = "core/discovery_exchange.rs"]
+mod discovery_exchange;
+#[path = "core/discovery_exchange_port_impl.rs"]
+mod discovery_exchange_port_impl;
+#[path = "core/discovery_pake.rs"]
+mod discovery_pake;
+#[path = "core/discovery_relation_store.rs"]
+mod discovery_relation_store;
+#[path = "os/shared/discovery_relation_store_adapter.rs"]
+mod discovery_relation_store_adapter;
+#[path = "core/discovery_signal_commands.rs"]
+mod discovery_signal_commands;
+#[path = "core/discovery_signal_cancellation.rs"]
+mod discovery_signal_cancellation;
+#[path = "core/discovery_signal_dispatch.rs"]
+mod discovery_signal_dispatch;
+#[path = "core/discovery_signal_exchange.rs"]
+mod discovery_signal_exchange;
+#[path = "core/discovery_signal_maintenance.rs"]
+mod discovery_signal_maintenance;
+#[path = "core/discovery_signal_offline.rs"]
+mod discovery_signal_offline;
+#[path = "core/discovery_signal_persisted.rs"]
+mod discovery_signal_persisted;
+#[path = "core/discovery_signal_publication.rs"]
+mod discovery_signal_publication;
+#[path = "core/discovery_signal_port.rs"]
+mod discovery_signal_port;
+#[path = "core/discovery_signal_state.rs"]
+mod discovery_signal_state;
+#[path = "core/discovery_signal_types.rs"]
+mod discovery_signal_types;
+#[path = "core/discovery_signal_validation.rs"]
+mod discovery_signal_validation;
+#[path = "core/discovery_signal_wire.rs"]
+mod discovery_signal_wire;
+#[path = "core/discovery_wire.rs"]
+mod discovery_wire;
 #[cfg(test)]
 #[path = "core/direct_identity_conflict_tests.rs"]
 mod direct_identity_conflict_tests;
@@ -169,6 +225,8 @@ mod profile_persistence;
 mod profile_store;
 #[path = "core/profiles.rs"]
 mod profiles;
+#[path = "core/room_relation.rs"]
+mod room_relation;
 #[cfg(test)]
 #[path = "core/remote_drive_task_mount_lease_tests.rs"]
 mod remote_drive_task_mount_lease_tests;
@@ -235,6 +293,13 @@ pub use self::direct_actions::{
     decide_direct_request, delete_direct_request_history, queue_direct_request_for_contact,
     retry_direct_request_now, DirectRequestAction,
 };
+pub use self::discovery_signal_types::{
+    DiscoveryAdvertisement, DiscoveryCommand, DiscoveryEvent, DiscoveryExchangeHandle,
+    DiscoveryKind, DiscoveryOfferHandle, DiscoveryOfferStopReason, DiscoveryPin,
+    DiscoveryPublishTarget, PairingCloseReason, PairingPacketKind, DISCOVERY_PAIRING_SUITE,
+    DISCOVERY_PAIRING_VERSION, DISCOVERY_PIN_MAX_BYTES,
+};
+pub use self::discovery_relation_store::DiscoveryRelationOutcome;
 pub use self::direct_ledger::{
     DirectEnvelopeKind, DirectLedgerError, DirectRelayOutcome, DirectRequestDirection,
     DirectRequestEntry, DirectRequestRetries, DirectRetryState, MAX_DIRECT_REQUEST_ENTRIES,

@@ -2,6 +2,7 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn drain_share(&mut self) {
+        self.drain_discovery_command_results();
         if let Some(svc) = self.share.take() {
             if let Err(error) = svc.cmd(crate::share::ShareCmd::Stop) {
                 self.append_share_diag(format!("Lokalen Share-Dienst stoppen: {error}"));
@@ -317,6 +318,8 @@ impl App {
                         "Direct decision: lookup={lookup_id}, requester={requester_device_id}, {outcome}\n"
                     ));
                 }
+                E::Discovery(event) => self.apply_share_discovery_event(event),
+                E::RuntimeProfilesCommitted => {}
                 E::RoomRoster { .. } | E::RoomJoined { .. } | E::RoomLeft { .. } => {}
             }
         }

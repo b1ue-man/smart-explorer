@@ -121,10 +121,17 @@ pub enum DirectReciprocalConflict {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectReciprocalPolicyDenied {
+    ContactIgnored { device_id: String },
+    GrantIgnored { device_id: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirectReciprocalError {
     InvalidIdentity(DirectProtocolError),
     InvalidMaterial(&'static str),
     Conflict(DirectReciprocalConflict),
+    PolicyDenied(DirectReciprocalPolicyDenied),
 }
 
 impl fmt::Display for DirectReciprocalError {
@@ -152,6 +159,18 @@ impl fmt::Display for DirectReciprocalError {
                 write!(
                     formatter,
                     "Direct relation material conflicts for device {device_id}"
+                )
+            }
+            Self::PolicyDenied(DirectReciprocalPolicyDenied::ContactIgnored { device_id }) => {
+                write!(
+                    formatter,
+                    "Direct contact is explicitly ignored for device {device_id}"
+                )
+            }
+            Self::PolicyDenied(DirectReciprocalPolicyDenied::GrantIgnored { device_id }) => {
+                write!(
+                    formatter,
+                    "Direct grant is explicitly ignored for device {device_id}"
                 )
             }
         }
@@ -210,6 +229,25 @@ impl ShareProfiles {
             }
         }
 
+        if contact_index.is_some_and(|index| {
+            self.direct_contacts[index].access_state == DirectAccessState::Ignored
+        }) {
+            return Err(DirectReciprocalError::PolicyDenied(
+                DirectReciprocalPolicyDenied::ContactIgnored {
+                    device_id: identity.device_id.clone(),
+                },
+            ));
+        }
+        if grant_index.is_some_and(|index| {
+            self.direct_grants[index].state == DirectGrantState::Ignored
+        }) {
+            return Err(DirectReciprocalError::PolicyDenied(
+                DirectReciprocalPolicyDenied::GrantIgnored {
+                    device_id: identity.device_id.clone(),
+                },
+            ));
+        }
+
         let mut changed = false;
         if let Some(index) = contact_index {
             let contact = &mut self.direct_contacts[index];
@@ -265,6 +303,11 @@ impl ShareProfiles {
 
         if let Some(index) = grant_index {
             let grant = &mut self.direct_grants[index];
+            if grant.node_id.is_empty() {
+                grant.node_id = identity.node_id.clone();
+                grant.updated_at = now;
+                changed = true;
+            }
             if grant.state != DirectGrantState::Accepted {
                 grant.state = DirectGrantState::Accepted;
                 grant.updated_at = now;
@@ -352,7 +395,8 @@ fn contact_matches(
 }
 
 fn grant_matches(grant: &DirectGrant, identity: &DirectPeerIdentity) -> bool {
-    grant.public_key == identity.public_key
+    grant.device_id == identity.device_id
+        && grant.public_key == identity.public_key
         && grant.fingerprint == identity.fingerprint
-        && grant.node_id == identity.node_id
+        && (grant.node_id.is_empty() || grant.node_id == identity.node_id)
 }

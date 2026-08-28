@@ -7,6 +7,7 @@ use super::direct_request_tombstone::DirectRequestTombstone;
 use super::exec_policy::{reset_all_for_legacy_migration, ExecGrant};
 use super::fs::ShareExportConfig;
 use super::legacy_direct_request::{LegacyDirectRequestEntry, LegacyDirectRequestTombstone};
+use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
@@ -254,6 +255,12 @@ impl RoomCode {
             room_id: parts[1].to_string(),
             secret,
         })
+    }
+
+    pub(super) fn into_relation_material(mut self) -> Result<RoomRelationMaterial, String> {
+        let room_id = std::mem::take(&mut self.room_id);
+        let secret = std::mem::take(&mut self.secret);
+        RoomRelationMaterial::new(room_id, secret).map_err(|error| error.to_string())
     }
 }
 

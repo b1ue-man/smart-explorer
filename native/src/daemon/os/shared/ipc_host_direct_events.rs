@@ -219,8 +219,10 @@ fn ensure_authenticated_request_decision(
         return Ok(());
     }
     let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
+    let policy_denied =
+        profiles.direct_auto_accept_denied(&request.lookup_id, &request.requester);
     let decision = match profiles.grant_for(&request.requester.device_id) {
-        _ if identity_conflict => DirectDecisionKind::Rejected,
+        _ if identity_conflict || policy_denied => DirectDecisionKind::Rejected,
         Some(grant)
             if grant.public_key == request.requester.public_key
                 && grant.node_id == request.requester.node_id

@@ -6,6 +6,9 @@ use super::profile_store::{
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, RoomCode, ShareProfiles,
 };
+use super::room_relation::{
+    canonical_room_display_name, RoomPersistenceOutcome, RoomRelationMaterial,
+};
 use super::types::{DirectAccessState, DirectContact, RoomProfile, ShareStatus};
 
 impl ShareProfiles {
@@ -84,32 +87,47 @@ impl ShareProfiles {
         code: &str,
         name: &str,
     ) -> Result<(Self, String), String> {
-        let parsed = RoomCode::parse(code)?;
+        let material = RoomCode::parse(code)?.into_relation_material()?;
+        let (profiles, outcome) =
+            Self::add_room_material_persisted(default_home, &material, name)?;
+        Ok((profiles, outcome.room_profile_id().to_string()))
+    }
+
+    /// Persist authenticated Room material without constructing a secret-bearing
+    /// RoomCode string. The credential is installed before the profile CAS and
+    /// verified against an existing canonical profile after any rebase.
+    pub fn add_room_material_persisted(
+        default_home: Option<String>,
+        material: &RoomRelationMaterial,
+        name: &str,
+    ) -> Result<(Self, RoomPersistenceOutcome), String> {
+        let label = canonical_room_display_name(name).map_err(|error| error.to_string())?;
         let generated_id =
             random_token(10).map_err(|error| format!("Sichere Raumprofil-ID erzeugen: {error}"))?;
         let account = room_secret_account(&generated_id);
-        let secret = SecretString::encoded(&parsed.secret);
+        let secret = SecretString::encoded(material.secret());
         prepare_unique_credential(&account, &secret)?;
-        let label = if name.trim().is_empty() {
-            "Raum".to_string()
-        } else {
-            name.trim().to_string()
-        };
         let mut selected_id = generated_id.clone();
+        let mut changed = false;
         let result = Self::mutate_persisted(default_home, |profiles| {
             if let Some(existing) = profiles
                 .rooms
                 .iter()
-                .find(|room| room.room_id == parsed.room_id)
+                .find(|room| room.room_id == material.room_id())
             {
                 selected_id = existing.id.clone();
+                changed = false;
                 return Ok(());
             }
             selected_id = generated_id.clone();
+            changed = true;
+            if profiles.rooms.iter().any(|room| room.id == generated_id) {
+                return Err("Zufaellige Raumprofil-ID kollidierte".into());
+            }
             profiles.rooms.push(RoomProfile {
                 id: generated_id.clone(),
                 name: label.clone(),
-                room_id: parsed.room_id.clone(),
+                room_id: material.room_id().to_string(),
                 auto_join: true,
                 last_seen: None,
                 status: ShareStatus::Waiting,
@@ -130,7 +148,16 @@ impl ShareProfiles {
                 "Raum ist bereits mit anderem Secret gespeichert",
             )?;
         }
-        Ok((profiles, selected_id))
+        let outcome = if changed {
+            RoomPersistenceOutcome::Changed {
+                room_profile_id: selected_id,
+            }
+        } else {
+            RoomPersistenceOutcome::AlreadyComplete {
+                room_profile_id: selected_id,
+            }
+        };
+        Ok((profiles, outcome))
     }
 
     pub fn remove_direct_contact_persisted(

@@ -1,4 +1,4 @@
-use super::ipc_host::{configure_service, ShareHost};
+use super::ipc_host::{configure_service, reload_committed_profiles, ShareHost};
 use super::state::log;
 
 impl ShareHost {
@@ -36,6 +36,7 @@ impl ShareHost {
             .take()
             .unwrap_or_else(|| previous_profiles.clone());
         let mut changed = false;
+        let mut runtime_profiles_committed = false;
         for event in events {
             use crate::share::ShareEvent as Event;
             let mut ui_event = Some(event.clone());
@@ -54,6 +55,10 @@ impl ShareHost {
                     log(&format!("share signaling disconnected: {error}"));
                     state.signal_connected = false;
                     state.signal_error = Some(error);
+                }
+                Event::RuntimeProfilesCommitted => {
+                    runtime_profiles_committed = true;
+                    ui_event = None;
                 }
                 Event::DirectSignal(event) => {
                     match state.identity.clone() {
@@ -261,11 +266,34 @@ impl ShareHost {
                         }
                     }
                 }
+                Event::Discovery(_) => {}
             }
             if let Some(event) = ui_event {
                 super::ipc_host::ui_events::push(&mut state.ui_events, event);
             }
         }
+        let canonical_reloaded = if runtime_profiles_committed {
+            match reload_committed_profiles(
+                &mut state,
+                &previous_profiles,
+                changed,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    state.profiles_error = Some(error.clone());
+                    state.last_reload = std::time::Instant::now();
+                    super::ipc_host::ui_events::push(
+                        &mut state.ui_events,
+                        crate::share::ShareEvent::Error(format!(
+                            "Verbindliche Share-Profile konnten nicht neu geladen werden: {error}"
+                        )),
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
         if changed || retrying_profile_commit {
             let worker_profiles = state.profiles.clone();
             match crate::share::ShareProfiles::mutate_persisted(
@@ -294,16 +322,18 @@ impl ShareHost {
                     state.pending_profiles_base = None;
                 }
             }
-            if state.pending_profiles_base.is_none() {
-                if let Some(service) = &state.service {
-                    if let Err(error) = configure_service(service, &state.profiles) {
-                        super::ipc_host::ui_events::push(
-                            &mut state.ui_events,
-                            crate::share::ShareEvent::Error(format!(
-                                "Share-Konfiguration konnte nicht zugestellt werden: {error}"
-                            )),
-                        );
-                    }
+        }
+        if canonical_reloaded
+            || state.pending_profiles_base.is_none() && (changed || retrying_profile_commit)
+        {
+            if let Some(service) = &state.service {
+                if let Err(error) = configure_service(service, &state.profiles) {
+                    super::ipc_host::ui_events::push(
+                        &mut state.ui_events,
+                        crate::share::ShareEvent::Error(format!(
+                            "Share-Konfiguration konnte nicht zugestellt werden: {error}"
+                        )),
+                    );
                 }
             }
         }

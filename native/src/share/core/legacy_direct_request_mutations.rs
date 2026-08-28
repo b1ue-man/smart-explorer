@@ -49,6 +49,7 @@ impl ShareProfiles {
             .map(|grant| grant.state.clone());
         let identity_conflict = device_grant.is_some_and(|grant| !exact_grant(grant, &peer))
             || self.identity_conflicts(&peer, &selector);
+        let policy_denied = self.direct_auto_accept_denied(lookup_id, &peer);
         if let Some(index) = self
             .legacy_direct_requests
             .iter()
@@ -69,7 +70,7 @@ impl ShareProfiles {
                 snapshot.decision,
                 snapshot.decision_source,
                 existing_grant,
-                identity_conflict,
+                identity_conflict || policy_denied,
             );
             if automatic.install_grant {
                 set_exact_grant(self, &peer, true, now)?;
@@ -92,7 +93,7 @@ impl ShareProfiles {
             LegacyDirectDecisionState::Pending,
             None,
             existing_grant,
-            identity_conflict,
+            identity_conflict || policy_denied,
         );
         if automatic.install_grant {
             set_exact_grant(self, &peer, true, now)?;
@@ -374,6 +375,11 @@ fn apply_authenticated_decision(
     automatic: AuthenticatedDecision,
     now: i64,
 ) {
+    if entry.decision == LegacyDirectDecisionState::Revoked
+        && entry.decision_source == Some(LegacyDirectDecisionSource::User)
+    {
+        return;
+    }
     if entry.decision != automatic.decision {
         entry.decision = automatic.decision;
         entry.decision_source = Some(automatic.source);

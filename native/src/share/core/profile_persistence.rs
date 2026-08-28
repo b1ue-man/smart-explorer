@@ -202,11 +202,11 @@ impl ShareProfiles {
         name: &str,
         storage: &mut impl ProfilePersistence,
     ) -> Result<String, String> {
-        let mut parsed = RoomCode::parse(code)?;
+        let material = RoomCode::parse(code)?.into_relation_material()?;
         if let Some(existing) = self
             .rooms
             .iter()
-            .find(|room| room.room_id == parsed.room_id)
+            .find(|room| room.room_id == material.room_id())
         {
             return Ok(existing.id.clone());
         }
@@ -214,7 +214,7 @@ impl ShareProfiles {
             random_token(10).map_err(|error| format!("Sichere Raumprofil-ID erzeugen: {error}"))?;
         let account = room_secret_account(&id);
         storage
-            .save_secret(&account, &b64(&parsed.secret))
+            .save_secret(&account, &b64(material.secret()))
             .map_err(|error| format!("Raum-Secret speichern: {error}"))?;
         let mut candidate = self.clone();
         candidate.rooms.push(RoomProfile {
@@ -224,7 +224,7 @@ impl ShareProfiles {
             } else {
                 name.trim().to_string()
             },
-            room_id: std::mem::take(&mut parsed.room_id),
+            room_id: material.room_id().to_string(),
             auto_join: true,
             last_seen: None,
             status: ShareStatus::Waiting,

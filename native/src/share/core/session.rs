@@ -5,7 +5,13 @@ use std::sync::{Arc, Mutex};
 use iroh::endpoint::Connection;
 use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 
-use super::core::{eio, now_secs, verify_hmac};
+use super::core::{eio, now_secs, public_fingerprint, verify_hmac};
+use super::direct_protocol::DirectPeerIdentity;
+use super::direct_reciprocal::DirectRelationMaterial;
+use super::direct_reciprocal_session::{
+    AuthenticatedDirectSession, DirectSessionAuthorization,
+};
+use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
 use super::fs::ShareExportConfig;
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::types::{DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope};
@@ -14,6 +20,15 @@ use super::wire::PeerHello;
 #[derive(Clone, Debug)]
 pub(super) struct IncomingSession {
     hello: PeerHello,
+}
+
+/// Secret-bearing authorization snapshot for exactly one reciprocal stream.
+/// It is deliberately not serializable and has no `Debug` implementation.
+pub(super) struct AuthorizedDirectRepair {
+    pub(super) local_identity: DirectPeerIdentity,
+    pub(super) local_material: DirectRelationMaterial,
+    pub(super) session: AuthenticatedDirectSession,
+    pub(super) expected_remote_material: Option<DirectRelationMaterial>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -80,6 +95,77 @@ impl IncomingSession {
         self.authorize_state(&state)
     }
 
+    /// Rechecks the current Direct grant, TLS-bound pins, capability request,
+    /// and local material immediately before accepting a reciprocal stream.
+    pub(super) fn authorize_direct_repair(
+        &self,
+        auth: &Arc<Mutex<ShareAuthState>>,
+    ) -> io::Result<AuthorizedDirectRepair> {
+        let state = auth.lock().map_err(|_| eio("Share-Auth gesperrt"))?;
+        self.authorize_state(&state)?;
+        let hello = &self.hello;
+        if hello.relation_kind != "direct" {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "reciprocal stream requires an authenticated Direct relation",
+            ));
+        }
+        let grant = state
+            .direct_grants
+            .iter()
+            .find(|grant| {
+                grant.device_id == hello.device_id
+                    && grant.state == DirectGrantState::Accepted
+                    && grant.public_key == hello.public_key
+                    && (grant.node_id == hello.node_id
+                        || (grant.node_id.is_empty() && grant.public_key == hello.node_id))
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "reciprocal Direct grant is not accepted",
+                )
+            })?;
+        let session = AuthenticatedDirectSession::from_verified_handshake(
+            hello.device_id.clone(),
+            hello.node_id.clone(),
+            grant.public_key.clone(),
+            grant.fingerprint.clone(),
+            grant.node_id.clone(),
+            DirectSessionAuthorization::IncomingAcceptedGrant,
+            hello
+                .requested_capabilities
+                .iter()
+                .any(|value| value == DIRECT_RECIPROCAL_CAPABILITY),
+        )
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "reciprocal Direct session binding is invalid",
+            )
+        })?;
+        let local_identity = DirectPeerIdentity {
+            device_id: state.identity.device_id.clone(),
+            device_name: state.identity.device_name.clone(),
+            node_id: state.identity.node_id.clone(),
+            public_key: state.identity.public_key.clone(),
+            fingerprint: public_fingerprint(state.identity.public_key.as_bytes()),
+        };
+        let local_material = DirectRelationMaterial::new(
+            state.identity.direct_lookup_id.clone(),
+            state.direct_secret.clone(),
+        )
+        .map_err(|_| eio("lokales Direct-Material ist ungueltig"))?;
+        Ok(AuthorizedDirectRepair {
+            local_identity,
+            local_material,
+            session,
+            // Incoming grants carry identity authorization, not the remote's
+            // own Direct secret. Persisted conflicts are rejected by the store.
+            expected_remote_material: None,
+        })
+    }
+
     fn authorize_state(&self, state: &ShareAuthState) -> io::Result<ShareExportConfig> {
         let hello = &self.hello;
         match hello.relation_kind.as_str() {
@@ -94,7 +180,8 @@ impl IncomingSession {
                         g.device_id == hello.device_id
                             && g.state == DirectGrantState::Accepted
                             && g.public_key == hello.public_key
-                            && g.node_id == hello.node_id
+                            && (g.node_id == hello.node_id
+                                || (g.node_id.is_empty() && g.public_key == hello.node_id))
                     })
                     .ok_or_else(|| eio("Direktfreigabe nicht akzeptiert"))?;
                 if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {

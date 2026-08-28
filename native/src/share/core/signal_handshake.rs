@@ -2,6 +2,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::core::eio;
+use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::signal_connection::SignalConnection;
 use super::wire::{SrvMsg, TRACKED_DIRECT_CAPABILITY};
 
@@ -10,6 +11,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct SignalCapabilities {
     pub(super) tracked_direct: bool,
+    pub(super) discovery_exchange: bool,
 }
 
 pub(super) fn await_hello_ok(signal: &mut SignalConnection) -> io::Result<SignalCapabilities> {
@@ -38,6 +40,9 @@ pub(super) fn parse_hello_ok(line: &str) -> io::Result<SignalCapabilities> {
             tracked_direct: capabilities
                 .iter()
                 .any(|capability| capability == TRACKED_DIRECT_CAPABILITY),
+            discovery_exchange: capabilities
+                .iter()
+                .any(|capability| capability == DISCOVERY_EXCHANGE_CAPABILITY),
         }),
         SrvMsg::Error { scope, msg } => Err(eio(format!("{scope}: {msg}"))),
         _ => Err(eio(
@@ -55,7 +60,8 @@ mod tests {
         assert_eq!(
             parse_hello_ok(r#"{"t":"hello_ok"}"#).unwrap(),
             SignalCapabilities {
-                tracked_direct: false
+                tracked_direct: false,
+                discovery_exchange: false,
             }
         );
     }
@@ -66,7 +72,22 @@ mod tests {
             parse_hello_ok(r#"{"t":"hello_ok","capabilities":["future","tracked_direct_v1"]}"#)
                 .unwrap(),
             SignalCapabilities {
-                tracked_direct: true
+                tracked_direct: true,
+                discovery_exchange: false,
+            }
+        );
+    }
+
+    #[test]
+    fn discovery_capability_must_be_confirmed_by_server() {
+        assert_eq!(
+            parse_hello_ok(
+                r#"{"t":"hello_ok","capabilities":["discovery_exchange_v1"]}"#
+            )
+            .unwrap(),
+            SignalCapabilities {
+                tracked_direct: false,
+                discovery_exchange: true,
             }
         );
     }

@@ -2,9 +2,10 @@ use std::collections::HashSet;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use super::authorization_policy::configuration_changed;
 use super::backend::ShareIrohNode;
+use super::configuration_runtime::RuntimeConfiguration;
 use super::core::eio;
+use super::discovery_signal_commands::DiscoverySignalRuntime;
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_subscriptions::{plan_subscription_teardown, SubscriptionTeardownPlan};
 use super::signal_worker::{publish_all, send_direct_answer, send_direct_request};
@@ -18,6 +19,8 @@ pub(super) struct ConnectedCommandRuntime<'a> {
     pub(super) iroh: &'a ShareIrohNode,
     pub(super) direct_requests_sent: &'a mut HashSet<String>,
     pub(super) tracked_direct: bool,
+    pub(super) discovery_exchange: bool,
+    pub(super) discovery: &'a mut DiscoverySignalRuntime,
     pub(super) events: &'a crossbeam_channel::Sender<ShareEvent>,
     pub(super) tracked_attempts: &'a mut AttemptCounters,
 }
@@ -27,6 +30,7 @@ pub(super) struct OfflineCommandRuntime<'a> {
     pub(super) iroh: &'a ShareIrohNode,
     pub(super) direct_requests_sent: &'a mut HashSet<String>,
     pub(super) events: &'a crossbeam_channel::Sender<ShareEvent>,
+    pub(super) discovery: &'a mut DiscoverySignalRuntime,
 }
 
 pub(super) struct CommandOutcome {
@@ -91,6 +95,46 @@ pub(super) fn run_connected_command(
     runtime: &mut ConnectedCommandRuntime<'_>,
 ) -> CommandOutcome {
     match command {
+        ShareCmd::Discovery(command) => {
+            let outcome = runtime.discovery.run_connected_command(
+                command,
+                runtime.signal,
+                runtime.discovery_exchange,
+                runtime.events,
+            );
+            CommandOutcome {
+                result: outcome.result,
+                should_stop: false,
+                should_reconnect: outcome.should_reconnect,
+                published: false,
+            }
+        }
+        ShareCmd::ConfigureProfiles { profiles } => {
+            let result = plan_current_subscription_teardown(
+                runtime.auth,
+                &profiles.direct_contacts,
+                &profiles.rooms,
+            )
+            .and_then(|teardown| {
+                RuntimeConfiguration {
+                    auth: runtime.auth,
+                    iroh: runtime.iroh,
+                    direct_requests_sent: runtime.direct_requests_sent,
+                }
+                .apply_profiles(*profiles)?;
+                send_subscription_teardown(runtime.signal, teardown)
+            })
+            .and_then(|()| {
+                publish_all(
+                    runtime.signal,
+                    runtime.auth,
+                    runtime.iroh,
+                    runtime.direct_requests_sent,
+                    runtime.tracked_direct,
+                )
+            });
+            CommandOutcome::connected_fail_closed(result, true)
+        }
         ShareCmd::Configure {
             direct,
             direct_grants,
@@ -99,10 +143,12 @@ pub(super) fn run_connected_command(
         } => {
             let result = plan_current_subscription_teardown(runtime.auth, &direct, &rooms)
                 .and_then(|teardown| {
-                    apply_configuration(
-                        runtime.auth,
-                        runtime.iroh,
-                        runtime.direct_requests_sent,
+                    RuntimeConfiguration {
+                        auth: runtime.auth,
+                        iroh: runtime.iroh,
+                        direct_requests_sent: runtime.direct_requests_sent,
+                    }
+                    .apply_parts(
                         direct,
                         direct_grants,
                         rooms,
@@ -243,20 +289,36 @@ pub(super) fn run_offline_command(
     runtime: &mut OfflineCommandRuntime<'_>,
 ) -> CommandOutcome {
     match command {
+        ShareCmd::Discovery(command) => {
+            let outcome = runtime.discovery.run_offline_command(command, runtime.events);
+            CommandOutcome {
+                result: outcome.result,
+                should_stop: false,
+                should_reconnect: false,
+                published: false,
+            }
+        }
+        ShareCmd::ConfigureProfiles { profiles } => CommandOutcome::local(
+            RuntimeConfiguration {
+                auth: runtime.auth,
+                iroh: runtime.iroh,
+                direct_requests_sent: runtime.direct_requests_sent,
+            }
+            .apply_profiles(*profiles),
+        ),
         ShareCmd::Configure {
             direct,
             direct_grants,
             rooms,
             default_direct_exports,
-        } => CommandOutcome::local(apply_configuration(
-            runtime.auth,
-            runtime.iroh,
-            runtime.direct_requests_sent,
-            direct,
-            direct_grants,
-            rooms,
-            default_direct_exports,
-        )),
+        } => CommandOutcome::local(
+            RuntimeConfiguration {
+                auth: runtime.auth,
+                iroh: runtime.iroh,
+                direct_requests_sent: runtime.direct_requests_sent,
+            }
+            .apply_parts(direct, direct_grants, rooms, default_direct_exports),
+        ),
         ShareCmd::SyncDirectRequests {
             direct_requests,
             direct_request_tombstones,
@@ -300,7 +362,7 @@ pub(super) fn run_offline_command(
     }
 }
 
-fn plan_current_subscription_teardown(
+pub(super) fn plan_current_subscription_teardown(
     auth: &Arc<Mutex<ShareAuthState>>,
     direct: &[super::types::DirectContact],
     rooms: &[super::types::RoomProfile],
@@ -309,7 +371,7 @@ fn plan_current_subscription_teardown(
     Ok(plan_subscription_teardown(&state, direct, rooms))
 }
 
-fn send_subscription_teardown(
+pub(super) fn send_subscription_teardown(
     signal: &mut SignalConnection,
     teardown: SubscriptionTeardownPlan,
 ) -> io::Result<()> {
@@ -360,57 +422,6 @@ fn apply_persisted_exec_grant(
     Ok(mutation)
 }
 
-fn apply_configuration(
-    auth: &Arc<Mutex<ShareAuthState>>,
-    iroh: &ShareIrohNode,
-    direct_requests_sent: &mut HashSet<String>,
-    direct: Vec<super::types::DirectContact>,
-    direct_grants: Vec<super::types::DirectGrant>,
-    rooms: Vec<super::types::RoomProfile>,
-    default_direct_exports: super::fs::ShareExportConfig,
-) -> io::Result<()> {
-    let changed = {
-        let mut state = auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
-        let changed = configuration_changed(
-            &state,
-            &direct,
-            &direct_grants,
-            &rooms,
-            &default_direct_exports,
-        );
-        if changed {
-            let next_epoch = state
-                .authorization_epoch
-                .checked_add(1)
-                .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
-            let mut candidate = state.clone();
-            candidate.direct_contacts = direct;
-            candidate.direct_grants = direct_grants;
-            candidate.rooms = rooms;
-            candidate.default_direct_exports = default_direct_exports;
-            candidate.authorization_epoch = next_epoch;
-            super::exec_grant_runtime::apply_configuration_transition(
-                &state,
-                &candidate,
-                next_epoch,
-                iroh.exec_registry(),
-            )?;
-            *state = candidate;
-        } else {
-            state.direct_contacts = direct;
-            state.direct_grants = direct_grants;
-            state.rooms = rooms;
-            state.default_direct_exports = default_direct_exports;
-        }
-        changed
-    };
-    if changed {
-        iroh.invalidate_sessions()?;
-        direct_requests_sent.clear();
-    }
-    Ok(())
-}
-
 fn sync_direct_requests(
     auth: &Arc<Mutex<ShareAuthState>>,
     direct_requests: Vec<super::direct_ledger::DirectRequestEntry>,
@@ -429,6 +440,7 @@ fn set_direct_online(
     iroh: &ShareIrohNode,
     online: bool,
 ) -> io::Result<String> {
+    let _transition = iroh.begin_runtime_transition()?;
     let (lookup_id, changed) = {
         let mut state = auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
         let changed = state.direct_online != online;

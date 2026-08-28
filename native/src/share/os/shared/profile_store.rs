@@ -12,6 +12,7 @@ use super::profiles::{
     direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
     SHARE_PROFILE_VERSION,
 };
+use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrantState, PeerPresence, RoomProfile};
 
 const PROFILES_FILE: &str = "share_profiles.json";
@@ -220,9 +221,25 @@ impl ShareProfiles {
         Self::room_secret_checked(room).ok().flatten()
     }
 
+    pub fn room_relation_material_checked(
+        room: &RoomProfile,
+    ) -> Result<Option<RoomRelationMaterial>, String> {
+        Self::room_secret_checked(room)?
+            .map(|secret| {
+                RoomRelationMaterial::new(room.room_id.clone(), secret)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    }
+
     pub fn room_code_checked(room: &RoomProfile) -> Result<Option<String>, String> {
-        Ok(Self::room_secret_checked(room)?
-            .map(|secret| format!("SE-R3-{}-{}", room.room_id, super::core::hex(&secret))))
+        Ok(Self::room_relation_material_checked(room)?.map(|material| {
+            format!(
+                "SE-R3-{}-{}",
+                material.room_id(),
+                super::core::hex(material.secret())
+            )
+        }))
     }
 
     pub fn room_code(room: &RoomProfile) -> Option<String> {

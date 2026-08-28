@@ -8,16 +8,24 @@ use crossbeam_channel::Receiver;
 
 use super::backend::ShareIrohNode;
 use super::core::eio;
+use super::discovery_signal_commands::DiscoverySignalRuntime;
+use super::discovery_signal_offline::{
+    wait_for_connection, wait_offline_backoff, ConnectionWait,
+};
+use super::discovery_signal_port::DiscoveryExchangePort;
+use super::direct_reciprocal_coordinator::{
+    DirectReciprocalCoordinator, DirectRepairCompletionReceiver,
+};
 use super::identity::ShareIdentity;
 use super::keepalive::SIGNAL_MAINTENANCE_POLICY;
 use super::profiles::ShareProfiles;
 use super::signal_commands::{
-    run_connected_command, run_offline_command, ConnectedCommandRuntime, OfflineCommandRuntime,
+    run_connected_command, ConnectedCommandRuntime,
 };
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_connector::{spawn_connect, NegotiatedSignal};
 use super::signal_presence::build_presence;
-use super::tracked_signal_dispatch::dispatch_server_line;
+use super::tracked_signal_dispatch::{dispatch_server_line, SignalDispatchOutcome};
 use super::tracked_signal_sender::{send_pending_tracked, AttemptCounters};
 use super::types::{DirectAccessState, DirectContact, PendingShareCmd, ShareAuthState, ShareEvent};
 use super::wire::ClientMsg;
@@ -30,11 +38,16 @@ pub(super) fn worker(
     commands: Receiver<PendingShareCmd>,
     events: crossbeam_channel::Sender<ShareEvent>,
     stopped_flag: Arc<AtomicBool>,
+    discovery_port: Box<dyn DiscoveryExchangePort>,
+    reciprocal: Arc<DirectReciprocalCoordinator>,
+    repair_completions: DirectRepairCompletionReceiver,
 ) {
     let mut stopped = false;
     let mut backoff = Duration::from_secs(1);
     let mut direct_requests_sent = HashSet::new();
     let mut tracked_attempts = AttemptCounters::new();
+    let mut discovery = DiscoverySignalRuntime::with_port(discovery_port);
+    let _reciprocal_guard = reciprocal;
     let mut runtime = WorkerRuntime {
         auth: &auth,
         iroh: &iroh,
@@ -43,6 +56,8 @@ pub(super) fn worker(
         stopped_flag: &stopped_flag,
         direct_requests_sent: &mut direct_requests_sent,
         tracked_attempts: &mut tracked_attempts,
+        discovery: &mut discovery,
+        repair_completions: &repair_completions,
     };
     while !stopped && !stopped_flag.load(Ordering::Relaxed) {
         let connector = match spawn_connect(server.clone(), identity.clone()) {
@@ -80,110 +95,43 @@ pub(super) fn worker(
     }
 }
 
-struct WorkerRuntime<'a> {
-    auth: &'a Arc<Mutex<ShareAuthState>>,
-    iroh: &'a ShareIrohNode,
-    commands: &'a Receiver<PendingShareCmd>,
-    events: &'a crossbeam_channel::Sender<ShareEvent>,
-    stopped_flag: &'a AtomicBool,
-    direct_requests_sent: &'a mut HashSet<String>,
-    tracked_attempts: &'a mut AttemptCounters,
+pub(super) struct WorkerRuntime<'a> {
+    pub(super) auth: &'a Arc<Mutex<ShareAuthState>>,
+    pub(super) iroh: &'a ShareIrohNode,
+    pub(super) commands: &'a Receiver<PendingShareCmd>,
+    pub(super) events: &'a crossbeam_channel::Sender<ShareEvent>,
+    pub(super) stopped_flag: &'a AtomicBool,
+    pub(super) direct_requests_sent: &'a mut HashSet<String>,
+    pub(super) tracked_attempts: &'a mut AttemptCounters,
+    pub(super) discovery: &'a mut DiscoverySignalRuntime,
+    pub(super) repair_completions: &'a DirectRepairCompletionReceiver,
 }
 
-enum ConnectionWait {
-    Ready(io::Result<NegotiatedSignal>),
-    Stopped,
-}
-
-fn wait_for_connection(
-    connector: &Receiver<io::Result<NegotiatedSignal>>,
-    runtime: &mut WorkerRuntime<'_>,
-) -> ConnectionWait {
-    loop {
-        if runtime.stopped_flag.load(Ordering::Relaxed) {
-            return ConnectionWait::Stopped;
-        }
-        match connector.try_recv() {
-            Ok(result) => return ConnectionWait::Ready(result),
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                return ConnectionWait::Ready(Err(eio(
-                    "Share-Verbindungsversuch wurde unerwartet beendet",
-                )))
-            }
-            Err(crossbeam_channel::TryRecvError::Empty) => {}
-        }
-        match runtime.commands.recv_timeout(Duration::from_millis(25)) {
-            Ok(pending) => {
-                if acknowledge_offline(pending, runtime) {
-                    return ConnectionWait::Stopped;
-                }
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                return ConnectionWait::Stopped
-            }
-        }
+pub(super) fn drain_repair_completions(runtime: &WorkerRuntime<'_>) {
+    if runtime.repair_completions.drain() {
+        let _ = runtime.events.send(ShareEvent::RuntimeProfilesCommitted);
     }
-}
-
-fn wait_offline_backoff(duration: Duration, runtime: &mut WorkerRuntime<'_>) -> bool {
-    let deadline = Instant::now() + duration;
-    loop {
-        if runtime.stopped_flag.load(Ordering::Relaxed) {
-            return true;
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return false;
-        }
-        let remaining = deadline.saturating_duration_since(now);
-        match runtime
-            .commands
-            .recv_timeout(remaining.min(Duration::from_millis(50)))
-        {
-            Ok(pending) => {
-                if acknowledge_offline(pending, runtime) {
-                    return true;
-                }
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return true,
-        }
-    }
-}
-
-fn acknowledge_offline(pending: PendingShareCmd, runtime: &mut WorkerRuntime<'_>) -> bool {
-    if Instant::now() > pending.expires_at {
-        let _ = pending.acknowledgement.send(Err(
-            "Share-Kommando ist vor der Verarbeitung abgelaufen".into(),
-        ));
-        return false;
-    }
-    let mut command_runtime = OfflineCommandRuntime {
-        auth: runtime.auth,
-        iroh: runtime.iroh,
-        direct_requests_sent: runtime.direct_requests_sent,
-        events: runtime.events,
-    };
-    let outcome = run_offline_command(pending.command, &mut command_runtime);
-    let _ = pending
-        .acknowledgement
-        .send(outcome.result.map_err(|error| error.to_string()));
-    if outcome.should_stop {
-        runtime.stopped_flag.store(true, Ordering::Relaxed);
-    }
-    outcome.should_stop
 }
 
 fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'_>) -> bool {
     let tracked_direct = negotiated.capabilities.tracked_direct;
+    let discovery_exchange = negotiated.capabilities.discovery_exchange;
     let _ = runtime.events.send(ShareEvent::ServerConnected);
     let _ = runtime.events.send(ShareEvent::Status(format!(
-        "Share-Server verbunden ({}, tracked_direct={tracked_direct})",
-        negotiated.transport
+        "Share-Server verbunden ({}, tracked_direct={tracked_direct}, discovery_exchange={discovery_exchange})",
+        negotiated.transport,
     )));
-    // Read before publishing: if the endpoint changes during publication the
-    // newer revision remains visible and triggers another coherent publish.
+    if let Err(error) = runtime.discovery.connected(
+        &mut negotiated.connection,
+        discovery_exchange,
+        runtime.events,
+    ) {
+        let _ = runtime.events.send(ShareEvent::ServerDisconnected(format!(
+            "Discovery-Signaling konnte nicht initialisiert werden: {error}"
+        )));
+        runtime.discovery.disconnected(runtime.events);
+        return false;
+    }
     let mut published_route_revision = runtime.iroh.route_revision();
     if let Err(error) = publish_all(
         &mut negotiated.connection,
@@ -195,6 +143,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         let _ = runtime.events.send(ShareEvent::ServerDisconnected(format!(
             "Share-Presence konnte nicht sicher erzeugt werden: {error}"
         )));
+        runtime.discovery.disconnected(runtime.events);
         return false;
     }
     if tracked_direct
@@ -210,6 +159,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
         let _ = runtime.events.send(ShareEvent::ServerDisconnected(
             "Direct-Outbox konnte nicht gesendet werden".into(),
         ));
+        runtime.discovery.disconnected(runtime.events);
         return false;
     }
 
@@ -219,6 +169,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
     let mut last_tracked_send = Instant::now();
     let mut stopped = false;
     loop {
+        drain_repair_completions(runtime);
         if runtime.stopped_flag.load(Ordering::Relaxed) {
             stopped = true;
             break;
@@ -236,6 +187,8 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
                 iroh: runtime.iroh,
                 direct_requests_sent: runtime.direct_requests_sent,
                 tracked_direct,
+                discovery_exchange,
+                discovery: runtime.discovery,
                 events: runtime.events,
                 tracked_attempts: runtime.tracked_attempts,
             };
@@ -247,7 +200,9 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
                 last_publish = Instant::now();
             }
             if outcome.should_reconnect {
-                break;
+                runtime.discovery.disconnected(runtime.events);
+                let _ = runtime.events.send(ShareEvent::ServerDisconnected("Signaling-Kommando fehlgeschlagen".into()));
+                return false;
             }
             if outcome.should_stop {
                 stopped = true;
@@ -312,10 +267,34 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             }
             last_tracked_send = Instant::now();
         }
+        if discovery_exchange
+            && runtime
+                .discovery
+                .maintain(&mut negotiated.connection, runtime.events)
+                .is_err()
+        {
+            break;
+        }
         match negotiated.connection.read_message() {
             Ok(Some(line)) => {
-                if dispatch_server_line(line.trim(), tracked_direct, runtime.auth, runtime.events) {
-                    heartbeat_outstanding_since = None;
+                let mut configuration = super::configuration_runtime::RuntimeConfiguration {
+                    auth: runtime.auth,
+                    iroh: runtime.iroh,
+                    direct_requests_sent: runtime.direct_requests_sent,
+                };
+                match dispatch_server_line(
+                    line.trim(),
+                    tracked_direct,
+                    discovery_exchange,
+                    runtime.discovery,
+                    &mut negotiated.connection,
+                    runtime.auth,
+                    runtime.events,
+                    &mut configuration,
+                ) {
+                    SignalDispatchOutcome::Pong => heartbeat_outstanding_since = None,
+                    SignalDispatchOutcome::Continue => {}
+                    SignalDispatchOutcome::Reconnect => break,
                 }
             }
             Ok(None) => break,
@@ -325,6 +304,7 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             Err(_) => break,
         }
     }
+    runtime.discovery.disconnected(runtime.events);
     let _ = runtime
         .events
         .send(ShareEvent::ServerDisconnected("Signaling getrennt".into()));
