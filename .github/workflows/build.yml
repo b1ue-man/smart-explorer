@@ -156,12 +156,17 @@ jobs:
           fi
           . /root/.cargo/env
           rustup component add rustfmt clippy
-          for tool in bash cargo rustc rustup gcc musl-gcc file git xvfb-run xauth xwininfo; do
-            command -v "$tool" >/dev/null 2>&1 || {
-              echo "missing WSL release tool: $tool" >&2
-              exit 1
-            }
-          done
+          command -v bash >/dev/null 2>&1 || { echo 'missing WSL release tool: bash' >&2; exit 1; }
+          command -v cargo >/dev/null 2>&1 || { echo 'missing WSL release tool: cargo' >&2; exit 1; }
+          command -v rustc >/dev/null 2>&1 || { echo 'missing WSL release tool: rustc' >&2; exit 1; }
+          command -v rustup >/dev/null 2>&1 || { echo 'missing WSL release tool: rustup' >&2; exit 1; }
+          command -v gcc >/dev/null 2>&1 || { echo 'missing WSL release tool: gcc' >&2; exit 1; }
+          command -v musl-gcc >/dev/null 2>&1 || { echo 'missing WSL release tool: musl-gcc' >&2; exit 1; }
+          command -v file >/dev/null 2>&1 || { echo 'missing WSL release tool: file' >&2; exit 1; }
+          command -v git >/dev/null 2>&1 || { echo 'missing WSL release tool: git' >&2; exit 1; }
+          command -v xvfb-run >/dev/null 2>&1 || { echo 'missing WSL release tool: xvfb-run' >&2; exit 1; }
+          command -v xauth >/dev/null 2>&1 || { echo 'missing WSL release tool: xauth' >&2; exit 1; }
+          command -v xwininfo >/dev/null 2>&1 || { echo 'missing WSL release tool: xwininfo' >&2; exit 1; }
           '@
           $setup = $setup -replace "`r", ""
           wsl.exe -d $distro -u root -- bash -lc $setup
