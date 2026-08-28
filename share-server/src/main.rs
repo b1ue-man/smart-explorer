@@ -5,13 +5,17 @@
 //! end-to-end encrypted Iroh transport traffic on the adjacent port. It cannot
 //! decrypt relation secrets, private keys, file names, file contents, or export
 //! configuration. Clients validate HMAC proofs, pinned SmartExplorer identities,
-//! and Iroh NodeIds before opening a peer session.
+//! and Iroh NodeIds before opening a peer session. Public discovery exposes only
+//! short-lived aliases and relays opaque PAKE/application packets without seeing
+//! PINs, stable relation identifiers, or decrypted key bundles.
 
 use std::net::{Shutdown, TcpListener};
 use std::sync::{Arc, Mutex};
 
 mod direct_messages;
 mod direct_validation;
+mod discovery;
+mod discovery_state;
 mod limits;
 mod line;
 #[cfg(test)]
@@ -158,7 +162,24 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
         In::UnwatchDirect { lookup_id } => tracked_direct::unwatch(id, &lookup_id, state),
         In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
         In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
+        In::PublishDiscovery { offer } => discovery::publish(id, writer, offer, state),
+        In::UnpublishDiscovery { offer_id } => discovery::unpublish(id, writer, &offer_id, state),
+        In::ListDiscoveries => discovery::list(id, writer, state),
+        In::StartPairing {
+            discovery_id,
+            exchange_id,
+            payload,
+        } => discovery::start_pairing(id, writer, &discovery_id, &exchange_id, payload, state),
+        In::PairingPacket {
+            exchange_id,
+            kind,
+            payload,
+        } => discovery::pairing_packet(id, writer, &exchange_id, kind, payload, state),
+        In::CancelPairing { exchange_id } => {
+            discovery::cancel_pairing(id, writer, &exchange_id, state)
+        }
         In::Heartbeat => {
+            discovery::prune_expired(state);
             send(writer, &Out::Pong);
         }
         In::Hello { .. } => {}

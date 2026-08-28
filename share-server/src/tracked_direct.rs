@@ -21,16 +21,19 @@ pub(super) const CAPABILITY: &str = "tracked_direct_v1";
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
     offered
         .into_iter()
-        .filter(|capability| capability == CAPABILITY)
+        .filter(|capability| capability == CAPABILITY || capability == super::discovery::CAPABILITY)
         .collect()
 }
 
 pub(super) fn capability_list(negotiated: &HashSet<String>) -> Vec<String> {
+    let mut capabilities = Vec::with_capacity(2);
     if negotiated.contains(CAPABILITY) {
-        vec![CAPABILITY.to_string()]
-    } else {
-        Vec::new()
+        capabilities.push(CAPABILITY.to_string());
     }
+    if negotiated.contains(super::discovery::CAPABILITY) {
+        capabilities.push(super::discovery::CAPABILITY.to_string());
+    }
+    capabilities
 }
 
 pub(super) fn route_request(
