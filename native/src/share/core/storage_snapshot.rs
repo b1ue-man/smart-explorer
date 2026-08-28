@@ -32,7 +32,9 @@ pub(super) async fn serve_snapshot(
     .await?;
     while let Some(update) = received.recv().await {
         match update {
-            Err(error) => return reply_snapshot(&mut send, super::fs_error::response(&error)).await,
+            Err(error) => {
+                return reply_snapshot(&mut send, super::fs_error::response(&error)).await
+            }
             Ok(update) => match update {
                 SnapshotUpdate::Progress(totals) => {
                     reply_snapshot(
@@ -117,7 +119,10 @@ fn build_snapshot(
                 if encoded.len() > MAX_SNAPSHOT_BYTES {
                     return Err(eio("share storage snapshot exceeds encoded safety limit"));
                 }
-                let _ = send_update(&updates, SnapshotUpdate::Ready(Snapshot { encoded, totals }));
+                let _ = send_update(
+                    &updates,
+                    SnapshotUpdate::Ready(Snapshot { encoded, totals }),
+                );
                 return Ok(());
             }
         }
