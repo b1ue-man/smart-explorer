@@ -268,6 +268,7 @@ impl DiscoveryUiState {
         let entries = &self.entries;
         self.entry_pins
             .retain(|id, _| entries.iter().any(|entry| &entry.discovery_id == id));
+        retention::prune_orphaned_terminal_exchanges(self);
         self.refreshing = false;
         self.status = Some("Auffindbare Ziele aktualisiert".to_string());
     }
@@ -314,9 +315,8 @@ impl DiscoveryUiState {
 
     pub(in crate::app) fn exchange_started(&mut self, exchange_id: String, discovery_id: String) {
         self.starting_discoveries.remove(&discovery_id);
-        self.exchange_by_discovery
-            .insert(discovery_id.clone(), exchange_id.clone());
-        self.exchanges.insert(
+        retention::replace_exchange_record(
+            self,
             exchange_id,
             DiscoveryExchangeRecord {
                 discovery_id,
@@ -333,9 +333,8 @@ impl DiscoveryUiState {
         outcome: String,
     ) {
         self.starting_discoveries.remove(&discovery_id);
-        self.exchange_by_discovery
-            .insert(discovery_id.clone(), exchange_id.clone());
-        self.exchanges.insert(
+        retention::replace_exchange_record(
+            self,
             exchange_id,
             DiscoveryExchangeRecord {
                 discovery_id,
@@ -361,9 +360,8 @@ impl DiscoveryUiState {
             self.starting_discoveries.remove(discovery_id);
         }
         if let (Some(exchange_id), Some(discovery_id)) = (exchange_id, known_discovery) {
-            self.exchange_by_discovery
-                .insert(discovery_id.clone(), exchange_id.clone());
-            self.exchanges.insert(
+            retention::replace_exchange_record(
+                self,
                 exchange_id,
                 DiscoveryExchangeRecord {
                     discovery_id,
@@ -401,9 +399,8 @@ impl DiscoveryUiState {
         if let Some(exchange) = self.exchanges.get_mut(&exchange_id) {
             exchange.state = DiscoveryExchangeState::Cancelled;
         } else if let Some(discovery_id) = discovery_id {
-            self.exchange_by_discovery
-                .insert(discovery_id.clone(), exchange_id.clone());
-            self.exchanges.insert(
+            retention::replace_exchange_record(
+                self,
                 exchange_id,
                 DiscoveryExchangeRecord {
                     discovery_id,
@@ -437,6 +434,7 @@ impl DiscoveryUiState {
         let entries = &self.entries;
         self.entry_pins
             .retain(|id, _| entries.iter().any(|entry| &entry.discovery_id == id));
+        retention::prune_orphaned_terminal_exchanges(self);
     }
 }
 use zeroize::Zeroize;
@@ -478,3 +476,5 @@ impl DiscoveryPinDraft {
         self.0.is_empty() || self.0 == "0"
     }
 }
+#[path = "share_discovery_retention.rs"]
+mod retention;
