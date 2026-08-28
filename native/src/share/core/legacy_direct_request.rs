@@ -38,6 +38,7 @@ impl LegacyDirectDecisionState {
 pub enum LegacyDirectDecisionSource {
     User,
     ExistingGrant,
+    AuthenticatedSecretPossession,
     AuthorizationLost,
 }
 
