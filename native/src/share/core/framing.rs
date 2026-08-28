@@ -74,7 +74,10 @@ pub(super) async fn recv_tagged(recv: &mut RecvStream) -> io::Result<(u8, Vec<u8
     recv_tagged_limited(recv, MAX_FRAME).await
 }
 
-async fn recv_tagged_limited(recv: &mut RecvStream, max_frame: usize) -> io::Result<(u8, Vec<u8>)> {
+pub(super) async fn recv_tagged_limited(
+    recv: &mut RecvStream,
+    max_frame: usize,
+) -> io::Result<(u8, Vec<u8>)> {
     let mut len4 = [0u8; 4];
     recv.read_exact(&mut len4).await.map_err(read_exact_error)?;
     let n = u32::from_be_bytes(len4) as usize;

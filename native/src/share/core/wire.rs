@@ -267,6 +267,9 @@ pub(crate) enum FsRequest {
     WalkTree {
         path: String,
     },
+    StorageSnapshot {
+        path: String,
+    },
     Read {
         path: String,
     },
@@ -334,6 +337,10 @@ pub(crate) enum FsResponse {
         root_confined: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lease: Option<String>,
+        /// Additive advertisement. Absent means the peer only supports the
+        /// legacy WalkTree stream.
+        #[serde(default)]
+        storage_snapshot_v1: bool,
     },
     Entries {
         entries: Vec<FsMeta>,
@@ -348,6 +355,26 @@ pub(crate) enum FsResponse {
         bytes: u64,
     },
     WalkDone {
+        files: u64,
+        dirs: u64,
+        bytes: u64,
+        nodes: u64,
+    },
+    SnapshotProgress {
+        files: u64,
+        dirs: u64,
+        bytes: u64,
+        nodes: u64,
+    },
+    SnapshotReady {
+        encoded_len: u64,
+        sha256: [u8; 32],
+        files: u64,
+        dirs: u64,
+        bytes: u64,
+        nodes: u64,
+    },
+    SnapshotDone {
         files: u64,
         dirs: u64,
         bytes: u64,

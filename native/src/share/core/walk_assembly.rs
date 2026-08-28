@@ -4,7 +4,7 @@ use std::io;
 use super::wire::FsWalkNode;
 
 pub(super) const WALK_BATCH_NODES: usize = 256;
-pub(super) const MAX_WALK_NODES: usize = 2_000_000;
+pub(super) const MAX_WALK_NODES: usize = 1_000_000;
 pub(super) const MAX_WALK_NAME_BYTES: usize = 128 * 1024 * 1024;
 pub(super) const MAX_WALK_DEPTH: usize = 512;
 const MAX_NAME_BYTES: usize = 4 * 1024;
@@ -154,11 +154,12 @@ impl TreeAssembler {
 }
 
 pub(super) fn validate_name(name: &str, root: bool) -> io::Result<()> {
+    let root_marker = root && name == "/";
     if name.is_empty()
         || name.len() > MAX_NAME_BYTES
-        || (name.contains('/') || name.contains('\\') || name.contains('\0'))
-            && !(root && name == "/")
-        || (!root && matches!(name, "." | ".."))
+        || name.contains('\0')
+        || (!root_marker && (name.contains('/') || name.contains('\\')))
+        || matches!(name, "." | "..")
     {
         return Err(invalid("peer tree contains an invalid path segment"));
     }

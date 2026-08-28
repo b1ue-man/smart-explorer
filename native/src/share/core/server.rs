@@ -254,6 +254,9 @@ async fn handle_peer_stream(
             }
         }
         FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, access).await,
+        FsRequest::StorageSnapshot { path } => {
+            super::storage_snapshot::serve_snapshot(send, path, access).await
+        }
         FsRequest::Read { path } => super::server_transfer::read_file(send, path, access).await,
         FsRequest::Write { path } => {
             super::server_transfer::write_file(
@@ -391,6 +394,7 @@ async fn handle_capabilities(
                     contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                     root_confined: capabilities.root_confinement.is_enforced(),
                     lease: Some(grant.token),
+                    storage_snapshot_v1: true,
                 });
             }
         }
@@ -402,6 +406,7 @@ async fn handle_capabilities(
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: false,
                 lease: None,
+                storage_snapshot_v1: true,
             });
         };
         if !acquire_lease {
@@ -411,6 +416,7 @@ async fn handle_capabilities(
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined,
                 lease: None,
+                storage_snapshot_v1: true,
             });
         }
         let grant = mount_leases.acquire(
@@ -427,6 +433,7 @@ async fn handle_capabilities(
             contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
             root_confined: capabilities.root_confinement.is_enforced(),
             lease: Some(grant.token),
+            storage_snapshot_v1: true,
         })
     })
     .await;
