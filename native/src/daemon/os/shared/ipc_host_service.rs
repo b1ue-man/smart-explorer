@@ -70,7 +70,7 @@ fn share_service_requested(suspended: bool, server: &str, auto_connect: bool) ->
     !suspended && !server.trim().is_empty() && auto_connect
 }
 
-pub(super) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
+pub(in crate::daemon) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
     if let Some(service) = state.service.take() {
         service.cmd(crate::share::ShareCmd::Stop)?;
     }
@@ -79,7 +79,7 @@ pub(super) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), Stri
     Ok(())
 }
 
-pub(super) fn configure_service(
+pub(in crate::daemon) fn configure_service(
     service: &crate::share::ShareService,
     profiles: &crate::share::ShareProfiles,
 ) -> Result<(), String> {
@@ -93,7 +93,7 @@ pub(super) fn configure_service(
         .map(|_| ())
 }
 
-pub(super) fn reload_committed_profiles(
+pub(in crate::daemon) fn reload_committed_profiles(
     state: &mut ShareHostState,
     previous: &crate::share::ShareProfiles,
     preserve_worker_updates: bool,

@@ -8,6 +8,10 @@ use crossbeam_channel::unbounded;
 
 use super::backend::ShareIrohNode;
 use super::core::public_fingerprint;
+use super::discovery_exchange_port_impl::DiscoveryExchangePortImpl;
+use super::discovery_relation_store::InMemoryRelationStore;
+use super::discovery_signal_commands::DiscoverySignalRuntime;
+use super::discovery_signal_port::direct_peer_from_identity;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
 use super::signal_commands::{run_connected_command, ConnectedCommandRuntime};
@@ -25,12 +29,15 @@ fn configure_emits_real_teardown_before_republishing_new_state() {
     let mut sent = HashSet::new();
     let mut attempts = HashMap::new();
     let (events, _) = unbounded();
+    let mut discovery = discovery_runtime(&fixture.auth);
     let mut runtime = ConnectedCommandRuntime {
         signal: &mut signal,
         auth: &fixture.auth,
         iroh: &fixture.iroh,
         direct_requests_sent: &mut sent,
         tracked_direct: true,
+        discovery_exchange: true,
+        discovery: &mut discovery,
         events: &events,
         tracked_attempts: &mut attempts,
     };
@@ -54,12 +61,15 @@ fn configure_write_failure_forces_reconnect_and_new_state_has_no_old_subscriptio
     let mut sent = HashSet::new();
     let mut attempts = HashMap::new();
     let (events, _) = unbounded();
+    let mut discovery = discovery_runtime(&fixture.auth);
     let mut runtime = ConnectedCommandRuntime {
         signal: &mut broken,
         auth: &fixture.auth,
         iroh: &fixture.iroh,
         direct_requests_sent: &mut sent,
         tracked_direct: true,
+        discovery_exchange: true,
+        discovery: &mut discovery,
         events: &events,
         tracked_attempts: &mut attempts,
     };
@@ -119,6 +129,20 @@ fn fixture() -> Fixture {
     let (events, _) = unbounded();
     let iroh = ShareIrohNode::start("127.0.0.1:0", &identity, auth.clone(), events).unwrap();
     Fixture { auth, iroh }
+}
+
+fn discovery_runtime(auth: &Arc<Mutex<ShareAuthState>>) -> DiscoverySignalRuntime {
+    let direct_peer_auth = auth.clone();
+    let port = DiscoveryExchangePortImpl::new(
+        Box::new(move || {
+            let state = direct_peer_auth
+                .lock()
+                .map_err(|_| "Share-State gesperrt".to_string())?;
+            direct_peer_from_identity(&state.identity)
+        }),
+        Box::new(InMemoryRelationStore::default()),
+    );
+    DiscoverySignalRuntime::with_port(Box::new(port))
 }
 
 fn empty_configuration() -> ShareCmd {

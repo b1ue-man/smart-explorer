@@ -203,7 +203,7 @@ impl DiscoverySignalRuntime {
         {
             return Err(eio("Discovery-Anzeigename ist ungueltig"));
         }
-        let offer_id = random_token(18)?;
+        let offer_id = random_token(18).map_err(eio)?;
         if self.state.offers.contains_key(&offer_id) {
             return Err(eio("zufaellige Discovery-Offer-ID kollidierte"));
         }

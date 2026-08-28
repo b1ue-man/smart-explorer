@@ -72,7 +72,8 @@ impl DiscoverySignalRuntime {
                 "Discovery-Angebot verwendet eine inkompatible Crypto-Suite",
             )));
         }
-        let exchange_id = random_token(18).map_err(DiscoveryExchangeCommandError::Local)?;
+        let exchange_id = random_token(18)
+            .map_err(|error| DiscoveryExchangeCommandError::Local(eio(error)))?;
         if self.state.exchanges.contains_key(&exchange_id)
             || self.state.pending_exchange_id_exists(&exchange_id)
         {
@@ -263,7 +264,9 @@ impl DiscoverySignalRuntime {
             .state
             .exchanges
             .get_mut(&exchange_id)
-            .ok_or("Discovery-Austausch verschwand waehrend der Verarbeitung")
+            .ok_or_else(|| {
+                "Discovery-Austausch verschwand waehrend der Verarbeitung".to_string()
+            })
             .and_then(|exchange| {
                 exchange.accept_packet(kind)?;
                 exchange.record_payload(canonical_payload_text_len(decoded.len()))
@@ -293,7 +296,9 @@ impl DiscoverySignalRuntime {
                     .state
                     .exchanges
                     .get_mut(&exchange_id)
-                    .ok_or("Discovery-Austausch verschwand vor dem Senden")
+                    .ok_or_else(|| {
+                        "Discovery-Austausch verschwand vor dem Senden".to_string()
+                    })
                     .and_then(|exchange| {
                         exchange.accept_port_packet(kind)?;
                         exchange.record_payload(canonical_payload_text_len(payload.len()))

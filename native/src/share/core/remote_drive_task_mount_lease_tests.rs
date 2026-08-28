@@ -51,6 +51,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: true,
                 lease: Some("lease-a".into()),
+                storage_snapshot_v1: true,
             },
             true,
         )
@@ -76,6 +77,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: true,
                 lease: None,
+                storage_snapshot_v1: true,
             },
             false,
         )
@@ -90,6 +92,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
             contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
             root_confined: true,
             lease: Some("probe-must-not-allocate".into()),
+            storage_snapshot_v1: true,
         },
         false,
     );
@@ -105,6 +108,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: false,
                 lease: None,
+                storage_snapshot_v1: true,
             },
             true,
         )
@@ -119,6 +123,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: false,
                 lease: Some("lease-unverified".into()),
+                storage_snapshot_v1: true,
             },
             true,
         )
@@ -139,6 +144,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
                 root_confined: true,
                 lease: Some(releasable_token.clone()),
+                storage_snapshot_v1: true,
             },
             true,
         )

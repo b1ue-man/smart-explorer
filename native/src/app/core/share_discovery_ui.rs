@@ -3,6 +3,7 @@ use super::share_discovery_state::{
     DiscoveryUiAction, DiscoveryUiKind,
 };
 use super::App;
+use eframe::egui;
 
 impl App {
     pub(in crate::app) fn ui_share_discovery_direct(&mut self, ui: &mut egui::Ui) {
