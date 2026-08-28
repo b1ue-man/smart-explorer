@@ -199,8 +199,8 @@ async fn receive_snapshot_responses(
         }
     }
 
-    let (request_id, frame) = crate::agent_proto::Frame::decode(&encoded)
-        .map_err(PeerSnapshotFailure::protocol)?;
+    let (request_id, frame) =
+        crate::agent_proto::Frame::decode(&encoded).map_err(PeerSnapshotFailure::protocol)?;
     if request_id != 0 {
         return Err(PeerSnapshotFailure::protocol(invalid(
             "peer storage snapshot has an unexpected frame id",
@@ -312,9 +312,7 @@ fn validate_tree(tree: &crate::agent_proto::WireNode) -> io::Result<WalkTotals> 
         nodes: &mut u64,
     ) -> io::Result<WalkTotals> {
         if depth > MAX_WALK_DEPTH {
-            return Err(invalid(
-                "peer storage snapshot exceeds depth safety limit",
-            ));
+            return Err(invalid("peer storage snapshot exceeds depth safety limit"));
         }
         validate_name(&node.name, root)?;
         if root && !node.is_dir {
@@ -351,9 +349,7 @@ fn validate_tree(tree: &crate::agent_proto::WireNode) -> io::Result<WalkTotals> 
         }
         if node.is_dir {
             if node.size != child_size {
-                return Err(invalid(
-                    "peer storage snapshot directory size mismatch",
-                ));
+                return Err(invalid("peer storage snapshot directory size mismatch"));
             }
             totals.dirs = totals
                 .dirs
@@ -417,8 +413,5 @@ impl PeerSnapshotFailure {
 }
 
 fn interrupted() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Interrupted,
-        "peer storage snapshot canceled",
-    )
+    io::Error::new(io::ErrorKind::Interrupted, "peer storage snapshot canceled")
 }

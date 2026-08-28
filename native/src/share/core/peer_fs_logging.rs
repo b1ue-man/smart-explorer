@@ -60,7 +60,12 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
             bytes,
             nodes,
         } => format!("walk done nodes={nodes} files={files} dirs={dirs} bytes={bytes}"),
-        FsResponse::SnapshotProgress { files, dirs, bytes, nodes } => {
+        FsResponse::SnapshotProgress {
+            files,
+            dirs,
+            bytes,
+            nodes,
+        } => {
             format!("snapshot progress nodes={nodes} files={files} dirs={dirs} bytes={bytes}")
         }
         FsResponse::SnapshotReady {
@@ -76,14 +81,15 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
                     "snapshot ready encoded={} nodes={} ",
                     "files={} dirs={} bytes={}"
                 ),
-                encoded_len,
-                nodes,
-                files,
-                dirs,
-                bytes,
+                encoded_len, nodes, files, dirs, bytes,
             )
         }
-        FsResponse::SnapshotDone { files, dirs, bytes, nodes } => {
+        FsResponse::SnapshotDone {
+            files,
+            dirs,
+            bytes,
+            nodes,
+        } => {
             format!("snapshot done nodes={nodes} files={files} dirs={dirs} bytes={bytes}")
         }
         FsResponse::Data { size } => format!("{size} bytes"),
