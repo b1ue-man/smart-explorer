@@ -78,7 +78,7 @@ fn apply(
                 return Ok(());
             }
             ensure_request_receipt(profiles, identity, request, *received_at)?;
-            ensure_existing_grant_decision(profiles, identity, request, *received_at)?;
+            ensure_authenticated_request_decision(profiles, identity, request, *received_at)?;
         }
         DirectSignalEvent::RequestReceiptReceived {
             receipt,
@@ -205,7 +205,7 @@ fn ensure_request_receipt(
     Ok(())
 }
 
-fn ensure_existing_grant_decision(
+fn ensure_authenticated_request_decision(
     profiles: &mut ShareProfiles,
     identity: &ShareIdentity,
     request: &crate::share::SignedDirectRequest,
@@ -218,17 +218,21 @@ fn ensure_existing_grant_decision(
     {
         return Ok(());
     }
-    let Some(grant) = profiles.grant_for(&request.requester.device_id) else {
-        return Ok(());
-    };
-    if grant.public_key != request.requester.public_key
-        || grant.node_id != request.requester.node_id
-    {
-        return Ok(());
-    }
-    let decision = match grant.state {
-        DirectGrantState::Accepted => DirectDecisionKind::Accepted,
-        DirectGrantState::Ignored => DirectDecisionKind::Rejected,
+    let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
+    let decision = match profiles.grant_for(&request.requester.device_id) {
+        _ if identity_conflict => DirectDecisionKind::Rejected,
+        Some(grant)
+            if grant.public_key == request.requester.public_key
+                && grant.node_id == request.requester.node_id
+                && grant.fingerprint == request.requester.fingerprint =>
+        {
+            match grant.state {
+                DirectGrantState::Accepted => DirectDecisionKind::Accepted,
+                DirectGrantState::Ignored => DirectDecisionKind::Rejected,
+            }
+        }
+        Some(_) => DirectDecisionKind::Rejected,
+        None => DirectDecisionKind::Accepted,
     };
     let signed = SignedDirectDecision::sign(
         request,

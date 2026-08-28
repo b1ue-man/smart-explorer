@@ -141,9 +141,11 @@ impl ShareProfiles {
                 return Ok(changed);
             }
         }
-        if self.direct_requests[index].direction == DirectRequestDirection::Incoming
+        let incoming_identity_conflict = self.direct_requests[index].direction
+            == DirectRequestDirection::Incoming
+            && self.tracked_identity_conflict(&decision.request_id);
+        if incoming_identity_conflict
             && decision.decision == super::direct_protocol::DirectDecisionKind::Accepted
-            && self.tracked_identity_conflict(&decision.request_id)
         {
             return Err(DirectLedgerError::IdentityConflict);
         }
@@ -168,7 +170,15 @@ impl ShareProfiles {
         entry.decision_receipt = None;
         entry.retries.decision = DirectRetryState::default();
         entry.retries.decision_receipt = DirectRetryState::default();
-        self.project_decision(index, &decision);
+        // A rejection caused by competing live identity claims is durable
+        // request history, not authorization state. In particular, it must not
+        // revoke an exact accepted grant or let a conflicting identity install
+        // an ignored grant that can influence a later legitimate decision.
+        let conflict_rejection = incoming_identity_conflict
+            && decision.decision == super::direct_protocol::DirectDecisionKind::Rejected;
+        if !conflict_rejection {
+            self.project_decision(index, &decision);
+        }
         Ok(true)
     }
 

@@ -40,33 +40,46 @@ impl ShareProfiles {
         {
             return Ok(false);
         }
-        let existing_grant = self
+        let device_grant = self
             .direct_grants
             .iter()
-            .find(|grant| exact_grant(grant, &peer))
+            .find(|grant| grant.device_id == peer.device_id);
+        let existing_grant = device_grant
+            .filter(|grant| exact_grant(grant, &peer))
             .map(|grant| grant.state.clone());
-        let identity_conflict = self.identity_conflicts(&peer, &selector);
+        let identity_conflict = device_grant.is_some_and(|grant| !exact_grant(grant, &peer))
+            || self.identity_conflicts(&peer, &selector);
         if let Some(index) = self
             .legacy_direct_requests
             .iter()
             .position(|entry| entry.selector == selector)
         {
-            let entry = &mut self.legacy_direct_requests[index];
-            if entry.lookup_id != lookup_id
-                || entry.peer.device_id != peer.device_id
-                || entry.peer.public_key != peer.public_key
-                || entry.peer.node_id != peer.node_id
+            let snapshot = self.legacy_direct_requests[index].clone();
+            if snapshot.lookup_id != lookup_id
+                || snapshot.peer.device_id != peer.device_id
+                || snapshot.peer.public_key != peer.public_key
+                || snapshot.peer.node_id != peer.node_id
             {
                 return Err(format!("legacy request selector conflict: {selector}"));
             }
-            if entry.evidence.event_id == evidence.event_id {
+            if snapshot.evidence.event_id == evidence.event_id {
                 return Ok(false);
             }
+            let automatic = authenticated_decision(
+                snapshot.decision,
+                snapshot.decision_source,
+                existing_grant,
+                identity_conflict,
+            );
+            if automatic.install_grant {
+                set_exact_grant(self, &peer, true, now)?;
+            }
+            let entry = &mut self.legacy_direct_requests[index];
             entry.peer.device_name = peer.device_name;
             entry.evidence = evidence;
             entry.last_received_at = now;
             entry.identity_conflict = identity_conflict;
-            apply_existing_decision(entry, existing_grant, now);
+            apply_authenticated_decision(entry, automatic, now);
             self.recompute_identity_conflicts_for_device(&peer.device_id);
             return Ok(true);
         }
@@ -75,8 +88,15 @@ impl ShareProfiles {
                 "legacy request inbox is full (maximum {MAX_LEGACY_DIRECT_REQUESTS})"
             ));
         }
-        let grant = (!identity_conflict).then_some(existing_grant).flatten();
-        let (decision, source, revision, delivery) = initial_decision(grant);
+        let automatic = authenticated_decision(
+            LegacyDirectDecisionState::Pending,
+            None,
+            existing_grant,
+            identity_conflict,
+        );
+        if automatic.install_grant {
+            set_exact_grant(self, &peer, true, now)?;
+        }
         self.legacy_direct_requests.push(LegacyDirectRequestEntry {
             selector,
             lookup_id: lookup_id.to_string(),
@@ -84,11 +104,11 @@ impl ShareProfiles {
             evidence,
             first_received_at: now,
             last_received_at: now,
-            decision,
-            decision_source: source,
+            decision: automatic.decision,
+            decision_source: Some(automatic.source),
             decision_changed_at: now,
-            decision_revision: revision,
-            decision_delivery: delivery,
+            decision_revision: 1,
+            decision_delivery: queued_delivery(1),
             identity_conflict,
         });
         self.recompute_identity_conflicts_for_device(&presence.device_id);
@@ -296,70 +316,74 @@ impl ShareProfiles {
     }
 }
 
-fn apply_existing_decision(
-    entry: &mut LegacyDirectRequestEntry,
+#[derive(Clone, Copy)]
+struct AuthenticatedDecision {
+    decision: LegacyDirectDecisionState,
+    source: LegacyDirectDecisionSource,
+    install_grant: bool,
+}
+
+fn authenticated_decision(
+    previous: LegacyDirectDecisionState,
+    previous_source: Option<LegacyDirectDecisionSource>,
     grant: Option<DirectGrantState>,
-    now: i64,
-) {
-    let effective = grant.map(|state| match state {
-        DirectGrantState::Accepted => LegacyDirectDecisionState::Accepted,
-        DirectGrantState::Ignored => LegacyDirectDecisionState::Rejected,
-    });
-    if entry.decision == LegacyDirectDecisionState::Accepted && effective.is_none() {
-        entry.decision = LegacyDirectDecisionState::Pending;
-        entry.decision_source = None;
-        entry.decision_changed_at = now;
-        entry.decision_revision = 0;
-        entry.decision_delivery = LegacyDirectDecisionDelivery::default();
-        return;
+    identity_conflict: bool,
+) -> AuthenticatedDecision {
+    if identity_conflict {
+        return AuthenticatedDecision {
+            decision: LegacyDirectDecisionState::Rejected,
+            source: previous_source
+                .unwrap_or(LegacyDirectDecisionSource::AuthenticatedSecretPossession),
+            install_grant: false,
+        };
     }
-    if let Some(decision) = effective.or_else(|| {
-        (entry.decision == LegacyDirectDecisionState::Rejected).then_some(entry.decision)
-    }) {
-        if entry.decision != decision {
-            entry.decision = decision;
-            entry.decision_source = Some(LegacyDirectDecisionSource::ExistingGrant);
-            entry.decision_changed_at = now;
-            entry.decision_revision = entry.decision_revision.saturating_add(1).max(1);
+    match grant {
+        Some(DirectGrantState::Accepted) => AuthenticatedDecision {
+            decision: LegacyDirectDecisionState::Accepted,
+            source: LegacyDirectDecisionSource::ExistingGrant,
+            install_grant: false,
+        },
+        Some(DirectGrantState::Ignored) => AuthenticatedDecision {
+            decision: LegacyDirectDecisionState::Rejected,
+            source: LegacyDirectDecisionSource::ExistingGrant,
+            install_grant: false,
+        },
+        None
+            if matches!(
+                previous,
+                LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
+            ) =>
+        {
+            AuthenticatedDecision {
+                decision: LegacyDirectDecisionState::Rejected,
+                source: previous_source
+                    .unwrap_or(LegacyDirectDecisionSource::AuthenticatedSecretPossession),
+                install_grant: false,
+            }
         }
-        entry.decision_delivery = queued_delivery(entry.decision_revision);
-    } else {
-        entry.decision = LegacyDirectDecisionState::Pending;
-        entry.decision_source = None;
-        entry.decision_changed_at = now;
-        entry.decision_revision = 0;
-        entry.decision_delivery = LegacyDirectDecisionDelivery::default();
+        None => AuthenticatedDecision {
+            decision: LegacyDirectDecisionState::Accepted,
+            source: LegacyDirectDecisionSource::AuthenticatedSecretPossession,
+            install_grant: true,
+        },
     }
 }
 
-fn initial_decision(
-    grant: Option<DirectGrantState>,
-) -> (
-    LegacyDirectDecisionState,
-    Option<LegacyDirectDecisionSource>,
-    u64,
-    LegacyDirectDecisionDelivery,
+fn apply_authenticated_decision(
+    entry: &mut LegacyDirectRequestEntry,
+    automatic: AuthenticatedDecision,
+    now: i64,
 ) {
-    match grant {
-        Some(DirectGrantState::Accepted) => (
-            LegacyDirectDecisionState::Accepted,
-            Some(LegacyDirectDecisionSource::ExistingGrant),
-            1,
-            queued_delivery(1),
-        ),
-        Some(DirectGrantState::Ignored) => (
-            LegacyDirectDecisionState::Rejected,
-            Some(LegacyDirectDecisionSource::ExistingGrant),
-            1,
-            queued_delivery(1),
-        ),
-        None => (
-            LegacyDirectDecisionState::Pending,
-            None,
-            0,
-            LegacyDirectDecisionDelivery::default(),
-        ),
+    if entry.decision != automatic.decision {
+        entry.decision = automatic.decision;
+        entry.decision_source = Some(automatic.source);
+        entry.decision_changed_at = now;
+        entry.decision_revision = entry.decision_revision.saturating_add(1).max(1);
+    } else {
+        entry.decision_source.get_or_insert(automatic.source);
+        entry.decision_revision = entry.decision_revision.max(1);
     }
+    entry.decision_delivery = queued_delivery(entry.decision_revision);
 }
 
 fn queued_delivery(revision: u64) -> LegacyDirectDecisionDelivery {
