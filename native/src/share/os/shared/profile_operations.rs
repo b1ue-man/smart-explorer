@@ -1,5 +1,8 @@
-use super::core::{b64, random_token};
+use super::core::random_token;
 use super::profile_persistence::ProfileChange;
+use super::profile_store::{
+    credential_matches, delete_credential_verified, prepare_unique_credential, SecretString,
+};
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, RoomCode, ShareProfiles,
 };
@@ -18,7 +21,8 @@ impl ShareProfiles {
         let generated_id = random_token(10)
             .map_err(|error| format!("Sichere Direktkontakt-ID erzeugen: {error}"))?;
         let account = direct_contact_secret_account(&generated_id);
-        save_secret_verified(&account, &b64(&parsed.secret))?;
+        let secret = SecretString::encoded(&parsed.secret);
+        prepare_unique_credential(&account, &secret)?;
         let label = if name.trim().is_empty() {
             format!(
                 "Direkt {}",
@@ -65,9 +69,12 @@ impl ShareProfiles {
             Err(error) => return Err(cleanup_prepared_secret(error, &account)),
         };
         if selected_id != generated_id {
-            crate::creds::delete_secret_checked(&account).map_err(|cleanup| {
-                format!("Direktgeraet ist bereits gespeichert; temporaeres Secret blieb: {cleanup}")
-            })?;
+            finish_rebased_credential(
+                &account,
+                &direct_contact_secret_account(&selected_id),
+                &secret,
+                "Direktgeraet ist bereits mit anderem Secret gespeichert",
+            )?;
         }
         Ok((profiles, selected_id))
     }
@@ -81,7 +88,8 @@ impl ShareProfiles {
         let generated_id =
             random_token(10).map_err(|error| format!("Sichere Raumprofil-ID erzeugen: {error}"))?;
         let account = room_secret_account(&generated_id);
-        save_secret_verified(&account, &b64(&parsed.secret))?;
+        let secret = SecretString::encoded(&parsed.secret);
+        prepare_unique_credential(&account, &secret)?;
         let label = if name.trim().is_empty() {
             "Raum".to_string()
         } else {
@@ -115,9 +123,12 @@ impl ShareProfiles {
             Err(error) => return Err(cleanup_prepared_secret(error, &account)),
         };
         if selected_id != generated_id {
-            crate::creds::delete_secret_checked(&account).map_err(|cleanup| {
-                format!("Raum ist bereits gespeichert; temporaeres Secret blieb: {cleanup}")
-            })?;
+            finish_rebased_credential(
+                &account,
+                &room_secret_account(&selected_id),
+                &secret,
+                "Raum ist bereits mit anderem Secret gespeichert",
+            )?;
         }
         Ok((profiles, selected_id))
     }
@@ -144,9 +155,7 @@ impl ShareProfiles {
             Ok(())
         })?;
         let cleanup_warning = changed
-            .then(|| {
-                crate::creds::delete_secret_checked(&direct_contact_secret_account(contact_id))
-            })
+            .then(|| delete_credential_verified(&direct_contact_secret_account(contact_id)))
             .and_then(Result::err)
             .map(|error| format!("Kontakt entfernt, aber sein Secret blieb gespeichert: {error}"));
         Ok((
@@ -171,7 +180,7 @@ impl ShareProfiles {
             Ok(())
         })?;
         let cleanup_warning = changed
-            .then(|| crate::creds::delete_secret_checked(&room_secret_account(room_id)))
+            .then(|| delete_credential_verified(&room_secret_account(room_id)))
             .and_then(Result::err)
             .map(|error| format!("Raum entfernt, aber sein Secret blieb gespeichert: {error}"));
         Ok((
@@ -184,18 +193,31 @@ impl ShareProfiles {
     }
 }
 
-fn save_secret_verified(account: &str, secret: &str) -> Result<(), String> {
-    crate::creds::set_secret(account, secret)?;
-    match crate::creds::get_secret_checked(account)? {
-        Some(stored) if stored == secret => Ok(()),
-        Some(_) => Err("secure store returned different Share secret bytes".into()),
-        None => Err("secure store did not retain the Share secret".into()),
+fn cleanup_prepared_secret(error: String, account: &str) -> String {
+    match delete_credential_verified(account) {
+        Ok(()) => error,
+        Err(cleanup) => format!("{error}; neues Secret konnte nicht entfernt werden: {cleanup}"),
     }
 }
 
-fn cleanup_prepared_secret(error: String, account: &str) -> String {
-    match crate::creds::delete_secret_checked(account) {
-        Ok(()) => error,
-        Err(cleanup) => format!("{error}; neues Secret konnte nicht entfernt werden: {cleanup}"),
+fn finish_rebased_credential(
+    prepared_account: &str,
+    existing_account: &str,
+    expected: &SecretString,
+    conflict: &str,
+) -> Result<(), String> {
+    let matches = credential_matches(existing_account, expected);
+    let cleanup = delete_credential_verified(prepared_account);
+    if let Err(cleanup) = cleanup {
+        return Err(format!(
+            "temporaeres Secret konnte nach Rebase nicht entfernt werden: {cleanup}"
+        ));
+    }
+    match matches {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(conflict.to_string()),
+        Err(error) => Err(format!(
+            "gespeichertes Secret konnte nicht geprueft werden: {error}"
+        )),
     }
 }

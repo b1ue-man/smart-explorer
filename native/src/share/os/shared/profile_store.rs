@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fmt, str};
 
 #[path = "profile_transaction.rs"]
 mod profile_transaction;
@@ -18,6 +19,122 @@ const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const SECRET_BYTES: usize = 32;
 const PROFILES_LOCK_FILE: &str = "share_profiles.lock";
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// UTF-8 credential material whose owned buffer is redacted in diagnostics and
+/// erased when it leaves scope.
+pub(super) struct SecretString {
+    bytes: Vec<u8>,
+}
+
+impl SecretString {
+    pub(super) fn from_string(value: String) -> Self {
+        Self {
+            bytes: value.into_bytes(),
+        }
+    }
+
+    pub(super) fn encoded(value: &[u8]) -> Self {
+        Self::from_string(super::core::b64(value))
+    }
+
+    pub(super) fn expose(&self) -> Result<&str, String> {
+        str::from_utf8(&self.bytes).map_err(|_| "credential secret is not valid UTF-8".to_string())
+    }
+
+    pub(super) fn same_secret(&self, other: &Self) -> bool {
+        constant_time_eq(&self.bytes, &other.bytes)
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretString([REDACTED])")
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    let common = left.len().min(right.len());
+    for index in 0..common {
+        difference |= usize::from(left[index] ^ right[index]);
+    }
+    difference == 0
+}
+
+pub(super) fn credential_matches(account: &str, expected: &SecretString) -> Result<bool, String> {
+    let stored = crate::creds::get_secret_checked(account)?;
+    Ok(stored
+        .map(SecretString::from_string)
+        .is_some_and(|stored| stored.same_secret(expected)))
+}
+
+/// Remove a credential and confirm absence. Verification makes a backend that
+/// reports an error after successfully deleting safe to retry.
+pub(super) fn delete_credential_verified(account: &str) -> Result<(), String> {
+    let mut last_error = "secure credential remained after deletion".to_string();
+    for _ in 0..3 {
+        let deletion = crate::creds::delete_secret_checked(account);
+        match crate::creds::get_secret_checked(account) {
+            Ok(None) => return Ok(()),
+            Ok(Some(stored)) => {
+                let _stored = SecretString::from_string(stored);
+                last_error = match deletion {
+                    Ok(()) => "secure credential remained after deletion".to_string(),
+                    Err(error) => error,
+                };
+            }
+            Err(verification) => {
+                last_error = match deletion {
+                    Ok(()) => format!(
+                        "secure credential deletion could not be verified: {verification}"
+                    ),
+                    Err(deletion) => format!(
+                        "secure credential deletion failed ({deletion}) and could not be verified ({verification})"
+                    ),
+                };
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// Install a secret only into an unused credential account and verify the
+/// exact bytes. Any failure after the write attempts verified cleanup.
+pub(super) fn prepare_unique_credential(
+    account: &str,
+    secret: &SecretString,
+) -> Result<(), String> {
+    match crate::creds::get_secret_checked(account)? {
+        None => {}
+        Some(existing) => {
+            let _existing = SecretString::from_string(existing);
+            return Err("secure credential account is already occupied".to_string());
+        }
+    }
+    let operation = secret.expose().and_then(|exposed| {
+        crate::creds::set_secret(account, exposed)?;
+        if credential_matches(account, secret)? {
+            Ok(())
+        } else {
+            Err("secure store did not retain the expected credential bytes".to_string())
+        }
+    });
+    if let Err(operation) = operation {
+        return match delete_credential_verified(account) {
+            Ok(()) => Err(operation),
+            Err(cleanup) => Err(format!(
+                "{operation}; prepared credential cleanup failed: {cleanup}"
+            )),
+        };
+    }
+    Ok(())
+}
 
 struct ProfileWriteGuard {
     _process_guard: MutexGuard<'static, ()>,
@@ -129,16 +246,12 @@ impl ProfilePersistence for SystemProfilePersistence {
     }
 
     fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
-        crate::creds::set_secret(account, secret)?;
-        match crate::creds::get_secret_checked(account)? {
-            Some(stored) if stored == secret => Ok(()),
-            Some(_) => Err("secure store returned different Share secret bytes".into()),
-            None => Err("secure store did not retain the Share secret".into()),
-        }
+        let secret = SecretString::from_string(secret.to_string());
+        prepare_unique_credential(account, &secret)
     }
 
     fn delete_secret(&mut self, account: &str) -> Result<(), String> {
-        crate::creds::delete_secret_checked(account)
+        delete_credential_verified(account)
     }
 }
 
@@ -175,9 +288,11 @@ fn load_relation_secret(account: &str, label: &str) -> Result<Option<Vec<u8>>, S
     let Some(raw) = crate::creds::get_secret_checked(account)? else {
         return Ok(None);
     };
-    let decoded =
-        super::core::b64_decode(&raw).map_err(|error| format!("{label} ist ungueltig: {error}"))?;
+    let raw = SecretString::from_string(raw);
+    let mut decoded = super::core::b64_decode(raw.expose()?)
+        .map_err(|error| format!("{label} ist ungueltig: {error}"))?;
     if decoded.len() != SECRET_BYTES {
+        decoded.fill(0);
         return Err(format!("{label} hat nicht {SECRET_BYTES} Bytes"));
     }
     Ok(Some(decoded))

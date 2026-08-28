@@ -445,3 +445,30 @@ pub(crate) struct ShareAuthState {
     pub(crate) direct_online: bool,
     pub(crate) authorization_epoch: u64,
 }
+
+impl std::fmt::Debug for ShareAuthState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShareAuthState")
+            .field("identity", &"[REDACTED]")
+            .field("direct_secret", &"[REDACTED]")
+            .field("direct_contact_count", &self.direct_contacts.len())
+            .field("direct_grant_count", &self.direct_grants.len())
+            .field("room_count", &self.rooms.len())
+            .field("direct_request_count", &self.direct_requests.len())
+            .field(
+                "direct_request_tombstone_count",
+                &self.direct_request_tombstones.len(),
+            )
+            .field("seen_nonce_count", &self.seen_nonces.len())
+            .field("direct_online", &self.direct_online)
+            .field("authorization_epoch", &self.authorization_epoch)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ShareAuthState {
+    fn drop(&mut self) {
+        self.direct_secret.fill(0);
+    }
+}

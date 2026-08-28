@@ -37,6 +37,10 @@ mod direct_lifecycle_error;
 mod direct_messages;
 #[path = "core/direct_protocol.rs"]
 mod direct_protocol;
+#[path = "core/direct_reciprocal.rs"]
+mod direct_reciprocal;
+#[path = "os/shared/direct_reciprocal_persistence.rs"]
+mod direct_reciprocal_persistence;
 #[path = "core/direct_request_tombstone.rs"]
 mod direct_request_tombstone;
 #[path = "core/direct_signal_event.rs"]
@@ -143,12 +147,12 @@ mod peer_lease_release;
 mod peer_read;
 #[path = "core/peer_request.rs"]
 mod peer_request;
+#[path = "core/peer_storage_snapshot.rs"]
+mod peer_storage_snapshot;
 #[path = "core/peer_telemetry.rs"]
 mod peer_telemetry;
 #[path = "core/peer_walk.rs"]
 mod peer_walk;
-#[path = "core/peer_storage_snapshot.rs"]
-mod peer_storage_snapshot;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
 #[cfg(target_os = "linux")]
@@ -197,6 +201,8 @@ mod signal_presence;
 mod signal_subscriptions;
 #[path = "core/signal_worker.rs"]
 mod signal_worker;
+#[path = "core/storage_snapshot.rs"]
+mod storage_snapshot;
 #[cfg(windows)]
 #[path = "os/windows/system.rs"]
 mod system;
@@ -222,8 +228,6 @@ mod types;
 mod walk;
 #[path = "core/walk_assembly.rs"]
 mod walk_assembly;
-#[path = "core/storage_snapshot.rs"]
-mod storage_snapshot;
 #[path = "core/wire.rs"]
 mod wire;
 
@@ -246,6 +250,14 @@ pub use self::direct_protocol::{
     DirectDecisionKind, DirectPeerIdentity, DirectProtocolError, DirectRequestId,
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
     SignedDirectRequestReceipt,
+};
+pub use self::direct_reciprocal::{
+    DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError, DirectReciprocalPeer,
+    DirectRelationMaterial,
+};
+pub use self::direct_reciprocal_persistence::{
+    persist_reciprocal_direct_peer, DirectReciprocalPersistenceError,
+    DirectReciprocalPersistenceOutcome,
 };
 pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;

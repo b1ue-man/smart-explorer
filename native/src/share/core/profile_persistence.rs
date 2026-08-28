@@ -103,7 +103,7 @@ impl ShareProfiles {
         name: &str,
         storage: &mut impl ProfilePersistence,
     ) -> Result<String, String> {
-        let parsed = DirectCode::parse(code)?;
+        let mut parsed = DirectCode::parse(code)?;
         if self
             .direct_contacts
             .iter()
@@ -129,9 +129,9 @@ impl ShareProfiles {
         candidate.direct_contacts.push(DirectContact {
             id: id.clone(),
             display_name: label,
-            lookup_id: parsed.lookup_id,
-            expected_fingerprint: parsed.fingerprint,
-            expected_node_id: parsed.node_id,
+            lookup_id: std::mem::take(&mut parsed.lookup_id),
+            expected_fingerprint: std::mem::take(&mut parsed.fingerprint),
+            expected_node_id: std::mem::take(&mut parsed.node_id),
             remote_device_id: None,
             remote_public_key: None,
             auto_connect: true,
@@ -202,7 +202,7 @@ impl ShareProfiles {
         name: &str,
         storage: &mut impl ProfilePersistence,
     ) -> Result<String, String> {
-        let parsed = RoomCode::parse(code)?;
+        let mut parsed = RoomCode::parse(code)?;
         if let Some(existing) = self
             .rooms
             .iter()
@@ -224,7 +224,7 @@ impl ShareProfiles {
             } else {
                 name.trim().to_string()
             },
-            room_id: parsed.room_id,
+            room_id: std::mem::take(&mut parsed.room_id),
             auto_join: true,
             last_seen: None,
             status: ShareStatus::Waiting,
