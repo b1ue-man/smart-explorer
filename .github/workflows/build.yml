@@ -1,5 +1,14 @@
 name: build
 
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.complete_release_source_sha != '' &&
+      format('Complete release from {0}', inputs.complete_release_source_sha) ||
+      github.event_name == 'workflow_dispatch' && inputs.publish_release == true &&
+      format('Publish release candidate {0}', github.sha) ||
+      github.event_name == 'workflow_dispatch' && inputs.verify_release_candidate == true &&
+      format('Verify release candidate {0}', github.sha) ||
+      format('{0} {1}', github.event_name, github.ref_name) }}
+
 # Ordinary branch pushes and pull requests run development checks and disposable
 # builds. Publication triggers only verify and publish the exact committed
 # candidate bytes; they never rebuild or rerun the task-level suite. Heavyweight
@@ -22,11 +31,140 @@ on:
         required: true
         default: false
         type: boolean
+      complete_release_source_sha:
+        description: Build and publish once from this exact main source SHA
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  complete-release:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.complete_release_source_sha != ''
+    runs-on: windows-2025
+    timeout-minutes: 360
+    concurrency:
+      group: smart-explorer-complete-release
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Bind complete release to exact main source
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.complete_release_source_sha }}
+          REQUESTED_PUBLISH: ${{ inputs.publish_release }}
+          REQUESTED_VERIFY: ${{ inputs.verify_release_candidate }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Complete release dispatch must select the main branch; got '$env:GITHUB_REF'."
+          }
+          if ($env:REQUESTED_PUBLISH -eq "true" -or $env:REQUESTED_VERIFY -eq "true") {
+            throw "complete_release_source_sha is mutually exclusive with publish_release and verify_release_candidate."
+          }
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+            throw "complete_release_source_sha must be one full Git object ID."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN) -or
+              [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
+            throw "The complete release requires the job-scoped GitHub token."
+          }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main." }
+          $expected = $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()
+          $head = (git rev-parse 'HEAD^{commit}').Trim().ToLowerInvariant()
+          $remoteMain = (git rev-parse 'refs/remotes/origin/main^{commit}').Trim().ToLowerInvariant()
+          $eventSha = $env:GITHUB_SHA.ToLowerInvariant()
+          if ($head -ne $expected -or $eventSha -ne $expected -or $remoteMain -ne $expected) {
+            throw "Complete release source drift: input=$expected HEAD=$head event=$eventSha origin/main=$remoteMain."
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare Windows release tools
+        shell: pwsh
+        run: choco install strawberryperl nsis -y --no-progress
+
+      - name: Select WSL1 before Ubuntu installation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          wsl.exe --set-default-version 1
+          if ($LASTEXITCODE -ne 0) { throw "Could not select WSL1 as the installation default." }
+
+      - name: Prepare Ubuntu WSL1 release environment
+        uses: Ubuntu/WSL/.github/actions/wsl-install@3b7a6b2a43af18aa541eeee1669ac27656630097
+        with:
+          distro: Ubuntu-24.04
+          useStore: false
+
+      - name: Prepare and preflight WSL release tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $distro = "Ubuntu-24.04"
+          $installed = @(wsl.exe --list --quiet |
+            ForEach-Object { ($_ -replace "`0", "").Trim() } |
+            Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0 -or $installed -notcontains $distro) {
+            throw "The pinned Ubuntu WSL action did not install $distro."
+          }
+          wsl.exe --set-version $distro 1
+          if ($LASTEXITCODE -ne 0) { throw "Could not select WSL1 for $distro." }
+          wsl.exe --set-default $distro
+          if ($LASTEXITCODE -ne 0) { throw "Could not make $distro the default WSL distribution." }
+          $packages = @(
+            "build-essential", "ca-certificates", "curl", "file", "git", "musl-tools",
+            "p7zip-full", "pkg-config", "python3", "xauth", "x11-utils", "xvfb",
+            "libegl1", "libgl1", "libgl1-mesa-dri", "libx11-6", "libx11-xcb1",
+            "libxcursor1", "libxi6", "libxkbcommon0", "libxkbcommon-x11-0", "libxrandr2"
+          ) -join " "
+          $setup = @"
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y $packages
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --profile minimal
+          fi
+          . /root/.cargo/env
+          rustup component add rustfmt clippy
+          for tool in bash cargo rustc rustup gcc musl-gcc file git xvfb-run xauth xwininfo; do
+            command -v "`$tool" >/dev/null 2>&1 || {
+              echo "missing WSL release tool: `$tool" >&2
+              exit 1
+            }
+          done
+          "@
+          wsl.exe -d $distro -u root -- bash -lc $setup
+          if ($LASTEXITCODE -ne 0) { throw "WSL release-tool setup or preflight failed." }
+
+      - name: Run one complete release transaction
+        shell: pwsh
+        timeout-minutes: 330
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SMART_EXPLORER_COMPLETE_RELEASE_SOURCE_SHA: ${{ inputs.complete_release_source_sha }}
+        run: >-
+          pwsh ./native/publish-release-local.ps1
+          -SkipLocalCliUpdate
+          -PublicationTimeoutMinutes 180
+
   windows-native-tests:
     if: >-
       github.event_name == 'pull_request' ||
@@ -194,6 +332,7 @@ jobs:
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' &&
+        inputs.complete_release_source_sha == '' &&
         (inputs.publish_release == true ||
           (inputs.verify_release_candidate == true && inputs.publish_release != true))) ||
       (github.event_name == 'push' && github.event.deleted != true &&

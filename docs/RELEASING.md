@@ -105,6 +105,37 @@ The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.
 
+For remote automation, dispatch `.github/workflows/build.yml` exactly once from
+the `main` ref with `complete_release_source_sha` set to the full current
+`origin/main` object ID. Leave `verify_release_candidate` and `publish_release`
+false. The job rejects a non-`main` ref, a shortened or drifting SHA, and mixed
+release modes before the release wrapper runs. It is serialized, has six hours
+of job time and 330 minutes for the wrapper, and grants only `contents: write`
+and `actions: write`. On the pinned `windows-2025` image it installs the missing
+Windows tools, provisions Ubuntu 24.04 as WSL1 through Canonical's SHA-pinned
+WSL action, preflights the WSL tools, and invokes only
+`native/publish-release-local.ps1`; no YAML step reproduces versioning, build,
+staging, tagging, or publication.
+
+The job-scoped `GITHUB_TOKEN` needs no repository secret. GitHub deliberately
+does not start a second workflow for a tag pushed with that token. Therefore,
+only when the wrapper detects this exact GitHub Actions context, it explicitly
+dispatches `build.yml` with `publish_release=true` against the candidate tag or
+fallback ref, asks the API to return the run ID, and monitors that exact
+publication run. The publication consumer still only verifies and publishes
+the committed bytes. A recovered remote wrapper reuses and, at most once,
+reruns the same exact failed dispatch instead of creating a competing pipeline.
+The local wrapper's tag/`release/v*` push behavior is unchanged. These hosted
+runner, token-recursion, and dispatch-response details were checked against the
+[Windows 2025 image inventory](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md),
+[GitHub token documentation](https://docs.github.com/en/actions/concepts/security/github_token),
+and [workflow REST API](https://docs.github.com/en/rest/actions/workflows) on
+2026-08-28. Repository policy must permit the declared job-token writes;
+otherwise the wrapper's non-interactive Git preflight or publication dispatch
+fails closed.
+
+For a human-operated workstation release, use the same wrapper directly:
+
 1. Run the non-building preflight from the repository's clean, synchronized
    `main` branch:
 
@@ -171,10 +202,11 @@ run an exact-candidate verification pipeline by hand first.
 `verify_release_candidate=true` and `verify/v*` remain available only when a
 user explicitly requests exact-candidate verification without a release. They
 must not precede the normal tag publication, because that would create a second
-pipeline for the same candidate. Likewise, do not use workflow dispatch or a
-`release/v*` branch in addition to a successful wrapper tag run. The wrapper
-alone may select that branch after proving the tag push failed and no remote
-tag exists; it never dispatches a competing pipeline.
+pipeline for the same candidate. Do not manually combine `publish_release`, a
+tag push, or a `release/v*` branch with either a local wrapper run or the
+`complete_release_source_sha` initiator. The wrapper alone selects its mutually
+exclusive publication trigger; on GitHub-hosted automation that trigger is the
+one exact internal publication dispatch described above.
 
 The Windows-only diagnostic
 `.\native\publish-release-local.ps1 -SkipLinuxFeed` remains non-publishable: it
@@ -268,9 +300,18 @@ That explicit verify-only path adds the committed Linux, mixed-version, and
 Windows Share/Exec lifecycle runs; it still does not rebuild or rewrite the
 candidate.
 
-The normal release wrapper does not use the verify-only path. Its one tag push,
-or its mutually exclusive `release/v*` fallback, runs only the static
-publication consumer: version consistency, all six payload hashes, Windows
+An explicit `workflow_dispatch` from `main` with only
+`complete_release_source_sha=<full origin/main SHA>` starts the one remote
+complete-release transaction. Its SHA gate, pinned Windows/WSL environment,
+timeouts, permissions, and wrapper-owned internal publication dispatch are
+separate from both ordinary development CI and the verify-only path.
+
+The normal release wrapper does not use the verify-only path. On a human-run
+host its one tag push, or its mutually exclusive `release/v*` fallback, starts
+the publication consumer; on the GitHub-hosted path the wrapper starts that
+same consumer through its one exact internal dispatch after creating the ref.
+Both variants run only the static publication consumer: version consistency,
+all six payload hashes, Windows
 build-manifest source-parent binding, portable Windows/feed equality, installer payload equality,
 ELF linkage, DLL exports, and the exact 18-file map are checked directly from
 the candidate commit. The publication job downloads that staged set, fails if
