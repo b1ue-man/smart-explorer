@@ -1,5 +1,34 @@
 # Repository Instructions
 
+## subagent scope and RAM budget
+
+- Keep Codex agent concurrency capped at eight threads per session. The main agent counts as one,
+  so it may have at most seven direct children active at once. Prefer fewer whenever the same work
+  can progress sequentially, and do not spawn while a task-level suite, build, package, or release
+  process is running.
+- Only the main agent may spawn agents. Subagents must never spawn sub-subagents or recursively fan
+  out work.
+- Give every subagent one bounded, coherent outcome. Do not combine broad repository exploration,
+  design, implementation, verification, and release ownership in one assignment.
+- Before spawning, the main agent must record in the brief:
+  - the exact files, directories, symbols, or line ranges the subagent may read, avoiding broad
+    repository-wide wildcards; keep that surface as small as the coherent outcome allows, but permit
+    a larger connected surface when splitting it would hide a required integration boundary, and
+    explain that exception in the brief;
+  - the exact files it may create or modify;
+  - the files, modules, and activities it must not touch;
+  - the concrete deliverable, acceptance signal, and required report format.
+- A subagent may inspect and edit only the explicitly assigned surface. It must not list or explore
+  other folders, broaden its own scope, or ask another agent to fill a gap. It should make safe local
+  decisions inside the assignment and report unresolved out-of-scope dependencies to the main
+  agent.
+- Subagents are zero-compute workers: they must not run builds, test suites, servers, package
+  installs, long-running processes, commits, pushes, graph rebuilds, packaging, or release commands.
+  The main agent owns the one task-level suite, resource monitoring, integration, commits, pushes,
+  and the terminal release workflow.
+- Every subagent result must list files read, files created or modified, key findings or changes,
+  decisions made, and unresolved issues. When its assigned outcome is complete, it stops.
+
 - Commit each coherent requested change or implementation milestone separately as soon as that milestone is complete. Several milestone commits from the same active task batch may be pushed together to the configured remote branch to avoid redundant CI builds; intermediate commits and pushes are development checkpoints, not releases.
 - Unless the user explicitly says not to or pushing is technically blocked, do not leave completed work only in the worktree or local commits. Push the completed milestone commit(s), then report the branch, commit(s), and push result.
 - A release is the single terminal distribution event after all user-requested work intended for that release is complete. Batch those open tasks together. Native source changes, intermediate commits, review fixes, test fixes, and untagged CI retries must not independently trigger a version bump, release-artifact build, tag, or GitHub Release.
