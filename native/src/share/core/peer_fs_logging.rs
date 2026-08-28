@@ -7,6 +7,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::ListDir { .. } => "list_dir",
         FsRequest::Stat { .. } => "stat",
         FsRequest::WalkTree { .. } => "walk_tree",
+        FsRequest::StorageSnapshot { .. } => "storage_snapshot",
         FsRequest::Read { .. } => "read",
         FsRequest::Write { .. } => "write",
         FsRequest::WriteNew { .. } => "write_new",
@@ -28,11 +29,16 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
             contract_version,
             root_confined,
             lease,
+            storage_snapshot_v1,
         } => format!(
-            "capabilities contract={} root_confined={} lease={} create={} replace={} namespace_replace={}",
+            concat!(
+                "capabilities contract={} root_confined={} lease={} ",
+                "storage_snapshot_v1={} create={} replace={} namespace_replace={}"
+            ),
             contract_version,
             root_confined,
             lease.is_some(),
+            storage_snapshot_v1,
             capabilities.create,
             capabilities.replace,
             capabilities.namespace_replace,
@@ -54,6 +60,32 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
             bytes,
             nodes,
         } => format!("walk done nodes={nodes} files={files} dirs={dirs} bytes={bytes}"),
+        FsResponse::SnapshotProgress { files, dirs, bytes, nodes } => {
+            format!("snapshot progress nodes={nodes} files={files} dirs={dirs} bytes={bytes}")
+        }
+        FsResponse::SnapshotReady {
+            encoded_len,
+            files,
+            dirs,
+            bytes,
+            nodes,
+            ..
+        } => {
+            format!(
+                concat!(
+                    "snapshot ready encoded={} nodes={} ",
+                    "files={} dirs={} bytes={}"
+                ),
+                encoded_len,
+                nodes,
+                files,
+                dirs,
+                bytes,
+            )
+        }
+        FsResponse::SnapshotDone { files, dirs, bytes, nodes } => {
+            format!("snapshot done nodes={nodes} files={files} dirs={dirs} bytes={bytes}")
+        }
         FsResponse::Data { size } => format!("{size} bytes"),
         FsResponse::Ready => "bereit".into(),
         FsResponse::Ok => "ok".into(),

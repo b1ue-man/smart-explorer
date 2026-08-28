@@ -282,7 +282,7 @@ impl ServerWalker {
 
     fn reserve(&mut self, name: &str) -> io::Result<u64> {
         if self.reserved >= MAX_WALK_NODES {
-            return Err(eio("share walk exceeds the 2,000,000-node safety limit"));
+            return Err(eio("share walk exceeds the 1,000,000-node safety limit"));
         }
         self.name_bytes = self
             .name_bytes

@@ -147,6 +147,8 @@ mod peer_request;
 mod peer_telemetry;
 #[path = "core/peer_walk.rs"]
 mod peer_walk;
+#[path = "core/peer_storage_snapshot.rs"]
+mod peer_storage_snapshot;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
 #[cfg(target_os = "linux")]
@@ -220,6 +222,8 @@ mod types;
 mod walk;
 #[path = "core/walk_assembly.rs"]
 mod walk_assembly;
+#[path = "core/storage_snapshot.rs"]
+mod storage_snapshot;
 #[path = "core/wire.rs"]
 mod wire;
 

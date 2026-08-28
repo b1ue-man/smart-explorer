@@ -308,7 +308,8 @@ fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
         | FsRequest::Write { .. }
         | FsRequest::WriteNew { .. }
         | FsRequest::WriteDone
-        | FsRequest::WalkTree { .. } => false,
+        | FsRequest::WalkTree { .. }
+        | FsRequest::StorageSnapshot { .. } => false,
     }
 }
 

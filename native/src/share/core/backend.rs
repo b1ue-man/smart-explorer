@@ -219,7 +219,7 @@ impl Backend for PeerBackend {
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
     ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
-        super::peer_walk::walk_peer(self, root, on_progress)
+        super::peer_storage_snapshot::walk_peer(self, root, on_progress)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
