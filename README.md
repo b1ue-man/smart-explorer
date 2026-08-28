@@ -464,9 +464,18 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 
 1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und über seine eine
    automatisierte Task-Suite validieren. Zwischencommits sind keine Releases.
-2. Den nicht bauenden Preflight ausführen:
+2. Für den automatisierten Remote-Pfad `build.yml` genau einmal auf `main` mit
+   `complete_release_source_sha=<vollständiger aktueller origin/main-SHA>`
+   dispatchen; `verify_release_candidate` und `publish_release` bleiben dabei
+   aus. Der fest auf `windows-2025` laufende Job bindet Ref, Checkout und
+   Remote-`main` an exakt diesen SHA, richtet das gepinnte Windows-/Ubuntu-WSL1-
+   Release-Environment ein und ruft ausschließlich den Top-Level-Wrapper auf.
+   Alternativ führt ein menschlicher Release-Operator lokal den nicht bauenden
+   Preflight aus:
    `pwsh ./native/publish-release-local.ps1 -CheckEnvOnly`.
-3. Danach genau einmal `pwsh ./native/publish-release-local.ps1` starten. Dieser
+3. Beim lokalen Operator-Pfad danach genau einmal
+   `pwsh ./native/publish-release-local.ps1` starten. Im Remote-Pfad übernimmt
+   das bereits der eine Dispatch. Dieser
    eine Wrapper erhöht die Patch-Version, hält das gemeinsame Cross-Host-Lock,
    baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die sechs
    Feed-Hashes, die im Installer eingebetteten App-/Updater-/`se`-Bytes, den
@@ -478,7 +487,11 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    gegenseitig ausschließenden Pfad `release/vX.Y.Z`. CI baut und testet diesen
    Kandidaten nicht erneut, sondern veröffentlicht ausschließlich die bereits
    geprüften Commit-Bytes. Auf Linux aktualisiert der Wrapper danach das lokale
-   `se` aus genau diesem Tag und übergibt den Daemon an die neue Version. Ein
+   `se` aus genau diesem Tag und übergibt den Daemon an die neue Version. Unter
+   GitHub Actions löst der Wrapper wegen GitHubs Rekursionsschutz mit dem
+   Job-Token genau einen internen `publish_release=true`-Dispatch gegen den
+   exakten Kandidaten-Ref aus und überwacht dessen zurückgegebene Run-ID; der
+   lokale Tag-/Fallback-Pfad bleibt unverändert. Ein
    Fehler vor dem Tag bleibt bei derselben vorgesehenen Version; Tags werden
    niemals verschoben oder überschrieben. Ist nur der erste bereits getaggte
    Workflow fehlgeschlagen, kann derselbe Wrapper diesen exakten Run einmal mit

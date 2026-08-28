@@ -594,6 +594,123 @@ function Invoke-GitHubGet {
         -AllowNotFound:$AllowNotFound
 }
 
+function Test-GitHubActionsCompleteRelease {
+    return $env:GITHUB_ACTIONS -eq "true"
+}
+
+function Assert-GitHubActionsCompleteReleaseContext {
+    if (-not (Test-GitHubActionsCompleteRelease)) { return }
+    $source = $env:SMART_EXPLORER_COMPLETE_RELEASE_SOURCE_SHA
+    if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch" -or
+        $env:GITHUB_REF -ne "refs/heads/main" -or
+        $env:GITHUB_SHA -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$' -or
+        $source -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+        throw "GitHub Actions complete releases require the exact main workflow_dispatch source input."
+    }
+    $source = $source.ToLowerInvariant()
+    if ($env:GITHUB_SHA.ToLowerInvariant() -ne $source -or
+        (Get-HeadSha).ToLowerInvariant() -ne $source) {
+        throw "GitHub Actions complete-release source does not match GITHUB_SHA and HEAD."
+    }
+}
+
+function Get-GitHubActionsPublicationRun(
+    [string]$CandidateSha,
+    [string]$TriggerBranch
+) {
+    $candidateSha = $CandidateSha.ToLowerInvariant()
+    $encodedSha = [uri]::EscapeDataString($candidateSha)
+    $response = Invoke-GitHubGet `
+        "actions/workflows/$workflowFile/runs?event=workflow_dispatch&head_sha=$encodedSha&per_page=100"
+    $title = "Publish release candidate $candidateSha"
+    $matches = @($response.workflow_runs | Where-Object {
+        $_.event -eq "workflow_dispatch" -and
+        $_.head_sha.ToLowerInvariant() -eq $candidateSha -and
+        $_.head_branch -eq $TriggerBranch -and
+        $_.path -eq ".github/workflows/$workflowFile" -and
+        $_.display_title -eq $title
+    })
+    if ($matches.Count -gt 1) {
+        throw "More than one exact remote publication dispatch exists for '$TriggerBranch' at '$candidateSha'."
+    }
+    if ($matches.Count -eq 1) { return $matches[0] }
+    return $null
+}
+
+function Invoke-GitHubActionsPublicationDispatch(
+    [string]$CandidateSha,
+    [string]$TriggerBranch
+) {
+    $token = Get-ReleasePublicationGitHubToken -Require
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        Authorization = "Bearer $token"
+        "X-GitHub-Api-Version" = "2026-03-10"
+        "User-Agent" = "smart-explorer-remote-complete-release"
+    }
+    $body = @{
+        ref = $TriggerBranch
+        inputs = @{
+            verify_release_candidate = $false
+            publish_release = $true
+            complete_release_source_sha = ""
+        }
+        return_run_details = $true
+    } | ConvertTo-Json -Depth 4 -Compress
+    $uri = "https://api.github.com/repos/$($script:githubRepository)/actions/workflows/$workflowFile/dispatches"
+    try {
+        $dispatch = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers `
+            -ContentType "application/json" -Body $body -ErrorAction Stop
+    } catch {
+        $detail = ConvertTo-ReleasePublicationSafeText $_.Exception.Message
+        throw "Could not dispatch the exact remote publication workflow: $detail"
+    }
+    if (-not $dispatch.workflow_run_id) {
+        throw "GitHub did not return an exact workflow run ID for the publication dispatch."
+    }
+    return Invoke-GitHubGet "actions/runs/$($dispatch.workflow_run_id)"
+}
+
+function Wait-GitHubActionsPublicationWorkflow(
+    [long]$RunId,
+    [string]$CandidateSha,
+    [string]$TriggerBranch,
+    [switch]$RetryFailedOnce,
+    [datetimeoffset]$Deadline
+) {
+    $candidateSha = $CandidateSha.ToLowerInvariant()
+    $title = "Publish release candidate $candidateSha"
+    $retryFromAttempt = $null
+    while ([datetimeoffset]::UtcNow -lt $Deadline) {
+        $run = Invoke-GitHubGet "actions/runs/$RunId"
+        if ($run.event -ne "workflow_dispatch" -or
+            $run.head_sha.ToLowerInvariant() -ne $candidateSha -or
+            $run.head_branch -ne $TriggerBranch -or
+            $run.path -ne ".github/workflows/$workflowFile" -or
+            $run.display_title -ne $title) {
+            throw "Remote publication run $RunId is not bound to '$TriggerBranch' at '$candidateSha'."
+        }
+        if ($run.status -eq "completed") {
+            if ($run.conclusion -eq "success") { return $run }
+            $attempt = [int]$run.run_attempt
+            if ($RetryFailedOnce -and $null -eq $retryFromAttempt -and $attempt -eq 1) {
+                $endpoint = if ($run.conclusion -eq "failure") { "rerun-failed-jobs" } else { "rerun" }
+                Invoke-ReleasePublicationGitHubPost `
+                    -RepositorySlug $script:githubRepository `
+                    -ApiPath "/actions/runs/$RunId/$endpoint"
+                $retryFromAttempt = $attempt
+            } elseif ($null -ne $retryFromAttempt -and $attempt -le $retryFromAttempt) {
+                # GitHub may briefly keep serving the completed first attempt
+                # after accepting the rerun request.
+            } else {
+                throw "Exact remote publication run $RunId completed '$($run.conclusion)': $($run.html_url)"
+            }
+        }
+        if (-not (Wait-ReleasePublicationDelay -Deadline $Deadline)) { break }
+    }
+    throw "Timed out waiting for exact remote publication run $RunId."
+}
+
 function Get-VersionFromCargoText([string]$Text, [string]$Source) {
     $match = [regex]::Match($Text, '(?m)^version\s*=\s*"([^"]+)"')
     if (-not $match.Success) {
@@ -955,6 +1072,7 @@ function Assert-CommonReleasePreflight {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         throw "git is required for a complete release."
     }
+    Assert-GitHubActionsCompleteReleaseContext
     Assert-GitReleasePreflight
     Assert-PublicationNoUntrackedBuildInputs -RepoRoot $repoRoot
     $script:githubRepository = Get-GitHubRepositorySlug
@@ -1073,13 +1191,31 @@ try {
     }
 
     $deadline = [DateTime]::UtcNow.AddMinutes($PublicationTimeoutMinutes)
-    Wait-ReleasePublicationWorkflow `
-        -RepositorySlug $script:githubRepository `
-        -Version $version `
-        -CandidateSha $candidateSha `
-        -TriggerBranch $publicationTrigger.TriggerBranch `
-        -RetryFailedOnce:([bool]$publicationTrigger.ExistingRun) `
-        -Deadline $deadline
+    if (Test-GitHubActionsCompleteRelease) {
+        $publicationRun = Get-GitHubActionsPublicationRun `
+            -CandidateSha $candidateSha `
+            -TriggerBranch $publicationTrigger.TriggerBranch
+        $existingDispatch = $null -ne $publicationRun
+        if (-not $publicationRun) {
+            $publicationRun = Invoke-GitHubActionsPublicationDispatch `
+                -CandidateSha $candidateSha `
+                -TriggerBranch $publicationTrigger.TriggerBranch
+        }
+        Wait-GitHubActionsPublicationWorkflow `
+            -RunId ([long]$publicationRun.id) `
+            -CandidateSha $candidateSha `
+            -TriggerBranch $publicationTrigger.TriggerBranch `
+            -RetryFailedOnce:$existingDispatch `
+            -Deadline $deadline
+    } else {
+        Wait-ReleasePublicationWorkflow `
+            -RepositorySlug $script:githubRepository `
+            -Version $version `
+            -CandidateSha $candidateSha `
+            -TriggerBranch $publicationTrigger.TriggerBranch `
+            -RetryFailedOnce:([bool]$publicationTrigger.ExistingRun) `
+            -Deadline $deadline
+    }
     Wait-ReleasePublicationAssets `
         -RepoRoot $repoRoot `
         -RepositorySlug $script:githubRepository `
