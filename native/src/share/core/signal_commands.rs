@@ -476,3 +476,7 @@ fn set_direct_online(
     invalidation?;
     Ok(lookup_id)
 }
+
+#[cfg(test)]
+#[path = "signal_commands_task_tests.rs"]
+mod task_tests;

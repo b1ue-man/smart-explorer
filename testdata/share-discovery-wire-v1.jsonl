@@ -1,0 +1,13 @@
+{"direction":"client","message":{"t":"publish_discovery","offer":{"offer_id":"fixture-offer-direct","kind":"direct","display_alias":"Fixture Direct","suite":"se-discovery-opaque-r255-sha512-argon2id-chacha20poly1305","version":1,"lease_secs":300}}}
+{"direction":"client","message":{"t":"unpublish_discovery","offer_id":"fixture-offer-direct"}}
+{"direction":"client","message":{"t":"list_discoveries"}}
+{"direction":"client","message":{"t":"start_pairing","discovery_id":"fixture-discovery","exchange_id":"fixture-exchange","payload":"AQID"}}
+{"direction":"client","message":{"t":"pairing_packet","exchange_id":"fixture-exchange","kind":"opaque_ke2","payload":"BAUG"}}
+{"direction":"client","message":{"t":"cancel_pairing","exchange_id":"fixture-exchange"}}
+{"direction":"server","message":{"t":"discovery_published","advertisement":{"discovery_id":"fixture-discovery","offer_id":"fixture-offer-direct","kind":"direct","display_alias":"Fixture Direct","suite":"se-discovery-opaque-r255-sha512-argon2id-chacha20poly1305","version":1,"expires_at":4102444800}}}
+{"direction":"server","message":{"t":"discovery_list","advertisements":[{"discovery_id":"fixture-room-discovery","offer_id":"fixture-offer-room","kind":"room","display_alias":"Fixture Room","suite":"se-discovery-opaque-r255-sha512-argon2id-chacha20poly1305","version":1,"expires_at":4102444800}]}}
+{"direction":"server","message":{"t":"pairing_opened","exchange_id":"fixture-exchange","discovery_id":"fixture-discovery"}}
+{"direction":"server","message":{"t":"pairing_started","exchange_id":"fixture-exchange","discovery_id":"fixture-discovery","payload":"AQID"}}
+{"direction":"server","message":{"t":"pairing_packet","exchange_id":"fixture-exchange","kind":"connector_commit","payload":"BAUG"}}
+{"direction":"server","message":{"t":"pairing_finished","exchange_id":"fixture-exchange","reason":"cancelled"}}
+{"direction":"server","message":{"t":"discovery_rejected","operation":"start_pairing","discovery_id":"fixture-discovery","exchange_id":"fixture-exchange","classification":"unavailable","retryable":true,"msg":"discovery offer is unavailable"}}

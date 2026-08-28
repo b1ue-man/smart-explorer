@@ -28,6 +28,10 @@ mod registration_guard;
 mod relay;
 #[cfg(test)]
 mod resource_limits_tests;
+#[cfg(test)]
+mod share_remote_task_tests;
+#[cfg(test)]
+mod share_remote_wire_task_tests;
 mod state;
 #[cfg(test)]
 mod state_transition_tests;

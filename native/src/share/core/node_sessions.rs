@@ -49,12 +49,8 @@ impl ShareIrohNode {
         };
         let runtime_guard =
             super::direct_reciprocal_transport::direct_repair_runtime_guard(transition, None);
-        let current_authorization = match self.auth.lock() {
-            Ok(state) => state.direct_online && state.authorization_epoch == expected_generation,
-            Err(_) => return DirectReciprocalTransportResult::Transient,
-        };
-        if !current_authorization {
-            return DirectReciprocalTransportResult::PolicyDenied;
+        if let Err(result) = authorize_outgoing_repair_generation(&self.auth, expected_generation) {
+            return result;
         }
         let (kind, relation_id) = relation_kind_id(endpoint);
         if kind != "direct" {
@@ -433,3 +429,19 @@ fn classify_repair_session_setup(
         _ => DirectReciprocalTransportResult::Conflict,
     }
 }
+
+fn authorize_outgoing_repair_generation(
+    auth: &Arc<Mutex<super::types::ShareAuthState>>,
+    expected_generation: u64,
+) -> Result<(), DirectReciprocalTransportResult> {
+    let state = auth
+        .lock()
+        .map_err(|_| DirectReciprocalTransportResult::Transient)?;
+    (state.direct_online && state.authorization_epoch == expected_generation)
+        .then_some(())
+        .ok_or(DirectReciprocalTransportResult::PolicyDenied)
+}
+
+#[cfg(test)]
+#[path = "node_sessions_task_tests.rs"]
+mod task_tests;

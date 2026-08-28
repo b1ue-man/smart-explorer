@@ -230,6 +230,12 @@ mod room_relation;
 #[cfg(test)]
 #[path = "core/remote_drive_task_mount_lease_tests.rs"]
 mod remote_drive_task_mount_lease_tests;
+#[cfg(test)]
+#[path = "core/share_remote_direct_task_tests.rs"]
+mod share_remote_direct_task_tests;
+#[cfg(test)]
+#[path = "core/share_remote_discovery_task_tests.rs"]
+mod share_remote_discovery_task_tests;
 #[path = "core/server.rs"]
 mod server;
 #[path = "core/server_transfer.rs"]

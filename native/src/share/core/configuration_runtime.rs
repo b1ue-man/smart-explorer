@@ -130,6 +130,14 @@ pub(super) fn schedule_current(
 }
 
 fn schedule_snapshot(snapshot: &ShareAuthState, reciprocal: &DirectReciprocalCoordinator) {
+    schedule_snapshot_with(snapshot, reciprocal, ShareProfiles::direct_secret_checked);
+}
+
+fn schedule_snapshot_with(
+    snapshot: &ShareAuthState,
+    reciprocal: &DirectReciprocalCoordinator,
+    mut direct_secret: impl FnMut(&DirectContact) -> Result<Option<Vec<u8>>, String>,
+) {
     if !snapshot.direct_online {
         return;
     }
@@ -144,7 +152,7 @@ fn schedule_snapshot(snapshot: &ShareAuthState, reciprocal: &DirectReciprocalCoo
         else {
             continue;
         };
-        let Ok(Some(relation_secret)) = ShareProfiles::direct_secret_checked(contact) else {
+        let Ok(Some(relation_secret)) = direct_secret(contact) else {
             continue;
         };
         let expected_node_id = if contact.expected_node_id.is_empty() {
@@ -172,3 +180,7 @@ fn schedule_snapshot(snapshot: &ShareAuthState, reciprocal: &DirectReciprocalCoo
         let _ = reciprocal.schedule(candidate);
     }
 }
+
+#[cfg(test)]
+#[path = "configuration_runtime_task_tests.rs"]
+mod task_tests;

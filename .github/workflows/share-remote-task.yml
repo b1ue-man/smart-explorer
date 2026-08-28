@@ -1,0 +1,82 @@
+name: share-remote-task-suite
+
+# This workflow is deliberately manual and isolated from release publication.
+# Dispatch it once for the exact pushed candidate SHA after implementation ends.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full 40-character commit SHA to verify (must match the selected ref)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: share-remote-task-suite-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind the run to the exact candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          log_root="$RUNNER_TEMP/share-remote-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+          checked_out_sha="$(git rev-parse HEAD)"
+          printf 'requested_sha=%s\nworkflow_sha=%s\nchecked_out_sha=%s\n' \
+            "$CANDIDATE_SHA" "$GITHUB_SHA" "$checked_out_sha" \
+            > "$log_root/candidate.txt"
+          if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::candidate_sha must be one full 40-character commit SHA."
+            exit 1
+          fi
+          if [[ "${CANDIDATE_SHA,,}" != "${GITHUB_SHA,,}" ]] || \
+             [[ "$checked_out_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Selected ref, requested candidate, and checked-out commit differ."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+
+      - name: Run the single Share/Remote task suite
+        shell: bash
+        timeout-minutes: 75
+        run: |
+          set -Eeuo pipefail
+          bash native/test-share-remote-task.sh --direct 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite.log"
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: share-remote-task-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/share-remote-task-logs
+          if-no-files-found: warn
+          retention-days: 7
