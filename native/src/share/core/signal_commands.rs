@@ -397,6 +397,7 @@ fn mutate_exec_grant(
         enabled,
         super::core::now_secs(),
     )?;
+    super::configuration_runtime::schedule_current(auth, iroh)?;
     // Exec authorization is checked on every fresh Exec connection, and the
     // registry has already installed the deny barrier/cancellation above.
     // Keep existing connections alive long enough to deliver their signed-off
@@ -419,6 +420,7 @@ fn apply_persisted_exec_grant(
         principal,
         policy,
     )?;
+    super::configuration_runtime::schedule_current(auth, iroh)?;
     Ok(mutation)
 }
 
@@ -440,7 +442,7 @@ fn set_direct_online(
     iroh: &ShareIrohNode,
     online: bool,
 ) -> io::Result<String> {
-    let _transition = iroh.begin_runtime_transition()?;
+    let transition = iroh.begin_runtime_transition()?;
     let (lookup_id, changed) = {
         let mut state = auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
         let changed = state.direct_online != online;
@@ -462,8 +464,15 @@ fn set_direct_online(
         }
         (state.identity.direct_lookup_id.clone(), changed)
     };
+    let invalidation = if changed {
+        iroh.invalidate_sessions().map(|_| ())
+    } else {
+        Ok(())
+    };
+    drop(transition);
     if changed {
-        iroh.invalidate_sessions()?;
+        super::configuration_runtime::schedule_current(auth, iroh)?;
     }
+    invalidation?;
     Ok(lookup_id)
 }

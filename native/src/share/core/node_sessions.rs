@@ -38,14 +38,24 @@ impl ShareIrohNode {
         &self,
         endpoint: &PeerEndpoint,
         identity: &ShareIdentity,
+        expected_generation: u64,
     ) -> DirectReciprocalTransportResult {
         if self.require_sharing_active().is_err() {
             return DirectReciprocalTransportResult::Transient;
         }
-        let _transition = match self.runtime_transition_slot.clone().try_acquire_owned() {
+        let transition = match self.runtime_transition_slot.clone().try_acquire_owned() {
             Ok(transition) => transition,
             Err(_) => return DirectReciprocalTransportResult::Transient,
         };
+        let runtime_guard =
+            super::direct_reciprocal_transport::direct_repair_runtime_guard(transition, None);
+        let current_authorization = match self.auth.lock() {
+            Ok(state) => state.direct_online && state.authorization_epoch == expected_generation,
+            Err(_) => return DirectReciprocalTransportResult::Transient,
+        };
+        if !current_authorization {
+            return DirectReciprocalTransportResult::PolicyDenied;
+        }
         let (kind, relation_id) = relation_kind_id(endpoint);
         if kind != "direct" {
             return DirectReciprocalTransportResult::PolicyDenied;
@@ -108,7 +118,12 @@ impl ShareIrohNode {
         let store = self.direct_repair_store.clone();
         match self.block_on(tokio::time::timeout(
             timeout,
-            super::direct_reciprocal_transport::run_outgoing(connection, authorized, store),
+            super::direct_reciprocal_transport::run_outgoing(
+                connection,
+                authorized,
+                store,
+                runtime_guard,
+            ),
         )) {
             Ok(result) => result,
             Err(_) => DirectReciprocalTransportResult::Transient,

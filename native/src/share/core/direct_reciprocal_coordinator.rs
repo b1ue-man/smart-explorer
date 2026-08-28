@@ -364,7 +364,11 @@ fn run_worker(
         let Some((key, epoch, candidate)) = take_due(&shared) else {
             return;
         };
-        let result = node.repair_direct_reciprocal(&candidate.endpoint, &candidate.identity);
+        let result = node.repair_direct_reciprocal(
+            &candidate.endpoint,
+            &candidate.identity,
+            candidate.key.local_generation,
+        );
         let Ok(mut state) = shared.state.lock() else {
             return;
         };

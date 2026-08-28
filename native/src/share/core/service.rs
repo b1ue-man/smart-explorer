@@ -185,7 +185,7 @@ impl ShareService {
     }
 
     pub(crate) fn reciprocal_repair_in_flight(&self) -> bool {
-        self.reciprocal.repair_in_flight() || self.iroh.incoming_direct_repair_in_flight()
+        self.reciprocal.repair_in_flight() || self.iroh.reciprocal_transition_in_flight()
     }
 
     pub(crate) fn exec_active_views(&self) -> Vec<super::exec_types::ExecJobView> {
