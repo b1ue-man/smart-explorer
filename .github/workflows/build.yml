@@ -116,14 +116,30 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $distro = "Ubuntu-24.04"
-          $installed = @(wsl.exe --list --quiet |
-            ForEach-Object { ($_ -replace "`0", "").Trim() } |
-            Where-Object { $_ })
-          if ($LASTEXITCODE -ne 0 -or $installed -notcontains $distro) {
-            throw "The pinned Ubuntu WSL action did not install $distro."
+          $verbose = @(wsl.exe --list --verbose 2>&1)
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect the WSL distributions installed by the pinned Ubuntu action."
           }
-          wsl.exe --set-version $distro 1
-          if ($LASTEXITCODE -ne 0) { throw "Could not select WSL1 for $distro." }
+          $distroRows = @(
+            foreach ($rawLine in $verbose) {
+              $line = ([string]$rawLine -replace "`0", "").Trim()
+              $line = ($line -replace '^\*\s*', '').Trim()
+              $match = [regex]::Match(
+                $line,
+                '^(?<name>\S+)\s+.+?\s+(?<version>\d+)\s*$'
+              )
+              if ($match.Success -and $match.Groups['name'].Value -ceq $distro) {
+                [pscustomobject]@{
+                  Name = $match.Groups['name'].Value
+                  Version = [int]$match.Groups['version'].Value
+                }
+              }
+            }
+          )
+          if ($distroRows.Count -ne 1 -or $distroRows[0].Version -ne 1) {
+            $observed = if ($distroRows.Count -eq 1) { $distroRows[0].Version } else { "missing-or-ambiguous" }
+            throw "The pinned Ubuntu WSL action must install exactly one $distro distribution as WSL1; observed version: $observed."
+          }
           wsl.exe --set-default $distro
           if ($LASTEXITCODE -ne 0) { throw "Could not make $distro the default WSL distribution." }
           $packages = @(
