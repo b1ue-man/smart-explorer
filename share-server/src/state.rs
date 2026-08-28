@@ -22,10 +22,14 @@ pub(super) struct Client {
 #[derive(Default)]
 pub(super) struct State {
     pub(super) next_id: u64,
+    pub(super) next_discovery_id: u64,
     pub(super) clients: HashMap<u64, Client>,
     pub(super) direct: HashMap<String, (u64, PeerPresence)>,
     pub(super) watchers: HashMap<String, HashSet<u64>>,
     pub(super) rooms: HashMap<String, HashMap<String, (u64, PeerPresence)>>,
+    pub(super) discovery_offers: HashMap<String, super::discovery_state::DiscoveryOffer>,
+    pub(super) discovery_offer_index: HashMap<(u64, String), String>,
+    pub(super) discovery_exchanges: HashMap<String, super::discovery_state::DiscoveryExchange>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,7 +255,7 @@ pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         let Some(client) = state.clients.remove(&id) else {
             return;
         };
-        let mut notifications = Vec::new();
+        let mut notifications = super::discovery::cleanup_client_locked(&mut state, id);
 
         for lookup_id in client.direct_lookup_ids {
             if state.direct.get(&lookup_id).map(|(owner, _)| *owner) == Some(id) {

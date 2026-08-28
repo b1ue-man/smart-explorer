@@ -2,6 +2,60 @@ use serde::{Deserialize, Serialize};
 
 use super::tracked_direct;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DiscoveryKind {
+    Direct,
+    Room,
+}
+
+/// Public, intentionally unlinkable metadata supplied by the publishing client.
+/// Stable device/room identifiers and all key material are exchanged only inside
+/// the opaque end-to-end pairing payloads.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct DiscoveryOfferRequest {
+    pub(super) offer_id: String,
+    pub(super) kind: DiscoveryKind,
+    pub(super) display_alias: String,
+    pub(super) suite: String,
+    pub(super) version: u32,
+    pub(super) lease_secs: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct DiscoveryAdvertisement {
+    pub(super) discovery_id: String,
+    pub(super) offer_id: String,
+    pub(super) kind: DiscoveryKind,
+    pub(super) display_alias: String,
+    pub(super) suite: String,
+    pub(super) version: u32,
+    pub(super) expires_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PairingPacketKind {
+    OpaqueKe2,
+    OpaqueKe3Bundle,
+    PublisherBundle,
+    ConnectorCommit,
+    PublisherCommit,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PairingCloseReason {
+    Completed,
+    Cancelled,
+    TimedOut,
+    OfferExpired,
+    OfferWithdrawn,
+    PeerDisconnected,
+    TargetUnavailable,
+    ProtocolError,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct PeerPresence {
     pub(super) kind: String,
@@ -80,6 +134,26 @@ pub(super) enum In {
     LeaveRoom {
         room_id: String,
     },
+    PublishDiscovery {
+        offer: DiscoveryOfferRequest,
+    },
+    UnpublishDiscovery {
+        offer_id: String,
+    },
+    ListDiscoveries,
+    StartPairing {
+        discovery_id: String,
+        exchange_id: String,
+        payload: String,
+    },
+    PairingPacket {
+        exchange_id: String,
+        kind: PairingPacketKind,
+        payload: String,
+    },
+    CancelPairing {
+        exchange_id: String,
+    },
     Heartbeat,
 }
 
@@ -136,6 +210,30 @@ pub(super) enum Out {
     RoomLeft {
         room_id: String,
         device_id: String,
+    },
+    DiscoveryPublished {
+        advertisement: DiscoveryAdvertisement,
+    },
+    DiscoveryList {
+        advertisements: Vec<DiscoveryAdvertisement>,
+    },
+    PairingOpened {
+        exchange_id: String,
+        discovery_id: String,
+    },
+    PairingStarted {
+        exchange_id: String,
+        discovery_id: String,
+        payload: String,
+    },
+    PairingPacket {
+        exchange_id: String,
+        kind: PairingPacketKind,
+        payload: String,
+    },
+    PairingFinished {
+        exchange_id: String,
+        reason: PairingCloseReason,
     },
     Error {
         scope: String,
