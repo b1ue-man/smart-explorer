@@ -368,7 +368,10 @@ impl App {
                     .ctx()
                     .input(|i| i.pointer.interact_pos())
                     .unwrap_or_else(|| ui.min_rect().center());
-                self.remote_ctx = Some((pos, idx));
+                self.open_remote_context_menu(
+                    pos,
+                    super::remote_context_menu::RemoteContextTarget::Row { entry_idx: idx },
+                );
             } else {
                 let path = self.entries[idx].path.to_string();
                 let ctx = ui.ctx().clone();

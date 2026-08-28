@@ -94,7 +94,14 @@ impl App {
             if let Some(p) = ptr_pos {
                 let on_empty = base_y.is_none_or(|by| p.y > by + total_rows as f32 * row_h);
                 if body_viewport.contains(p) && on_empty {
-                    self.show_background_menu();
+                    if self.remote.is_some() {
+                        self.open_remote_context_menu(
+                            p,
+                            super::remote_context_menu::RemoteContextTarget::Background,
+                        );
+                    } else {
+                        self.show_background_menu();
+                    }
                 }
             }
         }

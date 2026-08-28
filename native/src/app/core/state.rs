@@ -410,8 +410,8 @@ pub struct App {
     /// The SFTP session the activation is running against (guards installing the
     /// result into the right connection if the user switched tabs meanwhile).
     pub(in crate::app) agent_activate_for: Option<Arc<crate::sftp::SftpBackend>>,
-    /// Open egui context menu for a remote entry: (screen pos, entry index).
-    pub(in crate::app) remote_ctx: Option<(egui::Pos2, usize)>,
+    /// Open egui context menu for a remote row or its empty background.
+    pub(in crate::app) remote_ctx: Option<super::remote_context_menu::RemoteContextMenu>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
     pub(in crate::app) clip_download_rx: Option<Receiver<Result<Vec<String>, String>>>,
