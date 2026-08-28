@@ -166,6 +166,7 @@ jobs:
             }
           done
           "@
+          $setup = $setup -replace "`r", ""
           wsl.exe -d $distro -u root -- bash -lc $setup
           if ($LASTEXITCODE -ne 0) { throw "WSL release-tool setup or preflight failed." }
 
