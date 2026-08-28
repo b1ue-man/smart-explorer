@@ -13,6 +13,15 @@ einheitliche `Backend`-Schnittstelle (Sidebar → **VERBINDEN**); Zugangsdaten i
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
 den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
+Das Remote-Rechtsklickmenü unterscheidet Zeile, Mehrfachauswahl und freien
+Ordnerhintergrund. Es bietet je nach Ziel unter anderem Öffnen, Herunterladen,
+Kopieren/Einfügen, Umbenennen, Löschen, Favoriten, Remote-Pfad kopieren,
+Ordneranalyse, Aktualisieren sowie **Neu** mit Ordner und editierbaren
+Dateitypen. Unter Windows kann **Öffnen mit…** auch für Remote-Dateien den
+nativen App-Auswahldialog verwenden; Smart Explorer materialisiert dafür eine
+überwachte lokale Kopie und lädt gespeicherte Änderungen über den bestehenden
+Save-back-Pfad zurück.
+
 **Google Drive (ab 0.5.16):** durchsuchen und **synchronisieren** über denselben
 `Backend`-Mechanismus. Smart Explorer ist **kein Cloud-Dienst** — du hinterlegst
 einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
@@ -201,6 +210,32 @@ Dateisystemdaten im Klartext. Toolbar → **📡 Teilen**; Server in Einstellung
 **TEILEN**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
+In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
+zeitlich begrenzt **suchbar machen**. Fünf Minuten sind voreingestellt; eine
+andere positive Dauer ist frei wählbar. Die PIN wird als exakte UTF-8-Bytefolge
+verwendet, nicht getrimmt und nicht dauerhaft gespeichert. Es gibt bewusst
+keine Mindestlänge: auch eine leere PIN und exakt `0` funktionieren, werden aber
+als trivial zu erraten gekennzeichnet. Die getrennten Listen für auffindbare
+Direct-Geräte und Räume zeigen den ungeprüften Anzeigenamen, Ablauf und
+Kompatibilität. **Connect** plus PIN startet den authentifizierten,
+verschlüsselten Schlüsselaustausch vollständig im Hintergrund; die
+Freigabeseite des veröffentlichenden Geräts muss nicht noch einmal zustimmen.
+
+Eine erfolgreiche Direct-Kopplung installiert die vollständige Relation auf
+beiden Geräten, sodass beide Seiten sofort als Remote-Gerät nutzbar sind.
+Bestehende einseitige Direct-Beziehungen werden bei kompatiblen aktuellen
+Clients im Hintergrund nachgezogen, sobald beide Geräte online sind. Exakte
+Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
+widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
+nicht automatisch überschrieben.
+
+Die Speicheranalyse eines Direct- oder Raum-Ziels lässt den entfernten
+Share-Client den vollständigen, begrenzten logischen Baum aufbauen. Er überträgt
+anschließend den fertigen Snapshot samt Fortschritt, Summen und SHA-256-Prüfung;
+der anfragende Client validiert es und zeigt daraus direkt die Treemap, statt
+den Baum aus einzeln zurückgesendeten Metadatenknoten zusammenzusetzen. Nur bei
+einem älteren Peer ohne diese Fähigkeit greift der bisherige Walk-Fallback.
+
 **Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** arbeitet auch
 ohne GUI-Sitzung und nutzt dieselben gespeicherten Verbindungen, App-Daten,
 Zugangsdaten, Share-Profile und den Daemon wie die GUI. Unter Windows liegen
@@ -231,7 +266,9 @@ example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
 speichert eine UNC-Verbindung, `se connections add-peer --code SE-D3-... --name
 Laptop` speichert eine getrackte Freigabeanfrage mit stabiler Request-ID und
-reiht sie ueber den Share-Worker ein, und `se connections add-room --code
+reiht sie ueber den Share-Worker ein; ein kompatibles Ziel entscheidet sie nach
+der kryptografischen Prüfung automatisch gemäß seiner lokalen Policy. `se
+connections add-room --code
 SE-R3-... --name Team` tritt einem Raum bei. `queued` bedeutet dabei nur lokal
 dauerhaft vorgemerkt; auch eine Relay-Meldung `forwarded` bestaetigt noch keinen
 Peer-Empfang. Erst der signierte Request-Receipt des Zielgeraets meldet
@@ -240,10 +277,14 @@ Autorisierung und aktuelle Verbindung werden getrennt angezeigt.
 
 `se share request` zeigt ohne weitere Argumente die offene Inbox samt
 Request-ID, Geraet, Fingerprint, Empfangs-, Entscheidungs- und
-Autorisierungsstatus. Ist genau eine Anfrage offen, akzeptiert oder verwirft
-`se share request accept` beziehungsweise `reject` sie ohne versteckte IDs oder
-erneute Fingerprint-Eingabe; bei mehreren Anfragen nennt die Inbox direkt die
-gueltigen Befehle. `list`, `show`, `retry` und `delete` verwalten den
+Autorisierungsstatus. Eine kryptografisch gültige neue Direct-Anfrage wird vom
+Ziel automatisch gemäß seiner dauerhaften lokalen Policy angenommen oder
+abgelehnt; im normalen Kopplungsfluss ist daher keine zweite Bestätigung nötig.
+Bleibt ein älterer oder importierter Zustand dennoch offen, akzeptiert oder
+verwirft `se share request accept` beziehungsweise `reject` bei genau einem
+Treffer ohne versteckte IDs oder erneute Fingerprint-Eingabe; bei mehreren
+Anfragen nennt die Inbox direkt die gültigen Befehle. `list`, `show`, `retry`
+und `delete` verwalten den
 vollstaendigen Verlauf. `delete` entfernt auch eine offene eingehende oder
 ausgehende Anfrage lokal, stoppt ihre Retries und behaelt einen kleinen
 dauerhaften Replay-Tombstone; ein spaetes Accept einer geloeschten ausgehenden
@@ -261,7 +302,7 @@ die expliziten signierten Peer-Entscheidungen.
 
 Meldet sich dieselbe Geraete-ID mit einem anderen Schluessel, Node-ID oder
 Fingerprint, bleibt die Anfrage sichtbar, wird aber als Identitaetskonflikt
-fail-closed von **Annehmen** ausgeschlossen. Text- und JSON-Ausgabe nennen den
+automatisch fail-closed abgelehnt. Text- und JSON-Ausgabe nennen den
 Konflikt sowie direkt nutzbare `revoke`-, `reject`- und `delete`-Befehle;
 Ablehnen und lokales Loeschen bleiben auch im Konfliktfall moeglich.
 

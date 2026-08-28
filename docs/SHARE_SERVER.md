@@ -31,6 +31,39 @@ Multiple app endpoints can be separated with commas or semicolons:
 wss://share.example.com/se-share, share.example.com:51820
 ```
 
+## Temporary Discoverability and Background Pairing
+
+The current Share UI can publish the owner's Direct identity or one existing
+Room as a temporary discovery offer. Five minutes is the UI default, while any
+positive duration can be selected. The server grants at most a five-minute
+lease at a time; the client renews shorter leases only until the original local
+deadline, so reconnects and renewals cannot silently extend the user's chosen
+visibility window.
+
+PIN input is consumed as its exact UTF-8 byte sequence. It is not trimmed,
+normalized, parsed as a number, or stored durably. There is no minimum length:
+empty input and the exact value `0` are valid, although the UI warns that they
+are trivial to guess. The 1,024-byte upper bound is a resource ceiling, not a
+password-strength rule.
+
+Discovery lists Direct devices and Rooms separately. Their display aliases are
+untrusted labels; the cryptographic exchange binds the offer kind and the
+server-issued discovery/exchange identifiers. Pressing **Connect** starts an
+OPAQUE-based password-authenticated exchange in the background. The rendezvous
+server routes bounded pairing packets and can observe public offer metadata and
+timing, but it never receives the PIN, relation secret, private key, or decoded
+application bundle. Wrong PINs, altered packets, replayed identifiers, expired
+offers, and target changes fail without installing a relation.
+
+For Direct offers, both peers exchange their authenticated identity and current
+relation material and persist the reciprocal contact/grant before either side
+sends the commit packet that claims persistence. A successful exchange is
+therefore ready from both directions. For a Room offer, the joining peer
+persists the publisher's current Room material; the publisher already owns that
+Room and does not create a synthetic Direct relation. Neither flow requires a
+second click or approval on the publishing side. Cancel and expiry terminate
+only the affected offer or exchange.
+
 ## Signaling Resource Limits
 
 The public signaling listener uses fixed resource ceilings so unauthenticated
@@ -166,10 +199,21 @@ than as an access-request decision.
 Adding a direct code does more than create a local contact. The requester first
 persists a signed request with a stable UUID, then asks the Share worker to
 deliver that exact envelope. The target persists and verifies it before showing
-it as received. Accept, reject, and revoke are signed, revisioned decisions;
-the other endpoint returns a signed receipt for the decision. Pending envelopes
-remain in the endpoint's durable ledger and are retried after a worker or app
-restart.
+it as received. A valid new request is then automatically accepted unless the
+exact identity or relation conflicts with local state or durable policy records
+an ignore, rejection, revocation, or deletion tombstone; those cases are
+automatically rejected and never overwritten. Accept, reject, and revoke remain
+signed, revisioned decisions, and the other endpoint returns a signed receipt.
+Pending envelopes remain in the endpoint's durable ledger and are retried after
+a worker or app restart.
+
+Once an accepted Direct pair is online, a bounded background repair exchanges
+the missing reciprocal contact/grant and persists it on both endpoints before
+reporting completion. This also upgrades earlier one-way relations when both
+clients support the reciprocal protocol. It is idempotent across disconnects
+and retries; explicit denial or identity/material conflict stops repair until
+the corresponding local state changes. A peer without the capability keeps its
+existing file session and is retried later rather than breaking connectivity.
 
 The user-visible state deliberately has separate axes:
 
@@ -209,10 +253,11 @@ requester identity and relation.
 The GUI's **Teilen** view shows three durable sections:
 
 - **Eingehende Anfragen**: request ID, requester identity, fingerprint,
-  transport/receipt state, decision, authorization, and actions to accept after
-  explicitly confirming the displayed fingerprint or to delete/reject without
-  an unrelated confirmation hurdle. Local delete stops retries and persists a
-  bounded replay tombstone; signed reject remains the peer-visible decision.
+  transport/receipt state, automatic policy decision, authorization, and
+  explicit management actions for retained or older states. A normal verified
+  new request needs no second confirmation. Local delete stops retries and
+  persists a bounded replay tombstone; signed reject remains the peer-visible
+  decision.
   Completed entries move into a collapsed history. An accepted incoming entry
   remains until its active grant is signed-revoked and the peer receipt arrives;
   this preserves the only durable revoke outbox. It can then be removed locally
@@ -258,10 +303,10 @@ GUI/worker updates are rebased instead of overwriting each other.
 
 An incoming request whose device ID matches an existing tracked or legacy
 identity but whose public key, node ID, or fingerprint differs is an explicit
-`identity_conflict`. It is shown in text and JSON but excluded from acceptance
-and grant projection. The GUI disables Accept and names the blocker; the CLI
-prints exact revoke/reject/delete resolution commands. Reject and local delete
-remain available so a conflict cannot strand an unmanageable inbox row. An
+`identity_conflict`. It is shown in text and JSON, automatically rejected, and
+excluded from grant projection. The GUI names the blocker; the CLI prints exact
+revoke/reject/delete resolution commands. Reject and local delete remain
+available so a conflict cannot strand an unmanageable inbox row. An
 already active old identity must be revoked before the conflicting request can
 be reconsidered; no key change silently inherits its authority.
 
@@ -282,8 +327,9 @@ lines, but it cannot consume unbounded memory or suppress a later legitimate
 connection once the consumer drains capacity.
 
 The accepted direct code authorizes the owner's `Standard Direkt` export scope.
-That scope is visible next to the code and can be changed before accepting or
-while the service is online. Windows firewall setup is attempted automatically;
+That scope is visible next to the code and can be changed before initiating the
+pairing or while the service is online. Windows firewall setup is attempted
+automatically;
 if a normal rule fails, the app asks Windows for elevated firewall permission
 through UAC.
 

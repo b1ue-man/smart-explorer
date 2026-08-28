@@ -41,16 +41,18 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 |---|---|---|---|---|
 | Navigate into folder | scanner / `rscan` -> `list_dir` | ✅ | ✅ | ✅ |
 | Open file (double-click/Enter) | `open_file` -> temp download + launch | ✅ | ✅ temp copy + save-back | ✅ temp copy + save-back |
+| Open remote file with chosen app (Windows right-click) | `open_file(OpenMode::With)` -> temp download + native chooser | native shell menu | ✅ watched temp copy + save-back | ✅ watched temp copy + save-back |
 | New folder | `create_new_folder` -> `mkdir_all` | ✅ | ✅ | ✅ |
 | Delete (Entf) | `trash_selected` -> trash / recursive `remove_*` | ✅ | ✅ (Drive -> trash; SFTP/FTP dirs walked by app) | ✅ recursive peer delete |
 | Rename (F2) | `confirm_rename` -> `rename` | ✅ | ✅ | ✅ within same peer mount |
-| Right-click menu | shell menu / egui menu | ✅ shell | ✅ egui | ✅ egui |
+| Right-click menu | shell menu / selection-aware egui menu | ✅ native shell | ✅ row/background actions: open, download, clipboard, rename/delete, favorite/path, analysis, refresh, **Neu**, selection controls; Windows also **Öffnen mit…** | ✅ same remote menu and policy-aware backend dispatch |
 | Copy -> paste into folder | clipboard / upload | ✅ | ✅ paste into remote = `open_write` | ✅ paste into peer = `open_write` |
 | Copy files/folders -> Explorer | CF_HDROP / temp+CF_HDROP | ✅ | ✅ remote selections -> temp -> CF_HDROP | ✅ peer selections -> temp -> CF_HDROP |
 | Mirror / two-way sync | `sync`/`bisync` over `Backend` | ✅ | ✅ | ⚠️ works while peer is reachable; each operation opens a fresh QUIC stream and reconnects the cached Iroh session when needed |
 | Drag rows between tabs/panes | internal drag -> copy/upload/download/cross-copy | ✅ local<->local | ✅ local<->remote, remote<->local, remote<->remote | ✅ via peer `Backend` |
 | Drag out to Explorer (OLE) | `dragout.rs` CF_HDROP | ✅ local | ✅ remote -> temp -> OLE | ✅ peer -> temp -> OLE |
 | Drop OS files into folder | `handle_os_drop` | ✅ copy | ✅ upload into remote | ✅ upload into peer |
+| Storage analysis / treemap | `Backend::walk_tree` | ✅ local bounded scan | ✅ agent/parallel backend paths | ✅ capable Direct/Room peer builds the complete bounded tree and streams one totals/SHA-256-verified snapshot; old peers fall back to the node walk |
 
 ## C. Terminal `se` command -> backend method -> status
 
@@ -65,7 +67,7 @@ full endpoints, local paths, or saved-connection shorthand:
 | `se doctor [--json]` | bounded, non-mutating checks of app-data, credentials, profiles, server config, and daemon heartbeat | ✅ | ✅ corruption and backend errors produce exit 1 | ✅ configuration health without starting Share |
 | `se connections list` | checked credential metadata + `ShareProfiles::load_checked()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
 | `se connections add` / `remove` | transactional metadata + platform credential store | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup and removal | n/a |
-| `se connections add-peer` / `add-room` / `remove-peer` / `remove-room` | revision-checked `ShareProfiles` persistence + daemon profile reload | n/a | n/a | ✅ one-sided setup/removal; other peer confirms direct access as usual |
+| `se connections add-peer` / `add-room` / `remove-peer` / `remove-room` | revision-checked `ShareProfiles` persistence + daemon profile reload | n/a | n/a | ✅ one-sided initiation/removal; a compatible Direct target decides automatically by durable local policy and reciprocal repair completes both endpoints |
 | `se share ...` | checked Share identity/profile persistence + authenticated local daemon IPC | n/a | n/a | ✅ configure, identity, status, requests, exports, rooms, refresh, and stop |
 | `se ls` / `se stat` | `list_dir` / `stat` | ✅ | ✅ | ✅ |
 | `se cat` / `se get` | `open_read` | ✅ | ✅ | ✅ |
@@ -91,12 +93,22 @@ full endpoints, local paths, or saved-connection shorthand:
    relay forwards encrypted QUIC transport packets and can observe routing
    metadata/ciphertext, but it does not receive relation secrets or plaintext
    filesystem frames.
-3. **Own saved connections are exported one level deep.** A peer can browse the
+3. **Direct setup is reciprocal.** A newly accepted Direct relation is persisted
+   on both endpoints before completion. A bounded background repair fills in
+   older one-way contacts when compatible clients are simultaneously online;
+   ignored/rejected/revoked/tombstoned identities and exact relation conflicts
+   remain fail-closed.
+4. **Share analytics returns a finished remote tree.** A capable Direct or Room
+   peer constructs the bounded logical tree beside the data, streams progress,
+   then sends the encoded snapshot with announced totals and SHA-256. The
+   requester validates the complete tree and does not rebuild it from individual
+   metadata events. Capability absence alone selects the older walk fallback.
+5. **Own saved connections are exported one level deep.** A peer can browse the
    exporting device's saved SFTP/FTP/WebDAV/UNC connections only when the
    default-direct or room export policy enables them. Peer-share connections are
    not persisted as nested exports and therefore cannot recurse back into Share
    sessions.
-4. **Peer remote execution is exact-device, default-deny, and unrestricted once
+6. **Peer remote execution is exact-device, default-deny, and unrestricted once
    enabled.** Accepting file access does not grant Exec. The receiver verifies
    the authenticated device, current grant revision, capability, request digest,
    and admission lease before releasing the native launch barrier. Windows uses
@@ -105,10 +117,10 @@ full endpoints, local paths, or saved-connection shorthand:
    the full authority of the Smart Explorer worker's OS user, without command
    filters. Starts remain at-most-once and are never retried after an ambiguous
    transport error.
-5. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
+7. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
    are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
    large folders therefore need enough local temp space before the drop/paste.
-6. **Linux headless credentials use owner-protected files.** The DBus-free
+8. **Linux headless credentials use owner-protected files.** The DBus-free
    backend enforces a `0700` directory, `0600` single-link records, bounded
    versioned envelopes, atomic replacement, and interprocess locking. It is not
    encryption against root, the same Unix account, or offline access to an
