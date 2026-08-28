@@ -9,6 +9,31 @@ pub(super) enum DiscoveryKind {
     Room,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DiscoveryOperation {
+    PublishDiscovery,
+    UnpublishDiscovery,
+    ListDiscoveries,
+    StartPairing,
+    PairingPacket,
+    CancelPairing,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DiscoveryRejectionClass {
+    Unsupported,
+    InvalidRequest,
+    Conflict,
+    Forbidden,
+    Unavailable,
+    Capacity,
+    RateLimited,
+    Protocol,
+    Internal,
+}
+
 /// Public, intentionally unlinkable metadata supplied by the publishing client.
 /// Stable device/room identifiers and all key material are exchanged only inside
 /// the opaque end-to-end pairing payloads.
@@ -234,6 +259,18 @@ pub(super) enum Out {
     PairingFinished {
         exchange_id: String,
         reason: PairingCloseReason,
+    },
+    DiscoveryRejected {
+        operation: DiscoveryOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offer_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        discovery_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exchange_id: Option<String>,
+        classification: DiscoveryRejectionClass,
+        retryable: bool,
+        msg: String,
     },
     Error {
         scope: String,
