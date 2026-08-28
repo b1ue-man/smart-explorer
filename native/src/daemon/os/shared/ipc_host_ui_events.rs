@@ -3,6 +3,17 @@ use crate::share::ShareEvent;
 pub(crate) const MAX_SHARE_HOST_UI_EVENTS: usize = 512;
 
 pub(crate) fn push(events: &mut Vec<ShareEvent>, event: ShareEvent) {
+    if matches!(
+        &event,
+        ShareEvent::Discovery(crate::share::DiscoveryEvent::DiscoveryList { .. })
+    ) {
+        events.retain(|queued| {
+            !matches!(
+                queued,
+                ShareEvent::Discovery(crate::share::DiscoveryEvent::DiscoveryList { .. })
+            )
+        });
+    }
     events.push(event);
     let overflow = events.len().saturating_sub(MAX_SHARE_HOST_UI_EVENTS);
     if overflow > 0 {

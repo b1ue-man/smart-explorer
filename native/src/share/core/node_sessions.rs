@@ -5,13 +5,21 @@ use std::time::Instant;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 
-use super::core::{eio, hmac_proof, random_token};
+use super::core::{eio, hmac_proof, public_fingerprint, random_token};
+use super::direct_protocol::DirectPeerIdentity;
+use super::direct_reciprocal::DirectRelationMaterial;
+use super::direct_reciprocal_session::{
+    AuthenticatedDirectSession, DirectRepairSessionError, DirectSessionAuthorization,
+};
+use super::direct_reciprocal_transport::DirectReciprocalTransportResult;
+use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
 use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::node::{ShareIrohNode, ALPN};
 use super::session::{
     endpoint_addr, relation_kind_id, session_key, session_payload, transport_label,
+    AuthorizedDirectRepair,
 };
 use super::types::{PeerEndpoint, ShareEvent};
 use super::wire::{Ctrl, FsResponse, PeerHello};
@@ -24,6 +32,89 @@ pub(super) struct OpenedPeerStream {
 }
 
 impl ShareIrohNode {
+    /// Runs reciprocal repair on a new bi-stream of the cached filesystem
+    /// session. Repair failures never evict or close that cached connection.
+    pub(crate) fn repair_direct_reciprocal(
+        &self,
+        endpoint: &PeerEndpoint,
+        identity: &ShareIdentity,
+    ) -> DirectReciprocalTransportResult {
+        if self.require_sharing_active().is_err() {
+            return DirectReciprocalTransportResult::Transient;
+        }
+        let _transition = match self.runtime_transition_slot.clone().try_acquire_owned() {
+            Ok(transition) => transition,
+            Err(_) => return DirectReciprocalTransportResult::Transient,
+        };
+        let (kind, relation_id) = relation_kind_id(endpoint);
+        if kind != "direct" {
+            return DirectReciprocalTransportResult::PolicyDenied;
+        }
+        let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
+        let key = session_key(endpoint);
+        let expected_epoch = self.session_epoch.load(Ordering::Acquire);
+        let connection = match self.session_connection_until(
+            &key,
+            endpoint,
+            identity,
+            expected_epoch,
+            deadline,
+        ) {
+            Ok(connection) => connection,
+            Err(error) => return classify_repair_setup_io(&error),
+        };
+        let session = match AuthenticatedDirectSession::from_verified_handshake(
+            endpoint.presence.device_id.clone(),
+            connection.remote_id().to_string(),
+            endpoint.presence.public_key.clone(),
+            endpoint.presence.fingerprint.clone(),
+            endpoint.expected_node_id.clone().unwrap_or_default(),
+            DirectSessionAuthorization::OutgoingAcceptedContact,
+            true,
+        ) {
+            Ok(session) => session,
+            Err(error) => return classify_repair_session_setup(error),
+        };
+        let local_material = match DirectRelationMaterial::new(
+            identity.direct_lookup_id.clone(),
+            identity.direct_secret(),
+        ) {
+            Ok(material) => material,
+            Err(_) => return DirectReciprocalTransportResult::Conflict,
+        };
+        let expected_remote_material = match DirectRelationMaterial::new(
+            relation_id,
+            endpoint.relation_secret.clone(),
+        ) {
+            Ok(material) => material,
+            Err(_) => return DirectReciprocalTransportResult::Conflict,
+        };
+        let authorized = AuthorizedDirectRepair {
+            local_identity: DirectPeerIdentity {
+                device_id: identity.device_id.clone(),
+                device_name: identity.device_name.clone(),
+                node_id: identity.node_id.clone(),
+                public_key: identity.public_key.clone(),
+                fingerprint: public_fingerprint(identity.public_key.as_bytes()),
+            },
+            local_material,
+            session,
+            expected_remote_material: Some(expected_remote_material),
+        };
+        let timeout = match io_deadline::remaining(deadline, "reciprocal Direct repair") {
+            Ok(timeout) => timeout,
+            Err(_) => return DirectReciprocalTransportResult::Transient,
+        };
+        let store = self.direct_repair_store.clone();
+        match self.block_on(tokio::time::timeout(
+            timeout,
+            super::direct_reciprocal_transport::run_outgoing(connection, authorized, store),
+        )) {
+            Ok(result) => result,
+            Err(_) => DirectReciprocalTransportResult::Transient,
+        }
+    }
+
     pub(super) fn open_stream(
         &self,
         endpoint: &PeerEndpoint,
@@ -212,6 +303,10 @@ impl ShareIrohNode {
         let local_addr = self.routes.current(&self.endpoint);
         let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
         let (kind, relation_id) = relation_kind_id(endpoint);
+        let mut requested_capabilities = vec!["fs".to_string(), "fs_walk_batches_v1".to_string()];
+        if kind == "direct" {
+            requested_capabilities.push(DIRECT_RECIPROCAL_CAPABILITY.to_string());
+        }
         let remote_device = endpoint.presence.device_id.clone();
         let remote_node = endpoint.presence.node_id.clone();
         let nonce = random_token(12).map_err(eio)?;
@@ -234,7 +329,7 @@ impl ShareIrohNode {
             node_id: identity.node_id.clone(),
             session_nonce: nonce,
             session_proof: proof,
-            requested_capabilities: vec!["fs".to_string(), "fs_walk_batches_v1".to_string()],
+            requested_capabilities,
         };
         let started = Instant::now();
         let timeout = io_deadline::remaining(deadline, "peer session handshake")?;
@@ -265,7 +360,7 @@ impl ShareIrohNode {
                     }
                     Ctrl::FsResp {
                         resp: FsResponse::Err { msg, .. },
-                    } => Err(eio(msg)),
+                    } => Err(io::Error::new(io::ErrorKind::PermissionDenied, msg)),
                     _ => Err(eio("Peer akzeptiert die Iroh-Session nicht")),
                 }
             },
@@ -299,5 +394,27 @@ impl ShareIrohNode {
             Some(generation) => self.invalidate_outgoing_session(&key, generation),
             None => Ok(false),
         }
+    }
+}
+
+fn classify_repair_setup_io(error: &io::Error) -> DirectReciprocalTransportResult {
+    match error.kind() {
+        io::ErrorKind::PermissionDenied => DirectReciprocalTransportResult::PolicyDenied,
+        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => {
+            DirectReciprocalTransportResult::Conflict
+        }
+        _ => DirectReciprocalTransportResult::Transient,
+    }
+}
+
+fn classify_repair_session_setup(
+    error: DirectRepairSessionError,
+) -> DirectReciprocalTransportResult {
+    match error {
+        DirectRepairSessionError::PolicyDenied => DirectReciprocalTransportResult::PolicyDenied,
+        DirectRepairSessionError::CapabilityNotRequested => {
+            DirectReciprocalTransportResult::Unsupported
+        }
+        _ => DirectReciprocalTransportResult::Conflict,
     }
 }

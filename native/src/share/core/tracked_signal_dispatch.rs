@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use super::core::now_secs;
+use super::configuration_runtime::RuntimeConfiguration;
+use super::discovery_signal_commands::DiscoverySignalRuntime;
+use super::discovery_signal_dispatch::DiscoveryDispatchOutcome;
 use super::direct_ledger::{
     DirectEnvelopeKind, DirectRelayOutcome, DirectRequestDirection, DirectRequestEntry,
 };
@@ -8,6 +11,7 @@ use super::direct_protocol::{DirectPeerIdentity, DirectRequestId, SignedDirectRe
 use super::direct_signal_event::DirectSignalEvent;
 use super::profiles::ShareProfiles;
 use super::signal_auth::handle_server_msg;
+use super::signal_connection::SignalConnection;
 use super::tracked_signal_verify::{
     verify_decision_for_requester, verify_decision_receipt_for_target, verify_request_for_target,
     verify_request_receipt_for_requester,
@@ -37,29 +41,69 @@ pub(super) fn parse_tracked_server_message(
         .map_err(|error| error.to_string())
 }
 
+pub(super) enum SignalDispatchOutcome {
+    Continue,
+    Pong,
+    Reconnect,
+}
+
 pub(super) fn dispatch_server_line(
     line: &str,
     tracked_direct: bool,
+    discovery_exchange: bool,
+    discovery: &mut DiscoverySignalRuntime,
+    signal: &mut SignalConnection,
     auth: &Arc<Mutex<ShareAuthState>>,
     events: &crossbeam_channel::Sender<ShareEvent>,
-) -> bool {
+    configuration: &mut RuntimeConfiguration<'_>,
+) -> SignalDispatchOutcome {
+    match discovery.dispatch_server_line(
+        line,
+        signal,
+        discovery_exchange,
+        events,
+        configuration,
+        tracked_direct,
+    ) {
+        DiscoveryDispatchOutcome::Handled => return SignalDispatchOutcome::Continue,
+        DiscoveryDispatchOutcome::Reconnect => return SignalDispatchOutcome::Reconnect,
+        DiscoveryDispatchOutcome::NotDiscovery => {}
+    }
     match parse_tracked_server_message(line) {
         Ok(Some(message)) if tracked_direct => {
             handle_tracked_server_message(message, auth, events);
-            false
+            SignalDispatchOutcome::Continue
         }
         Ok(Some(_)) => {
             let _ = events.send(ShareEvent::Error(
                 "Tracked-Direct-Nachricht ohne ausgehandelte Faehigkeit verworfen".into(),
             ));
-            false
+            SignalDispatchOutcome::Continue
         }
-        Ok(None) => handle_server_msg(line, auth, events),
+        Ok(None) => {
+            if is_discovery_error(line) {
+                discovery.handle_server_discovery_error(events);
+            }
+            if handle_server_msg(line, auth, events) {
+                SignalDispatchOutcome::Pong
+            } else {
+                SignalDispatchOutcome::Continue
+            }
+        }
         Err(error) => {
             let _ = events.send(ShareEvent::Error(format!("Server-Nachricht: {error}")));
-            false
+            SignalDispatchOutcome::Continue
         }
     }
+}
+
+fn is_discovery_error(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .map_or(false, |value| {
+            value.get("t").and_then(serde_json::Value::as_str) == Some("error")
+                && value.get("scope").and_then(serde_json::Value::as_str) == Some("discovery")
+        })
 }
 
 pub(super) fn handle_tracked_server_message(

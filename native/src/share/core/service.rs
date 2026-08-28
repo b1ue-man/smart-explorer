@@ -6,6 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend::{PeerBackend, ShareIrohNode};
+use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
+use super::direct_reciprocal_transport::shared_direct_repair_store;
+use super::direct_repair_store_adapter::DirectRepairRelationStoreAdapter;
+use super::discovery_exchange_port_impl::DiscoveryExchangePortImpl;
+use super::discovery_relation_store_adapter::SystemRelationStore;
+use super::discovery_signal_port::direct_peer_from_identity;
 use super::core::{eio, now_secs};
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
@@ -22,6 +28,7 @@ pub struct ShareService {
     pub(super) auth: Arc<Mutex<ShareAuthState>>,
     pub(super) iroh: Arc<ShareIrohNode>,
     pub(super) stopped: Arc<AtomicBool>,
+    pub(super) reciprocal: Arc<DirectReciprocalCoordinator>,
     pub(super) server: String,
     pub(super) owner: bool,
 }
@@ -97,7 +104,11 @@ impl ShareService {
     ) -> Result<super::exec_grant_runtime::ExecGrantMutation, String> {
         match self.cmd(command)? {
             ShareCmdResult::ExecGrant(mutation) => Ok(*mutation),
-            ShareCmdResult::Applied => Err("Share worker returned no Exec grant mutation".into()),
+            ShareCmdResult::Applied
+            | ShareCmdResult::DiscoveryOffer(_)
+            | ShareCmdResult::DiscoveryExchange(_) => {
+                Err("Share worker returned no Exec grant mutation".into())
+            }
         }
     }
 
@@ -171,6 +182,10 @@ impl ShareService {
 
     pub fn peer_candidates(&self) -> Vec<String> {
         self.iroh.candidates()
+    }
+
+    pub(crate) fn reciprocal_repair_in_flight(&self) -> bool {
+        self.reciprocal.repair_in_flight() || self.iroh.incoming_direct_repair_in_flight()
     }
 
     pub(crate) fn exec_active_views(&self) -> Vec<super::exec_types::ExecJobView> {
@@ -272,6 +287,15 @@ impl ShareService {
         identity: ShareIdentity,
         profiles: ShareProfiles,
     ) -> io::Result<ShareService> {
+        Self::start_with_profile_home(server, identity, profiles, None)
+    }
+
+    pub(crate) fn start_with_profile_home(
+        server: String,
+        identity: ShareIdentity,
+        profiles: ShareProfiles,
+        default_home: Option<String>,
+    ) -> io::Result<ShareService> {
         let listen_port = 0;
         let (cmd_tx, cmd_rx) = unbounded::<PendingShareCmd>();
         let (ev_tx, ev_rx) = super::connection_events::channel();
@@ -301,8 +325,21 @@ impl ShareService {
             authorization_epoch: 0,
         }));
 
-        let iroh = ShareIrohNode::start(&server, &identity, auth.clone(), ev_tx.clone())?;
+        let repair_store = shared_direct_repair_store(DirectRepairRelationStoreAdapter::new(
+            SystemRelationStore::new(default_home.clone()),
+        ));
+        let iroh = ShareIrohNode::start_with_repair_store(
+            &server,
+            &identity,
+            auth.clone(),
+            ev_tx.clone(),
+            repair_store,
+        )?;
+        let (reciprocal, repair_completions) = DirectReciprocalCoordinator::start(iroh.clone(), 0)?;
+        let reciprocal = Arc::new(reciprocal);
+        iroh.install_direct_repair_coordinator(&reciprocal)?;
         super::exec_grant_runtime::seed_registry(&auth, iroh.exec_registry())?;
+        super::configuration_runtime::schedule_current(&auth, &iroh)?;
         let _ = ev_tx.send(ShareEvent::Status(format!(
             "Iroh bereit: node={}, relay={}",
             identity.node_id,
@@ -315,7 +352,18 @@ impl ShareService {
             let identity_worker = identity.clone();
             let iroh_worker = iroh.clone();
             let stopped = stopped.clone();
+            let reciprocal_worker = reciprocal.clone();
             let worker_server = server.clone();
+            let direct_peer_auth = auth.clone();
+            let discovery_port = DiscoveryExchangePortImpl::new(
+                Box::new(move || {
+                    let state = direct_peer_auth
+                        .lock()
+                        .map_err(|_| "Share-State gesperrt".to_string())?;
+                    direct_peer_from_identity(&state.identity)
+                }),
+                Box::new(SystemRelationStore::new(default_home)),
+            );
             std::thread::Builder::new()
                 .name("share-signal".into())
                 .spawn(move || {
@@ -327,6 +375,9 @@ impl ShareService {
                         cmd_rx,
                         ev,
                         stopped,
+                        Box::new(discovery_port),
+                        reciprocal_worker,
+                        repair_completions,
                     )
                 })
                 .map_err(eio)?;
@@ -340,6 +391,7 @@ impl ShareService {
             auth,
             iroh,
             stopped,
+            reciprocal,
             server,
             owner: true,
         })
@@ -356,6 +408,7 @@ impl Clone for ShareService {
             auth: self.auth.clone(),
             iroh: self.iroh.clone(),
             stopped: self.stopped.clone(),
+            reciprocal: self.reciprocal.clone(),
             server: self.server.clone(),
             owner: false,
         }
@@ -367,6 +420,7 @@ impl Drop for ShareService {
         if self.owner {
             let _ = self.iroh.stop_sharing();
             self.stopped.store(true, Ordering::Relaxed);
+            self.reciprocal.request_stop();
         }
     }
 }

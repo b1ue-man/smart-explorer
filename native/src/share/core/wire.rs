@@ -399,6 +399,9 @@ pub(crate) enum Ctrl {
         hello: PeerHello,
     },
     PeerHelloOk,
+    /// Unit-only selector for the bounded binary reciprocal Direct stream.
+    /// Relation material is never serialized into this JSON control frame.
+    DirectReciprocal,
     Ping {
         nonce: String,
     },

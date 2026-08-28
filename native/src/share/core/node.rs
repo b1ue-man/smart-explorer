@@ -9,6 +9,8 @@ use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::eio;
+use super::direct_reciprocal_transport::SharedDirectRepairStore;
+use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::endpoint_routes::{EndpointRoutes, PublishedEndpointRoutes};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
@@ -22,11 +24,15 @@ use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
 const MAX_PENDING_HANDSHAKES_PER_ENDPOINT: usize = 4;
+const MAX_CONCURRENT_DIRECT_REPAIRS: usize = 4;
+const RUNTIME_TRANSITION_PERMITS: u32 = 8;
 
 pub(crate) struct ShareIrohNode {
     pub(super) rt: Arc<tokio::runtime::Runtime>,
     pub(super) endpoint: Endpoint,
     pub(super) auth: Arc<Mutex<ShareAuthState>>,
+    pub(super) direct_repair_store: SharedDirectRepairStore,
+    direct_repair_coordinator: Mutex<Weak<DirectReciprocalCoordinator>>,
     pub(super) ev: crossbeam_channel::Sender<ShareEvent>,
     pub(super) sessions: Mutex<HashMap<String, Connection>>,
     pub(super) session_connects: Mutex<HashMap<String, Weak<Mutex<()>>>>,
@@ -38,6 +44,8 @@ pub(crate) struct ShareIrohNode {
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
     pub(super) handshake_slots: Arc<Semaphore>,
+    pub(super) direct_repair_slots: Arc<Semaphore>,
+    pub(super) runtime_transition_slot: Arc<Semaphore>,
     pub(super) peer_handshake_slots: PeerHandshakeLimiter,
     pub(super) routes: EndpointRoutes,
 }
@@ -48,6 +56,24 @@ impl ShareIrohNode {
         identity: &ShareIdentity,
         auth: Arc<Mutex<ShareAuthState>>,
         ev: crossbeam_channel::Sender<ShareEvent>,
+    ) -> io::Result<Arc<Self>> {
+        Self::start_with_repair_store(
+            server,
+            identity,
+            auth,
+            ev,
+            super::direct_reciprocal_transport::shared_direct_repair_store(
+                super::direct_reciprocal_store::UnavailableDirectRepairStore,
+            ),
+        )
+    }
+
+    pub(crate) fn start_with_repair_store(
+        server: &str,
+        identity: &ShareIdentity,
+        auth: Arc<Mutex<ShareAuthState>>,
+        ev: crossbeam_channel::Sender<ShareEvent>,
+        direct_repair_store: SharedDirectRepairStore,
     ) -> io::Result<Arc<Self>> {
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -77,6 +103,8 @@ impl ShareIrohNode {
             rt,
             endpoint,
             auth,
+            direct_repair_store,
+            direct_repair_coordinator: Mutex::new(Weak::new()),
             ev,
             sessions: Mutex::new(HashMap::new()),
             session_connects: Mutex::new(HashMap::new()),
@@ -88,6 +116,10 @@ impl ShareIrohNode {
             connection_events: ConnectionEventReporter::default(),
             exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
+            direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
+            runtime_transition_slot: Arc::new(Semaphore::new(
+                RUNTIME_TRANSITION_PERMITS as usize,
+            )),
             peer_handshake_slots: PeerHandshakeLimiter::new(
                 MAX_PENDING_HANDSHAKES_PER_ENDPOINT,
                 MAX_PENDING_APPLICATION_HANDSHAKES,
@@ -110,6 +142,17 @@ impl ShareIrohNode {
         self.routes.published(&self.endpoint)
     }
 
+    pub(crate) fn incoming_direct_repair_in_flight(&self) -> bool {
+        self.direct_repair_slots.available_permits() < MAX_CONCURRENT_DIRECT_REPAIRS
+    }
+
+    pub(super) fn begin_runtime_transition(&self) -> io::Result<tokio::sync::OwnedSemaphorePermit> {
+        self.runtime_transition_slot
+            .clone()
+            .try_acquire_many_owned(RUNTIME_TRANSITION_PERMITS)
+            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Direct repair is active"))
+    }
+
     pub(super) fn route_revision(&self) -> u64 {
         self.routes.revision()
     }
@@ -120,6 +163,21 @@ impl ShareIrohNode {
 
     pub(crate) fn exec_registry(&self) -> &Arc<ExecRegistry> {
         &self.exec_registry
+    }
+
+    pub(super) fn install_direct_repair_coordinator(
+        &self,
+        coordinator: &Arc<DirectReciprocalCoordinator>,
+    ) -> io::Result<()> {
+        *self
+            .direct_repair_coordinator
+            .lock()
+            .map_err(|_| eio("Direct repair coordinator is locked"))? = Arc::downgrade(coordinator);
+        Ok(())
+    }
+
+    pub(super) fn direct_repair_coordinator(&self) -> Option<Arc<DirectReciprocalCoordinator>> {
+        self.direct_repair_coordinator.lock().ok()?.upgrade()
     }
 
     pub(super) fn track_incoming(

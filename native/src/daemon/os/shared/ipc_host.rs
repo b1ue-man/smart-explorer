@@ -24,8 +24,14 @@ mod mount_probe;
 pub(super) mod profile_merge;
 #[path = "ipc_host_stop.rs"]
 mod stop;
+#[path = "ipc_host_service.rs"]
+mod service_lifecycle;
 #[path = "ipc_host_ui_events.rs"]
 pub(super) mod ui_events;
+
+pub(super) use service_lifecycle::{
+    configure_service, reload_committed_profiles, stop_service_locked,
+};
 
 #[cfg(test)]
 #[path = "ipc_host_direct_events_tests.rs"]
@@ -153,6 +159,14 @@ impl ShareHost {
                 "Share-Status wartet nach einem Speicherfehler auf einen erneuten Commit".into(),
             );
         }
+        if state
+            .service
+            .as_ref()
+            .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
+        {
+            state.last_reload = Instant::now();
+            return Ok(true);
+        }
         state.last_reload = Instant::now();
         state.server = match load_share_server() {
             Ok(server) => server,
@@ -208,7 +222,7 @@ impl ShareHost {
                 return Err(format!("Share-Profile nicht verfuegbar: {error}"));
             }
         }
-        configure_or_restart_locked(&mut state)?;
+        service_lifecycle::configure_or_restart_locked(&mut state)?;
         if let Some(entry) = &pending {
             exec_grant_journal::recover_and_record(&mut state, entry);
         } else {
@@ -234,8 +248,9 @@ impl ShareHost {
             crate::share::ShareCmd::EnableExec { .. }
                 | crate::share::ShareCmd::DisableExec { .. }
                 | crate::share::ShareCmd::ApplyExecGrant { .. }
+                | crate::share::ShareCmd::ConfigureProfiles { .. }
         ) {
-            return Err("Exec-Grant changes require the durable daemon mutation IPC".into());
+            return Err("Dieser Share-Befehl erfordert eine dauerhafte Daemon-Mutation".into());
         }
         {
             let mut state = self
@@ -351,95 +366,6 @@ impl ShareHost {
     }
 }
 
-fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<(), String> {
-    if let Some(error) = &state.identity_error {
-        return Err(format!("Share-Identitaet nicht verfuegbar: {error}"));
-    }
-    if let Some(error) = &state.profiles_error {
-        return Err(format!("Share-Profile nicht verfuegbar: {error}"));
-    }
-    let identity = state
-        .identity
-        .clone()
-        .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())?;
-    if !share_service_requested(state.suspended, &state.server, state.profiles.auto_connect) {
-        if let Some(service) = state.service.take() {
-            service.cmd(crate::share::ShareCmd::Stop)?;
-        }
-        state.running_server.clear();
-        state.signal_connected = false;
-        state.signal_error = None;
-        return Ok(());
-    }
-    let needs_restart = state
-        .service
-        .as_ref()
-        .map(|service| {
-            service.identity.node_id != identity.node_id
-                || service.identity.device_id != identity.device_id
-                || service.identity.device_name != identity.device_name
-                || service.identity.direct_lookup_id != identity.direct_lookup_id
-                || service.identity.direct_secret() != identity.direct_secret()
-                || state.running_server != state.server
-        })
-        .unwrap_or(true);
-    if needs_restart {
-        if let Some(service) = state.service.take() {
-            service.cmd(crate::share::ShareCmd::Stop)?;
-        }
-        state.running_server.clear();
-        state.signal_connected = false;
-        state.signal_error = None;
-        match crate::share::ShareService::start(
-            state.server.clone(),
-            identity.clone(),
-            state.profiles.clone(),
-        ) {
-            Ok(service) => {
-                log("share worker started");
-                configure_service(&service, &state.profiles)?;
-                state.running_server = state.server.clone();
-                state.service = Some(service);
-            }
-            Err(error) => return Err(format!("Share-Worker Start: {error}")),
-        }
-    } else if let Some(service) = &state.service {
-        configure_service(service, &state.profiles)?;
-    }
-    Ok(())
-}
-
-fn share_service_requested(suspended: bool, server: &str, auto_connect: bool) -> bool {
-    !suspended && !server.trim().is_empty() && auto_connect
-}
-
-fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
-    if let Some(service) = state.service.take() {
-        service.cmd(crate::share::ShareCmd::Stop)?;
-    }
-    state.running_server.clear();
-    state.signal_connected = false;
-    Ok(())
-}
-
-pub(super) fn configure_service(
-    service: &crate::share::ShareService,
-    profiles: &crate::share::ShareProfiles,
-) -> Result<(), String> {
-    service.cmd(crate::share::ShareCmd::Configure {
-        direct: profiles.direct_contacts.clone(),
-        direct_grants: profiles.direct_grants.clone(),
-        rooms: profiles.rooms.clone(),
-        default_direct_exports: profiles.default_direct_exports.clone(),
-    })?;
-    service
-        .cmd(crate::share::ShareCmd::SyncDirectRequests {
-            direct_requests: profiles.direct_requests.clone(),
-            direct_request_tombstones: profiles.direct_request_tombstones.clone(),
-        })
-        .map(|_| ())
-}
-
 fn load_share_server() -> Result<String, String> {
     let path = crate::support_dirs::app_data_file("share_server.txt");
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -480,17 +406,4 @@ pub(super) fn default_home() -> String {
         .unwrap_or_else(std::env::temp_dir)
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::share_service_requested;
-
-    #[test]
-    fn explicit_stop_barrier_blocks_periodic_auto_connect_reload() {
-        assert!(share_service_requested(false, "127.0.0.1:9", true));
-        assert!(!share_service_requested(true, "127.0.0.1:9", true));
-        assert!(!share_service_requested(false, "", true));
-        assert!(!share_service_requested(false, "127.0.0.1:9", false));
-    }
 }

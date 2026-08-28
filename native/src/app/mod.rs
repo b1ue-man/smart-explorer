@@ -128,6 +128,12 @@ mod remote_open;
 mod scanning;
 #[path = "core/share.rs"]
 mod share;
+#[path = "core/share_discovery_state.rs"]
+mod share_discovery_state;
+#[path = "core/share_discovery_events.rs"]
+mod share_discovery_events;
+#[path = "core/share_discovery_ui.rs"]
+mod share_discovery_ui;
 #[path = "core/share_exec_jobs_ui.rs"]
 mod share_exec_jobs_ui;
 #[path = "core/share_exec_ui.rs"]

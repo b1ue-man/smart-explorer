@@ -547,6 +547,9 @@ impl App {
         }
 
         ui.separator();
+        self.ui_share_discovery_direct(ui);
+
+        ui.separator();
         lifecycle_ui::ui_lifecycle(self, ui);
 
         ui.separator();
@@ -713,6 +716,8 @@ impl App {
     }
 
     fn ui_share_rooms(&mut self, ui: &mut egui::Ui) {
+        self.ui_share_discovery_rooms(ui);
+        ui.separator();
         ui.label(
             RichText::new("RAUM ERSTELLEN")
                 .small()

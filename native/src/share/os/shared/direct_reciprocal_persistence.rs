@@ -3,6 +3,7 @@ use std::fmt;
 use super::core::random_token;
 use super::direct_reciprocal::{
     DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError, DirectReciprocalPeer,
+    DirectReciprocalPolicyDenied,
 };
 use super::profile_store::{
     credential_matches, delete_credential_verified, prepare_unique_credential, SecretString,
@@ -18,9 +19,42 @@ pub enum DirectReciprocalPersistenceOutcome {
     AlreadyComplete { contact_id: String },
 }
 
+impl DirectReciprocalPersistenceOutcome {
+    pub fn contact_id(&self) -> &str {
+        match self {
+            Self::Changed { contact_id } | Self::AlreadyComplete { contact_id } => contact_id,
+        }
+    }
+
+    pub fn changed(&self) -> bool {
+        matches!(self, Self::Changed { .. })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectReciprocalPersistenceResult {
+    profiles: ShareProfiles,
+    outcome: DirectReciprocalPersistenceOutcome,
+}
+
+impl DirectReciprocalPersistenceResult {
+    pub fn profiles(&self) -> &ShareProfiles {
+        &self.profiles
+    }
+
+    pub fn outcome(&self) -> &DirectReciprocalPersistenceOutcome {
+        &self.outcome
+    }
+
+    pub fn into_parts(self) -> (ShareProfiles, DirectReciprocalPersistenceOutcome) {
+        (self.profiles, self.outcome)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirectReciprocalPersistenceError {
     Conflict(DirectReciprocalConflict),
+    PolicyDenied(DirectReciprocalPolicyDenied),
     Invalid(DirectReciprocalError),
     Persistence(String),
 }
@@ -30,6 +64,9 @@ impl fmt::Display for DirectReciprocalPersistenceError {
         match self {
             Self::Conflict(conflict) => {
                 DirectReciprocalError::Conflict(conflict.clone()).fmt(formatter)
+            }
+            Self::PolicyDenied(denial) => {
+                DirectReciprocalError::PolicyDenied(denial.clone()).fmt(formatter)
             }
             Self::Invalid(error) => error.fmt(formatter),
             Self::Persistence(error) => write!(formatter, "reciprocal Direct persistence: {error}"),
@@ -101,7 +138,7 @@ impl Drop for PreparedCredential {
 pub fn persist_reciprocal_direct_peer(
     default_home: Option<String>,
     peer: &DirectReciprocalPeer,
-) -> Result<DirectReciprocalPersistenceOutcome, DirectReciprocalPersistenceError> {
+) -> Result<DirectReciprocalPersistenceResult, DirectReciprocalPersistenceError> {
     let generated_contact_id = random_token(10).map_err(|error| {
         DirectReciprocalPersistenceError::Persistence(format!(
             "secure Direct contact id generation failed: {error}"
@@ -175,13 +212,16 @@ pub fn persist_reciprocal_direct_peer(
         });
 
         match transaction {
-            Ok(_) => {
+            Ok(profiles) => {
                 if apply_contact_id(&applied) == generated_contact_id {
                     if let Some(credential) = prepared.take() {
                         credential.disarm();
                     }
                 }
-                return Ok(map_apply_outcome(applied));
+                return Ok(DirectReciprocalPersistenceResult {
+                    profiles,
+                    outcome: map_apply_outcome(applied),
+                });
             }
             Err(error) => match abort.take() {
                 Some(TransactionAbort::NeedsPreparedCredential) => continue,
@@ -264,6 +304,9 @@ fn map_domain_error(error: DirectReciprocalError) -> DirectReciprocalPersistence
     match error {
         DirectReciprocalError::Conflict(conflict) => {
             DirectReciprocalPersistenceError::Conflict(conflict)
+        }
+        DirectReciprocalError::PolicyDenied(denial) => {
+            DirectReciprocalPersistenceError::PolicyDenied(denial)
         }
         other => DirectReciprocalPersistenceError::Invalid(other),
     }

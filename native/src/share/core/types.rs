@@ -6,6 +6,7 @@ use std::time::Instant;
 use super::exec_policy::ExecGrant;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
+use super::profiles::ShareProfiles;
 use super::{direct_ledger::DirectRequestEntry, direct_signal_event::DirectSignalEvent};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -336,6 +337,9 @@ mod endpoint_tests {
 /// What the UI tells the share worker to do.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ShareCmd {
+    ConfigureProfiles {
+        profiles: Box<ShareProfiles>,
+    },
     Configure {
         direct: Vec<DirectContact>,
         direct_grants: Vec<DirectGrant>,
@@ -375,12 +379,15 @@ pub enum ShareCmd {
         requester_device_id: String,
         accepted: bool,
     },
+    Discovery(super::discovery_signal_types::DiscoveryCommand),
 }
 
 #[derive(Clone, Debug)]
 pub enum ShareCmdResult {
     Applied,
     ExecGrant(Box<super::exec_grant_runtime::ExecGrantMutation>),
+    DiscoveryOffer(super::discovery_signal_types::DiscoveryOfferHandle),
+    DiscoveryExchange(super::discovery_signal_types::DiscoveryExchangeHandle),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -420,6 +427,10 @@ pub enum ShareEvent {
         room_id: String,
         device_id: String,
     },
+    Discovery(super::discovery_signal_types::DiscoveryEvent),
+    /// Secret-free notification emitted only after a persisted reciprocal or
+    /// discovery exchange has completed its application-level acknowledgement.
+    RuntimeProfilesCommitted,
 }
 
 pub(crate) struct PendingShareCmd {

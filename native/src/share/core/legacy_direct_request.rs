@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::core::{hex, presence_payload, public_fingerprint, verify_hmac};
+use super::direct_ledger::DirectRequestDirection;
 use super::direct_protocol::DirectPeerIdentity;
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
-use super::types::{DirectGrantState, PeerPresence};
+use super::types::{DirectAccessState, DirectGrantState, PeerPresence};
 
 pub const MAX_LEGACY_DIRECT_REQUESTS: usize = 24;
 pub const MAX_LEGACY_PRESENCE_FUTURE_SECS: i64 = super::types::MAX_PRESENCE_FUTURE_SECS;
@@ -184,6 +185,56 @@ impl LegacyDirectRequestEntry {
             ));
         }
         Ok(())
+    }
+}
+
+impl ShareProfiles {
+    /// Returns whether durable, exact-identity policy forbids automatic
+    /// acceptance. Authentication proves secret possession; it does not erase
+    /// an ignored contact or a user's retained rejection/revocation history.
+    pub(crate) fn direct_auto_accept_denied(
+        &self,
+        lookup_id: &str,
+        peer: &DirectPeerIdentity,
+    ) -> bool {
+        let ignored_grant = self.direct_grants.iter().any(|grant| {
+            grant.state == DirectGrantState::Ignored
+                && grant.device_id == peer.device_id
+                && grant.public_key == peer.public_key
+                && grant.fingerprint == peer.fingerprint
+                && grant.node_id == peer.node_id
+        });
+        let ignored_contact = self.direct_contacts.iter().any(|contact| {
+            contact.access_state == DirectAccessState::Ignored
+                && contact.remote_device_id.as_deref() == Some(peer.device_id.as_str())
+                && contact.remote_public_key.as_deref() == Some(peer.public_key.as_str())
+                && contact.expected_fingerprint == peer.fingerprint
+                && (contact.expected_node_id.is_empty()
+                    || contact.expected_node_id == peer.node_id)
+        });
+        let tracked_tombstone = self.direct_request_tombstones.iter().any(|tombstone| {
+            tombstone.direction == DirectRequestDirection::Incoming
+                && tombstone.request.lookup_id == lookup_id
+                && tombstone.request.requester == *peer
+        });
+        let selector = legacy_selector(lookup_id, peer);
+        let user_denial = self.legacy_direct_requests.iter().any(|entry| {
+            entry.selector == selector
+                && entry.decision_source == Some(LegacyDirectDecisionSource::User)
+                && matches!(
+                    entry.decision,
+                    LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
+                )
+        });
+        let legacy_tombstone = self
+            .legacy_direct_request_tombstones
+            .iter()
+            .any(|tombstone| tombstone.selector == selector);
+        ignored_grant
+            || ignored_contact
+            || tracked_tombstone
+            || user_denial
+            || legacy_tombstone
     }
 }
 

@@ -3,6 +3,7 @@ use std::io;
 use crossbeam_channel::{bounded, Receiver};
 
 use super::identity::ShareIdentity;
+use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_handshake::{await_hello_ok, SignalCapabilities};
 use super::system::lan_ips;
@@ -41,7 +42,10 @@ fn connect_and_negotiate(server: &str, identity: &ShareIdentity) -> io::Result<N
             lan: lan_ips(),
             public_key: identity.public_key.clone(),
             fingerprint: identity.fingerprint.clone(),
-            capabilities: vec![TRACKED_DIRECT_CAPABILITY.to_string()],
+            capabilities: vec![
+                TRACKED_DIRECT_CAPABILITY.to_string(),
+                DISCOVERY_EXCHANGE_CAPABILITY.to_string(),
+            ],
         },
     )?;
     let capabilities = await_hello_ok(&mut connection)?;

@@ -60,6 +60,16 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Discoverable Share pairing: RFC 9807 OPAQUE authenticates the exact user PIN
+# without exposing it to signaling. Suite v1 fixes Argon2id v0x13 to
+# m=19456 KiB, t=2, p=1 and wipes its explicit work memory. Follow-up bundles
+# use stage/direction-bound HKDF-SHA-512 keys with pure-Rust ChaCha20-Poly1305.
+opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255"] }
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+chacha20 = { version = "=0.10.0", default-features = false, features = ["rng", "zeroize"] }
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+hkdf = "0.12.4"
+zeroize = "1.8"
 # Cross-platform file identity checks keep updater targets, staging payloads,
 # and bookkeeping files from aliasing through hard links or symlinks.
 same-file = "1"

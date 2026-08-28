@@ -132,16 +132,21 @@ async fn handle_peer_stream(
     exec_slots: Arc<AtomicUsize>,
     legacy_connection: usize,
 ) -> io::Result<()> {
-    if let Err(error) = session.authorize(&auth) {
-        return io_deadline::run("Share authorization rejection", reply_err(&mut send, error))
-            .await;
-    }
     let ctrl = io_deadline::run(
         "Share operation frame",
         recv_ctrl_limited(&mut recv, MAX_REQUEST_CTRL_FRAME),
     )
     .await?;
     node.require_sharing_active()?;
+    if matches!(&ctrl, Ctrl::DirectReciprocal) {
+        let authorized = session.authorize_direct_repair(&auth)?;
+        super::direct_reciprocal_transport::serve_incoming_bounded(
+            send, recv, authorized, node.direct_repair_store.clone(),
+            node.direct_repair_slots.clone(), node.runtime_transition_slot.clone(),
+            node.ev.clone(),
+        ).await?;
+        return Ok(());
+    }
     let exports = match session.authorize(&auth) {
         Ok(exports) => exports,
         Err(error) => {
