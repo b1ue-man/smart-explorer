@@ -134,6 +134,10 @@ impl DirectPeerIdentity {
     }
 }
 
+pub(crate) fn validate_direct_lookup_id(value: &str) -> Result<(), DirectProtocolError> {
+    validate_text("lookup_id", value, MAX_ID_BYTES, false)
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DirectDecisionKind {

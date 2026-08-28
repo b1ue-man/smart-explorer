@@ -164,6 +164,24 @@ pub(super) struct DirectCode {
     pub(super) node_id: String,
 }
 
+impl std::fmt::Debug for DirectCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DirectCode")
+            .field("lookup_id", &self.lookup_id)
+            .field("secret", &"[REDACTED]")
+            .field("fingerprint", &self.fingerprint)
+            .field("node_id", &self.node_id)
+            .finish()
+    }
+}
+
+impl Drop for DirectCode {
+    fn drop(&mut self) {
+        self.secret.fill(0);
+    }
+}
+
 impl DirectCode {
     pub(super) fn parse(code: &str) -> Result<Self, String> {
         let rest = code
@@ -176,15 +194,16 @@ impl DirectCode {
         }
         let node_id = parts[0].trim().to_string();
         let fingerprint = parts[1].to_ascii_lowercase();
-        let secret = hex_decode(parts[2])?;
-        if secret.len() != 32 {
-            return Err("Direkt-Code enthaelt kein gueltiges Secret".into());
-        }
         if fingerprint.len() < 16 || !fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err("Direkt-Code enthaelt keinen gueltigen Fingerprint".into());
         }
         if node_id.is_empty() {
             return Err("Direkt-Code enthaelt keine Iroh NodeId".into());
+        }
+        let mut secret = hex_decode(parts[2])?;
+        if secret.len() != 32 {
+            secret.fill(0);
+            return Err("Direkt-Code enthaelt kein gueltiges Secret".into());
         }
         Ok(Self {
             lookup_id: parts[3].to_string(),
@@ -200,6 +219,22 @@ pub(super) struct RoomCode {
     pub(super) secret: Vec<u8>,
 }
 
+impl std::fmt::Debug for RoomCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RoomCode")
+            .field("room_id", &self.room_id)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for RoomCode {
+    fn drop(&mut self) {
+        self.secret.fill(0);
+    }
+}
+
 impl RoomCode {
     pub(super) fn parse(code: &str) -> Result<Self, String> {
         let rest = code
@@ -210,8 +245,9 @@ impl RoomCode {
         if parts.len() != 2 || parts[1].trim().is_empty() {
             return Err("Ungueltiger Raum-Code".into());
         }
-        let secret = hex_decode(parts[0])?;
+        let mut secret = hex_decode(parts[0])?;
         if secret.len() != 32 {
+            secret.fill(0);
             return Err("Raum-Code enthaelt kein gueltiges Secret".into());
         }
         Ok(Self {
