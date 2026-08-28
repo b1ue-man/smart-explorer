@@ -60,7 +60,7 @@ impl RuntimeConfiguration<'_> {
             Vec<super::direct_request_tombstone::DirectRequestTombstone>,
         )>,
     ) -> io::Result<()> {
-        let _transition = self.iroh.begin_runtime_transition()?;
+        let transition = self.iroh.begin_runtime_transition()?;
         let (changed, snapshot) = {
             let mut state = self.auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
             let policy_changed = requests.as_ref().is_some_and(|(entries, tombstones)| {
@@ -99,15 +99,18 @@ impl RuntimeConfiguration<'_> {
             *state = candidate;
             (changed, state.clone())
         };
-        if changed {
-            self.iroh.invalidate_sessions()?;
+        let invalidation = if changed {
             self.direct_requests_sent.clear();
-        }
+            self.iroh.invalidate_sessions().map(|_| ())
+        } else {
+            Ok(())
+        };
+        drop(transition);
         if let Some(reciprocal) = self.iroh.direct_repair_coordinator() {
             reciprocal.set_current_generation(snapshot.authorization_epoch);
             schedule_snapshot(&snapshot, &reciprocal);
         }
-        Ok(())
+        invalidation
     }
 }
 
@@ -127,6 +130,9 @@ pub(super) fn schedule_current(
 }
 
 fn schedule_snapshot(snapshot: &ShareAuthState, reciprocal: &DirectReciprocalCoordinator) {
+    if !snapshot.direct_online {
+        return;
+    }
     for contact in snapshot.direct_contacts.iter().filter(|contact| {
         contact.auto_connect && contact.access_state == DirectAccessState::Accepted
     }) {

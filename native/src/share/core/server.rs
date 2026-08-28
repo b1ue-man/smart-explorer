@@ -139,9 +139,8 @@ async fn handle_peer_stream(
     .await?;
     node.require_sharing_active()?;
     if matches!(&ctrl, Ctrl::DirectReciprocal) {
-        let authorized = session.authorize_direct_repair(&auth)?;
         super::direct_reciprocal_transport::serve_incoming_bounded(
-            send, recv, authorized, node.direct_repair_store.clone(),
+            send, recv, session, auth, node.direct_repair_store.clone(),
             node.direct_repair_slots.clone(), node.runtime_transition_slot.clone(),
             node.ev.clone(),
         ).await?;

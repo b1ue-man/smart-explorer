@@ -142,8 +142,8 @@ impl ShareIrohNode {
         self.routes.published(&self.endpoint)
     }
 
-    pub(crate) fn incoming_direct_repair_in_flight(&self) -> bool {
-        self.direct_repair_slots.available_permits() < MAX_CONCURRENT_DIRECT_REPAIRS
+    pub(crate) fn reciprocal_transition_in_flight(&self) -> bool {
+        self.runtime_transition_slot.available_permits() < RUNTIME_TRANSITION_PERMITS as usize
     }
 
     pub(super) fn begin_runtime_transition(&self) -> io::Result<tokio::sync::OwnedSemaphorePermit> {
