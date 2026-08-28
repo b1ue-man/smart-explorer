@@ -142,17 +142,14 @@ jobs:
           }
           wsl.exe --set-default $distro
           if ($LASTEXITCODE -ne 0) { throw "Could not make $distro the default WSL distribution." }
-          $packages = @(
-            "build-essential", "ca-certificates", "curl", "file", "git", "musl-tools",
-            "p7zip-full", "pkg-config", "python3", "xauth", "x11-utils", "xvfb",
-            "libegl1", "libgl1", "libgl1-mesa-dri", "libx11-6", "libx11-xcb1",
-            "libxcursor1", "libxi6", "libxkbcommon0", "libxkbcommon-x11-0", "libxrandr2"
-          ) -join " "
-          $setup = @"
+          $setup = @'
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y $packages
+          apt-get install -y \
+            build-essential ca-certificates curl file git musl-tools p7zip-full pkg-config \
+            python3 xauth x11-utils xvfb libegl1 libgl1 libgl1-mesa-dri libx11-6 \
+            libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
               sh -s -- -y --profile minimal
@@ -160,12 +157,12 @@ jobs:
           . /root/.cargo/env
           rustup component add rustfmt clippy
           for tool in bash cargo rustc rustup gcc musl-gcc file git xvfb-run xauth xwininfo; do
-            command -v "`$tool" >/dev/null 2>&1 || {
-              echo "missing WSL release tool: `$tool" >&2
+            command -v "$tool" >/dev/null 2>&1 || {
+              echo "missing WSL release tool: $tool" >&2
               exit 1
             }
           done
-          "@
+          '@
           $setup = $setup -replace "`r", ""
           wsl.exe -d $distro -u root -- bash -lc $setup
           if ($LASTEXITCODE -ne 0) { throw "WSL release-tool setup or preflight failed." }
