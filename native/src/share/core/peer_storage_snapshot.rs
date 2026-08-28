@@ -415,3 +415,7 @@ impl PeerSnapshotFailure {
 fn interrupted() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "peer storage snapshot canceled")
 }
+
+#[cfg(test)]
+#[path = "peer_storage_snapshot_task_tests.rs"]
+mod share_remote_task_tests;

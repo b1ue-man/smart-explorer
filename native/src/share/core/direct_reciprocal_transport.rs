@@ -199,6 +199,30 @@ pub(super) async fn serve_incoming_bounded(
     events: crossbeam_channel::Sender<super::types::ShareEvent>,
 ) -> io::Result<()> {
     let deadline = tokio::time::Instant::now() + super::io_deadline::PEER_OP_TIMEOUT;
+    let (authorized, runtime_guard) = admit_incoming_direct_repair(
+        deadline,
+        session,
+        auth,
+        slots,
+        transition_slot,
+    )
+    .await?;
+    super::io_deadline::run_until(
+        deadline,
+        "reciprocal Direct exchange timed out",
+        serve_incoming(send, recv, authorized, store, runtime_guard),
+    )
+    .await?;
+    publish_runtime_profiles_committed(&events)
+}
+
+async fn admit_incoming_direct_repair(
+    deadline: tokio::time::Instant,
+    session: Arc<IncomingSession>,
+    auth: Arc<Mutex<ShareAuthState>>,
+    slots: Arc<Semaphore>,
+    transition_slot: Arc<Semaphore>,
+) -> io::Result<(AuthorizedDirectRepair, SharedDirectRepairRuntimeGuard)> {
     let slot = super::io_deadline::run_until(
         deadline,
         "reciprocal Direct exchange timed out",
@@ -223,12 +247,12 @@ pub(super) async fn serve_incoming_bounded(
     .await?;
     let authorized = session.authorize_direct_repair(&auth)?;
     let runtime_guard = direct_repair_runtime_guard(transition, Some(slot));
-    super::io_deadline::run_until(
-        deadline,
-        "reciprocal Direct exchange timed out",
-        serve_incoming(send, recv, authorized, store, runtime_guard),
-    )
-    .await?;
+    Ok((authorized, runtime_guard))
+}
+
+fn publish_runtime_profiles_committed(
+    events: &crossbeam_channel::Sender<super::types::ShareEvent>,
+) -> io::Result<()> {
     match events.try_send(super::types::ShareEvent::RuntimeProfilesCommitted) {
         Ok(()) | Err(crossbeam_channel::TrySendError::Full(_)) => Ok(()),
         Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
@@ -381,3 +405,7 @@ fn stream_io_error() -> io::Error {
         "reciprocal Direct stream ended",
     )
 }
+
+#[cfg(test)]
+#[path = "direct_reciprocal_transport_task_tests.rs"]
+mod task_tests;

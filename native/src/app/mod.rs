@@ -167,6 +167,9 @@ mod temp_recovery_ui;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "core/share_remote_task_tests.rs"]
+mod share_remote_task_tests;
 #[path = "os/shared/transfer_helpers.rs"]
 mod transfer_helpers;
 #[path = "core/transfer_lifecycle.rs"]
