@@ -51,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in cargo grep mktemp tee; do
+for command_name in cargo grep mktemp pwsh tee; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -114,12 +114,23 @@ server_tests=(
     share_remote_task_server_discovery_rejections_cancel_and_expiry
 )
 
+ci_native_tests=(
+    ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial
+    ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful
+    ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant
+    ci_remote_task_first_verified_identity_wins_in_both_arrival_orders
+    ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity
+    ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost
+    ci_remote_task_tracked_reject_clears_conflict_but_retains_legacy_denial
+    ci_remote_task_legacy_revoke_resolves_conflict_before_tracked_accept
+)
+
 verify_test_log() {
     local log=$1
     local expected_count=$2
     shift 2
     local actual_count test_name occurrences
-    actual_count="$(grep -Ec '^test .*share_remote_task_.* \.\.\. ok$' "$log" || true)"
+    actual_count="$(grep -Ec '^test .* \.\.\. ok$' "$log" || true)"
     if [[ "$actual_count" -ne "$expected_count" ]]; then
         echo "expected $expected_count passing filtered tests in $log, found $actual_count" >&2
         exit 1
@@ -151,6 +162,13 @@ fi
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
 
+echo "share/remote task suite: corrected legacy authorization regressions"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --lib ci_remote_task_ -- --test-threads=1
+) 2>&1 | tee "$native_log"
+verify_test_log "$native_log" "${#ci_native_tests[@]}" "${ci_native_tests[@]}"
+
 echo "share/remote task suite: share-server wire and lifecycle"
 (
     cd "$repo_root/share-server"
@@ -158,5 +176,8 @@ echo "share/remote task suite: share-server wire and lifecycle"
 ) 2>&1 | tee "$server_log"
 verify_test_log "$server_log" "${#server_tests[@]}" "${server_tests[@]}"
 
+echo "share/remote task suite: remote CI and release orchestration"
+pwsh -NoLogo -NoProfile -File "$repo_root/native/test-ci-automation-task.ps1"
+
 suite_succeeded=true
-echo "share/remote task suite passed with the exact expected native and server results"
+echo "task-level suite passed with the exact expected native, server, and automation results"

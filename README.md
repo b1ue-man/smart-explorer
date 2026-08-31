@@ -470,6 +470,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    aus. Der fest auf `windows-2025` laufende Job bindet Ref, Checkout und
    Remote-`main` an exakt diesen SHA, richtet das gepinnte Windows-/Ubuntu-WSL1-
    Release-Environment ein und ruft ausschließlich den Top-Level-Wrapper auf.
+   Das ist der maßgebliche unbeaufsichtigte Pfad: lokal werden nur Commit, Push,
+   Dispatch und Monitoring ausgeführt; Build, Tests, Paketierung und
+   Veröffentlichung laufen auf GitHub-Runnern.
    Alternativ führt ein menschlicher Release-Operator lokal den nicht bauenden
    Preflight aus:
    `pwsh ./native/publish-release-local.ps1 -CheckEnvOnly`.
@@ -491,7 +494,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    GitHub Actions löst der Wrapper wegen GitHubs Rekursionsschutz mit dem
    Job-Token genau einen internen `publish_release=true`-Dispatch gegen den
    exakten Kandidaten-Ref aus und überwacht dessen zurückgegebene Run-ID; der
-   lokale Tag-/Fallback-Pfad bleibt unverändert. Ein
+   Wrapper wartet dabei ausschließlich für eine frisch zurückgegebene Run-ID
+   bis zu zwei Minuten auf GitHubs anfänglich noch unvollständige Ref-/SHA-
+   Metadaten. Abgeschlossene Abweichungen sowie spätere Drift brechen sofort ab.
+   Der lokale Tag-/Fallback-Pfad bleibt unverändert. Ein
    Fehler vor dem Tag bleibt bei derselben vorgesehenen Version; Tags werden
    niemals verschoben oder überschrieben. Ist nur der erste bereits getaggte
    Workflow fehlgeschlagen, kann derselbe Wrapper diesen exakten Run einmal mit
