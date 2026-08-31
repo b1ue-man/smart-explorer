@@ -121,7 +121,7 @@ ci_native_tests=(
     ci_remote_task_first_verified_identity_wins_in_both_arrival_orders
     ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity
     ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost
-    ci_remote_task_tracked_reject_clears_conflict_but_retains_legacy_denial
+    ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_conflict
     ci_remote_task_legacy_revoke_resolves_conflict_before_tracked_accept
 )
 
