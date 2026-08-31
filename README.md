@@ -463,7 +463,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 **[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
 1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und über seine eine
-   automatisierte Task-Suite validieren. Zwischencommits sind keine Releases.
+   automatisierte Task-Suite validieren. Der gepushte Head-Commit endet dafür
+   in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
+   nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
+   Zwischencommits sind keine Releases.
 2. Für den automatisierten Remote-Pfad `build.yml` genau einmal auf `main` mit
    `complete_release_source_sha=<vollständiger aktueller origin/main-SHA>`
    dispatchen; `verify_release_candidate` und `publish_release` bleiben dabei
