@@ -193,10 +193,11 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
         assert_eq!(accepted.decision, LegacyDirectDecisionState::Accepted);
         assert!(rejected.identity_conflict);
         assert_eq!(rejected.decision, LegacyDirectDecisionState::Rejected);
+        let rejected_selector = rejected.selector.clone();
         assert_eq!(profiles.direct_grants.len(), 1);
         assert_eq!(profiles.direct_grants[0].public_key, peer_key(seeds[0]));
         assert!(profiles
-            .decide_legacy_direct_request(&rejected.selector, true, 110)
+            .decide_legacy_direct_request(&rejected_selector, true, 110)
             .unwrap_err()
             .contains("not pending"));
     }
