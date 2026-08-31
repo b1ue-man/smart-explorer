@@ -100,7 +100,7 @@ fn explicit_accept_replaces_only_an_inactive_different_key_pin() {
 }
 
 #[test]
-fn ci_remote_task_tracked_reject_clears_conflict_but_retains_legacy_denial() {
+fn ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_conflict() {
     let identity = local_identity();
     let tracked = request(REQUEST_A, 1);
     let legacy = legacy_presence(&identity, 2, "legacy-b");
@@ -113,7 +113,7 @@ fn ci_remote_task_tracked_reject_clears_conflict_but_retains_legacy_denial() {
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
 
-    assert!(profiles.tracked_identity_conflict(&tracked.request_id));
+    assert!(!profiles.tracked_identity_conflict(&tracked.request_id));
     assert!(profiles.legacy_direct_requests[0].identity_conflict);
     profiles
         .record_direct_decision(decision(&tracked, DirectDecisionKind::Rejected, 120), 120)
