@@ -3135,9 +3135,9 @@
     "semantic_hash": "9f14c51010eeddc1b092c0e90b9069eb"
   },
   "share/core/legacy_direct_request_tests.rs": {
-    "mtime": 1788154772.2270362,
-    "ast_hash": "27fe86e1accbbc61e2f00437b3c1275b",
-    "semantic_hash": "27fe86e1accbbc61e2f00437b3c1275b"
+    "mtime": 1788155423.34006,
+    "ast_hash": "d5307dc92d6f5382c8f9fe9fde7c8a09",
+    "semantic_hash": "d5307dc92d6f5382c8f9fe9fde7c8a09"
   },
   "share/core/legacy_direct_request_validation.rs": {
     "mtime": 1783953813.7782211,
