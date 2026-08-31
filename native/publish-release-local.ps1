@@ -676,20 +676,35 @@ function Wait-GitHubActionsPublicationWorkflow(
     [string]$CandidateSha,
     [string]$TriggerBranch,
     [switch]$RetryFailedOnce,
+    [switch]$AllowInitialBindingPropagation,
     [datetimeoffset]$Deadline
 ) {
     $candidateSha = $CandidateSha.ToLowerInvariant()
     $title = "Publish release candidate $candidateSha"
     $retryFromAttempt = $null
+    $bindingObserved = $false
+    $bindingDeadline = [datetimeoffset]::UtcNow.AddMinutes(2)
+    if ($bindingDeadline -gt $Deadline) { $bindingDeadline = $Deadline }
     while ([datetimeoffset]::UtcNow -lt $Deadline) {
         $run = Invoke-GitHubGet "actions/runs/$RunId"
-        if ($run.event -ne "workflow_dispatch" -or
-            $run.head_sha.ToLowerInvariant() -ne $candidateSha -or
-            $run.head_branch -ne $TriggerBranch -or
-            $run.path -ne ".github/workflows/$workflowFile" -or
-            $run.display_title -ne $title) {
+        $bindingMatches = $run.event -eq "workflow_dispatch" -and
+            $run.head_sha.ToLowerInvariant() -eq $candidateSha -and
+            $run.head_branch -eq $TriggerBranch -and
+            $run.path -eq ".github/workflows/$workflowFile" -and
+            $run.display_title -eq $title
+        if (-not $bindingMatches) {
+            $withinInitialPropagation = $AllowInitialBindingPropagation -and
+                -not $bindingObserved -and
+                $run.status -ne "completed" -and
+                [datetimeoffset]::UtcNow -lt $bindingDeadline
+            if ($withinInitialPropagation) {
+                Write-Host "Waiting for GitHub to populate exact binding metadata for publication run $RunId."
+                if (-not (Wait-ReleasePublicationDelay -Deadline $bindingDeadline)) { break }
+                continue
+            }
             throw "Remote publication run $RunId is not bound to '$TriggerBranch' at '$candidateSha'."
         }
+        $bindingObserved = $true
         if ($run.status -eq "completed") {
             if ($run.conclusion -eq "success") { return $run }
             $attempt = [int]$run.run_attempt
@@ -1206,6 +1221,7 @@ try {
             -CandidateSha $candidateSha `
             -TriggerBranch $publicationTrigger.TriggerBranch `
             -RetryFailedOnce:$existingDispatch `
+            -AllowInitialBindingPropagation:(-not $existingDispatch) `
             -Deadline $deadline
     } else {
         Wait-ReleasePublicationWorkflow `

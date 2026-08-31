@@ -115,7 +115,9 @@ and `actions: write`. On the pinned `windows-2025` image it installs the missing
 Windows tools, provisions Ubuntu 24.04 as WSL1 through Canonical's SHA-pinned
 WSL action, preflights the WSL tools, and invokes only
 `native/publish-release-local.ps1`; no YAML step reproduces versioning, build,
-staging, tagging, or publication.
+staging, tagging, or publication. This is the authoritative unattended path:
+the initiating workstation only commits, pushes, dispatches, and monitors;
+compilation, tests, packaging, and publication execute on GitHub-hosted runners.
 
 The job-scoped `GITHUB_TOKEN` needs no repository secret. GitHub deliberately
 does not start a second workflow for a tag pushed with that token. Therefore,
@@ -125,12 +127,18 @@ fallback ref, asks the API to return the run ID, and monitors that exact
 publication run. The publication consumer still only verifies and publishes
 the committed bytes. A recovered remote wrapper reuses and, at most once,
 reruns the same exact failed dispatch instead of creating a competing pipeline.
+GitHub can briefly return the new run before its tag/SHA binding fields are
+fully populated. For only the exact run ID returned by the dispatch call, the
+wrapper allows up to two minutes for that initial metadata to settle. A
+completed mismatch, an existing mismatched run, or any drift after the exact
+binding has appeared still fails closed immediately.
 The local wrapper's tag/`release/v*` push behavior is unchanged. These hosted
 runner, token-recursion, and dispatch-response details were checked against the
 [Windows 2025 image inventory](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md),
 [GitHub token documentation](https://docs.github.com/en/actions/concepts/security/github_token),
-and [workflow REST API](https://docs.github.com/en/rest/actions/workflows) on
-2026-08-28. Repository policy must permit the declared job-token writes;
+the [workflow REST API](https://docs.github.com/en/rest/actions/workflows), and
+the official [`actions/checkout` v7 guidance](https://github.com/actions/checkout)
+on 2026-08-31. Repository policy must permit the declared job-token writes;
 otherwise the wrapper's non-interactive Git preflight or publication dispatch
 fails closed.
 

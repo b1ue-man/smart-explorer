@@ -35,11 +35,14 @@ cargo build --release
 # → target/release/smart_explorer.exe und target/release/se.exe
 ```
 
-Release-Artefakte werden nicht per Hand kopiert. Der aktuelle lokale
-Release-Flow steht in [`../docs/RELEASING.md`](../docs/RELEASING.md); auf einem
-Windows-Rechner ist `..\native\publish-release-local.ps1` der Standard, weil der
-Wrapper Windows- und Linux-Feed-Payloads inklusive `se` gemeinsam in einem
-isolierten Baum baut, prüft und erst danach rollback-geschützt veröffentlicht.
+Release-Artefakte werden nicht per Hand kopiert. Der vollständige Release-Flow
+steht in [`../docs/RELEASING.md`](../docs/RELEASING.md). Für unbeaufsichtigte
+Releases ist der einmalige `complete_release_source_sha`-Dispatch auf GitHub der
+Standard; er führt `..\native\publish-release-local.ps1` auf dem Remote-Runner
+aus. Ein menschlicher Windows-Operator kann denselben Wrapper weiterhin direkt
+verwenden. Der Wrapper baut Windows- und Linux-Feed-Payloads inklusive `se`
+gemeinsam in einem isolierten Baum, prüft sie und veröffentlicht sie erst danach
+rollback-geschützt.
 Die vollständigen Windows- und Linux-Pfade teilen
 `release-native/.complete-release.lock` und brechen bei einem zweiten Lauf vor
 dem Build ab. Ein fehlgeschlagener vollständiger Lauf behält seinen Stage und

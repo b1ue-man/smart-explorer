@@ -1,4 +1,4 @@
-name: share-remote-task-suite
+name: smart-explorer-task-suite
 
 # This workflow is deliberately manual and isolated from release publication.
 # Dispatch it once for the exact pushed candidate SHA after implementation ends.
@@ -28,7 +28,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -64,7 +64,7 @@ jobs:
             native
             share-server
 
-      - name: Run the single Share/Remote task suite
+      - name: Run the single task-level suite
         shell: bash
         timeout-minutes: 75
         run: |
