@@ -100,7 +100,7 @@ fn explicit_accept_replaces_only_an_inactive_different_key_pin() {
 }
 
 #[test]
-fn tracked_and_legacy_claims_conflict_then_resolve_through_reject() {
+fn ci_remote_task_tracked_reject_clears_conflict_but_retains_legacy_denial() {
     let identity = local_identity();
     let tracked = request(REQUEST_A, 1);
     let legacy = legacy_presence(&identity, 2, "legacy-b");
@@ -119,16 +119,15 @@ fn tracked_and_legacy_claims_conflict_then_resolve_through_reject() {
         .record_direct_decision(decision(&tracked, DirectDecisionKind::Rejected, 120), 120)
         .unwrap();
     assert!(!profiles.legacy_direct_requests[0].identity_conflict);
-    profiles
-        .decide_legacy_direct_request(&selector, true, 130)
-        .unwrap();
-    let grant = &profiles.direct_grants[0];
-    assert_eq!(grant.state, DirectGrantState::Accepted);
-    assert_eq!(grant.public_key, legacy.public_key);
+    let legacy_entry = profiles.legacy_direct_request(&selector).unwrap();
+    assert_eq!(legacy_entry.decision.code(), "rejected");
+    assert_eq!(profiles.direct_grants.len(), 1);
+    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
+    assert_eq!(profiles.direct_grants[0].public_key, tracked.requester.public_key);
 }
 
 #[test]
-fn legacy_reject_resolves_conflict_before_tracked_accept() {
+fn ci_remote_task_legacy_revoke_resolves_conflict_before_tracked_accept() {
     let identity = local_identity();
     let legacy = legacy_presence(&identity, 1, "legacy-a");
     let tracked = request(REQUEST_A, 2);
@@ -144,7 +143,7 @@ fn legacy_reject_resolves_conflict_before_tracked_accept() {
     assert!(profiles.legacy_direct_requests[0].identity_conflict);
 
     profiles
-        .decide_legacy_direct_request(&selector, false, 120)
+        .revoke_legacy_direct_request(&selector, 120)
         .unwrap();
     assert!(!profiles.tracked_identity_conflict(&tracked.request_id));
     profiles

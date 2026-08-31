@@ -42,7 +42,7 @@ fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
 }
 
 #[test]
-fn replay_is_idempotent_and_pending_delete_blocks_only_until_verified_expiry() {
+fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
     let first = presence(&identity, 2, "nonce-a", 200);
@@ -53,10 +53,18 @@ fn replay_is_idempotent_and_pending_delete_blocks_only_until_verified_expiry() {
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 101)
         .unwrap());
     let selector = profiles.legacy_direct_requests[0].selector.clone();
-    profiles
+    assert!(profiles
         .delete_legacy_direct_request(&selector, 110)
+        .unwrap_err()
+        .contains("active authorization"));
+    profiles
+        .revoke_legacy_direct_request(&selector, 110)
         .unwrap();
-    assert!(profiles.direct_grants.is_empty());
+    assert!(profiles
+        .delete_legacy_direct_request(&selector, 111)
+        .unwrap());
+    assert_eq!(profiles.direct_grants.len(), 1);
+    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
 
     let reconnect = presence(&identity, 2, "nonce-b", 230);
     assert!(!profiles
@@ -69,10 +77,14 @@ fn replay_is_idempotent_and_pending_delete_blocks_only_until_verified_expiry() {
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &later, 201)
         .unwrap());
     assert_eq!(profiles.legacy_direct_requests.len(), 1);
+    assert_eq!(
+        profiles.legacy_direct_requests[0].decision,
+        LegacyDirectDecisionState::Rejected
+    );
 }
 
 #[test]
-fn accept_reject_revoke_and_manual_answer_retry_remain_truthful() {
+fn ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
     let request = presence(&identity, 2, "nonce-a", 200);
@@ -80,9 +92,6 @@ fn accept_reject_revoke_and_manual_answer_retry_remain_truthful() {
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
-    profiles
-        .decide_legacy_direct_request(&selector, true, 110)
-        .unwrap();
     let entry = profiles.legacy_direct_request(&selector).unwrap();
     assert_eq!(entry.decision, LegacyDirectDecisionState::Accepted);
     assert_eq!(
@@ -129,7 +138,7 @@ fn accept_reject_revoke_and_manual_answer_retry_remain_truthful() {
 }
 
 #[test]
-fn identity_conflict_is_visible_and_can_never_be_accepted() {
+fn ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant() {
     let identity = identity();
     let other = peer_key(3);
     let mut profiles = ShareProfiles::default();
@@ -149,26 +158,16 @@ fn identity_conflict_is_visible_and_can_never_be_accepted() {
         .unwrap();
     let entry = profiles.legacy_direct_requests[0].clone();
     assert!(entry.identity_conflict);
-    assert_eq!(entry.decision, LegacyDirectDecisionState::Pending);
+    assert_eq!(entry.decision, LegacyDirectDecisionState::Rejected);
     assert!(profiles
         .decide_legacy_direct_request(&entry.selector, true, 110)
         .unwrap_err()
-        .contains("identity conflict"));
-    profiles
-        .decide_legacy_direct_request(&entry.selector, false, 110)
-        .unwrap();
-    assert_eq!(
-        profiles
-            .legacy_direct_request(&entry.selector)
-            .unwrap()
-            .decision,
-        LegacyDirectDecisionState::Rejected
-    );
+        .contains("not pending"));
     assert_eq!(profiles.direct_grants[0].public_key, peer_key(3));
 }
 
 #[test]
-fn conflicting_ungranted_identities_block_acceptance_in_both_arrival_orders() {
+fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
     let identity = identity();
     for seeds in [[2, 3], [3, 2]] {
         let mut profiles = ShareProfiles::default();
@@ -188,25 +187,23 @@ fn conflicting_ungranted_identities_block_acceptance_in_both_arrival_orders() {
                 .unwrap();
         }
         assert_eq!(profiles.legacy_direct_requests.len(), 2);
-        let selectors = profiles
-            .legacy_direct_requests
-            .iter()
-            .map(|entry| {
-                assert!(entry.identity_conflict);
-                entry.selector.clone()
-            })
-            .collect::<Vec<_>>();
-        for selector in selectors {
-            assert!(profiles
-                .decide_legacy_direct_request(&selector, true, 110)
-                .unwrap_err()
-                .contains("identity conflict"));
-        }
+        let accepted = &profiles.legacy_direct_requests[0];
+        let rejected = &profiles.legacy_direct_requests[1];
+        assert!(!accepted.identity_conflict);
+        assert_eq!(accepted.decision, LegacyDirectDecisionState::Accepted);
+        assert!(rejected.identity_conflict);
+        assert_eq!(rejected.decision, LegacyDirectDecisionState::Rejected);
+        assert_eq!(profiles.direct_grants.len(), 1);
+        assert_eq!(profiles.direct_grants[0].public_key, peer_key(seeds[0]));
+        assert!(profiles
+            .decide_legacy_direct_request(&rejected.selector, true, 110)
+            .unwrap_err()
+            .contains("not pending"));
     }
 }
 
 #[test]
-fn generic_grant_upsert_cannot_replace_an_accepted_identity() {
+fn ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
     let request_a = presence(&identity, 2, "nonce-a", 300);
@@ -214,9 +211,6 @@ fn generic_grant_upsert_cannot_replace_an_accepted_identity() {
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
         .unwrap();
     let selector_a = profiles.legacy_direct_requests[0].selector.clone();
-    profiles
-        .decide_legacy_direct_request(&selector_a, true, 110)
-        .unwrap();
     assert_eq!(profiles.legacy_answers_due(110).len(), 1);
 
     let request_b = presence(&identity, 3, "nonce-b", 310);
@@ -232,7 +226,7 @@ fn generic_grant_upsert_cannot_replace_an_accepted_identity() {
 }
 
 #[test]
-fn load_reconciles_an_accepted_history_when_its_exact_grant_was_lost() {
+fn ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
     let request_a = presence(&identity, 2, "nonce-a", 300);
@@ -240,9 +234,6 @@ fn load_reconciles_an_accepted_history_when_its_exact_grant_was_lost() {
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
-    profiles
-        .decide_legacy_direct_request(&selector, true, 110)
-        .unwrap();
     profiles.direct_grants.clear();
     assert!(profiles.validate_legacy_direct_requests().is_err());
 
