@@ -160,7 +160,7 @@ Assert-Task (
     $releaseGuide.Contains("allows up to two minutes for that initial metadata to settle")
 ) "release guide does not document the bounded metadata propagation wait"
 Assert-Task (
-    $releaseGuide.Contains('head commit ends in `[task candidate]`')
+    [regex]::IsMatch($releaseGuide, 'head\s+commit ends in `\[task candidate\]`')
 ) "release guide does not document single-suite candidate routing"
 $readme = [System.IO.File]::ReadAllText((Join-Path $repoRoot "README.md"))
 Assert-Task (
