@@ -191,6 +191,7 @@ jobs:
         startsWith(github.ref, 'refs/heads/') &&
         startsWith(github.ref, 'refs/heads/verify/v') == false &&
         startsWith(github.ref, 'refs/heads/release/v') == false &&
+        endsWith(github.event.head_commit.message, '[task candidate]') == false &&
         (github.ref != 'refs/heads/main' ||
           endsWith(github.event.head_commit.message, '[release candidate]') == false))
     runs-on: windows-latest

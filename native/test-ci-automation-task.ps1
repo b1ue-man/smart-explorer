@@ -147,6 +147,10 @@ foreach ($workflowPath in $workflowPaths) {
     ) "an outdated checkout runtime remains in $workflowPath"
     Assert-Task ($workflowText.Contains("actions/checkout@v7")) "current checkout runtime is missing from $workflowPath"
 }
+$buildWorkflow = [System.IO.File]::ReadAllText($workflowPaths[0])
+Assert-Task (
+    $buildWorkflow.Contains("endsWith(github.event.head_commit.message, '[task candidate]') == false")
+) "ordinary push builds do not exclude the exact task-suite candidate"
 
 $releaseGuide = [System.IO.File]::ReadAllText((Join-Path $repoRoot "docs/RELEASING.md"))
 Assert-Task (
@@ -155,6 +159,9 @@ Assert-Task (
 Assert-Task (
     $releaseGuide.Contains("allows up to two minutes for that initial metadata to settle")
 ) "release guide does not document the bounded metadata propagation wait"
+Assert-Task (
+    $releaseGuide.Contains('head commit ends in `[task candidate]`')
+) "release guide does not document single-suite candidate routing"
 $readme = [System.IO.File]::ReadAllText((Join-Path $repoRoot "README.md"))
 Assert-Task (
     $readme.Contains("Build, Tests, Paketierung und") -and

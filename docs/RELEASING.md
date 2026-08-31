@@ -292,7 +292,10 @@ directory and proves that it opens a real X window. It does not touch or
 promote `release-native`, write `version.txt`, or publish anything.
 
 On every ordinary branch push and pull request, `build.yml` runs development
-validation on native Windows and Ubuntu/mingw: formatting, dependency audit,
+validation on native Windows and Ubuntu/mingw. A pushed candidate whose head
+commit ends in `[task candidate]` is the deliberate exception: the ordinary
+matrix stays skipped while the one exact-SHA task-level workflow evaluates the
+batch. The ordinary matrix otherwise covers formatting, dependency audit,
 Windows-target checks, native Windows library and standalone-`se` tests,
 all-target host tests (including built-`se` subprocess coverage), Windows
 test-harness compilation, clippy, deterministic static-musl `se-agent` bundle
