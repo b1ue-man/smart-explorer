@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptRoot
 $wrapperPath = Join-Path $scriptRoot "publish-release-local.ps1"
+$publicationPath = Join-Path $scriptRoot "release-publication.ps1"
 $workflowPaths = @(
     (Join-Path $repoRoot ".github/workflows/build.yml"),
     (Join-Path $repoRoot ".github/workflows/share-remote-task.yml")
@@ -11,6 +12,52 @@ $workflowPaths = @(
 
 function Assert-Task([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
+}
+
+. $publicationPath
+
+$assetExpectationRoot = Join-Path (
+    [System.IO.Path]::GetTempPath()
+) "smart-explorer-publication-task-$([guid]::NewGuid().ToString('N'))"
+[void](New-Item -ItemType Directory -Path $assetExpectationRoot)
+try {
+    $versionPath = Join-Path $assetExpectationRoot "version.txt"
+    [System.IO.File]::WriteAllBytes(
+        $versionPath,
+        [System.Text.UTF8Encoding]::new($false).GetBytes("9.8.7`r`n")
+    )
+    $versionExpectation = Get-PublicationExpectedReleaseAsset `
+        -Asset ([pscustomobject]@{
+            LocalPath = $versionPath
+            PublishedName = "version.txt"
+        }) `
+        -Version "9.8.7"
+    $canonicalVersionPath = Join-Path $assetExpectationRoot "canonical-version.txt"
+    [System.IO.File]::WriteAllBytes(
+        $canonicalVersionPath,
+        [System.Text.UTF8Encoding]::new($false).GetBytes("9.8.7`n")
+    )
+    Assert-Task ($versionExpectation.Size -eq 6) `
+        "published version.txt expectation must use canonical LF bytes"
+    Assert-Task (
+        $versionExpectation.Sha256 -eq (Get-PublicationSha256 $canonicalVersionPath)
+    ) "published version.txt expectation must hash the canonical Git representation"
+
+    $binaryPath = Join-Path $assetExpectationRoot "payload.bin"
+    [System.IO.File]::WriteAllBytes($binaryPath, [byte[]]@(0, 1, 2, 255))
+    $binaryExpectation = Get-PublicationExpectedReleaseAsset `
+        -Asset ([pscustomobject]@{
+            LocalPath = $binaryPath
+            PublishedName = "payload.bin"
+        }) `
+        -Version "9.8.7"
+    Assert-Task ($binaryExpectation.Size -eq 4) `
+        "binary release asset expectation must retain the exact file size"
+    Assert-Task (
+        $binaryExpectation.Sha256 -eq (Get-PublicationSha256 $binaryPath)
+    ) "binary release asset expectation must retain the exact file digest"
+} finally {
+    Remove-Item -LiteralPath $assetExpectationRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $tokens = $null

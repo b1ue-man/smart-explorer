@@ -190,6 +190,49 @@ function Get-PublicationSha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-PublicationExpectedReleaseAsset {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Asset,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    Assert-PublicationNonEmptyFile $Asset.LocalPath
+    if ($Asset.PublishedName -eq "version.txt") {
+        $localVersion = (Get-Content -LiteralPath $Asset.LocalPath -Raw).Trim()
+        if ($localVersion -ne $Version) {
+            throw "Release version asset contains '$localVersion', expected '$Version'."
+        }
+        # Git normalizes this tracked text file to LF before the publication
+        # workflow checks it out.  The Windows wrapper may still hold the
+        # pre-commit CRLF working copy, so compare against the canonical blob.
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes("$Version`n")
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $hasher.ComputeHash($bytes)
+        } finally {
+            $hasher.Dispose()
+        }
+        $sha256 = -join @($hashBytes | ForEach-Object { $_.ToString("x2") })
+        return [pscustomobject]@{
+            Name = $Asset.PublishedName
+            LocalPath = $Asset.LocalPath
+            Size = [long]$bytes.Length
+            Sha256 = $sha256
+        }
+    }
+
+    $item = Get-Item -LiteralPath $Asset.LocalPath
+    return [pscustomobject]@{
+        Name = $Asset.PublishedName
+        LocalPath = $Asset.LocalPath
+        Size = [long]$item.Length
+        Sha256 = Get-PublicationSha256 $Asset.LocalPath
+    }
+}
+
 function Assert-PublicationHashSidecar {
     param(
         [Parameter(Mandatory = $true)][string]$Feed,
@@ -1339,13 +1382,9 @@ function Wait-ReleasePublicationAssets {
     }
     $expected = @{}
     foreach ($asset in $candidate.Assets) {
-        $item = Get-Item -LiteralPath $asset.LocalPath
-        $expected[$asset.PublishedName] = [pscustomobject]@{
-            Name = $asset.PublishedName
-            LocalPath = $asset.LocalPath
-            Size = [long]$item.Length
-            Sha256 = Get-PublicationSha256 $asset.LocalPath
-        }
+        $expected[$asset.PublishedName] = Get-PublicationExpectedReleaseAsset `
+            -Asset $asset `
+            -Version $Version
     }
     if ($expected.Count -ne 18) {
         throw "Expected release publication set must contain exactly 18 assets."
