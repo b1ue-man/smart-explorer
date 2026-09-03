@@ -200,7 +200,10 @@ For a human-operated workstation release, use the same wrapper directly:
    commit skips its redundant development CI run; the tag run performs the
    static exact committed Linux/Windows candidate gates and publishes the
    GitHub Release. The wrapper polls that exact run, checks all 18 published asset
-   digests against the local bytes, and only then reports success.
+   digests against the expected committed bytes, and only then reports success.
+   Binary and script assets remain byte-exact. For `version.txt`, the verifier
+   hashes the canonical UTF-8/LF Git representation so a Windows wrapper's
+   pre-commit CRLF working copy cannot cause a false post-publication failure.
 4. On Linux the wrapper finally installs `se` from that exact tag with release
    assets required, verifies its version and SHA-256, and requests the existing
    daemon's version-bound handoff. CLI-only installation leaves an existing
