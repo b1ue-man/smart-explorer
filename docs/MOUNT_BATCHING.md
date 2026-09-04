@@ -114,6 +114,10 @@ workflow invalidate that fingerprint. A mismatch or corrupt cache falls back to
 the same incremental library-target build. Checker-only revisions can therefore
 reuse the exact executable while rerunning the same task entrypoint. This is
 separate from the dependency cache, which normally removes workspace binaries.
+Fixture errors label the failing startup or native I/O operation, including
+synthetic fixture paths; bounded phase messages identify mount readiness,
+navigation completion, checker launch/results and teardown. These CI-only
+diagnostics are separate from the sanitized user checker report.
 The cache/save-on-failure contracts were checked on 2026-09-04 against the
 [Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
 and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).
