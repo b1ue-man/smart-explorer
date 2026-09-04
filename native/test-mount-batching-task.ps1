@@ -96,7 +96,7 @@ if ($InstallRuntime -and -not [IO.File]::Exists($dll)) {
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Installing the pinned runtime requires the administrator-enabled remote runner.'
     }
-    $download = Invoke-TaskProcess (Get-Command pwsh.exe -CommandType Application).Source @(
+    $download = Invoke-TaskProcess (Get-Command pwsh.exe -CommandType Application | Select-Object -First 1).Source @(
         '-NoProfile', '-NonInteractive', '-File', (Join-Path $nativeRoot 'fetch-dokany-runtime.ps1')
     ) 300 'runtime-download'
     if ($download.Code -ne 0) { throw "Pinned runtime download failed: $($download.Error)" }
@@ -132,7 +132,7 @@ if ([string]::IsNullOrWhiteSpace($TestBinary) -and -not [string]::IsNullOrWhiteS
 if ([string]::IsNullOrWhiteSpace($TestBinary)) {
     # This is the only build: one incremental native library test target, not
     # a workspace/all-target/release build. Discover its actual hashed filename.
-    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application).Source @(
+    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
         'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
     ) 5400 'native-incremental'
     if ($build.Code -ne 0) { throw "Affected native target failed to build: $($build.Error)" }
