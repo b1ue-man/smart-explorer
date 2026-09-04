@@ -151,6 +151,15 @@ and the plan's security/acceptance boundaries were checked on 2026-09-04 before
 the correction. The earlier unlabelled native error 2 could not be attributed
 retrospectively; subsequent native navigation completed, and exact failure
 labels remain in the fixture rather than treating a non-recurrence as proof.
+
+[Run 33930320930](https://github.com/b1ue-man/smart-explorer/actions/runs/33930320930)
+confirmed successful raw ordinary-node queries, exact link rejection, native
+deep navigation and a PowerShell checker PASS after the correction. Its
+deliberately stalled-backend case reached the outer parent deadline before any
+checker stdout/stderr or report appeared. The checker-only follow-up adds
+CI-conditional entry/initialization markers to distinguish a pre-body stall
+from a blocking script initializer before changing the supervision design.
+These markers contain no paths or user data and do not change deadlines.
 The cache/save-on-failure contracts were checked on 2026-09-04 against the
 [Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
 and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).

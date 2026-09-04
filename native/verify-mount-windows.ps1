@@ -13,6 +13,7 @@ param(
     [ValidateRange(20, 300)][int]$TimeoutSeconds = 120
 )
 
+if ($env:SMART_EXPLORER_MOUNT_TASK_LOG_ROOT) { [Console]::Error.WriteLine('[mount checker] script body entered'); [Console]::Error.Flush() }
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -26,6 +27,7 @@ $reason = 'no_active_managed_mount'
 $cliVersion = $null
 $reportSaved = $false
 $shellExe = [IO.Path]::Combine([Environment]::SystemDirectory, 'WindowsPowerShell\v1.0\powershell.exe')
+if ($env:SMART_EXPLORER_MOUNT_TASK_LOG_ROOT) { [Console]::Error.WriteLine('[mount checker] supervisor initialized'); [Console]::Error.Flush() }
 
 function Start-Captured {
     param([string]$Executable, [string]$Arguments, [int]$Seconds)
@@ -245,6 +247,7 @@ if ($stats.outcome -eq 'ERROR') { exit 3 }
 exit 2
 '@
 
+if ($env:SMART_EXPLORER_MOUNT_TASK_LOG_ROOT) { [Console]::Error.WriteLine('[mount checker] target discovery begins'); [Console]::Error.Flush() }
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'windows_required' }
     if (@($Drive).Count -gt 0) {
