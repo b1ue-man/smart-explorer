@@ -118,6 +118,18 @@ Fixture errors label the failing startup or native I/O operation, including
 synthetic fixture paths; bounded phase messages identify mount readiness,
 navigation completion, checker launch/results and teardown. These CI-only
 diagnostics are separate from the sanitized user checker report.
+The failed Windows checker returned a base `0x80070002` before its first
+directory lookup completed. That error alone does not identify the failing
+kernel request: [.NET Framework's attribute helper](https://github.com/microsoft/referencesource/blob/3b1eaf5203992df69de44c783a3eda37d3d4cd10/mscorlib/system/io/file.cs#L1356)
+can retry `GetFileAttributesEx` failures using `FindFirstFile`, trimming a root's
+trailing separator. The fixture therefore records bounded, test-only create,
+information and enumeration callback statuses/flags, and the raw parent-process
+`GetFileAttributesExW` result, before selecting a correction. In particular,
+the current blanket rejection of `FILE_OPEN_REPARSE_POINT` contradicts the
+[ordinary-file flag contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
+but is not yet claimed as the cause of this observed checker failure. No mount
+visibility flag, retry, delay or successful-navigation assertion is changed to
+collect this evidence. These additional API contracts were checked on 2026-09-04.
 The cache/save-on-failure contracts were checked on 2026-09-04 against the
 [Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
 and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).
