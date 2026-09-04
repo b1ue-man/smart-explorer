@@ -77,6 +77,14 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 
 ### Dokany remote-drive boundary
 
+- **Disable IPC batching before every filesystem creation.** The official
+  2.3.1.1000 DLL truncates the `0x1000` option to a byte when selecting its
+  consumer, while the driver receives batching enabled. Trailing requests in
+  a batch are then lost. `DokanOptions::prepare_for_create` clears only that
+  option before every foreign call, including reused options; ordinary
+  multithreading stays enabled. Do not replace this with single-thread mode or
+  clear it after creation. See [evidence and acceptance criteria](MOUNT_BATCHING.md)
+  before changing the guard or selecting a replacement runtime.
 - **This is a real user-mode filesystem, not CfAPI.** The selected backend root
   is exposed as a Windows drive letter through Dokany callbacks. Do not add a
   Cloud Files sync-root registration, placeholders, hydration callbacks, or

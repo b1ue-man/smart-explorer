@@ -6,12 +6,10 @@ use std::{
     },
 };
 
-use crate::{
-    daemon::MountHostSession,
-    mount::{DriveLetter, MountEngine, MountStatus},
-};
+use crate::mount::{DriveLetter, MountEngine, MountStatus};
 
 use super::{
+    callback_reporter::CallbackReporter,
     callback_timeout::{CallbackTimeoutLease, CallbackTimeoutSupervisor},
     handle_reservation::{HandleReservation, RenameReservation},
     handle_state::HandleTable,
@@ -28,7 +26,7 @@ pub(super) struct CallbackContext {
     pub(super) label: String,
     pub(super) volume_serial: u32,
     pub(super) cache_root_wide: Vec<u16>,
-    session: Arc<MountHostSession>,
+    reporter: CallbackReporter,
     handles: HandleTable,
     selected_drive: Mutex<DriveLetter>,
     stop_requested: AtomicBool,
@@ -40,7 +38,7 @@ impl CallbackContext {
     pub(super) fn new(
         engine: Arc<MountEngine>,
         runtime: DokanyRuntime,
-        session: Arc<MountHostSession>,
+        reporter: impl Into<CallbackReporter>,
         selected_drive: DriveLetter,
         read_only: bool,
         label: String,
@@ -57,7 +55,7 @@ impl CallbackContext {
             label,
             volume_serial,
             cache_root_wide,
-            session,
+            reporter: reporter.into(),
             handles: HandleTable::new(case_sensitive_paths, read_only),
             selected_drive: Mutex::new(selected_drive),
             stop_requested: AtomicBool::new(false),
@@ -134,7 +132,7 @@ impl CallbackContext {
     }
 
     pub(super) fn report(&self, status: MountStatus) {
-        if self.session.report_status(status).is_err() {
+        if self.reporter.report(status).is_err() {
             self.stop_requested.store(true, Ordering::Release);
         }
     }
