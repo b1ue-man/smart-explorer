@@ -97,6 +97,13 @@ se drive unmount M:
 se drive retry <mount-id>
 ```
 
+Dokany-IPC-Batching bleibt wegen eines im offiziellen 2.3.1.1000-DLL
+nachgewiesenen Request-Verlusts deaktiviert; normale parallele Verarbeitung
+bleibt aktiv. Ein DLL-/Treiberwechsel ist dafür nicht erforderlich. Nach dem
+App-Update bestehende Laufwerke neu mounten. Der eigenständige, rein lesende
+Windows-Check `native/verify-mount-windows.ps1` prüft echte Laufwerkszugriffe
+mit Zeitlimit; Details und Grenzen stehen in [MOUNT_BATCHING.md](docs/MOUNT_BATCHING.md).
+
 Die Metadaten-Tiefe ist in GUI und CLI von 0 bis 4 einstellbar und standardmäßig
 2. Vor der Laufwerksbereitschaft lädt Smart Explorer nur ein vollständiges
 Root-Snapshot; tiefere vollständige Verzeichnis-Snapshots folgen danach
