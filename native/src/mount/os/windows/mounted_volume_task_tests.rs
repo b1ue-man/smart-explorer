@@ -156,7 +156,7 @@ fn mount_batching_task_real_driver_navigation_and_checker() -> io::Result<()> {
     exercise_parallel(&fixture)?;
     eprintln!("[mount fixture] parallel navigation complete");
     callback_trace::arm_verbose();
-    callback_trace::probe_root_attributes(&fixture.root()?);
+    callback_trace::assert_metadata_queries(&fixture.root()?)?;
     let pass = run_checker(&fixture, &checker, "pass", 90, Duration::from_secs(100))?;
     assert_eq!(pass.0.code(), Some(0), "checker did not pass: {}", pass.1);
     assert_eq!(pass.1["outcome"], "PASS");

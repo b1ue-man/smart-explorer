@@ -13,10 +13,10 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use windows_sys::Win32::{
-    Foundation::{GetLastError, SetLastError},
+    Foundation::{GetLastError, SetLastError, ERROR_NOT_SUPPORTED},
     Storage::FileSystem::{
         GetFileAttributesExW, GetFileExInfoStandard, BY_HANDLE_FILE_INFORMATION,
-        WIN32_FILE_ATTRIBUTE_DATA,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, WIN32_FILE_ATTRIBUTE_DATA,
     },
 };
 
@@ -42,19 +42,50 @@ pub(super) fn arm_verbose() {
     eprintln!("[mount fixture] callback tracing armed; total callback line limit={MAX_LINES}");
 }
 
-pub(super) fn probe_root_attributes(root: &Path) {
-    let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+pub(super) fn assert_metadata_queries(root: &Path) -> io::Result<()> {
+    for (path, directory) in [(root.to_path_buf(), true), (root.join("root.txt"), false)] {
+        let attributes = probe_attributes(&path)
+            .map_err(|error| super::path_context("acceptance: GetFileAttributesExW", &path, error))?;
+        assert_eq!(attributes & FILE_ATTRIBUTE_DIRECTORY != 0, directory,
+            "GetFileAttributesExW returned wrong directory/file kind for {}: 0x{attributes:08x}",
+            path.display());
+        assert_eq!(attributes & FILE_ATTRIBUTE_REPARSE_POINT, 0,
+            "GetFileAttributesExW marked plain fixture node as a reparse point: {}",
+            path.display());
+    }
+    let link = root.join("outside-link");
+    match probe_attributes(&link) {
+        // create_file and file_information reject actual is_symlink metadata;
+        // callback_status maps Unsupported specifically to ERROR_NOT_SUPPORTED.
+        Err(error) if error.raw_os_error() == Some(ERROR_NOT_SUPPORTED as i32) => Ok(()),
+        Err(error) => Err(super::path_context(
+            "acceptance: link GetFileAttributesExW must fail with ERROR_NOT_SUPPORTED (50)",
+            &link, error,
+        )),
+        Ok(attributes) => Err(io::Error::other(format!(
+            "acceptance: link GetFileAttributesExW unexpectedly succeeded path={} attributes=0x{attributes:08x}",
+            link.display(),
+        ))),
+    }
+}
+
+fn probe_attributes(path: &Path) -> io::Result<u32> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     // All fields are integers/FILETIMEs. Read returned attributes only after
     // the BOOL succeeds; on failure capture GetLastError before other calls.
     let mut data: WIN32_FILE_ATTRIBUTE_DATA = unsafe { std::mem::zeroed() };
     let result = unsafe {
-        GetFileAttributesExW(path.as_ptr(), GetFileExInfoStandard,
+        GetFileAttributesExW(wide.as_ptr(), GetFileExInfoStandard,
             (&mut data as *mut WIN32_FILE_ATTRIBUTE_DATA).cast())
     };
     let error = if result == 0 { Some(unsafe { GetLastError() }) } else { None };
     let attributes = if result != 0 { Some(data.dwFileAttributes) } else { None };
     eprintln!("[mount fixture] parent GetFileAttributesExW pid={} path={:?} BOOL={result} error={error:?} attributes={attributes:?}",
-        std::process::id(), root);
+        std::process::id(), path);
+    match error {
+        Some(error) => Err(io::Error::from_raw_os_error(error as i32)),
+        None => Ok(data.dwFileAttributes),
+    }
 }
 
 unsafe extern "system" fn create_file(
@@ -74,10 +105,17 @@ unsafe extern "system" fn create_file(
             share_access, create_disposition, create_options, file_info,
         )
     };
-    record(status, || format!(
-        "CreateFile path={:?} access=0x{desired_access:08x} attributes=0x{file_attributes:08x} share=0x{share_access:08x} disposition={create_disposition} options=0x{create_options:08x} before={before:?} after={:?}",
-        unsafe { bounded_wide(file_name) }, unsafe { snapshot(file_info) },
-    ));
+    record(status, || {
+        // FILE_OPEN_BY_FILE_ID can supply binary data without a NUL terminator.
+        // Production rejects it; diagnostics must not decode it as a path.
+        let path = if create_options & 0x0000_2000 != 0 {
+            "<binary file ID>".into()
+        } else { unsafe { bounded_wide(file_name) } };
+        format!(
+            "CreateFile path={path:?} access=0x{desired_access:08x} attributes=0x{file_attributes:08x} share=0x{share_access:08x} disposition={create_disposition} options=0x{create_options:08x} before={before:?} after={:?}",
+            unsafe { snapshot(file_info) },
+        )
+    });
     status
 }
 

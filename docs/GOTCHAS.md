@@ -85,6 +85,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   multithreading stays enabled. Do not replace this with single-thread mode or
   clear it after creation. See [evidence and acceptance criteria](MOUNT_BATCHING.md)
   before changing the guard or selecting a replacement runtime.
+- **A no-follow open is not evidence of a link.** Windows attribute queries
+  use `FILE_OPEN_REPARSE_POINT` even on ordinary files and directory roots.
+  Accept that flag and inspect actual metadata; keep rejecting remote symlinks.
+  Blanket flag rejection breaks `GetFileAttributesExW`, and .NET Framework's
+  fallback can hide the original error behind "file not found". The exact
+  callback trace and platform contract are recorded in [the mount evidence](MOUNT_BATCHING.md).
 - **This is a real user-mode filesystem, not CfAPI.** The selected backend root
   is exposed as a Windows drive letter through Dokany callbacks. Do not add a
   Cloud Files sync-root registration, placeholders, hydration callbacks, or
@@ -273,16 +279,15 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   while temporarily absent during atomic save/delete/rename, and any `NotFound`
   in that mutation path retains the prior marker.
 - **Remote latency is application latency.** Reads first materialize an entire
-  file, and each changed flush uploads it entirely. Metadata requests have
-  absolute transport deadlines and metadata callbacks do not repeatedly reset
-  Dokany's timeout. Supervised whole-file read/write/flush callbacks may stay
-  alive while bytes make progress, but ambiguous mutations are never replayed.
+  file, and each changed flush uploads it entirely. Backend operations retain
+  their transport deadlines; supervised metadata and whole-file I/O callbacks
+  can extend Dokany's timeout while pending. Ambiguous mutations are never replayed.
   The reported free space is the local spool's lower bound, not the remote
   quota. Keep unrelated files parallel but serialize one file/namespace
   mutation.
 - **The surface is intentionally narrower than NTFS.** Windows file attributes
   and timestamps cannot be set, ACL/security writes, alternate data streams,
-  open-by-ID and reparse-point access are unsupported, and remote symlinks are
+  open-by-ID and actual reparse-point access are unsupported, and remote symlinks are
   hidden/rejected rather than followed. `GetFileSecurity` returns
   `STATUS_NOT_IMPLEMENTED` so Dokany synthesizes a current-user descriptor.
   Never fabricate durable remote semantics for metadata the backend cannot
