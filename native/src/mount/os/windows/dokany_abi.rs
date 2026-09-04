@@ -76,6 +76,17 @@ impl Default for DokanOptions {
     }
 }
 
+impl DokanOptions {
+    pub(super) fn prepare_for_create(&mut self) {
+        // Dokany 2.3.1 sends batching to the driver but truncates 0x1000 to
+        // BOOLEAN (u8) when choosing its consumer, dropping trailing events.
+        // Clear this BEFORE creation; the DLL can mutate/reuse these options.
+        // Keep normal parallel workers and every unrelated option unchanged.
+        // Evidence and the condition for removing this guard: docs/MOUNT_BATCHING.md.
+        self.options &= !OPTION_ALLOW_IPC_BATCHING;
+    }
+}
+
 #[repr(C)]
 pub(crate) struct DokanFileInfo {
     pub(crate) context: u64,

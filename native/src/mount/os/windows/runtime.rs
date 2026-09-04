@@ -194,13 +194,17 @@ impl DokanyRuntime {
         self.inner.info
     }
 
-    /// `options`, `operations`, their referenced strings, and `global_context`
+    /// `options` must be non-null, aligned and exclusively writable for this
+    /// call. It, `operations`, their referenced strings, and `global_context`
     /// must remain valid until the returned filesystem has been closed.
     pub(crate) unsafe fn create_file_system_raw(
         &self,
         options: *mut DokanOptions,
         operations: *mut DokanOperations,
     ) -> Result<DokanyFileSystem, DokanyCreateError> {
+        // Apply on every attempt, not only when initially allocating options:
+        // Dokany may change its caller-owned flags while selecting workers.
+        unsafe { (*options).prepare_for_create() };
         let mut handle: DokanHandle = null_mut();
         let status =
             unsafe { (self.inner.api.create_file_system)(options, operations, &mut handle) };

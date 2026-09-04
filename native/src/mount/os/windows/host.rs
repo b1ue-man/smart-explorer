@@ -22,7 +22,7 @@ use super::{
     cache_lease::CacheLease, callback_context::CallbackContext,
     callback_status::CALLBACK_TIMEOUT_MS, callbacks, wide::encode_mount_point, DokanOperations,
     DokanOptions, DokanyCreateError, DokanyFileSystem, DokanyPreflightError, DokanyRuntime,
-    DokanyRuntimeInfo, DokanyWaitOutcome, OPTION_ALLOW_IPC_BATCHING, OPTION_CASE_SENSITIVE,
+    DokanyRuntimeInfo, DokanyWaitOutcome, OPTION_CASE_SENSITIVE,
     OPTION_CURRENT_SESSION, OPTION_MOUNT_MANAGER, OPTION_WRITE_PROTECT,
 };
 
@@ -170,7 +170,6 @@ impl CallbackStorage {
         let mut options = Box::<DokanOptions>::default();
         options.options = OPTION_CURRENT_SESSION
             | OPTION_MOUNT_MANAGER
-            | OPTION_ALLOW_IPC_BATCHING
             | if context.case_sensitive_paths {
                 OPTION_CASE_SENSITIVE
             } else {
