@@ -14,6 +14,8 @@ use std::{
 
 #[path = "mounted_volume_fixture_backend.rs"]
 mod fixture_backend;
+#[path = "mounted_volume_task_trace.rs"]
+mod callback_trace;
 use fixture_backend::{FixtureBackend, CONTENTS, DEPTH};
 
 struct MountedFixture {
@@ -74,6 +76,7 @@ impl MountedFixture {
                 .map_err(|error| path_context("startup: encode absolute spool path", &spool, error))?,
         ).map_err(|error| io_context("startup: create callback context", error))?);
         let mut storage = CallbackStorage::new(context, false);
+        callback_trace::install(&mut storage.operations);
         assert_eq!(storage.options.single_thread, 0);
         assert_eq!(storage.options.options & OPTION_ALLOW_IPC_BATCHING, 0);
         // Model options reused after Dokany's CPU-count branch mutated them.
@@ -152,6 +155,8 @@ fn mount_batching_task_real_driver_navigation_and_checker() -> io::Result<()> {
     eprintln!("[mount fixture] parallel navigation begin");
     exercise_parallel(&fixture)?;
     eprintln!("[mount fixture] parallel navigation complete");
+    callback_trace::arm_verbose();
+    callback_trace::probe_root_attributes(&fixture.root()?);
     let pass = run_checker(&fixture, &checker, "pass", 90, Duration::from_secs(100))?;
     assert_eq!(pass.0.code(), Some(0), "checker did not pass: {}", pass.1);
     assert_eq!(pass.1["outcome"], "PASS");

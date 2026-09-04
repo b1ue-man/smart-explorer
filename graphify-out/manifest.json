@@ -2440,9 +2440,14 @@
     "semantic_hash": "15784b43e590404b07bf9a7e92feb728"
   },
   "mount/os/windows/mounted_volume_task_tests.rs": {
-    "mtime": 1788562417.7993872,
-    "ast_hash": "7c23e7a5b5d24a881ab63efbe32ef435",
-    "semantic_hash": "7c23e7a5b5d24a881ab63efbe32ef435"
+    "mtime": 1788563902.687433,
+    "ast_hash": "751437859ba3f61dca260e1c830ea791",
+    "semantic_hash": "751437859ba3f61dca260e1c830ea791"
+  },
+  "mount/os/windows/mounted_volume_task_trace.rs": {
+    "mtime": 1788563939.2641637,
+    "ast_hash": "42bafb94fe7a488f575dcc4dc6c7ca5e",
+    "semantic_hash": "42bafb94fe7a488f575dcc4dc6c7ca5e"
   },
   "mount/os/windows/runtime.rs": {
     "mtime": 1788557114.4751997,
