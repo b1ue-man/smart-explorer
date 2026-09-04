@@ -75,7 +75,13 @@ The coherent behavioral milestones and their acceptance criteria are:
    Windows boundary shared by SSH, Share and fallback; it is not a claim of
    end-to-end certification of all transports. Exercise the user checker on
    that same mounted volume. Missing driver/runtime is a failure, not a skip.
-4. **Distribution**: refresh the root source graph, commit/push the complete
+4. **Ordinary-node attribute queries** (`callbacks_open.rs` and the same Windows
+   fixture): accept no-follow opens on ordinary nodes, while continuing to
+   reject actual remote links and open-by-ID. Validate the latter before
+   interpreting a possibly binary file ID as a terminated path. The same suite
+   must observe successful raw root/file attribute queries, rejection of the
+   fixture link, and the unchanged PowerShell navigation/read acceptance.
+5. **Distribution**: refresh the root source graph, commit/push the complete
    candidate, evaluate one focused remote Windows suite, then invoke the existing
    complete-release automation once. Verify the published version and assets.
 
@@ -124,12 +130,27 @@ kernel request: [.NET Framework's attribute helper](https://github.com/microsoft
 can retry `GetFileAttributesEx` failures using `FindFirstFile`, trimming a root's
 trailing separator. The fixture therefore records bounded, test-only create,
 information and enumeration callback statuses/flags, and the raw parent-process
-`GetFileAttributesExW` result, before selecting a correction. In particular,
-the current blanket rejection of `FILE_OPEN_REPARSE_POINT` contradicts the
-[ordinary-file flag contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
-but is not yet claimed as the cause of this observed checker failure. No mount
-visibility flag, retry, delay or successful-navigation assertion is changed to
-collect this evidence. These additional API contracts were checked on 2026-09-04.
+`GetFileAttributesExW` result before selecting a correction.
+[Run 33929186454](https://github.com/b1ue-man/smart-explorer/actions/runs/33929186454)
+then demonstrated the exact cause: a root create request with access `0x80`,
+disposition `FILE_OPEN`, and options `0x00200000` was rejected by the production
+callback with `STATUS_NOT_SUPPORTED` (`0xc00000bb`). The raw parent query
+returned Win32 error 50. PowerShell processes reached the same mount, succeeded
+with ordinary directory opens, and hit the same rejected no-follow request.
+Thus this failure was not a missing process/session drive mapping.
+
+The correction removes the blanket rejection of `FILE_OPEN_REPARSE_POINT`:
+the [ordinary-file flag contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+says this flag has no effect on non-reparse nodes. Existing metadata-based
+remote-link refusal remains in place. The raw root and ordinary-file queries
+become required assertions alongside the unchanged user checker; the fixture
+link must still return error 50. Unsupported open-by-ID is rejected before path
+decoding because [its name can be binary and not NUL-terminated](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatefile).
+No visibility flag, retry or delay is changed. These additional API contracts
+and the plan's security/acceptance boundaries were checked on 2026-09-04 before
+the correction. The earlier unlabelled native error 2 could not be attributed
+retrospectively; subsequent native navigation completed, and exact failure
+labels remain in the fixture rather than treating a non-recurrence as proof.
 The cache/save-on-failure contracts were checked on 2026-09-04 against the
 [Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
 and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).

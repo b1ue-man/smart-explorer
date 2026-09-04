@@ -24,7 +24,6 @@ const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FILE_OPEN_BY_FILE_ID: u32 = 0x0000_2000;
-const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_WRITE_DATA: u32 = 0x0000_0002;
 const FILE_APPEND_DATA: u32 = 0x0000_0004;
 const FILE_WRITE_EA: u32 = 0x0000_0010;
@@ -54,8 +53,10 @@ pub(super) unsafe extern "system" fn create_file(
 ) -> NtStatus {
     unsafe {
         guard_long_with_context(file_info, |context| {
-            let path = read_wide(file_name)?;
+            // Open-by-ID names can be binary and not NUL-terminated. Reject
+            // unsupported flags before interpreting the input as a path.
             validate_create_flags(file_attributes, create_options)?;
+            let path = read_wide(file_name)?;
             let cache_safe = cache_safe_namespace_open(
                 desired_access,
                 create_disposition,
@@ -333,7 +334,10 @@ fn disposition_for_file(
 }
 
 fn validate_create_flags(attributes: u32, options: u32) -> Result<(), CallbackFailure> {
-    if options & (FILE_OPEN_BY_FILE_ID | FILE_OPEN_REPARSE_POINT) != 0 {
+    // FILE_OPEN_REPARSE_POINT is a no-follow request, not proof that the
+    // target is a link. Windows uses it for ordinary GetFileAttributesEx
+    // queries too. Actual links are rejected after stat by reject_open_symlink.
+    if options & FILE_OPEN_BY_FILE_ID != 0 {
         return Err(win32(ERROR_NOT_SUPPORTED));
     }
     if attributes & !(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NORMAL)
@@ -349,4 +353,17 @@ fn validate_create_flags(attributes: u32, options: u32) -> Result<(), CallbackFa
         .into());
     }
     Ok(())
+}
+
+#[test]
+fn mount_batching_task_no_follow_queries_preserve_link_and_id_boundaries() {
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    for options in [0, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE] {
+        assert!(validate_create_flags(0, options | OPEN_REPARSE_POINT).is_ok());
+    }
+    assert!(validate_create_flags(0, FILE_OPEN_BY_FILE_ID | OPEN_REPARSE_POINT).is_err());
+    assert!(validate_create_flags(0,
+        FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE | OPEN_REPARSE_POINT).is_err());
+    let link = crate::vfs::VfsMeta { is_symlink: true, ..Default::default() };
+    assert_eq!(reject_open_symlink(&link).unwrap_err().kind(), io::ErrorKind::Unsupported);
 }
