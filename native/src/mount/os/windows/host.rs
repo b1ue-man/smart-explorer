@@ -28,6 +28,10 @@ use super::{
 
 const CONTROL_POLL: Duration = Duration::from_millis(250);
 
+#[cfg(test)]
+#[path = "mounted_volume_task_tests.rs"]
+mod mount_batching_task;
+
 pub(crate) fn preflight_runtime() -> Result<DokanyRuntimeInfo, DokanyPreflightError> {
     DokanyRuntime::preflight().map(|runtime| runtime.info())
 }

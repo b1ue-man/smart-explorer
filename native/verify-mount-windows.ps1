@@ -115,7 +115,22 @@ try {
         $candidate = [IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'), 'Programs\Smart Explorer\se.exe')
     }
     if (-not [IO.File]::Exists($candidate)) { throw 'cli_missing' }
-    [pscustomobject]@{ executable = [IO.Path]::GetFullPath($candidate) } | ConvertTo-Json -Compress
+    $candidate = [IO.Path]::GetFullPath($candidate)
+    $systemDrive = [IO.Path]::GetPathRoot([Environment]::SystemDirectory)
+    if (-not $candidate.StartsWith($systemDrive, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'cli_requires_plain_system_drive_path'
+    }
+    # CreateProcess opens its executable synchronously before a child deadline
+    # can apply. Never hand the parent a CLI on a Dokany/UNC/reparse path.
+    # All potentially blocking path inspection stays in this bounded worker.
+    $cursor = $candidate
+    while (-not [string]::IsNullOrEmpty($cursor)) {
+        if (([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'cli_requires_plain_system_drive_path'
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    [pscustomobject]@{ executable = $candidate } | ConvertTo-Json -Compress
     exit 0
 } catch { '{"error":"cli_discovery_failed"}'; exit 3 }
 '@
