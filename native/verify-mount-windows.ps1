@@ -138,6 +138,8 @@ try {
 $probe = @'
 $stats = [ordered]@{
     worker = [int]$inputData.Worker; outcome = 'INCONCLUSIVE'; error_code = $null
+    error_line = 0; error_column = 0; error_id = $null; exception_type = $null
+    base_exception_type = $null; base_error_code = $null
     rounds = 0; directories = 0; unique_directories = 0; metadata = 0
     files_read = 0; bytes_read = 0; links_skipped = 0; capped = $false
 }
@@ -222,8 +224,19 @@ try {
     }
 } catch {
     $stats.outcome = 'ERROR'
-    # Exception messages and paths may contain account or filename details.
+    # Retain the failing worker statement and exception identity, never its
+    # source text, message, target object, stack trace or filesystem path.
     $stats.error_code = '0x{0:X8}' -f ($_.Exception.HResult -band 0xffffffffL)
+    $stats.error_line = [int]$_.InvocationInfo.ScriptLineNumber
+    $stats.error_column = [int]$_.InvocationInfo.OffsetInLine
+    $errorId = [string]$_.FullyQualifiedErrorId
+    if ($errorId -cmatch '^[A-Za-z0-9_.+,]{1,200}$') { $stats.error_id = $errorId }
+    $exceptionType = $_.Exception.GetType().FullName
+    if ($exceptionType -cmatch '^[A-Za-z0-9_.+]{1,160}$') { $stats.exception_type = $exceptionType }
+    $baseException = $_.Exception.GetBaseException()
+    $baseType = $baseException.GetType().FullName
+    if ($baseType -cmatch '^[A-Za-z0-9_.+]{1,160}$') { $stats.base_exception_type = $baseType }
+    $stats.base_error_code = '0x{0:X8}' -f ($baseException.HResult -band 0xffffffffL)
     $stats.unique_directories = $seen.Count
 }
 [pscustomobject]$stats | ConvertTo-Json -Compress
@@ -290,6 +303,9 @@ try {
                 # Only the fixed worker schema is copied into the public report.
                 $workerReports += [pscustomobject]@{
                     worker = [int]$parsed.worker; outcome = [string]$parsed.outcome
+                    error_line = [int]$parsed.error_line; error_column = [int]$parsed.error_column
+                    error_id = $parsed.error_id; exception_type = $parsed.exception_type
+                    base_exception_type = $parsed.base_exception_type; base_error_code = $parsed.base_error_code
                     error_code = $parsed.error_code; rounds = [int]$parsed.rounds
                     directories = [int]$parsed.directories; unique_directories = [int]$parsed.unique_directories
                     metadata = [int]$parsed.metadata; files_read = [int]$parsed.files_read

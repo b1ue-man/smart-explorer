@@ -105,6 +105,19 @@ accepts `-TestBinary` to reuse an existing native library test executable;
 otherwise it builds that single incremental target and discovers the executable
 from Cargo's JSON output. Only `mount_batching_task` cases execute.
 
+The CI workflow separately retains the compiled fixture with
+`-BinaryCacheRoot`, including on checker failure. Before reuse, the task verifies
+its binary SHA-256 and a fingerprint of the complete committed Git tree,
+excluding only this document, `docs/RELEASING.md`, and the standalone checker.
+Changes to Rust, assets, dependencies, the task script, its cache helper, or the
+workflow invalidate that fingerprint. A mismatch or corrupt cache falls back to
+the same incremental library-target build. Checker-only revisions can therefore
+reuse the exact executable while rerunning the same task entrypoint. This is
+separate from the dependency cache, which normally removes workspace binaries.
+The cache/save-on-failure contracts were checked on 2026-09-04 against the
+[Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
+and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).
+
 For an installed Windows mount, the standalone checker requires only Windows
 PowerShell 5.1 or later, not a repository build, Rust, or debugger. From a checked-out
 repository, its one command is:
@@ -132,6 +145,9 @@ guarantee against a concurrently changing tree. Files are sampled only when
 observed metadata reports at most 64 KiB, since the mount can materialize an
 entire file on open; concurrent growth can exceed that size estimate. Reports
 omit remote paths, names, file contents, account labels and raw CLI output.
+Failures retain only numeric worker-script line/column locations, bounded
+exception/error identifiers, and outer/base HRESULTs. Exception messages,
+source-line text, target objects and stack traces are not included.
 
 This validates observed behavior, not the identity of an already-running mount
 host or every possible remote operation. After updating the application, remount
