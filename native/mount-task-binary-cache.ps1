@@ -4,7 +4,7 @@
 
 function Get-MountTaskBuildFingerprint {
     param([string]$RepositoryRoot)
-    $tree = Invoke-TaskProcess (Get-Command git.exe -CommandType Application).Source @(
+    $tree = Invoke-TaskProcess (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source @(
         '-C', $RepositoryRoot, '-c', 'core.quotePath=true', 'ls-tree', '-r', '--full-tree', 'HEAD'
     ) 60 'binary-cache-inputs'
     if ($tree.Code -ne 0) { throw 'Could not fingerprint the committed mount task build inputs.' }
