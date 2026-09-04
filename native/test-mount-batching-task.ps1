@@ -2,6 +2,7 @@
 param(
     [string]$TestBinary = '',
     [string]$LogRoot = '',
+    [string]$BinaryCacheRoot = '',
     [switch]$InstallRuntime
 )
 
@@ -76,13 +77,15 @@ function Assert-TaskHash {
 
 # Parse the checked-in PowerShell code before invoking any subprocess. The
 # actual checker is then exercised under Windows PowerShell 5.1 by the fixture.
-foreach ($path in @($PSCommandPath, $env:SMART_EXPLORER_MOUNT_CHECKER,
+$cacheHelper = Join-Path $nativeRoot 'mount-task-binary-cache.ps1'
+foreach ($path in @($PSCommandPath, $cacheHelper, $env:SMART_EXPLORER_MOUNT_CHECKER,
         (Join-Path $nativeRoot 'fetch-dokany-runtime.ps1'))) {
     $tokens = $null
     $errors = $null
     [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
     if ($errors.Count -ne 0) { throw "PowerShell syntax error in $path`: $($errors.Message -join '; ')" }
 }
+. $cacheHelper
 
 $system = [Environment]::SystemDirectory
 $dll = Join-Path $system 'dokan2.dll'
@@ -115,6 +118,17 @@ $runtimeIdentity | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot
 $startDriver = Invoke-TaskProcess (Join-Path $system 'sc.exe') @('start', 'dokan2') 30 'driver-start'
 if ($startDriver.Code -notin @(0, 1056)) { throw "Could not start Dokany driver: $($startDriver.Output)" }
 
+$binaryCache = $null
+$buildFingerprint = $null
+$builtForTask = $false
+if ([string]::IsNullOrWhiteSpace($TestBinary) -and -not [string]::IsNullOrWhiteSpace($BinaryCacheRoot)) {
+    $binaryCache = Get-MountTaskCacheLocation $BinaryCacheRoot $repoRoot
+    $buildFingerprint = Get-MountTaskBuildFingerprint $repoRoot
+    $TestBinary = Get-MountTaskCachedBinary $binaryCache $buildFingerprint
+    if ([string]::IsNullOrWhiteSpace($TestBinary)) {
+        Write-Host 'No matching intact retained fixture; using the single incremental native build.'
+    }
+}
 if ([string]::IsNullOrWhiteSpace($TestBinary)) {
     # This is the only build: one incremental native library test target, not
     # a workspace/all-target/release build. Discover its actual hashed filename.
@@ -134,8 +148,12 @@ if ([string]::IsNullOrWhiteSpace($TestBinary)) {
     )
     if ($executables.Count -ne 1) { throw 'Cargo did not identify exactly one native library test executable.' }
     $TestBinary = $executables[0]
+    $builtForTask = $true
 }
 $TestBinary = (Resolve-Path -LiteralPath $TestBinary).Path
+if ($builtForTask -and $null -ne $binaryCache) {
+    Save-MountTaskCachedBinary $binaryCache $buildFingerprint $TestBinary
+}
 [IO.File]::WriteAllText((Join-Path $LogRoot 'test-executable.txt'), $TestBinary)
 $selected = Invoke-TaskProcess $TestBinary @('mount_batching_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0 -or $selected.Output -notmatch 'mount_batching_task_real_driver_navigation_and_checker') {

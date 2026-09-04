@@ -108,7 +108,9 @@ on `windows-2025`, installs the exact pinned runtime on the disposable runner,
 checks DLL/driver hashes, and incrementally builds the affected library test
 target if an existing binary was not supplied. It exercises real mounted-volume
 I/O and the standalone read-only Windows checker; it does not build release
-artifacts or replace the terminal release transaction below. See
+artifacts or replace the terminal release transaction below. Its separate
+fixture cache survives checker failures and requires matching binary SHA-256
+and committed build-input fingerprint before reuse. See
 [MOUNT_BATCHING.md](MOUNT_BATCHING.md) for the evidence and acceptance scope.
 
 The release is one terminal transaction, started only after the complete task

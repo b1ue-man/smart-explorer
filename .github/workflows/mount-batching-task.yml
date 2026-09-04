@@ -57,6 +57,14 @@ jobs:
           shared-key: windows-mount-batching
           cache-on-failure: true
 
+      - name: Restore source-bound fixture binary
+        id: mount-binary-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mount-task-binary
+          key: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Run the single Windows mounted-volume task suite
         shell: pwsh
         timeout-minutes: 110
@@ -64,6 +72,14 @@ jobs:
           ./native/test-mount-batching-task.ps1
           -InstallRuntime
           -LogRoot (Join-Path $env:RUNNER_TEMP 'mount-batching-task')
+          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'mount-task-binary')
+
+      - name: Keep the fixture binary even when its checker reports failure
+        if: always() && steps.mount-binary-cache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/mount-task-binary
+          key: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Retain runtime identity and bounded probe diagnostics
         if: always()
