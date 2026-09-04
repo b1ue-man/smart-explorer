@@ -101,6 +101,16 @@ documentation together.
 
 ## Cut a release
 
+For the Dokany request-delivery correction, the one task-level pipeline is
+`.github/workflows/mount-batching-task.yml`, bound by its full `candidate_sha`
+input to the pushed source. It invokes only `native/test-mount-batching-task.ps1`
+on `windows-2025`, installs the exact pinned runtime on the disposable runner,
+checks DLL/driver hashes, and incrementally builds the affected library test
+target if an existing binary was not supplied. It exercises real mounted-volume
+I/O and the standalone read-only Windows checker; it does not build release
+artifacts or replace the terminal release transaction below. See
+[MOUNT_BATCHING.md](MOUNT_BATCHING.md) for the evidence and acceptance scope.
+
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.

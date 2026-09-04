@@ -11,6 +11,10 @@
 //! 231, while `sys/public.h` defines the independent driver protocol as
 //! `0x190` (decimal 400).
 
+#[cfg(test)]
+#[path = "mount_options_task_tests.rs"]
+mod mount_batching_task;
+
 use std::ffi::c_void;
 
 use windows_sys::Win32::{

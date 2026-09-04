@@ -2330,9 +2330,14 @@
     "semantic_hash": "44d0ec36f6c65d69f936d19c6f2382c4"
   },
   "mount/os/windows/callback_context.rs": {
-    "mtime": 1785108637.2553685,
-    "ast_hash": "0784a7e1e34ca133191205dd6c6c9a44",
-    "semantic_hash": "0784a7e1e34ca133191205dd6c6c9a44"
+    "mtime": 1788557211.5251048,
+    "ast_hash": "8ef7d92372b0ecf314096a0f61c8f70b",
+    "semantic_hash": "8ef7d92372b0ecf314096a0f61c8f70b"
+  },
+  "mount/os/windows/callback_reporter.rs": {
+    "mtime": 1788557211.523105,
+    "ast_hash": "0f25923a67761dc200aeee0e59932b36",
+    "semantic_hash": "0f25923a67761dc200aeee0e59932b36"
   },
   "mount/os/windows/callback_status.rs": {
     "mtime": 1784877057.8494816,
@@ -2375,9 +2380,9 @@
     "semantic_hash": "07d15448e06e3dd50329989037ca277b"
   },
   "mount/os/windows/dokany_abi.rs": {
-    "mtime": 1784706340.7202165,
-    "ast_hash": "92a0b1d4aca0fd83a5fda63a96cdce74",
-    "semantic_hash": "92a0b1d4aca0fd83a5fda63a96cdce74"
+    "mtime": 1788557764.170973,
+    "ast_hash": "2b43364a09bb4afb6237b5bb9441d9c1",
+    "semantic_hash": "2b43364a09bb4afb6237b5bb9441d9c1"
   },
   "mount/os/windows/handle_access.rs": {
     "mtime": 1784637412.2775583,
@@ -2405,9 +2410,9 @@
     "semantic_hash": "42f2a2de235c9c42cb7b7e425e02c7fa"
   },
   "mount/os/windows/host.rs": {
-    "mtime": 1784876348.2498388,
-    "ast_hash": "580b07ca9212140edce6dc5491921196",
-    "semantic_hash": "580b07ca9212140edce6dc5491921196"
+    "mtime": 1788557849.0136433,
+    "ast_hash": "89fea3c0f0dcf54d5442aae9dc1ebf1f",
+    "semantic_hash": "89fea3c0f0dcf54d5442aae9dc1ebf1f"
   },
   "mount/os/windows/metadata.rs": {
     "mtime": 1784627615.9358141,
@@ -2420,14 +2425,29 @@
     "semantic_hash": "144a4ce43018c257e3e3e86a499d6c1c"
   },
   "mount/os/windows/mod.rs": {
-    "mtime": 1784875075.9485083,
-    "ast_hash": "35229b3379ea400d88268e039db344ef",
-    "semantic_hash": "35229b3379ea400d88268e039db344ef"
+    "mtime": 1788557211.5241048,
+    "ast_hash": "978535b046cad177102c2774cca32880",
+    "semantic_hash": "978535b046cad177102c2774cca32880"
+  },
+  "mount/os/windows/mount_options_task_tests.rs": {
+    "mtime": 1788557764.169973,
+    "ast_hash": "ec28e00854efd73aca57e154c8f01d7f",
+    "semantic_hash": "ec28e00854efd73aca57e154c8f01d7f"
+  },
+  "mount/os/windows/mounted_volume_fixture_backend.rs": {
+    "mtime": 1788557934.2573216,
+    "ast_hash": "15784b43e590404b07bf9a7e92feb728",
+    "semantic_hash": "15784b43e590404b07bf9a7e92feb728"
+  },
+  "mount/os/windows/mounted_volume_task_tests.rs": {
+    "mtime": 1788557934.2563217,
+    "ast_hash": "3180cc18adc01709c6e87cc0c7e1672f",
+    "semantic_hash": "3180cc18adc01709c6e87cc0c7e1672f"
   },
   "mount/os/windows/runtime.rs": {
-    "mtime": 1784706340.736217,
-    "ast_hash": "0ae821980f55d81a0510b55ff4bf61e4",
-    "semantic_hash": "0ae821980f55d81a0510b55ff4bf61e4"
+    "mtime": 1788557114.4751997,
+    "ast_hash": "843aac2c6b21de2162d81f8c772fc90f",
+    "semantic_hash": "843aac2c6b21de2162d81f8c772fc90f"
   },
   "mount/os/windows/runtime_install.rs": {
     "mtime": 1784701946.7132225,

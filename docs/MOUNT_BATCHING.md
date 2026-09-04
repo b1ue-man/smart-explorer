@@ -92,3 +92,48 @@ pipe reads can introduce a second hang. PowerShell encoded commands use UTF-16LE
 These contracts were checked on 2026-09-04 against [Process.WaitForExit](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.waitforexit),
 [redirected output](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.standardoutput),
 and [Windows PowerShell invocation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).
+
+## Running the bounded checks
+
+The single CI entrypoint is `native/test-mount-batching-task.ps1`, dispatched
+through `.github/workflows/mount-batching-task.yml` with `candidate_sha` equal
+to the selected pushed commit. Its Windows job has 120 minutes and the entrypoint
+has 110 minutes. `-InstallRuntime` installs only the pinned official MSI on that
+disposable remote runner if the DLL is absent. Installed DLL and driver SHA-256
+must match the audited binaries before the real-volume fixture runs. The script
+accepts `-TestBinary` to reuse an existing native library test executable;
+otherwise it builds that single incremental target and discovers the executable
+from Cargo's JSON output. Only `mount_batching_task` cases execute.
+
+For an installed Windows mount, the standalone checker requires only Windows
+PowerShell 5.1 or later, not a repository build, Rust, or debugger. From a checked-out
+repository, its one command is:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\native\verify-mount-windows.ps1
+```
+
+It discovers `se.exe` and up to three normal managed mounts. `-Drive M` explicitly
+selects a drive and bypasses CLI discovery. `-ReportPath C:\local\new-report.json`
+optionally creates a new local JSON report; it never overwrites an existing file.
+Automatic CLI startup accepts only a plain system-drive executable with no
+observed reparse ancestors: Windows opens executables synchronously, outside
+the child timeout. Use explicit `-Drive` for nonstandard CLI locations. This
+check does not claim atomic protection against concurrent local path replacement.
+Exit codes are 0 (PASS), 2 (INCONCLUSIVE), 3 (ERROR), and 4 (TIMEOUT). The default
+overall budget is 120 seconds, with at most five additional seconds for optional
+local report writing. A PASS requires four workers each completing three rounds,
+at least five distinct directories, and a nonempty small-file read. Insufficient
+sample data cannot produce a PASS.
+
+The probe never mounts, retries, unmounts, replaces the runtime, or writes remote
+data. Reparse entries are skipped; this is not an atomic namespace-confinement
+guarantee against a concurrently changing tree. Files are sampled only when
+observed metadata reports at most 64 KiB, since the mount can materialize an
+entire file on open; concurrent growth can exceed that size estimate. Reports
+omit remote paths, names, file contents, account labels and raw CLI output.
+
+This validates observed behavior, not the identity of an already-running mount
+host or every possible remote operation. After updating the application, remount
+before using it to check the correction. The real-driver fixture and the broader
+SSH/Share/reconnect/write certification tracked in `TODO.md` are distinct.
