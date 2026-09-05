@@ -75,6 +75,12 @@ The coherent behavioral milestones and their acceptance criteria are:
    Windows boundary shared by SSH, Share and fallback; it is not a claim of
    end-to-end certification of all transports. Exercise the user checker on
    that same mounted volume. Missing driver/runtime is a failure, not a skip.
+   For the deliberate stall, initialize the supervising PowerShell host first,
+   signal readiness using bounded named events, then arm the backend stall and
+   invalidate metadata before allowing it to invoke the checker in-process.
+   Keep the 20-second checker and 30-second outer deadlines. The existing host
+   captures the success-stream JSON directly into the fixture's local report;
+   the timeout must not depend on starting another report-writing shell.
 4. **Ordinary-node attribute queries** (`callbacks_open.rs` and the same Windows
    fixture): accept no-follow opens on ordinary nodes, while continuing to
    reject actual remote links and open-by-ID. Validate the latter before
@@ -160,6 +166,23 @@ checker stdout/stderr or report appeared. The checker-only follow-up adds
 CI-conditional entry/initialization markers to distinguish a pre-body stall
 from a blocking script initializer before changing the supervision design.
 These markers contain no paths or user data and do not change deadlines.
+[Run 33931270999](https://github.com/b1ue-man/smart-explorer/actions/runs/33931270999)
+reused the exact retained native fixture and established the boundary: the
+healthy run emitted all three markers, while the stalled run emitted none,
+including the immediately flushed first statement. The new host did not enter
+the script body; the script's timer could not supervise that pre-body wait.
+This does not identify the exact private Windows PowerShell stack frame.
+
+The revised fixture models a checker invoked from an already initialized
+console, using a readiness/continue handshake before fault injection, not a
+sleep or longer timeout. It invokes the same script with `&`, captures its
+JSON and `$LASTEXITCODE`, and saves that JSON using the existing host. This
+also avoids depending on the optional report writer's fresh-host startup
+while the mount remains stalled. The API/lifetime and invocation contracts
+were checked on 2026-09-05 against [CreateEventW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createeventw),
+[bounded event waits](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject),
+[Framework EventWaitHandle.OpenExisting](https://github.com/microsoft/referencesource/blob/3b1eaf5203992df69de44c783a3eda37d3d4cd10/mscorlib/system/threading/eventwaithandle.cs),
+and [PowerShell script exit status](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_automatic_variables?view=powershell-5.1#lastexitcode).
 The cache/save-on-failure contracts were checked on 2026-09-04 against the
 [Rust cache documentation](https://github.com/Swatinem/rust-cache/blob/v2/README.md)
 and [GitHub cache save action](https://github.com/actions/cache/blob/v4/save/README.md).
@@ -169,7 +192,7 @@ PowerShell 5.1 or later, not a repository build, Rust, or debugger. From a check
 repository, its one command is:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\native\verify-mount-windows.ps1
+& .\native\verify-mount-windows.ps1
 ```
 
 It discovers `se.exe` and up to three normal managed mounts. `-Drive M` explicitly
@@ -184,6 +207,12 @@ overall budget is 120 seconds, with at most five additional seconds for optional
 local report writing. A PASS requires four workers each completing three rounds,
 at least five distinct directories, and a nonempty small-file read. Insufficient
 sample data cannot produce a PASS.
+Invoke it from an existing, initialized, non-elevated PowerShell console.
+Starting a new `powershell.exe` against an already stalled mount can block
+before the script body and is outside the script's deadline. `&` invokes the
+local script without starting another parent process; its exit code is in
+`$LASTEXITCODE`. Any necessary permitted execution-policy adjustment should be
+process-scoped and restored afterward, never a persistent machine/user change.
 
 The probe never mounts, retries, unmounts, replaces the runtime, or writes remote
 data. Reparse entries are skipped; this is not an atomic namespace-confinement

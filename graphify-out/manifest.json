@@ -2434,15 +2434,20 @@
     "ast_hash": "ec28e00854efd73aca57e154c8f01d7f",
     "semantic_hash": "ec28e00854efd73aca57e154c8f01d7f"
   },
+  "mount/os/windows/mounted_volume_checker_process.rs": {
+    "mtime": 1788566800.8783092,
+    "ast_hash": "a1d832e2d5a09e5090772ebcf11982cc",
+    "semantic_hash": "a1d832e2d5a09e5090772ebcf11982cc"
+  },
   "mount/os/windows/mounted_volume_fixture_backend.rs": {
     "mtime": 1788557934.2573216,
     "ast_hash": "15784b43e590404b07bf9a7e92feb728",
     "semantic_hash": "15784b43e590404b07bf9a7e92feb728"
   },
   "mount/os/windows/mounted_volume_task_tests.rs": {
-    "mtime": 1788564929.3525417,
-    "ast_hash": "6ca138ed3cd7c80595c77985b3888f06",
-    "semantic_hash": "6ca138ed3cd7c80595c77985b3888f06"
+    "mtime": 1788566800.877309,
+    "ast_hash": "9c6bd7b97dc4aead4f362eb5e016f5d1",
+    "semantic_hash": "9c6bd7b97dc4aead4f362eb5e016f5d1"
   },
   "mount/os/windows/mounted_volume_task_trace.rs": {
     "mtime": 1788564929.3535419,

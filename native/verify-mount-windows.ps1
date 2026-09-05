@@ -2,6 +2,8 @@
 <#
 Checks observed Windows mounted-volume behavior using bounded, read-only I/O.
 No compilation, installation, remote writes, or automatic mount changes occur.
+Invoke with & from an initialized console: a fresh PowerShell host can block
+before this script starts if an existing mount is already stalled.
 Exit codes: 0 PASS, 2 INCONCLUSIVE, 3 ERROR, 4 TIMEOUT.
 The CLI version does not prove the identity/version of an existing mount host.
 #>

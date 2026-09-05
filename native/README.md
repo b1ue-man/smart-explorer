@@ -141,6 +141,7 @@ Callbacks bleiben aktiv; der Runtime-/Installer-Pin ändert sich nicht. Bereits
 aktive Mounts nach dem App-Update neu starten. `verify-mount-windows.ps1` ist
 ein eigenständiger PowerShell-5.1+-Check für begrenzte parallele Lesezugriffe auf
 echte Windows-Mounts, ohne Remote-Dateien zu ändern oder Laufwerke auszuwerfen.
+Mit `&` in einer bereits geöffneten, nicht erhöhten PowerShell aufrufen.
 Siehe [Nachweis und Prüfgrenzen](../docs/MOUNT_BATCHING.md).
 
 `--letter` akzeptiert `auto` (Standard) oder einen Buchstaben. Als Ziel gelten

@@ -6,7 +6,6 @@ use std::{
     fs::{self, File},
     io::Read,
     path::PathBuf,
-    process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
     time::Instant,
@@ -16,6 +15,9 @@ use std::{
 mod fixture_backend;
 #[path = "mounted_volume_task_trace.rs"]
 mod callback_trace;
+#[path = "mounted_volume_checker_process.rs"]
+mod checker_process;
+use checker_process::{run_checker, CheckerMode};
 use fixture_backend::{FixtureBackend, CONTENTS, DEPTH};
 
 struct MountedFixture {
@@ -157,7 +159,7 @@ fn mount_batching_task_real_driver_navigation_and_checker() -> io::Result<()> {
     eprintln!("[mount fixture] parallel navigation complete");
     callback_trace::arm_verbose();
     callback_trace::assert_metadata_queries(&fixture.root()?)?;
-    let pass = run_checker(&fixture, &checker, "pass", 90, Duration::from_secs(100))?;
+    let pass = run_checker(&fixture, &checker, CheckerMode::Healthy)?;
     assert_eq!(pass.0.code(), Some(0), "checker did not pass: {}", pass.1);
     assert_eq!(pass.1["outcome"], "PASS");
     assert_eq!(pass.1["read_only_probe"], true);
@@ -176,15 +178,10 @@ fn mount_batching_task_real_driver_navigation_and_checker() -> io::Result<()> {
     }
     fixture.assert_healthy();
 
-    // A fresh root lookup must reach the backend rather than the warm cache.
-    // The guard and fixture Drop both release the finite stall before unmount.
-    let release = fixture.backend.arm_stall();
-    fixture.storage.context.engine.invalidate_metadata("/", true);
-    eprintln!("[mount fixture] timeout branch: backend stall armed and root cache invalidated");
+    // The process helper waits for an initialized host before arming the
+    // finite backend stall; host startup is included in the outer deadline.
     let started = Instant::now();
-    let timed_out = run_checker(&fixture, &checker, "timeout", 20, Duration::from_secs(30));
-    drop(release);
-    eprintln!("[mount fixture] timeout branch: backend stall released");
+    let timed_out = run_checker(&fixture, &checker, CheckerMode::Stalled);
     let (status, report) = timed_out?;
     assert!(started.elapsed() < Duration::from_secs(31));
     assert!(fixture.backend.stalled_calls() > 0, "timeout never reached backend latch");
@@ -297,56 +294,6 @@ fn assert_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn run_checker(
-    fixture: &MountedFixture, checker: &Path, name: &str, timeout: u32, limit: Duration,
-) -> io::Result<(ExitStatus, serde_json::Value)> {
-    let report = fixture.logs.join(format!("{name}.json"));
-    let system_root = std::env::var_os("SystemRoot")
-        .ok_or_else(|| io::Error::other(format!("checker {name}: SystemRoot is required")))?;
-    let powershell = PathBuf::from(system_root)
-        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let stdout_path = fixture.logs.join(format!("{name}.stdout"));
-    let stderr_path = fixture.logs.join(format!("{name}.stderr"));
-    let stdout = File::create(&stdout_path)
-        .map_err(|error| path_context("checker: create stdout capture", &stdout_path, error))?;
-    let stderr = File::create(&stderr_path)
-        .map_err(|error| path_context("checker: create stderr capture", &stderr_path, error))?;
-    let drive = fixture.drive()?.get().to_string();
-    eprintln!("[mount fixture] checker {name} launch: drive={drive}, timeout={timeout}s, executable={}, script={}, cwd={}, report={}",
-        powershell.display(), checker.display(), fixture.temporary.path().display(), report.display());
-    let mut child = CapturedChild(Command::new(&powershell)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(checker).arg("-Drive").arg(&drive)
-        .arg("-ReportPath").arg(&report).arg("-TimeoutSeconds").arg(timeout.to_string())
-        .current_dir(fixture.temporary.path()).stdin(Stdio::null())
-        .stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr)).spawn()
-        .map_err(|error| io_context(format!(
-            "checker {name}: spawn executable={} script={} cwd={}",
-            powershell.display(), checker.display(), fixture.temporary.path().display(),
-        ), error))?);
-    let deadline = Instant::now() + limit;
-    loop {
-        if let Some(status) = child.0.try_wait()
-            .map_err(|error| io_context(format!("checker {name}: poll process exit"), error))? {
-            eprintln!("[mount fixture] checker {name} exited: {status}");
-            let bytes = fs::read(&report)
-                .map_err(|error| path_context("checker: read JSON report", &report, error))?;
-            let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-                .map_err(|error| io::Error::other(format!(
-                    "checker {name}: parse JSON report {}: {error}", report.display(),
-                )))?;
-            eprintln!("[mount fixture] checker {name} result: outcome={}", parsed["outcome"]);
-            return Ok((status, parsed));
-        }
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, format!(
-                "checker {name}: parent deadline after {limit:?}, pid={}", child.0.id(),
-            )));
-        }
-        thread::sleep(Duration::from_millis(40));
-    }
-}
-
 fn io_context(operation: impl std::fmt::Display, error: io::Error) -> io::Error {
     // Keep the error kind and the original debug representation, including
     // raw OS error codes, when adding the precise fixture operation.
@@ -355,17 +302,4 @@ fn io_context(operation: impl std::fmt::Display, error: io::Error) -> io::Error 
 
 fn path_context(operation: &str, path: &Path, error: io::Error) -> io::Error {
     io_context(format!("{operation} path={}", path.display()), error)
-}
-
-struct CapturedChild(Child);
-
-impl Drop for CapturedChild {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
-            // A kernel-blocked child may not terminate immediately. Never turn
-            // the outer supervisor into an unbounded wait; fixture Drop unmounts.
-            let _ = self.0.try_wait();
-        }
-    }
 }
