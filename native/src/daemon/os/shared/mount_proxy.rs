@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::sync::Arc;
 
 use crate::vfs::{
@@ -7,6 +8,12 @@ use crate::vfs::{
 
 use super::ipc_protocol::MountBackendCapabilities;
 use super::mount_request_gate::{MountRequestGate, MountRequestPermit};
+
+/// Mount metadata is latency-sensitive even though its daemon hop is local.
+/// Do not buffer small requests/replies behind an unrelated acknowledgement.
+pub(super) fn prepare_stream(stream: &TcpStream) -> io::Result<()> {
+    stream.set_nodelay(true)
+}
 
 /// Mount-only client wrapper around AgentBackend. It restores the sanitized
 /// error kinds flattened by the generic framing layer and exposes only the

@@ -1,51 +1,24 @@
-use std::io::{self, Read, Write};
+use std::io;
 
-use super::node_codec::{decode_node, validate_node};
+use super::node_codec::decode_node;
 use super::relative_path::ValidatedRelativePath;
-use super::types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK};
+use super::types::{Frame, SearchSpec, WireMeta, CHUNK};
 
 pub(super) const MAX_FRAME: usize = 64 * 1024 * 1024;
-pub(super) const MAX_DIRECTORY_ENTRIES: usize = 50_000;
+// Empty-name WireMeta: u32 name length, two flags, u64 size, i64 mtime,
+// and one optional-md5 flag. Variable string bytes can only increase this.
+pub(super) const MIN_WIRE_META_BYTES: usize = 23;
+
+#[path = "frame_encode.rs"]
+mod frame_encode;
+#[path = "frame_io.rs"]
+mod frame_io;
+pub use frame_io::{read_frame, write_frame};
 
 pub(super) fn validate_frame_len(len: usize) -> io::Result<()> {
     (len <= MAX_FRAME)
         .then_some(())
         .ok_or_else(|| bad("frame too large"))
-}
-
-fn put_u32(b: &mut Vec<u8>, v: u32) {
-    b.extend_from_slice(&v.to_le_bytes());
-}
-fn put_u64(b: &mut Vec<u8>, v: u64) {
-    b.extend_from_slice(&v.to_le_bytes());
-}
-fn put_i64(b: &mut Vec<u8>, v: i64) {
-    b.extend_from_slice(&v.to_le_bytes());
-}
-fn put_bool(b: &mut Vec<u8>, v: bool) {
-    b.push(v as u8);
-}
-fn put_str(b: &mut Vec<u8>, s: &str) {
-    put_u32(b, s.len() as u32);
-    b.extend_from_slice(s.as_bytes());
-}
-fn put_tagged_str(b: &mut Vec<u8>, tag: u8, value: &str) {
-    b.push(tag);
-    put_str(b, value);
-}
-fn put_bytes(b: &mut Vec<u8>, s: &[u8]) {
-    put_u32(b, s.len() as u32);
-    b.extend_from_slice(s);
-}
-
-fn put_opt_str(b: &mut Vec<u8>, s: &Option<String>) {
-    match s {
-        Some(v) => {
-            put_bool(b, true);
-            put_str(b, v);
-        }
-        None => put_bool(b, false),
-    }
 }
 
 pub(super) struct Reader<'a> {
@@ -59,7 +32,7 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> io::Result<&'a [u8]> {
-        if self.i + n > self.b.len() {
+        if n > self.remaining() {
             return Err(bad("truncated frame"));
         }
         let s = &self.b[self.i..self.i + n];
@@ -118,6 +91,10 @@ impl<'a> Reader<'a> {
         Ok(self.take(length)?.to_vec())
     }
 
+    fn remaining(&self) -> usize {
+        self.b.len() - self.i
+    }
+
     fn is_finished(&self) -> bool {
         self.i == self.b.len()
     }
@@ -135,15 +112,6 @@ fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
-fn put_meta(b: &mut Vec<u8>, m: &WireMeta) {
-    put_str(b, &m.name);
-    put_bool(b, m.is_dir);
-    put_bool(b, m.is_symlink);
-    put_u64(b, m.size);
-    put_i64(b, m.mtime_ms);
-    put_opt_str(b, &m.content_md5);
-}
-
 fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
     Ok(WireMeta {
         name: r.string()?,
@@ -155,205 +123,7 @@ fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
     })
 }
 
-fn put_node(b: &mut Vec<u8>, n: &WireNode) {
-    put_str(b, &n.name);
-    put_u64(b, n.size);
-    put_bool(b, n.is_dir);
-    put_u32(b, n.children.len() as u32);
-    for c in &n.children {
-        put_node(b, c);
-    }
-}
-
 impl Frame {
-    pub fn encode(&self, req_id: u64) -> io::Result<Vec<u8>> {
-        match self {
-            Frame::Data(data) if data.len() > CHUNK => {
-                return Err(bad("data frame exceeds the protocol chunk size"))
-            }
-            Frame::Dir(entries) if entries.len() > MAX_DIRECTORY_ENTRIES => {
-                return Err(bad("directory frame exceeds the entry limit"))
-            }
-            Frame::Tree(node) => validate_node(node)?,
-            Frame::TreeEntry { rel, .. } => {
-                ValidatedRelativePath::parse(rel)?;
-            }
-            _ => {}
-        }
-        let mut b = Vec::new();
-        put_u64(&mut b, req_id);
-        match self {
-            Frame::Hello { proto } => {
-                b.push(1);
-                put_u32(&mut b, *proto);
-            }
-            Frame::HelloOk { proto, version } => {
-                b.push(2);
-                put_u32(&mut b, *proto);
-                put_str(&mut b, version);
-            }
-            Frame::ListDir(p) => {
-                b.push(3);
-                put_str(&mut b, p);
-            }
-            Frame::Dir(v) => {
-                b.push(4);
-                put_u32(&mut b, v.len() as u32);
-                for m in v {
-                    put_meta(&mut b, m);
-                }
-            }
-            Frame::Stat(p) => {
-                b.push(5);
-                put_str(&mut b, p);
-            }
-            Frame::Meta(m) => {
-                b.push(6);
-                put_meta(&mut b, m);
-            }
-            Frame::WalkTree(p) => {
-                b.push(7);
-                put_str(&mut b, p);
-            }
-            Frame::Tree(n) => {
-                b.push(8);
-                put_node(&mut b, n);
-            }
-            Frame::Read { path, offset, len } => {
-                b.push(9);
-                put_str(&mut b, path);
-                put_u64(&mut b, *offset);
-                put_u64(&mut b, *len);
-            }
-            Frame::Write(p) => put_tagged_str(&mut b, 10, p),
-            Frame::WriteNew(p) => put_tagged_str(&mut b, 33, p),
-            Frame::Data(d) => {
-                b.push(11);
-                put_bytes(&mut b, d);
-            }
-            Frame::Copy { src, dst } => {
-                b.push(12);
-                put_str(&mut b, src);
-                put_str(&mut b, dst);
-            }
-            Frame::Rename { src, dst } => {
-                b.push(13);
-                put_str(&mut b, src);
-                put_str(&mut b, dst);
-            }
-            Frame::Remove { path, recursive } => {
-                b.push(14);
-                put_str(&mut b, path);
-                put_bool(&mut b, *recursive);
-            }
-            Frame::Mkdir(p) => {
-                b.push(15);
-                put_str(&mut b, p);
-            }
-            Frame::GetTree(p) => {
-                b.push(16);
-                put_str(&mut b, p);
-            }
-            Frame::PutTree(p) => {
-                b.push(17);
-                put_str(&mut b, p);
-            }
-            Frame::TreeEntry {
-                rel,
-                is_dir,
-                size,
-                mtime_ms,
-            } => {
-                b.push(18);
-                put_str(&mut b, rel);
-                put_bool(&mut b, *is_dir);
-                put_u64(&mut b, *size);
-                put_i64(&mut b, *mtime_ms);
-            }
-            Frame::Search { root, spec } => {
-                b.push(19);
-                put_str(&mut b, root);
-                put_str(&mut b, &spec.query);
-                put_bool(&mut b, spec.glob);
-                put_u64(&mut b, spec.min_size);
-                put_u64(&mut b, spec.max_size);
-                put_u64(&mut b, spec.max_results);
-                put_bool(&mut b, spec.want_dirs);
-            }
-            Frame::Match {
-                rel,
-                is_dir,
-                size,
-                mtime_ms,
-            } => {
-                b.push(20);
-                put_str(&mut b, rel);
-                put_bool(&mut b, *is_dir);
-                put_u64(&mut b, *size);
-                put_i64(&mut b, *mtime_ms);
-            }
-            Frame::WalkHashed { root, want_hash } => {
-                b.push(21);
-                put_str(&mut b, root);
-                put_bool(&mut b, *want_hash);
-            }
-            Frame::HashEntry {
-                rel,
-                is_dir,
-                size,
-                mtime_ms,
-                md5,
-            } => {
-                b.push(22);
-                put_str(&mut b, rel);
-                put_bool(&mut b, *is_dir);
-                put_u64(&mut b, *size);
-                put_i64(&mut b, *mtime_ms);
-                put_opt_str(&mut b, md5);
-            }
-            Frame::Progress { done, total } => {
-                b.push(23);
-                put_u64(&mut b, *done);
-                put_u64(&mut b, *total);
-            }
-            Frame::Ok => b.push(24),
-            Frame::End => b.push(25),
-            Frame::Err(e) => {
-                b.push(26);
-                put_str(&mut b, e);
-            }
-            Frame::Cancel => b.push(27),
-            Frame::TryExists(p) => put_tagged_str(&mut b, 28, p),
-            Frame::Exists(exists) => {
-                b.push(29);
-                put_bool(&mut b, *exists);
-            }
-            Frame::RenameNoReplace { src, dst } => {
-                b.push(30);
-                put_str(&mut b, src);
-                put_str(&mut b, dst);
-            }
-            Frame::Promote {
-                staged,
-                destination,
-            } => {
-                b.push(31);
-                put_str(&mut b, staged);
-                put_str(&mut b, destination);
-            }
-            Frame::PromoteNoReplace {
-                staged,
-                destination,
-            } => {
-                b.push(32);
-                put_str(&mut b, staged);
-                put_str(&mut b, destination);
-            }
-        }
-        validate_frame_len(b.len())?;
-        Ok(b)
-    }
-
     pub fn decode(body: &[u8]) -> io::Result<(u64, Frame)> {
         validate_frame_len(body.len())?;
         let mut r = Reader::new(body);
@@ -367,8 +137,10 @@ impl Frame {
             3 => Frame::ListDir(r.string()?),
             4 => {
                 let n = r.u32()? as usize;
-                if n > MAX_DIRECTORY_ENTRIES {
-                    return Err(bad("directory frame exceeds the entry limit"));
+                if n > r.remaining() / MIN_WIRE_META_BYTES {
+                    return Err(bad(
+                        "directory entry count exceeds the remaining frame bytes",
+                    ));
                 }
                 let mut v = Vec::with_capacity(n.min(4096));
                 for _ in 0..n {
@@ -469,28 +241,4 @@ impl Frame {
         }
         Ok((req_id, frame))
     }
-}
-
-pub fn write_frame(w: &mut impl Write, req_id: u64, frame: &Frame) -> io::Result<()> {
-    let body = frame.encode(req_id)?;
-    w.write_all(&(body.len() as u32).to_le_bytes())?;
-    w.write_all(&body)?;
-    w.flush()
-}
-
-pub fn read_frame(r: &mut impl Read) -> io::Result<Option<(u64, Frame)>> {
-    let mut lenb = [0u8; 4];
-    let mut got = 0;
-    while got < 4 {
-        match r.read(&mut lenb[got..])? {
-            0 if got == 0 => return Ok(None),
-            0 => return Err(bad("eof inside length")),
-            n => got += n,
-        }
-    }
-    let len = u32::from_le_bytes(lenb) as usize;
-    validate_frame_len(len)?;
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
-    Ok(Some(Frame::decode(&body)?))
 }
