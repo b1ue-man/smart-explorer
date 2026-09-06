@@ -40,13 +40,22 @@ if [ "$check_env" != "1" ] && [ -z "${SMART_EXPLORER_RELEASE_LOCK_TOKEN:-}" ]; t
   echo "Run 'pwsh native/publish-release-local.ps1' so one wrapper owns the version, lock, build, publication, and final verification." >&2
   exit 1
 fi
-for tool in cargo rustc rustup git curl x86_64-w64-mingw32-gcc \
+for tool in cargo rustc rustup git curl pwsh x86_64-w64-mingw32-gcc \
   x86_64-w64-mingw32-objdump makensis sha256sum file install 7z; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Required release tool missing: $tool" >&2
     exit 1
   }
 done
+
+if [ -n "${SMART_EXPLORER_DOKANY_DLL_DIR:-}" ] || [ -n "${SMART_EXPLORER_DOKANY_DLL_SHA256:-}" ]; then
+  echo "Release payload builds refuse bootstrap private-DLL overrides." >&2
+  exit 1
+fi
+# GNU consumers embed the same approved x64 DLL; no MSBuild or DLL rebuilding
+# belongs to this complete cross-platform release transaction.
+pwsh -NoProfile -NonInteractive -File "$script_dir/prepare-dokany-private.ps1" \
+  -ArtifactDirectory "$script_dir/assets/dokany-private" -VerifyOnly -RequireApproved
 
 version="$(sed -nE 's/^version = "([^"]+)".*/\1/p' Cargo.toml | head -1)"
 if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then

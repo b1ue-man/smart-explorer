@@ -2,6 +2,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "build_support/private_dokany.rs"]
+mod private_dokany;
+
 fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=app.rc");
@@ -11,6 +14,9 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    private_dokany::generate().unwrap_or_else(|error| {
+        panic!("private Dokany embedding contract failed: {error}")
+    });
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu") {
         return;
     }

@@ -163,6 +163,12 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "t
 # cgroup-backed services. The CLI never shells out to systemd-run.
 zbus = { version = "5.16", default-features = false, features = ["tokio", "blocking-api"] }
 
+[build-dependencies]
+# Pure-Rust verification of prepared DLL bytes; never compile/download Dokany
+# from build.rs. Both dependencies already occur in Cargo.lock.
+serde_json = "1"
+sha2 = "0.10"
+
 [profile.release]
 opt-level = 3
 # Full LTO and one monolithic codegen unit made the desktop crate exceed the

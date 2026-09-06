@@ -180,6 +180,15 @@ if (-not $archiveExtractor) {
     throw "7z wird zum Prüfen der eingebetteten Dokany-Installerdateien benötigt."
 }
 
+# Reuse the remotely approved runtime bytes; never build a new DLL as an
+# incidental part of installer/feed publication, or accept a bootstrap override.
+if ($env:SMART_EXPLORER_DOKANY_DLL_DIR -or $env:SMART_EXPLORER_DOKANY_DLL_SHA256) {
+    throw "Release payload builds refuse bootstrap private-DLL overrides."
+}
+& (Join-Path $PSScriptRoot "prepare-dokany-private.ps1") `
+    -ArtifactDirectory (Join-Path $PSScriptRoot "assets/dokany-private") `
+    -VerifyOnly -RequireApproved | Out-Host
+
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
 $rustcVersion = (& rustc -vV | Out-String)
