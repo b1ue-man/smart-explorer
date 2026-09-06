@@ -129,7 +129,9 @@ prepared copy, or treat a preparation result alone as suite approval. Before
 expensive builds, `publish-release-local.ps1` invokes the dependency verifier
 with `-VerifyOnly -RequireApproved`. This checks the canonical tracked, unchanged
 inputs and their exact payload/source/provenance hashes; absent, partial or
-mismatched inputs fail. Its Windows and Linux feed leaves repeat that verification.
+mismatched inputs fail. Its Windows and Linux-host cross-platform feed leaves
+repeat that verification; the Windows wrapper's WSL Linux-only leaf neither
+builds nor consumes the Windows DLL.
 All release paths reject `SMART_EXPLORER_DOKANY_DLL_DIR` and
 `SMART_EXPLORER_DOKANY_DLL_SHA256` bootstrap overrides. These variables belong
 only to controlled task-suite preparation, not publication.
@@ -164,7 +166,8 @@ and committed build-input fingerprint before reuse. See
 That historical entrypoint is not an additional gate for the current
 optimization batch. Its relevant regression coverage runs inside
 `native/test-mount-optimization-task.ps1`, selected by the exact-candidate
-`.github/workflows/mount-optimization-task.yml` dispatch. That single entrypoint
+`.github/workflows/mount-optimization-task.yml` dispatch on `windows-2022`, which
+supplies the recipe's VS 2022/v143 compiler. That single entrypoint
 prepares or verifies the private dependency, reuses one source-and-payload-bound
 incremental library fixture, runs only this batch's selected behavior, and
 records `approval.json` after success. The job timeout is 180 minutes; its one

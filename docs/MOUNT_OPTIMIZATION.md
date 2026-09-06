@@ -19,6 +19,14 @@ uses `StringComparison.Ordinal`, following [.NET's string-comparison contract](h
 (checked 2026-09-06). BOM rejection itself remains enforced. This failed attempt
 does not approve any runtime artifact or mounted behavior.
 
+The [next attempt](https://github.com/b1ue-man/smart-explorer/actions/runs/34049203874)
+passed recipe parsing but stopped at compiler discovery. Its runner image was
+`windows-2025-vs2026`, without the required VS 2022 installation. The same suite
+now selects `windows-2022`, whose [published image inventory](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)
+includes VS 2022/v143 (checked 2026-09-06). The source/toolchain acceptance
+contract is unchanged; the terminal release reuses the approved DLL rather than
+requiring its compiler on the release runner.
+
 ## Complete requested batch
 
 Improve local-like remote-drive use: repeated file access, an Obsidian-style
@@ -282,7 +290,7 @@ bounded request-delivery regression fixture within this same task invocation.
 The fixture cache identity includes both committed inputs and the exact embedded
 DLL/source-package hashes. The suite retains `approval.json` only after all
 selected behavior succeeds; preparation alone does not approve the DLL. Its
-remote job allows 180 minutes, with one 170-minute task invocation. Retained
+`windows-2022` remote job allows 180 minutes, with one 170-minute task invocation. Retained
 dependency artifacts are verified and reused through the same fix loop.
 Map every milestone above to explicit expected results and log backend-call/
 transfer/concurrency measurements without presenting synthetic latency as a user's
