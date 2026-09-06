@@ -227,7 +227,7 @@ fn io_status(context: &CallbackContext, error: &io::Error) -> NtStatus {
         io::ErrorKind::AlreadyExists => ERROR_ALREADY_EXISTS,
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => ERROR_INVALID_PARAMETER,
         io::ErrorKind::TimedOut => ERROR_SEM_TIMEOUT,
-        io::ErrorKind::WriteZero => ERROR_DISK_FULL,
+        io::ErrorKind::WriteZero | io::ErrorKind::StorageFull => ERROR_DISK_FULL,
         io::ErrorKind::UnexpectedEof => ERROR_HANDLE_EOF,
         io::ErrorKind::Unsupported => ERROR_NOT_SUPPORTED,
         io::ErrorKind::OutOfMemory => ERROR_NOT_ENOUGH_MEMORY,

@@ -71,7 +71,7 @@ pub(crate) fn audit_recovery(
     crate::mount::spool::audit_recovery(cache_root, mount_id)
 }
 
-fn prepare_plain_directory(path: &Path) -> io::Result<File> {
+pub(super) fn prepare_plain_directory(path: &Path) -> io::Result<File> {
     match fs::create_dir(path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -80,7 +80,7 @@ fn prepare_plain_directory(path: &Path) -> io::Result<File> {
     open_plain_directory(path)
 }
 
-fn open_plain_directory(path: &Path) -> io::Result<File> {
+pub(super) fn open_plain_directory(path: &Path) -> io::Result<File> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || is_reparse_point(&metadata) {
         return Err(unsafe_cache_object(
@@ -108,7 +108,7 @@ fn validate_existing_target(path: &Path) -> io::Result<()> {
     }
 }
 
-fn validate_directory_handle(directory: &File) -> io::Result<()> {
+pub(super) fn validate_directory_handle(directory: &File) -> io::Result<()> {
     let information = file_information(directory)?;
     if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
         || information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -120,7 +120,7 @@ fn validate_directory_handle(directory: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_lock_handle(file: &File) -> io::Result<()> {
+pub(super) fn validate_lock_handle(file: &File) -> io::Result<()> {
     let information = file_information(file)?;
     if information.nNumberOfLinks != 1
         || information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
@@ -133,7 +133,7 @@ fn validate_lock_handle(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn file_information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
+pub(super) fn file_information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     let ok = unsafe {
         GetFileInformationByHandle(file.as_raw_handle() as _, &mut information as *mut _)

@@ -2,7 +2,8 @@ Dokany optional runtime dependency
 ==================================
 
 Smart Explorer can install the unmodified official Dokany x64 runtime MSI as
-an optional system-wide prerequisite for Windows remote-drive hosting.
+an optional system-wide prerequisite for Windows remote-drive hosting. The
+official driver and system DLL are not overwritten by the private correction.
 
 Version: 2.3.1.1000 (API 231)
 Upstream project: https://github.com/dokan-dev/dokany
@@ -17,4 +18,28 @@ of GNU GPL v3, GNU LGPL v3, and the upstream MIT notice accompany this notice.
 
 Dokany is not part of Smart Explorer and is not removed by the Smart Explorer
 uninstaller because it is a shared machine-wide runtime that other programs
-may use. Smart Explorer loads the installed user-mode library dynamically.
+may use.
+
+Private user-mode correction
+----------------------------
+Smart Explorer also distributes a modified x64 user-mode DLL based on commit
+f1d5de68ff459af94e309cfdd171e4b8ca2af4dd. The correction normalizes batching options
+before driver startup, fixes a mask-to-BOOLEAN truncation, and adds a private
+completed-batch counter for verification. It makes no driver/protocol change.
+This modified library remains licensed under GNU LGPL version 3.
+
+The application embeds the verified DLL and its corresponding-source.zip and
+loads a hash-addressed private copy. The official installed DLL remains the
+non-batched compatibility fallback. Portable and auto-updated applications
+extract this notice, the license texts and corresponding-source.zip next to
+that private runtime before loading it.
+
+Full Smart Explorer source, private-library patch, build recipe, recombination
+instructions and approved dependency bytes are available in the repository:
+https://github.com/b1ue-man/smart-explorer
+Use the source tag matching the installed Smart Explorer version. In that
+source tree see native/dokany-private/README.md and
+native/assets/dokany-private/corresponding-source.zip. The complete application
+source and supplied preparation/build materials allow modification and
+recombination with a modified library; byte pinning is an integrity check, not
+a restriction on modifying or rebuilding the supplied source.
