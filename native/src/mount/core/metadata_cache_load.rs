@@ -153,6 +153,7 @@ pub(super) fn invalidate_descendants(loads: &mut LoadTable, parent: &str) {
     let prefix = format!("{}/", parent.trim_end_matches('/'));
     for (_, slot) in loads.slots.range(prefix.clone()..)
         .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+        .filter(|(candidate, _)| candidate.as_str() != parent)
     {
         if let Some(slot) = slot.upgrade() { slot.invalidate(); }
     }

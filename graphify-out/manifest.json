@@ -2285,19 +2285,19 @@
     "semantic_hash": "e454559737366a98a6438c1dcd1da9b0"
   },
   "mount/core/metadata_cache_load.rs": {
-    "mtime": 1788727109.608866,
-    "ast_hash": "048564a236b266a4c15a8469966f9c3b",
-    "semantic_hash": "048564a236b266a4c15a8469966f9c3b"
+    "mtime": 1788731010.6671088,
+    "ast_hash": "5c15b336504d7ce1b392ed0263dce19b",
+    "semantic_hash": "5c15b336504d7ce1b392ed0263dce19b"
   },
   "mount/core/metadata_cache_order.rs": {
-    "mtime": 1788726606.7337408,
-    "ast_hash": "5a94e0b97c252368696e1186669ad1a7",
-    "semantic_hash": "5a94e0b97c252368696e1186669ad1a7"
+    "mtime": 1788731010.6651087,
+    "ast_hash": "5a1e97856f456c7712d23fb1b618ae65",
+    "semantic_hash": "5a1e97856f456c7712d23fb1b618ae65"
   },
   "mount/core/metadata_cache_support.rs": {
-    "mtime": 1788726682.159275,
-    "ast_hash": "bc1302749087374d8520a016a36f44b7",
-    "semantic_hash": "bc1302749087374d8520a016a36f44b7"
+    "mtime": 1788731010.6681087,
+    "ast_hash": "5d6be83f9e65859c807297988bc64ae7",
+    "semantic_hash": "5d6be83f9e65859c807297988bc64ae7"
   },
   "mount/core/metadata_cache_task_tests.rs": {
     "mtime": 1788728307.7305748,
@@ -2315,14 +2315,14 @@
     "semantic_hash": "9c94e3b77b3de939f877d6fb714bba88"
   },
   "mount/core/metadata_point_cache.rs": {
-    "mtime": 1788726682.159275,
-    "ast_hash": "586ec1d9af46f7e517d271a5c8425cef",
-    "semantic_hash": "586ec1d9af46f7e517d271a5c8425cef"
+    "mtime": 1788731010.6691089,
+    "ast_hash": "5714bb73199c121c8c4a75e06f8cca94",
+    "semantic_hash": "5714bb73199c121c8c4a75e06f8cca94"
   },
   "mount/core/metadata_point_order.rs": {
-    "mtime": 1788726068.8748765,
-    "ast_hash": "3e842433a7d90528816e5de4383cda06",
-    "semantic_hash": "3e842433a7d90528816e5de4383cda06"
+    "mtime": 1788731010.6661088,
+    "ast_hash": "c6a6f8a34419149a86f6ba7ac15b1077",
+    "semantic_hash": "c6a6f8a34419149a86f6ba7ac15b1077"
   },
   "mount/core/metadata_policy.rs": {
     "mtime": 1784726553.2782001,
@@ -2425,9 +2425,9 @@
     "semantic_hash": "61c24c80fd97144c743b3506d8d941e3"
   },
   "mount/core/vault_metadata_task_tests.rs": {
-    "mtime": 1788728365.8656967,
-    "ast_hash": "0cf367c28075cb6233f2150cf3e2fa93",
-    "semantic_hash": "0cf367c28075cb6233f2150cf3e2fa93"
+    "mtime": 1788731010.6701088,
+    "ast_hash": "106b096e2753713d2fe2ff65f047c5fb",
+    "semantic_hash": "106b096e2753713d2fe2ff65f047c5fb"
   },
   "mount/core/vault_scheduler_task_tests.rs": {
     "mtime": 1788727740.7463865,

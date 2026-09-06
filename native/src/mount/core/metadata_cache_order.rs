@@ -6,6 +6,7 @@ use std::time::Instant;
 pub(super) fn descendants<T>(map: &BTreeMap<String, T>, key: &str) -> Vec<String> {
     let prefix = format!("{}/", key.trim_end_matches('/'));
     map.range(prefix.clone()..).take_while(|(path, _)| path.starts_with(&prefix))
+        .filter(|(path, _)| path.as_str() != key)
         .map(|(path, _)| path.clone()).collect()
 }
 
