@@ -157,6 +157,10 @@ impl WholeFileSpool {
         lock(&self.journal)?.upsert_entry(entry)
     }
 
+    pub fn is_recovery_referenced(&self, name: &str) -> io::Result<bool> {
+        Ok(lock(&self.referenced)?.contains(name))
+    }
+
     pub fn forget_entry(&self, remote_path: &str, spool_name: &str) -> io::Result<()> {
         lock(&self.journal)?.forget_entry(remote_path)?;
         if let Ok(mut referenced) = self.referenced.lock() {

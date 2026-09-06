@@ -94,6 +94,7 @@ impl MountEngine {
                 DeletePhase::Unresolved
             },
         };
+        self.invalidate_content(&delete.original_path, true);
         self.spool.persist_delete(&delete)?;
         if local_only {
             lock(&self.deletes)?.insert(token, delete);
@@ -201,6 +202,8 @@ impl MountEngine {
             lock(&self.deletes)?.remove(&token);
             return Ok(());
         }
+        self.invalidate_content(&delete.original_path, true);
+        self.invalidate_content(&delete.quarantine_path, true);
         let source_exists = self.backend.try_exists(&delete.original_path)?;
         let quarantine_exists = self.backend.try_exists(&delete.quarantine_path)?;
         match (source_exists, quarantine_exists) {
@@ -248,6 +251,8 @@ impl MountEngine {
                 "unresolved delete quarantine requires explicit recovery",
             ));
         }
+        self.invalidate_content(&delete.original_path, true);
+        self.invalidate_content(&delete.quarantine_path, true);
         self.invalidate_metadata(&delete.original_path, true);
         self.invalidate_metadata(&delete.quarantine_path, true);
         match self.backend.stat(&delete.quarantine_path) {
@@ -370,6 +375,7 @@ impl MountEngine {
                 state.delete_token = None;
                 state.delete_committed = true;
                 let path = state.remote_path.clone();
+                lock(&self.detached)?.insert(state.spool_name.clone(), entry.clone());
                 drop(state);
                 // The namespace name is gone as soon as Cleanup commits the
                 // delete. Old FILE_SHARE_DELETE handles retain this Arc and its
@@ -392,37 +398,6 @@ impl MountEngine {
         self.spool.forget_delete(token.0)?;
         lock(&self.deletes)?.remove(&token);
         Ok(())
-    }
-
-    pub(super) fn cleanup_committed_entry(
-        &self,
-        entry: &std::sync::Arc<super::engine::Entry>,
-    ) -> io::Result<()> {
-        if lock(&self.handles)?
-            .values()
-            .any(|handle| handle.references(entry))
-        {
-            return Ok(());
-        }
-        let state = lock(&entry.state)?;
-        let removable_clean =
-            state.condition == EntryCondition::Clean && state.delete_token.is_none();
-        if !state.delete_committed && !removable_clean {
-            return Ok(());
-        }
-        let path = state.remote_path.clone();
-        let spool_name = state.spool_name.clone();
-        drop(state);
-        let mut entries = lock(&self.entries)?;
-        let key = self.cache_key(&path);
-        if entries
-            .get(&key)
-            .is_some_and(|current| std::sync::Arc::ptr_eq(current, entry))
-        {
-            entries.remove(&key);
-        }
-        drop(entries);
-        self.spool.remove_file(&spool_name)
     }
 
     fn has_visible_cached_child(&self, parent: &str) -> io::Result<bool> {
