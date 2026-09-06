@@ -1,6 +1,9 @@
 # Remote-mount optimization: design evidence
 
-This is task-scoped design/evidence, not a second live work board. Open work is
+This is historical v0.5.151 task-scoped design/evidence, not a second live work board.
+The later metadata limits/scheduling and current suite platform are described in
+[MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md); platform selections below refer
+to the original private-DLL compilation/approval task. Open work is
 tracked in [TODO.md](TODO.md). Baseline inspected: source `80a75ef` (2026-09-06).
 The user confirmed that the preceding request-delivery fix resolved the freeze.
 

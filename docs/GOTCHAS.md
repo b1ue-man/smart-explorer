@@ -170,13 +170,18 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   operations fail closed, active leases become invalid and a later re-share
   requires Retry/remount. One already admitted operation may finish;
   multi-stage writes must recheck before flush and promotion.
-- **Cache metadata, never safety decisions or file content.** Mount metadata
+- **Cache reusable observations, never safety decisions.** Mount metadata
   depth defaults to 2 and is configurable from 0 through 4 in the GUI or with
   `--metadata-depth`. Load only the complete root snapshot synchronously; fill
   deeper complete snapshots breadth-first in bounded 8-target batches and
   rotate at most 16 refresh targets every 20 seconds. Keep the directory cache
-  within 4,096 directories, 50,000 entries, 32 MiB total and 4 MiB per
-  directory; the five-second point-stat cache has a separate 4-MiB bound.
+  within its 128-MiB retention budget; the five-second point-stat cache has a
+  separate 16-MiB bound and the mount daemon ancestor cache has 64 MiB. These
+  budgets govern disposable retention, not valid directory or entry counts.
+  Share simultaneous loads even when retention fails; do not turn expiry into
+  one remote stat per child of a previously observed directory. Wire frames
+  still have a 64-MiB safety bound, not an arbitrary 50,000-entry limit. The
+  configurable clean content cache remains separate from dirty/recovery bytes.
   Mutations invalidate affected paths. Open/create admission, conflict checks,
   replacement and all write decisions must continue to query live state.
 - **Root authority and read/write mode are separate gates.** Strict mode is the

@@ -180,19 +180,29 @@ Die Platzabfrage reserviert keinen Speicher gegenüber anderen Anwendungen.
 `--metadata-depth` bleibt 0 bis 4, Standard 2; null deaktiviert proaktives
 Vorladen, nicht den Bedarfscache. Bei aktivem Vorladen wird nur das Root-Snapshot
 vor Bereitschaft geladen. Hintergrundbreite ist
-`parallelism.clamp(1,8).saturating_sub(1).clamp(1,4)`; Vorfahren werden vor
-Nachfahren verarbeitet, fällige Auffrischung vor Spekulation. Das ist keine
+`parallelism.max(1).saturating_sub(1).max(1)` innerhalb der ausgewählten Charge;
+freie Arbeiter erhalten sofort unabhängige Ziele. Nur tatsächlich ausgewählte
+Vorfahren müssen vor ihren Nachfahren fertig sein, fällige Auffrischung geht vor
+Spekulation. Produktive Vorladechargen warten nicht zusätzlich 250 ms. Das ist keine
 strikte Vordergrundpriorität auf Backends mit nur einer Anfragekapazität.
 Verzeichnisbeobachtungen verfallen nach 20 Sekunden, positive Punktabfragen nach
 fünf und exakte Nichtgefunden-Abfragen nach einer Sekunde. Alte Snapshots bleiben
-nur für Änderungsvergleiche erhalten. Grenzen: 4.096 Verzeichnisse, 50.000
-Einträge, 16 MiB insgesamt/pro Verzeichnis und separat 4 MiB Punktcache.
+nur für Änderungsvergleiche erhalten. Die aktuelle Quellfassung nutzt
+128 MiB für Verzeichnis-Snapshots, separat 16 MiB Punktcache und 64 MiB für den
+mount-spezifischen Daemon-Verzeichniscache. Verzeichnis-/Eintragszahlen begrenzen
+weder gültige Listen noch deren Aufnahme innerhalb dieser Speicherbudgets.
+Gleichzeitige Abfragen teilen Beobachtungen auch ohne dauerhafte Cache-Aufnahme;
+ein bekannter abgelaufener Elternordner wird vor einzelnen Kind-Stats gemeinsam
+aufgefrischt. Scheitert die Liste, bleibt die einzelne Stat-Abfrage möglich.
 Mutierende Opens/Create/Replace und Konflikte behalten Live-Prüfungen; lokale
 Mutationen invalidieren betroffene positive/negative Cache-Autorität sofort.
 
 Erfolgreiche aktuelle Snapshot-Ersetzungen liefern konkrete Windows-
-Änderungsbenachrichtigungen über den besitzenden Host. Bis zu 64 ausstehende
-Snapshot-Diffs mit konservativ 64 MiB werden geordnet gehalten; bei Gegendruck
+Änderungsbenachrichtigungen über den besitzenden Host. Ausstehende
+Snapshot-Diffs werden ohne Mengenlimit mit konservativ 384 MiB geordnet
+gehalten; gemeinsame Snapshot-Arcs werden mitgezählt, nicht zusätzlich kopiert.
+Ein Drain gibt nach höchstens 1.024 Ereignissen oder 4.096 Vergleichen ab und wird
+auch ohne Ereignis in der nächsten Zustellrunde fortgesetzt. Bei Gegendruck
 bleibt die alte Baseline erhalten, statt Kindänderungen durch ein erfundenes
 Root-Rescan-Ereignis zu ersetzen. Auffrischung erfolgt im Hintergrund, nicht mit
 einer garantierten 20-Sekunden-Zustellfrist.

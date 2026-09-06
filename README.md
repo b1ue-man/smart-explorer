@@ -134,9 +134,11 @@ proaktive Vorladen ab. Bei aktivem Vorladen wird zunächst nur das Root-Snapshot
 geladen. Unabhängige Verzeichnisse folgen begrenzt parallel, Vorfahren vor
 Nachfahren. Verzeichnisbeobachtungen gelten 20 Sekunden, positive Punktabfragen
 fünf und exakte Nichtgefunden-Ergebnisse eine Sekunde. Abgelaufene Snapshots sind
-nur Vergleichsdaten, keine gültigen Treffer. Der Metadaten-Cache ist auf 4.096
-Verzeichnisse, 50.000 Einträge und 16 MiB insgesamt/pro Verzeichnis begrenzt,
-der Punktcache auf 4 MiB. Erfolgreiche Auffrischungen liefern begrenzte, geordnete
+nur Vergleichsdaten, keine gültigen Treffer. Die aktuelle Quellfassung begrenzt
+die Verzeichnis-Snapshots nach Speicherverbrauch auf 128 MiB, den Punktcache auf
+16 MiB; die bisherigen Mengenlimits für gültige Verzeichnislisten entfallen.
+Gleichzeitige Abfragen teilen ihre Beobachtung auch ohne dauerhafte Aufnahme.
+Erfolgreiche Auffrischungen liefern begrenzte, geordnete
 Änderungen für Windows-Benachrichtigungen; der 20-Sekunden-Zyklus ist keine feste
 Zustellfrist bei langsamen oder ausgefallenen Remotes. Mutierende Opens,
 Konfliktprüfungen und Schreiboperationen behalten ihre Live-Prüfungen.
@@ -513,6 +515,11 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
    nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
    Zwischencommits sind keine Releases.
+   Der aktuelle Mount-Metadaten-Block nutzt ausschließlich
+   `mount-optimization-task.yml` auf Windows 2025 mit
+   `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,
+   tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi; die bereits freigegebene
+   private DLL wird wiederverwendet.
 2. Für den automatisierten Remote-Pfad `build.yml` genau einmal auf `main` mit
    `complete_release_source_sha=<vollständiger aktueller origin/main-SHA>`
    dispatchen; `verify_release_candidate` und `publish_release` bleiben dabei

@@ -112,6 +112,14 @@ mod rooted_backend_gate;
 mod rooted_backend_io;
 #[path = "os/shared/rooted_backend_paths.rs"]
 mod rooted_backend_paths;
+#[cfg(test)]
+#[path = "os/shared/vault_task_backend.rs"]
+mod vault_task_backend;
+#[cfg(test)]
+#[path = "os/shared/vault_task_tree.rs"]
+mod vault_task_tree;
+#[cfg(test)]
+pub(crate) use vault_task_backend::{VaultTaskBridge, VaultTaskCounters};
 #[cfg(all(test, target_os = "linux"))]
 #[path = "os/shared/rooted_backend_task_tests.rs"]
 mod rooted_backend_task_tests;

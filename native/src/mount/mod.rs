@@ -34,6 +34,9 @@ mod metadata;
 mod metadata_cache;
 #[path = "core/metadata_batch.rs"]
 mod metadata_batch;
+#[cfg(test)]
+#[path = "core/vault_scheduler_task_tests.rs"]
+mod vault_scheduler_task_tests;
 #[path = "core/metadata_loading.rs"]
 mod metadata_loading;
 #[path = "core/metadata_point_cache.rs"]

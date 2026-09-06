@@ -24,6 +24,7 @@ $LogRoot = [IO.Path]::GetFullPath($LogRoot)
 [void][IO.Directory]::CreateDirectory($LogRoot)
 $env:SMART_EXPLORER_MOUNT_TASK_LOG_ROOT = $LogRoot
 $env:SMART_EXPLORER_MOUNT_CHECKER = Join-Path $nativeRoot 'verify-mount-windows.ps1'
+$env:SMART_EXPLORER_MOUNT_VAULT_NODE_SCRIPT = Join-Path $nativeRoot 'mount-vault-node.cjs'
 $env:RUST_BACKTRACE = '1'
 $env:CARGO_BUILD_JOBS = '1'
 $env:CARGO_INCREMENTAL = '1'
@@ -79,6 +80,32 @@ function Assert-TaskHash {
     return [pscustomobject]@{ path = $Path; sha256 = $observed }
 }
 
+# Exact standalone runtime, not whichever Electron/Node happens to be on PATH.
+# SHA-256 from nodejs.org/dist/v24.20.0/SHASUMS256.txt, checked 2026-09-06.
+$nodeRoot = if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
+    Join-Path ([IO.Path]::GetTempPath()) ('mount-vault-node-' + [guid]::NewGuid().ToString('N'))
+} else { Join-Path $DependencyCacheRoot 'node-v24.20.0-x64' }
+[void][IO.Directory]::CreateDirectory($nodeRoot)
+$env:SMART_EXPLORER_MOUNT_NODE = Join-Path $nodeRoot 'node.exe'
+if (-not [IO.File]::Exists($env:SMART_EXPLORER_MOUNT_NODE)) {
+    Invoke-WebRequest -Uri 'https://nodejs.org/dist/v24.20.0/win-x64/node.exe' `
+        -OutFile $env:SMART_EXPLORER_MOUNT_NODE -TimeoutSec 300
+}
+$nodeIdentity = Assert-TaskHash $env:SMART_EXPLORER_MOUNT_NODE `
+    '5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5'
+$nodeVersion = Invoke-TaskProcess $env:SMART_EXPLORER_MOUNT_NODE @(
+    '-p', 'JSON.stringify({node:process.versions.node,uv:process.versions.uv,arch:process.arch,platform:process.platform})'
+) 30 'node-runtime'
+if ($nodeVersion.Code -ne 0) { throw 'Pinned Node runtime did not start.' }
+$nodeDetails = $nodeVersion.Output | ConvertFrom-Json
+if ($nodeDetails.node -ne '24.20.0' -or $nodeDetails.uv -ne '1.52.1' -or
+    $nodeDetails.arch -ne 'x64' -or $nodeDetails.platform -ne 'win32') {
+    throw 'Node/libuv/architecture differs from the selected metadata API contract.'
+}
+[ordered]@{ node = $nodeDetails; executable = $nodeIdentity;
+    windows = [Environment]::OSVersion.VersionString } | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $LogRoot 'metadata-runtime.json')
+
 # Parse the checked-in PowerShell code before invoking any subprocess. The
 # actual checker is then exercised under Windows PowerShell 5.1 by the fixture.
 $cacheHelper = Join-Path $nativeRoot 'mount-task-binary-cache.ps1'
@@ -124,25 +151,13 @@ $startDriver = Invoke-TaskProcess (Join-Path $system 'sc.exe') @('start', 'dokan
 if ($startDriver.Code -notin @(0, 1056)) { throw "Could not start Dokany driver: $($startDriver.Output)" }
 
 
-# Prepare only this bounded user-mode dependency. Once approved bytes exist in
-# source control, verification/reuse replaces compilation on every fix/release.
+# This follow-up must reuse the approved dependency. Its compiler recipe belongs
+# to the preceding task; missing bytes are an input failure, not a rebuild trigger.
 $approved = Join-Path $nativeRoot 'assets/dokany-private'
-if (Test-Path -LiteralPath $approved) {
-    $prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') -ArtifactDirectory $approved -VerifyOnly -RequireApproved
-} else {
-    if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
-        $DependencyCacheRoot = Join-Path $nativeRoot 'target/dokany-private-task'
-    }
-    $recipeInputs = [Text.StringBuilder]::new()
-    foreach ($inputPath in @('prepare-dokany-private.ps1', 'dokany-private/recipe.json',
-            'dokany-private/batching.patch', 'dokany-private/README.md',
-            'dokany-private/LICENSE.LGPL-3.0.txt', 'dokany-private/LICENSE.GPL-3.0.txt')) {
-        [void]$recipeInputs.Append([IO.File]::ReadAllText((Join-Path $nativeRoot $inputPath)).Replace("`r`n", "`n"))
-    }
-    $dependencyKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-        [Text.Encoding]::UTF8.GetBytes($recipeInputs.ToString()))).ToLowerInvariant()
-    $prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') -ArtifactDirectory (Join-Path $DependencyCacheRoot $dependencyKey)
+if (-not (Test-Path -LiteralPath $approved -PathType Container)) {
+    throw 'Approved private-DLL inputs are required; the vault task never rebuilds them.'
 }
+$prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') -ArtifactDirectory $approved -VerifyOnly -RequireApproved
 $env:SMART_EXPLORER_DOKANY_DLL_DIR = $prepared.Directory
 $env:SMART_EXPLORER_DOKANY_DLL_SHA256 = $prepared.DllSha256
 $dependencyEvidence = Join-Path $LogRoot 'private-dokany'
@@ -193,25 +208,54 @@ if ($builtForTask -and $null -ne $binaryCache) {
 }
 [IO.File]::WriteAllText((Join-Path $LogRoot 'test-executable.txt'), $TestBinary)
 
-$selected = Invoke-TaskProcess $TestBinary @('mount_optimization_task', '--list', '--include-ignored') 30 'selected-cases'
+$selected = Invoke-TaskProcess $TestBinary @('mount_vault_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
-foreach ($required in @('cli_cache_and_runtime_policy', 'metadata_authority_and_revision',
-        'change_queue_preserves_concrete_events', 'metadata_parallelism_and_ancestor_waves',
-        'cache_policy_defaults_and_bounds', 'persisted_policy_matches_sanitized_host_and_runtime',
-        'reopen_reuses_contents_but_revalidates', 'short_and_overlong_streams_never_enter_cache',
-        'pins_bridge_close_and_reopen_without_double_disposal',
-        'failed_upload_and_restart_preserve_dirty_bytes',
-        'space_reclaims_clean_but_never_unsaved_data', 'lazy_destination_survives_atomic_replace',
-        'private_runtime_selection_and_rejections', 'actual_volume_apps_watchers_and_batching')) {
+foreach ($required in @(
+    'listing_name_and_collision_safety',
+    'metadata_authority_and_revision',
+    'point_stat_coalescence_and_error_policy',
+    'scheduler_uses_more_than_four_available_workers',
+    'scheduler_stalled_sibling_allows_other_depth_and_refill',
+    'scheduler_deduplicates_keyed_paths_with_boundary_ancestry',
+    'scheduler_stop_joins_started_work_without_dispatching_children',
+    'scheduler_work_errors_and_panics_join_and_do_not_starve',
+    'scheduler_panicking_stop_predicate_wakes_and_joins_workers',
+    'scheduler_foreground_refresh_satisfies_selected_revision',
+    'actual_volume_metadata_apps_watchers',
+    '50001_valid_children_enumerate_and_reuse_snapshot',
+    'over_retention_demand_succeeds_and_shares_completed_flight',
+    'pressure_sharing_does_not_publish_unnotifiable_image',
+    'completed_flights_expire_and_reject_invalidated_revisions',
+    'same_flight_listing_failures_share_without_persistent_error_cache',
+    'expired_parent_stats_share_listing_and_preserve_point_precedence',
+    'expired_parent_listing_denial_falls_back_to_exact_stat',
+    'rooted_refresh_crosses_daemon_ttl',
+    'framed_tcp_latency_diagnostic',
+    'all_frame_variants_keep_exact_protocol_bytes',
+    'directory_above_50000_real_entries_roundtrips',
+    'directory_minimum_record_guards_reject_malformed_frames',
+    'utf8_and_optional_md5_use_encoded_byte_lengths',
+    'exact_64_mib_body_and_one_byte_over',
+    'framed_writer_short_interrupt_and_error_semantics',
+    'framed_reader_interrupt_eof_and_truncation_semantics',
+    'daemon_waiters_share_snapshot_and_index_without_retention',
+    'daemon_unrelated_snapshot_loads_overlap',
+    'daemon_mutation_fences_persistent_and_waiter_authority',
+    'daemon_waiters_share_errors_but_do_not_retain_them',
+    'more_than_4096_small_directories_remain_reusable',
+    'unchanged_parent_preserves_child_and_replacement_invalidates',
+    'byte_lru_can_evict_root_without_evicting_speculatively',
+    'notification_byte_pressure_retains_baseline_and_retries',
+    'bounded_diff_comparison_resumes_after_empty_drain'
+)) {
     if (-not $selected.Output.Contains($required)) { throw "Missing task acceptance case: $required" }
 }
-# The real mounted-volume case also calls the preceding v0.5.150 checker fixture.
 # One filter, one invocation, one incremental library output throughout the loop.
 $run = Invoke-TaskProcess $TestBinary @(
-    'mount_optimization_task', '--include-ignored', '--nocapture', '--test-threads=1'
-) 1200 'mount-optimization'
+    'mount_vault_task', '--include-ignored', '--nocapture', '--test-threads=1'
+) 2400 'mount-vault'
 Write-Host $run.Output
-if ($run.Code -ne 0) { throw "The Windows mount optimization task failed: $($run.Error)" }
+if ($run.Code -ne 0) { throw "The Windows vault metadata task failed: $($run.Error)" }
 $null = Assert-TaskHash $dll '75600aba867acbdfdb85fcd142b524da769bdc611b855a760aeb0c6e2eaae17a'
 $null = Assert-TaskHash $driver '9549a20e63c22a2b068e635600b65f6b55d8be5122a6623997b1274a1a1f6235'
 $head = Invoke-TaskProcess (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source @(

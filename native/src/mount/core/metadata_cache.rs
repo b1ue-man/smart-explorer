@@ -15,6 +15,12 @@ mod changes;
 mod schedule;
 #[path = "metadata_cache_order.rs"]
 mod order;
+#[cfg(test)]
+#[path = "vault_metadata_task_tests.rs"]
+mod vault_task_tests;
+#[cfg(test)]
+#[path = "vault_metadata_flight_tests.rs"]
+mod vault_flight_tests;
 use load_support::{expire_observed_path, invalidate_descendants, invalidate_paths,
     invalidate_slot, LoadTable};
 pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup};
