@@ -6,7 +6,7 @@ One version number drives everything: `native/Cargo.toml`.
 ```
  finish task batch + development validation
    ─▶ top-level wrapper bumps Cargo.toml once
-   ─▶ one complete local release build
+   ─▶ one complete release build
        ├─▶ update feed   version + source-bound manifest + Windows/Linux app/updater/se + hashes
        └─▶ installer     Windows NSIS + Linux install-linux.sh
    ─▶ commit + push main
@@ -19,8 +19,12 @@ One version number drives everything: `native/Cargo.toml`.
 ```
 
 The version is consistent across all four outputs because each reads it from
-`Cargo.toml`. Never hand-edit `version.txt` — the complete local release script
+`Cargo.toml`. Never hand-edit `version.txt` — the top-level release script
 writes it last.
+
+The checked-in version remains **0.5.150**. The mount-cache/private-Dokany work
+below is a candidate pending its single remote task suite and terminal release;
+these dependency rules do not mean the new behavior has already shipped.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
 
@@ -64,9 +68,11 @@ resolves it before the build, passes it to NSIS, then uses 7-Zip to extract the
 embedded MSI from the completed installer and compares its size and SHA-256
 again. This MSI remains inside the Windows installer: it is not a standalone
 update-feed payload or GitHub Release asset, and portable/auto-updated users get
-it on demand through the GUI or `se drive install-runtime`. `dokan2.dll`,
-`dokan2.sys`, `DokanSetup.exe`, debug installers and any unreviewed Dokany files
-must never be copied beside Smart Explorer or added as separate assets.
+it on demand through the GUI or `se drive install-runtime`. The official
+`dokan2.dll`, `dokan2.sys`, `DokanSetup.exe`, debug installers and unreviewed
+Dokany files must not be copied beside Smart Explorer or added as separate
+assets. The candidate's separate reviewed private-DLL embedding is described
+below; it never changes the shared System32 installation.
 
 The GUI/CLI downloader allows HTTPS only, at most two redirects, and only the
 exact source URL or GitHub's `release-assets.githubusercontent.com` host as the
@@ -99,9 +105,52 @@ on 2026-07-22. If the supported ABI, driver protocol, or MSI changes, review and
 manifest, Rust validation, fetchers, installer, license notices and user/native
 documentation together.
 
+## Candidate private-DLL dependency: approve once, reuse exact bytes
+
+The candidate adds a modified user-mode DLL with corrected batching; the
+official MSI, System32 DLL, signed driver and API/protocol requirements stay
+unchanged. Its pinned source, patch, toolchain/provenance contract and source
+delivery are documented in
+[the private dependency recipe](../native/dokany-private/README.md).
+
+The single task-suite entrypoint must prepare this dependency on its configured
+remote Windows runner through `native/prepare-dokany-private.ps1`, then exercise
+those exact bytes together with the complete mount candidate. Preparation is
+remote-only and builds no driver. Once the suite approves the dependency, the
+release owner retains and commits exactly these inputs, recording the approving
+run:
+
+- `native/assets/dokany-private/dokan2.dll`;
+- `native/assets/dokany-private/manifest.json`; and
+- `native/assets/dokany-private/corresponding-source.zip`.
+
+The terminal release must not rebuild this DLL, replace it with an independently
+prepared copy, or treat a preparation result alone as suite approval. Before
+expensive builds, `publish-release-local.ps1` invokes the dependency verifier
+with `-VerifyOnly -RequireApproved`. This checks the canonical tracked, unchanged
+inputs and their exact payload/source/provenance hashes; absent, partial or
+mismatched inputs fail. Its Windows and Linux feed leaves repeat that verification.
+All release paths reject `SMART_EXPLORER_DOKANY_DLL_DIR` and
+`SMART_EXPLORER_DOKANY_DLL_SHA256` bootstrap overrides. These variables belong
+only to controlled task-suite preparation, not publication.
+
+The approved DLL and corresponding source travel inside the Windows application
+and `se` payloads. Runtime staging verifies bytes and preserves source/license
+documents for portable and auto-updated users in a separate hash-addressed
+runtime directory, outside disposable remote-content eviction. Do not add an
+unreviewed new feed or publication asset as a substitute for that delivery.
+
+Only the verified private path enables batching. Rejected or unavailable private
+inputs fall back to the official non-batched runtime; an unfinished private
+attempt retains a per-mount/payload marker that chooses the official path on
+the next Retry. `--system-runtime` and the GUI compatibility choice bypass
+private selection. This is not live DLL replacement or a promise of automatic
+recovery from every hang. Candidate scope and validation limits are in
+[MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md).
+
 ## Cut a release
 
-For the Dokany request-delivery correction, the one task-level pipeline is
+For the historical 0.5.150 Dokany request-delivery correction, the task-level pipeline was
 `.github/workflows/mount-batching-task.yml`, bound by its full `candidate_sha`
 input to the pushed source. It invokes only `native/test-mount-batching-task.ps1`
 on `windows-2025`, installs the exact pinned runtime on the disposable runner,
@@ -112,6 +161,15 @@ artifacts or replace the terminal release transaction below. Its separate
 fixture cache survives checker failures and requires matching binary SHA-256
 and committed build-input fingerprint before reuse. See
 [MOUNT_BATCHING.md](MOUNT_BATCHING.md) for the evidence and acceptance scope.
+That historical entrypoint is not an additional gate for the current
+optimization batch. Its relevant regression coverage runs inside
+`native/test-mount-optimization-task.ps1`, selected by the exact-candidate
+`.github/workflows/mount-optimization-task.yml` dispatch. That single entrypoint
+prepares or verifies the private dependency, reuses one source-and-payload-bound
+incremental library fixture, runs only this batch's selected behavior, and
+records `approval.json` after success. The job timeout is 180 minutes; its one
+task invocation has 170 minutes. Use the same entrypoint for relevant fix retries,
+not the historical workflow or a second validation pipeline.
 
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
@@ -166,7 +224,9 @@ For a human-operated workstation release, use the same wrapper directly:
    It checks Windows/WSL or Linux cross-build tooling, Rust targets,
    `rustfmt`/Clippy, Zig, NSIS, MinGW, 7-Zip, network access, the active workflow, and
    non-interactive Git write authentication for `main` plus at least one of the
-   exact tag or `release/vX.Y.Z` trigger paths. Resolve every failure before the
+   exact tag or `release/vX.Y.Z` trigger paths. The candidate additionally
+   requires the committed suite-approved private-DLL/source set described above
+   and rejects bootstrap overrides. Resolve every failure before the
    complete build. The HTTPS remote needs a usable Git credential, and the
    long-running REST poll requires `GH_TOKEN`/`GITHUB_TOKEN` or a successful
    `gh auth login`; recovery of a failed tagged run additionally requires

@@ -67,8 +67,10 @@ Portable und per Auto-Update aktualisierte Installationen können dieselbe
 Runtime aus der GUI oder mit `se drive install-runtime` sicher nachinstallieren.
 Die Smart-Explorer-Basis bleibt eine per-user-Installation; nur der Windows
 Installer (`msiexec`) fordert für den systemweiten Treiber UAC an. Die offizielle
-signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`, und Smart
-Explorer lädt weiterhin ausschließlich `%WINDIR%\System32\dokan2.dll`.
+signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`. Die
+veröffentlichte Basis 0.5.150 lädt `%WINDIR%\System32\dokan2.dll`; der unten
+beschriebene Entwicklungskandidat ergänzt eine geprüfte private DLL, ohne die
+System32-DLL oder den Treiber zu verändern.
 `DokanVersion()` muss die DLL-API 231 melden; `DokanDriverVersion()` fragt das
 getrennte Kernel-Protokoll ab und muss 0x190/400 melden. Eine fehlende Runtime
 beziehungsweise ein nicht verfügbarer Treiber kann automatisch installiert
@@ -97,23 +99,54 @@ se drive unmount M:
 se drive retry <mount-id>
 ```
 
-Dokany-IPC-Batching bleibt wegen eines im offiziellen 2.3.1.1000-DLL
-nachgewiesenen Request-Verlusts deaktiviert; normale parallele Verarbeitung
-bleibt aktiv. Ein DLL-/Treiberwechsel ist dafür nicht erforderlich. Nach dem
+In 0.5.150 und beim offiziellen System-Runtime-Pfad bleibt Dokany-IPC-Batching
+wegen eines im offiziellen 2.3.1.1000-DLL nachgewiesenen Request-Verlusts
+deaktiviert; normale parallele Verarbeitung bleibt aktiv. Ein DLL-/Treiberwechsel
+ist für diese Korrektur nicht erforderlich. Nach dem
 App-Update bestehende Laufwerke neu mounten. Der eigenständige, rein lesende
 Windows-Check `native/verify-mount-windows.ps1` prüft echte Laufwerkszugriffe
 mit Zeitlimit. Mit `&` in einer bereits geöffneten, nicht erhöhten PowerShell
 aufrufen; Details und Grenzen stehen in [MOUNT_BATCHING.md](docs/MOUNT_BATCHING.md).
 
-Die Metadaten-Tiefe ist in GUI und CLI von 0 bis 4 einstellbar und standardmäßig
-2. Vor der Laufwerksbereitschaft lädt Smart Explorer nur ein vollständiges
-Root-Snapshot; tiefere vollständige Verzeichnis-Snapshots folgen danach
-breitensuchend in kleinen Hintergrund-Batches und werden rotierend alle
-20 Sekunden erneuert. Das cached ausschließlich Namen und Dateimetadaten, nie
-Inhalte: maximal 4.096 Verzeichnisse, 50.000 Einträge, 32 MiB insgesamt und
-4 MiB pro Verzeichnis, ergänzt um einen kurzlebigen 4-MiB-Punktcache.
-Öffnen/Erstellen, Konfliktprüfungen und Mutationen fragen weiterhin live ab;
-lokale Änderungen invalidieren betroffene Snapshots sofort.
+**Entwicklungskandidat, noch nicht veröffentlicht:** Die folgenden Änderungen
+gehören nicht zu 0.5.150; ihre gemeinsame Remote-Verifikation und Veröffentlichung
+stehen noch aus. Einzelheiten und Nachweisgrenzen stehen in
+[MOUNT_OPTIMIZATION.md](docs/MOUNT_OPTIMIZATION.md).
+
+Der Kandidat behält unbenutzte, saubere Dateiinhalte innerhalb derselben
+Einbindung in einem separaten LRU-Cache: standardmäßig **500 MiB pro Laufwerk**,
+einstellbar in GUI oder mit `--cache-mib <Wert>` (0 bis 65.536); `0` deaktiviert die
+Aufbewahrung nach dem letzten aktiven Zugriff. Offene, ungespeicherte und für
+Recovery benötigte Dateien zählen nicht zu diesem Aufbewahrungslimit und werden
+dafür nicht verworfen. Wiederverwendung verlangt eine frische Remote-Stat-Abfrage
+und passende Baseline/lokale Dateilänge; eine Inhaltsgeneration wird höchstens
+fünf Minuten wiederverwendet. Metadatengleichheit ist kein kryptografischer
+Inhaltsnachweis. Vor zusätzlichem Arbeitsbedarf und bei der Wartung wird nur
+entbehrlicher sauberer Cache freigegeben, um **512 MiB freien Platz** zu erhalten;
+fremde Programme können diese Momentaufnahme anschließend verändern.
+
+Die Metadaten-Tiefe bleibt 0 bis 4, standardmäßig 2; `0` schaltet nur das
+proaktive Vorladen ab. Bei aktivem Vorladen wird zunächst nur das Root-Snapshot
+geladen. Unabhängige Verzeichnisse folgen begrenzt parallel, Vorfahren vor
+Nachfahren. Verzeichnisbeobachtungen gelten 20 Sekunden, positive Punktabfragen
+fünf und exakte Nichtgefunden-Ergebnisse eine Sekunde. Abgelaufene Snapshots sind
+nur Vergleichsdaten, keine gültigen Treffer. Der Metadaten-Cache ist auf 4.096
+Verzeichnisse, 50.000 Einträge und 16 MiB insgesamt/pro Verzeichnis begrenzt,
+der Punktcache auf 4 MiB. Erfolgreiche Auffrischungen liefern begrenzte, geordnete
+Änderungen für Windows-Benachrichtigungen; der 20-Sekunden-Zyklus ist keine feste
+Zustellfrist bei langsamen oder ausgefallenen Remotes. Mutierende Opens,
+Konfliktprüfungen und Schreiboperationen behalten ihre Live-Prüfungen.
+
+Automatisch wird eine eingebettete, vor dem Laden anhand ihrer exakten Bytes
+geprüfte private Dokany-DLL gewählt; nur sie darf korrigiertes IPC-Batching
+verwenden. Fehlende oder abgelehnte private Daten führen zum offiziellen
+System32-Pfad ohne Batching. Ein nicht erfolgreich abgeschlossener privater
+Mount-Versuch hinterlässt einen Marker pro Laufwerk und DLL-Payload; der nächste
+`Retry` verwendet damit die System-Runtime. `--system-runtime` beziehungsweise
+die GUI-Kompatibilitätsoption erzwingt diesen Pfad direkt. Es gibt weder einen
+DLL-Wechsel in einer laufenden Einbindung noch eine Garantie automatischer
+Erholung von einem Live-Hänger. Eine Obsidian-Zertifizierung oder ein gemessener
+Geschwindigkeitsgewinn wird damit nicht behauptet.
 
 Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Bei
 einem SFTP-Ziel verlangt ein solcher Mount eine gespeicherte Verbindung mit
