@@ -28,6 +28,10 @@ use super::{
 
 const CONTROL_POLL: Duration = Duration::from_millis(250);
 
+#[path = "host_lifecycle.rs"]
+mod lifecycle;
+use lifecycle::{close_and_finalize, run_until_stopped};
+
 #[cfg(test)]
 #[path = "mounted_volume_task_tests.rs"]
 mod mount_batching_task;
@@ -52,6 +56,8 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
             MountRecovery::Unknown,
         )
     })?;
+    let space = super::cache_space::CacheDiskSpace::new(&spool_root)
+        .map_err(|error| report_failure(&session, &format!("cache space probe: {error}")))?;
     let engine = MountEngine::open_host_cache(
         MountRuntimeConfig::new(config.id.clone(), config.mode)
             .with_metadata_policy(config.metadata)
@@ -66,7 +72,7 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
             "the mounted-drive cache could not be recovered safely",
             MountRecovery::Unknown,
         )
-    })?;
+    })?.with_cache_space_probe(Arc::new(space));
     let local_recovery = inspect_recovery(&engine).map_err(|_| {
         report_failure_with_recovery(
             &session,
@@ -75,8 +81,10 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
         )
     })?;
     session.report_status_with_recovery(MountStatus::Mounting, Some(local_recovery))?;
-    let runtime = match DokanyRuntime::preflight() {
-        Ok(runtime) => runtime,
+    let selection = match super::runtime_selection::RuntimeSelection::select(
+        &spool_root, &config.id, config.runtime_preference,
+    ) {
+        Ok(selection) => selection,
         Err(error) => {
             let detail = error.to_string();
             let _ = session.report_status(MountStatus::RuntimeUnavailable {
@@ -85,6 +93,7 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
             return Err(detail);
         }
     };
+    let runtime = &selection.runtime;
     if let Err(error) = engine.prepare_host_remote() {
         let detail = format!("mounted-drive remote root validation failed: {error}");
         return Err(report_engine_failure(&session, &engine, &detail));
@@ -140,7 +149,7 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
     // If creation itself fails, the branch below disarms only after proving
     // that the journal is still clean.
     session.report_status_with_recovery(MountStatus::Mounting, Some(MountRecovery::Unknown))?;
-    let filesystem = match start_on_available_drive(&runtime, &mut storage, &candidates) {
+    let filesystem = match start_on_available_drive(runtime, &mut storage, &candidates) {
         Ok(filesystem) => filesystem,
         Err(error) => {
             return Err(report_pre_mount_failure(
@@ -159,6 +168,9 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
     // inspection and engine teardown complete before another host may open it.
     drop(storage);
     drop(engine);
+    if result.is_ok() {
+        selection.complete();
+    }
     drop(cache_lease);
     result
 }
@@ -257,132 +269,6 @@ fn start_on_available_drive(
     Err(last_busy.unwrap_or(DokanyCreateError::InvalidDriveLetter))
 }
 
-fn run_until_stopped(
-    filesystem: DokanyFileSystem,
-    storage: &CallbackStorage,
-    session: &MountHostSession,
-) -> Result<(), String> {
-    let drive = match storage.context.selected_drive() {
-        Ok(drive) => drive,
-        Err(_) => {
-            return close_and_finalize(
-                filesystem,
-                storage,
-                session,
-                Some("the mounted drive lost its letter state"),
-            );
-        }
-    };
-    let initial_status = match storage.context.engine.dirty_entries() {
-        Ok(entries) if entries.is_empty() => MountStatus::Mounted { drive },
-        Ok(entries) => {
-            let (path, condition) = &entries[0];
-            let detail = match condition {
-                EntryCondition::Conflict(conflict) => conflict.detail.clone(),
-                EntryCondition::Dirty => {
-                    "a cached change still requires safe remote recovery".into()
-                }
-                EntryCondition::Clean => "mounted-drive recovery is incomplete".into(),
-            };
-            MountStatus::Conflict {
-                drive,
-                path: path.clone(),
-                detail,
-            }
-        }
-        Err(_) => {
-            return close_and_finalize(
-                filesystem,
-                storage,
-                session,
-                Some("the mounted drive could not inspect its recovery state"),
-            );
-        }
-    };
-    if session.report_status(initial_status).is_err() {
-        return close_and_finalize(
-            filesystem,
-            storage,
-            session,
-            Some("the mounted drive could not report its running state"),
-        );
-    }
-    loop {
-        if session.wait_for_stop_timeout(CONTROL_POLL) {
-            return close_and_finalize(filesystem, storage, session, None);
-        }
-        if storage.context.stop_requested() {
-            return close_and_finalize(
-                filesystem,
-                storage,
-                session,
-                Some("the mounted drive stopped after a callback or control failure"),
-            );
-        }
-        match filesystem.wait(0) {
-            DokanyWaitOutcome::Timeout if filesystem.is_running() => {}
-            DokanyWaitOutcome::Closed | DokanyWaitOutcome::Timeout => {
-                return close_and_finalize(filesystem, storage, session, None);
-            }
-            DokanyWaitOutcome::Failed { .. } | DokanyWaitOutcome::Unexpected(_) => {
-                return close_and_finalize(
-                    filesystem,
-                    storage,
-                    session,
-                    Some("Dokany stopped the mounted drive unexpectedly"),
-                );
-            }
-        }
-    }
-}
-
-fn close_and_finalize(
-    filesystem: DokanyFileSystem,
-    storage: &CallbackStorage,
-    session: &MountHostSession,
-    prior_failure: Option<&str>,
-) -> Result<(), String> {
-    storage.request_metadata_refresh_stop();
-    let shutdown_watchdog = super::shutdown_watchdog::ShutdownWatchdog::start("dokan-close");
-    // DokanCloseHandle is the callback lifetime boundary. Only inspect the
-    // engine once Dokany can no longer mutate its retryable journal state.
-    filesystem.close();
-    // Closing Dokany first prevents a slow background target from keeping the
-    // drive visible. The worker observes cancellation between remote targets;
-    // join still owns its engine before recovery inspection begins.
-    if let Some(watchdog) = shutdown_watchdog.as_ref() {
-        watchdog.set_phase("metadata-refresh");
-    }
-    storage.join_metadata_refresh();
-    let watchdog_failed = shutdown_watchdog.is_some_and(|watchdog| !watchdog.finish());
-    let prior_failure = prior_failure.or(watchdog_failed
-        .then_some("the mounted drive shutdown watchdog stopped after an internal failure"));
-    match storage.context.engine.dirty_entries() {
-        Ok(entries) if !entries.is_empty() => {
-            let detail = recovery_detail(&entries);
-            Err(report_failure_with_recovery(
-                session,
-                &detail,
-                MountRecovery::Required,
-            ))
-        }
-        Err(_) => Err(report_failure_with_recovery(
-            session,
-            "the mounted drive closed, but its recovery journal could not be inspected; keep the mount and use Retry",
-            MountRecovery::Unknown,
-        )),
-        Ok(_) => match prior_failure {
-            Some(detail) => Err(report_failure_with_recovery(
-                session,
-                detail,
-                MountRecovery::Clean,
-            )),
-            None => session
-                .report_status_with_recovery(MountStatus::Unmounted, Some(MountRecovery::Clean))
-                .map_err(|_| "the mounted drive closed, but its final status could not be recorded".to_string()),
-        },
-    }
-}
 
 fn recovery_detail(entries: &[(String, EntryCondition)]) -> String {
     let dirty = entries

@@ -1,19 +1,14 @@
-//! Secure, delay-loaded access to the Dokany 2.3.1 user-mode runtime.
+//! Secure, delay-loaded Dokany with a byte-verified private batching capability.
 
 use std::{
     ffi::c_void,
     fmt,
+    path::Path,
     ptr::{null_mut, NonNull},
     sync::Arc,
 };
 
-use windows_sys::Win32::{
-    Foundation::{
-        FreeLibrary, GetLastError, ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, HMODULE, WAIT_FAILED,
-        WAIT_OBJECT_0, WAIT_TIMEOUT,
-    },
-    System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32},
-};
+use windows_sys::Win32::Foundation::{GetLastError, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
 
 use crate::mount::{validate_dokany_version_domains, DokanyVersionCompatibilityError};
 
@@ -21,21 +16,9 @@ use super::dokany_abi::{
     DokanFileInfo, DokanHandle, DokanOperations, DokanOptions, NtStatus, DOKANY_DLL_NAME,
     DOKANY_DRIVER_PROTOCOL_VERSION, DOKANY_LIBRARY_API_VERSION, DRIVER_INSTALL_ERROR,
     DRIVE_LETTER_ERROR, ERROR, MOUNT_ERROR, MOUNT_POINT_ERROR, START_ERROR, SUCCESS, VERSION_ERROR,
+    OPTION_ALLOW_IPC_BATCHING,
 };
-
-const DOKANY_DLL_WIDE: &[u16] = &[
-    b'd' as u16,
-    b'o' as u16,
-    b'k' as u16,
-    b'a' as u16,
-    b'n' as u16,
-    b'2' as u16,
-    b'.' as u16,
-    b'd' as u16,
-    b'l' as u16,
-    b'l' as u16,
-    0,
-];
+use super::{private_payload::PrivatePayload, runtime_loader::LoadedModule};
 
 type InitFn = unsafe extern "system" fn();
 type ShutdownFn = unsafe extern "system" fn();
@@ -48,6 +31,9 @@ type CloseHandleFn = unsafe extern "system" fn(DokanHandle);
 type ResetTimeoutFn = unsafe extern "system" fn(u32, *mut DokanFileInfo) -> i32;
 type IsNameInExpressionFn = unsafe extern "system" fn(*const u16, *const u16, i32) -> i32;
 type NtStatusFromWin32Fn = unsafe extern "system" fn(u32) -> NtStatus;
+type BatchContinuationCountFn = unsafe extern "system" fn(DokanHandle) -> u64;
+type NotifyEntryFn = unsafe extern "system" fn(DokanHandle, *const u16, i32) -> i32;
+type NotifyUpdateFn = unsafe extern "system" fn(DokanHandle, *const u16) -> i32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DokanyRuntimeInfo {
@@ -66,6 +52,7 @@ pub(crate) enum DokanyPreflightError {
     LibraryApiMismatch { expected: u32, found: u32 },
     DriverUnavailable,
     DriverProtocolMismatch { expected: u32, found: u32 },
+    PrivateRuntimeRejected { detail: String },
 }
 
 impl fmt::Display for DokanyPreflightError {
@@ -99,6 +86,9 @@ impl fmt::Display for DokanyPreflightError {
                 formatter,
                 "Dokany driver protocol mismatch: required {expected}, found {found}"
             ),
+            Self::PrivateRuntimeRejected { detail } => {
+                write!(formatter, "private Dokany runtime rejected: {detail}")
+            }
         }
     }
 }
@@ -157,8 +147,31 @@ impl DokanyRuntime {
     /// protocol `0x190`, then initializes Dokany. No DLL access occurs before
     /// this explicit call.
     pub(crate) fn preflight() -> Result<Self, DokanyPreflightError> {
-        let module = LoadedModule::system32()?;
+        Self::initialize(LoadedModule::system32()?, false)
+    }
+
+    /// Selection owns fallback. The task suite can require this path without
+    /// silently succeeding against the official, non-batched runtime instead.
+    pub(super) fn preflight_private(cache_root: &Path) -> Result<Self, DokanyPreflightError> {
+        let payload = PrivatePayload::stage(cache_root)
+            .map_err(|error| DokanyPreflightError::PrivateRuntimeRejected { detail: error.to_string() })?
+            .ok_or_else(|| DokanyPreflightError::PrivateRuntimeRejected {
+                detail: "this build has no embedded private runtime".into(),
+            })?;
+        Self::initialize(LoadedModule::private(payload)?, true)
+    }
+
+    fn initialize(module: LoadedModule, private: bool) -> Result<Self, DokanyPreflightError> {
         let api = Api::resolve(&module)?;
+        let batch_counter = if private {
+            let raw = module.symbol(b"SmartExplorerBatchContinuationCountV1\0",
+                "SmartExplorerBatchContinuationCountV1")?;
+            Some(unsafe { std::mem::transmute::<
+                unsafe extern "system" fn() -> isize, BatchContinuationCountFn
+            >(raw) })
+        } else {
+            None
+        };
         let library_api = unsafe { (api.version)() };
         let driver_protocol = unsafe { (api.driver_protocol_version)() };
         validate_dokany_version_domains(library_api, driver_protocol).map_err(
@@ -180,6 +193,7 @@ impl DokanyRuntime {
             inner: Arc::new(RuntimeInner {
                 _module: module,
                 api,
+                batch_counter,
                 info: DokanyRuntimeInfo {
                     required_library_api: DOKANY_LIBRARY_API_VERSION,
                     library_api,
@@ -194,6 +208,14 @@ impl DokanyRuntime {
         self.inner.info
     }
 
+    pub(super) fn is_private(&self) -> bool {
+        self.inner.batch_counter.is_some()
+    }
+
+    pub(super) fn loaded_path(&self) -> std::io::Result<std::path::PathBuf> {
+        self.inner._module.path()
+    }
+
     /// `options` must be non-null, aligned and exclusively writable for this
     /// call. It, `operations`, their referenced strings, and `global_context`
     /// must remain valid until the returned filesystem has been closed.
@@ -205,6 +227,11 @@ impl DokanyRuntime {
         // Apply on every attempt, not only when initially allocating options:
         // Dokany may change its caller-owned flags while selecting workers.
         unsafe { (*options).prepare_for_create() };
+        // Only byte-verified private runtime ownership grants batching. The
+        // official path retains the guard on every reused/create attempt.
+        if self.is_private() && unsafe { (*options).single_thread == 0 } {
+            unsafe { (*options).options |= OPTION_ALLOW_IPC_BATCHING };
+        }
         let mut handle: DokanHandle = null_mut();
         let status =
             unsafe { (self.inner.api.create_file_system)(options, operations, &mut handle) };
@@ -248,6 +275,31 @@ pub(crate) struct DokanyFileSystem {
 }
 
 impl DokanyFileSystem {
+    pub(super) fn batch_continuation_count(&self) -> Option<u64> {
+        let handle = self.handle?;
+        self.runtime.batch_counter.map(|query| unsafe { query(handle.as_ptr()) })
+    }
+
+    pub(super) fn notify_create(&self, path: &[u16], directory: bool) -> bool {
+        self.notify_entry(path, directory, self.runtime.api.notify_create)
+    }
+
+    pub(super) fn notify_delete(&self, path: &[u16], directory: bool) -> bool {
+        self.notify_entry(path, directory, self.runtime.api.notify_delete)
+    }
+
+    fn notify_entry(&self, path: &[u16], directory: bool, notify: NotifyEntryFn) -> bool {
+        self.handle.is_some_and(|handle| path.last() == Some(&0) && unsafe {
+            notify(handle.as_ptr(), path.as_ptr(), i32::from(directory)) != 0
+        })
+    }
+
+    pub(super) fn notify_update(&self, path: &[u16]) -> bool {
+        self.handle.is_some_and(|handle| path.last() == Some(&0) && unsafe {
+            (self.runtime.api.notify_update)(handle.as_ptr(), path.as_ptr()) != 0
+        })
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.handle
             .map(|handle| unsafe {
@@ -312,6 +364,7 @@ struct RuntimeInner {
     _module: LoadedModule,
     api: Api,
     info: DokanyRuntimeInfo,
+    batch_counter: Option<BatchContinuationCountFn>,
 }
 
 impl Drop for RuntimeInner {
@@ -337,6 +390,9 @@ struct Api {
     reset_timeout: ResetTimeoutFn,
     is_name_in_expression: IsNameInExpressionFn,
     nt_status_from_win32: NtStatusFromWin32Fn,
+    notify_create: NotifyEntryFn,
+    notify_delete: NotifyEntryFn,
+    notify_update: NotifyUpdateFn,
 }
 
 impl Api {
@@ -363,49 +419,9 @@ impl Api {
             reset_timeout: symbol!("DokanResetTimeout", ResetTimeoutFn),
             is_name_in_expression: symbol!("DokanIsNameInExpression", IsNameInExpressionFn),
             nt_status_from_win32: symbol!("DokanNtStatusFromWin32", NtStatusFromWin32Fn),
+            notify_create: symbol!("DokanNotifyCreate", NotifyEntryFn),
+            notify_delete: symbol!("DokanNotifyDelete", NotifyEntryFn),
+            notify_update: symbol!("DokanNotifyUpdate", NotifyUpdateFn),
         })
-    }
-}
-
-struct LoadedModule(HMODULE);
-
-impl LoadedModule {
-    fn system32() -> Result<Self, DokanyPreflightError> {
-        let handle = unsafe {
-            LoadLibraryExW(
-                DOKANY_DLL_WIDE.as_ptr(),
-                null_mut(),
-                LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        };
-        if handle.is_null() {
-            let win32_error = unsafe { GetLastError() };
-            return Err(match win32_error {
-                ERROR_MOD_NOT_FOUND => DokanyPreflightError::RuntimeNotInstalled,
-                ERROR_BAD_EXE_FORMAT => DokanyPreflightError::RuntimeArchitectureMismatch,
-                _ => DokanyPreflightError::RuntimeLoadFailed { win32_error },
-            });
-        }
-        Ok(Self(handle))
-    }
-
-    fn symbol(
-        &self,
-        nul_terminated_name: &'static [u8],
-        display_name: &'static str,
-    ) -> Result<unsafe extern "system" fn() -> isize, DokanyPreflightError> {
-        unsafe { GetProcAddress(self.0, nul_terminated_name.as_ptr()) }.ok_or(
-            DokanyPreflightError::RuntimeSymbolMissing {
-                symbol: display_name,
-            },
-        )
-    }
-}
-
-impl Drop for LoadedModule {
-    fn drop(&mut self) {
-        unsafe {
-            FreeLibrary(self.0);
-        }
     }
 }
