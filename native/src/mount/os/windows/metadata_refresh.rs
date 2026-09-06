@@ -58,9 +58,7 @@ fn run(engine: Arc<MountEngine>, stop: Arc<(Mutex<bool>, Condvar)>) {
         if is_stopped(&stop) {
             return;
         }
-        let progressed = engine
-            .preload_metadata_batch_while(|| is_stopped(&stop))
-            .unwrap_or(0);
+        let _ = engine.maintain_cache();
         let refreshed = if Instant::now() >= next_refresh {
             let _ = engine.refresh_metadata_while(|| is_stopped(&stop));
             next_refresh = Instant::now() + REFRESH_INTERVAL;
@@ -68,6 +66,9 @@ fn run(engine: Arc<MountEngine>, stop: Arc<(Mutex<bool>, Condvar)>) {
         } else {
             false
         };
+        let progressed = engine
+            .preload_metadata_batch_while(|| is_stopped(&stop))
+            .unwrap_or(0);
         let until_refresh = next_refresh.saturating_duration_since(Instant::now());
         let delay = if progressed > 0 || refreshed {
             PRELOAD_BATCH_INTERVAL.min(until_refresh)

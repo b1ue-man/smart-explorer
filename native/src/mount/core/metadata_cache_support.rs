@@ -3,10 +3,11 @@ use super::{
     MAX_CACHED_DIRECTORIES, MAX_CACHED_ENTRIES,
 };
 use crate::vfs::VfsMeta;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub(super) fn tick(state: &mut CacheState) -> u64 {
     state.clock = state.clock.saturating_add(1);
@@ -18,6 +19,16 @@ pub(super) fn lookup_metadata(
     path: &str,
     case_sensitive: bool,
 ) -> MetadataLookup {
+    lookup_metadata_at(state, path, case_sensitive, Instant::now(), true).0
+}
+
+pub(super) fn lookup_metadata_at(
+    state: &mut CacheState,
+    path: &str,
+    case_sensitive: bool,
+    now: Instant,
+    demand: bool,
+) -> (MetadataLookup, Instant) {
     let touch = tick(state);
     let mut cursor = path;
     let mut direct_child = true;
@@ -25,19 +36,20 @@ pub(super) fn lookup_metadata(
         let parent_key = identity_key(case_sensitive, parent);
         let name_key = identity_key(case_sensitive, name);
         if let Some(cached) = state.directories.get_mut(&parent_key) {
-            cached.last_touch = touch;
-            cached.last_access = touch;
-            let metadata = cached
-                .entry_index
-                .get(&name_key)
-                .and_then(|index| cached.entries.get(*index));
-            if direct_child {
-                return metadata
-                    .cloned()
-                    .map_or(MetadataLookup::KnownMissing, MetadataLookup::Found);
+            if demand {
+                cached.last_touch = touch;
+                cached.last_access = touch;
             }
-            if !metadata.is_some_and(|entry| entry.is_dir && !entry.is_symlink) {
-                return MetadataLookup::KnownMissing;
+            if cached.listing_expires_at > now {
+                let metadata = cached.entry_index.get(&name_key)
+                    .and_then(|index| cached.entries.get(*index));
+                if direct_child {
+                    return (metadata.cloned().map_or(MetadataLookup::KnownMissing,
+                        MetadataLookup::Found), cached.listing_expires_at);
+                }
+                if !metadata.is_some_and(|entry| entry.is_dir && !entry.is_symlink) {
+                    return (MetadataLookup::KnownMissing, cached.listing_expires_at);
+                }
             }
         }
         cursor = parent;
@@ -46,11 +58,16 @@ pub(super) fn lookup_metadata(
 
     let key = identity_key(case_sensitive, path);
     let Some(cached) = state.directories.get_mut(&key) else {
-        return MetadataLookup::Uncached;
+        return (MetadataLookup::Uncached, now);
     };
-    cached.last_touch = touch;
-    cached.last_access = touch;
-    MetadataLookup::Found(cached.metadata.clone())
+    if demand {
+        cached.last_touch = touch;
+        cached.last_access = touch;
+    }
+    if cached.metadata_expires_at <= now {
+        return (MetadataLookup::Uncached, now);
+    }
+    (MetadataLookup::Found(cached.metadata.clone()), cached.metadata_expires_at)
 }
 
 pub(super) fn fits(state: &CacheState, entries: usize, bytes: usize) -> bool {
@@ -72,7 +89,8 @@ pub(super) fn evict_until(
         let victim = state
             .directories
             .iter()
-            .filter(|(key, _)| key.as_str() != root_key && keep_key != Some(key.as_str()))
+            .filter(|(key, cached)| key.as_str() != root_key
+                && keep_key != Some(key.as_str()) && !cached.deferred_changes)
             .min_by_key(|(_, cached)| cached.last_touch)
             .map(|(key, _)| key.clone());
         let Some(victim) = victim else {
@@ -89,42 +107,39 @@ pub(super) fn remove_directory(state: &mut CacheState, key: &str) {
     }
 }
 
-fn remove_subtree(state: &mut CacheState, key: &str) {
-    let prefix = format!("{}/", key.trim_end_matches('/'));
-    let directories = state
-        .directories
-        .keys()
-        .filter(|candidate| *candidate == key || candidate.starts_with(&prefix))
-        .cloned()
-        .collect::<Vec<_>>();
-    for candidate in directories {
-        remove_directory(state, &candidate);
-    }
-}
-
 pub(super) fn reconcile_direct_children(
     state: &mut CacheState,
     parent_key: &str,
     entries: &[VfsMeta],
     case_sensitive: bool,
+    previous: Option<(&[VfsMeta], &HashMap<String, usize>)>,
 ) {
     let plain_directories = entries
         .iter()
         .filter(|metadata| metadata.is_dir && !metadata.is_symlink)
-        .map(|metadata| identity_key(case_sensitive, &metadata.name))
-        .collect::<HashSet<_>>();
+        .map(|metadata| (identity_key(case_sensitive, &metadata.name), metadata))
+        .collect::<HashMap<_, _>>();
+    let prefix = format!("{}/", parent_key.trim_end_matches('/'));
     let removed_directories = state
         .directories
         .iter()
         .filter_map(|(key, cached)| {
-            let (parent, name) = parent_and_name(&cached.path)?;
-            (identity_key(case_sensitive, parent) == parent_key
-                && !plain_directories.contains(&identity_key(case_sensitive, name)))
-            .then(|| key.clone())
+            let relative = key.strip_prefix(&prefix)?;
+            if relative.is_empty() { return None; }
+            let name = relative.split('/').next()?;
+            let current = plain_directories.get(name);
+            let old = previous.and_then(|(entries, index)| {
+                index.get(name).and_then(|index| entries.get(*index))
+            }).or_else(|| (!relative.contains('/')).then_some(&cached.metadata));
+            let replaced = current.is_some_and(|metadata| {
+                old.is_some_and(|old| old.id.is_some() && metadata.id.is_some()
+                    && old.id != metadata.id)
+            });
+            (current.is_none() || replaced).then(|| key.clone())
         })
         .collect::<Vec<_>>();
     for child in removed_directories {
-        remove_subtree(state, &child);
+        remove_directory(state, &child);
     }
 }
 
