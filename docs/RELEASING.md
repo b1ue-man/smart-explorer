@@ -184,6 +184,18 @@ task invocation has 170 minutes. Use the same entrypoint for relevant fix retrie
 not the historical workflow or a second validation pipeline.
 See [MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) for this task's scope.
 
+The separate protected-storage-analysis follow-up has one entrypoint,
+`native/test-analytics-access-task.ps1`, selected by the exact-SHA
+`analytics-access-task.yml` dispatch on Windows 2025. It requires the runner's
+administrator token and `SeBackupPrivilege`, uses owned deny-ACL/junction fixtures,
+and reuses the established source-bound library binary cache. It compiles only
+the affected incremental library fixture when necessary and selects only
+`analytics_access_task`; it does not rerun the mount suite or install Dokany.
+The job/task timeouts are 120/110 minutes. An explicitly supplied development
+binary must include its source SHA and SHA-256. See
+[ANALYTICS_ACCESS.md](ANALYTICS_ACCESS.md) for the scope and remaining acceptance.
+Its release must follow completion of the already running mount transaction.
+
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.

@@ -379,7 +379,9 @@ impl App {
         }
 
         // ── Apply deferred actions (self is free of the borrows here) ──
-        if request_access { self.request_analytics_access(); }
+        if request_access {
+            self.request_analytics_access();
+        }
         if let Some((cells, rect)) = recomputed {
             self.analytics_cells = cells;
             self.analytics_cells_rect = rect;

@@ -284,6 +284,18 @@ der anfragende Client validiert es und zeigt daraus direkt die Treemap, statt
 den Baum aus einzeln zurückgesendeten Metadatenknoten zusammenzusetzen. Nur bei
 einem älteren Peer ohne diese Fähigkeit greift der bisherige Walk-Fallback.
 
+**Lokale Windows-Speicheranalyse (Entwicklungskandidat, noch nicht veröffentlicht):**
+Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
+begrenzten Windows-Backup-Lesezugriff ausgewertet — Administratorzugehörigkeit
+allein aktiviert dieses Recht nicht. Fehlt es, bietet die Analyse eine
+Windows-Rechteanfrage für denselben lokalen Pfad an. Nach Zustimmung öffnet sich
+ein separates, rein lesendes Analysefenster; das normale Fenster bleibt erhalten.
+Besitzrechte und ACLs werden nicht verändert. Teilergebnisse zeigen die
+gespeicherten betroffenen Pfade mit kopierbarem Bericht und weisen zusätzliche,
+nicht einzeln gespeicherte Fehler aus. Anbieter-/Dateisystemsperren können auch
+mit Administratorrechten verbleiben; lokale UAC ersetzt keine Remote-Zugangsdaten.
+Der Kandidatenstatus steht in [docs/ANALYTICS_ACCESS.md](docs/ANALYTICS_ACCESS.md).
+
 **Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** arbeitet auch
 ohne GUI-Sitzung und nutzt dieselben gespeicherten Verbindungen, App-Daten,
 Zugangsdaten, Share-Profile und den Daemon wie die GUI. Unter Windows liegen

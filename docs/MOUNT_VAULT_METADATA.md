@@ -234,5 +234,27 @@ and Node traversal succeeded. No by-name fast-path success or Obsidian result
 is inferred. The compatibility-runtime workload had not started when the
 private watcher phase failed.
 
-Status: remote acceptance pending after the root-boundary correction. No local
-build or test execution; no release has been started for this follow-up.
+## Successful candidate acceptance (2026-09-06)
+
+The same remote suite subsequently passed for source
+`9258e8fc655eb0e90e71df986609d6b34ef274a1` in
+[run 34062169969](https://github.com/b1ue-man/smart-explorer/actions/runs/34062169969).
+Its `approval.json` binds the fixture SHA-256
+`5e37ebb848b44b652c9395960751429a957696155824b2b6f2b0f2ad0e312388`.
+Both actual mounted runtimes completed recursive native and Node traversal,
+replace/save, script reads and created/modified/deleted watcher delivery. The
+protected recent-demand reservation also retained oldest-attempt fairness.
+
+For the controlled indexed provider, cold native traversal took 6,440 ms in the
+private runtime and 5,602 ms in compatibility mode; immediate subtree revisits
+took 36/35 ms without provider calls. Native metadata traversal performed no
+point-stat or content reads. Subsequent Node traversals took 10,983/9,415 ms
+against the retained metadata. These are synthetic loopback acceptance timings,
+not a user-network or actual Obsidian benchmark. Direct by-name queries still
+reported Win32 87; classic-handle fallback and Node completed in both modes.
+
+Status: remote acceptance passed. The one complete release transaction was
+started as [run 34062761376](https://github.com/b1ue-man/smart-explorer/actions/runs/34062761376)
+and remains in progress at the 2026-09-06 23:25 UTC agent check. Do not duplicate
+it. Agent release checks are at least 30 minutes apart. No local build or test
+execution occurred.

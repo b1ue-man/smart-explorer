@@ -152,6 +152,32 @@ report that accurately rather than claiming every possible path is readable.
 Logical file totals are not a claim to include unexposed filesystem bookkeeping,
 snapshots or all allocated disk space.
 
-Status: both planning/research stages complete; implementation follows these
-milestones. Remote acceptance has not started. The release-monitoring rule is
-already recorded and pushed.
+## Candidate implementation and acceptance entrypoint
+
+Implementation checkpoints `fdd46d4` and `fe92c36` are pushed on the isolated
+branch. The candidate includes the typed directory adapter, temporary backup
+token, directory-record decoder, exact-purpose elevated startup and retained-path
+report. A startup-validation failure opens an error-only analysis window; it
+never falls through into the ordinary app or starts a scan.
+
+The single entrypoint is `native/test-analytics-access-task.ps1`, dispatched by
+`.github/workflows/analytics-access-task.yml` on Windows 2025 with an exact source
+SHA. It preflights administrator/backup-token availability before compiling,
+reuses the existing source-bound library binary-cache helper, builds only the
+incremental native library fixture if needed, and runs only
+`analytics_access_task`. The workflow has 120 minutes; its task step has 110.
+No mount runtime installation, broad test matrix or release build is part of it.
+
+Coverage maps to milestones 1–3: real denied directory and locked-file metadata,
+ACL/process-token invariance, preservation of an existing or restricted thread
+identity, junction boundaries, full-record fallback, malformed record admission,
+native UTF-16 names, partial/root/canceled outcomes, reporting omissions, remote
+authorization separation, exact startup/hash binding and Windows argument parsing.
+Actual interactive UAC consent and GUI rendering are not claimed as automated
+headless desktop certification. The API result/quoting path and privileged
+filesystem operations are exercised separately by this same suite.
+
+Status: implementation complete; remote acceptance has not started. The previous
+mount release remains a separate, unattended transaction. No local builds or
+tests were run; source formatting and static parser checks do not execute Rust
+compilation/linking or the suite.
