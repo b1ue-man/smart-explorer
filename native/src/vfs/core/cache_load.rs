@@ -53,10 +53,23 @@ impl Drop for DirectoryLoad {
 
 impl CachingBackend {
     pub(super) fn directory_snapshot(&self, path: &str) -> VfsResult<DirectorySnapshot> {
+        self.acquire_directory(path, false)
+    }
+
+    /// The mount host already owns its freshness interval. An explicit leaf
+    /// refresh must not re-label a daemon-cache hit as a new remote observation.
+    /// Shared ancestor resolution still benefits from the resulting snapshot.
+    pub(crate) fn refresh_directory(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        Ok(self.acquire_directory(path, true)?.entries.to_vec())
+    }
+
+    fn acquire_directory(&self, path: &str, refresh: bool) -> VfsResult<DirectorySnapshot> {
         let key = Self::norm(path);
         let slot = {
             let mut cache = self.cache.lock().map_err(|_| unavailable())?;
-            if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+            if !refresh {
+                if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+            }
             if let Some(slot) = cache.loads.get(&key).and_then(Weak::upgrade) {
                 slot
             } else {
@@ -72,7 +85,9 @@ impl CachingBackend {
         let mut completed = slot.result.lock().map_err(|_| unavailable())?;
         let generation = {
             let mut cache = self.cache.lock().map_err(|_| unavailable())?;
-            if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+            if !refresh {
+                if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+            }
             if let Some(result) = completed.as_ref() {
                 if result.generation == cache.generation && result.expires_at > Instant::now() {
                     return result.result.as_ref().cloned().map_err(SharedFailure::error);

@@ -183,8 +183,8 @@ impl Backend for RootedBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let _operation = self.operation.read()?;
-        self.inner
-            .list_dir(&self.checked_existing(path)?)
+        self.case_cache
+            .refresh_directory(&self.checked_existing(path)?)
             .map(|entries| entries.into_iter().map(sanitize_metadata).collect())
             .map_err(sanitize_error)
     }
