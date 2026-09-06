@@ -36,6 +36,10 @@ use lifecycle::{close_and_finalize, run_until_stopped};
 #[path = "mounted_volume_task_tests.rs"]
 mod mount_batching_task;
 
+#[cfg(test)]
+#[path = "optimization_volume_tests.rs"]
+mod optimization_task;
+
 pub(crate) fn preflight_runtime() -> Result<DokanyRuntimeInfo, DokanyPreflightError> {
     DokanyRuntime::preflight().map(|runtime| runtime.info())
 }

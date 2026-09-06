@@ -81,6 +81,19 @@ mod remote_drive_task_tests;
 
 pub(crate) mod os;
 
+#[cfg(test)]
+#[path = "core/optimization_fixture.rs"]
+pub(crate) mod optimization_fixture;
+#[cfg(test)]
+#[path = "core/optimization_cache_tests.rs"]
+mod optimization_cache_tests;
+#[cfg(test)]
+#[path = "core/optimization_policy_tests.rs"]
+mod optimization_policy_tests;
+#[cfg(test)]
+#[path = "core/optimization_metadata_tests.rs"]
+mod optimization_metadata_tests;
+
 pub use engine::MountEngine;
 pub use cache_policy::{
     MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,

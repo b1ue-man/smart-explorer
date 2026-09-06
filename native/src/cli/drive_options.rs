@@ -45,3 +45,34 @@ pub(super) struct MountArgs {
     #[arg(long, help = "Print machine-readable JSON")]
     pub(super) json: bool,
 }
+
+#[cfg(test)]
+mod optimization_task {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Command {
+        #[command(flatten)]
+        mount: MountArgs,
+    }
+
+    #[test]
+    fn mount_optimization_task_cli_cache_and_runtime_policy() {
+        let defaults = Command::try_parse_from(["mount", "@fixture:/vault"]).unwrap();
+        assert_eq!(defaults.mount.cache_mib, 500);
+        assert!(!defaults.mount.system_runtime);
+        for value in ["0", "1", "500", "65536"] {
+            let command = Command::try_parse_from([
+                "mount", "@fixture:/vault", "--cache-mib", value, "--system-runtime",
+            ]).unwrap();
+            assert_eq!(command.mount.cache_mib, value.parse::<u32>().unwrap());
+            assert!(command.mount.system_runtime);
+        }
+        for value in ["-1", "65537", "4294967296", "many"] {
+            assert!(Command::try_parse_from([
+                "mount", "@fixture:/vault", "--cache-mib", value,
+            ]).is_err());
+        }
+    }
+}
