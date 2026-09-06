@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use super::{
@@ -14,7 +14,10 @@ mod cache_index;
 mod cache_support;
 #[path = "cache_writer.rs"]
 mod cache_writer;
-use cache_index::{ChildKey, EntryIndex};
+#[path = "cache_load.rs"]
+mod cache_load;
+use cache_index::ChildKey;
+use cache_load::{DirectoryLoad, DirectorySnapshot};
 use cache_support::*;
 use cache_writer::InvalidatingWriter;
 
@@ -25,17 +28,17 @@ use cache_writer::InvalidatingWriter;
 /// sync re-opens a fresh backend per run and walks each folder once, so a cache
 /// would only add staleness with no hit benefit.
 const CACHE_TTL: Duration = Duration::from_secs(20);
-// Keep both UI and mounted browsing caches on a fixed metadata budget. A
-// single wide directory is admitted only when it fits the global entry/byte
-// limits; older directories are evicted by access recency.
-const MAX_CACHED_DIRECTORIES: usize = 4_096;
-const MAX_CACHED_ENTRIES: usize = 50_000;
-const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
+#[derive(Clone, Copy)]
+struct CacheLimits { directories: usize, entries: usize, bytes: usize }
+
+impl CacheLimits {
+    const BROWSING: Self = Self { directories: 4_096, entries: 50_000, bytes: 32 * 1024 * 1024 };
+    // Mount limits govern retention, never directory validity or traversal.
+    const MOUNT: Self = Self { directories: usize::MAX, entries: usize::MAX, bytes: 64 * 1024 * 1024 };
+}
 
 struct CachedDirectory {
-    stored_at: Instant,
-    entries: Arc<[VfsMeta]>,
-    entry_index: Arc<EntryIndex>,
+    snapshot: DirectorySnapshot,
     entry_count: usize,
     byte_count: usize,
     last_touch: u64,
@@ -43,7 +46,10 @@ struct CachedDirectory {
 
 #[derive(Default)]
 pub(super) struct CacheState {
-    directories: HashMap<String, CachedDirectory>,
+    directories: BTreeMap<String, CachedDirectory>,
+    recency: BTreeSet<(u64, String)>,
+    expiry: BTreeSet<(Instant, String)>,
+    loads: HashMap<String, Weak<DirectoryLoad>>,
     entries: usize,
     bytes: usize,
     clock: u64,
@@ -54,6 +60,7 @@ pub struct CachingBackend {
     inner: BackendHandle,
     cache: Arc<Mutex<CacheState>>,
     child_key: ChildKey,
+    limits: CacheLimits,
 }
 
 impl CachingBackend {
@@ -66,7 +73,14 @@ impl CachingBackend {
             inner,
             cache: Arc::new(Mutex::new(CacheState::default())),
             child_key,
+            limits: CacheLimits::BROWSING,
         }
+    }
+
+    pub(crate) fn for_mount(inner: BackendHandle, child_key: Option<fn(&str) -> String>) -> Self {
+        let mut cache = Self::with_child_key(inner, child_key.unwrap_or(cache_index::exact_child_key));
+        cache.limits = CacheLimits::MOUNT;
+        cache
     }
 
     fn norm(path: &str) -> String {
@@ -109,19 +123,9 @@ impl CachingBackend {
     fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
         let (parent, name) = Self::parent_and_name(key)?;
         let mut cache = self.cache.lock().ok()?;
-        let expired = cache
-            .directories
-            .get(&parent)
-            .is_some_and(|cached| cached.stored_at.elapsed() >= CACHE_TTL);
-        if expired {
-            remove_directory(&mut cache, &parent);
-            return None;
-        }
-        let touch = tick(&mut cache);
-        let cached = cache.directories.get_mut(&parent)?;
-        cached.last_touch = touch;
+        let snapshot = cached_snapshot(&mut cache, &parent)?;
         let key = (self.child_key)(name);
-        cache_index::lookup(&cached.entries, &cached.entry_index, &key)
+        cache_index::lookup(&snapshot.entries, &snapshot.index, &key)
             .ok()
             .flatten()
     }
@@ -139,12 +143,11 @@ impl CachingBackend {
             } else {
                 format!("{key}/")
             };
-            let removed = cache
-                .directories
-                .keys()
-                .filter(|cached| *cached == &key || cached.starts_with(&child_prefix))
-                .cloned()
+            let removed = cache.directories.range(child_prefix.clone()..)
+                .take_while(|(cached, _)| cached.starts_with(&child_prefix))
+                .map(|(cached, _)| cached.clone())
                 .collect::<Vec<_>>();
+            remove_directory(&mut cache, &key);
             for cached in removed {
                 remove_directory(&mut cache, &cached);
             }
@@ -158,82 +161,12 @@ impl CachingBackend {
         cache_support::invalidate_ancestors(&self.cache, path);
     }
 
-    fn directory_snapshot(&self, path: &str) -> VfsResult<Arc<[VfsMeta]>> {
-        let key = Self::norm(path);
-        let generation = match self.cache.lock() {
-            Ok(mut cache) => {
-                let expired = cache
-                    .directories
-                    .get(&key)
-                    .is_some_and(|cached| cached.stored_at.elapsed() >= CACHE_TTL);
-                if expired {
-                    remove_directory(&mut cache, &key);
-                } else {
-                    let touch = tick(&mut cache);
-                    if let Some(cached) = cache.directories.get_mut(&key) {
-                        cached.last_touch = touch;
-                        return Ok(Arc::clone(&cached.entries));
-                    }
-                }
-                cache.generation
-            }
-            Err(_) => return Ok(Arc::<[VfsMeta]>::from(self.inner.list_dir(path)?)),
-        };
-        let entries = Arc::<[VfsMeta]>::from(self.inner.list_dir(path)?);
-        let entry_count = entries.len().saturating_add(1);
-        if entry_count <= MAX_CACHED_ENTRIES {
-            let metadata_bytes = cached_metadata_bytes(&key, &entries);
-            if metadata_bytes <= MAX_CACHED_BYTES {
-                let (entry_index, index_bytes) = cache_index::build(&entries, self.child_key);
-                let byte_count = cached_bytes(metadata_bytes, index_bytes);
-                if byte_count <= MAX_CACHED_BYTES {
-                    let entry_index = Arc::new(entry_index);
-                    if let Ok(mut cache) = self.cache.lock() {
-                        if cache.generation != generation {
-                            return Ok(entries);
-                        }
-                        purge_expired(&mut cache);
-                        remove_directory(&mut cache, &key);
-                        evict_until(&mut cache, entry_count, byte_count);
-                        if cache.directories.len() < MAX_CACHED_DIRECTORIES
-                            && fits(&cache, entry_count, byte_count)
-                        {
-                            let last_touch = tick(&mut cache);
-                            cache.entries += entry_count;
-                            cache.bytes += byte_count;
-                            cache.directories.insert(
-                                key,
-                                CachedDirectory {
-                                    stored_at: Instant::now(),
-                                    entries: Arc::clone(&entries),
-                                    entry_index,
-                                    entry_count,
-                                    byte_count,
-                                    last_touch,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        Ok(entries)
-    }
-
     /// Resolves one child from the retained snapshot without cloning or
     /// rescanning a wide directory on every path component.
     pub(crate) fn unique_child(&self, parent: &str, requested: &str) -> VfsResult<Option<VfsMeta>> {
-        let entries = self.directory_snapshot(parent)?;
-        let key = Self::norm(parent);
+        let snapshot = self.directory_snapshot(parent)?;
         let requested_key = (self.child_key)(requested);
-        if let Ok(mut cache) = self.cache.lock() {
-            let touch = tick(&mut cache);
-            if let Some(cached) = cache.directories.get_mut(&key) {
-                cached.last_touch = touch;
-                return cache_index::lookup(&cached.entries, &cached.entry_index, &requested_key);
-            }
-        }
-        cache_index::scan(&entries, requested, self.child_key)
+        cache_index::lookup(&snapshot.entries, &snapshot.index, &requested_key)
     }
 }
 
@@ -249,7 +182,7 @@ impl Backend for CachingBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        Ok(self.directory_snapshot(path)?.to_vec())
+        Ok(self.directory_snapshot(path)?.entries.to_vec())
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
@@ -414,8 +347,10 @@ impl Backend for CachingBackend {
     fn invalidate_cache(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             let generation = cache.generation.wrapping_add(1);
+            let loads = std::mem::take(&mut cache.loads);
             *cache = CacheState {
                 generation,
+                loads,
                 ..CacheState::default()
             };
         }

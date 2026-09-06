@@ -3,10 +3,9 @@ use std::sync::Mutex;
 
 use crate::vfs::VfsMeta;
 
-use super::{
-    CacheState, CachedDirectory, CachingBackend, MAX_CACHED_BYTES, MAX_CACHED_DIRECTORIES,
-    MAX_CACHED_ENTRIES,
-};
+use super::{CacheLimits, CacheState, CachedDirectory, CachingBackend};
+use super::cache_load::DirectorySnapshot;
+use std::time::Instant;
 
 pub(super) fn tick(cache: &mut CacheState) -> u64 {
     cache.clock = cache.clock.saturating_add(1);
@@ -15,36 +14,45 @@ pub(super) fn tick(cache: &mut CacheState) -> u64 {
 
 pub(super) fn remove_directory(cache: &mut CacheState, key: &str) {
     if let Some(previous) = cache.directories.remove(key) {
+        cache.recency.remove(&(previous.last_touch, key.to_string()));
+        cache.expiry.remove(&(previous.snapshot.expires_at, key.to_string()));
         cache.entries = cache.entries.saturating_sub(previous.entry_count);
         cache.bytes = cache.bytes.saturating_sub(previous.byte_count);
     }
 }
 
 pub(super) fn purge_expired(cache: &mut CacheState) {
-    let expired = cache
-        .directories
-        .iter()
-        .filter(|(_, cached)| cached.stored_at.elapsed() >= super::CACHE_TTL)
-        .map(|(key, _)| key.clone())
-        .collect::<Vec<_>>();
-    for key in expired {
+    let now = Instant::now();
+    while let Some((expires, key)) = cache.expiry.first().cloned() {
+        if expires > now { break; }
         remove_directory(cache, &key);
     }
 }
 
-pub(super) fn fits(cache: &CacheState, entries: usize, bytes: usize) -> bool {
-    cache.entries.saturating_add(entries) <= MAX_CACHED_ENTRIES
-        && cache.bytes.saturating_add(bytes) <= MAX_CACHED_BYTES
+pub(super) fn cached_snapshot(cache: &mut CacheState, key: &str) -> Option<DirectorySnapshot> {
+    let cached = cache.directories.get(key)?;
+    if cached.snapshot.expires_at <= Instant::now() {
+        remove_directory(cache, key);
+        return None;
+    }
+    let previous_touch = cached.last_touch;
+    cache.recency.remove(&(previous_touch, key.to_string()));
+    let touch = tick(cache);
+    let cached = cache.directories.get_mut(key)?;
+    cached.last_touch = touch;
+    let snapshot = cached.snapshot.clone();
+    cache.recency.insert((touch, key.to_string()));
+    Some(snapshot)
 }
 
-pub(super) fn evict_until(cache: &mut CacheState, entries: usize, bytes: usize) {
-    while cache.directories.len() >= MAX_CACHED_DIRECTORIES || !fits(cache, entries, bytes) {
-        let victim = cache
-            .directories
-            .iter()
-            .min_by_key(|(_, cached)| cached.last_touch)
-            .map(|(key, _)| key.clone());
-        let Some(victim) = victim else {
+pub(super) fn fits(cache: &CacheState, entries: usize, bytes: usize, limits: CacheLimits) -> bool {
+    cache.entries.saturating_add(entries) <= limits.entries
+        && cache.bytes.saturating_add(bytes) <= limits.bytes
+}
+
+pub(super) fn evict_until(cache: &mut CacheState, entries: usize, bytes: usize, limits: CacheLimits) {
+    while cache.directories.len() >= limits.directories || !fits(cache, entries, bytes, limits) {
+        let Some((_, victim)) = cache.recency.first().cloned() else {
             break;
         };
         remove_directory(cache, &victim);
@@ -53,7 +61,10 @@ pub(super) fn evict_until(cache: &mut CacheState, entries: usize, bytes: usize) 
 
 pub(super) fn cached_metadata_bytes(key: &str, entries: &[VfsMeta]) -> usize {
     size_of::<CachedDirectory>()
-        .saturating_add(key.len())
+        // Directory map plus maintained recency/expiry keys and tree-node
+        // overhead are charged as well as the immutable metadata/index.
+        .saturating_add(key.len().saturating_mul(3))
+        .saturating_add(3 * (size_of::<String>() + 96))
         .saturating_add(entries.iter().fold(0usize, |total, metadata| {
             total
                 .saturating_add(size_of::<VfsMeta>())

@@ -82,14 +82,10 @@ impl RootedBackend {
         }
         let revalidate_root =
             root_security == MountRootSecurity::Trusted || !root_confinement.is_enforced();
-        let case_cache = Arc::new(if case_sensitive_paths {
-            CachingBackend::new(Arc::clone(&raw_inner))
-        } else {
-            CachingBackend::with_child_key(
-                Arc::clone(&raw_inner),
-                crate::mount::windows_ordinal_key,
-            )
-        });
+        let child_key = if case_sensitive_paths { None } else {
+            Some(crate::mount::windows_ordinal_key as fn(&str) -> String)
+        };
+        let case_cache = Arc::new(CachingBackend::for_mount(Arc::clone(&raw_inner), child_key));
         let inner: BackendHandle = case_cache.clone();
         let backend = Self {
             inner,
