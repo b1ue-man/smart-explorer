@@ -24,6 +24,12 @@ speedup, or user-specific root cause has yet been established.
 - Daemon case resolution uses `CachingBackend::directory_snapshot`, which has
   no same-directory load sharing. Concurrent cold paths can repeatedly list the
   same ancestors. Expiry and eviction scan the whole retained cache.
+- The mandatory agent frame codec independently rejects 50,000-plus entries.
+  Removing only the host limit cannot make those directories usable end-to-end.
+- Agent frames are written as a separate four-byte length and body; mount IPC
+  sockets leave Nagle enabled. This matches Microsoft's documented small-send /
+  delayed-ACK latency mechanism. The actual delay on the user's machine has not
+  been measured; eliminate this framing dependency, not global TCP settings.
 - Background work starts fixed chunks and waits for their slowest member before
   refilling. Its four-worker ceiling is additional to backend admission. This is
   not the foreground callback limit.
@@ -63,6 +69,10 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
 - [Pinned russh-sftp request dispatch](https://docs.rs/russh-sftp/2.3.0/src/russh_sftp/client/rawsession.rs.html)
   has independent request identifiers; this does not establish the capacity of
   SE's separate remote-agent server or every SFTP server.
+- [Microsoft small-send guidance](https://learn.microsoft.com/en-us/windows/win32/winsock/tcp-ip-characteristics-2)
+  documents Nagle/delayed-ACK interaction. [Rust TCP_NODELAY](https://doc.rust-lang.org/std/net/struct.TcpStream.html#method.set_nodelay)
+  is a per-socket setting; combine the length/body in one framed write and apply
+  low-latency mode to the two mount IPC endpoints, without registry changes.
 
 ## Stage two: final behavioral milestones
 
@@ -116,7 +126,23 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
    descendants remain fenced against ancestor replacement; a demand refresh
    satisfies previously selected maintenance without another remote request.
 
-4. **One integrated acceptance and release.** After all implementation, update
+4. **Complete low-latency metadata frames.** `agent_proto/core/codec` with a
+   cohesive encoding/framing extraction as needed, and daemon mount IPC socket
+   setup. Remove the arbitrary directory-entry count limit while retaining the
+   64-MiB wire-byte safety boundary. Validate declared entry counts against the
+   minimum actual encoded record size before allocating/decoding. Encode the
+   four-byte length and payload together without a second full payload copy;
+   preserve exact protocol bytes, short-write handling and flush/error semantics.
+   Enable TCP_NODELAY on both loopback mount/backend endpoints. No protocol
+   concurrency increase, wire-format change, or global socket/registry tuning.
+   Acceptance: >50,000 real entries traverse the codec and mounted volume;
+   malformed counts and over-byte-budget frames fail safely; short writes produce
+   exactly the old wire bytes; complete small frames use one writer call on an
+   accepting sink; both production socket setup paths report nodelay enabled.
+   Log controlled old split-write/default-socket versus production round-trip
+   timings inside the one suite, without imposing a speculative speedup claim.
+
+5. **One integrated acceptance and release.** After all implementation, update
    `native/test-mount-optimization-task.ps1` as the single task entrypoint with a
    focused `mount_vault_task` selection and necessary regression coverage. Add a
    generated nested/wide fixture through `RootedBackend -> backend_server ->

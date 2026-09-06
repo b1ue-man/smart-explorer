@@ -153,6 +153,7 @@ pub(super) fn handle_client(
             id, backend_token, ..
         } => match host.mounts.take_backend(&id, &backend_token) {
             Ok((backend, _generation_lease)) => {
+                super::mount_proxy::prepare_stream(&stream)?;
                 write_response(&mut stream, &IpcResponse::Ok)?;
                 let read = stream.try_clone()?;
                 serve_backend(read, stream, backend)

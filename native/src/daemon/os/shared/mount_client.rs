@@ -176,6 +176,8 @@ fn connect_backend(
     backend_token: String,
 ) -> Result<BackendHandle, String> {
     let mut stream = host_stream(ipc_addr, HOST_ATTACH_TIMEOUT)?;
+    super::mount_proxy::prepare_stream(&stream)
+        .map_err(|error| format!("Laufwerk-Backend-Transport: {error}"))?;
     write_request(
         &mut stream,
         &IpcRequest::MountHostBackend {
