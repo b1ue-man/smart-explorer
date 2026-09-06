@@ -98,6 +98,13 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
    resolution lists their shared ancestor once; unrelated listings overlap;
    mutation during a fetch cannot publish stale cached authority; pressure never
    becomes an enumeration failure or repeated index construction for waiters.
+   The host already owns directory freshness. A host miss/refresh must therefore
+   refresh the daemon's exact directory snapshot, while still reusing cached
+   ancestor resolution. Otherwise two independent 20-second TTLs can present a
+   nearly 40-second-old listing as newly fetched. Add a shared fresh-list path
+   for this boundary; normal UI listing reuse remains unchanged. Acceptance:
+   explicit host refresh observes external changes without waiting out another
+   daemon TTL, and updates the daemon's ancestor index for subsequent children.
 
 3. **Work-conserving background metadata.** `metadata_schedule`, a focused worker
    helper, `metadata_loading`, and Windows `metadata_refresh` if needed. Refill
