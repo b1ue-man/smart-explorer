@@ -107,8 +107,8 @@ System32-`msiexec` per UAC. Automatisch installiert wird bei fehlender Runtime
 oder nicht verfügbarem Treiber; eine vorhandene inkompatible shared Runtime wird
 nicht automatisch ersetzt oder herabgestuft.
 
-Die veröffentlichte Basis 0.5.150 lädt `dokan2.dll` mit
-`LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` nur aus
+Die historische Basis 0.5.150 lud `dokan2.dll` mit
+`LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` ausschließlich aus
 `%WINDIR%\System32`. `DokanVersion()` muss die DLL-API **231** melden;
 `DokanDriverVersion()` fragt über `FSCTL_GET_VERSION` das getrennte
 Kernel-Treiberprotokoll ab und muss **0x190** (dezimal **400**) melden.
@@ -154,11 +154,16 @@ Share-Geräten; der globale Laufwerksmanager kann Mounts auswerfen oder nach
 Fehlern erneut verbinden. Nicht-Windows-Plattformen liefern für den Mount-Pfad
 bewusst `Unsupported`.
 
-### Mount-Optimierungskandidat (noch nicht in 0.5.150)
+### Mount-Cache, Metadaten und private Runtime
 
-Diese Quelländerungen warten auf ihre gemeinsame Remote-Verifikation und die
-abschließende Veröffentlichung; siehe
-[Entwurf und Nachweisgrenzen](../docs/MOUNT_OPTIMIZATION.md).
+Verifikationsstand 2026-09-06: Der Quellkandidat
+`0101ea6f6aa41b35f80a60870702bae16c670f59` bestand die
+[Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053),
+einschließlich Speichern/Replace, Skriptzugriffen und Änderungsbeobachtern auf
+einem echten Windows-Mount, privater Batch-Fortsetzung (`continuation > 0`),
+offiziellem Fallback sowie Schutz ungespeicherter Inhalte und Cache-Frische.
+Dieser Verhaltensnachweis belegt keine Release-Veröffentlichung; siehe
+[Implementierung und Nachweisgrenzen](../docs/MOUNT_OPTIMIZATION.md).
 
 `--cache-mib <Wert>` und die GUI setzen den separaten Cache für unbenutzte saubere
 Inhalte auf 0 bis 65.536 MiB pro Laufwerk, standardmäßig 500 MiB. Null deaktiviert
@@ -203,7 +208,8 @@ sodass der nächste `Retry` die System-Runtime wählt. Kontrolliert erfolgreiche
 Abbau entfernt nur den eigenen Marker; bei einem Löschfehler bleibt die
 Kompatibilitätswahl erhalten. `--system-runtime` und die GUI-
 Kompatibilitätsoption erzwingen System32. Kein Live-DLL-Wechsel, keine Garantie
-automatischer Hänger-Erholung, keine Obsidian-Zertifizierung oder unbelegten
+automatischer Hänger-Erholung, keine Zertifizierung der tatsächlichen Obsidian-
+Anwendung oder sämtlicher Remote-Transporte und keine unbelegten
 Geschwindigkeitsangaben. Die bisherige Root-/Transport-/Schreibsicherheit gilt
 weiter; die folgenden Abschnitte beschreiben diese unabhängigen Grenzen.
 

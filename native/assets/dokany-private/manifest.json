@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "source_commit": "f1d5de68ff459af94e309cfdd171e4b8ca2af4dd",
+  "source_archive_sha256": "f07c0a13ef426234b8707862a52f30f177528d6d34294bb0dde1620f681d266b",
+  "recipe_sha256": "3d27f6fc3ba3b5d8d673232477fa7283c0e8186476016b0a392dffd04a0af5b2",
+  "patch_sha256": "a2a5eebc4ace7165b91bfd457348905229773cb0870b5a1bf1ad0b28cccbc15f",
+  "builder_sha256": "d932346c96cf6fbcf2d9abc58a10ef97493eab32ebd1747c90c35c1cc33838ef",
+  "library_api": 231,
+  "driver_protocol": 400,
+  "toolchain": {
+    "vs_version": "17.14.37614.0",
+    "msvc_version": "14.44.35207",
+    "sdk_version": "10.0.26100.0",
+    "platform_toolset": "v143",
+    "runtime_library": "MultiThreaded"
+  },
+  "payload": {
+    "file": "dokan2.dll",
+    "size": 244736,
+    "sha256": "f5f4de55f833734302a890cd185b788bdb84d2be8020cafca617c102aeeef537",
+    "machine": "AMD64",
+    "imports": [
+      "advapi32.dll",
+      "kernel32.dll",
+      "shell32.dll",
+      "user32.dll"
+    ],
+    "exports": [
+      "DokanCloseHandle",
+      "DokanCreateFileSystem",
+      "DokanDebugMode",
+      "DokanDriverVersion",
+      "DokanGetMountPointList",
+      "DokanInit",
+      "DokanIsFileSystemRunning",
+      "DokanIsNameInExpression",
+      "DokanMain",
+      "DokanMapKernelToUserCreateFileFlags",
+      "DokanNetworkProviderInstall",
+      "DokanNetworkProviderUninstall",
+      "DokanNotifyCreate",
+      "DokanNotifyDelete",
+      "DokanNotifyRename",
+      "DokanNotifyUpdate",
+      "DokanNotifyXAttrUpdate",
+      "DokanNtStatusFromWin32",
+      "DokanOpenRequestorToken",
+      "DokanRegisterWaitForFileSystemClosed",
+      "DokanReleaseMountPointList",
+      "DokanRemoveMountPoint",
+      "DokanResetTimeout",
+      "DokanServiceDelete",
+      "DokanServiceInstall",
+      "DokanSetDebugMode",
+      "DokanShutdown",
+      "DokanUnmount",
+      "DokanUnregisterWaitForFileSystemClosed",
+      "DokanUseStdErr",
+      "DokanVersion",
+      "DokanWaitForFileSystemClosed",
+      "SmartExplorerBatchContinuationCountV1"
+    ]
+  },
+  "source_package": {
+    "file": "corresponding-source.zip",
+    "size": 732613,
+    "sha256": "941e053db23f2dbc07e64d57225eb0748612f28b3deb51ef5cf7746e95abcf6f"
+  }
+}

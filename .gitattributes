@@ -2,3 +2,5 @@
 release-native/update-feed/*.sha256 text eol=lf
 release-native/update-feed/version.txt text eol=lf
 release-native/update-feed/windows-build.manifest text eol=lf
+# Preserve the exact remote-approved dependency bytes, including JSON line endings.
+/native/assets/dokany-private/* -text

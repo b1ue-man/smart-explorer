@@ -22,9 +22,10 @@ The version is consistent across all four outputs because each reads it from
 `Cargo.toml`. Never hand-edit `version.txt` — the top-level release script
 writes it last.
 
-The checked-in version remains **0.5.150**. The mount-cache/private-Dokany work
-below is a candidate pending its single remote task suite and terminal release;
-these dependency rules do not mean the new behavior has already shipped.
+The mount-cache/private-Dokany source and exact dependency were approved by the
+[single remote task suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053)
+on 2026-09-06, before the terminal release. Approval alone is not publication;
+use the versioned feed and matching GitHub Release for current release truth.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
 
@@ -105,9 +106,9 @@ on 2026-07-22. If the supported ABI, driver protocol, or MSI changes, review and
 manifest, Rust validation, fetchers, installer, license notices and user/native
 documentation together.
 
-## Candidate private-DLL dependency: approve once, reuse exact bytes
+## Private-DLL dependency: approve once, reuse exact bytes
 
-The candidate adds a modified user-mode DLL with corrected batching; the
+The mount runtime includes a modified user-mode DLL with corrected batching; the
 official MSI, System32 DLL, signed driver and API/protocol requirements stay
 unchanged. Its pinned source, patch, toolchain/provenance contract and source
 delivery are documented in
@@ -123,6 +124,11 @@ run:
 - `native/assets/dokany-private/dokan2.dll`;
 - `native/assets/dokany-private/manifest.json`; and
 - `native/assets/dokany-private/corresponding-source.zip`.
+
+The retained set was approved in run `34049677053` at source
+`0101ea6f6aa41b35f80a60870702bae16c670f59`. Exact payload/provenance identities and
+the observed continuation/fallback behavior are recorded in
+[MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md#approved-exact-dependency-and-observed-behavior).
 
 The terminal release must not rebuild this DLL, replace it with an independently
 prepared copy, or treat a preparation result alone as suite approval. Before
