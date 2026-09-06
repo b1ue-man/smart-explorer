@@ -31,6 +31,9 @@ mod runtime_install_process;
 mod shutdown_watchdog;
 mod wide;
 
+#[cfg(test)]
+mod optimization_runtime_tests;
+
 pub(crate) use cache_lease::audit_recovery;
 pub(crate) use host::{preflight_runtime, run_mount_host};
 pub(crate) use runtime_install::install_runtime;
