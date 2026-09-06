@@ -58,6 +58,7 @@ impl MountEngine {
         destination: &ProjectedPath,
         shared_destination_is_open: bool,
     ) -> io::Result<ReplaceDestination> {
+        self.preserve_lazy_destination(destination, shared_destination_is_open)?;
         let entry = self.entry_for_path(destination.backend())?;
         let Some(entry) = entry else {
             let baseline = match self.backend.stat(destination.backend()) {
@@ -169,10 +170,25 @@ impl MountEngine {
             destination_state.as_deref_mut(),
         )?;
 
+        // Reserve ownership before dispatch. On failure the live entry still
+        // owns the same object; cleanup removes both registry references.
+        if let Some(entry) = destination.entry.as_ref() {
+            let name = destination_state.as_ref().map(|state| state.spool_name.clone())
+                .ok_or_else(|| io::Error::other("replace destination state is absent"))?;
+            lock(&self.detached)?.insert(name, Arc::clone(entry));
+        }
+        self.invalidate_content(source.backend(), true);
+        self.invalidate_content(destination_path.backend(), true);
+
         // A durable dirty record makes a missing/ambiguous mutation reply retain
         // the source cache instead of allowing a clean unmount.
-        self.spool
-            .persist_entry(&state.with_condition(EntryCondition::Dirty))?;
+        if let Err(error) = self.spool.persist_entry(&state.with_condition(EntryCondition::Dirty)) {
+            state.condition = EntryCondition::Conflict(MountConflict {
+                path: state.remote_path.clone(), baseline: state.baseline.clone(), current: None,
+                detail: format!("replace preparation journal durability is uncertain: {error}"),
+            });
+            return Err(error);
+        }
         state.condition = EntryCondition::Dirty;
         let mut ambiguous_promotion = None;
         let promotion_result = self
@@ -294,6 +310,7 @@ impl MountEngine {
                     Ok(()) => {
                         state.baseline = committed_baseline;
                         state.condition = EntryCondition::Clean;
+                        state.clean_since = std::time::Instant::now();
                         RenameOutcome::Complete
                     }
                     Err(error) => {

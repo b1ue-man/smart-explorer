@@ -2,6 +2,18 @@
 
 #[path = "core/cache_policy.rs"]
 mod cache_policy;
+#[path = "core/cache_space.rs"]
+mod cache_space;
+#[path = "core/clean_cache.rs"]
+mod clean_cache;
+#[path = "core/entry_lifecycle.rs"]
+mod entry_lifecycle;
+#[path = "core/engine_recovery.rs"]
+mod engine_recovery;
+#[path = "core/file_commit.rs"]
+mod file_commit;
+#[path = "core/materialization.rs"]
+mod materialization;
 #[path = "core/case_semantics.rs"]
 mod case_semantics;
 #[path = "core/commit.rs"]
@@ -73,6 +85,7 @@ pub use engine::MountEngine;
 pub use cache_policy::{
     MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,
 };
+pub use cache_space::CacheSpaceProbe;
 pub use metadata_policy::{
     MountMetadataPolicy, DEFAULT_METADATA_PRELOAD_DEPTH, MAX_METADATA_PRELOAD_DEPTH,
 };

@@ -1,4 +1,5 @@
 use super::engine::Entry;
+use super::entry_lifecycle::EntryPin;
 use crate::vfs::VfsMeta;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ pub(super) struct OpenHandle {
 
 #[derive(Clone)]
 pub(super) enum OpenHandleKind {
-    Materialized(Arc<Entry>),
+    Materialized(EntryPin),
     /// An open-existing handle whose contents were not fetched yet. The first
     /// data operation upgrades it in place to a materialized entry; pure
     /// metadata traffic (Explorer's bulk) never transfers the file at all.

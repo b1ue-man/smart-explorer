@@ -54,6 +54,7 @@ impl MountEngine {
     /// deliberately survives a delete-sharing namespace replace, where the
     /// old handle remains valid but its former pathname names a new object.
     pub fn stat_handle(&self, handle: HandleId) -> io::Result<VfsMeta> {
+        let _reap = self.operation_reaper();
         match self.handle(handle)?.kind {
             OpenHandleKind::Materialized(entry) => {
                 let state = lock(&entry.state)?;
@@ -97,7 +98,12 @@ impl MountEngine {
         path: &super::path::ProjectedPath,
         listed: Arc<[VfsMeta]>,
     ) -> io::Result<Arc<[VfsMeta]>> {
-        let entries = lock(&self.entries)?.values().cloned().collect::<Vec<_>>();
+        let parent = self.cache_key(path.backend());
+        // Namespace read ownership makes these identity keys stable through
+        // selection. Never wait for an unrelated file's upload state mutex.
+        let entries = lock(&self.entries)?.iter()
+            .filter(|(key, _)| parent_path(key) == parent)
+            .map(|(_, entry)| Arc::clone(entry)).collect::<Vec<_>>();
         let mut overlays = Vec::new();
         for entry in entries {
             let state = lock(&entry.state)?;

@@ -35,6 +35,7 @@ impl MountEngine {
             source_baseline: None,
             source_is_directory: None,
         };
+        self.invalidate_content(path.backend(), true);
         self.persist_namespace_intent(&intent)?;
         let mutation_error = self.backend.mkdir_all(path.backend()).err();
         self.invalidate_metadata(path.backend(), false);
@@ -149,6 +150,8 @@ impl MountEngine {
         if replace_existing {
             return self.rename_replace_file(&source, &destination, shared_destination_is_open);
         }
+        self.invalidate_content(source.backend(), true);
+        self.invalidate_content(destination.backend(), true);
         if self.entry_for_path(destination.backend())?.is_some()
             || self.backend.try_exists(destination.backend())?
         {
@@ -334,10 +337,14 @@ impl MountEngine {
     }
 
     pub fn flush_path(&self, callback_path: &str) -> io::Result<FlushOutcome> {
-        let path = self.project_checked(callback_path)?;
-        let entry = self
-            .entry_for_path(path.backend())?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "path is not materialized"))?;
+        let _reap = self.operation_reaper();
+        let entry = {
+            let _namespace = super::engine::read_lock(&self.namespace)?;
+            let path = self.project_checked(callback_path)?;
+            let entry = self.entry_for_path(path.backend())?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "path is not materialized"))?;
+            super::entry_lifecycle::EntryPin::new(entry)
+        };
         self.flush_entry(&entry)
     }
 
