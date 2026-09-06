@@ -2350,9 +2350,9 @@
     "semantic_hash": "50bd10ff3fd47c2ba1ee61d5ee202028"
   },
   "mount/core/navigation_cache_task_tests.rs": {
-    "mtime": 1788728781.2406454,
-    "ast_hash": "b2fc5c0c07e84f3cb68bdbc9768175d3",
-    "semantic_hash": "b2fc5c0c07e84f3cb68bdbc9768175d3"
+    "mtime": 1788729695.3704329,
+    "ast_hash": "0a54afbc2fb907f30d8b0c5ca33d18cf",
+    "semantic_hash": "0a54afbc2fb907f30d8b0c5ca33d18cf"
   },
   "mount/core/open_handle.rs": {
     "mtime": 1788712688.5129106,
@@ -2420,9 +2420,9 @@
     "semantic_hash": "1541512c840b5977bb1828e650139bbd"
   },
   "mount/core/vault_metadata_flight_tests.rs": {
-    "mtime": 1788728511.74947,
-    "ast_hash": "de1376d261dbd9e911e26cec8aa8a3c3",
-    "semantic_hash": "de1376d261dbd9e911e26cec8aa8a3c3"
+    "mtime": 1788729695.369433,
+    "ast_hash": "61c24c80fd97144c743b3506d8d941e3",
+    "semantic_hash": "61c24c80fd97144c743b3506d8d941e3"
   },
   "mount/core/vault_metadata_task_tests.rs": {
     "mtime": 1788728365.8656967,

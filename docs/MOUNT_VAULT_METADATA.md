@@ -195,6 +195,12 @@ indexed and introduces a documented 1-ms synthetic listing delay to expose
 overlap without a global fixture lock. This measures this stack under a
 controlled provider, not the user's WAN or an installed Obsidian application.
 
-Status: implementation milestones committed; the consolidated suite and root
-code graph are prepared for the exact-candidate remote invocation. Remote
-acceptance has not yet run. No local build or test execution.
+The [first remote invocation](https://github.com/b1ue-man/smart-explorer/actions/runs/34060164779)
+compiled the candidate successfully but stopped at its selected-case inventory:
+the name/collision case had been selected from an existing `not(windows)` module.
+No mounted workload ran. The same safety acceptance is now in the portable host
+fixture; the existing platform gate is unchanged. Retry uses the same suite and
+incremental library target, not an additional validation pipeline.
+
+Status: remote acceptance pending after this suite-wiring correction. No local
+build or test execution; no release has been started for this follow-up.
