@@ -174,7 +174,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   depth defaults to 2 and is configurable from 0 through 4 in the GUI or with
   `--metadata-depth`. Load only the complete root snapshot synchronously; fill
   deeper complete snapshots breadth-first in bounded 8-target batches and
-  rotate at most 16 refresh targets every 20 seconds. Keep the directory cache
+  rotate at most 16 refresh targets every 20 seconds. Reserve root, oldest-attempt
+  fairness and a most-recent demanded directory before the remaining demand
+  backlog; servicing a recent directory must not bury it behind an earlier full
+  vault scan. Keep the directory cache
   within its 128-MiB retention budget; the five-second point-stat cache has a
   separate 16-MiB bound and the mount daemon ancestor cache has 64 MiB. These
   budgets govern disposable retention, not valid directory or entry counts.

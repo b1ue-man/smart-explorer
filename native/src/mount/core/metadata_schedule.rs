@@ -43,6 +43,18 @@ impl MetadataCache {
             let oldest = candidates.remove(0);
             selected.push((oldest.0, oldest.1));
         }
+        // An application may keep watching its latest directory without reading
+        // it again. Servicing its last demand must not put it behind an entire
+        // earlier vault scan. Keep one recent position as well as cold fairness.
+        if selected.len() < limit {
+            if let Some(index) = candidates.iter().enumerate()
+                .filter(|(_, candidate)| candidate.2 > 0)
+                .max_by_key(|(_, candidate)| candidate.2).map(|(index, _)| index)
+            {
+                let recent = candidates.remove(index);
+                selected.push((recent.0, recent.1));
+            }
+        }
         candidates.sort_by(|left, right| (right.2 > right.3).cmp(&(left.2 > left.3))
             .then(right.2.cmp(&left.2)).then(left.0.cmp(&right.0)));
         let remaining = limit - selected.len();

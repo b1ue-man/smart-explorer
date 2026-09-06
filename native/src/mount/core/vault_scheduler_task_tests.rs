@@ -266,3 +266,35 @@ fn mount_vault_task_scheduler_foreground_refresh_satisfies_selected_revision() {
     }].into(), *depth).unwrap());
     assert!(cache.refreshed_since(path, *revision).unwrap());
 }
+
+#[test]
+fn mount_vault_task_scheduler_recent_directory_survives_old_demand_backlog() -> io::Result<()> {
+    let cache = MetadataCache::new("/", true);
+    let directory = VfsMeta { is_dir: true, ..VfsMeta::default() };
+    let names = (0..32).map(|index| format!("d{index:02}"))
+        .chain(std::iter::once("watch".into())).collect::<Vec<_>>();
+    let children = names.iter().map(|name| VfsMeta {
+        name: name.clone(), ..directory.clone()
+    }).collect::<Vec<_>>();
+    assert!(cache.install_directory("/", directory.clone(), children.into(), 0)?);
+    for name in &names {
+        let path = format!("/{name}");
+        assert!(cache.install_directory(&path, directory.clone(), Vec::new().into(), 1)?);
+        cache.mark_directory_access(&path)?;
+    }
+    // Simulate the existing pre-watch refresh. No new directory reads occur
+    // after this point; its last demand is serviced but it remains most recent.
+    assert!(cache.install_directory("/watch", directory, Vec::new().into(), 1)?);
+    let selected = cache.refresh_targets(16, true)?;
+    assert!(selected.iter().any(|(path, _)| path == "/watch"));
+    let mut visited = std::collections::HashSet::new();
+    for _ in 0..names.len() {
+        let selected = cache.refresh_targets(3, true)?;
+        assert_eq!(selected.len(), 3);
+        assert!(selected.iter().any(|(path, _)| path == "/watch"));
+        visited.extend(selected.into_iter().map(|(path, _)| path));
+    }
+    assert!(names.iter().all(|name| visited.contains(&format!("/{name}"))),
+        "reserving recent demand must retain cold-attempt fairness");
+    Ok(())
+}

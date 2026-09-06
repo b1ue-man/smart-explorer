@@ -2330,9 +2330,9 @@
     "semantic_hash": "5880fb4f483475bf41a35c233edb0048"
   },
   "mount/core/metadata_schedule.rs": {
-    "mtime": 1788727140.0264726,
-    "ast_hash": "bc72cd65646a95ea41370e343c47ddce",
-    "semantic_hash": "bc72cd65646a95ea41370e343c47ddce"
+    "mtime": 1788731223.5014546,
+    "ast_hash": "86433abb0e53c4ba4dcb64182c20f506",
+    "semantic_hash": "86433abb0e53c4ba4dcb64182c20f506"
   },
   "mount/core/metadata_snapshot_task_tests.rs": {
     "mtime": 1788728281.8570647,
@@ -2430,9 +2430,9 @@
     "semantic_hash": "106b096e2753713d2fe2ff65f047c5fb"
   },
   "mount/core/vault_scheduler_task_tests.rs": {
-    "mtime": 1788727740.7463865,
-    "ast_hash": "727967a8d0ec7a705c5bee554862e4b8",
-    "semantic_hash": "727967a8d0ec7a705c5bee554862e4b8"
+    "mtime": 1788731223.5024548,
+    "ast_hash": "fb7c7f6cf1a25458fb76b7630c7f8212",
+    "semantic_hash": "fb7c7f6cf1a25458fb76b7630c7f8212"
   },
   "mount/core/windows_access.rs": {
     "mtime": 1785108594.7572615,

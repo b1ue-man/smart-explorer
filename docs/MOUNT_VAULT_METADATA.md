@@ -133,6 +133,14 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
    Acceptance: one stalled sibling cannot idle the remaining available workers;
    descendants remain fenced against ancestor replacement; a demand refresh
    satisfies previously selected maintenance without another remote request.
+   The large-tree watcher review additionally exposed demand-backlog starvation:
+   once the latest directory has been refreshed, old unserviced reads outrank it
+   even though it remains the most recently used directory. Reserve one available
+   position for that most-recent non-root directory, alongside the existing root
+   and oldest-attempt reservations. Keep the remaining pending-demand ordering,
+   cooldowns and concurrency unchanged. Acceptance: a just-refreshed latest
+   directory is selected with more than a batch of older pending demands, while
+   repeated bounded selection still advances through every older directory.
 
 4. **Complete low-latency metadata frames.** `agent_proto/core/codec` with a
    cohesive encoding/framing extraction as needed, and daemon mount IPC socket
