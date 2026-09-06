@@ -62,24 +62,3 @@ pub(super) fn lookup(
         ),
     }
 }
-
-pub(super) fn scan(
-    entries: &[VfsMeta],
-    requested: &str,
-    child_key: ChildKey,
-) -> VfsResult<Option<VfsMeta>> {
-    let key = child_key(requested);
-    let mut matched = None;
-    for metadata in entries {
-        if child_key(&metadata.name) != key {
-            continue;
-        }
-        if matched.replace(metadata.clone()).is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "backend contains case-colliding child names",
-            ));
-        }
-    }
-    Ok(matched)
-}
