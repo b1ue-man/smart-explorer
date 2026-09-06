@@ -27,3 +27,11 @@ pub(super) fn read_directory(
 ) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
     platform::read_directory(path)
 }
+
+pub(super) fn can_request_elevation(root: &str) -> bool { platform::can_request_elevation(root) }
+pub(super) fn launch_elevated_analysis(root: &str) -> Result<bool, String> {
+    platform::launch_elevated_analysis(root)
+}
+pub(super) fn verify_analysis_startup(request: &super::AnalysisStartup) -> Result<(), String> {
+    platform::verify_analysis_startup(request)
+}

@@ -98,7 +98,8 @@ impl Directory {
             if let Some(fallback) = &mut self.fallback {
                 let Some(entry) = fallback.next() else { return Ok(None); };
                 let entry = entry?;
-                let metadata = entry.metadata()?;
+                let metadata = entry.metadata().map_err(|error| io::Error::new(error.kind(),
+                    format!("{}: {error}", entry.path().display())))?;
                 use std::os::windows::fs::MetadataExt;
                 let attrs = metadata.file_attributes();
                 let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
@@ -107,19 +108,32 @@ impl Directory {
                 return Ok(Some(LocalEntry { name: entry.file_name(),
                     kind: kind(attrs, tag.unwrap_or(0)), size: metadata.len() }));
             }
-            if self.cursor.is_none() && !self.refill()? { return Ok(None); }
+            if self.cursor.is_none() {
+                match self.refill() {
+                    Ok(false) => return Ok(None),
+                    Ok(true) => {},
+                    Err(error) => { self.ended = true; return Err(error); }
+                }
+            }
             let Some(offset) = self.cursor else { continue; }; // ordinary fallback
             // The API owns the initialized, aligned allocation only during the
             // synchronous call. Decode bounds-checked bytes, never cast records.
             let bytes = unsafe { std::slice::from_raw_parts(self.buffer.as_ptr().cast::<u8>(),
                 self.buffer.len() * size_of::<u64>()) };
-            let record = directory_records::decode(bytes, offset, self.layout)?;
+            let record = match directory_records::decode(bytes, offset, self.layout) {
+                Ok(record) => record,
+                Err(error) => { self.ended = true; return Err(error); }
+            };
             self.cursor = record.next;
             if record.name == "." || record.name == ".." { continue; }
             let tag = if record.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 match record.tag {
                     Some(tag) => tag,
-                    None => attributes(&open(&self.path.join(&record.name), FILE_READ_ATTRIBUTES)?)?.ReparseTag,
+                    None => {
+                        let path = self.path.join(&record.name);
+                        open(&path, FILE_READ_ATTRIBUTES).and_then(|file| attributes(&file))
+                            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", path.display())))?.ReparseTag
+                    },
                 }
             } else { 0 };
             return Ok(Some(LocalEntry { name: record.name, size: record.size,
@@ -143,7 +157,7 @@ impl Iterator for Directory {
         match self.next_entry() {
             Ok(Some(entry)) => Some(Ok(entry)),
             Ok(None) => { self.ended = true; None }
-            Err(error) => { self.ended = true; Some(Err(error)) }
+            Err(error) => Some(Err(error)),
         }
     }
 }

@@ -44,6 +44,12 @@ pub mod zipfs;
 
 pub fn run_gui() -> eframe::Result<()> {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    // This exact-purpose UAC route must precede all ordinary GUI side effects.
+    match analytics::parse_analysis_startup(&raw_args) {
+        Ok(Some(request)) => return app::run_analysis_window(Ok(request)),
+        Err(error) => return app::run_analysis_window(Err(error)),
+        Ok(None) => {}
+    }
     if let Some(result) = share::run_exec_supervisor_if_requested(&raw_args) {
         result.unwrap_or_else(|error| panic!("remote-exec supervisor failed: {error}"));
         return Ok(());

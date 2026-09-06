@@ -68,6 +68,7 @@ impl App {
         let mut rescan_source: Option<StorageScanSource> = None;
         let mut pick_folder = false;
         let mut cancel = false;
+        let mut request_access = false;
         let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
 
         {
@@ -240,6 +241,9 @@ impl App {
                         }
                         StorageRunState::Running | StorageRunState::Complete => {}
                     }
+                    analytics_access::issues_ui(ui, &self.analytics_issues,
+                        self.analytics_suppressed_issues, self.analytics_access.permission_denied);
+                    request_access = analytics_access::access_ui(ui, &self.analytics_access);
                     ui.separator();
 
                     treemap_accessible_list(
@@ -375,6 +379,7 @@ impl App {
         }
 
         // ── Apply deferred actions (self is free of the borrows here) ──
+        if request_access { self.request_analytics_access(); }
         if let Some((cells, rect)) = recomputed {
             self.analytics_cells = cells;
             self.analytics_cells_rect = rect;

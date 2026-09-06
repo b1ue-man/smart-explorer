@@ -70,6 +70,7 @@ pub struct App {
     pub(in crate::app) analytics_state: StorageRunState,
     pub(in crate::app) analytics_issues: Vec<crate::analytics::ScanIssue>,
     pub(in crate::app) analytics_suppressed_issues: u64,
+    pub(in crate::app) analytics_access: analytics_access::AnalyticsAccess,
     /// In-memory drill position within the tree (segment names from the root).
     pub(in crate::app) analytics_focus: Vec<String>,
     /// A running background analytics scan, if any.

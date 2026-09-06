@@ -2,6 +2,11 @@
 mod agent_update_remote;
 #[path = "core/analytics_accessibility.rs"]
 mod analytics_accessibility;
+#[path = "core/analytics_access.rs"]
+mod analytics_access;
+#[path = "core/analytics_window.rs"]
+mod analytics_window;
+pub(crate) use analytics_window::run_analysis_window;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
 #[path = "core/analytics_ui.rs"]
