@@ -18,7 +18,11 @@ function Get-BytesHash([byte[]]$Bytes) {
 
 function Get-CanonicalText([string]$Path) {
     $value = $utf8.GetString([IO.File]::ReadAllBytes($Path))
-    if ($value.StartsWith([string][char]0xfeff)) { throw "UTF-8 BOM is not permitted: $Path" }
+    # BOM is an exact format marker, not linguistic text: a culture-sensitive
+    # comparison can ignore U+FEFF and report a prefix on a BOM-free file.
+    if ($value.StartsWith([string][char]0xfeff, [StringComparison]::Ordinal)) {
+        throw "UTF-8 BOM is not permitted: $Path"
+    }
     return $value.Replace("`r`n", "`n")
 }
 
