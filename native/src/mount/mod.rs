@@ -32,6 +32,8 @@ mod journal;
 mod metadata;
 #[path = "core/metadata_cache.rs"]
 mod metadata_cache;
+#[path = "core/metadata_batch.rs"]
+mod metadata_batch;
 #[path = "core/metadata_loading.rs"]
 mod metadata_loading;
 #[path = "core/metadata_point_cache.rs"]

@@ -4,7 +4,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const PRELOAD_BATCH_INTERVAL: Duration = Duration::from_millis(250);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(20);
 
 pub(super) struct MetadataRefreshWorker {
@@ -59,22 +58,17 @@ fn run(engine: Arc<MountEngine>, stop: Arc<(Mutex<bool>, Condvar)>) {
             return;
         }
         let _ = engine.maintain_cache();
-        let refreshed = if Instant::now() >= next_refresh {
+        if Instant::now() >= next_refresh {
             let _ = engine.refresh_metadata_while(|| is_stopped(&stop));
             next_refresh = Instant::now() + REFRESH_INTERVAL;
-            true
-        } else {
-            false
-        };
+        }
         let progressed = engine
             .preload_metadata_batch_while(|| is_stopped(&stop))
             .unwrap_or(0);
-        let until_refresh = next_refresh.saturating_duration_since(Instant::now());
-        let delay = if progressed > 0 || refreshed {
-            PRELOAD_BATCH_INTERVAL.min(until_refresh)
-        } else {
-            until_refresh
-        };
+        // Productive bounded expansion can immediately refill. The configured
+        // depth, retention budget, backend admission and stop checks still apply.
+        if progressed > 0 { continue; }
+        let delay = next_refresh.saturating_duration_since(Instant::now());
         if wait_for_stop(&stop, delay) {
             return;
         }

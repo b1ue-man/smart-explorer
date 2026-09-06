@@ -1,8 +1,8 @@
 use super::case_semantics::identity_key;
 use crate::vfs::VfsMeta;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 #[path = "metadata_cache_load.rs"]
@@ -13,15 +13,20 @@ mod support;
 mod changes;
 #[path = "metadata_schedule.rs"]
 mod schedule;
-use load_support::{expire_observed_path, invalidate_descendants, invalidate_paths, invalidate_slot};
+#[path = "metadata_cache_order.rs"]
+mod order;
+use load_support::{expire_observed_path, invalidate_descendants, invalidate_paths,
+    invalidate_slot, LoadTable};
 pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup};
-pub(super) use schedule::run_metadata_batch;
+#[cfg(test)]
+pub(super) use crate::mount::metadata_batch::run_metadata_batch;
 pub use changes::MetadataChange;
 use support::*;
 
-const MAX_CACHED_DIRECTORIES: usize = 4_096;
+// Kept only as a historical threshold for regression fixtures, not admission.
+#[cfg(test)]
 pub(super) const MAX_CACHED_ENTRIES: usize = 50_000;
-const MAX_CACHED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHED_DIRECTORY_BYTES: usize = MAX_CACHED_BYTES;
 const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 pub(super) const DIRECTORY_TTL: Duration = Duration::from_secs(20);
@@ -47,8 +52,12 @@ struct CachedDirectory {
 
 #[derive(Default)]
 struct CacheState {
-    directories: HashMap<String, CachedDirectory>,
-    snapshot_cooldowns: HashMap<String, Instant>,
+    directories: BTreeMap<String, CachedDirectory>,
+    recency: BTreeSet<(u64, String)>,
+    expiry: BTreeSet<(Instant, String)>,
+    snapshot_cooldowns: BTreeMap<String, Instant>,
+    cooldown_expiry: BTreeSet<(Instant, String)>,
+    cooldown_bytes: usize,
     entries: usize,
     bytes: usize,
     clock: u64,
@@ -60,7 +69,7 @@ pub(super) struct MetadataCache {
     root: String,
     case_sensitive: bool,
     state: Mutex<CacheState>,
-    loads: Mutex<HashMap<String, Weak<LoadSlot>>>,
+    loads: Mutex<LoadTable>,
 }
 
 impl MetadataCache {
@@ -69,7 +78,7 @@ impl MetadataCache {
             root: root.to_string(),
             case_sensitive,
             state: Mutex::new(CacheState::default()),
-            loads: Mutex::new(HashMap::new()),
+            loads: Mutex::new(LoadTable::default()),
         }
     }
 
@@ -93,7 +102,14 @@ impl MetadataCache {
     }
 
     pub(super) fn drain_changes(&self, limit: usize) -> io::Result<Vec<MetadataChange>> {
-        Ok(self.lock_state()?.changes.drain(limit))
+        let (changes, retired) = {
+            let mut state = self.lock_state()?;
+            state.changes.drain(limit)
+        };
+        // Releasing a final snapshot Arc can free a wide directory's strings;
+        // keep those destructors outside the foreground cache-state mutex.
+        drop(retired);
+        Ok(changes)
     }
 
     pub(super) fn directory(&self, path: &str) -> io::Result<Option<Arc<[VfsMeta]>>> {
@@ -107,12 +123,10 @@ impl MetadataCache {
             }
             _ => {}
         }
-        let touch = tick(&mut state);
-        let Some(cached) = state.directories.get_mut(&key) else {
+        order::touch(&mut state, &key, true);
+        let Some(cached) = state.directories.get(&key) else {
             return Ok(None);
         };
-        cached.last_touch = touch;
-        cached.last_access = touch;
         if cached.listing_expires_at <= now {
             return Ok(None);
         }
@@ -123,11 +137,7 @@ impl MetadataCache {
     pub(super) fn mark_directory_access(&self, path: &str) -> io::Result<()> {
         let mut state = self.lock_state()?;
         let key = self.key(path);
-        let touch = tick(&mut state);
-        if let Some(cached) = state.directories.get_mut(&key) {
-            cached.last_touch = touch;
-            cached.last_access = touch;
-        }
+        order::touch(&mut state, &key, true);
         Ok(())
     }
 
@@ -169,17 +179,36 @@ impl MetadataCache {
         admission: Option<(&LoadSlot, u64)>,
         intent: Admission,
     ) -> io::Result<bool> {
+        self.install_snapshot(path, observation, depth, admission, intent, None)
+    }
+
+    pub(super) fn install_observation_reconciled(
+        &self, path: &str, observation: DirectoryObservation, depth: u8,
+        admission: Option<(&LoadSlot, u64)>, intent: Admission,
+        points: &super::metadata_point_cache::MetadataPointCache,
+    ) -> io::Result<bool> {
+        self.install_snapshot(path, observation, depth, admission, intent, Some(points))
+    }
+
+    fn install_snapshot(
+        &self, path: &str, observation: DirectoryObservation, depth: u8,
+        admission: Option<(&LoadSlot, u64)>, intent: Admission,
+        points: Option<&super::metadata_point_cache::MetadataPointCache>,
+    ) -> io::Result<bool> {
         let DirectoryObservation { metadata, metadata_expires_at,
             entries, listing_expires_at } = observation;
+        let key = self.key(path);
         let entry_count = entries.len().saturating_add(1);
-        let metadata_bytes = path
-            .len()
-            .saturating_mul(2)
+        let metadata_bytes = path.len()
+            // Snapshot path, ordered-map key, recency/expiry keys and tree-node
+            // bookkeeping are included, not merely the metadata payload.
+            .saturating_add(key.capacity().saturating_mul(3))
+            .saturating_add(256)
             .saturating_add(meta_bytes(&metadata))
             .saturating_add(entries.iter().fold(0usize, |total, metadata| {
                 total.saturating_add(meta_bytes(metadata))
             }));
-        if entry_count > MAX_CACHED_ENTRIES || metadata_bytes > MAX_CACHED_DIRECTORY_BYTES {
+        if metadata_bytes > MAX_CACHED_DIRECTORY_BYTES {
             return Ok(false);
         }
         let (entry_index, index_bytes) = build_entry_index(&entries, self.case_sensitive)?;
@@ -189,7 +218,6 @@ impl MetadataCache {
         if byte_count > MAX_CACHED_DIRECTORY_BYTES {
             return Ok(false);
         }
-        let key = self.key(path);
         let root_key = self.key(&self.root);
         let mut loads = self.lock_loads()?;
         let mut state = self.lock_state()?;
@@ -209,9 +237,7 @@ impl MetadataCache {
             let Some(prepared) = prepared else {
                 // Keep this comparison baseline even if an unrelated demand
                 // needs cache space before notification pressure clears.
-                if let Some(cached) = state.directories.get_mut(&key) {
-                    cached.deferred_changes = true;
-                }
+                order::pin_changes(&mut state, &key);
                 return Ok(false);
             };
             Some(prepared)
@@ -232,26 +258,33 @@ impl MetadataCache {
                 true,
             );
         }
-        if !fits(&state, entry_count, byte_count)
-            || state.directories.len() >= MAX_CACHED_DIRECTORIES
-        {
+        if !fits(&state, entry_count, byte_count) {
             if let Some(previous) = previous {
                 restore_directory(&mut state, key, previous);
             }
             return Ok(false);
         }
-        invalidate_descendants(&mut loads, &key);
+        if let Some(points) = points {
+            // The established order is load table -> snapshots -> points.
+            // Reconcile identity-replaced subtrees before publishing their new
+            // parent authority, without a window for an older point hit.
+            if let Err(error) = points.reconcile_snapshot(path, &entries,
+                previous.as_ref().map(|previous| previous.entries.as_ref()))
+            {
+                if let Some(previous) = previous { restore_directory(&mut state, key, previous); }
+                return Err(error);
+            }
+        }
+        reconcile_loads(&mut loads, &key, &entries, &entry_index,
+            previous.as_ref().map(|previous| (previous.entries.as_ref(),
+                previous.entry_index.as_ref())), self.case_sensitive);
         // A refresh releases its fetch guard before taking namespace authority.
         // Any intervening same-path install must also reject that older result.
         invalidate_slot(&mut loads, &key);
         let last_touch = tick(&mut state);
-        if let Some(prepared) = prepared_change {
-            state.changes.commit(prepared);
-        }
+        let retired = prepared_change.and_then(|prepared| state.changes.commit(prepared));
         state.generation = state.generation.saturating_add(1);
-        state.entries += entry_count;
-        state.bytes += byte_count;
-        state.directories.insert(
+        order::insert(&mut state,
             key.clone(),
             CachedDirectory {
                 path: path.to_string(),
@@ -271,11 +304,15 @@ impl MetadataCache {
                 deferred_changes: false,
             },
         );
-        state.snapshot_cooldowns.remove(&key);
+        order::remove_cooldown(&mut state, &key);
         reconcile_direct_children(
             &mut state, &key, &entries, self.case_sensitive,
             previous.as_ref().map(|previous| (previous.entries.as_ref(), previous.entry_index.as_ref())),
         );
+        drop(state);
+        drop(loads);
+        drop(previous);
+        drop(retired);
         Ok(true)
     }
 
@@ -287,22 +324,19 @@ impl MetadataCache {
         invalidate_paths(&mut loads, &key, &prefix, recursive, parent_key.as_deref());
         let mut state = self.lock_state()?;
         state.generation = state.generation.saturating_add(1);
-        let directory_keys = state
-            .directories
-            .keys()
-            .filter(|candidate| *candidate == &key || (recursive && candidate.starts_with(&prefix)))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut directory_keys = if recursive { order::descendants(&state.directories, &key) }
+            else { Vec::new() };
+        directory_keys.push(key.clone());
         for candidate in directory_keys {
             remove_directory(&mut state, &candidate);
         }
-        state.snapshot_cooldowns.retain(|candidate, _| {
-            candidate != &key
-                && !(recursive && candidate.starts_with(&prefix))
-                && parent_key.as_ref() != Some(candidate)
-        });
+        let mut cooldowns = if recursive { order::descendants(&state.snapshot_cooldowns, &key) }
+            else { Vec::new() };
+        cooldowns.push(key.clone());
+        for candidate in cooldowns { order::remove_cooldown(&mut state, &candidate); }
         if let Some(parent_key) = parent_key {
             remove_directory(&mut state, &parent_key);
+            order::remove_cooldown(&mut state, &parent_key);
         }
         Ok(())
     }
@@ -310,34 +344,30 @@ impl MetadataCache {
     pub(super) fn cool_down_snapshot(&self, path: &str) -> io::Result<()> {
         let key = self.key(path);
         let mut state = self.lock_state()?;
-        if state.snapshot_cooldowns.len() >= MAX_CACHED_DIRECTORIES
-            && !state.snapshot_cooldowns.contains_key(&key)
-        {
-            if let Some(victim) = state
-                .snapshot_cooldowns
-                .iter()
-                .min_by_key(|(_, retry_at)| **retry_at)
-                .map(|(path, _)| path.clone())
-            {
-                state.snapshot_cooldowns.remove(&victim);
+        let now = Instant::now();
+        order::prune_cooldowns(&mut state, now);
+        order::remove_cooldown(&mut state, &key);
+        // Retry bookkeeping is disposable too: bound its estimated bytes,
+        // rather than imposing a directory count on valid mounted contents.
+        let bytes = order::cooldown_bytes(&key);
+        let allowance = MAX_CACHED_BYTES.saturating_sub(state.bytes);
+        if bytes <= allowance {
+            while state.cooldown_bytes.saturating_add(bytes) > allowance {
+                let Some((_, oldest)) = state.cooldown_expiry.first().cloned() else { break; };
+                order::remove_cooldown(&mut state, &oldest);
             }
+            let deadline = now + SNAPSHOT_RETRY_DELAY;
+            state.cooldown_bytes = state.cooldown_bytes.saturating_add(bytes);
+            state.snapshot_cooldowns.insert(key.clone(), deadline);
+            state.cooldown_expiry.insert((deadline, key));
         }
-        state
-            .snapshot_cooldowns
-            .insert(key, Instant::now() + SNAPSHOT_RETRY_DELAY);
         Ok(())
     }
 
     pub(super) fn load_slot(&self, path: &str) -> io::Result<Arc<LoadSlot>> {
         let key = self.key(path);
         let mut loads = self.lock_loads()?;
-        load_support::retain_active_loads(&mut loads);
-        if let Some(slot) = loads.get(&key).and_then(Weak::upgrade) {
-            return Ok(slot);
-        }
-        let slot = Arc::new(LoadSlot::new());
-        loads.insert(key, Arc::downgrade(&slot));
-        Ok(slot)
+        Ok(loads.slot(key))
     }
 
     pub(super) fn revision(&self, path: &str) -> io::Result<Option<u64>> {
@@ -346,6 +376,16 @@ impl MetadataCache {
             .directories
             .get(&self.key(path))
             .map(|entry| entry.revision))
+    }
+
+    /// Only a previously observed, now expired direct parent can be refreshed
+    /// for stat coalescing. A cold stat never introduces an ancestor listing.
+    pub(super) fn expired_parent(&self, path: &str) -> io::Result<Option<(String, u8)>> {
+        let Some((parent, _)) = parent_and_name(path) else { return Ok(None); };
+        let state = self.lock_state()?;
+        let Some(cached) = state.directories.get(&self.key(parent)) else { return Ok(None); };
+        Ok((cached.listing_expires_at <= Instant::now())
+            .then(|| (cached.path.clone(), cached.depth)))
     }
 
     pub(super) fn generation(&self) -> io::Result<u64> {
@@ -362,6 +402,7 @@ impl MetadataCache {
         let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
         let key = self.key(path);
         let mut loads = self.lock_loads()?;
+        invalidate_slot(&mut loads, &key);
         invalidate_descendants(&mut loads, &key);
         if let Some(parent_key) = parent_key.as_ref() {
             invalidate_slot(&mut loads, parent_key);
@@ -396,7 +437,7 @@ impl MetadataCache {
             .map_err(|_| io::Error::other("mount metadata cache is unavailable"))
     }
 
-    fn lock_loads(&self) -> io::Result<MutexGuard<'_, HashMap<String, Weak<LoadSlot>>>> {
+    fn lock_loads(&self) -> io::Result<MutexGuard<'_, LoadTable>> {
         self.loads
             .lock()
             .map_err(|_| io::Error::other("metadata load table is unavailable"))

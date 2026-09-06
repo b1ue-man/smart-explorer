@@ -120,6 +120,8 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
    helper, `metadata_loading`, and Windows `metadata_refresh` if needed. Refill
    available workers without chunk barriers, preserving actual ancestor ordering,
    stopped checks, complete joins and backend capacity with foreground headroom.
+   Productive preload batches refill immediately, without the old 250-ms sleep;
+   configured preload depth and disposable-memory limits still bound speculation.
    Avoid maintenance refetching a snapshot already refreshed after selection.
    Remove the redundant four-worker ceiling, not backend/resource safety limits.
    Acceptance: one stalled sibling cannot idle the remaining available workers;
@@ -172,5 +174,13 @@ unchanged. No unbounded proactive whole-share crawl is introduced. Conservative
 transport admission, notification memory pressure and OS/path limits are not
 blindly removed. The demonstrated SSH admission problem remains a separate
 protocol-design boundary unless this task establishes an exact safe correction.
+
+Notification comparison images have a conservative 384-MiB byte budget (shared
+snapshot Arcs are charged even when they allocate no duplicate payload). This
+allows at least one maximum-size 128-MiB old/new snapshot pair plus bookkeeping.
+It replaces the old 64-directory ceiling; memory is allocated only as needed.
+Draining yields after 1,024 records or 4,096 comparisons, and recurring delivery
+continues even when a comparison slice produces no event. Root snapshots use
+ordinary LRU retention; only deferred change baselines remain protected.
 
 Status: plan finalized before implementation; remote acceptance not yet run.

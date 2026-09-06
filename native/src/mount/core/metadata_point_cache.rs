@@ -1,14 +1,17 @@
 use super::case_semantics::identity_key;
 use super::metadata_cache::MetadataLookup;
 use crate::vfs::VfsMeta;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io;
 use std::mem::size_of;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const MAX_POINT_STATS: usize = 4_096;
-const MAX_POINT_BYTES: usize = 4 * 1024 * 1024;
+#[path = "metadata_point_order.rs"]
+mod order;
+use order::{prune_expired, remove};
+
+const MAX_POINT_BYTES: usize = 16 * 1024 * 1024;
 const POINT_STAT_TTL: Duration = Duration::from_secs(5);
 const POINT_MISSING_TTL: Duration = Duration::from_secs(1);
 
@@ -21,7 +24,9 @@ struct CachedPoint {
 
 #[derive(Default)]
 struct PointState {
-    entries: HashMap<String, CachedPoint>,
+    entries: BTreeMap<String, CachedPoint>,
+    recency: BTreeSet<(u64, String)>,
+    expiry: BTreeSet<(Instant, String)>,
     bytes: usize,
     clock: u64,
 }
@@ -73,12 +78,10 @@ impl MetadataPointCache {
             remove(&mut state, &key);
             return Ok((MetadataLookup::Uncached, now));
         }
-        state.clock = state.clock.saturating_add(1);
-        let touch = state.clock;
-        let Some(cached) = state.entries.get_mut(&key) else {
+        order::touch(&mut state, &key);
+        let Some(cached) = state.entries.get(&key) else {
             return Ok((MetadataLookup::Uncached, now));
         };
-        cached.last_touch = touch;
         Ok((cached.metadata.clone().map_or(MetadataLookup::KnownMissing,
             MetadataLookup::Found), cached.expires_at))
     }
@@ -93,29 +96,22 @@ impl MetadataPointCache {
 
     fn install_observation(&self, path: &str, metadata: Option<VfsMeta>) -> io::Result<()> {
         let ttl = if metadata.is_some() { POINT_STAT_TTL } else { POINT_MISSING_TTL };
-        let bytes = path.len().saturating_add(size_of::<CachedPoint>())
+        let key = self.key(path);
+        let bytes = key.capacity().saturating_mul(3).saturating_add(192)
+            .saturating_add(size_of::<CachedPoint>())
             .saturating_add(metadata.as_ref().map_or(0, meta_bytes));
         if bytes > MAX_POINT_BYTES {
             return Ok(());
         }
-        let key = self.key(path);
         let mut state = self.lock_state()?;
         remove(&mut state, &key);
-        let prefix = format!("{}/", key.trim_end_matches('/'));
-        let descendants = state.entries.keys().filter(|candidate| candidate.starts_with(&prefix))
-            .cloned().collect::<Vec<_>>();
+        let descendants = order::descendants(&state.entries, &key);
         for descendant in descendants {
             remove(&mut state, &descendant);
         }
         prune_expired(&mut state);
-        while state.entries.len() >= MAX_POINT_STATS
-            || state.bytes.saturating_add(bytes) > MAX_POINT_BYTES
-        {
-            let victim = state
-                .entries
-                .iter()
-                .min_by_key(|(_, cached)| cached.last_touch)
-                .map(|(key, _)| key.clone());
+        while state.bytes.saturating_add(bytes) > MAX_POINT_BYTES {
+            let victim = state.recency.first().map(|(_, key)| key.clone());
             let Some(victim) = victim else {
                 return Ok(());
             };
@@ -123,8 +119,7 @@ impl MetadataPointCache {
         }
         state.clock = state.clock.saturating_add(1);
         let last_touch = state.clock;
-        state.bytes += bytes;
-        state.entries.insert(
+        order::insert(&mut state,
             key,
             CachedPoint {
                 metadata,
@@ -139,13 +134,9 @@ impl MetadataPointCache {
     pub(super) fn invalidate(&self, path: &str, recursive: bool) -> io::Result<()> {
         let mut state = self.lock_state()?;
         let key = self.key(path);
-        let prefix = format!("{}/", key.trim_end_matches('/'));
-        let removed = state
-            .entries
-            .keys()
-            .filter(|candidate| *candidate == &key || (recursive && candidate.starts_with(&prefix)))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut removed = if recursive { order::descendants(&state.entries, &key) }
+            else { Vec::new() };
+        removed.push(key.clone());
         for candidate in removed {
             remove(&mut state, &candidate);
         }
@@ -156,6 +147,12 @@ impl MetadataPointCache {
     }
 
     pub(super) fn reconcile_directory(&self, path: &str, entries: &[VfsMeta]) -> io::Result<()> {
+        self.reconcile_snapshot(path, entries, None)
+    }
+
+    pub(super) fn reconcile_snapshot(
+        &self, path: &str, entries: &[VfsMeta], previous: Option<&[VfsMeta]>,
+    ) -> io::Result<()> {
         let mut state = self.lock_state()?;
         let key = self.key(path);
         let prefix = if key == "/" {
@@ -166,25 +163,29 @@ impl MetadataPointCache {
         let plain_directories = entries
             .iter()
             .filter(|metadata| metadata.is_dir && !metadata.is_symlink)
-            .map(|metadata| self.key(&metadata.name))
-            .collect::<HashSet<_>>();
-        let removed = state
-            .entries
-            .keys()
-            .filter(|candidate| {
-                if *candidate == &key {
-                    return true;
-                }
-                let Some(relative) = candidate.strip_prefix(&prefix) else {
-                    return false;
-                };
+            .map(|metadata| (self.key(&metadata.name), metadata))
+            .collect::<BTreeMap<_, _>>();
+        let replaced = previous.into_iter().flatten()
+            .filter(|old| old.is_dir && !old.is_symlink)
+            .filter_map(|old| {
+                let name = self.key(&old.name);
+                plain_directories.get(&name).is_some_and(|new| old.name != new.name
+                    || (old.id.is_some() && new.id.is_some() && old.id != new.id))
+                    .then_some(name)
+            }).collect::<HashSet<_>>();
+        let mut removed = state.entries.range(prefix.clone()..)
+            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+            .filter(|(candidate, _)| {
+                let relative = &candidate[prefix.len()..];
                 match relative.split_once('/') {
                     None => true,
-                    Some((child, _)) => !plain_directories.contains(child),
+                    Some((child, _)) => !plain_directories.contains_key(child)
+                        || replaced.contains(child),
                 }
             })
-            .cloned()
+            .map(|(candidate, _)| candidate.clone())
             .collect::<Vec<_>>();
+        removed.push(key);
         for candidate in removed {
             remove(&mut state, &candidate);
         }
@@ -202,30 +203,11 @@ impl MetadataPointCache {
     }
 }
 
-fn prune_expired(state: &mut PointState) {
-    let now = Instant::now();
-    let expired = state
-        .entries
-        .iter()
-        .filter(|(_, cached)| cached.expires_at <= now)
-        .map(|(key, _)| key.clone())
-        .collect::<Vec<_>>();
-    for key in expired {
-        remove(state, &key);
-    }
-}
-
-fn remove(state: &mut PointState, key: &str) {
-    if let Some(cached) = state.entries.remove(key) {
-        state.bytes = state.bytes.saturating_sub(cached.bytes);
-    }
-}
-
 fn meta_bytes(metadata: &VfsMeta) -> usize {
     size_of::<VfsMeta>()
-        .saturating_add(metadata.name.len())
-        .saturating_add(metadata.id.as_ref().map_or(0, String::len))
-        .saturating_add(metadata.content_md5.as_ref().map_or(0, String::len))
+        .saturating_add(metadata.name.capacity())
+        .saturating_add(metadata.id.as_ref().map_or(0, String::capacity))
+        .saturating_add(metadata.content_md5.as_ref().map_or(0, String::capacity))
 }
 
 fn parent_and_name(path: &str) -> Option<(&str, &str)> {
