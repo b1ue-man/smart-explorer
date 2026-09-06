@@ -18,8 +18,9 @@ concurrency:
 
 jobs:
   suite:
-    # The approved private-DLL recipe requires VS 2022/v143, not VS 2026.
-    runs-on: windows-2022
+    # Reuse approved private-DLL bytes. Server 2025 also exposes the modern
+    # Windows by-name metadata path used by the pinned Node/libuv fixture.
+    runs-on: windows-2025
     timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: 1
