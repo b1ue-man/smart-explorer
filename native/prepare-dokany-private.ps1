@@ -205,7 +205,7 @@ function Assert-Approved([string]$Directory) {
     $approved = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'assets/dokany-private'))
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     if (-not $Directory.Equals($approved, $comparison)) { throw 'Approved input must be native/assets/dokany-private' }
-    $git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
+    $git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
     $files = @('native/assets/dokany-private/dokan2.dll', 'native/assets/dokany-private/manifest.json',
         'native/assets/dokany-private/corresponding-source.zip')
@@ -330,7 +330,8 @@ $sdk = Get-ChildItem -LiteralPath (Join-Path $sdkRoot 'Include') -Directory | Wh
     (Test-Path -LiteralPath (Join-Path $sdkRoot "bin/$($_.Name)/x64/rc.exe"))
 } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
 if (-not $sdk) { throw 'A complete Windows 10+ SDK is required' }
-$git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
+# PATH can contain several Git executables; ProcessStartInfo needs exactly one.
+$git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $parent = [IO.Path]::GetDirectoryName($ArtifactDirectory)
 $existingParent = $parent
 while (-not (Test-Path -LiteralPath $existingParent)) {
