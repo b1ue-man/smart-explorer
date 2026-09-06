@@ -27,6 +27,13 @@ includes VS 2022/v143 (checked 2026-09-06). The source/toolchain acceptance
 contract is unchanged; the terminal release reuses the approved DLL rather than
 requiring its compiler on the release runner.
 
+The [Windows 2022 attempt](https://github.com/b1ue-man/smart-explorer/actions/runs/34049461053)
+found the compiler and verified/extracted the source, but process startup then
+reported three concatenated Git executable paths. Both preparation and approval
+lookups now select the first discovered application explicitly instead of
+coercing a collection of executable paths into a single process filename. No
+private DLL had been compiled at this failure boundary.
+
 ## Complete requested batch
 
 Improve local-like remote-drive use: repeated file access, an Obsidian-style
