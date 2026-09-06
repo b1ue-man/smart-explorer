@@ -1,0 +1,81 @@
+name: analytics-access-task
+run-name: Storage access ${{ inputs.candidate_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact pushed source SHA (must match selected ref)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analytics-access-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind the single suite to its pushed candidate
+        shell: pwsh
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CANDIDATE_SHA -notmatch '^[a-fA-F0-9]{40}$') { throw 'A full candidate SHA is required.' }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:CANDIDATE_SHA -or $head -ne $env:GITHUB_SHA) {
+              throw 'Requested candidate, workflow ref and checkout differ.'
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: windows-mount-batching
+          cache-on-failure: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/analytics-task-binary
+          key: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run the single storage-access task entrypoint
+        shell: pwsh
+        timeout-minutes: 110
+        run: >-
+          ./native/test-analytics-access-task.ps1
+          -LogRoot (Join-Path $env:RUNNER_TEMP 'analytics-access-task')
+          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'analytics-task-binary')
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ runner.temp }}/analytics-task-binary
+          key: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: analytics-access-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/analytics-access-task
+          if-no-files-found: error
+          retention-days: 14
