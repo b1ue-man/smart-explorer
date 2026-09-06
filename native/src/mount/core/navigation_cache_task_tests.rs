@@ -225,7 +225,7 @@ fn remote_drive_task_unrelated_parallel_directory_loads_both_remain_cached() -> 
 }
 
 #[test]
-fn mount_vault_task_listing_name_and_collision_safety() -> io::Result<()> {
+fn remote_drive_task_engine_listing_preserves_name_and_collision_validation() -> io::Result<()> {
     let temporary = tempfile::tempdir()?;
     {
         let backend = NavigationBackend::with_root_listing(vec![file("same", 1), file("same", 2)]);

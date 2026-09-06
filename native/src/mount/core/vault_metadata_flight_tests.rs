@@ -5,7 +5,7 @@ use crate::mount::{engine::MountEngine, optimization_fixture::OptimizationBacken
     MountId, MountMetadataPolicy, MountMode, MountRuntimeConfig};
 use crate::vfs::{Backend, BackendHandle, RootConfinement, Scheme, VfsMeta};
 use std::io::{self, Read, Write};
-use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use std::time::{Duration, Instant};
 
 struct CountingBackend {
@@ -14,13 +14,14 @@ struct CountingBackend {
     deny_listing: AtomicBool,
     wide: AtomicUsize,
     over_retention: AtomicBool,
+    listing: Mutex<Option<Vec<VfsMeta>>>,
 }
 
 impl CountingBackend {
     fn new() -> Arc<Self> {
         Arc::new(Self { base: OptimizationBackend::new(), lists: AtomicUsize::new(0),
             deny_listing: AtomicBool::new(false), wide: AtomicUsize::new(0),
-            over_retention: AtomicBool::new(false) })
+            over_retention: AtomicBool::new(false), listing: Mutex::new(None) })
     }
     fn lists(&self) -> usize { self.lists.load(Ordering::SeqCst) }
 }
@@ -36,6 +37,9 @@ impl Backend for CountingBackend {
         self.lists.fetch_add(1, Ordering::SeqCst);
         if self.deny_listing.load(Ordering::SeqCst) {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "fixture listing denied"));
+        }
+        if let Some(entries) = self.listing.lock().unwrap().as_ref() {
+            return Ok(entries.clone());
         }
         let count = self.wide.load(Ordering::SeqCst);
         let mut entries = if count > 0 {
@@ -116,6 +120,30 @@ fn mount_vault_task_50001_valid_children_enumerate_and_reuse_snapshot() -> io::R
     assert_eq!(engine.stat_cached(r"\note-50000.md")?.size, 4);
     assert_eq!(backend.base.stat_count(), 1, "only the root required exact stat");
     assert_eq!(backend.base.read_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn mount_vault_task_listing_name_and_collision_safety() -> io::Result<()> {
+    for (entries, collision) in [
+        (vec![file("same", 1), file("same", 2)], true),
+        (vec![file("safe.md", 1), file("../escape", 1), file("", 1), file("bad:name", 1)], false),
+    ] {
+        let temporary = tempfile::tempdir()?;
+        let backend = CountingBackend::new();
+        *backend.listing.lock().unwrap() = Some(entries);
+        let engine = engine(backend.clone(), temporary.path())?;
+        let result = engine.list_dir_cached(r"\");
+        if collision {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        } else {
+            let entries = result?;
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "safe.md");
+        }
+        assert_eq!(backend.lists(), 1);
+        assert_eq!(backend.base.read_count(), 0);
+    }
     Ok(())
 }
 
