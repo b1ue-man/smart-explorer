@@ -4,12 +4,13 @@ This is task-scoped design/evidence, not a second live work board. Open work is
 tracked in [TODO.md](TODO.md). Baseline inspected: source `80a75ef` (2026-09-06).
 The user confirmed that the preceding request-delivery fix resolved the freeze.
 
-Candidate status, checked 2026-09-06: `native/Cargo.toml` and
-`release-native/update-feed/version.txt` still read **0.5.150**. The cache,
-metadata/notification and private-DLL changes described here are source work,
-not a shipped version. Their single remote suite, exact dependency approval and
-terminal release remain pending. This document records design/evidence, not a
-second live checklist or an Obsidian certification.
+Approval checkpoint, 2026-09-06: the complete source candidate
+`0101ea6f6aa41b35f80a60870702bae16c670f59` passed its
+[single remote suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053).
+At that checkpoint `native/Cargo.toml` and the update feed still read **0.5.150**;
+dependency approval is distinct from terminal publication. This document records
+design/evidence, not a second live checklist or an Obsidian certification.
+Current publication status belongs to the versioned feed and matching GitHub Release.
 
 The [first remote attempt](https://github.com/b1ue-man/smart-explorer/actions/runs/34048575411)
 stopped before DLL compilation or mount execution: preparation incorrectly
@@ -33,6 +34,36 @@ reported three concatenated Git executable paths. Both preparation and approval
 lookups now select the first discovered application explicitly instead of
 coercing a collection of executable paths into a single process filename. No
 private DLL had been compiled at this failure boundary.
+
+## Approved exact dependency and observed behavior
+
+The successful run above produced and exercised the exact retained inputs under
+`native/assets/dokany-private/`; Git attributes preserve their bytes on all hosts.
+The corresponding source archive includes the complete patched upstream source,
+recipe, preparation script and licenses.
+
+- DLL: `f5f4de55f833734302a890cd185b788bdb84d2be8020cafca617c102aeeef537`
+  (244,736 bytes).
+- Corresponding source: `941e053db23f2dbc07e64d57225eb0748612f28b3deb51ef5cf7746e95abcf6f`
+  (732,613 bytes).
+- Manifest: `86c1f763100d3392d3ad3b06c58a4bd822ecb97b83adead764937fd01d76eccd`.
+- Toolchain: VS 17.14.37614.0, MSVC 14.44.35207, SDK 10.0.26100.0, v143,
+  x64 Release, static CRT. The unchanged library API is 231 and driver protocol 400.
+
+Observed on the real Windows mounted fixture: the private runtime completed
+4,772 second-or-later batch records. Both private and official mounts handled
+save/replace/truncate/flush, scripts accessing mounted siblings and a child script,
+concurrent reads, external create/modify/delete notifications and clean teardown.
+The official System32 DLL and driver retained their original hashes. Rejected
+payload and unfinished-attempt cases selected official non-batched fallback.
+
+The controlled cold-read/reopen fixture logged one download of five bytes and
+one fresh stat on reuse. Dirty/recovery data, pressure eviction, metadata
+expiry/revision races and bounded independent refresh were exercised by the same
+entrypoint. These are mechanism/behavior observations, not a network throughput
+benchmark, a numerical user-visible speedup, certification of an actual Obsidian
+installation, or proof against every possible future hang. No native source
+changed after this approving run when retaining the artifacts and this evidence.
 
 ## Complete requested batch
 

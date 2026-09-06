@@ -67,10 +67,10 @@ Portable und per Auto-Update aktualisierte Installationen können dieselbe
 Runtime aus der GUI oder mit `se drive install-runtime` sicher nachinstallieren.
 Die Smart-Explorer-Basis bleibt eine per-user-Installation; nur der Windows
 Installer (`msiexec`) fordert für den systemweiten Treiber UAC an. Die offizielle
-signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`. Die
-veröffentlichte Basis 0.5.150 lädt `%WINDIR%\System32\dokan2.dll`; der unten
-beschriebene Entwicklungskandidat ergänzt eine geprüfte private DLL, ohne die
-System32-DLL oder den Treiber zu verändern.
+signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`. Als
+historische Basis verwendete 0.5.150 ausschließlich
+`%WINDIR%\System32\dokan2.dll`; der unten beschriebene Runtime-Pfad ergänzt eine
+geprüfte private DLL, ohne die System32-DLL oder den Treiber zu verändern.
 `DokanVersion()` muss die DLL-API 231 melden; `DokanDriverVersion()` fragt das
 getrennte Kernel-Protokoll ab und muss 0x190/400 melden. Eine fehlende Runtime
 beziehungsweise ein nicht verfügbarer Treiber kann automatisch installiert
@@ -99,21 +99,25 @@ se drive unmount M:
 se drive retry <mount-id>
 ```
 
-In 0.5.150 und beim offiziellen System-Runtime-Pfad bleibt Dokany-IPC-Batching
-wegen eines im offiziellen 2.3.1.1000-DLL nachgewiesenen Request-Verlusts
-deaktiviert; normale parallele Verarbeitung bleibt aktiv. Ein DLL-/Treiberwechsel
+Beim offiziellen System-Runtime-Pfad bleibt Dokany-IPC-Batching wegen eines in
+der offiziellen 2.3.1.1000-DLL nachgewiesenen Request-Verlusts deaktiviert;
+normale parallele Verarbeitung bleibt aktiv. Ein DLL-/Treiberwechsel
 ist für diese Korrektur nicht erforderlich. Nach dem
 App-Update bestehende Laufwerke neu mounten. Der eigenständige, rein lesende
 Windows-Check `native/verify-mount-windows.ps1` prüft echte Laufwerkszugriffe
 mit Zeitlimit. Mit `&` in einer bereits geöffneten, nicht erhöhten PowerShell
 aufrufen; Details und Grenzen stehen in [MOUNT_BATCHING.md](docs/MOUNT_BATCHING.md).
 
-**Entwicklungskandidat, noch nicht veröffentlicht:** Die folgenden Änderungen
-gehören nicht zu 0.5.150; ihre gemeinsame Remote-Verifikation und Veröffentlichung
-stehen noch aus. Einzelheiten und Nachweisgrenzen stehen in
-[MOUNT_OPTIMIZATION.md](docs/MOUNT_OPTIMIZATION.md).
+**Verifikation des Quellstands (2026-09-06):** Der Kandidat
+`0101ea6f6aa41b35f80a60870702bae16c670f59` wurde in der
+[Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053)
+erfolgreich geprüft: Speichern/Replace, Skriptzugriffe und Änderungsbeobachter
+auf einem echten Windows-Mount, private Batch-Fortsetzung (`continuation > 0`),
+offizieller Fallback sowie Schutz ungespeicherter Inhalte und Cache-Frische.
+Das ist ein Verhaltensnachweis, kein Nachweis einer Release-Veröffentlichung.
+Einzelheiten und Grenzen stehen in [MOUNT_OPTIMIZATION.md](docs/MOUNT_OPTIMIZATION.md).
 
-Der Kandidat behält unbenutzte, saubere Dateiinhalte innerhalb derselben
+Der Mount behält unbenutzte, saubere Dateiinhalte innerhalb derselben
 Einbindung in einem separaten LRU-Cache: standardmäßig **500 MiB pro Laufwerk**,
 einstellbar in GUI oder mit `--cache-mib <Wert>` (0 bis 65.536); `0` deaktiviert die
 Aufbewahrung nach dem letzten aktiven Zugriff. Offene, ungespeicherte und für
@@ -145,8 +149,9 @@ Mount-Versuch hinterlässt einen Marker pro Laufwerk und DLL-Payload; der nächs
 `Retry` verwendet damit die System-Runtime. `--system-runtime` beziehungsweise
 die GUI-Kompatibilitätsoption erzwingt diesen Pfad direkt. Es gibt weder einen
 DLL-Wechsel in einer laufenden Einbindung noch eine Garantie automatischer
-Erholung von einem Live-Hänger. Eine Obsidian-Zertifizierung oder ein gemessener
-Geschwindigkeitsgewinn wird damit nicht behauptet.
+Erholung von einem Live-Hänger. Eine Zertifizierung der tatsächlichen
+Obsidian-Anwendung oder sämtlicher Remote-Transporte sowie ein gemessener
+Geschwindigkeitsgewinn werden damit nicht behauptet.
 
 Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Bei
 einem SFTP-Ziel verlangt ein solcher Mount eine gespeicherte Verbindung mit
