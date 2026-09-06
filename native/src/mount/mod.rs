@@ -1,5 +1,7 @@
 //! Remote-drive mounting boundaries.
 
+#[path = "core/cache_policy.rs"]
+mod cache_policy;
 #[path = "core/case_semantics.rs"]
 mod case_semantics;
 #[path = "core/commit.rs"]
@@ -68,6 +70,9 @@ mod remote_drive_task_tests;
 pub(crate) mod os;
 
 pub use engine::MountEngine;
+pub use cache_policy::{
+    MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,
+};
 pub use metadata_policy::{
     MountMetadataPolicy, DEFAULT_METADATA_PRELOAD_DEPTH, MAX_METADATA_PRELOAD_DEPTH,
 };

@@ -84,6 +84,8 @@ mod mount_runtime_ui;
 mod mount_ui;
 #[path = "core/mount_ui_draft.rs"]
 mod mount_ui_draft;
+#[path = "core/mount_ui_cache_settings.rs"]
+mod mount_ui_cache_settings;
 #[path = "core/mount_ui_helpers.rs"]
 mod mount_ui_helpers;
 #[path = "core/omni_accel.rs"]

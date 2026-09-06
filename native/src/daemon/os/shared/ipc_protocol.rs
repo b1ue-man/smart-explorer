@@ -154,7 +154,26 @@ pub struct MountHostConfig {
     pub mode: crate::mount::MountMode,
     #[serde(default)]
     pub metadata: crate::mount::MountMetadataPolicy,
+    #[serde(default)]
+    pub cache: crate::mount::MountCachePolicy,
+    #[serde(default)]
+    pub runtime_preference: crate::mount::MountRuntimePreference,
     pub label: String,
+}
+
+impl MountHostConfig {
+    pub fn with_cache_policy(mut self, cache: crate::mount::MountCachePolicy) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    pub fn with_runtime_preference(
+        mut self,
+        preference: crate::mount::MountRuntimePreference,
+    ) -> Self {
+        self.runtime_preference = preference;
+        self
+    }
 }
 
 impl From<&crate::mount::MountConfig> for MountHostConfig {
@@ -164,6 +183,8 @@ impl From<&crate::mount::MountConfig> for MountHostConfig {
             drive: config.drive,
             mode: config.mode,
             metadata: config.metadata,
+            cache: config.cache,
+            runtime_preference: config.runtime_preference,
             label: config.label.clone(),
         }
     }

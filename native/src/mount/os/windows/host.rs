@@ -54,7 +54,9 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
     })?;
     let engine = MountEngine::open_host_cache(
         MountRuntimeConfig::new(config.id.clone(), config.mode)
-            .with_metadata_policy(config.metadata),
+            .with_metadata_policy(config.metadata)
+            .with_cache_policy(config.cache)
+            .with_runtime_preference(config.runtime_preference),
         Arc::clone(&session.backend),
         &spool_root,
     )

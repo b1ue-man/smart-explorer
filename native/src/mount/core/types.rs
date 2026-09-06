@@ -2,6 +2,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::io;
 
+use super::cache_policy::{MountCachePolicy, MountRuntimePreference};
 use super::metadata_policy::MountMetadataPolicy;
 
 const MAX_ID_LEN: usize = 256;
@@ -243,6 +244,10 @@ pub struct MountConfig {
     pub root_security: MountRootSecurity,
     #[serde(default)]
     pub metadata: MountMetadataPolicy,
+    #[serde(default)]
+    pub cache: MountCachePolicy,
+    #[serde(default)]
+    pub runtime_preference: MountRuntimePreference,
     pub label: String,
 }
 
@@ -261,6 +266,8 @@ impl MountConfig {
             mode,
             root_security: MountRootSecurity::Enforced,
             metadata: MountMetadataPolicy::default(),
+            cache: MountCachePolicy::default(),
+            runtime_preference: MountRuntimePreference::default(),
             label: label.into(),
         };
         config.validate()?;
@@ -270,6 +277,7 @@ impl MountConfig {
     pub fn validate(&self) -> io::Result<()> {
         self.source.validate()?;
         self.metadata.validate()?;
+        self.cache.validate()?;
         if self.label.chars().count() > 128
             || self
                 .label
@@ -286,6 +294,8 @@ impl MountConfig {
             id: self.id.clone(),
             mode: self.mode,
             metadata: self.metadata,
+            cache: self.cache,
+            runtime_preference: self.runtime_preference,
         }
     }
 
@@ -298,6 +308,16 @@ impl MountConfig {
         self.metadata = metadata;
         self
     }
+
+    pub fn with_cache_policy(mut self, cache: MountCachePolicy) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    pub fn with_runtime_preference(mut self, preference: MountRuntimePreference) -> Self {
+        self.runtime_preference = preference;
+        self
+    }
 }
 
 /// Sanitized configuration passed to a filesystem host. The host receives an
@@ -308,6 +328,10 @@ pub struct MountRuntimeConfig {
     pub mode: MountMode,
     #[serde(default)]
     pub metadata: MountMetadataPolicy,
+    #[serde(default)]
+    pub cache: MountCachePolicy,
+    #[serde(default)]
+    pub runtime_preference: MountRuntimePreference,
 }
 
 impl MountRuntimeConfig {
@@ -316,11 +340,23 @@ impl MountRuntimeConfig {
             id,
             mode,
             metadata: MountMetadataPolicy::default(),
+            cache: MountCachePolicy::default(),
+            runtime_preference: MountRuntimePreference::default(),
         }
     }
 
     pub fn with_metadata_policy(mut self, metadata: MountMetadataPolicy) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    pub fn with_cache_policy(mut self, cache: MountCachePolicy) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    pub fn with_runtime_preference(mut self, preference: MountRuntimePreference) -> Self {
+        self.runtime_preference = preference;
         self
     }
 }

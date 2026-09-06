@@ -10,6 +10,10 @@ use crate::mount::{
     MountSource, MountStatus, PeerMountTarget,
 };
 
+#[path = "drive_options.rs"]
+mod drive_options;
+use drive_options::MountArgs;
+
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Args)]
@@ -38,40 +42,6 @@ enum DriveCommand {
 struct InstallRuntimeArgs {
     #[arg(long, hide = true, value_name = "PATH")]
     msi: Option<PathBuf>,
-    #[arg(long, help = "Print machine-readable JSON")]
-    json: bool,
-}
-
-#[derive(Args)]
-struct MountArgs {
-    #[arg(help = "Saved @label:/path, remote URL, gdrive:// path, or share:// endpoint")]
-    target: String,
-    #[arg(
-        long,
-        default_value = "auto",
-        value_name = "AUTO|LETTER",
-        help = "Choose a drive letter automatically or request one letter"
-    )]
-    letter: String,
-    #[arg(
-        long,
-        help = "Enable writes; the default is read-only and safer for remote protocols"
-    )]
-    read_write: bool,
-    #[arg(
-        long,
-        help = "Trust the selected root when the active backend cannot provide race-proof root confinement"
-    )]
-    trust_remote_root: bool,
-    #[arg(
-        long,
-        default_value = "2",
-        value_parser = clap::value_parser!(u8).range(0..=4),
-        help = "Preload directory metadata to this depth; 0 caches only opened folders"
-    )]
-    metadata_depth: u8,
-    #[arg(long, value_name = "TEXT", help = "Windows volume label")]
-    label: Option<String>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -156,6 +126,13 @@ fn mount(args: MountArgs) -> Result<i32, String> {
     };
     let metadata = crate::mount::MountMetadataPolicy::new(args.metadata_depth)
         .map_err(|error| format!("invalid metadata preload policy: {error}"))?;
+    let cache = crate::mount::MountCachePolicy::new(args.cache_mib)
+        .map_err(|error| format!("invalid cache policy: {error}"))?;
+    let runtime_preference = if args.system_runtime {
+        crate::mount::MountRuntimePreference::System
+    } else {
+        crate::mount::MountRuntimePreference::Auto
+    };
     let config = MountConfig::new(
         MountId::new_random().map_err(|error| error.to_string())?,
         source,
@@ -164,6 +141,7 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         label,
     )
     .map(|config| config.with_metadata_policy(metadata))
+    .map(|config| config.with_cache_policy(cache).with_runtime_preference(runtime_preference))
     .map(|config| config.with_root_security(root_security))
     .map_err(|error| format!("invalid drive configuration: {error}"))?;
     let started = crate::daemon::start_mount(config)?;
