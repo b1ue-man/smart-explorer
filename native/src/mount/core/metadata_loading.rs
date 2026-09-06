@@ -1,9 +1,10 @@
 use super::engine::{not_found, read_lock, MountEngine};
-use super::metadata_cache::{run_metadata_batch, Admission, DirectoryObservation,
+use super::metadata_cache::{Admission, DirectoryObservation,
     MetadataChange, MetadataLookup, DIRECTORY_TTL};
+use super::metadata_batch::run_metadata_batch_keyed;
 use super::path::validate_windows_component;
 use crate::vfs::VfsMeta;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Instant;
@@ -37,7 +38,7 @@ impl MountEngine {
         let targets = self
             .metadata_cache
             .preload_targets(self.config.metadata.preload_depth(), METADATA_PRELOAD_BATCH)?;
-        run_metadata_batch(targets, self.metadata_background_width(), &stopped, &|path, depth| {
+        run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, depth| {
             match self.preload_directory(path, depth) {
                 Ok(loaded) => Ok(loaded),
                 Err(_) => {
@@ -45,7 +46,7 @@ impl MountEngine {
                     Ok(false)
                 }
             }
-        })
+        }, &|path| self.cache_key(path))
     }
 
     /// Refreshes a bounded rotating set. A failed or raced refresh leaves the
@@ -57,17 +58,20 @@ impl MountEngine {
     pub(crate) fn refresh_metadata_while(
         &self, stopped: impl Fn() -> bool + Sync,
     ) -> io::Result<()> {
-        let targets = self.metadata_cache.refresh_targets(
+        let selected = self.metadata_cache.refresh_targets_with_revisions(
             METADATA_REFRESH_BATCH,
             self.config.metadata.preload_depth() > 0,
         )?;
-        run_metadata_batch(targets, self.metadata_background_width(), &stopped, &|path, depth| {
-            self.refresh_directory(path, depth).map(|_| true)
-        }).map(|_| ())
+        let revisions = selected.iter().map(|(path, _, revision)|
+            (self.cache_key(path), *revision)).collect::<HashMap<_, _>>();
+        let targets = selected.into_iter().map(|(path, depth, _)| (path, depth)).collect();
+        run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, depth| {
+            self.refresh_directory(path, depth, revisions[&self.cache_key(path)])
+        }, &|path| self.cache_key(path)).map(|_| ())
     }
 
     fn metadata_background_width(&self) -> usize {
-        self.backend.parallelism().clamp(1, 8).saturating_sub(1).clamp(1, 4)
+        self.backend.parallelism().max(1).saturating_sub(1).max(1)
     }
 
     pub(crate) fn drain_metadata_changes(&self, limit: usize) -> io::Result<Vec<MetadataChange>> {
@@ -84,6 +88,22 @@ impl MountEngine {
             MetadataLookup::Found(metadata) => return Ok(metadata),
             MetadataLookup::KnownMissing => return Err(not_found(path)),
             MetadataLookup::Uncached => {}
+        }
+        if let Some((parent, depth)) = self.metadata_cache.expired_parent(path)? {
+            // A known expired parent can answer a whole sibling burst with one
+            // shared refresh. Cold/point-fresh stats still avoid parent listing;
+            // listing denial never becomes a prerequisite for exact stat.
+            let _ = self.load_directory_cached(&parent, depth);
+            match self.metadata_cache.stat(path)? {
+                MetadataLookup::Found(metadata) => return Ok(metadata),
+                MetadataLookup::KnownMissing => return Err(not_found(path)),
+                MetadataLookup::Uncached => {}
+            }
+            match self.metadata_points.lookup(path)? {
+                MetadataLookup::Found(metadata) => return Ok(metadata),
+                MetadataLookup::KnownMissing => return Err(not_found(path)),
+                MetadataLookup::Uncached => {}
+            }
         }
         let slot = self.metadata_cache.load_slot(path)?;
         let _load = slot.lock()?;
@@ -110,7 +130,7 @@ impl MountEngine {
         if fetched.as_ref().err().is_some_and(|error| error.kind() != io::ErrorKind::NotFound) {
             return fetched;
         }
-        self.metadata_cache.install_point_if_current(
+        let installed = self.metadata_cache.install_point_if_current(
             path, &slot, revision, &self.metadata_points, fetched.as_ref().ok().cloned(),
         )?;
         match self.metadata_cache.stat(path)? {
@@ -124,7 +144,8 @@ impl MountEngine {
             }
             MetadataLookup::Uncached => {}
         }
-        if slot.revision() != revision {
+        let installed_revision = if installed { revision.wrapping_add(1) } else { revision };
+        if slot.revision() != installed_revision {
             let _ = self.metadata_points.invalidate(path, false);
             return fetched;
         }
@@ -160,10 +181,21 @@ impl MountEngine {
         if let Some(entries) = self.metadata_cache.directory(path)? {
             return Ok(entries);
         }
+        if let Some(entries) = slot.completed_directory()? {
+            return Ok(entries);
+        }
         let revision = slot.revision();
-        let hint = self.directory_metadata_hint(path)?;
-        let observation = self.fetch_directory(path, hint)?;
+        let observation = match self.directory_metadata_hint(path)
+            .and_then(|hint| self.fetch_directory(path, hint))
+        {
+            Ok(observation) => observation,
+            Err(error) => {
+                slot.complete_directory_failure(revision, &error)?;
+                return Err(error);
+            }
+        };
         let entries = Arc::clone(&observation.entries);
+        let expires_at = observation.listing_expires_at;
         let installed = self.install_directory_snapshot(
             path,
             observation,
@@ -179,16 +211,28 @@ impl MountEngine {
         } else if slot.revision() == revision && self.metadata_cache.revision(path)?.is_none() {
             self.metadata_cache.cool_down_snapshot(path)?;
         }
+        // Successful admission increments this path's revision exactly once.
+        // A concurrent invalidation must never tag old entries with its newer
+        // revision; publish against the expected value, not a reread value.
+        let completed_revision = if installed { revision.wrapping_add(1) } else { revision };
+        slot.complete_directory(completed_revision, expires_at, Arc::clone(&entries))?;
         Ok(entries)
     }
 
-    fn refresh_directory(&self, path: &str, depth: u8) -> io::Result<()> {
+    fn refresh_directory(
+        &self, path: &str, depth: u8, selected_revision: Option<u64>,
+    ) -> io::Result<bool> {
         let epoch = {
             let _namespace = read_lock(&self.namespace)?;
             self.metadata_epoch.load(Ordering::Acquire)
         };
         let slot = self.metadata_cache.load_slot(path)?;
         let load = slot.lock()?;
+        // Preserve explicit refresh semantics for unchanged selections; only a
+        // newer still-fresh snapshot satisfies work selected before its fetch.
+        if self.metadata_cache.refreshed_since(path, selected_revision)? {
+            return Ok(false);
+        }
         let revision = slot.revision();
         let hint = self.directory_metadata_hint(path)?;
         let observation = self.fetch_directory(path, hint)?;
@@ -196,12 +240,12 @@ impl MountEngine {
         let _namespace = read_lock(&self.namespace)?;
         let _install_load = slot.lock()?;
         if self.metadata_epoch.load(Ordering::Acquire) != epoch || slot.revision() != revision {
-            return Ok(());
+            return Ok(false);
         }
-        self.install_directory_snapshot(
+        let installed = self.install_directory_snapshot(
             path, observation, depth, &slot, revision, Admission::Refresh,
         )?;
-        Ok(())
+        Ok(installed)
     }
 
     fn preload_directory(&self, path: &str, depth: u8) -> io::Result<bool> {
@@ -241,14 +285,9 @@ impl MountEngine {
         revision: u64,
         intent: Admission,
     ) -> io::Result<bool> {
-        let entries = Arc::clone(&observation.entries);
-        let installed = self.metadata_cache.install_observation(
-            path, observation, depth, Some((slot, revision)), intent,
-        )?;
-        if installed {
-            self.metadata_points.reconcile_directory(path, &entries)?;
-        }
-        Ok(installed)
+        self.metadata_cache.install_observation_reconciled(
+            path, observation, depth, Some((slot, revision)), intent, &self.metadata_points,
+        )
     }
 
     fn directory_metadata_hint(&self, path: &str) -> io::Result<Option<(VfsMeta, Instant)>> {

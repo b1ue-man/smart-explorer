@@ -1,12 +1,14 @@
 use super::{identity_key, support::join};
 use crate::vfs::VfsMeta;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, LinkedList};
 use std::mem::size_of;
 use std::sync::Arc;
 
-const MAX_PENDING_DIFFS: usize = 64;
-const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
+// At least one maximum-size old/new snapshot pair plus bookkeeping must fit.
+// Conservatively charging shared Arcs is intentional; this is not allocation.
+const MAX_PENDING_BYTES: usize = 3 * super::MAX_CACHED_BYTES;
 const MAX_DRAIN_RECORDS: usize = 1_024;
+const MAX_DRAIN_COMPARISONS: usize = 4_096;
 
 /// Paths are absolute inside the authorized backend, not Windows drive paths.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +35,7 @@ pub(super) struct SnapshotImage {
     pub bytes: usize,
 }
 
-struct PendingDiff {
+pub(super) struct PendingDiff {
     path: String,
     previous: SnapshotImage,
     current: SnapshotImage,
@@ -44,20 +46,32 @@ struct PendingDiff {
     started: bool,
 }
 
+enum Scan {
+    Change(MetadataChange),
+    Finished,
+    Pending,
+}
+
 impl PendingDiff {
     fn bytes(&self) -> usize {
         self.previous.bytes.saturating_add(self.current.bytes)
-            .saturating_add(self.path.len()).saturating_add(size_of::<Self>())
+            .saturating_add(self.path.capacity()).saturating_add(size_of::<Self>())
+            .saturating_add(2 * size_of::<usize>())
     }
 
-    fn next(&mut self) -> Option<MetadataChange> {
+    fn next(&mut self, comparisons: &mut usize) -> Scan {
+        if *comparisons == 0 { return Scan::Pending; }
         if let Some(index) = self.pending_created.take() {
+            *comparisons -= 1;
             let new = &self.current.entries[index];
-            return Some(MetadataChange::Created {
+            return Scan::Change(MetadataChange::Created {
                 path: join(&self.path, &new.name), is_directory: new.is_dir,
             });
         }
         while let Some(old) = self.previous.entries.get(self.old_cursor) {
+            if *comparisons == 0 { return Scan::Pending; }
+            *comparisons -= 1;
+            self.started = true;
             self.old_cursor += 1;
             let key = identity_key(self.case_sensitive, &old.name);
             let index = self.current.index.get(&key).copied();
@@ -78,32 +92,37 @@ impl PendingDiff {
                 }),
                 Some(_) => None,
             };
-            if change.is_some() {
+            if let Some(change) = change {
                 self.started = true;
-                return change;
+                return Scan::Change(change);
             }
         }
         while let Some(new) = self.current.entries.get(self.new_cursor) {
+            if *comparisons == 0 { return Scan::Pending; }
+            *comparisons -= 1;
+            self.started = true;
             self.new_cursor += 1;
             if !self.previous.index.contains_key(&identity_key(self.case_sensitive, &new.name)) {
                 self.started = true;
-                return Some(MetadataChange::Created {
+                return Scan::Change(MetadataChange::Created {
                     path: join(&self.path, &new.name), is_directory: new.is_dir,
                 });
             }
         }
-        None
+        Scan::Finished
     }
 }
 
 pub(super) struct PreparedDiff {
     pending: Option<PendingDiff>,
-    replacement: Option<usize>,
+    replacement: bool,
 }
 
 #[derive(Default)]
 pub(super) struct ChangeQueue {
-    pending: VecDeque<PendingDiff>,
+    // Endpoint-only ownership avoids retaining a peak-capacity backing array
+    // after a large burst has drained; node storage is charged in bytes().
+    pending: LinkedList<PendingDiff>,
     bytes: usize,
 }
 
@@ -115,26 +134,27 @@ impl ChangeQueue {
         case_sensitive: bool,
     ) -> Option<PreparedDiff> {
         if !different(&previous, &current, case_sensitive) {
-            return Some(PreparedDiff { pending: None, replacement: None });
+            return Some(PreparedDiff { pending: None, replacement: false });
         }
         // Only the tail may coalesce: this preserves commit order across
-        // directories as well as every already partly delivered snapshot.
-        let replacement = self.pending.back().filter(|pending| {
+        // directories and preserves progress of a partly compared snapshot.
+        let replacement = self.pending.back().is_some_and(|pending| {
             pending.path == path && !pending.started
-        }).map(|_| self.pending.len() - 1);
-        let previous = replacement.map(|index| self.pending[index].previous.clone())
+        });
+        let previous = self.pending.back().filter(|_| replacement)
+            .map(|pending| pending.previous.clone())
             .unwrap_or(previous);
-        if !different(&previous, &current, case_sensitive) {
+        if replacement && !different(&previous, &current, case_sensitive) {
             return Some(PreparedDiff { pending: None, replacement });
         }
         let pending = PendingDiff {
             path: path.to_string(), previous, current, case_sensitive,
             old_cursor: 0, new_cursor: 0, pending_created: None, started: false,
         };
-        let replaced_bytes = replacement.map_or(0, |index| self.pending[index].bytes());
-        if (replacement.is_none() && self.pending.len() >= MAX_PENDING_DIFFS)
-            || self.bytes.saturating_sub(replaced_bytes).saturating_add(pending.bytes())
-                > MAX_PENDING_BYTES
+        let replaced_bytes = self.pending.back().filter(|_| replacement)
+            .map_or(0, PendingDiff::bytes);
+        if self.bytes.saturating_sub(replaced_bytes).saturating_add(pending.bytes())
+            > MAX_PENDING_BYTES
         {
             return None;
         }
@@ -143,30 +163,37 @@ impl ChangeQueue {
 
     /// Must be called under the same snapshot mutex as prepare, and only after
     /// successful revision/capacity admission. No I/O or external locks occur.
-    pub(super) fn commit(&mut self, prepared: PreparedDiff) {
-        if let Some(index) = prepared.replacement {
-            if let Some(previous) = self.pending.remove(index) {
-                self.bytes = self.bytes.saturating_sub(previous.bytes());
-            }
+    pub(super) fn commit(&mut self, prepared: PreparedDiff) -> Option<PendingDiff> {
+        let retired = if prepared.replacement { self.pending.pop_back() } else { None };
+        if let Some(previous) = retired.as_ref() {
+            self.bytes = self.bytes.saturating_sub(previous.bytes());
         }
         if let Some(pending) = prepared.pending {
             self.bytes += pending.bytes();
             self.pending.push_back(pending);
         }
+        retired
     }
 
-    pub(super) fn drain(&mut self, limit: usize) -> Vec<MetadataChange> {
+    pub(super) fn drain(&mut self, limit: usize) -> (Vec<MetadataChange>, Vec<PendingDiff>) {
         let limit = limit.min(MAX_DRAIN_RECORDS);
+        let mut comparisons = MAX_DRAIN_COMPARISONS;
         let mut drained = Vec::new();
+        let mut retired = Vec::new();
         while drained.len() < limit {
             let Some(pending) = self.pending.front_mut() else { break; };
-            if let Some(change) = pending.next() {
-                drained.push(change);
-            } else if let Some(finished) = self.pending.pop_front() {
-                self.bytes = self.bytes.saturating_sub(finished.bytes());
+            match pending.next(&mut comparisons) {
+                Scan::Change(change) => drained.push(change),
+                Scan::Pending => break,
+                Scan::Finished => {
+                    if let Some(finished) = self.pending.pop_front() {
+                        self.bytes = self.bytes.saturating_sub(finished.bytes());
+                        retired.push(finished);
+                    }
+                }
             }
         }
-        drained
+        (drained, retired)
     }
 }
 
@@ -177,7 +204,7 @@ fn different(previous: &SnapshotImage, current: &SnapshotImage, case_sensitive: 
     })
 }
 
-fn same(left: &VfsMeta, right: &VfsMeta) -> bool {
+pub(super) fn same(left: &VfsMeta, right: &VfsMeta) -> bool {
     left.name == right.name && left.is_dir == right.is_dir && left.is_symlink == right.is_symlink
         && left.size == right.size && left.mtime_ms == right.mtime_ms
         && left.id == right.id && left.content_md5 == right.content_md5

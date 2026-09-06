@@ -1,5 +1,4 @@
-use super::{support::*, MetadataCache, MAX_CACHED_BYTES, MAX_CACHED_DIRECTORIES,
-    MAX_CACHED_ENTRIES};
+use super::{order, support::*, MetadataCache, MAX_CACHED_BYTES};
 use std::collections::BinaryHeap;
 use std::io;
 use std::time::Instant;
@@ -8,12 +7,19 @@ impl MetadataCache {
     pub(in crate::mount) fn refresh_targets(
         &self, limit: usize, proactive_root: bool,
     ) -> io::Result<Vec<(String, u8)>> {
+        self.refresh_targets_with_revisions(limit, proactive_root)
+            .map(|targets| targets.into_iter().map(|(path, depth, _)| (path, depth)).collect())
+    }
+
+    pub(in crate::mount) fn refresh_targets_with_revisions(
+        &self, limit: usize, proactive_root: bool,
+    ) -> io::Result<Vec<(String, u8, Option<u64>)>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
         let mut state = self.lock_state()?;
         let now = Instant::now();
-        state.snapshot_cooldowns.retain(|_, retry_at| *retry_at > now);
+        order::prune_cooldowns(&mut state, now);
         let root_key = self.key(&self.root);
         let mut candidates = state.directories.iter()
             .filter(|(key, _)| !state.snapshot_cooldowns.contains_key(*key))
@@ -53,7 +59,21 @@ impl MetadataCache {
                 cached.last_attempt = attempt;
             }
         }
-        Ok(selected)
+        // Capture identity under the same lock as selection. A foreground load
+        // that completes while this target waits can satisfy that maintenance.
+        Ok(selected.into_iter().map(|(path, depth)| {
+            let revision = state.directories.get(&self.key(&path)).map(|cached| cached.revision);
+            (path, depth, revision)
+        }).collect())
+    }
+
+    pub(in crate::mount) fn refreshed_since(
+        &self, path: &str, selected_revision: Option<u64>,
+    ) -> io::Result<bool> {
+        let state = self.lock_state()?;
+        Ok(state.directories.get(&self.key(path)).is_some_and(|cached| {
+            Some(cached.revision) != selected_revision && cached.listing_expires_at > Instant::now()
+        }))
     }
 
     pub(in crate::mount) fn preload_targets(
@@ -64,10 +84,8 @@ impl MetadataCache {
         }
         let now = Instant::now();
         let mut state = self.lock_state()?;
-        state.snapshot_cooldowns.retain(|_, retry_at| *retry_at > now);
-        if state.directories.len() >= MAX_CACHED_DIRECTORIES
-            || state.entries >= MAX_CACHED_ENTRIES || state.bytes >= MAX_CACHED_BYTES
-        {
+        order::prune_cooldowns(&mut state, now);
+        if state.bytes.saturating_add(state.cooldown_bytes) >= MAX_CACHED_BYTES {
             return Ok(Vec::new());
         }
         let mut candidates: BinaryHeap<(u8, String)> = BinaryHeap::with_capacity(limit + 1);
@@ -98,53 +116,5 @@ impl MetadataCache {
         let mut candidates = candidates.into_vec();
         candidates.sort();
         Ok(candidates.into_iter().map(|(depth, path)| (path, depth)).collect())
-    }
-}
-
-/// Ancestor waves commit before descendants begin; every started worker is
-/// joined, including after spawn failure or another worker's panic/error.
-pub(in crate::mount) fn run_metadata_batch(
-    mut targets: Vec<(String, u8)>, width: usize,
-    stopped: &(impl Fn() -> bool + Sync),
-    work: &(impl Fn(&str, u8) -> io::Result<bool> + Sync),
-) -> io::Result<usize> {
-    targets.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
-    let mut completed = 0;
-    let mut first_error = None;
-    let mut start = 0;
-    while start < targets.len() {
-        let depth = targets[start].1;
-        let end = start + targets[start..].iter().take_while(|(_, level)| *level == depth).count();
-        for batch in targets[start..end].chunks(width.clamp(1, 4)) {
-            std::thread::scope(|scope| {
-                let mut handles = Vec::with_capacity(batch.len());
-                for (path, depth) in batch {
-                    match std::thread::Builder::new().name("mount-metadata-load".into())
-                        .spawn_scoped(scope, move || {
-                            if stopped() { Ok(false) } else { work(path, *depth) }
-                        })
-                    {
-                        Ok(handle) => handles.push(handle),
-                        Err(error) => { first_error.get_or_insert(error); break; }
-                    }
-                }
-                for handle in handles {
-                    let result = handle.join().unwrap_or_else(|_| {
-                        Err(io::Error::other("mounted metadata worker panicked"))
-                    });
-                    collect(result, &mut completed, &mut first_error);
-                }
-            });
-        }
-        start = end;
-    }
-    first_error.map_or(Ok(completed), Err)
-}
-
-fn collect(result: io::Result<bool>, completed: &mut usize, error: &mut Option<io::Error>) {
-    match result {
-        Ok(true) => *completed += 1,
-        Ok(false) => {}
-        Err(failure) => { error.get_or_insert(failure); }
     }
 }
