@@ -4,6 +4,13 @@ This is task-scoped design/evidence, not a second live work board. Open work is
 tracked in [TODO.md](TODO.md). Baseline inspected: source `80a75ef` (2026-09-06).
 The user confirmed that the preceding request-delivery fix resolved the freeze.
 
+Candidate status, checked 2026-09-06: `native/Cargo.toml` and
+`release-native/update-feed/version.txt` still read **0.5.150**. The cache,
+metadata/notification and private-DLL changes described here are source work,
+not a shipped version. Their single remote suite, exact dependency approval and
+terminal release remain pending. This document records design/evidence, not a
+second live checklist or an Obsidian certification.
+
 ## Complete requested batch
 
 Improve local-like remote-drive use: repeated file access, an Obsidian-style
@@ -18,6 +25,9 @@ on remote Windows CI after all implementation is committed/pushed. One complete
 remote release follows successful evaluation of that suite.
 
 ## Stage one: source findings and implementation direction
+
+These findings describe the inspected pre-implementation baseline above; the
+candidate changes below address them and supersede those old source behaviors.
 
 - `mount/core/delete.rs::cleanup_committed_entry` deletes clean downloaded data
   on last materialized close. A later first read downloads the whole file again.
@@ -101,8 +111,9 @@ settings renderer, and `cli/drive.rs` with a cohesive options extraction if need
 
 Retained clean data defaults to 500 MiB per drive; accept 0–65,536 MiB, with zero
 disabling retention. Old serialized configurations receive that default. Expose
-the same setting in GUI and `--cache-mib`. An explicit system-runtime compatibility
-choice must remain available independently of private-runtime automatic fallback.
+the same setting in GUI and `--cache-mib <value>`. `--system-runtime` and the GUI
+compatibility checkbox independently select the official system runtime rather
+than automatic private selection.
 Keep identity/credentials out of sanitized runtime policy.
 
 Acceptance: default/backward-compatible decoding, invalid-limit rejection,
@@ -175,6 +186,12 @@ Account replacement sizes after subtracting the previous snapshot.
 Capture successful current snapshot replacements atomically for bounded ordered
 change delivery; initial/failed/stale/rejected installs emit no invented changes.
 Keep prior comparison data when a point observation invalidates its authority.
+The implemented queue retains at most 64 pending snapshot pairs with 64 MiB
+conservative byte accounting. It drains concrete create/delete/modify records
+in bounded batches; only a wholly undrained same-directory tail coalesces.
+When that queue cannot represent a new diff, reject the cache commit and protect
+its old baseline from unrelated eviction until pressure clears. Do not discard
+child changes in favor of a root-only update that watchers might not rescan.
 
 Acceptance: expiry through every lookup path, negative coalescing/invalidation,
 sibling overlap and width limits, ancestor race rejection, non-starving refresh,
@@ -188,9 +205,11 @@ delivery, and directly affected save/open handling. Depends on M2 and M3.
 Drain successful remote diffs from the host owner loop and invoke documented
 create/delete/update notifications only while the owned DLL instance is alive.
 Keep all network work and DLL calls outside cache locks. Do not duplicate driver
-notifications for through-mount mutations. Bound event count/bytes and retain a
-bounded rescan/coalescing strategy rather than silently allocating without limit.
+notifications for through-mount mutations. Drain the bounded concrete snapshot
+diffs described in M3; do not fabricate root rescan notifications on overflow.
 Preserve the official DLL's attributes-only update limitation explicitly.
+The 20-second refresh schedule is not an end-to-end notification deadline when
+I/O is slow, unavailable or subject to queue backpressure.
 
 Acceptance: actual Windows watcher delivery for external create/delete/modify,
 fresh content after notification, unchanged/failed/raced refresh, bounded backlog,
@@ -211,13 +230,18 @@ versioned instance counter query for completed second-or-later batch records, so
 acceptance proves actual multi-event consumption rather than merely navigation.
 Keep the official driver, MSI and System32 DLL untouched.
 
-One source-bound remote preparation stage builds only the user-mode x64 DLL from
+One source-bound remote preparation stage, `native/prepare-dokany-private.ps1`,
+builds only the user-mode x64 DLL from
 the pinned archive and committed patch. Capture toolchain/source/patch/payload
 identity and corresponding LGPL source/notices. Embed the verified payload in
 app/se so existing installer/update payload boundaries stay coherent. Retain the
 successful suite's exact DLL bytes/provenance as approved repository artifacts;
 the terminal release consumes and rehashes them, never silently rebuilding a
-different private DLL. GNU Rust consumers can embed the same x64 DLL without
+different private DLL. The approved set under `native/assets/dokany-private/`
+is exactly `dokan2.dll`, `manifest.json` and `corresponding-source.zip`.
+Release preflight uses `-VerifyOnly -RequireApproved`
+and rejects bootstrap `SMART_EXPLORER_DOKANY_DLL_DIR`/`SMART_EXPLORER_DOKANY_DLL_SHA256`
+overrides. GNU Rust consumers can embed the same x64 DLL without
 MSBuild; release preflight must reject absent/mismatched approved inputs before
 the expensive build. Ordinary developer builds may remain official-only when no
 private payload is available, but release/task validation must not silently do so.
@@ -240,11 +264,18 @@ fallback, explicit compatibility mode, and preserved dirty recovery on failure.
 
 ### Final task suite and release
 
-After all source changes, implement one `native/test-mount-optimization-task.ps1`
-entrypoint and one exact-candidate remote workflow. Reuse one incremental Windows
+After all source changes, the checked-in `native/test-mount-optimization-task.ps1`
+entrypoint runs through `.github/workflows/mount-optimization-task.yml`, bound
+to the exact pushed `candidate_sha`. Reuse one incremental Windows
 library development binary for all selected core/IPC/policy and real-driver cases;
 no broad existing collection or cross-platform matrix. Include the previous
 bounded request-delivery regression fixture within this same task invocation.
+
+The fixture cache identity includes both committed inputs and the exact embedded
+DLL/source-package hashes. The suite retains `approval.json` only after all
+selected behavior succeeds; preparation alone does not approve the DLL. Its
+remote job allows 180 minutes, with one 170-minute task invocation. Retained
+dependency artifacts are verified and reused through the same fix loop.
 Map every milestone above to explicit expected results and log backend-call/
 transfer/concurrency measurements without presenting synthetic latency as a user's
 network benchmark. Reuse the same suite for relevant fixes and approval of the

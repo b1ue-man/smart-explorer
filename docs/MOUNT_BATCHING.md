@@ -1,5 +1,14 @@
 # Windows remote-mount request delivery
 
+This records the **0.5.150 official-runtime correction and its historical
+verification**. The user subsequently confirmed that it resolved the Explorer
+freeze. The current cache/private-DLL optimization is a separate, unverified
+candidate in the same project, described in
+[MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md); it has not been released as part
+of 0.5.150. Its reviewed private-DLL path may enable corrected batching only
+after exact-byte validation. The official System32 fallback remains non-batched
+and neither the shared DLL nor kernel driver is replaced.
+
 ## Evidence and selected correction
 
 Checked on 2026-09-04 against Dokany `v2.3.1.1000`, upstream commit
@@ -31,7 +40,7 @@ still contains the defect. No public acknowledgment of this exact truncation
 defect was found. The related maintainer discussion of a formerly missing
 driver flag is not acknowledgment of this later request-loss defect.
 
-The selected correction clears batching before every `DokanCreateFileSystem`
+The correction selected for 0.5.150 clears batching before every `DokanCreateFileSystem`
 call and leaves ordinary multithreaded processing enabled. Driver options are
 sent before Dokany's worker-count adjustment, so clearing the bit after
 creation, or only selecting single-thread mode, is too late. Dokany can mutate
@@ -47,7 +56,7 @@ Timeouts can complete individual lost requests while Dokany's keepalive keeps
 the mount present; this investigation does not claim that every single request
 waits forever or that the third/fourth navigation is a fixed trigger count.
 
-## Two-stage implementation and acceptance plan
+## Historical two-stage implementation and acceptance plan
 
 Stage one traced the common Windows mount path, checked callback ABI/lifetimes,
 locks and remote transports, and compared upgrading Dokany, distributing a

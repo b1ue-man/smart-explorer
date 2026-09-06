@@ -107,9 +107,9 @@ System32-`msiexec` per UAC. Automatisch installiert wird bei fehlender Runtime
 oder nicht verfügbarem Treiber; eine vorhandene inkompatible shared Runtime wird
 nicht automatisch ersetzt oder herabgestuft.
 
-Zur Laufzeit wird `dokan2.dll` mit
+Die veröffentlichte Basis 0.5.150 lädt `dokan2.dll` mit
 `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` nur aus
-`%WINDIR%\System32` geladen. `DokanVersion()` muss die DLL-API **231** melden;
+`%WINDIR%\System32`. `DokanVersion()` muss die DLL-API **231** melden;
 `DokanDriverVersion()` fragt über `FSCTL_GET_VERSION` das getrennte
 Kernel-Treiberprotokoll ab und muss **0x190** (dezimal **400**) melden.
 Unterstützt ist die offizielle [Dokany-Version
@@ -135,7 +135,8 @@ se drive unmount M:
 se drive retry <mount-id>
 ```
 
-IPC-Batching wird vor jedem Dokany-Mountstart deaktiviert, da die offizielle
+Im offiziellen System-Runtime-Pfad wird IPC-Batching vor jedem Dokany-Mountstart
+deaktiviert, da die offizielle
 2.3.1.1000-DLL sonst einzelne Requests aus Batches verliert. Normale parallele
 Callbacks bleiben aktiv; der Runtime-/Installer-Pin ändert sich nicht. Bereits
 aktive Mounts nach dem App-Update neu starten. `verify-mount-windows.ps1` ist
@@ -153,16 +154,60 @@ Share-Geräten; der globale Laufwerksmanager kann Mounts auswerfen oder nach
 Fehlern erneut verbinden. Nicht-Windows-Plattformen liefern für den Mount-Pfad
 bewusst `Unsupported`.
 
-`--metadata-depth` und der entsprechende GUI-Regler akzeptieren 0 bis 4;
-Standard ist 2. Nur das vollständige Root-Snapshot wird synchron vor der
-Bereitschaft geladen. Tiefere vollständige Verzeichnis-Snapshots folgen danach
-breitensuchend in 8er-Batches, eine rotierende Auffrischung arbeitet alle
-20 Sekunden in begrenzten Batches. Der Cache enthält keine Dateiinhalte und ist
-auf 4.096 Verzeichnisse, 50.000 Einträge und 32 MiB insgesamt sowie 4 MiB pro
-Verzeichnis begrenzt; kalte Einzelabfragen nutzen zusätzlich höchstens 4 MiB
-für fünf Sekunden. Sicherheitsentscheidungen zu Open/Create/Replace und
-Konflikten bleiben Live-Abfragen, Mutationen invalidieren die betroffenen
-Snapshots.
+### Mount-Optimierungskandidat (noch nicht in 0.5.150)
+
+Diese Quelländerungen warten auf ihre gemeinsame Remote-Verifikation und die
+abschließende Veröffentlichung; siehe
+[Entwurf und Nachweisgrenzen](../docs/MOUNT_OPTIMIZATION.md).
+
+`--cache-mib <Wert>` und die GUI setzen den separaten Cache für unbenutzte saubere
+Inhalte auf 0 bis 65.536 MiB pro Laufwerk, standardmäßig 500 MiB. Null deaktiviert
+die Aufbewahrung; höchstens 10.000 Datensätze bleiben innerhalb einer Einbindung
+erhalten. Offene, unsaubere, Konflikt- und Recovery-Daten werden nicht zur
+Einhaltung dieses Limits verworfen. Wiederverwendung prüft eine frische Remote-
+Stat-Abfrage, Baseline, normalen Dateityp und lokale Länge; nach fünf Minuten
+wird eine Inhaltsgeneration nicht weiterverwendet. Größen-/Zeitgleichheit ohne
+starken Remote-Identifier ist kein Inhaltsbeweis. Die Arbeitsraum-Zulassung
+berücksichtigt gleichzeitiges Wachstum und versucht 512 MiB caller-verfügbaren
+Platz freizuhalten; bei Druck wird nur entbehrlicher sauberer Cache entfernt.
+Die Platzabfrage reserviert keinen Speicher gegenüber anderen Anwendungen.
+
+`--metadata-depth` bleibt 0 bis 4, Standard 2; null deaktiviert proaktives
+Vorladen, nicht den Bedarfscache. Bei aktivem Vorladen wird nur das Root-Snapshot
+vor Bereitschaft geladen. Hintergrundbreite ist
+`parallelism.clamp(1,8).saturating_sub(1).clamp(1,4)`; Vorfahren werden vor
+Nachfahren verarbeitet, fällige Auffrischung vor Spekulation. Das ist keine
+strikte Vordergrundpriorität auf Backends mit nur einer Anfragekapazität.
+Verzeichnisbeobachtungen verfallen nach 20 Sekunden, positive Punktabfragen nach
+fünf und exakte Nichtgefunden-Abfragen nach einer Sekunde. Alte Snapshots bleiben
+nur für Änderungsvergleiche erhalten. Grenzen: 4.096 Verzeichnisse, 50.000
+Einträge, 16 MiB insgesamt/pro Verzeichnis und separat 4 MiB Punktcache.
+Mutierende Opens/Create/Replace und Konflikte behalten Live-Prüfungen; lokale
+Mutationen invalidieren betroffene positive/negative Cache-Autorität sofort.
+
+Erfolgreiche aktuelle Snapshot-Ersetzungen liefern konkrete Windows-
+Änderungsbenachrichtigungen über den besitzenden Host. Bis zu 64 ausstehende
+Snapshot-Diffs mit konservativ 64 MiB werden geordnet gehalten; bei Gegendruck
+bleibt die alte Baseline erhalten, statt Kindänderungen durch ein erfundenes
+Root-Rescan-Ereignis zu ersetzen. Auffrischung erfolgt im Hintergrund, nicht mit
+einer garantierten 20-Sekunden-Zustellfrist.
+
+Der automatische Runtime-Pfad lädt nur eine vorab bytegeprüfte eingebettete
+private DLL aus einem gesonderten, hashgebundenen Bereich. DLL, korrespondierende
+Quellen und Hinweise gehören nicht zum entbehrlichen Inhaltscache. System32-DLL,
+signierter Treiber und offizieller MSI bleiben unverändert. Nur die geprüfte
+private DLL aktiviert korrigiertes Batching; fehlende/abgelehnte private Daten
+fallen auf System32 ohne Batching zurück. Ein Marker pro Mount und Payload
+bleibt nach einem nicht erfolgreich abgeschlossenen privaten Versuch erhalten,
+sodass der nächste `Retry` die System-Runtime wählt. Kontrolliert erfolgreicher
+Abbau entfernt nur den eigenen Marker; bei einem Löschfehler bleibt die
+Kompatibilitätswahl erhalten. `--system-runtime` und die GUI-
+Kompatibilitätsoption erzwingen System32. Kein Live-DLL-Wechsel, keine Garantie
+automatischer Hänger-Erholung, keine Obsidian-Zertifizierung oder unbelegten
+Geschwindigkeitsangaben. Die bisherige Root-/Transport-/Schreibsicherheit gilt
+weiter; die folgenden Abschnitte beschreiben diese unabhängigen Grenzen.
+
+### Unabhängige Root-, Transport- und Schreibgrenzen
 
 Für ein Share-Gerät werden konkrete lokale Exporte als `/Label` und gespeicherte
 Verbindungswurzeln als `/Verbindungen/<Verbindung>` angeboten; nur das
