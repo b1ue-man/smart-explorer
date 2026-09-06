@@ -11,6 +11,14 @@ not a shipped version. Their single remote suite, exact dependency approval and
 terminal release remain pending. This document records design/evidence, not a
 second live checklist or an Obsidian certification.
 
+The [first remote attempt](https://github.com/b1ue-man/smart-explorer/actions/runs/34048575411)
+stopped before DLL compilation or mount execution: preparation incorrectly
+reported a BOM in the BOM-free committed recipe. The `StartsWith(string)`
+overload uses culture-sensitive comparison; format-marker matching now explicitly
+uses `StringComparison.Ordinal`, following [.NET's string-comparison contract](https://learn.microsoft.com/en-us/dotnet/standard/base-types/best-practices-strings)
+(checked 2026-09-06). BOM rejection itself remains enforced. This failed attempt
+does not approve any runtime artifact or mounted behavior.
+
 ## Complete requested batch
 
 Improve local-like remote-drive use: repeated file access, an Obsidian-style
