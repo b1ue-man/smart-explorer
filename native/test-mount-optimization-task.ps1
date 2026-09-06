@@ -244,6 +244,7 @@ foreach ($required in @(
     'daemon_waiters_share_errors_but_do_not_retain_them',
     'more_than_4096_small_directories_remain_reusable',
     'root_is_not_its_own_descendant',
+    'scheduler_recent_directory_survives_old_demand_backlog',
     'unchanged_parent_preserves_child_and_replacement_invalidates',
     'byte_lru_can_evict_root_without_evicting_speculatively',
     'notification_byte_pressure_retains_baseline_and_retries',
