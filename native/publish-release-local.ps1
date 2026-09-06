@@ -1090,6 +1090,14 @@ function Assert-CommonReleasePreflight {
     Assert-GitHubActionsCompleteReleaseContext
     Assert-GitReleasePreflight
     Assert-PublicationNoUntrackedBuildInputs -RepoRoot $repoRoot
+    # Private Dokany is an approved dependency artifact, not another release
+    # build. The exact suite-approved DLL/source bytes must already be committed.
+    if ($env:SMART_EXPLORER_DOKANY_DLL_DIR -or $env:SMART_EXPLORER_DOKANY_DLL_SHA256) {
+        throw "Complete release refuses bootstrap private-DLL environment overrides."
+    }
+    & (Join-Path $scriptRoot "prepare-dokany-private.ps1") `
+        -ArtifactDirectory (Join-Path $scriptRoot "assets/dokany-private") `
+        -VerifyOnly -RequireApproved | Out-Host
     $script:githubRepository = Get-GitHubRepositorySlug
     $null = Get-ReleasePublicationGitHubToken -Require
     $workflow = Invoke-GitHubGet "actions/workflows/$workflowFile"
