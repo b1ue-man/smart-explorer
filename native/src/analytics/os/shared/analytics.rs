@@ -14,6 +14,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use crate::analytics::os::{read_directory, EntryKind};
 
 #[path = "analytics_backend.rs"]
 mod backend;
@@ -123,16 +124,16 @@ fn scan_dir(
     let mut own_files = 0u64;
     let mut own_bytes = 0u64;
 
-    match std::fs::read_dir(dir) {
+    match read_directory(dir) {
         Ok(rd) => {
             for entry in rd {
                 let ent = match entry {
                     Ok(ent) => ent,
                     Err(error) => {
-                        diagnostics.record(
+                        diagnostics.record_io(
                             dir.to_string_lossy().into_owned(),
-                            error.to_string(),
-                            false,
+                            &error,
+                            is_root && own_files == 0 && subdirs.is_empty(),
                         );
                         continue;
                     }
@@ -140,55 +141,33 @@ fn scan_dir(
                 if p.cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let ft = match ent.file_type() {
-                    Ok(t) => t,
-                    Err(error) => {
-                        diagnostics.record(
-                            ent.path().to_string_lossy().into_owned(),
-                            error.to_string(),
-                            false,
-                        );
-                        continue;
-                    }
-                };
-                // Don't follow symlinks/reparse points — avoids cycles and
-                // double-counting the same bytes.
-                if ft.is_symlink() {
+                if matches!(ent.kind, EntryKind::Link | EntryKind::Other) {
                     continue;
                 }
+                let path = dir.join(&ent.name);
                 let nm: Box<str> = ent
-                    .file_name()
+                    .name
                     .to_string_lossy()
                     .into_owned()
                     .into_boxed_str();
                 if !budget.claim(
-                    &ent.path(),
+                    &path,
                     depth.saturating_add(1),
                     nm.len() as u64,
                     diagnostics,
                 ) {
                     break;
                 }
-                if ft.is_dir() {
-                    let cp = ent.path();
+                if ent.kind == EntryKind::Directory {
+                    let cp = path;
                     if crate::agent_proto::is_pseudo_dir(&cp.to_string_lossy()) {
                         continue; // /proc, /sys, … report bogus huge sizes
                     }
                     subdirs.push((cp, nm));
-                } else if ft.is_file() {
-                    let sz = match ent.metadata() {
-                        Ok(metadata) => metadata.len(),
-                        Err(error) => {
-                            diagnostics.record(
-                                ent.path().to_string_lossy().into_owned(),
-                                error.to_string(),
-                                false,
-                            );
-                            0
-                        }
-                    };
+                } else if ent.kind == EntryKind::File {
+                    let sz = ent.size;
                     own_files += 1;
-                    own_bytes += sz;
+                    own_bytes = own_bytes.saturating_add(sz);
                     files.push(SizeNode {
                         name: nm,
                         size: sz,
@@ -198,9 +177,9 @@ fn scan_dir(
                 }
             }
         }
-        Err(error) => diagnostics.record(
+        Err(error) => diagnostics.record_io(
             dir.to_string_lossy().into_owned(),
-            error.to_string(),
+            &error,
             is_root,
         ),
     }
@@ -232,7 +211,7 @@ fn scan_dir(
 
     let mut size = own_bytes;
     for d in &dir_nodes {
-        size += d.size;
+        size = size.saturating_add(d.size);
     }
     let mut children = Vec::with_capacity(dir_nodes.len() + files.len());
     children.append(&mut dir_nodes);

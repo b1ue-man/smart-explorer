@@ -148,7 +148,7 @@ fn scan_parallel(
             let children = match result {
                 Ok(children) => children,
                 Err(error) => {
-                    diagnostics.record(&directory, error.to_string(), directory == root);
+                    diagnostics.record_io(&directory, &error, directory == root);
                     continue;
                 }
             };
@@ -231,7 +231,7 @@ fn scan_serial(
     let listed = match collect_children(backend, directory, depth, diagnostics, budget) {
         Ok(listed) => listed,
         Err(error) => {
-            diagnostics.record(directory, error.to_string(), is_root);
+            diagnostics.record_io(directory, &error, is_root);
             Vec::new()
         }
     };
