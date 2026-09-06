@@ -18,7 +18,8 @@ concurrency:
 
 jobs:
   suite:
-    runs-on: windows-2025
+    # The approved private-DLL recipe requires VS 2022/v143, not VS 2026.
+    runs-on: windows-2022
     timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: 1
@@ -116,4 +117,3 @@ jobs:
             ${{ runner.temp }}/dokany-private-dependency/.dokany-private-stage.*/msbuild.stderr.log
           if-no-files-found: ignore
           retention-days: 14
-
