@@ -23,6 +23,7 @@ pub struct ScanOutcome {
     pub status: ScanStatus,
     pub issues: Vec<ScanIssue>,
     pub suppressed_issues: u64,
+    pub permission_denied: u64,
 }
 
 impl ScanOutcome {
@@ -32,6 +33,7 @@ impl ScanOutcome {
             status: ScanStatus::Complete,
             issues: Vec::new(),
             suppressed_issues: 0,
+            permission_denied: 0,
         }
     }
 
@@ -44,6 +46,7 @@ impl ScanOutcome {
                 detail: detail.into(),
             }],
             suppressed_issues: 0,
+            permission_denied: 0,
         }
     }
 
@@ -53,6 +56,7 @@ impl ScanOutcome {
             status: ScanStatus::Canceled,
             issues: Vec::new(),
             suppressed_issues: 0,
+            permission_denied: 0,
         }
     }
 }
@@ -62,9 +66,17 @@ pub(super) struct Diagnostics {
     issues: Mutex<Vec<ScanIssue>>,
     suppressed: AtomicU64,
     root_failed: AtomicBool,
+    permission_denied: AtomicU64,
 }
 
 impl Diagnostics {
+    pub(super) fn record_io(&self, path: impl Into<String>, error: &std::io::Error, is_root: bool) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            self.permission_denied.fetch_add(1, Ordering::Relaxed);
+        }
+        self.record(path, error.to_string(), is_root);
+    }
+
     pub(super) fn record(&self, path: impl Into<String>, detail: impl Into<String>, is_root: bool) {
         if is_root {
             self.root_failed.store(true, Ordering::Relaxed);
@@ -100,6 +112,7 @@ impl Diagnostics {
             status,
             issues,
             suppressed_issues,
+            permission_denied: self.permission_denied.load(Ordering::Relaxed),
         }
     }
 }
