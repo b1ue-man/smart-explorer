@@ -1,0 +1,119 @@
+name: mount-optimization-task
+run-name: Mount optimization ${{ inputs.candidate_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full source SHA to verify (must match selected ref)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mount-optimization-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind suite to exact pushed candidate
+        shell: pwsh
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CANDIDATE_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'candidate_sha must be a full commit SHA.'
+          }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:CANDIDATE_SHA -or $head -ne $env:GITHUB_SHA) {
+            throw 'Requested candidate, selected workflow ref and checkout differ.'
+          }
+          $logs = Join-Path $env:RUNNER_TEMP 'mount-optimization-task'
+          [void][IO.Directory]::CreateDirectory($logs)
+          [IO.File]::WriteAllText((Join-Path $logs 'candidate.txt'), $head)
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: windows-mount-batching
+          cache-on-failure: true
+
+      - name: Restore source-bound fixture binary
+        id: mount-binary-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mount-task-binary
+          key: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore exact prepared dependency between task fix attempts
+        id: private-dependency-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/dokany-private-dependency
+          key: dokany-private-${{ runner.os }}-${{ hashFiles('native/prepare-dokany-private.ps1', 'native/dokany-private/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: dokany-private-${{ runner.os }}-${{ hashFiles('native/prepare-dokany-private.ps1', 'native/dokany-private/**') }}-
+
+      - name: Run the single Windows mounted-volume task suite
+        shell: pwsh
+        timeout-minutes: 170
+        run: >-
+          ./native/test-mount-optimization-task.ps1
+          -InstallRuntime
+          -LogRoot (Join-Path $env:RUNNER_TEMP 'mount-optimization-task')
+          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'mount-task-binary')
+          -DependencyCacheRoot (Join-Path $env:RUNNER_TEMP 'dokany-private-dependency')
+
+      - name: Keep the fixture binary even when its checker reports failure
+        if: always() && steps.mount-binary-cache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/mount-task-binary
+          key: mount-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Retain the prepared dependency for the same task fix loop
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/dokany-private-dependency
+          key: dokany-private-${{ runner.os }}-${{ hashFiles('native/prepare-dokany-private.ps1', 'native/dokany-private/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Retain runtime identity and bounded probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mount-optimization-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mount-optimization-task
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain private compiler evidence when preparation fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-dokany-preparation-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dokany-private-dependency/.dokany-private-stage.*/msbuild.stdout.log
+            ${{ runner.temp }}/dokany-private-dependency/.dokany-private-stage.*/msbuild.stderr.log
+          if-no-files-found: ignore
+          retention-days: 14
+
