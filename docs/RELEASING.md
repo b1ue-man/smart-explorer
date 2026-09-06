@@ -202,6 +202,14 @@ staging, tagging, or publication. This is the authoritative unattended path:
 the initiating workstation only commits, pushes, dispatches, and monitors;
 compilation, tests, packaging, and publication execute on GitHub-hosted runners.
 
+Codex leaves release jobs unattended and checks their status at most once every
+30 minutes, working on other authorized tasks meanwhile. Do not actively poll
+or repeat unchanged release-status messages between checks. This agent-monitoring
+cadence does not change the remote wrapper's own subprocess or publication
+coordination. A new requested fix may use a separate development branch while a
+release runs; do not advance its bound `main` source or start another release
+until the preceding transaction has completed.
+
 The job-scoped `GITHUB_TOKEN` needs no repository secret. GitHub deliberately
 does not start a second workflow for a tag pushed with that token. Therefore,
 only when the wrapper detects this exact GitHub Actions context, it explicitly
