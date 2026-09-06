@@ -1,6 +1,14 @@
 use super::{EntryKind, LocalEntry};
 use std::{io, path::Path};
 
+pub(super) fn can_request_elevation(_root: &str) -> bool { false }
+pub(super) fn launch_elevated_analysis(_root: &str) -> Result<bool, String> {
+    Err("Administrator-Analyse ist nur unter Windows verfügbar".into())
+}
+pub(super) fn verify_analysis_startup(_request: &crate::analytics::AnalysisStartup) -> Result<(), String> {
+    Err("Administrator-Analyse ist nur unter Windows verfügbar".into())
+}
+
 pub(super) fn read_directory(
     path: &Path,
 ) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {

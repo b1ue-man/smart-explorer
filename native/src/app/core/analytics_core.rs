@@ -150,6 +150,7 @@ impl App {
 
     pub(in crate::app) fn start_analytics_source(&mut self, source: StorageScanSource) {
         self.cancel_analytics_worker();
+        self.analytics_access.reset_scan();
         if source.root().is_empty() {
             let detail = "Leeres Scan-Ziel".to_string();
             self.analytics_source = None;
@@ -216,9 +217,11 @@ impl App {
 
     /// Drain a finished analytics scan into the tree (called each frame).
     pub(in crate::app) fn poll_analytics_scan(&mut self) {
+        self.poll_analytics_access();
         let message = self.analytics_scan.as_ref().map(|scan| scan.rx.try_recv());
         match message {
             Some(Ok(outcome)) => {
+                self.update_analytics_access(outcome.permission_denied);
                 self.analytics_scan = None;
                 self.analytics_state = outcome.status.into();
                 self.analytics_tree = outcome.tree;
@@ -246,6 +249,7 @@ impl App {
             self.analytics_state = StorageRunState::Canceled;
             self.analytics_issues.clear();
             self.analytics_suppressed_issues = 0;
+            self.analytics_access.reset_scan();
         }
     }
 
@@ -261,10 +265,7 @@ impl App {
     }
 
     fn log_analytics_outcome(&mut self) {
-        if !matches!(
-            self.analytics_state,
-            StorageRunState::Partial | StorageRunState::Failed
-        ) {
+        if self.analytics_state != StorageRunState::Failed || self.analytics_access.offer {
             return;
         }
         let first = self

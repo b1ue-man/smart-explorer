@@ -140,6 +140,12 @@ The existing GUI gets one typed access controller; issue rendering is extracted
 to avoid growing the already large treemap module. Consent is an explicit action,
 not an automatic launch or repeated prompt. Declining leaves the result intact.
 
+Inspection of `App::new` also found automatic daemon/update initialization. The
+elevated window therefore uses a dedicated read-only analytics `eframe::App`,
+dispatched before normal GUI bootstrap, with progress, cancellation, drilldown,
+the existing treemap layout and the shared diagnostics view. It does not start
+the ordinary app's background services, updater, reclaim or file-write actions.
+
 Windows may still
 refuse access because of filesystem/provider policy or unavailable privileges;
 report that accurately rather than claiming every possible path is readable.
