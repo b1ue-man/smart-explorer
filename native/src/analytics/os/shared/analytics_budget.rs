@@ -87,7 +87,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn analytics_budget_stops_at_each_limit() {
+    fn analytics_access_task_existing_budget_stops_honestly() {
         let diagnostics = Diagnostics::default();
         let budget = AnalyticsBudget::with_limits(1, 4, 2);
         assert!(budget.claim(Path::new("root"), 0, 4, &diagnostics));

@@ -265,7 +265,8 @@ impl App {
     }
 
     fn log_analytics_outcome(&mut self) {
-        if self.analytics_state != StorageRunState::Failed || self.analytics_access.offer {
+        if !analytics_access::should_log_failure(self.analytics_state, self.analytics_access.offer)
+        {
             return;
         }
         let first = self

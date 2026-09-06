@@ -1,11 +1,15 @@
 use super::{EntryKind, LocalEntry};
 use std::{io, path::Path};
 
-pub(super) fn can_request_elevation(_root: &str) -> bool { false }
+pub(super) fn can_request_elevation(_root: &str) -> bool {
+    false
+}
 pub(super) fn launch_elevated_analysis(_root: &str) -> Result<bool, String> {
     Err("Administrator-Analyse ist nur unter Windows verfügbar".into())
 }
-pub(super) fn verify_analysis_startup(_request: &crate::analytics::AnalysisStartup) -> Result<(), String> {
+pub(super) fn verify_analysis_startup(
+    _request: &crate::analytics::AnalysisStartup,
+) -> Result<(), String> {
     Err("Administrator-Analyse ist nur unter Windows verfügbar".into())
 }
 
@@ -14,8 +18,9 @@ pub(super) fn read_directory(
 ) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
     Ok(std::fs::read_dir(path)?.map(|entry| {
         let entry = entry?;
-        let contextualize = |error: io::Error| io::Error::new(error.kind(),
-            format!("{}: {error}", entry.path().display()));
+        let contextualize = |error: io::Error| {
+            io::Error::new(error.kind(), format!("{}: {error}", entry.path().display()))
+        };
         let ty = entry.file_type().map_err(contextualize)?;
         let kind = if ty.is_symlink() {
             EntryKind::Link
@@ -26,7 +31,15 @@ pub(super) fn read_directory(
         } else {
             EntryKind::Other
         };
-        let size = if kind == EntryKind::File { entry.metadata().map_err(contextualize)?.len() } else { 0 };
-        Ok(LocalEntry { name: entry.file_name(), kind, size })
+        let size = if kind == EntryKind::File {
+            entry.metadata().map_err(contextualize)?.len()
+        } else {
+            0
+        };
+        Ok(LocalEntry {
+            name: entry.file_name(),
+            kind,
+            size,
+        })
     }))
 }

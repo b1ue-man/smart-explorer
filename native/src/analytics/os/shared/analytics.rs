@@ -10,11 +10,11 @@
 //! reconstructed by descending from the root (the drill position carries the
 //! prefix), so the tree stays compact: roughly `name + ~48 bytes` per node.
 
+use crate::analytics::os::{read_directory, EntryKind};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use crate::analytics::os::{read_directory, EntryKind};
 
 #[path = "analytics_backend.rs"]
 mod backend;
@@ -145,17 +145,8 @@ fn scan_dir(
                     continue;
                 }
                 let path = dir.join(&ent.name);
-                let nm: Box<str> = ent
-                    .name
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str();
-                if !budget.claim(
-                    &path,
-                    depth.saturating_add(1),
-                    nm.len() as u64,
-                    diagnostics,
-                ) {
+                let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
+                if !budget.claim(&path, depth.saturating_add(1), nm.len() as u64, diagnostics) {
                     break;
                 }
                 if ent.kind == EntryKind::Directory {
@@ -177,11 +168,7 @@ fn scan_dir(
                 }
             }
         }
-        Err(error) => diagnostics.record_io(
-            dir.to_string_lossy().into_owned(),
-            &error,
-            is_root,
-        ),
+        Err(error) => diagnostics.record_io(dir.to_string_lossy().into_owned(), &error, is_root),
     }
 
     p.files.fetch_add(own_files, Ordering::Relaxed);

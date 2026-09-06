@@ -3,9 +3,9 @@ use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Cursor, Read, Write};
 
 #[test]
-fn scans_sizes_and_counts() {
-    let base = std::env::temp_dir().join(format!("se_an_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+fn analytics_access_task_sizes_and_counts() {
+    let fixture = tempfile::tempdir().unwrap();
+    let base = fixture.path();
     std::fs::create_dir_all(base.join("sub")).unwrap();
     std::fs::write(base.join("a.txt"), vec![0u8; 100]).unwrap();
     std::fs::write(base.join("sub/b.bin"), vec![0u8; 250]).unwrap();
@@ -24,18 +24,12 @@ fn scans_sizes_and_counts() {
     let a = root.children.iter().find(|c| &*c.name == "a.txt").unwrap();
     assert_eq!(a.size, 100);
     assert!(!a.is_dir && a.children.is_empty());
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
-fn missing_local_root_is_failed_not_empty_success() {
-    let root = std::env::temp_dir().join(format!(
-        "se_an_missing_{}_{}",
-        std::process::id(),
-        std::thread::current().name().unwrap_or("test")
-    ));
-    let _ = std::fs::remove_dir_all(&root);
+fn analytics_access_task_missing_local_root_is_failed_not_empty_success() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("se_an_missing");
     let outcome = scan(&root, &Progress::default());
     assert_eq!(outcome.status, ScanStatus::Failed);
     assert!(outcome.tree.is_none());
@@ -68,22 +62,36 @@ fn scan_backend_via_local_backend() {
 }
 
 #[test]
-fn backend_child_error_is_partial_and_root_error_is_failed() {
-    let p = Progress::default();
-    let partial = scan_backend(&FailingBackend { fail_root: false }, "/", &p);
-    assert_eq!(partial.status, ScanStatus::Partial);
-    assert_eq!(partial.tree.as_ref().map(|n| n.size), Some(7));
-    assert_eq!(partial.issues.len(), 1);
-    assert_eq!(partial.issues[0].path, "/broken");
+fn analytics_access_task_backend_child_error_is_partial_and_root_error_is_failed() {
+    for parallel in [1, 3] {
+        let p = Progress::default();
+        let partial = scan_backend(
+            &FailingBackend {
+                fail_root: false,
+                parallel,
+            },
+            "/",
+            &p,
+        );
+        assert_eq!(partial.status, ScanStatus::Partial);
+        assert_eq!(partial.tree.as_ref().map(|n| n.size), Some(7));
+        assert_eq!(partial.issues.len(), 1);
+        assert_eq!(partial.issues[0].path, "/broken");
+        assert_eq!(partial.permission_denied, 1);
 
-    let failed = scan_backend(
-        &FailingBackend { fail_root: true },
-        "/",
-        &Progress::default(),
-    );
-    assert_eq!(failed.status, ScanStatus::Failed);
-    assert!(failed.tree.is_none());
-    assert_eq!(failed.issues[0].path, "/");
+        let failed = scan_backend(
+            &FailingBackend {
+                fail_root: true,
+                parallel,
+            },
+            "/",
+            &Progress::default(),
+        );
+        assert_eq!(failed.status, ScanStatus::Failed);
+        assert!(failed.tree.is_none());
+        assert_eq!(failed.issues[0].path, "/");
+        assert_eq!(failed.permission_denied, 1);
+    }
 }
 
 #[test]
@@ -130,9 +138,13 @@ fn parallel_tree_assembly() {
 
 struct FailingBackend {
     fail_root: bool,
+    parallel: usize,
 }
 
 impl Backend for FailingBackend {
+    fn parallelism(&self) -> usize {
+        self.parallel
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Peer
     }

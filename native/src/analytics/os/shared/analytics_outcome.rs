@@ -12,6 +12,55 @@ pub enum ScanStatus {
     Canceled,
 }
 
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    fn tree() -> SizeNode {
+        SizeNode {
+            name: "root".into(),
+            size: 7,
+            is_dir: true,
+            children: Vec::new(),
+        }
+    }
+    #[test]
+    fn analytics_access_task_diagnostics_keep_denial_identity_when_report_is_full() {
+        let diagnostics = Diagnostics::default();
+        for index in 0..70 {
+            diagnostics.record_io(
+                format!("root/{index}"),
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                false,
+            );
+        }
+        diagnostics.record("root/other", "unrelated I/O failure", false);
+        let outcome = diagnostics.finish(tree(), false);
+        assert_eq!(outcome.status, ScanStatus::Partial);
+        assert_eq!(outcome.permission_denied, 70);
+        assert_eq!(outcome.issues.len(), 64);
+        assert_eq!(outcome.suppressed_issues, 7);
+        assert_eq!(outcome.tree.unwrap().size, 7);
+    }
+    #[test]
+    fn analytics_access_task_cancellation_never_becomes_partial_success() {
+        let diagnostics = Diagnostics::default();
+        diagnostics.record_io(
+            "root",
+            &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            true,
+        );
+        let outcome = diagnostics.finish(tree(), true);
+        assert_eq!(outcome.status, ScanStatus::Canceled);
+        assert!(outcome.tree.is_none());
+        assert_eq!(outcome.permission_denied, 0);
+        let progress = crate::analytics::Progress::default();
+        progress.cancel.store(true, Ordering::Relaxed);
+        let fixture = tempfile::tempdir().unwrap();
+        let outcome = crate::analytics::scan(fixture.path(), &progress);
+        assert_eq!(outcome.status, ScanStatus::Canceled);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanIssue {
     pub path: String,

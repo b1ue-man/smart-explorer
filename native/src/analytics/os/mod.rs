@@ -1,10 +1,10 @@
 use std::{ffi::OsString, io, path::Path};
 
-#[cfg(windows)]
-mod windows;
 #[cfg(not(windows))]
 #[path = "shared/local_directory.rs"]
 mod platform;
+#[cfg(windows)]
+mod windows;
 #[cfg(windows)]
 use windows as platform;
 
@@ -28,7 +28,9 @@ pub(super) fn read_directory(
     platform::read_directory(path)
 }
 
-pub(super) fn can_request_elevation(root: &str) -> bool { platform::can_request_elevation(root) }
+pub(super) fn can_request_elevation(root: &str) -> bool {
+    platform::can_request_elevation(root)
+}
 pub(super) fn launch_elevated_analysis(root: &str) -> Result<bool, String> {
     platform::launch_elevated_analysis(root)
 }
