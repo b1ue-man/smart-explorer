@@ -175,6 +175,7 @@ impl MetadataPointCache {
             }).collect::<HashSet<_>>();
         let mut removed = state.entries.range(prefix.clone()..)
             .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+            .filter(|(candidate, _)| candidate.as_str() != key)
             .filter(|(candidate, _)| {
                 let relative = &candidate[prefix.len()..];
                 match relative.split_once('/') {

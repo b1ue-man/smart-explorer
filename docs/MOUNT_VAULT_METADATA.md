@@ -202,5 +202,29 @@ No mounted workload ran. The same safety acceptance is now in the portable host
 fixture; the existing platform gate is unchanged. Retry uses the same suite and
 incremental library target, not an additional validation pipeline.
 
-Status: remote acceptance pending after this suite-wiring correction. No local
+The [second remote invocation](https://github.com/b1ue-man/smart-explorer/actions/runs/34060953744)
+exercised the private runtime's complete native and Node metadata traversals,
+then failed cache-authority and watcher acceptance. The ordered prefix rewrite
+contained a concrete root-boundary defect: `range("/"..)` includes the root
+itself. Initial child reconciliation interpreted its empty relative name as a
+removed child and deleted the just-installed root snapshot. Descendant load
+invalidation also included the root slot, advancing its revision twice instead
+of once and rejecting completed listings and exact root point observations.
+The correction excludes the exact parent after prefix iteration, without
+skipping any true descendants. The same suite now explicitly checks root
+retention, shared completion and exactly-once root/child revision changes.
+Rust's [BTreeMap range contract](https://doc.rust-lang.org/std/collections/struct.BTreeMap.html#method.range)
+was rechecked on 2026-09-06; an inclusive range start is not a strict descendant
+boundary. Point reconciliation retains its deliberate exact-parent removal.
+
+The failed invocation's diagnostic timings are not release acceptance: private
+native traversal took 6,851 ms, an immediately repeated subtree took 41 ms with
+no provider calls, and Node traversal took 13,522 ms. The controlled provider
+observed eight concurrent listings and no file-content reads in these phases.
+Direct by-name metadata returned Windows error 87; the classic-handle fallback
+and Node traversal succeeded. No by-name fast-path success or Obsidian result
+is inferred. The compatibility-runtime workload had not started when the
+private watcher phase failed.
+
+Status: remote acceptance pending after the root-boundary correction. No local
 build or test execution; no release has been started for this follow-up.

@@ -47,6 +47,39 @@ impl MetadataCache {
 }
 
 #[test]
+fn mount_vault_task_root_is_not_its_own_descendant() -> io::Result<()> {
+    let paths = ["/", "/a", "/a/deep", "/ab"].into_iter()
+        .map(|path| (path.to_string(), ())).collect();
+    assert_eq!(order::descendants(&paths, "/"), vec!["/a", "/a/deep", "/ab"]);
+    assert_eq!(order::descendants(&paths, "/a"), vec!["/a/deep"]);
+    let cache = MetadataCache::new("/", true);
+    let points = MetadataPointCache::new(true);
+    let root = cache.load_slot("/")?;
+    let child = cache.load_slot("/a")?;
+    let root_revision = root.revision();
+    let child_revision = child.revision();
+    assert!(cache.install_observation("/", observation(vec![directory("a")]),
+        0, Some((&root, root_revision)), Admission::Demand)?);
+    assert_eq!(root.revision(), root_revision.wrapping_add(1));
+    assert_eq!(child.revision(), child_revision.wrapping_add(1));
+    let entries = cache.directory("/")?.expect("root authority survives reconciliation");
+    root.complete_directory(root.revision(), Instant::now() + super::DIRECTORY_TTL,
+        Arc::clone(&entries))?;
+    assert!(Arc::ptr_eq(&entries, &root.completed_directory()?.unwrap()));
+
+    let root_revision = root.revision();
+    let child_revision = child.revision();
+    assert!(cache.install_point_if_current("/", &root, root_revision,
+        &points, Some(directory("/")))?);
+    assert_eq!(root.revision(), root_revision.wrapping_add(1));
+    assert_eq!(child.revision(), child_revision.wrapping_add(1));
+    assert!(root.completed_directory()?.is_none());
+    assert!(matches!(points.lookup("/")?, MetadataLookup::Found(_)));
+    assert!(cache.directory("/")?.is_none(), "exact point expires the old listing");
+    Ok(())
+}
+
+#[test]
 fn mount_vault_task_more_than_4096_small_directories_remain_reusable() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let count = 4_200;

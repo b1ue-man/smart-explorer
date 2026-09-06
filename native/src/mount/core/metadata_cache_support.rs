@@ -156,6 +156,9 @@ pub(super) fn reconcile_direct_children(
         let prefix = format!("{}/", parent_key.trim_end_matches('/'));
         for (key, cached) in state.directories.range(prefix.clone()..)
             .take_while(|(key, _)| key.starts_with(&prefix))
+            // The root's descendant prefix is also "/". Its newly inserted
+            // snapshot is authority, never an unnamed child to reconcile.
+            .filter(|(key, _)| key.as_str() != parent_key)
         {
             let relative = &key[prefix.len()..];
             let name = relative.split('/').next().unwrap_or("");
