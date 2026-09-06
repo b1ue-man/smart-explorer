@@ -15,6 +15,10 @@ mod frame_encode;
 mod frame_io;
 pub use frame_io::{read_frame, write_frame};
 
+#[cfg(test)]
+#[path = "vault_frame_task_tests.rs"]
+mod vault_frame_task_tests;
+
 pub(super) fn validate_frame_len(len: usize) -> io::Result<()> {
     (len <= MAX_FRAME)
         .then_some(())

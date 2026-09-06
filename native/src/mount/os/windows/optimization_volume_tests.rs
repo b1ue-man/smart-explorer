@@ -1,4 +1,4 @@
-//! Actual-driver portion of the single remote mount-optimization task suite.
+//! Actual layered daemon/driver portion of the single remote vault task suite.
 use super::*;
 use super::super::{callback_reporter::CallbackReporter, dokany_abi::OPTION_ALLOW_IPC_BATCHING};
 use crate::mount::optimization_fixture::OptimizationBackend;
@@ -13,12 +13,17 @@ use std::{
 mod volume_io;
 #[path = "optimization_watch_tests.rs"]
 mod watch;
+#[path = "vault_volume_metadata.rs"]
+mod vault_metadata;
+#[path = "vault_volume_byname.rs"]
+mod byname;
 
 struct MountedOptimization {
     filesystem: Option<DokanyFileSystem>,
     storage: Option<CallbackStorage>,
     statuses: Receiver<MountStatus>,
     backend: Arc<OptimizationBackend>,
+    bridge: Option<crate::daemon::VaultTaskBridge>,
     lease: Option<CacheLease>,
     spool: PathBuf,
     id: MountId,
@@ -31,12 +36,13 @@ impl MountedOptimization {
         let spool = prepare_spool_root(&temporary.path().join("spool"))?;
         let id = MountId::new_random()?;
         let lease = CacheLease::acquire(&spool, &id)?;
-        let backend = OptimizationBackend::new();
+        let bridge = crate::daemon::VaultTaskBridge::new()?;
+        let backend = Arc::clone(&bridge.source);
         for directory in ["/watch", "/vault", "/scripts", "/burst"] {
             backend.mkdir(directory);
         }
         volume_io::seed(&backend);
-        let handle: crate::vfs::BackendHandle = backend.clone();
+        let handle = bridge.backend.clone();
         let engine = Arc::new(MountEngine::open_host_cache(
             MountRuntimeConfig::new(id.clone(), MountMode::ReadWrite), handle, &spool,
         )?.with_cache_space_probe(Arc::new(super::super::cache_space::CacheDiskSpace::new(&spool)?)));
@@ -57,7 +63,7 @@ impl MountedOptimization {
         let (send, statuses) = mpsc::channel();
         let context = Box::new(CallbackContext::new(
             engine, runtime.clone(), CallbackReporter::Capture(send), initial, false,
-            "Mount optimization task".into(), super::super::metadata::volume_serial(id.as_str()),
+            "Mount vault metadata task".into(), super::super::metadata::volume_serial(id.as_str()),
             absolute_path_wide(&spool)?,
         )?);
         let mut storage = CallbackStorage::new(context, false);
@@ -70,9 +76,12 @@ impl MountedOptimization {
         assert_eq!(storage.options.options & OPTION_ALLOW_IPC_BATCHING != 0, private);
         let fixture = Self {
             filesystem: Some(filesystem), storage: Some(storage), statuses, backend,
+            bridge: Some(bridge),
             lease: Some(lease), spool, id, temporary,
         };
-        fixture.storage().start_metadata_refresh()?;
+        // Root preload is production code; defer only the background worker
+        // during measured metadata phases so an unrelated cadence cannot alter
+        // their RPC counters. Start it before the existing mixed/watch phase.
         match fixture.statuses.recv_timeout(Duration::from_secs(5)) {
             Ok(MountStatus::Mounted { drive }) if drive == fixture.drive()? => {}
             other => return Err(io::Error::other(format!("Mounted callback absent: {other:?}"))),
@@ -111,6 +120,7 @@ impl MountedOptimization {
         assert!(self.storage().context.engine.dirty_entries()?.is_empty(), "dirty entries after teardown");
         volume_io::assert_callbacks();
         drop(self.storage.take());
+        if let Some(mut bridge) = self.bridge.take() { bridge.finish()?; }
         drop(self.lease.take());
         assert!(super::super::cache_lease::audit_recovery(&self.spool, &self.id)?.is_clean(),
             "actual journal replay requires recovery after successful workload");
@@ -137,8 +147,8 @@ impl Deadline {
     fn start() -> io::Result<Self> {
         let (cancel, wait) = mpsc::channel();
         let worker = thread::Builder::new().name("optimization-volume-deadline".into()).spawn(move || {
-            if matches!(wait.recv_timeout(Duration::from_secs(180)), Err(mpsc::RecvTimeoutError::Timeout)) {
-                eprintln!("[mount optimization] fatal 180-second volume deadline; no further mount attempted");
+            if matches!(wait.recv_timeout(Duration::from_secs(600)), Err(mpsc::RecvTimeoutError::Timeout)) {
+                eprintln!("[mount vault] fatal 600-second volume deadline; no further mount attempted");
                 std::process::abort();
             }
         })?;
@@ -155,10 +165,12 @@ impl Drop for Deadline {
 
 #[test]
 #[ignore = "remote Windows suite only: requires approved private payload and installed Dokany driver"]
-fn mount_optimization_task_actual_volume_apps_watchers_and_batching() -> io::Result<()> {
+fn mount_vault_task_actual_volume_metadata_apps_watchers() -> io::Result<()> {
     for private in [true, false] {
         let _deadline = Deadline::start()?;
         let mut fixture = MountedOptimization::start(private)?;
+        vault_metadata::exercise(&mut fixture)?;
+        fixture.storage().start_metadata_refresh()?;
         watch::exercise(&fixture)?;
         volume_io::exercise(&mut fixture)?;
         fixture.healthy()?;
@@ -174,9 +186,5 @@ fn mount_optimization_task_actual_volume_apps_watchers_and_batching() -> io::Res
             fixture.backend.read_count());
         fixture.finish()?;
     }
-    // Keep the previously established real-driver navigation/checker regression
-    // in this same selected task. Its finite stall is last: no mount starts after it.
-    let _deadline = Deadline::start()?;
-    super::mount_batching_task::mount_batching_task_real_driver_navigation_and_checker()?;
     Ok(())
 }

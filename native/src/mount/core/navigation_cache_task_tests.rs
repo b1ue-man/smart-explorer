@@ -225,12 +225,11 @@ fn remote_drive_task_unrelated_parallel_directory_loads_both_remain_cached() -> 
 }
 
 #[test]
-fn remote_drive_task_engine_listing_rejects_entry_and_byte_overflow() -> io::Result<()> {
+fn mount_vault_task_listing_name_and_collision_safety() -> io::Result<()> {
     let temporary = tempfile::tempdir()?;
     {
-        let backend =
-            NavigationBackend::with_root_listing(vec![VfsMeta::default(); MAX_CACHED_ENTRIES + 1]);
-        let engine = engine("listing-entry-overflow", backend.clone(), temporary.path())?;
+        let backend = NavigationBackend::with_root_listing(vec![file("same", 1), file("same", 2)]);
+        let engine = engine("listing-name-collision", backend.clone(), temporary.path())?;
         assert_eq!(
             engine.list_dir(r"\").unwrap_err().kind(),
             io::ErrorKind::InvalidData
@@ -238,40 +237,30 @@ fn remote_drive_task_engine_listing_rejects_entry_and_byte_overflow() -> io::Res
         assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
     }
     {
-        let backend =
-            NavigationBackend::with_root_listing(vec![file(&"x".repeat(16 * 1024 * 1024 + 1), 1)]);
-        let engine = engine("listing-byte-overflow", backend.clone(), temporary.path())?;
-        assert_eq!(
-            engine.list_dir(r"\").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
+        let backend = NavigationBackend::with_root_listing(vec![file("safe.md", 1),
+            file("../escape", 1), file("", 1), file("bad:name", 1)]);
+        let engine = engine("listing-invalid-components", backend.clone(), temporary.path())?;
+        let entries = engine.list_dir(r"\")?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "safe.md");
         assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
     }
     Ok(())
 }
 
 #[test]
-fn remote_drive_task_directory_snapshot_rejects_entry_and_byte_overflow() -> io::Result<()> {
+fn remote_drive_task_directory_snapshot_budget_is_not_a_validity_limit() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let at_entry_limit = vec![VfsMeta::default(); MAX_CACHED_ENTRIES];
     cache.validate_listing(&at_entry_limit)?;
     drop(at_entry_limit);
 
     let over_entry_limit = vec![VfsMeta::default(); MAX_CACHED_ENTRIES + 1];
-    assert_eq!(
-        cache
-            .validate_listing(&over_entry_limit)
-            .unwrap_err()
-            .kind(),
-        io::ErrorKind::InvalidData
-    );
+    cache.validate_listing(&over_entry_limit)?;
     drop(over_entry_limit);
 
-    let over_byte_limit = vec![file(&"x".repeat(16 * 1024 * 1024), 1)];
-    assert_eq!(
-        cache.validate_listing(&over_byte_limit).unwrap_err().kind(),
-        io::ErrorKind::InvalidData
-    );
+    // Complete enumeration above the historical count and above retention
+    // bytes is covered through MountEngine by the mount_vault_task cases.
     Ok(())
 }
 

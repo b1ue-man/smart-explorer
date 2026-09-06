@@ -270,9 +270,8 @@ fn remote_drive_task_background_preload_honors_stop_between_targets() -> io::Res
     )?;
 
     engine.preload_metadata()?;
-    let checks = AtomicUsize::new(0);
     assert_eq!(
-        engine.preload_metadata_batch_while(|| checks.fetch_add(1, Ordering::SeqCst) > 0)?,
+        engine.preload_metadata_batch_while(|| backend.lists.load(Ordering::SeqCst) >= 2)?,
         1
     );
     assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
@@ -283,11 +282,13 @@ fn remote_drive_task_background_preload_honors_stop_between_targets() -> io::Res
 #[test]
 fn remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
-    let oversized_name = "x".repeat(8 * 1024 * 1024);
+    // Retained capacity matters even when a string's visible length is small.
+    let mut oversized_name = String::with_capacity(128 * 1024 * 1024 + 1);
+    oversized_name.push('x');
     assert!(!cache.install_directory(
         "/",
         directory("/"),
-        vec![file(&oversized_name, 1)].into(),
+        vec![VfsMeta { name: oversized_name, size: 1, ..VfsMeta::default() }].into(),
         0,
     )?);
     assert_eq!(cache.usage()?, (0, 0, 0));
@@ -310,15 +311,17 @@ fn remote_drive_task_refresh_prioritizes_recently_accessed_directory() -> io::Re
     assert!(cache.install_directory(
         "/",
         directory("/"),
-        vec![directory("Alpha"), directory("Beta")].into(),
+        vec![directory("Alpha"), directory("Beta"), directory("Gamma")].into(),
         0,
     )?);
     assert!(cache.install_directory("/Alpha", directory("Alpha"), Vec::new().into(), 1)?);
     assert!(cache.install_directory("/Beta", directory("Beta"), Vec::new().into(), 1)?);
+    assert!(cache.install_directory("/Gamma", directory("Gamma"), Vec::new().into(), 1)?);
     assert!(cache.directory("/Beta")?.is_some());
     assert_eq!(
-        cache.refresh_targets(2, true)?,
-        vec![("/".into(), 0), ("/Beta".into(), 1)]
+        cache.refresh_targets(3, true)?,
+        // Root + fairness reservation + most recently demanded snapshot.
+        vec![("/".into(), 0), ("/Alpha".into(), 1), ("/Beta".into(), 1)]
     );
     Ok(())
 }

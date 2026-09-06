@@ -124,9 +124,17 @@ pub(super) struct ChangeQueue {
     // after a large burst has drained; node storage is charged in bytes().
     pending: LinkedList<PendingDiff>,
     bytes: usize,
+    #[cfg(test)]
+    test_byte_budget: Option<usize>,
 }
 
 impl ChangeQueue {
+    #[cfg(test)]
+    pub(super) fn set_test_byte_budget(&mut self, budget: Option<usize>) -> usize {
+        self.test_byte_budget = budget;
+        self.bytes
+    }
+
     /// Pure admission, called under the snapshot mutex before any cache change.
     /// None means backpressure: the caller must retain the previous snapshot.
     pub(super) fn prepare(
@@ -153,8 +161,11 @@ impl ChangeQueue {
         };
         let replaced_bytes = self.pending.back().filter(|_| replacement)
             .map_or(0, PendingDiff::bytes);
+        let budget = MAX_PENDING_BYTES;
+        #[cfg(test)]
+        let budget = self.test_byte_budget.unwrap_or(budget);
         if self.bytes.saturating_sub(replaced_bytes).saturating_add(pending.bytes())
-            > MAX_PENDING_BYTES
+            > budget
         {
             return None;
         }

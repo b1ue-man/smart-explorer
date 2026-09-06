@@ -21,6 +21,10 @@ use cache_load::{DirectoryLoad, DirectorySnapshot};
 use cache_support::*;
 use cache_writer::InvalidatingWriter;
 
+#[cfg(test)]
+#[path = "vault_cache_task_tests.rs"]
+mod vault_cache_task_tests;
+
 /// Wraps any backend with a short-TTL **directory-listing cache** so interactive
 /// browsing (back/forward, re-visiting a folder, rapid drilling) doesn't re-list
 /// over the network every time. Mutating ops invalidate the affected directory;

@@ -172,13 +172,17 @@ and committed build-input fingerprint before reuse. See
 That historical entrypoint is not an additional gate for the current
 optimization batch. Its relevant regression coverage runs inside
 `native/test-mount-optimization-task.ps1`, selected by the exact-candidate
-`.github/workflows/mount-optimization-task.yml` dispatch on `windows-2022`, which
-supplies the recipe's VS 2022/v143 compiler. That single entrypoint
-prepares or verifies the private dependency, reuses one source-and-payload-bound
-incremental library fixture, runs only this batch's selected behavior, and
+`.github/workflows/mount-optimization-task.yml` dispatch on `windows-2025`.
+The vault-metadata follow-up reuses the already approved private-DLL bytes; it
+does not rebuild that VS-2022/v143 dependency on the newer image. Its single
+entrypoint fetches SHA-pinned Node 24.20.0 x64 (libuv 1.52.1), records the actual
+Windows/API behavior, and reuses one source-and-payload-bound incremental library
+fixture. It selects only `mount_vault_task` through the actual rooted daemon/TCP
+mount path, including the directly affected save/watch behavior, and
 records `approval.json` after success. The job timeout is 180 minutes; its one
 task invocation has 170 minutes. Use the same entrypoint for relevant fix retries,
 not the historical workflow or a second validation pipeline.
+See [MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) for this task's scope.
 
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or

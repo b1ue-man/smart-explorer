@@ -202,9 +202,11 @@ fn remote_drive_task_older_parent_fetch_cannot_resurrect_removed_child() -> io::
 }
 
 #[test]
-fn remote_drive_task_global_snapshot_admission_evicts_within_hard_limits() -> io::Result<()> {
+fn remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
-    assert!(cache.install_directory("/", directory("/"), Vec::new().into(), 0)?);
+    assert!(cache.install_directory("/", directory("/"), (0..4_200)
+        .map(|index| directory(&format!("directory-{index:04}")))
+        .collect::<Vec<_>>().into(), 0)?);
     let entries: Arc<[VfsMeta]> = (0..16)
         .map(|index| file(&format!("file-{index:02}.txt"), index))
         .collect::<Vec<_>>()
@@ -219,10 +221,10 @@ fn remote_drive_task_global_snapshot_admission_evicts_within_hard_limits() -> io
     }
 
     let (directories, entries, bytes) = cache.usage()?;
-    assert!(directories <= 4_096);
-    assert!(entries <= 50_000);
-    assert!(bytes <= 16 * 1024 * 1024);
-    assert!(cache.directory("/")?.is_some(), "root snapshot is pinned");
+    assert_eq!(directories, 4_201);
+    assert!(entries > 50_000);
+    assert!(bytes <= 128 * 1024 * 1024);
+    assert!(cache.directory("/")?.is_some(), "all these snapshots fit the byte budget");
     Ok(())
 }
 

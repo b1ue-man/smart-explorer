@@ -58,6 +58,12 @@ mount path under recursive metadata demand. Leave private DLL bytes unchanged.
   uses attribute-only handle stat and directory-listing access, and attempts
   by-name metadata first. Cover these APIs without asserting the user's bundled
   libuv version. [Microsoft by-name contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyname).
+  The follow-up fixture pins [Node 24.20.0](https://nodejs.org/dist/v24.20.0/)
+  with [libuv 1.52.1](https://raw.githubusercontent.com/nodejs/node/v24.20.0/deps/uv/include/uv/version.h)
+  and uses Windows Server 2025; API availability and the result for existing
+  files/directories must be probed, not inferred from the image label. The exact
+  standalone x64 executable SHA is checked against the publisher's
+  [release checksums](https://nodejs.org/dist/v24.20.0/SHASUMS256.txt).
 - [Rust HashMap traversal](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.iter)
   is capacity-proportional. [BTreeMap ranges](https://doc.rust-lang.org/std/collections/struct.BTreeMap.html#method.range)
   permit affected-prefix traversal; [BTreeSet](https://doc.rust-lang.org/std/collections/struct.BTreeSet.html)
@@ -183,4 +189,12 @@ Draining yields after 1,024 records or 4,096 comparisons, and recurring delivery
 continues even when a comparison slice produces no event. Root snapshots use
 ordinary LRU retention; only deferred change baselines remain protected.
 
-Status: plan finalized before implementation; remote acceptance not yet run.
+The generated acceptance provider has 4,609 directories and 16,384 four-byte
+notes below `/large`, plus 50,001 files in `/wide`. Its per-directory lookup is
+indexed and introduces a documented 1-ms synthetic listing delay to expose
+overlap without a global fixture lock. This measures this stack under a
+controlled provider, not the user's WAN or an installed Obsidian application.
+
+Status: implementation milestones committed; the consolidated suite and root
+code graph are prepared for the exact-candidate remote invocation. Remote
+acceptance has not yet run. No local build or test execution.
