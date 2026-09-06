@@ -12,6 +12,14 @@ dependency approval is distinct from terminal publication. This document records
 design/evidence, not a second live checklist or an Obsidian certification.
 Current publication status belongs to the versioned feed and matching GitHub Release.
 
+Terminal publication, checked 2026-09-06: [v0.5.151](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.151)
+is published from `b2fa5b91c9175582f508bd5547561d2ecf693552`.
+The [complete release transaction](https://github.com/b1ue-man/smart-explorer/actions/runs/34050435801)
+and its [exact-artifact publication job](https://github.com/b1ue-man/smart-explorer/actions/runs/34053787952)
+both succeeded. Cargo/feed versions, installer, tag, every feed hash and all
+published asset digests agree. The private dependency retained the approved
+hashes below; no native source changed between suite approval and release.
+
 The [first remote attempt](https://github.com/b1ue-man/smart-explorer/actions/runs/34048575411)
 stopped before DLL compilation or mount execution: preparation incorrectly
 reported a BOM in the BOM-free committed recipe. The `StartsWith(string)`
