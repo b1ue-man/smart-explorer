@@ -1,4 +1,5 @@
 use super::case_semantics::identity_key;
+use super::metadata_cache::MetadataLookup;
 use crate::vfs::VfsMeta;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -9,9 +10,10 @@ use std::time::{Duration, Instant};
 const MAX_POINT_STATS: usize = 4_096;
 const MAX_POINT_BYTES: usize = 4 * 1024 * 1024;
 const POINT_STAT_TTL: Duration = Duration::from_secs(5);
+const POINT_MISSING_TTL: Duration = Duration::from_secs(1);
 
 struct CachedPoint {
-    metadata: VfsMeta,
+    metadata: Option<VfsMeta>,
     bytes: usize,
     expires_at: Instant,
     last_touch: u64,
@@ -38,33 +40,73 @@ impl MetadataPointCache {
     }
 
     pub(super) fn get(&self, path: &str) -> io::Result<Option<VfsMeta>> {
+        Ok(match self.lookup(path)? {
+            MetadataLookup::Found(metadata) => Some(metadata),
+            MetadataLookup::KnownMissing | MetadataLookup::Uncached => None,
+        })
+    }
+
+    pub(super) fn lookup(&self, path: &str) -> io::Result<MetadataLookup> {
+        Ok(self.lookup_at(path)?.0)
+    }
+
+    pub(super) fn metadata_hint(&self, path: &str) -> io::Result<Option<(VfsMeta, Instant)>> {
+        let (lookup, expires_at) = self.lookup_at(path)?;
+        match lookup {
+            MetadataLookup::Found(metadata) => Ok(Some((metadata, expires_at))),
+            MetadataLookup::KnownMissing => Err(io::Error::new(
+                io::ErrorKind::NotFound, "mounted metadata path does not exist",
+            )),
+            MetadataLookup::Uncached => Ok(None),
+        }
+    }
+
+    fn lookup_at(&self, path: &str) -> io::Result<(MetadataLookup, Instant)> {
         let key = self.key(path);
         let mut state = self.lock_state()?;
+        let now = Instant::now();
         if state
             .entries
             .get(&key)
-            .is_some_and(|cached| cached.expires_at <= Instant::now())
+            .is_some_and(|cached| cached.expires_at <= now)
         {
             remove(&mut state, &key);
-            return Ok(None);
+            return Ok((MetadataLookup::Uncached, now));
         }
         state.clock = state.clock.saturating_add(1);
         let touch = state.clock;
         let Some(cached) = state.entries.get_mut(&key) else {
-            return Ok(None);
+            return Ok((MetadataLookup::Uncached, now));
         };
         cached.last_touch = touch;
-        Ok(Some(cached.metadata.clone()))
+        Ok((cached.metadata.clone().map_or(MetadataLookup::KnownMissing,
+            MetadataLookup::Found), cached.expires_at))
     }
 
     pub(super) fn install(&self, path: &str, metadata: VfsMeta) -> io::Result<()> {
-        let bytes = path.len().saturating_add(meta_bytes(&metadata));
+        self.install_observation(path, Some(metadata))
+    }
+
+    pub(super) fn install_missing(&self, path: &str) -> io::Result<()> {
+        self.install_observation(path, None)
+    }
+
+    fn install_observation(&self, path: &str, metadata: Option<VfsMeta>) -> io::Result<()> {
+        let ttl = if metadata.is_some() { POINT_STAT_TTL } else { POINT_MISSING_TTL };
+        let bytes = path.len().saturating_add(size_of::<CachedPoint>())
+            .saturating_add(metadata.as_ref().map_or(0, meta_bytes));
         if bytes > MAX_POINT_BYTES {
             return Ok(());
         }
         let key = self.key(path);
         let mut state = self.lock_state()?;
         remove(&mut state, &key);
+        let prefix = format!("{}/", key.trim_end_matches('/'));
+        let descendants = state.entries.keys().filter(|candidate| candidate.starts_with(&prefix))
+            .cloned().collect::<Vec<_>>();
+        for descendant in descendants {
+            remove(&mut state, &descendant);
+        }
         prune_expired(&mut state);
         while state.entries.len() >= MAX_POINT_STATS
             || state.bytes.saturating_add(bytes) > MAX_POINT_BYTES
@@ -87,7 +129,7 @@ impl MetadataPointCache {
             CachedPoint {
                 metadata,
                 bytes,
-                expires_at: Instant::now() + POINT_STAT_TTL,
+                expires_at: Instant::now() + ttl,
                 last_touch,
             },
         );
