@@ -3,6 +3,7 @@ use super::mount_peer_roots::{
 };
 use super::mount_runtime_ui::install_controls;
 use super::mount_ui::MountUiResult;
+use super::mount_ui_cache_settings::render_cache_settings;
 use super::mount_ui_helpers::{bounded_label, drive_selection_label};
 use super::prelude::*;
 use super::*;
@@ -13,6 +14,8 @@ pub(super) struct MountDraft {
     volume_label: String,
     drive: crate::mount::DriveSelection,
     metadata_depth: u8,
+    cache_mib: u32,
+    system_runtime: bool,
     read_write: bool,
     trust_remote_root: bool,
     pub(super) peer: Option<PeerDraft>,
@@ -80,6 +83,8 @@ impl App {
             volume_label: "Smart Explorer".into(),
             drive: crate::mount::DriveSelection::Automatic,
             metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
+            cache_mib: crate::mount::DEFAULT_MOUNT_CACHE_MIB,
+            system_runtime: false,
             read_write: false,
             trust_remote_root: false,
             peer: None,
@@ -104,6 +109,8 @@ impl App {
             volume_label: "Smart Explorer".into(),
             drive: crate::mount::DriveSelection::Automatic,
             metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
+            cache_mib: crate::mount::DEFAULT_MOUNT_CACHE_MIB,
+            system_runtime: false,
             read_write: false,
             trust_remote_root: false,
             peer: Some(PeerDraft {
@@ -135,6 +142,7 @@ impl App {
                 ui.add_space(6.0);
                 render_drive_choice(ui, &mut draft);
                 render_metadata_choice(ui, &mut draft);
+                render_cache_settings(ui, &mut draft.cache_mib, &mut draft.system_runtime);
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut draft.volume_label);
@@ -231,6 +239,17 @@ impl App {
                     .map(|config| config.with_metadata_policy(metadata))
                 })
             })
+            .and_then(|config| {
+                crate::mount::MountCachePolicy::new(draft.cache_mib)
+                    .map(|cache| config.with_cache_policy(cache))
+            })
+            .map(|config| {
+                config.with_runtime_preference(if draft.system_runtime {
+                    crate::mount::MountRuntimePreference::System
+                } else {
+                    crate::mount::MountRuntimePreference::Auto
+                })
+            })
             .map(|config| config.with_root_security(root_security))
             .map_err(|error| error.to_string());
         match config {
@@ -322,7 +341,7 @@ fn render_metadata_choice(ui: &mut egui::Ui, draft: &mut MountDraft) {
             }),
         )
         .on_hover_text(
-            "Metadaten werden begrenzt im Speicher gehalten; Dateiinhalte und Sicherheitspruefungen bleiben live.",
+            "Metadaten werden begrenzt im Speicher gehalten und regelmaessig erneuert. Wiederverwendete Dateiinhalte werden gegen den Remote-Stand geprueft.",
         );
     });
 }
