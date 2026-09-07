@@ -177,7 +177,33 @@ Actual interactive UAC consent and GUI rendering are not claimed as automated
 headless desktop certification. The API result/quoting path and privileged
 filesystem operations are exercised separately by this same suite.
 
-Status: implementation complete; remote acceptance has not started. The previous
-mount release remains a separate, unattended transaction. No local builds or
+## Independent source review corrections
+
+Before the first remote suite, independent review identified and corrected two
+scanner boundary defects. Windows impersonation belongs to the calling thread:
+only a positively established `ERROR_NO_TOKEN` permits moving scan work to a
+new pool. An existing token or token-query error now keeps the entire recursive
+scan on that thread. Explicit single-thread operation and pool-creation failure
+also cannot fall through into Rayon's global pool. The real restricted-token
+fixture exercises public `scan()` with multiple denied siblings, not just the
+low-level directory adapter.
+
+The initial Windows directory query now runs before the iterator is returned.
+A failed listing start can therefore fail the root honestly, while a later
+individual-entry failure remains a partial result even when it precedes the
+first readable sibling. A deterministic error-then-valid-entry case protects
+that distinction. The full-record constructor selects its layout before its
+initial query. A narrow API seam forces unsupported information-class results
+before exercising real full-record and ordinary enumeration; denial at either
+class must remain a start error instead of selecting a fallback.
+
+The new diagnostics panel also exposed an existing treemap cache mistake:
+absolute cell coordinates were reused when the rectangle moved without changing
+size. Both analysis views now use one full-rectangle cache decision. An invalid
+elevated startup has no worker and cannot start one through its rescan action.
+
+Status: implementation and independent source review complete; remote acceptance
+has not started. The prior mount transaction completed
+as v0.5.152 and was merged into this branch in `1d311e9`. No local builds or
 tests were run; source formatting and static parser checks do not execute Rust
 compilation/linking or the suite.

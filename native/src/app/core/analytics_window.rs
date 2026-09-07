@@ -4,7 +4,7 @@ use super::{
     analytics_access::issues_ui,
     analytics_accessibility::treemap_accessible_list,
     app_models::TmCell,
-    treemap::{nested_treemap, TM_HEADER},
+    treemap::{nested_treemap, treemap_needs_layout, TM_HEADER},
 };
 use crate::{
     analytics::{self, AnalysisStartup, Progress, ScanOutcome, ScanStatus, SizeNode},
@@ -168,10 +168,11 @@ impl eframe::App for AnalysisWindow {
                 }
             }
             if let Some(node) = node { ui.label(format_bytes(node.size)); }
+            ui.label("Ordner: hineinzoomen · Dateiklick in der Liste: Pfad kopieren.");
             treemap_accessible_list(ui, node, &base, &mut drill, &mut selected_file);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ui.available_height().max(120.0)), egui::Sense::click());
-            if rect != self.cells_rect || self.cells.is_empty() {
+            if treemap_needs_layout(node.is_some(), self.cells.is_empty(), self.cells_rect, rect) {
                 self.cells.clear();
                 if let Some(node) = node { nested_treemap(rect, node, base.trim_end_matches('/'), 0, None, &mut self.cells); }
                 self.cells_rect = rect;
@@ -224,4 +225,19 @@ fn focused<'a>(mut node: Option<&'a SizeNode>, focus: &[String]) -> Option<&'a S
             .find(|child| child.is_dir && &*child.name == part.as_str());
     }
     node
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn analytics_access_task_invalid_startup_cannot_spawn_or_restart_a_scan() {
+        let mut window = AnalysisWindow::new(Err("invalid invocation".into()));
+        assert!(!window.admitted);
+        assert!(window.rx.is_none());
+        assert_eq!(window.outcome.as_ref().unwrap().status, ScanStatus::Failed);
+        window.start();
+        assert!(window.rx.is_none());
+        assert!(window.outcome.as_ref().unwrap().tree.is_none());
+    }
 }

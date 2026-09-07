@@ -7,6 +7,17 @@ pub(in crate::app) const TM_HEADER: f32 = 15.0; // folder header strip height
 pub(in crate::app) const TM_MAXDEPTH: usize = 14;
 pub(in crate::app) const TM_MAXCELLS: usize = 80_000;
 
+pub(in crate::app) fn treemap_needs_layout(
+    has_node: bool,
+    cells_empty: bool,
+    cached: egui::Rect,
+    current: egui::Rect,
+) -> bool {
+    // Cells retain absolute coordinates. Opening diagnostics or moving the
+    // window can change the origin without changing the available size.
+    has_node && (cells_empty || cached != current)
+}
+
 /// Distinct, slightly muted hues for treemap groups. Each immediate child of the
 /// focus picks the next palette colour (so adjacent groups differ); the whole
 /// subtree inherits that colour — you see the grouping, not file types.
@@ -92,5 +103,20 @@ pub(in crate::app) fn nested_treemap(
                 color: gcol,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+    #[test]
+    fn analytics_access_task_treemap_origin_change_invalidates_geometry() {
+        let original = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 200.0));
+        let shifted = original.translate(egui::vec2(0.0, 120.0));
+        assert_eq!(original.size(), shifted.size());
+        assert!(treemap_needs_layout(true, false, original, shifted));
+        assert!(!treemap_needs_layout(true, false, original, original));
+        assert!(treemap_needs_layout(true, true, original, original));
+        assert!(!treemap_needs_layout(false, true, original, shifted));
     }
 }

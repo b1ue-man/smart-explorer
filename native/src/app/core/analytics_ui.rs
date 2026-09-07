@@ -261,9 +261,8 @@ impl App {
                         ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
                     // (Re)lay out only on resize or drill — painting reuses cells.
-                    let need = focus_node.is_some()
-                        && (cached_cells.is_empty()
-                            || (cached_rect.size() - tm_rect.size()).length() > 2.0);
+                    let need = treemap_needs_layout(focus_node.is_some(),
+                        cached_cells.is_empty(), cached_rect, tm_rect);
                     let cells: &[TmCell] = if need {
                         let mut v = Vec::new();
                         if let Some(node) = focus_node {

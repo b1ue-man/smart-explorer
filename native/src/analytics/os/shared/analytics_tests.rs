@@ -38,6 +38,51 @@ fn analytics_access_task_missing_local_root_is_failed_not_empty_success() {
 }
 
 #[test]
+fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
+    let fixture = tempfile::tempdir().unwrap();
+    let progress = Progress::default();
+    let diagnostics = Diagnostics::default();
+    let budget = AnalyticsBudget::default();
+    let traversal = Traversal {
+        progress: &progress,
+        diagnostics: &diagnostics,
+        budget: &budget,
+        parallel: false,
+    };
+    let entries = vec![
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "first child denied",
+        )),
+        Ok(LocalEntry {
+            name: "readable.bin".into(),
+            kind: EntryKind::File,
+            size: 7,
+        }),
+    ];
+    let tree = scan_entries(
+        &traversal,
+        fixture.path(),
+        "root".into(),
+        Ok(entries.into_iter()),
+        0,
+        true,
+    );
+    let outcome = diagnostics.finish(tree, false);
+    assert_eq!(outcome.status, ScanStatus::Partial);
+    assert_eq!(outcome.permission_denied, 1);
+    assert_eq!(outcome.issues.len(), 1);
+    assert!(outcome.issues[0].detail.contains("first child denied"));
+    let tree = outcome
+        .tree
+        .expect("one child error must not discard readable siblings");
+    assert_eq!(tree.size, 7);
+    assert_eq!(&*tree.children[0].name, "readable.bin");
+    assert_eq!(progress.files.load(Ordering::Relaxed), 1);
+    assert_eq!(progress.bytes.load(Ordering::Relaxed), 7);
+}
+
+#[test]
 fn scan_backend_via_local_backend() {
     let base = std::env::temp_dir().join(format!("se_anbe_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

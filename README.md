@@ -527,11 +527,15 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
    nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
    Zwischencommits sind keine Releases.
-   Der aktuelle Mount-Metadaten-Block nutzt ausschließlich
+   Der Mount-Metadaten-Block nutzte ausschließlich
    `mount-optimization-task.yml` auf Windows 2025 mit
    `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,
    tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi; die bereits freigegebene
    private DLL wird wiederverwendet.
+   Der separate Speicheranalyse-Zugriffsfix nutzt ausschließlich
+   `analytics-access-task.yml` mit `native/test-analytics-access-task.ps1`
+   (Windows 2025, echte Zugriffs-/Token-Prüfung); er wiederholt nicht die
+   Mount-Suite. Release-Abfragen durch Agenten erfolgen höchstens alle 30 Minuten.
 2. Für den automatisierten Remote-Pfad `build.yml` genau einmal auf `main` mit
    `complete_release_source_sha=<vollständiger aktueller origin/main-SHA>`
    dispatchen; `verify_release_candidate` und `publish_release` bleiben dabei

@@ -10,8 +10,9 @@
 //! reconstructed by descending from the root (the drill position carries the
 //! prefix), so the tree stays compact: roughly `name + ~48 bytes` per node.
 
-use crate::analytics::os::{read_directory, EntryKind};
+use crate::analytics::os::{parallel_scan_allowed, read_directory, EntryKind, LocalEntry};
 use rayon::prelude::*;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,8 +47,8 @@ pub struct Progress {
     pub cancel: Arc<AtomicBool>,
 }
 
-/// Scan `root` into a size tree, updating `p` live. Runs the subdirectories in
-/// parallel (rayon work-stealing handles the nested recursion).
+/// Scan `root` into a size tree, updating `p` live. Parallel traversal is used
+/// only when the OS confirms that moving work preserves the caller's authority.
 pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
     let name = root
         .file_name()
@@ -57,39 +58,26 @@ pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
     let diagnostics = Diagnostics::default();
     let budget = AnalyticsBudget::default();
     let _ = budget.claim(root, 0, name.len() as u64, &diagnostics);
-    let tree = if threads <= 1 {
-        scan_dir(
-            root,
-            name.into_boxed_str(),
-            p,
-            &diagnostics,
-            &budget,
-            0,
-            true,
-        )
+    let pool = if threads > 1 && parallel_scan_allowed() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .ok()
     } else {
-        match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
-            Ok(pool) => pool.install(|| {
-                scan_dir(
-                    root,
-                    name.into_boxed_str(),
-                    p,
-                    &diagnostics,
-                    &budget,
-                    0,
-                    true,
-                )
-            }),
-            Err(_) => scan_dir(
-                root,
-                name.into_boxed_str(),
-                p,
-                &diagnostics,
-                &budget,
-                0,
-                true,
-            ),
-        }
+        None
+    };
+    let traversal = Traversal {
+        progress: p,
+        diagnostics: &diagnostics,
+        budget: &budget,
+        // This also makes a failed pool creation genuinely serial: recursive
+        // work must not silently escape into Rayon's global pool.
+        parallel: pool.is_some(),
+    };
+    let visit = || scan_dir(&traversal, root, name.into_boxed_str(), 0, true);
+    let tree = match pool {
+        Some(pool) => pool.install(visit),
+        None => visit(),
     };
     diagnostics.finish(tree, p.cancel.load(Ordering::Relaxed))
 }
@@ -102,16 +90,21 @@ fn local_scan_threads() -> usize {
         .clamp(1, 4)
 }
 
+struct Traversal<'a> {
+    progress: &'a Progress,
+    diagnostics: &'a Diagnostics,
+    budget: &'a AnalyticsBudget,
+    parallel: bool,
+}
+
 fn scan_dir(
+    traversal: &Traversal<'_>,
     dir: &Path,
     name: Box<str>,
-    p: &Progress,
-    diagnostics: &Diagnostics,
-    budget: &AnalyticsBudget,
     depth: u32,
     is_root: bool,
 ) -> SizeNode {
-    if p.cancel.load(Ordering::Relaxed) || budget.stopped() {
+    if traversal.progress.cancel.load(Ordering::Relaxed) || traversal.budget.stopped() {
         return SizeNode {
             name,
             size: 0,
@@ -119,22 +112,32 @@ fn scan_dir(
             children: Vec::new(),
         };
     }
+    scan_entries(traversal, dir, name, read_directory(dir), depth, is_root)
+}
+
+fn scan_entries(
+    traversal: &Traversal<'_>,
+    dir: &Path,
+    name: Box<str>,
+    entries: io::Result<impl Iterator<Item = io::Result<LocalEntry>>>,
+    depth: u32,
+    is_root: bool,
+) -> SizeNode {
+    let p = traversal.progress;
+    let diagnostics = traversal.diagnostics;
+    let budget = traversal.budget;
     let mut subdirs: Vec<(PathBuf, Box<str>)> = Vec::new();
     let mut files: Vec<SizeNode> = Vec::new();
     let mut own_files = 0u64;
     let mut own_bytes = 0u64;
 
-    match read_directory(dir) {
+    match entries {
         Ok(rd) => {
             for entry in rd {
                 let ent = match entry {
                     Ok(ent) => ent,
                     Err(error) => {
-                        diagnostics.record_io(
-                            dir.to_string_lossy().into_owned(),
-                            &error,
-                            is_root && own_files == 0 && subdirs.is_empty(),
-                        );
+                        diagnostics.record_io(dir.to_string_lossy().into_owned(), &error, false);
                         continue;
                     }
                 };
@@ -178,19 +181,11 @@ fn scan_dir(
     // Recurse in parallel. A serial fallback for tiny lists avoids rayon
     // overhead on leaf-heavy trees.
     let visit = |(path, name): (PathBuf, Box<str>)| {
-        scan_dir(
-            &path,
-            name,
-            p,
-            diagnostics,
-            budget,
-            depth.saturating_add(1),
-            false,
-        )
+        scan_dir(traversal, &path, name, depth.saturating_add(1), false)
     };
     let mut dir_nodes: Vec<SizeNode> = if p.cancel.load(Ordering::Relaxed) || budget.stopped() {
         Vec::new()
-    } else if subdirs.len() > 1 {
+    } else if traversal.parallel && subdirs.len() > 1 {
         subdirs.into_par_iter().map(visit).collect()
     } else {
         subdirs.into_iter().map(visit).collect()
