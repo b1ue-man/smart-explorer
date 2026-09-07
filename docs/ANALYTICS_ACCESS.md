@@ -8,12 +8,16 @@ privileges when unavailable; expose the affected paths instead of only the first
 error. Keep the already running mount release untouched, then publish this fix
 as a subsequent release. Agent release checks are at least 30 minutes apart.
 
-The independent working branch is `work/analytics-access`. Do not advance the
-mount release's bound `main` until that transaction completes. No local builds,
-tests, or release execution are allowed. The mount task has already passed its
-remote suite; its distribution transaction remains separate from this task.
+Implementation used the independent branch `work/analytics-access`, leaving the
+mount release's bound `main` untouched until that transaction completed. The
+analytics candidate was then integrated into `main`. No local builds, tests, or
+release execution were performed; the two distribution transactions remained
+separate.
 
 ## Stage one: source evidence and approach
+
+This section records the inspected baseline before the correction, not the
+current implementation described below.
 
 - `analytics/os/shared/analytics.rs` uses `std::fs::read_dir`, `DirEntry::file_type`
   and per-file `metadata`. It neither requests backup access nor enables a
@@ -152,10 +156,10 @@ report that accurately rather than claiming every possible path is readable.
 Logical file totals are not a claim to include unexposed filesystem bookkeeping,
 snapshots or all allocated disk space.
 
-## Candidate implementation and acceptance entrypoint
+## Implementation and acceptance entrypoint
 
-Implementation checkpoints `fdd46d4` and `fe92c36` are pushed on the isolated
-branch. The candidate includes the typed directory adapter, temporary backup
+Implementation checkpoints `fdd46d4` and `fe92c36` were pushed on the isolated
+branch. The implementation includes the typed directory adapter, temporary backup
 token, directory-record decoder, exact-purpose elevated startup and retained-path
 report. A startup-validation failure opens an error-only analysis window; it
 never falls through into the ordinary app or starts a scan.
@@ -202,8 +206,32 @@ absolute cell coordinates were reused when the rectangle moved without changing
 size. Both analysis views now use one full-rectangle cache decision. An invalid
 elevated startup has no worker and cannot start one through its rescan action.
 
-Status: implementation and independent source review complete; remote acceptance
-has not started. The prior mount transaction completed
-as v0.5.152 and was merged into this branch in `1d311e9`. No local builds or
-tests were run; source formatting and static parser checks do not execute Rust
-compilation/linking or the suite.
+## Completed acceptance and publication
+
+Checked 2026-09-07. The prior mount transaction completed as v0.5.152 and was
+merged in `1d311e9` before this task's acceptance and subsequent release.
+The single focused [Windows acceptance run 34069051662](https://github.com/b1ue-man/smart-explorer/actions/runs/34069051662)
+passed for source `f71854e44f131eea114db3152e934dfb992f0a3b` on Windows build
+26100. Its source-bound approval records fixture SHA-256
+`6ef2553ef12f4e815dbe4109b9290b7217b8f4d63fb74daa4b730c92d8d22208`.
+The real deny-ACL, locked-file metadata and restricted-token cases passed;
+interactive desktop consent remains subject to the explicit limitation above.
+An earlier dispatch with an incorrect source input was canceled during checkout,
+before any build or task execution; it was not an additional executed suite.
+
+The existing top-level wrapper ran once in
+[complete-release run 34069849665](https://github.com/b1ue-man/smart-explorer/actions/runs/34069849665)
+and completed publication of
+[v0.5.153](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.153)
+from artifact commit `abf455f90b42fb246e3e9bc2590e8e53f851d0d8`.
+Its sole [publication consumer 34074209203](https://github.com/b1ue-man/smart-explorer/actions/runs/34074209203)
+succeeded without rebuilding the candidate. `native/Cargo.toml`, the feed version,
+installer and immutable tag agree; all required Release assets are visible and
+their SHA-256 digests match the committed bytes. All six feed hash sidecars also
+match their payloads. The release commit changes version/artifact files only;
+the accepted `native/src` is unchanged.
+
+No local builds or tests were run. Source formatting, static parsing and artifact
+hash comparisons do not execute Rust compilation/linking, test binaries or the
+release wrapper. The analysis access correction is shipped; remaining unrelated
+analytics work stays on the live TODO board.
