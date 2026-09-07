@@ -28,6 +28,10 @@ pub(super) fn read_directory(
     platform::read_directory(path)
 }
 
+pub(super) fn parallel_scan_allowed() -> bool {
+    platform::parallel_scan_allowed()
+}
+
 pub(super) fn can_request_elevation(root: &str) -> bool {
     platform::can_request_elevation(root)
 }

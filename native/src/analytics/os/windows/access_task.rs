@@ -292,24 +292,50 @@ fn analytics_access_task_restricted_identity_never_falls_back_to_process_authori
     let protected = fixture.path().join("protected");
     std::fs::create_dir(&protected).unwrap();
     std::fs::write(protected.join("file"), "secret").unwrap();
+    let other = fixture.path().join("protected_other");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(other.join("file"), "other").unwrap();
+    std::fs::write(fixture.path().join("public.bin"), vec![0; 7]).unwrap();
     let _denied = DeniedDirectory::new(&protected);
+    let _other_denied = DeniedDirectory::new(&other);
     {
         let identity = Identity::new(false);
         let previous_id = token_id(identity._token.0);
+        let previous_privileges = privileges(identity._token.0);
+        assert!(!super::parallel_scan_allowed());
         {
             let _backup = BackupRead::enable().unwrap();
         }
         assert_eq!(token_id(thread_token().unwrap().0), previous_id);
+        let outcome = scan(fixture.path(), &Progress::default());
+        assert_eq!(outcome.status, ScanStatus::Complete, "{:?}", outcome.issues);
+        assert_eq!(outcome.tree.unwrap().size, 18);
+        assert_eq!(token_id(thread_token().unwrap().0), previous_id);
+        assert_eq!(privileges(identity._token.0), previous_privileges);
     }
     {
         let identity = Identity::new(true);
         let previous_id = token_id(identity._token.0);
+        let previous_privileges = privileges(identity._token.0);
+        assert!(!super::parallel_scan_allowed());
         assert!(BackupRead::enable().is_err());
         let error = directory::read_directory(&protected)
             .err()
             .expect("restricted token must not bypass denial");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(token_id(thread_token().unwrap().0), previous_id);
+        // Multiple directories exercise recursive dispatch too: selecting one
+        // scan thread must not escape to Rayon's global worker pool here.
+        let outcome = scan(fixture.path(), &Progress::default());
+        assert_eq!(outcome.status, ScanStatus::Partial, "{:?}", outcome.issues);
+        assert_eq!(outcome.permission_denied, 2);
+        assert_eq!(outcome.tree.unwrap().size, 7);
+        let outcome = scan(&protected, &Progress::default());
+        assert_eq!(outcome.status, ScanStatus::Failed, "{:?}", outcome.issues);
+        assert_eq!(outcome.permission_denied, 1);
+        assert!(outcome.tree.is_none());
+        assert_eq!(token_id(thread_token().unwrap().0), previous_id);
+        assert_eq!(privileges(identity._token.0), previous_privileges);
     }
 }
 

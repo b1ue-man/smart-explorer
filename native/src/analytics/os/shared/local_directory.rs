@@ -1,6 +1,10 @@
 use super::{EntryKind, LocalEntry};
 use std::{io, path::Path};
 
+pub(super) fn parallel_scan_allowed() -> bool {
+    true
+}
+
 pub(super) fn can_request_elevation(_root: &str) -> bool {
     false
 }

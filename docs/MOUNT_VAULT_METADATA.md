@@ -253,8 +253,13 @@ against the retained metadata. These are synthetic loopback acceptance timings,
 not a user-network or actual Obsidian benchmark. Direct by-name queries still
 reported Win32 87; classic-handle fallback and Node completed in both modes.
 
-Status: remote acceptance passed. The one complete release transaction was
-started as [run 34062761376](https://github.com/b1ue-man/smart-explorer/actions/runs/34062761376)
-and remains in progress at the 2026-09-06 23:25 UTC agent check. Do not duplicate
-it. Agent release checks are at least 30 minutes apart. No local build or test
-execution occurred.
+Status: released as [v0.5.152](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.152).
+The one complete release transaction
+[34062761376](https://github.com/b1ue-man/smart-explorer/actions/runs/34062761376)
+and its exact-byte publication consumer
+[34066750935](https://github.com/b1ue-man/smart-explorer/actions/runs/34066750935)
+both succeeded. At the 2026-09-06 23:55 UTC agent observation, Cargo/feed version,
+installer, all six feed checksums, the matching immutable tag and the visible
+GitHub Release assets agreed with release commit
+`827f15122860b20252fb710b65f892655d9b01b9`. No local build or test execution
+occurred. Agent release observations remain at least 30 minutes apart.

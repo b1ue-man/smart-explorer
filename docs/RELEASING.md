@@ -194,7 +194,8 @@ the affected incremental library fixture when necessary and selects only
 The job/task timeouts are 120/110 minutes. An explicitly supplied development
 binary must include its source SHA and SHA-256. See
 [ANALYTICS_ACCESS.md](ANALYTICS_ACCESS.md) for the scope and remaining acceptance.
-Its release must follow completion of the already running mount transaction.
+Its release follows the completed mount v0.5.152 transaction; never overlap two
+artifact-mutating release transactions.
 
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or

@@ -26,6 +26,17 @@ impl Drop for Token {
     }
 }
 
+pub(in crate::analytics::os) fn parallel_scan_allowed() -> bool {
+    let mut handle = null_mut();
+    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut handle) } != 0 {
+        let _token = Token(handle);
+        return false;
+    }
+    // New worker threads do not inherit impersonation. Only a positively
+    // established absence of a thread token permits leaving this thread.
+    io::Error::last_os_error().raw_os_error() == Some(ERROR_NO_TOKEN as i32)
+}
+
 pub(super) struct BackupRead {
     previous: Option<Token>,
     _token: Token,
