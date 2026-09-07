@@ -42,6 +42,12 @@ impl MountEngine {
         metadata: VfsMeta,
         writable: bool,
     ) -> io::Result<HandleId> {
+        if writable && self.config.mode != MountMode::ReadWrite {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "mount is read-only",
+            ));
+        }
         require_regular(&metadata)?;
         let _namespace = read_lock(&self.namespace)?;
         let path = self.projector.project(callback_path)?;
