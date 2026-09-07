@@ -90,10 +90,12 @@ reported failure remains open.
 - First data access materializes the whole file, syncs its local spool and
   rechecks its remote baseline. This may multiply per-file latency even for tiny
   notes, but must not be conflated with the earlier content-free tree scan.
-- `mount/core/file_io.rs::open_metadata_file` lacks the read-only/writable check
-  already present in `open_file`. The daemon still independently rejects remote
-  writes. Correct the lazy-open admission boundary in the affected implementation
-  batch; do not call it an explanation of the large-vault failure.
+- At the inspected baseline, `mount/core/file_io.rs::open_metadata_file` lacked
+  the read-only/writable check already present in `open_file`. The daemon still
+  independently rejects remote writes. The development correction now rejects
+  writable lazy opens before validation or handle allocation; remote acceptance
+  and publication remain pending in this batch. This is not an explanation of
+  the large-vault failure.
 
 Stage-one direction: identify the stalled application phase, distinguish pending
 metadata from content/reconciliation work, and target the demonstrated boundary.
@@ -113,6 +115,10 @@ Checked 2026-09-07:
 - [libuv thread-pool contract](https://docs.libuv.org/en/v1.x/threadpool.html):
   the default filesystem pool is four and is shared. Do not silently replace an
   application's inherited pool with the fixture's larger one and infer parity.
+- [Windows file access rights](https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants):
+  explicit data-write access differs from metadata-read access. Rejecting a
+  writable lazy open must not make an allowed metadata-only read eager. The
+  correction reuses the existing engine mode/error contract, with no new API.
 
 ## Stage two: bounded milestones and acceptance signals
 
@@ -131,7 +137,13 @@ Checked 2026-09-07:
 3. **Preserve lazy-open read-only admission.** Restore the mode check in the
    existing lazy path as part of the affected implementation batch. Expected
    result: writable lazy opens on a read-only engine fail before creating a
-   writable handle/spool; legitimate metadata-only reads remain lazy.
+   writable handle/spool; legitimate metadata-only reads remain lazy. The guard
+   is implemented but unverified remotely. Reuse the `NavigationBackend` fixture
+   for denied writable admission, unchanged backend/spool counts and successful
+   lazy reads; retain a read-write admission case in the same final task suite.
+   Before reusing its first-read phase, derive `note.md`'s advertised length from
+   its payload: that older fixture currently advertises 12 bytes but returns the
+   15-byte `remote contents`. Do not weaken materialization length checks.
 4. **One faithful remote acceptance entrypoint.** Update the existing mount task
    entrypoint/fixture after implementation. Run an independently written cold
    names-plus-every-child-lstat consumer, with realpath and the recursive watcher
@@ -155,7 +167,8 @@ queries and must not warm the provider before the first consumer. A Windows
 recursive watcher is not equivalent to Linux's per-directory watcher branch.
 
 The remaining gap is the user's actual stalled phase/request, so milestone 2's
-implementation is intentionally not selected yet. No native code, limits, DLLs
-or application settings were changed by this investigation; no suite/build or
-release was started. A follow-up implementation plan must close that evidence
-gap before editing the mount behavior.
+implementation is intentionally not selected yet. The only native edit is the
+independently proven read-only admission guard from milestone 3. No limits, DLLs
+or application settings changed; no suite/build or release was started. A
+follow-up implementation plan must close the evidence gap before changing the
+large-vault request path. Do not release this guard alone as an Obsidian fix.
