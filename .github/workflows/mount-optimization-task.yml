@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   suite:
-    # Prepare/reuse recipe-bound private bytes using this image's VS 2022/v143.
-    # Server 2025 also exposes the modern by-name metadata API path.
+    # Reuse approved private-DLL bytes. Server 2025 also exposes the modern
+    # Windows by-name metadata path used by the pinned Node/libuv fixture.
     runs-on: windows-2025
     timeout-minutes: 180
     env:
@@ -81,7 +81,6 @@ jobs:
         run: >-
           ./native/test-mount-optimization-task.ps1
           -InstallRuntime
-          -PreparePrivateDependency
           -LogRoot (Join-Path $env:RUNNER_TEMP 'mount-optimization-task')
           -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'mount-task-binary')
           -DependencyCacheRoot (Join-Path $env:RUNNER_TEMP 'dokany-private-dependency')

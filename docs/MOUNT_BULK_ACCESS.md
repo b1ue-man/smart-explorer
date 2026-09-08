@@ -45,9 +45,9 @@ was checked for names-only `readdir`, per-child `lstat`, `realpath` and recursiv
 
 Final execution milestones, depending on the source corrections below:
 
-1. Extend only `test-mount-optimization-task.ps1` and its existing workflow to
+1. Extend only `test-mount-optimization-task.ps1`, using its unchanged workflow, to
    explicitly prepare or safely reuse recipe-bound private bytes. Preserve the
-   approved-only default for ordinary consumers and exact System32 identities.
+   approved-only inputs for ordinary consumers and exact System32 identities.
    Expected: one remote incremental library target embeds the new DLL, and the
    suite exports that exact DLL, manifest, source archive and candidate approval.
 2. Consolidate acceptance into its existing `mount_vault_task` filter: cold
