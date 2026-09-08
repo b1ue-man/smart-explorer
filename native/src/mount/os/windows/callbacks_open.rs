@@ -55,7 +55,7 @@ pub(super) unsafe extern "system" fn create_file(
         guard_long_with_context(file_info, |context| {
             // Open-by-ID names can be binary and not NUL-terminated. Reject
             // unsupported flags before interpreting the input as a path.
-            validate_create_flags(file_attributes, create_options)?;
+            validate_create_options(create_options)?;
             let path = read_wide(file_name)?;
             let cache_safe = cache_safe_namespace_open(
                 desired_access,
@@ -79,9 +79,6 @@ pub(super) unsafe extern "system" fn create_file(
             let explicitly_file = create_options & FILE_NON_DIRECTORY_FILE != 0;
             let is_directory = explicitly_directory
                 || (!explicitly_file && existing.as_ref().is_some_and(|meta| meta.is_dir));
-            if file_attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && !is_directory {
-                return Err(win32(ERROR_DIRECTORY));
-            }
             if is_directory {
                 open_directory(
                     context,
@@ -89,6 +86,7 @@ pub(super) unsafe extern "system" fn create_file(
                     existing.as_ref().map(|meta| meta.is_dir),
                     desired_access,
                     create_disposition,
+                    file_attributes,
                     create_options,
                     share_access,
                     file_info,
@@ -103,6 +101,7 @@ pub(super) unsafe extern "system" fn create_file(
                     existing.as_ref(),
                     desired_access,
                     create_disposition,
+                    file_attributes,
                     create_options,
                     share_access,
                     file_info,
@@ -118,6 +117,7 @@ fn open_directory(
     existing_is_directory: Option<bool>,
     desired_access: u32,
     disposition: u32,
+    file_attributes: u32,
     create_options: u32,
     share_access: u32,
     file_info: *mut DokanFileInfo,
@@ -130,15 +130,18 @@ fn open_directory(
         }
         (Some(true), FILE_OPEN | FILE_OPEN_IF) => {}
         (Some(true), _) => return Err(win32(ERROR_NOT_SUPPORTED)),
-        (None, FILE_CREATE | FILE_OPEN_IF) => match context.engine.mkdir(&path)? {
-            NamespaceOutcome::Complete => {}
-            NamespaceOutcome::CommittedPendingVerification { path, detail } => {
-                context.report(MountStatus::Failed {
-                    detail: format!("{detail} ({path})"),
-                });
-                context.request_stop();
+        (None, FILE_CREATE | FILE_OPEN_IF) => {
+            validate_creation_attributes(file_attributes, true)?;
+            match context.engine.mkdir(&path)? {
+                NamespaceOutcome::Complete => {}
+                NamespaceOutcome::CommittedPendingVerification { path, detail } => {
+                    context.report(MountStatus::Failed {
+                        detail: format!("{detail} ({path})"),
+                    });
+                    context.request_stop();
+                }
             }
-        },
+        }
         (None, FILE_OPEN) => {
             return Err(io::Error::new(io::ErrorKind::NotFound, "directory not found").into())
         }
@@ -172,6 +175,7 @@ fn open_regular_file(
     existing: Option<&crate::vfs::VfsMeta>,
     desired_access: u32,
     disposition: u32,
+    file_attributes: u32,
     create_options: u32,
     share_access: u32,
     file_info: *mut DokanFileInfo,
@@ -186,7 +190,13 @@ fn open_regular_file(
         & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE | GENERIC_ALL)
         != 0;
     let requested_disposition = disposition;
-    let disposition = disposition_for_file(requested_disposition, exists, writable)?;
+    let disposition = disposition_for_file(requested_disposition, exists)?;
+    if disposition != OpenDisposition::OpenExisting {
+        // FileAttributes are ignored only if this route cannot create or
+        // overwrite. Validate before any engine mutation, including when a
+        // missing OPEN_IF target appears after the initial namespace lookup.
+        validate_creation_attributes(file_attributes, false)?;
+    }
     // Every open-existing handle starts lazy: the engine fetches the file on
     // its first actual data operation. CreateFile returns immediately, and
     // metadata-only shell traffic never occupies a backend transfer slot —
@@ -320,29 +330,33 @@ fn opened_existing(exists: bool, disposition: u32) -> CallbackResult {
 fn disposition_for_file(
     value: u32,
     exists: bool,
-    writable: bool,
 ) -> Result<OpenDisposition, CallbackFailure> {
     match value {
         FILE_OPEN => Ok(OpenDisposition::OpenExisting),
-        FILE_OPEN_IF if exists && !writable => Ok(OpenDisposition::OpenExisting),
+        // An existing OPEN_IF ignores creation attributes even for a writable
+        // handle. Keep it lazy and bind it to OpenExisting: if the name later
+        // disappears, first data access must fail rather than create a file
+        // whose ignored attributes were never validated.
+        FILE_OPEN_IF if exists => Ok(OpenDisposition::OpenExisting),
         FILE_OPEN_IF => Ok(OpenDisposition::OpenOrCreate),
+        FILE_CREATE if exists => {
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, "file already exists").into())
+        }
         FILE_CREATE => Ok(OpenDisposition::CreateNew),
+        FILE_OVERWRITE if !exists => {
+            Err(io::Error::new(io::ErrorKind::NotFound, "file not found").into())
+        }
         FILE_OVERWRITE => Ok(OpenDisposition::TruncateExisting),
         FILE_SUPERSEDE | FILE_OVERWRITE_IF => Ok(OpenDisposition::CreateAlways),
         _ => Err(win32(ERROR_NOT_SUPPORTED)),
     }
 }
 
-fn validate_create_flags(attributes: u32, options: u32) -> Result<(), CallbackFailure> {
+fn validate_create_options(options: u32) -> Result<(), CallbackFailure> {
     // FILE_OPEN_REPARSE_POINT is a no-follow request, not proof that the
     // target is a link. Windows uses it for ordinary GetFileAttributesEx
     // queries too. Actual links are rejected after stat by reject_open_symlink.
     if options & FILE_OPEN_BY_FILE_ID != 0 {
-        return Err(win32(ERROR_NOT_SUPPORTED));
-    }
-    if attributes & !(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NORMAL)
-        != 0
-    {
         return Err(win32(ERROR_NOT_SUPPORTED));
     }
     if options & FILE_DIRECTORY_FILE != 0 && options & FILE_NON_DIRECTORY_FILE != 0 {
@@ -355,14 +369,29 @@ fn validate_create_flags(attributes: u32, options: u32) -> Result<(), CallbackFa
     Ok(())
 }
 
+fn validate_creation_attributes(attributes: u32, is_directory: bool) -> CallbackResult {
+    // ZwCreateFile ignores FileAttributes when no object is created or
+    // overwritten. In particular, DIRECTORY is not an existing-object type
+    // constraint; only CreateOptions and the actual metadata determine that.
+    if attributes & !(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NORMAL)
+        != 0
+    {
+        return Err(win32(ERROR_NOT_SUPPORTED));
+    }
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && !is_directory {
+        return Err(win32(ERROR_DIRECTORY));
+    }
+    Ok(())
+}
+
 #[test]
 fn mount_batching_task_no_follow_queries_preserve_link_and_id_boundaries() {
     const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     for options in [0, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE] {
-        assert!(validate_create_flags(0, options | OPEN_REPARSE_POINT).is_ok());
+        assert!(validate_create_options(options | OPEN_REPARSE_POINT).is_ok());
     }
-    assert!(validate_create_flags(0, FILE_OPEN_BY_FILE_ID | OPEN_REPARSE_POINT).is_err());
-    assert!(validate_create_flags(0,
+    assert!(validate_create_options(FILE_OPEN_BY_FILE_ID | OPEN_REPARSE_POINT).is_err());
+    assert!(validate_create_options(
         FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE | OPEN_REPARSE_POINT).is_err());
     let link = crate::vfs::VfsMeta { is_symlink: true, ..Default::default() };
     assert_eq!(reject_open_symlink(&link).unwrap_err().kind(), io::ErrorKind::Unsupported);

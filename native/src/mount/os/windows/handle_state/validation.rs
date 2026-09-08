@@ -3,7 +3,7 @@ use std::io;
 use super::{HandleRecord, PendingDelete, State};
 
 use super::super::{
-    handle_access::{invalid_handle, share_allows, sharing_violation},
+    handle_access::{invalid_handle, sharing_violation},
     handle_types::HandleSnapshot,
 };
 
@@ -13,18 +13,10 @@ pub(super) fn check_share_compatibility(
     desired_access: u32,
     share_access: u32,
 ) -> io::Result<()> {
-    for record in state
-        .handles
-        .values()
-        .filter(|record| record.share_active && record.namespace_attached && record.path == path)
-    {
-        if !share_allows(record.share_access, desired_access)
-            || !share_allows(share_access, record.desired_access)
-        {
-            return Err(sharing_violation(
-                "requested file access conflicts with an open handle",
-            ));
-        }
+    if !state.shares.allows(path, desired_access, share_access) {
+        return Err(sharing_violation(
+            "requested file access conflicts with an open handle",
+        ));
     }
     Ok(())
 }

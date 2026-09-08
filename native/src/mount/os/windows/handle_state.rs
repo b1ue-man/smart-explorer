@@ -10,13 +10,14 @@ use std::{
 use crate::mount::{DeleteToken, MountEngine};
 
 mod validation;
+mod share_index;
 
 use self::validation::{
     check_share_compatibility, matching_delete_type, snapshot_record, validate_record,
 };
 use super::handle_access::{
     callback_path_key, invalid_handle, require_delete_access, same_or_descendant,
-    sharing_violation, FILE_SHARE_DELETE,
+    sharing_violation,
 };
 use super::handle_reservation::{reserved_handle_missing, HandleReservation, RenameReservation};
 use super::handle_types::{HandleSnapshot, NodeHandle};
@@ -42,6 +43,7 @@ struct PendingDelete {
 #[derive(Default)]
 struct State {
     handles: HashMap<u64, HandleRecord>,
+    shares: share_index::ShareIndex,
     pending_deletes: HashMap<String, PendingDelete>,
 }
 
@@ -112,7 +114,7 @@ impl HandleTable {
                 check_share_compatibility(&state, &path, granted_access, share_access)?;
             }
             let key = self.allocate_key(&state)?;
-            state.handles.insert(
+            state.insert_handle(
                 key,
                 HandleRecord {
                     node: None,
@@ -125,7 +127,7 @@ impl HandleTable {
                     delete_requested: false,
                     delete_committed: false,
                 },
-            );
+            )?;
             (key, granted_access)
         };
         Ok(HandleReservation::new(self, key, granted_access))
@@ -142,21 +144,12 @@ impl HandleTable {
     }
 
     pub(super) fn cleanup(&self, key: u64) -> io::Result<HandleSnapshot> {
-        let mut state = self.lock_state()?;
-        let record = state
-            .handles
-            .get_mut(&key)
-            .ok_or_else(|| invalid_handle("unknown file handle"))?;
-        record.share_active = false;
-        snapshot_record(record)
+        self.lock_state()?.cleanup_handle(key)
     }
 
     pub(super) fn take(&self, key: u64) -> io::Result<HandleSnapshot> {
         let mut state = self.lock_state()?;
-        let record = state
-            .handles
-            .remove(&key)
-            .ok_or_else(|| invalid_handle("unknown file handle"))?;
+        let record = state.remove_handle(key)?;
         if record.delete_requested {
             if let Some(delete) = state.pending_deletes.get_mut(&record.path) {
                 delete.requesters.remove(&key);
@@ -247,15 +240,7 @@ impl HandleTable {
             .remove(&path)
             .map(|delete| delete.requesters)
             .unwrap_or_default();
-        for (handle_key, record) in &mut state.handles {
-            if record.namespace_attached && record.path == path {
-                record.namespace_attached = false;
-            }
-            if requesters.contains(handle_key) {
-                record.delete_requested = false;
-                record.delete_committed = true;
-            }
-        }
+        state.complete_delete(&path, &requesters);
         Ok(())
     }
 
@@ -269,6 +254,10 @@ impl HandleTable {
         let transition = self.lock_transition()?;
         let source = self.path_key(source);
         let destination = self.path_key(destination);
+        // The source object is not a replacement destination when both names
+        // identify the same canonical path. Keep source permission checks, but
+        // neither recheck the caller as a destination nor detach its handles.
+        let replace_existing = replace_existing && source != destination;
         let destination_is_open = {
             let state = self.lock_state()?;
             let caller = state
@@ -290,34 +279,17 @@ impl HandleTable {
                     "delete-pending namespace prevents rename",
                 ));
             }
-            for (other_key, record) in &state.handles {
-                if *other_key != key
-                    && record.share_active
-                    && record.namespace_attached
-                    && record.path == source
-                    && record.share_access & FILE_SHARE_DELETE == 0
-                {
-                    return Err(sharing_violation(
-                        "an open source handle does not share delete access",
-                    ));
-                }
+            if !state.shares.delete_allowed_except(&source, Some(caller)) {
+                return Err(sharing_violation(
+                    "an open source handle does not share delete access",
+                ));
             }
-            let mut found = false;
-            if replace_existing {
-                for record in state
-                    .handles
-                    .values()
-                    .filter(|record| record.namespace_attached && record.path == destination)
-                {
-                    found = true;
-                    if record.share_active && record.share_access & FILE_SHARE_DELETE == 0 {
-                        return Err(sharing_violation(
-                            "an open destination handle does not share delete access",
-                        ));
-                    }
-                }
+            if replace_existing && !state.shares.delete_allowed_except(&destination, None) {
+                return Err(sharing_violation(
+                    "an open destination handle does not share delete access",
+                ));
             }
-            found
+            replace_existing && state.shares.has_attached(&destination)
         };
         Ok(RenameReservation::new(
             self,
@@ -344,17 +316,10 @@ impl HandleTable {
                 return Ok(());
             }
             require_delete_access(record.desired_access)?;
-            for (other_key, other) in &state.handles {
-                if *other_key != key
-                    && other.share_active
-                    && other.namespace_attached
-                    && other.path == path
-                    && other.share_access & FILE_SHARE_DELETE == 0
-                {
-                    return Err(sharing_violation(
-                        "an open handle does not share delete access",
-                    ));
-                }
+            if !state.shares.delete_allowed_except(&path, Some(record)) {
+                return Err(sharing_violation(
+                    "an open handle does not share delete access",
+                ));
             }
             if let Some(delete) = state.pending_deletes.get_mut(&path) {
                 matching_delete_type(delete, is_directory)?;
@@ -440,7 +405,7 @@ impl HandleTable {
 
     pub(super) fn abort_reservation(&self, key: u64) {
         if let Ok(mut state) = self.state.lock() {
-            state.handles.remove(&key);
+            let _ = state.remove_handle(key);
         }
     }
 
@@ -450,27 +415,6 @@ impl HandleTable {
         destination: &str,
         replace_existing: bool,
     ) -> io::Result<()> {
-        let mut state = self.lock_state()?;
-        if replace_existing {
-            for record in state
-                .handles
-                .values_mut()
-                .filter(|record| record.namespace_attached && record.path == destination)
-            {
-                record.namespace_attached = false;
-            }
-        }
-        let descendant_prefix = format!("{}\\", source.trim_end_matches('\\'));
-        for record in state.handles.values_mut() {
-            if !record.namespace_attached {
-                continue;
-            }
-            if record.path == source {
-                record.path = destination.to_string();
-            } else if let Some(suffix) = record.path.strip_prefix(&descendant_prefix) {
-                record.path = format!("{}\\{suffix}", destination.trim_end_matches('\\'));
-            }
-        }
-        Ok(())
+        self.lock_state()?.rename_attached(source, destination, replace_existing)
     }
 }
