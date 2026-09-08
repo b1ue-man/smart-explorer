@@ -8,6 +8,10 @@ mod cache_space;
 mod clean_cache;
 #[path = "core/entry_lifecycle.rs"]
 mod entry_lifecycle;
+#[path = "core/entry_table.rs"]
+mod entry_table;
+#[path = "core/retirement_queue.rs"]
+mod retirement_queue;
 #[path = "core/engine_recovery.rs"]
 mod engine_recovery;
 #[path = "core/file_commit.rs"]

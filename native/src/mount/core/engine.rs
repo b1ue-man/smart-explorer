@@ -12,7 +12,7 @@ use crate::vfs::{BackendHandle, VfsMeta};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 pub struct MountEngine {
@@ -24,7 +24,7 @@ pub struct MountEngine {
     pub(super) spool: Arc<WholeFileSpool>,
     pub(super) namespace: RwLock<()>,
     pub(super) materializations: Mutex<HashMap<String, Weak<super::materialization::MaterializationSlot>>>,
-    pub(super) entries: Mutex<HashMap<String, Arc<Entry>>>,
+    pub(super) entries: Mutex<super::entry_table::EntryTable>,
     pub(super) handles: Mutex<HashMap<HandleId, OpenHandle>>,
     pub(super) deletes: Mutex<HashMap<DeleteToken, PersistedDelete>>,
     pub(super) namespace_conflicts: Mutex<HashMap<String, NamespaceIntent>>,
@@ -36,13 +36,13 @@ pub struct MountEngine {
     pub(super) clean_cache: super::clean_cache::CleanCache,
     pub(super) cache_space: Arc<super::cache_space::CacheSpace>,
     pub(super) detached: Mutex<HashMap<String, Arc<Entry>>>,
-    pub(super) retirement_pending: Arc<AtomicBool>,
+    pub(super) retirements: Arc<super::retirement_queue::RetirementQueue>,
 }
 
 pub(super) struct Entry {
     pub state: Mutex<EntryState>,
     pub(super) pins: AtomicUsize,
-    pub(super) retirement_pending: Arc<AtomicBool>,
+    pub(super) retirements: Arc<super::retirement_queue::RetirementQueue>,
 }
 
 pub(super) struct EntryState {

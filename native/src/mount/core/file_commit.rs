@@ -133,9 +133,7 @@ impl MountEngine {
         state.baseline = committed_baseline;
         state.condition = EntryCondition::Clean;
         state.clean_since = std::time::Instant::now();
-        if entry.pins.load(std::sync::atomic::Ordering::Acquire) == 0 {
-            self.retirement_pending.store(true, std::sync::atomic::Ordering::Release);
-        }
+        entry.schedule_retirement();
         Ok(FlushOutcome::Committed)
     }
 

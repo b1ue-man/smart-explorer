@@ -93,7 +93,7 @@ impl MountEngine {
         if let Some(entry) = self.materialize_cached(path, disposition)? { return Ok(entry); }
         let prepared = self.materialize_fetch(path, disposition)?;
         let entry = self.materialize_install(path, prepared, disposition)?;
-        self.retirement_pending.store(true, Ordering::Release);
+        entry.schedule_retirement();
         Ok(entry)
     }
 
@@ -198,7 +198,7 @@ impl MountEngine {
         }
         let record = prepared.record.take().ok_or_else(|| invalid_data("missing prepared spool"))?;
         let entry = Arc::new(Entry { pins: AtomicUsize::new(0),
-            retirement_pending: Arc::clone(&self.retirement_pending), state: Mutex::new(EntryState {
+            retirements: Arc::clone(&self.retirements), state: Mutex::new(EntryState {
             remote_path: path.backend().to_string(), spool_name: record.spool_name,
             baseline: record.baseline, condition: prepared.condition.clone(),
             delete_token: None, delete_committed: false, clean_since: record.created, retired: false,
