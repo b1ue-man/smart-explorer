@@ -7,8 +7,10 @@ use std::time::{Duration, Instant};
 
 use super::{DokanFileInfo, DokanyRuntime};
 
+mod schedule;
+use schedule::ResetSchedule;
+
 const RESET_INTERVAL: Duration = Duration::from_secs(30);
-const MAX_SUPERVISED_CALLBACKS: usize = 4_096;
 const MAX_ACTIVE_REPORTS: usize = 32;
 
 pub(super) struct CallbackTimeoutSupervisor {
@@ -28,6 +30,7 @@ struct State {
     next_id: u64,
     emitted_reports: usize,
     requests: HashMap<u64, Arc<Request>>,
+    schedule: ResetSchedule,
 }
 
 struct Request {
@@ -37,7 +40,6 @@ struct Request {
 }
 
 struct RequestState {
-    next_reset: Instant,
     failed: bool,
     in_flight: bool,
     reported: bool,
@@ -53,7 +55,8 @@ impl CallbackTimeoutSupervisor {
         let thread = std::thread::Builder::new()
             .name("mount-timeout-supervisor".into())
             .spawn(move || {
-                if catch_unwind(AssertUnwindSafe(|| run(runtime, Arc::clone(&worker)))).is_err() {
+                let result = catch_unwind(AssertUnwindSafe(|| run(runtime, Arc::clone(&worker))));
+                if !matches!(result, Ok(Ok(()))) {
                     fail_all(&worker);
                 }
             })?;
@@ -84,19 +87,18 @@ impl CallbackTimeoutSupervisor {
                 "callback timeout supervisor is stopping",
             ));
         }
-        if state.requests.len() >= MAX_SUPERVISED_CALLBACKS {
-            return Err(io::Error::new(
-                io::ErrorKind::OutOfMemory,
-                "too many supervised filesystem callbacks",
-            ));
-        }
         let id = allocate_id(&mut state)?;
+        state.requests.try_reserve(1).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "callback timeout registration allocation failed",
+            )
+        })?;
         state.requests.insert(
             id,
             Arc::new(Request {
                 file_info: file_info as usize,
                 state: Mutex::new(RequestState {
-                    next_reset: Instant::now() + RESET_INTERVAL,
                     failed: false,
                     in_flight: false,
                     reported: false,
@@ -104,7 +106,15 @@ impl CallbackTimeoutSupervisor {
                 wake: Condvar::new(),
             }),
         );
-        self.shared.wake.notify_all();
+        match state.schedule.arm(id, Instant::now()) {
+            Ok(true) => self.shared.wake.notify_one(),
+            Ok(false) => {}
+            Err(error) => {
+                state.requests.remove(&id);
+                shrink_requests(&mut state);
+                return Err(error);
+            }
+        }
         Ok(CallbackTimeoutLease {
             supervisor: self,
             id: Some(id),
@@ -117,7 +127,10 @@ impl CallbackTimeoutSupervisor {
             Err(poisoned) => poisoned.into_inner(),
         };
         let request = state.requests.remove(&id);
-        self.shared.wake.notify_all();
+        shrink_requests(&mut state);
+        if state.schedule.remove(id) {
+            self.shared.wake.notify_one();
+        }
         drop(state);
         let Some(request) = request else {
             return false;
@@ -195,7 +208,6 @@ impl ResetClaim {
     fn complete(mut self, reset: bool) {
         let mut request_state = lock_request(&self.request);
         request_state.failed |= !reset;
-        request_state.next_reset = Instant::now() + RESET_INTERVAL;
         request_state.in_flight = false;
         self.request.wake.notify_all();
         self.completed = true;
@@ -214,34 +226,34 @@ impl Drop for ResetClaim {
     }
 }
 
-fn allocate_id(state: &mut State) -> io::Result<u64> {
-    for _ in 0..u16::MAX {
-        state.next_id = state.next_id.wrapping_add(1).max(1);
-        if !state.requests.contains_key(&state.next_id) {
-            return Ok(state.next_id);
-        }
+fn shrink_requests(state: &mut State) {
+    let capacity = state.requests.capacity();
+    let live = state.requests.len();
+    // Geometric hysteresis bounds whole-burst rebuild work. Moving Arc values
+    // does not move requests, and finish still owns its removed Arc until the
+    // claimed reset completes. No request mutex is acquired for maintenance.
+    if capacity > 32 && capacity / 4 > live {
+        state.requests.shrink_to(live.saturating_mul(2));
     }
-    Err(io::Error::new(
-        io::ErrorKind::OutOfMemory,
-        "too many supervised filesystem callbacks",
-    ))
 }
 
-fn run(runtime: DokanyRuntime, shared: Arc<Shared>) {
+fn allocate_id(state: &mut State) -> io::Result<u64> {
+    state.next_id = state.next_id
+        .checked_add(1)
+        .ok_or_else(|| io::Error::other("callback timeout request ID space exhausted"))?;
+    Ok(state.next_id)
+}
+
+fn run(runtime: DokanyRuntime, shared: Arc<Shared>) -> io::Result<()> {
     let mut state = match shared.state.lock() {
         Ok(state) => state,
         Err(poisoned) => poisoned.into_inner(),
     };
     loop {
         if state.stopped {
-            return;
+            return Ok(());
         }
-        let Some(next_reset) = state
-            .requests
-            .values()
-            .map(|request| lock_request(request).next_reset)
-            .min()
-        else {
+        let Some((id, next_reset)) = state.schedule.front() else {
             state = match shared.wake.wait(state) {
                 Ok(state) => state,
                 Err(poisoned) => poisoned.into_inner(),
@@ -256,20 +268,12 @@ fn run(runtime: DokanyRuntime, shared: Arc<Shared>) {
             };
             continue;
         }
-        let now = Instant::now();
-        let due = state
-            .requests
-            .values()
-            .filter_map(|request| {
-                let request_state = lock_request(request);
-                (request_state.next_reset <= now && !request_state.in_flight)
-                    .then_some((request_state.next_reset, Arc::clone(request)))
-            })
-            .min_by_key(|(deadline, _)| *deadline)
-            .map(|(_, request)| request);
-        let Some(request) = due else {
-            continue;
-        };
+        let request = state.requests.get(&id).cloned()
+            .ok_or_else(|| io::Error::other("scheduled callback is no longer registered"))?;
+        state.schedule.remove(id);
+        // Claim while holding shared -> request locks, so finish cannot remove
+        // the registration and release file_info before in_flight is visible.
+        let claim = ResetClaim::new(Arc::clone(&request));
         let should_report = {
             let mut request_state = lock_request(&request);
             request_state.in_flight = true;
@@ -281,7 +285,6 @@ fn run(runtime: DokanyRuntime, shared: Arc<Shared>) {
                 false
             }
         };
-        let claim = ResetClaim::new(request);
         let file_info = claim.request.file_info;
         drop(state);
         if should_report {
@@ -302,6 +305,15 @@ fn run(runtime: DokanyRuntime, shared: Arc<Shared>) {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
+        // Completion released the request mutex before taking shared again.
+        // A concurrent finish may have removed this ID while waiting for the
+        // FFI reset. Never rearm a removed request or retain a stale queue ticket.
+        if !state.stopped
+            && state.requests.get(&id)
+                .is_some_and(|registered| Arc::ptr_eq(registered, &request))
+        {
+            state.schedule.arm(id, Instant::now())?;
+        }
     }
 }
 
