@@ -10,8 +10,8 @@ const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
-const FILE_SHARE_READ: u32 = 0x0000_0001;
-const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+pub(super) const FILE_SHARE_READ: u32 = 0x0000_0001;
+pub(super) const FILE_SHARE_WRITE: u32 = 0x0000_0002;
 pub(super) const FILE_SHARE_DELETE: u32 = 0x0000_0004;
 
 pub(super) fn share_allows(share_access: u32, desired_access: u32) -> bool {
@@ -61,7 +61,7 @@ pub(super) fn invalid_handle(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, message)
 }
 
-fn requests_read(access: u32) -> bool {
+pub(super) fn requests_read(access: u32) -> bool {
     access
         & (FILE_READ_DATA
             | FILE_EXECUTE
@@ -72,11 +72,11 @@ fn requests_read(access: u32) -> bool {
         != 0
 }
 
-fn requests_write(access: u32) -> bool {
+pub(super) fn requests_write(access: u32) -> bool {
     access & (FILE_WRITE_DATA | FILE_APPEND_DATA | MAXIMUM_ALLOWED | GENERIC_WRITE | GENERIC_ALL)
         != 0
 }
 
-fn requests_delete(access: u32) -> bool {
+pub(super) fn requests_delete(access: u32) -> bool {
     access & (DELETE_ACCESS | MAXIMUM_ALLOWED | GENERIC_ALL) != 0
 }
