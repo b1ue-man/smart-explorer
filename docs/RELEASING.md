@@ -24,8 +24,12 @@ writes it last.
 
 The bulk-access mount source and exact revised private-Dokany dependency were
 approved by the [single remote task suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
-on 2026-09-08, before the terminal release. Approval alone is not publication;
-use the versioned feed and matching GitHub Release for current release truth.
+on 2026-09-08, then published by the existing terminal remote wrapper as
+[v0.5.154](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.154).
+The [publication record](MOUNT_BULK_ACCESS.md#accepted-exact-candidate-2026-09-08)
+binds the approving source, retained dependency and release commit. Approval
+alone is not publication; use the versioned feed and matching GitHub Release
+for current release truth.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
 
