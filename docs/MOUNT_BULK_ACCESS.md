@@ -110,6 +110,17 @@ and retains its original exact-child rearm/cursor expectations. Production
 eviction already supplies canonical keys. These corrections use only the same
 remote suite and retained dependency; they are not a release approval.
 
+Run `34213200355` confirmed the canonical-key correction. Its watcher samples
+identified the other failure: creation/change events named
+`\watch\node-startup-check.md`, while removal named
+`watch\node-startup-check.md`. This matches the pinned libuv code's existing-name
+long-path expansion versus raw removal-name branch when watching a drive root.
+The fixture now compares resolved Windows path identities against the exact
+owned target, preserving raw diagnostics and the delivery deadline. It does not
+accept unrelated events or change production notifications. The next invocation
+uses that same complete suite; no dependency rebuild or release is authorized
+by either failed run.
+
 ## Stage one: current source findings
 
 - `handle_state/validation.rs` scans every live handle under global locks on
