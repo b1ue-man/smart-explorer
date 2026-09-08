@@ -93,6 +93,23 @@ save, then exercises native metadata, external notifications, replacement saves,
 sibling scripts and orderly teardown in both runtime modes. No standalone
 per-milestone invocations are added.
 
+Run `34211045997` prepared the DLL and built the Windows fixture. Its private
+runtime completed the cold Node metadata traversal, then the owned-save watcher
+check failed: events arrived, but the expected pathname was not recognized.
+Counts alone cannot distinguish a filename mismatch from missing target events.
+The same case now retains bounded raw event/name samples without weakening its
+success condition. The pinned [libuv event implementation](https://github.com/libuv/libuv/blob/v1.52.1/src/win/fs-event.c)
+and Node filename contract were reviewed on 2026-09-08; the actual returned names
+remain a runtime question, not grounds for changing production notifications.
+
+That run also exposed a fixture-only eviction error. Case-insensitive cache
+identity uses Windows ordinal uppercase; the test passed literal `/a` to an
+internal exact-key removal hook storing `/A`, so no removal occurred. The case
+now derives `cache.key("/a")`, asserts presence before and absence after removal,
+and retains its original exact-child rearm/cursor expectations. Production
+eviction already supplies canonical keys. These corrections use only the same
+remote suite and retained dependency; they are not a release approval.
+
 ## Stage one: current source findings
 
 - `handle_state/validation.rs` scans every live handle under global locks on

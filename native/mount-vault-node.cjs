@@ -20,6 +20,7 @@ let maxDirectoryGap = 0;
 let firstFailure;
 let watcher;
 let watchEvents = 0;
+const watchSamples = [];
 let scanning = false;
 const watchTarget = 'watch/node-startup-check.md';
 let targetSeen = false;
@@ -29,7 +30,8 @@ let unnamedSaveEvent = false;
 
 function report(phase) {
   console.log(JSON.stringify({ phase, pending, peak, completed,
-    max_directory_gap_ms: maxDirectoryGap, watch_events: watchEvents }));
+    max_directory_gap_ms: maxDirectoryGap, watch_events: watchEvents,
+    watch_samples: watchSamples }));
 }
 
 function fatal(reason) {
@@ -168,8 +170,11 @@ async function main() {
   const started = performance.now();
   const resolved = await operation('realpath', () => fs.realpath(root));
   assert.equal(path.resolve(resolved).toLowerCase(), path.resolve(root).toLowerCase());
-  watcher = watch(resolved, { recursive: true }, (_event, filename) => {
+  watcher = watch(resolved, { recursive: true }, (event, filename) => {
     watchEvents++;
+    // Retain actual owned-fixture names, not just a count: a delivered event
+    // with a mismatched path must be distinguishable from lost notification.
+    if (watchSamples.length < 16) watchSamples.push({ event, filename, save_armed: saveArmed });
     if (typeof filename === 'string' && filename.replaceAll('\\', '/').toLowerCase() === watchTarget) {
       targetSeen = true;
       targetReady?.();
