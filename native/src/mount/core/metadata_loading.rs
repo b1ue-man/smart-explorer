@@ -1,6 +1,6 @@
 use super::engine::{not_found, read_lock, MountEngine};
-use super::metadata_cache::{Admission, DirectoryObservation,
-    MetadataChange, MetadataLookup, DIRECTORY_TTL};
+use super::metadata_cache::{Admission, DirectoryObservation, PreloadTicket,
+    MetadataChange, MetadataLookup, SnapshotPublication, DIRECTORY_TTL};
 use super::metadata_batch::run_metadata_batch_keyed;
 use super::path::validate_windows_component;
 use crate::vfs::VfsMeta;
@@ -11,6 +11,12 @@ use std::time::Instant;
 
 pub(super) const METADATA_PRELOAD_BATCH: usize = 8;
 pub(super) const METADATA_REFRESH_BATCH: usize = 16;
+
+#[derive(Default)]
+pub(crate) struct MetadataPreloadProgress {
+    pub(crate) loaded: usize,
+    pub(crate) pending: bool,
+}
 
 impl MountEngine {
     /// Loads only the complete root snapshot needed for a responsive first
@@ -35,18 +41,31 @@ impl MountEngine {
         &self,
         stopped: impl Fn() -> bool + Sync,
     ) -> io::Result<usize> {
-        let targets = self
-            .metadata_cache
-            .preload_targets(self.config.metadata.preload_depth(), METADATA_PRELOAD_BATCH)?;
-        run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, depth| {
-            match self.preload_directory(path, depth) {
+        self.preload_metadata_progress_while(stopped).map(|progress| progress.loaded)
+    }
+
+    pub(crate) fn preload_metadata_progress_while(
+        &self, stopped: impl Fn() -> bool + Sync,
+    ) -> io::Result<MetadataPreloadProgress> {
+        let batch = self.metadata_cache.select_preload(
+            self.config.metadata.preload_depth(), METADATA_PRELOAD_BATCH,
+        )?;
+        let targets = batch.tickets().iter()
+            .map(|ticket| (ticket.path.clone(), ticket.depth)).collect();
+        let loaded = run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, _| {
+            let ticket = batch.tickets().iter().find(|ticket| ticket.path == path)
+                .ok_or_else(|| io::Error::other("preload selection lost its ownership ticket"))?;
+            match self.preload_directory(ticket) {
                 Ok(loaded) => Ok(loaded),
                 Err(_) => {
-                    let _ = self.metadata_cache.cool_down_snapshot(path);
+                    let _ = self.metadata_cache.cool_down_preload(ticket);
                     Ok(false)
                 }
             }
-        }, &|path| self.cache_key(path))
+        }, &|path| self.cache_key(path))?;
+        // The batch helper joins all started workers before this finalization;
+        // Drop performs the same release on errors or predicate/worker panic.
+        Ok(MetadataPreloadProgress { loaded, pending: batch.finish()? })
     }
 
     /// Refreshes a bounded rotating set. A failed or raced refresh leaves the
@@ -196,7 +215,7 @@ impl MountEngine {
         };
         let entries = Arc::clone(&observation.entries);
         let expires_at = observation.listing_expires_at;
-        let installed = self.install_directory_snapshot(
+        let publication = self.install_directory_snapshot(
             path,
             observation,
             depth,
@@ -204,18 +223,19 @@ impl MountEngine {
             revision,
             Admission::Demand,
         )?;
-        if installed {
+        if publication.retained {
             // This path was demanded by a foreground callback, so prioritize
             // it for the next bounded refresh cycle.
             self.metadata_cache.mark_directory_access(path)?;
-        } else if slot.revision() == revision && self.metadata_cache.revision(path)?.is_none() {
+        } else if publication.completed_revision.is_some() && self.metadata_cache.revision(path)?.is_none() {
             self.metadata_cache.cool_down_snapshot(path)?;
         }
-        // Successful admission increments this path's revision exactly once.
-        // A concurrent invalidation must never tag old entries with its newer
-        // revision; publish against the expected value, not a reread value.
-        let completed_revision = if installed { revision.wrapping_add(1) } else { revision };
-        slot.complete_directory(completed_revision, expires_at, Arc::clone(&entries))?;
+        // Every successful current observation advances once, retained or not.
+        // Obsolete flights cannot share a completion; a later invalidation
+        // cannot accidentally label these entries with its newer revision.
+        if let Some(revision) = publication.completed_revision {
+            slot.complete_directory(revision, expires_at, Arc::clone(&entries))?;
+        }
         Ok(entries)
     }
 
@@ -242,13 +262,14 @@ impl MountEngine {
         if self.metadata_epoch.load(Ordering::Acquire) != epoch || slot.revision() != revision {
             return Ok(false);
         }
-        let installed = self.install_directory_snapshot(
+        let publication = self.install_directory_snapshot(
             path, observation, depth, &slot, revision, Admission::Refresh,
         )?;
-        Ok(installed)
+        Ok(publication.retained)
     }
 
-    fn preload_directory(&self, path: &str, depth: u8) -> io::Result<bool> {
+    fn preload_directory(&self, ticket: &PreloadTicket) -> io::Result<bool> {
+        let path = ticket.path.as_str();
         let epoch = {
             let _namespace = read_lock(&self.namespace)?;
             self.metadata_epoch.load(Ordering::Acquire)
@@ -256,7 +277,9 @@ impl MountEngine {
         let slot = self.metadata_cache.load_slot(path)?;
         let load = slot.lock()?;
         let revision = slot.revision();
-        if self.metadata_cache.revision(path)?.is_some() {
+        if !self.metadata_cache.preload_ticket_current(ticket)?
+            || self.metadata_cache.revision(path)?.is_some()
+        {
             return Ok(false);
         }
         let hint = self.directory_metadata_hint(path)?;
@@ -267,12 +290,9 @@ impl MountEngine {
         if self.metadata_epoch.load(Ordering::Acquire) != epoch || slot.revision() != revision {
             return Ok(false);
         }
-        let installed = self.install_directory_snapshot(
-            path, observation, depth, &slot, revision, Admission::Speculative,
+        let installed = self.metadata_cache.install_preload_observation(
+            ticket, observation, &slot, revision, &self.metadata_points,
         )?;
-        if !installed && slot.revision() == revision {
-            self.metadata_cache.cool_down_snapshot(path)?;
-        }
         Ok(installed)
     }
 
@@ -284,9 +304,9 @@ impl MountEngine {
         slot: &super::metadata_cache::LoadSlot,
         revision: u64,
         intent: Admission,
-    ) -> io::Result<bool> {
-        self.metadata_cache.install_observation_reconciled(
-            path, observation, depth, Some((slot, revision)), intent, &self.metadata_points,
+    ) -> io::Result<SnapshotPublication> {
+        self.metadata_cache.install_observation_publication(
+            path, observation, depth, slot, revision, intent, &self.metadata_points,
         )
     }
 

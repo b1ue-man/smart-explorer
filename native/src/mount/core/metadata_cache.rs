@@ -15,6 +15,15 @@ mod changes;
 mod schedule;
 #[path = "metadata_cache_order.rs"]
 mod order;
+#[path = "metadata_refresh_order.rs"]
+mod refresh_order;
+#[path = "metadata_preload_records.rs"]
+mod preload_records;
+#[path = "metadata_preload.rs"]
+mod preload;
+#[path = "metadata_snapshot.rs"]
+mod snapshot;
+pub(super) use preload::PreloadTicket;
 #[cfg(test)]
 #[path = "vault_metadata_task_tests.rs"]
 mod vault_task_tests;
@@ -22,8 +31,9 @@ mod vault_task_tests;
 #[path = "vault_metadata_flight_tests.rs"]
 mod vault_flight_tests;
 use load_support::{expire_observed_path, invalidate_descendants, invalidate_paths,
-    invalidate_slot, LoadTable};
-pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup};
+    invalidate_slot, LoadTable, RetiredMetadata};
+pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup,
+    SnapshotPublication};
 #[cfg(test)]
 pub(super) use crate::mount::metadata_batch::run_metadata_batch;
 pub use changes::MetadataChange;
@@ -54,6 +64,9 @@ struct CachedDirectory {
     revision: u64,
     last_attempt: u64,
     deferred_changes: bool,
+    // A successful newer observation disproved this image, but it remains a
+    // charged comparison baseline until change/admission pressure is resolved.
+    comparison_only: bool,
 }
 
 #[derive(Default)]
@@ -69,6 +82,8 @@ struct CacheState {
     clock: u64,
     generation: u64,
     changes: changes::ChangeQueue,
+    refresh: refresh_order::RefreshOrder,
+    preload: preload_records::PreloadRecords,
 }
 
 pub(super) struct MetadataCache {
@@ -133,7 +148,7 @@ impl MetadataCache {
         let Some(cached) = state.directories.get(&key) else {
             return Ok(None);
         };
-        if cached.listing_expires_at <= now {
+        if cached.comparison_only || cached.listing_expires_at <= now {
             return Ok(None);
         }
         let entries = Arc::clone(&cached.entries);
@@ -196,178 +211,70 @@ impl MetadataCache {
         self.install_snapshot(path, observation, depth, admission, intent, Some(points))
     }
 
-    fn install_snapshot(
-        &self, path: &str, observation: DirectoryObservation, depth: u8,
-        admission: Option<(&LoadSlot, u64)>, intent: Admission,
-        points: Option<&super::metadata_point_cache::MetadataPointCache>,
-    ) -> io::Result<bool> {
-        let DirectoryObservation { metadata, metadata_expires_at,
-            entries, listing_expires_at } = observation;
-        let key = self.key(path);
-        let entry_count = entries.len().saturating_add(1);
-        let metadata_bytes = path.len()
-            // Snapshot path, ordered-map key, recency/expiry keys and tree-node
-            // bookkeeping are included, not merely the metadata payload.
-            .saturating_add(key.capacity().saturating_mul(3))
-            .saturating_add(256)
-            .saturating_add(meta_bytes(&metadata))
-            .saturating_add(entries.iter().fold(0usize, |total, metadata| {
-                total.saturating_add(meta_bytes(metadata))
-            }));
-        if metadata_bytes > MAX_CACHED_DIRECTORY_BYTES {
-            return Ok(false);
-        }
-        let (entry_index, index_bytes) = build_entry_index(&entries, self.case_sensitive)?;
-        let byte_count = metadata_bytes
-            .saturating_add(index_bytes)
-            .saturating_add(std::mem::size_of::<CachedDirectory>());
-        if byte_count > MAX_CACHED_DIRECTORY_BYTES {
-            return Ok(false);
-        }
-        let root_key = self.key(&self.root);
-        let mut loads = self.lock_loads()?;
-        let mut state = self.lock_state()?;
-        if admission.is_some_and(|(slot, revision)| slot.revision() != revision) {
-            return Ok(false);
-        }
-        let previous = state.directories.get(&key).cloned();
-        let prepared_change = if let Some(previous) = &previous {
-            let prepared = state.changes.prepare(
-                path,
-                changes::SnapshotImage { entries: Arc::clone(&previous.entries),
-                    index: Arc::clone(&previous.entry_index), bytes: previous.byte_count },
-                changes::SnapshotImage { entries: Arc::clone(&entries),
-                    index: Arc::clone(&entry_index), bytes: byte_count },
-                self.case_sensitive,
-            );
-            let Some(prepared) = prepared else {
-                // Keep this comparison baseline even if an unrelated demand
-                // needs cache space before notification pressure clears.
-                order::pin_changes(&mut state, &key);
-                return Ok(false);
-            };
-            Some(prepared)
-        } else {
-            None
-        };
-        let last_access = previous.as_ref().map_or(0, |cached| cached.last_access);
-        // Subtract a replacement before calculating pressure. Speculation and
-        // maintenance never evict another snapshot, including a demanded one.
-        remove_directory(&mut state, &key);
-        if intent == Admission::Demand {
-            evict_until(
-                &mut state,
-                entry_count,
-                byte_count,
-                &root_key,
-                Some(&key),
-                true,
-            );
-        }
-        if !fits(&state, entry_count, byte_count) {
-            if let Some(previous) = previous {
-                restore_directory(&mut state, key, previous);
-            }
-            return Ok(false);
-        }
-        if let Some(points) = points {
-            // The established order is load table -> snapshots -> points.
-            // Reconcile identity-replaced subtrees before publishing their new
-            // parent authority, without a window for an older point hit.
-            if let Err(error) = points.reconcile_snapshot(path, &entries,
-                previous.as_ref().map(|previous| previous.entries.as_ref()))
-            {
-                if let Some(previous) = previous { restore_directory(&mut state, key, previous); }
-                return Err(error);
-            }
-        }
-        reconcile_loads(&mut loads, &key, &entries, &entry_index,
-            previous.as_ref().map(|previous| (previous.entries.as_ref(),
-                previous.entry_index.as_ref())), self.case_sensitive);
-        // A refresh releases its fetch guard before taking namespace authority.
-        // Any intervening same-path install must also reject that older result.
-        invalidate_slot(&mut loads, &key);
-        let last_touch = tick(&mut state);
-        let retired = prepared_change.and_then(|prepared| state.changes.commit(prepared));
-        state.generation = state.generation.saturating_add(1);
-        order::insert(&mut state,
-            key.clone(),
-            CachedDirectory {
-                path: path.to_string(),
-                metadata,
-                metadata_expires_at,
-                entries: Arc::clone(&entries),
-                listing_expires_at,
-                entry_index,
-                depth,
-                entry_count,
-                byte_count,
-                last_touch,
-                last_access,
-                refreshed_through_access: last_access,
-                revision: last_touch,
-                last_attempt: last_touch,
-                deferred_changes: false,
-            },
-        );
-        order::remove_cooldown(&mut state, &key);
-        reconcile_direct_children(
-            &mut state, &key, &entries, self.case_sensitive,
-            previous.as_ref().map(|previous| (previous.entries.as_ref(), previous.entry_index.as_ref())),
-        );
-        drop(state);
-        drop(loads);
-        drop(previous);
-        drop(retired);
-        Ok(true)
-    }
-
     pub(super) fn invalidate(&self, path: &str, recursive: bool) -> io::Result<()> {
         let key = self.key(path);
         let prefix = format!("{}/", key.trim_end_matches('/'));
         let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
+        let mut retired = RetiredMetadata::default();
         let mut loads = self.lock_loads()?;
-        invalidate_paths(&mut loads, &key, &prefix, recursive, parent_key.as_deref());
+        invalidate_paths(&mut loads, &key, &prefix, recursive, parent_key.as_deref(), &mut retired);
         let mut state = self.lock_state()?;
         state.generation = state.generation.saturating_add(1);
         let mut directory_keys = if recursive { order::descendants(&state.directories, &key) }
             else { Vec::new() };
         directory_keys.push(key.clone());
         for candidate in directory_keys {
-            remove_directory(&mut state, &candidate);
+            remove_directory(&mut state, &candidate, &mut retired);
         }
         let mut cooldowns = if recursive { order::descendants(&state.snapshot_cooldowns, &key) }
             else { Vec::new() };
         cooldowns.push(key.clone());
         for candidate in cooldowns { order::remove_cooldown(&mut state, &candidate); }
         if let Some(parent_key) = parent_key {
-            remove_directory(&mut state, &parent_key);
+            remove_directory(&mut state, &parent_key, &mut retired);
             order::remove_cooldown(&mut state, &parent_key);
         }
         Ok(())
     }
 
     pub(super) fn cool_down_snapshot(&self, path: &str) -> io::Result<()> {
-        let key = self.key(path);
         let mut state = self.lock_state()?;
+        self.cool_down_locked(&mut state, &self.key(path));
+        Ok(())
+    }
+
+    pub(in crate::mount) fn cool_down_preload(&self, ticket: &PreloadTicket) -> io::Result<()> {
+        let mut state = self.lock_state()?;
+        // A failed old flight must not cool down a replacement parent's work.
+        if preload::ticket_current(&state, ticket) {
+            self.cool_down_locked(&mut state, &self.key(&ticket.path));
+        }
+        Ok(())
+    }
+
+    fn cool_down_locked(&self, state: &mut CacheState, key: &str) {
         let now = Instant::now();
-        order::prune_cooldowns(&mut state, now);
-        order::remove_cooldown(&mut state, &key);
+        order::prune_cooldowns(state, now);
+        preload::prune_retries(state, now, self.case_sensitive);
+        order::remove_cooldown(state, key);
         // Retry bookkeeping is disposable too: bound its estimated bytes,
         // rather than imposing a directory count on valid mounted contents.
-        let bytes = order::cooldown_bytes(&key);
+        let bytes = order::cooldown_bytes(key);
         let allowance = MAX_CACHED_BYTES.saturating_sub(state.bytes);
+        let deadline = now + SNAPSHOT_RETRY_DELAY;
         if bytes <= allowance {
             while state.cooldown_bytes.saturating_add(bytes) > allowance {
                 let Some((_, oldest)) = state.cooldown_expiry.first().cloned() else { break; };
-                order::remove_cooldown(&mut state, &oldest);
+                order::remove_cooldown(state, &oldest);
             }
-            let deadline = now + SNAPSHOT_RETRY_DELAY;
             state.cooldown_bytes = state.cooldown_bytes.saturating_add(bytes);
-            state.snapshot_cooldowns.insert(key.clone(), deadline);
-            state.cooldown_expiry.insert((deadline, key));
+            state.snapshot_cooldowns.insert(key.to_string(), deadline);
+            state.cooldown_expiry.insert((deadline, key.to_string()));
+            order::cool_down(state, key);
         }
-        Ok(())
+        // Already charged parent records retain their retry even when pressure
+        // cannot admit a standalone hint; otherwise the worker could hot-loop.
+        preload::cool_down_child(state, key, deadline);
     }
 
     pub(super) fn load_slot(&self, path: &str) -> io::Result<Arc<LoadSlot>> {
@@ -390,7 +297,7 @@ impl MetadataCache {
         let Some((parent, _)) = parent_and_name(path) else { return Ok(None); };
         let state = self.lock_state()?;
         let Some(cached) = state.directories.get(&self.key(parent)) else { return Ok(None); };
-        Ok((cached.listing_expires_at <= Instant::now())
+        Ok((!cached.comparison_only && cached.listing_expires_at <= Instant::now())
             .then(|| (cached.path.clone(), cached.depth)))
     }
 
@@ -407,11 +314,12 @@ impl MetadataCache {
     pub(super) fn note_path_observation(&self, path: &str) -> io::Result<()> {
         let parent_key = parent_and_name(path).map(|(parent, _)| self.key(parent));
         let key = self.key(path);
+        let mut retired = RetiredMetadata::default();
         let mut loads = self.lock_loads()?;
-        invalidate_slot(&mut loads, &key);
-        invalidate_descendants(&mut loads, &key);
+        invalidate_slot(&mut loads, &key, &mut retired);
+        invalidate_descendants(&mut loads, &key, &mut retired);
         if let Some(parent_key) = parent_key.as_ref() {
-            invalidate_slot(&mut loads, parent_key);
+            invalidate_slot(&mut loads, parent_key, &mut retired);
         }
         let mut state = self.lock_state()?;
         expire_observed_path(&mut state, &key, parent_key.as_deref());
