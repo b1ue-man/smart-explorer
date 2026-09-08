@@ -1,7 +1,9 @@
 //! Same-directory acquisition, separate from disposable retention admission.
-use super::{cache_index, cache_support::*, CacheState, CachedDirectory, CachingBackend, CACHE_TTL};
+use super::{cache_index, cache_support::*, cache_retirement::Retirement,
+    CacheState, CachedDirectory, CachingBackend, CACHE_TTL};
 use crate::vfs::{VfsMeta, VfsResult};
 use std::{io, sync::{Arc, Mutex, Weak}, time::{Duration, Instant}};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone)]
 pub(super) struct DirectorySnapshot {
@@ -12,6 +14,7 @@ pub(super) struct DirectorySnapshot {
 
 struct CompletedLoad {
     generation: u64,
+    revision: u64,
     expires_at: Instant,
     result: Result<DirectorySnapshot, SharedFailure>,
 }
@@ -33,6 +36,17 @@ pub(super) struct DirectoryLoad {
     result: Mutex<Option<CompletedLoad>>,
     cache: Weak<Mutex<CacheState>>,
     key: String,
+    revision: AtomicU64,
+}
+
+impl DirectoryLoad {
+    // Call while cache state is locked, without acquiring result. The caller
+    // keeps an upgraded Arc alive until the cache guard has been released.
+    pub(super) fn invalidate(&self) {
+        self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn revision(&self) -> u64 { self.revision.load(Ordering::Acquire) }
 }
 
 impl Drop for DirectoryLoad {
@@ -65,36 +79,46 @@ impl CachingBackend {
 
     fn acquire_directory(&self, path: &str, refresh: bool) -> VfsResult<DirectorySnapshot> {
         let key = Self::norm(path);
+        let mut retired = Retirement::default();
         let slot = {
             let mut cache = self.cache.lock().map_err(|_| unavailable())?;
             if !refresh {
-                if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+                if let Some(snapshot) = cached_snapshot(&mut cache, &key, &mut retired) {
+                    return Ok(snapshot);
+                }
             }
             if let Some(slot) = cache.loads.get(&key).and_then(Weak::upgrade) {
                 slot
             } else {
                 let slot = Arc::new(DirectoryLoad {
                     result: Mutex::new(None), cache: Arc::downgrade(&self.cache), key: key.clone(),
+                    revision: AtomicU64::new(0),
                 });
                 cache.loads.insert(key.clone(), Arc::downgrade(&slot));
                 slot
             }
         };
+        retired.clear();
         // Only this path's acquisition lock spans network work. All waiters
         // retain the same slot, including when its result exceeds retention.
         let mut completed = slot.result.lock().map_err(|_| unavailable())?;
-        let generation = {
+        let (generation, revision) = {
             let mut cache = self.cache.lock().map_err(|_| unavailable())?;
             if !refresh {
-                if let Some(snapshot) = cached_snapshot(&mut cache, &key) { return Ok(snapshot); }
+                if let Some(snapshot) = cached_snapshot(&mut cache, &key, &mut retired) {
+                    return Ok(snapshot);
+                }
             }
             if let Some(result) = completed.as_ref() {
-                if result.generation == cache.generation && result.expires_at > Instant::now() {
+                if result.generation == cache.generation && result.revision == slot.revision()
+                    && result.expires_at > Instant::now()
+                {
                     return result.result.as_ref().cloned().map_err(SharedFailure::error);
                 }
             }
-            cache.generation
+            (cache.generation, slot.revision())
         };
+        retired.clear();
         *completed = None;
         let entries: Arc<[VfsMeta]> = match self.inner.list_dir(path) {
             Ok(entries) => entries.into(),
@@ -103,7 +127,7 @@ impl CachingBackend {
                 // burst into serialized identical failures either. This is
                 // waiter-owned only, never persistent negative authority.
                 *completed = Some(CompletedLoad {
-                    generation, expires_at: Instant::now() + Duration::from_secs(1),
+                    generation, revision, expires_at: Instant::now() + Duration::from_secs(1),
                     result: Err(SharedFailure::capture(&error)),
                 });
                 return Err(error);
@@ -117,12 +141,16 @@ impl CachingBackend {
         let byte_count = cached_bytes(cached_metadata_bytes(&key, &entries), index_bytes);
         let snapshot = DirectorySnapshot { entries, index: Arc::new(index), expires_at };
         let mut cache = self.cache.lock().map_err(|_| unavailable())?;
-        if cache.generation != generation { return Ok(snapshot); }
-        *completed = Some(CompletedLoad { generation, expires_at, result: Ok(snapshot.clone()) });
+        if cache.generation != generation || slot.revision() != revision { return Ok(snapshot); }
+        *completed = Some(CompletedLoad {
+            generation, revision, expires_at, result: Ok(snapshot.clone()),
+        });
+        // A successful newer observation retires old authority independently
+        // of its retention size. Waiters can still share this complete result.
+        remove_directory(&mut cache, &key, &mut retired);
         if entry_count <= self.limits.entries && byte_count <= self.limits.bytes {
-            purge_expired(&mut cache);
-            remove_directory(&mut cache, &key);
-            evict_until(&mut cache, entry_count, byte_count, self.limits);
+            purge_expired(&mut cache, &mut retired);
+            evict_until(&mut cache, entry_count, byte_count, self.limits, &mut retired);
             if cache.directories.len() < self.limits.directories
                 && fits(&cache, entry_count, byte_count, self.limits) {
                 let last_touch = tick(&mut cache);
@@ -135,6 +163,9 @@ impl CachingBackend {
                 });
             }
         }
+        drop(cache);
+        drop(completed);
+        drop(retired);
         Ok(snapshot)
     }
 }

@@ -123,32 +123,34 @@ impl RootedBackend {
         for_write: bool,
     ) -> io::Result<String> {
         (|| {
-            let virtual_components = canonical_virtual_components(virtual_path)?;
-            if !self.case_sensitive_paths {
-                for component in &virtual_components {
-                    crate::mount::validate_windows_case_component(component)?;
-                }
-            }
-            if self.windows_paths {
-                validate_windows_components(&virtual_components)?;
-            }
-            let (resolver, case_cache) = if for_write {
-                (&self.raw_inner, None)
-            } else {
-                (&self.inner, Some(self.case_cache.as_ref()))
-            };
-            super::rooted_backend_case::resolve(
-                resolver,
-                case_cache,
-                self.revalidate_root.then_some(&self.raw_inner),
-                &self.root,
-                &self.root_ancestors,
-                &virtual_components,
-                allow_missing,
-                self.case_sensitive_paths,
-            )
+            let components = self.checked_components(virtual_path)?;
+            self.resolver(for_write).resolve(&components, allow_missing)
         })()
         .map_err(sanitize_error)
+    }
+
+    fn checked_components(&self, virtual_path: &str) -> io::Result<Vec<String>> {
+        let components = canonical_virtual_components(virtual_path)?;
+        if !self.case_sensitive_paths {
+            for component in &components {
+                crate::mount::validate_windows_case_component(component)?;
+            }
+        }
+        if self.windows_paths {
+            validate_windows_components(&components)?;
+        }
+        Ok(components)
+    }
+
+    fn resolver(&self, for_write: bool) -> super::rooted_backend_case::PathResolver<'_> {
+        super::rooted_backend_case::PathResolver {
+            backend: if for_write { &self.raw_inner } else { &self.inner },
+            case_cache: (!for_write).then_some(self.case_cache.as_ref()),
+            root_validator: self.revalidate_root.then_some(&self.raw_inner),
+            root: &self.root,
+            root_ancestors: &self.root_ancestors,
+            case_sensitive: self.case_sensitive_paths,
+        }
     }
 
     fn require_write(&self) -> io::Result<()> {
@@ -191,9 +193,10 @@ impl Backend for RootedBackend {
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let _operation = self.operation.read()?;
+        let components = self.checked_components(path).map_err(sanitize_error)?;
         let mut metadata = self
-            .raw_inner
-            .stat(&self.checked_existing(path)?)
+            .resolver(false)
+            .stat(&components, &self.raw_inner)
             .map(sanitize_metadata)
             .map_err(sanitize_error)?;
         if path == "/" {
