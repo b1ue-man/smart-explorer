@@ -1,68 +1,108 @@
-use crate::vfs::{BackendHandle, CachingBackend};
+use crate::vfs::{BackendHandle, CachingBackend, VfsMeta};
 use std::io;
 
 /// Resolves one helper-owned virtual path below its authorized backend root.
 /// Backends without a proven case-sensitive contract are made predictably
 /// case-insensitive here: each component must resolve to at most one physical
 /// child, and the backend's preserved spelling is used for every operation.
-pub(super) fn resolve(
-    backend: &BackendHandle,
-    case_cache: Option<&CachingBackend>,
-    root_validator: Option<&BackendHandle>,
-    root: &str,
-    root_ancestors: &[String],
-    requested_components: &[String],
-    allow_missing: bool,
-    case_sensitive: bool,
-) -> io::Result<String> {
-    if let Some(root_validator) = root_validator {
-        validate_root(root_validator, root_ancestors)?;
+pub(super) struct PathResolver<'a> {
+    pub backend: &'a BackendHandle,
+    pub case_cache: Option<&'a CachingBackend>,
+    pub root_validator: Option<&'a BackendHandle>,
+    pub root: &'a str,
+    pub root_ancestors: &'a [String],
+    pub case_sensitive: bool,
+}
+
+impl PathResolver<'_> {
+    pub fn resolve(&self, components: &[String], allow_missing: bool) -> io::Result<String> {
+        self.walk(components, allow_missing, None).map(|(path, _)| path)
     }
-    let mut current = root.to_string();
-    let mut missing = false;
-    for (index, requested) in requested_components.iter().enumerate() {
-        if missing {
-            current = join(&current, requested);
-            continue;
-        }
-        let is_final = index + 1 == requested_components.len();
-        let (candidate, listed_metadata) = if case_sensitive {
-            (join(&current, requested), None)
-        } else {
-            match unique_child(backend, case_cache, &current, requested)? {
-                Some(metadata) => {
-                    let candidate = join(&current, &metadata.name);
-                    (candidate, Some(metadata))
-                }
-                None if allow_missing => {
-                    missing = true;
-                    current = join(&current, requested);
-                    continue;
-                }
-                None => return Err(not_found()),
-            }
-        };
-        if let Some(metadata) = listed_metadata {
-            // Case-folded lookup already had to list this exact parent. Reuse
-            // that entry's type/link facts instead of a second remote stat.
-            // Enforced confinement remains the backend's independent contract;
-            // trusted-root backends already cannot make this lookup atomic
-            // against external namespace races.
-            validate_entry(&metadata, is_final)?;
-        } else {
-            match backend.stat(&candidate) {
-                Ok(metadata) => validate_entry(&metadata, is_final)?,
-                Err(stat_error) => match backend.try_exists(&candidate) {
-                    Ok(false) if allow_missing => missing = true,
-                    Ok(false) => return Err(not_found()),
-                    Ok(true) => return Err(stat_error),
-                    Err(probe_error) => return Err(probe_error),
-                },
-            }
-        }
-        current = candidate;
+
+    /// One fresh terminal observation supplies both link validation and the
+    /// returned metadata. Parent-listing metadata is never a fresh stat result.
+    pub fn stat(&self, components: &[String], raw: &BackendHandle) -> io::Result<VfsMeta> {
+        let (_, metadata) = self.walk(components, false, Some(raw))?;
+        metadata.ok_or_else(|| io::Error::other("resolved stat has no terminal metadata"))
     }
-    Ok(current)
+
+    fn walk(&self, components: &[String], allow_missing: bool,
+        terminal: Option<&BackendHandle>) -> io::Result<(String, Option<VfsMeta>)> {
+        let root_metadata = self.root_validator
+            .map(|validator| validate_root(validator, self.root_ancestors)).transpose()?;
+        let mut current = self.root.to_string();
+        if components.is_empty() {
+            let metadata = match terminal {
+                Some(raw) => {
+                    let metadata = match root_metadata {
+                        Some(metadata) => metadata,
+                        None => raw.stat(&current)?,
+                    };
+                    validate_entry(&metadata, false)?;
+                    Some(metadata)
+                }
+                None => None,
+            };
+            return Ok((current, metadata));
+        }
+        let mut missing = false;
+        for (index, requested) in components.iter().enumerate() {
+            if missing {
+                append_component(&mut current, requested);
+                continue;
+            }
+            let is_final = index + 1 == components.len();
+            let listed_metadata = if self.case_sensitive {
+                append_component(&mut current, requested);
+                None
+            } else {
+                match unique_child(self.backend, self.case_cache, &current, requested)? {
+                    Some(metadata) => {
+                        append_component(&mut current, &metadata.name);
+                        Some(metadata)
+                    }
+                    None if allow_missing => {
+                        missing = true;
+                        append_component(&mut current, requested);
+                        continue;
+                    }
+                    None => return Err(not_found()),
+                }
+            };
+            if let Some(metadata) = &listed_metadata {
+                validate_entry(metadata, is_final)?;
+            }
+            if let Some(raw) = terminal.filter(|_| is_final) {
+                let metadata = match raw.stat(&current) {
+                    Ok(metadata) => metadata,
+                    // Keep the previous cold case-sensitive error contract,
+                    // but do not add a probe or second stat to the success path.
+                    Err(error) if listed_metadata.is_none() => {
+                        return Err(match raw.try_exists(&current) {
+                            Ok(false) => not_found(),
+                            Ok(true) => error,
+                            Err(probe) => probe,
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
+                validate_entry(&metadata, true)?;
+                return Ok((current, Some(metadata)));
+            }
+            if listed_metadata.is_none() {
+                match self.backend.stat(&current) {
+                    Ok(metadata) => validate_entry(&metadata, is_final)?,
+                    Err(stat_error) => match self.backend.try_exists(&current) {
+                        Ok(false) if allow_missing => missing = true,
+                        Ok(false) => return Err(not_found()),
+                        Ok(true) => return Err(stat_error),
+                        Err(probe_error) => return Err(probe_error),
+                    },
+                }
+            }
+        }
+        Ok((current, None))
+    }
 }
 
 pub(super) fn validate_root(
@@ -154,12 +194,13 @@ fn validate_child_name(name: &str) -> io::Result<()> {
     }
 }
 
-fn join(parent: &str, child: &str) -> String {
-    if parent == "/" {
-        format!("/{child}")
-    } else {
-        format!("{}/{child}", parent.trim_end_matches('/'))
-    }
+fn append_component(path: &mut String, child: &str) {
+    // Reuse the growing allocation; constructing a new joined prefix at every
+    // component copies a deep path's earlier bytes repeatedly.
+    let length = path.trim_end_matches('/').len();
+    path.truncate(length);
+    path.push('/');
+    path.push_str(child);
 }
 
 fn not_found() -> io::Error {

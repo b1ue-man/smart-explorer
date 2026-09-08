@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -16,8 +16,11 @@ mod cache_support;
 mod cache_writer;
 #[path = "cache_load.rs"]
 mod cache_load;
+#[path = "cache_retirement.rs"]
+mod cache_retirement;
 use cache_index::ChildKey;
 use cache_load::{DirectoryLoad, DirectorySnapshot};
+use cache_retirement::Retirement;
 use cache_support::*;
 use cache_writer::InvalidatingWriter;
 
@@ -53,10 +56,12 @@ pub(super) struct CacheState {
     directories: BTreeMap<String, CachedDirectory>,
     recency: BTreeSet<(u64, String)>,
     expiry: BTreeSet<(Instant, String)>,
-    loads: HashMap<String, Weak<DirectoryLoad>>,
+    loads: BTreeMap<String, Weak<DirectoryLoad>>,
     entries: usize,
     bytes: usize,
     clock: u64,
+    // Only explicit whole-cache invalidation advances this epoch. Ordinary
+    // mutations fence the affected live DirectoryLoad revisions instead.
     generation: u64,
 }
 
@@ -97,6 +102,7 @@ impl CachingBackend {
     }
 
     fn parent_of(key: &str) -> Option<String> {
+        if key == "/" { return None; }
         key.rfind('/').map(|i| {
             if i == 0 {
                 "/".to_string()
@@ -126,8 +132,12 @@ impl CachingBackend {
 
     fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
         let (parent, name) = Self::parent_and_name(key)?;
-        let mut cache = self.cache.lock().ok()?;
-        let snapshot = cached_snapshot(&mut cache, &parent)?;
+        let mut retired = Retirement::default();
+        let snapshot = {
+            let mut cache = self.cache.lock().ok()?;
+            cached_snapshot(&mut cache, &parent, &mut retired)?
+        };
+        drop(retired);
         let key = (self.child_key)(name);
         cache_index::lookup(&snapshot.entries, &snapshot.index, &key)
             .ok()
@@ -139,26 +149,7 @@ impl CachingBackend {
     }
 
     fn invalidate_prefix(&self, path: &str) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.generation = cache.generation.wrapping_add(1);
-            let key = Self::norm(path);
-            let child_prefix = if key == "/" {
-                "/".to_string()
-            } else {
-                format!("{key}/")
-            };
-            let removed = cache.directories.range(child_prefix.clone()..)
-                .take_while(|(cached, _)| cached.starts_with(&child_prefix))
-                .map(|(cached, _)| cached.clone())
-                .collect::<Vec<_>>();
-            remove_directory(&mut cache, &key);
-            for cached in removed {
-                remove_directory(&mut cache, &cached);
-            }
-            if let Some(parent) = Self::parent_of(&key) {
-                remove_directory(&mut cache, &parent);
-            }
-        }
+        cache_support::invalidate_prefix(&self.cache, path);
     }
 
     fn invalidate_ancestors(&self, path: &str) {
@@ -349,15 +340,18 @@ impl Backend for CachingBackend {
         self.inner.changes_since(root, cursor)
     }
     fn invalidate_cache(&self) {
-        if let Ok(mut cache) = self.cache.lock() {
+        let retired = if let Ok(mut cache) = self.cache.lock() {
             let generation = cache.generation.wrapping_add(1);
             let loads = std::mem::take(&mut cache.loads);
-            *cache = CacheState {
+            Some(std::mem::replace(&mut *cache, CacheState {
                 generation,
                 loads,
                 ..CacheState::default()
-            };
-        }
+            }))
+        } else { None };
+        // The global epoch fences every live flight; registrations survive so
+        // their waiters still serialize. Old snapshot destructors run unlocked.
+        drop(retired);
     }
     fn delete_disposition(&self) -> DeleteDisposition {
         self.inner.delete_disposition()
