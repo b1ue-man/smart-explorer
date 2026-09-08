@@ -9,7 +9,7 @@ of Dokany. The corrected DLL still uses API 231 and driver protocol 0x190/400.
 
 The source is the immutable Dokany commit
 `f1d5de68ff459af94e309cfdd171e4b8ca2af4dd` (v2.3.1.1000), obtained from the URL,
-exact ZIP length and SHA-256 in `recipe.json`. `batching.patch` makes three
+exact ZIP length and SHA-256 in `recipe.json`. `batching.patch` makes five
 bounded changes:
 
 - Normalize batching/SingleThread worker options before sending them to the
@@ -21,11 +21,32 @@ bounded changes:
 - Export `ULONGLONG DOKANAPI SmartExplorerBatchContinuationCountV1(DOKAN_HANDLE)`.
   Query only through the owning DLL while that filesystem handle remains open;
   this counter proves continuation dispatch, not successful remote writes.
+- Resume cached directory enumeration directly at the supplied vector index
+  when library-side pattern filtering is disabled. Small buffers no longer
+  require revisiting the already-delivered prefix. The filtered fallback keeps
+  its matched-entry indexing, and restart/EOF/overflow behavior is unchanged.
+- Preserve failed metadata callback statuses instead of replacing every failure
+  with `STATUS_INVALID_PARAMETER`. An invalid asynchronous pending status is
+  still rejected by end-dispatch rather than sent as a completed operation.
+
+The two bulk-access corrections above were added on 2026-09-08 and checked
+against the exact pinned archive without building or loading a DLL. The source
+recipe is a candidate: the previously approved files in
+`native/assets/dokany-private/` do **not** contain these corrections and no longer
+match this recipe. They have deliberately not been relabeled. Before the next
+Windows build/acceptance, the remote preparation stage must produce new exact
+DLL/source bytes and pass their trusted override hashes to the build. Normal
+approved-asset verification fails closed until that new set is approved and
+committed. The official-runtime fallback remains unchanged and does not inherit
+these private-library corrections.
 
 Primary sources checked 2026-09-06: [pinned source](https://github.com/dokan-dev/dokany/tree/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd),
 [project settings](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd/dokan/dokan.vcxproj),
 [atomic alignment contract](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-interlockedincrement64),
 and [PE/COFF layout](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
+Bulk-access sources checked 2026-09-08:
+[directory continuation](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd/dokan/directory.c)
+and [metadata completion](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd/dokan/fileinfo.c).
 
 ## One preparation stage, exact-byte release reuse
 
@@ -123,7 +144,8 @@ does not prove how somebody built a DLL.
 
 Dokany's library is LGPL-3.0-or-later; see `LICENSE.LGPL-3.0.txt` (copied from
 the pinned source) and `LICENSE.GPL-3.0.txt` (GNU's GPLv3 text). Preserve upstream
-copyright notices. Smart Explorer's modifications are dated 2026-09-06 and are
+copyright notices. Smart Explorer's modifications are dated 2026-09-06 and
+2026-09-08 and are
 identified by this recipe and patch. The corresponding-source ZIP contains
 the complete patched upstream source, this recipe, the patch, preparation
 script, this README and both license texts, before compiler outputs exist.

@@ -128,3 +128,39 @@ diff --git a/dokan/dokan.def b/dokan/dokan.def
  DokanUnmount
  DokanIsNameInExpression
  DokanServiceInstall
+diff --git a/dokan/directory.c b/dokan/directory.c
+--- a/dokan/directory.c
++++ b/dokan/directory.c
+@@ -406,8 +406,16 @@
+        IoEvent->DokanOpenInfo->UnimplementedFindFilesWithPattern)) {
+     patternCheck = TRUE;
+   }
+
+-  for (size_t i = 0; i < DokanVector_GetCount(DirList); ++i) {
++  // Without library-side filtering, result indices are vector positions.
++  // Resume there instead of rescanning the delivered prefix for each buffer.
++  // Filtered fallback must still count matches from zero.
++  size_t firstEntry = 0;
++  if (!patternCheck) {
++    index = IoEvent->EventContext->Operation.Directory.FileIndex;
++    firstEntry = (size_t)index;
++  }
++  for (size_t i = firstEntry; i < DokanVector_GetCount(DirList); ++i) {
+     PDOKAN_FIND_DATA find = (PDOKAN_FIND_DATA)DokanVector_GetItem(DirList, i);
+     DbgPrintW(L"FileMatch? : %s (%s,%d,%d)\n", find->FindData.cFileName,
+               (pattern ? pattern : L"null"),
+diff --git a/dokan/fileinfo.c b/dokan/fileinfo.c
+--- a/dokan/fileinfo.c
++++ b/dokan/fileinfo.c
+@@ -312,7 +312,10 @@
+
+   if (Status != STATUS_SUCCESS) {
+-    IoEvent->EventResult->Status = STATUS_INVALID_PARAMETER;
++    // Preserve the filesystem's failure (e.g. missing or access denied).
++    // An end-dispatch call cannot complete an asynchronous pending request.
++    IoEvent->EventResult->Status =
++        Status == STATUS_PENDING ? STATUS_INTERNAL_ERROR : Status;
+     IoEvent->EventResult->BufferLength = 0;
+   } else {
+     ULONG fileInformationClass =
+         IoEvent->EventContext->Operation.File.FileInformationClass;
