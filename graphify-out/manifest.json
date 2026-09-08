@@ -2425,9 +2425,9 @@
     "semantic_hash": "59a6a99e4972fbff1cf5d91072b79256"
   },
   "mount/core/metadata_preload_task_tests.rs": {
-    "mtime": 1788859098.838705,
-    "ast_hash": "a7849e29fe1a9ac36c177db4a02a1d51",
-    "semantic_hash": "a7849e29fe1a9ac36c177db4a02a1d51"
+    "mtime": 1788861533.278412,
+    "ast_hash": "6e96d41ea558666ccd06721c46306d80",
+    "semantic_hash": "6e96d41ea558666ccd06721c46306d80"
   },
   "mount/core/metadata_refresh_order.rs": {
     "mtime": 1788854266.2821538,
