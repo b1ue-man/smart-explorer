@@ -175,7 +175,12 @@ async function main() {
     // Retain actual owned-fixture names, not just a count: a delivered event
     // with a mismatched path must be distinguishable from lost notification.
     if (watchSamples.length < 16) watchSamples.push({ event, filename, save_armed: saveArmed });
-    if (typeof filename === 'string' && filename.replaceAll('\\', '/').toLowerCase() === watchTarget) {
+    // At a drive-root watch, pinned libuv's long-name expansion reports a
+    // leading separator for existing names but not removals (run 34213200355).
+    // Compare the exact Windows path identity, not that representation detail;
+    // other drives, siblings and arbitrary unrelated events still cannot match.
+    if (typeof filename === 'string' &&
+        path.resolve(root, filename).toLowerCase() === path.resolve(root, watchTarget).toLowerCase()) {
       targetSeen = true;
       targetReady?.();
     } else if (filename == null && saveArmed) {
