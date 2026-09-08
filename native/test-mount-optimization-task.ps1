@@ -109,7 +109,8 @@ if ($nodeDetails.node -ne '24.20.0' -or $nodeDetails.uv -ne '1.52.1' -or
 # Parse the checked-in PowerShell code before invoking any subprocess. The
 # actual checker is then exercised under Windows PowerShell 5.1 by the fixture.
 $cacheHelper = Join-Path $nativeRoot 'mount-task-binary-cache.ps1'
-foreach ($path in @($PSCommandPath, $cacheHelper, $env:SMART_EXPLORER_MOUNT_CHECKER,
+$toolchainHelper = Join-Path $nativeRoot 'mount-task-toolchain.ps1'
+foreach ($path in @($PSCommandPath, $cacheHelper, $toolchainHelper, $env:SMART_EXPLORER_MOUNT_CHECKER,
         (Join-Path $nativeRoot 'fetch-dokany-runtime.ps1'),
         (Join-Path $nativeRoot 'prepare-dokany-private.ps1'))) {
     $tokens = $null
@@ -118,6 +119,7 @@ foreach ($path in @($PSCommandPath, $cacheHelper, $env:SMART_EXPLORER_MOUNT_CHEC
     if ($errors.Count -ne 0) { throw "PowerShell syntax error in $path`: $($errors.Message -join '; ')" }
 }
 . $cacheHelper
+. $toolchainHelper
 
 $system = [Environment]::SystemDirectory
 $dll = Join-Path $system 'dokan2.dll'
@@ -158,8 +160,12 @@ $dependencyRoot = if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
     Join-Path $LogRoot 'dependency-cache'
 } else { [IO.Path]::GetFullPath($DependencyCacheRoot) }
 [void][IO.Directory]::CreateDirectory($dependencyRoot)
+$privateDirectory = Join-Path $dependencyRoot 'private-dokany'
+if (-not (Test-Path -LiteralPath $privateDirectory)) {
+    Ensure-MountTaskDokanyToolchain -LogRoot $LogRoot -Install:$InstallRuntime
+}
 $prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') `
-    -ArtifactDirectory (Join-Path $dependencyRoot 'private-dokany')
+    -ArtifactDirectory $privateDirectory
 $env:SMART_EXPLORER_DOKANY_DLL_DIR = $prepared.Directory
 $env:SMART_EXPLORER_DOKANY_DLL_SHA256 = $prepared.DllSha256
 $dependencyEvidence = Join-Path $LogRoot 'private-dokany'

@@ -535,6 +535,8 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    bereitet die geänderte private DLL im selben Job vor bzw. verwendet sie
    rezeptgebunden wieder. Nur die dort akzeptierten
    exakten Bytes werden anschließend für den Release übernommen.
+   Fehlen dem Runner VS-2022-C++-Tools, richtet der Einstiegspunkt sie dort
+   gezielt über einen hash- und signaturgeprüften Microsoft-Bootstrapper ein.
    Der separate Speicheranalyse-Zugriffsfix nutzt ausschließlich
    `analytics-access-task.yml` mit `native/test-analytics-access-task.ps1`
    (Windows 2025, echte Zugriffs-/Token-Prüfung); er wiederholt nicht die
