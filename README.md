@@ -531,9 +531,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    Der Mount-Massenzugriffs-Block nutzt ausschließlich
    `mount-optimization-task.yml` auf Windows 2025 mit
    `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,
-   tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi. Mit dem expliziten
-   `-PreparePrivateDependency` wird die geänderte private DLL im selben Job
-   vorbereitet bzw. rezeptgebunden wiederverwendet. Nur die dort akzeptierten
+   tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi. Der Einstiegspunkt
+   bereitet die geänderte private DLL im selben Job vor bzw. verwendet sie
+   rezeptgebunden wieder. Nur die dort akzeptierten
    exakten Bytes werden anschließend für den Release übernommen.
    Der separate Speicheranalyse-Zugriffsfix nutzt ausschließlich
    `analytics-access-task.yml` mit `native/test-analytics-access-task.ps1`

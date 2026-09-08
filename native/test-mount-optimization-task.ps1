@@ -4,7 +4,6 @@ param(
     [string]$LogRoot = '',
     [string]$BinaryCacheRoot = '',
     [switch]$InstallRuntime,
-    [switch]$PreparePrivateDependency,
     [string]$DependencyCacheRoot = ''
 )
 
@@ -152,21 +151,15 @@ $startDriver = Invoke-TaskProcess (Join-Path $system 'sc.exe') @('start', 'dokan
 if ($startDriver.Code -notin @(0, 1056)) { throw "Could not start Dokany driver: $($startDriver.Output)" }
 
 
-# Preparation is explicit and confined to this remote acceptance entrypoint.
+# Preparation is confined to this remote acceptance entrypoint.
 # The existing builder validates recipe-bound cached bytes before reuse; normal
 # builds and the terminal release still require the committed approved set.
-if ($PreparePrivateDependency) {
-    $dependencyRoot = if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
-        Join-Path $LogRoot 'dependency-cache'
-    } else { [IO.Path]::GetFullPath($DependencyCacheRoot) }
-    [void][IO.Directory]::CreateDirectory($dependencyRoot)
-    $prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') `
-        -ArtifactDirectory (Join-Path $dependencyRoot 'private-dokany')
-} else {
-    $approved = Join-Path $nativeRoot 'assets/dokany-private'
-    $prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') `
-        -ArtifactDirectory $approved -VerifyOnly -RequireApproved
-}
+$dependencyRoot = if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
+    Join-Path $LogRoot 'dependency-cache'
+} else { [IO.Path]::GetFullPath($DependencyCacheRoot) }
+[void][IO.Directory]::CreateDirectory($dependencyRoot)
+$prepared = & (Join-Path $nativeRoot 'prepare-dokany-private.ps1') `
+    -ArtifactDirectory (Join-Path $dependencyRoot 'private-dokany')
 $env:SMART_EXPLORER_DOKANY_DLL_DIR = $prepared.Directory
 $env:SMART_EXPLORER_DOKANY_DLL_SHA256 = $prepared.DllSha256
 $dependencyEvidence = Join-Path $LogRoot 'private-dokany'

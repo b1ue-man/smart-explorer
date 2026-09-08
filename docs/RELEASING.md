@@ -173,11 +173,11 @@ That historical entrypoint is not an additional gate for the current
 optimization batch. Its relevant regression coverage runs inside
 `native/test-mount-optimization-task.ps1`, selected by the exact-candidate
 `.github/workflows/mount-optimization-task.yml` dispatch on `windows-2025`.
-The bulk-access follow-up passes `-PreparePrivateDependency` to prepare the
-changed pinned recipe, or reuse an intact recipe-bound cache, in that same job.
+The bulk-access entrypoint prepares the changed pinned recipe, or reuses an
+intact recipe-bound cache, in that same job without a workflow change.
 The current Windows 2025 image supplies VS 2022/v143 (inventory checked
 2026-09-08); the builder still verifies its exact toolchain requirements.
-Without that explicit switch the entrypoint requires committed approved bytes.
+Ordinary builds and the release wrapper still require committed approved bytes.
 Successful acceptance exports the exact DLL/manifest/source archive with the
 candidate approval; retain those bytes before the terminal release, which must
 not rebuild or substitute the dependency. Its single
