@@ -121,6 +121,20 @@ accept unrelated events or change production notifications. The next invocation
 uses that same complete suite; no dependency rebuild or release is authorized
 by either failed run.
 
+Run `34214582060` delivered the controlled Node notification and completed the
+native metadata, continuation and status-propagation phases. Its overwrite
+attribute case failed; the Win32 truncation probe had not established the native
+create disposition it expected to exercise. [Rust at the recorded compiler](https://github.com/rust-lang/rust/blob/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/sys/fs/windows.rs)
+uses `TRUNCATE_EXISTING` for this exact
+option combination, not its separate manual `OPEN_ALWAYS` truncation branch.
+No production change follows from assuming how that Win32 request is translated.
+The revised case explicitly calls [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+with `FILE_OVERWRITE`, synchronous non-directory options and owned native storage,
+and verifies the received callback disposition before asserting rejection.
+Microsoft's object attributes, Unicode-string, I/O-status and synchronous-call
+contracts were rechecked 2026-09-08. The remaining Win32 existing-object/create
+cases and backend-content invariants remain unchanged in the same suite.
+
 ## Stage one: current source findings
 
 - `handle_state/validation.rs` scans every live handle under global locks on
