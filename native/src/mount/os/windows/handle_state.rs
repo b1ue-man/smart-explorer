@@ -12,6 +12,9 @@ use crate::mount::{DeleteToken, MountEngine};
 mod validation;
 mod share_index;
 
+#[cfg(test)]
+mod bulk_handle_task_tests;
+
 use self::validation::{
     check_share_compatibility, matching_delete_type, snapshot_record, validate_record,
 };

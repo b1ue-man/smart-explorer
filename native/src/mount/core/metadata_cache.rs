@@ -30,6 +30,9 @@ mod vault_task_tests;
 #[cfg(test)]
 #[path = "vault_metadata_flight_tests.rs"]
 mod vault_flight_tests;
+#[cfg(test)]
+#[path = "bulk_metadata_task_tests.rs"]
+mod bulk_task_tests;
 use load_support::{expire_observed_path, invalidate_descendants, invalidate_paths,
     invalidate_slot, LoadTable, RetiredMetadata};
 pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup,

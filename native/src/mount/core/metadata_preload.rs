@@ -6,6 +6,10 @@ use std::time::Instant;
 
 const DISCOVERY_BUDGET: usize = 4096;
 
+#[cfg(test)]
+#[path = "metadata_preload_task_tests.rs"]
+mod task_tests;
+
 pub(in crate::mount) struct PreloadTicket {
     pub(in crate::mount) path: String,
     pub(in crate::mount) depth: u8,

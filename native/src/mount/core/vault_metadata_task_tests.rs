@@ -16,8 +16,13 @@ pub(super) fn file(name: &str, generation: i64) -> VfsMeta {
 }
 
 pub(super) fn observation(entries: Vec<VfsMeta>) -> DirectoryObservation {
+    observation_at("/", entries)
+}
+
+pub(super) fn observation_at(path: &str, entries: Vec<VfsMeta>) -> DirectoryObservation {
     let expires = Instant::now() + super::DIRECTORY_TTL;
-    DirectoryObservation { metadata: directory("/"), metadata_expires_at: expires,
+    let name = if path == "/" { "/" } else { path.rsplit('/').next().unwrap() };
+    DirectoryObservation { metadata: directory(name), metadata_expires_at: expires,
         entries: entries.into(), listing_expires_at: expires }
 }
 
@@ -69,6 +74,11 @@ fn mount_vault_task_root_is_not_its_own_descendant() -> io::Result<()> {
 
     let root_revision = root.revision();
     let child_revision = child.revision();
+    assert!(!cache.install_point_if_current("/", &root, root_revision,
+        &points, Some(directory("/")))?, "a fresh snapshot wins over a racing point");
+    assert_eq!(root.revision(), root_revision);
+    assert_eq!(child.revision(), child_revision);
+    cache.test_expire_directory("/")?;
     assert!(cache.install_point_if_current("/", &root, root_revision,
         &points, Some(directory("/")))?);
     assert_eq!(root.revision(), root_revision.wrapping_add(1));
@@ -87,7 +97,8 @@ fn mount_vault_task_more_than_4096_small_directories_remain_reusable() -> io::Re
         .map(|index| directory(&format!("d{index}"))).collect()), 0, None, Admission::Demand)?);
     for index in 0..count {
         assert!(cache.install_observation(&format!("/d{index}"),
-            observation(vec![file("note.md", 1)]), 1, None, Admission::Demand)?);
+            observation_at(&format!("/d{index}"), vec![file("note.md", 1)]),
+            1, None, Admission::Demand)?);
     }
     assert_eq!(cache.usage()?.0, count + 1);
     assert!(cache.usage()?.2 < MAX_CACHED_BYTES);
@@ -106,11 +117,11 @@ fn mount_vault_task_unchanged_parent_preserves_child_and_replacement_invalidates
     let points = MetadataPointCache::new(true);
     let parent = vec![directory("a"), directory("ab")];
     assert!(cache.install_observation("/", observation(parent.clone()), 0, None, Admission::Demand)?);
-    assert!(cache.install_observation("/a", observation(vec![directory("deep")]),
+    assert!(cache.install_observation("/a", observation_at("/a", vec![directory("deep")]),
         1, None, Admission::Demand)?);
-    assert!(cache.install_observation("/a/deep", observation(vec![file("note", 1)]),
+    assert!(cache.install_observation("/a/deep", observation_at("/a/deep", vec![file("note", 1)]),
         2, None, Admission::Demand)?);
-    assert!(cache.install_observation("/ab", observation(vec![file("safe", 1)]),
+    assert!(cache.install_observation("/ab", observation_at("/ab", vec![file("safe", 1)]),
         1, None, Admission::Demand)?);
     let child = cache.load_slot("/a")?;
     let nested = cache.load_slot("/a/deep")?;
@@ -138,7 +149,7 @@ fn mount_vault_task_unchanged_parent_preserves_child_and_replacement_invalidates
     assert!(cache.directory("/a/deep")?.is_none());
     assert!(matches!(points.lookup("/a/deep/point")?, MetadataLookup::Uncached));
     assert!(matches!(points.lookup("/ab/point")?, MetadataLookup::Found(_)));
-    assert!(!cache.install_observation("/a/deep", observation(vec![file("stale", 1)]),
+    assert!(!cache.install_observation("/a/deep", observation_at("/a/deep", vec![file("stale", 1)]),
         2, Some((&nested, nested_revision)), Admission::Demand)?);
     assert!(cache.directory("/ab")?.is_some());
 
@@ -159,11 +170,11 @@ fn mount_vault_task_byte_lru_can_evict_root_without_evicting_speculatively() -> 
     cache.test_fill_retention("/")?;
     let before = cache.usage()?;
     let root_revision = cache.revision("/")?;
-    assert!(!cache.install_observation("/child", observation(vec![file("note", 1)]),
+    assert!(!cache.install_observation("/child", observation_at("/child", vec![file("note", 1)]),
         1, None, Admission::Speculative)?);
     assert_eq!(cache.usage()?, before);
     assert_eq!(cache.revision("/")?, root_revision);
-    assert!(cache.install_observation("/child", observation(vec![file("note", 1)]),
+    assert!(cache.install_observation("/child", observation_at("/child", vec![file("note", 1)]),
         1, None, Admission::Demand)?);
     assert!(cache.revision("/")?.is_none(), "root is ordinary byte-LRU, not permanently pinned");
     assert!(cache.directory("/child")?.is_some());
@@ -177,10 +188,10 @@ fn mount_vault_task_notification_byte_pressure_retains_baseline_and_retries() ->
     assert!(cache.install_observation("/", observation(vec![directory("a"), directory("b")]),
         0, None, Admission::Demand)?);
     for path in ["/a", "/b"] {
-        assert!(cache.install_observation(path, observation(vec![file("note", 1)]),
+        assert!(cache.install_observation(path, observation_at(path, vec![file("note", 1)]),
             1, None, Admission::Demand)?);
     }
-    assert!(cache.install_observation("/a", observation(vec![file("note", 2)]),
+    assert!(cache.install_observation("/a", observation_at("/a", vec![file("note", 2)]),
         1, None, Admission::Refresh)?);
     let first_image_bytes = cache.test_change_budget(None)?;
     assert!(first_image_bytes > 0 && first_image_bytes < 32 * 1024);
@@ -188,14 +199,16 @@ fn mount_vault_task_notification_byte_pressure_retains_baseline_and_retries() ->
     let old_revision = cache.revision("/b")?;
     let child = cache.load_slot("/b/note")?;
     let child_revision = child.revision();
-    assert!(!cache.install_observation("/b", observation(vec![file("note", 2)]),
+    assert!(!cache.install_observation("/b", observation_at("/b", vec![file("note", 2)]),
         1, None, Admission::Refresh)?);
     assert_eq!(cache.revision("/b")?, old_revision);
-    assert_eq!(child.revision(), child_revision);
-    let MetadataLookup::Found(old) = cache.stat("/b/note")? else { panic!("lost baseline"); };
-    assert_eq!(old.mtime_ms, 1);
+    assert_ne!(child.revision(), child_revision);
+    assert!(matches!(cache.stat("/b/note")?, MetadataLookup::Uncached));
+    assert!(cache.directory("/b")?.is_none(), "comparison baseline is not authority");
+    assert!(cache.metadata_hint("/b/note")?.is_none());
+    assert!(cache.expired_parent("/b/note")?.is_none(), "no implicit parent retry loop");
     assert_eq!(cache.drain_changes(20)?, vec![MetadataChange::Modified { path: "/a/note".into() }]);
-    assert!(cache.install_observation("/b", observation(vec![file("note", 2)]),
+    assert!(cache.install_observation("/b", observation_at("/b", vec![file("note", 2)]),
         1, None, Admission::Refresh)?);
     assert_eq!(cache.drain_changes(20)?, vec![MetadataChange::Modified { path: "/b/note".into() }]);
     assert_eq!(cache.test_change_budget(None)?, 0);

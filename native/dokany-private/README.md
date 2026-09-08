@@ -53,6 +53,9 @@ and [metadata completion](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459
 The checked-in `../prepare-dokany-private.ps1` is a PowerShell 7.2+ entrypoint.
 Never invoke its build mode on the Codex workstation. The configured remote
 Windows runner sets `GITHUB_ACTIONS=true` or `SMART_EXPLORER_REMOTE_RUNNER=1`.
+For the bulk-access batch, the existing mount task entrypoint explicitly passes
+`-PreparePrivateDependency` and retains the prepared set in its recipe-bound
+dependency cache. The terminal release consumes only the accepted committed set.
 It needs VS 2022 C++ tools/v143, a complete Windows SDK at least 10.0.19041.0,
 Git and HTTPS access to the pinned codeload URL. It does not run upstream build
 scripts, build a driver, invoke WiX, install anything, or enable test signing.

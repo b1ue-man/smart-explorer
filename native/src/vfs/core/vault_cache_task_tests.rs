@@ -236,3 +236,64 @@ fn mount_vault_task_daemon_waiters_share_errors_but_do_not_retain_them() {
     assert_eq!(cache.unique_child("/ancestor", "available").unwrap().unwrap().name, "available");
     assert_eq!(inner.count("/ancestor"), 2);
 }
+
+#[test]
+fn mount_vault_task_daemon_fresh_unretained_image_retires_old_authority_but_errors_do_not() {
+    let inner = Arc::new(ListingBackend::default());
+    inner.entries("/ancestor", &["old"]);
+    let mut cache = CachingBackend::for_mount(inner.clone(), Some(|name| name.to_ascii_lowercase()));
+    cache.limits = CacheLimits { directories: usize::MAX, entries: usize::MAX, bytes: 4096 };
+    let first = cache.directory_snapshot("/ancestor").unwrap();
+    let old = Arc::downgrade(&first.entries);
+    assert_eq!(cache.cache.lock().unwrap().directories.len(), 1, "small baseline is retained");
+    inner.answers.lock().unwrap().insert("/ancestor".into(),
+        Answer::Failure(io::ErrorKind::PermissionDenied, "refresh denied".into()));
+    assert_eq!(cache.refresh_directory("/ancestor").unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert!(Arc::ptr_eq(&first.entries, &cache.directory_snapshot("/ancestor").unwrap().entries),
+        "backend error does not revoke a still-fresh observation");
+    let names = (0..64).map(|index| format!("new-{index:03}-{}", "x".repeat(128))).collect::<Vec<_>>();
+    inner.entries("/ancestor", &names.iter().map(String::as_str).collect::<Vec<_>>());
+    let refreshed = cache.refresh_directory("/ancestor").unwrap();
+    assert_eq!(refreshed.len(), names.len());
+    assert!(refreshed.iter().all(|entry| entry.name.starts_with("new-")));
+    assert_eq!(inner.count("/ancestor"), 3, "explicit refresh never relabels a fresh cache hit");
+    {
+        let state = cache.cache.lock().unwrap();
+        assert!(state.directories.is_empty(), "unretained success must remove stale authority");
+        assert_eq!((state.entries, state.bytes), (0, 0));
+        assert!(state.loads.is_empty());
+    }
+    assert!(cache.cached_child_meta("/ancestor/old").is_none());
+    drop(first);
+    assert!(old.upgrade().is_none(), "retired observation is not held by a dead flight");
+    assert!(cache.unique_child("/ancestor", "old").unwrap().is_none());
+    assert_eq!(inner.count("/ancestor"), 4, "later demand fetches, not resurrects old retained data");
+}
+
+#[test]
+fn mount_vault_task_daemon_unrelated_mutation_preserves_active_shared_flight() {
+    for retained in [true, false] {
+        let inner = Arc::new(ListingBackend::default());
+        inner.entries("/one", &["kept"]);
+        inner.entries("/two", &["removed"]);
+        let cache = cache(&inner, retained);
+        let release = inner.gate("/one");
+        let leader = load(&cache, "/one");
+        release.wait();
+        let waiter = load(&cache, "/one");
+        wait_for_owners(&cache, "/one", 2);
+        let generation = cache.cache.lock().unwrap().generation;
+        cache.remove_file("/two/removed").unwrap();
+        assert_eq!(cache.cache.lock().unwrap().generation, generation,
+            "ordinary unrelated mutation is not a whole-cache epoch");
+        release.release();
+        let first = leader.finish().unwrap();
+        let second = waiter.finish().unwrap();
+        assert_eq!(first.entries[0].name, "kept");
+        assert!(Arc::ptr_eq(&first.entries, &second.entries));
+        assert!(Arc::ptr_eq(&first.index, &second.index));
+        assert_eq!(inner.count("/one"), 1, "unrelated mutation must not discard another path's flight");
+        assert!(cache.cache.lock().unwrap().loads.is_empty());
+        assert_eq!(inner.active.load(Ordering::SeqCst), 0);
+    }
+}

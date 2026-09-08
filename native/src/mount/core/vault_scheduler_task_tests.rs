@@ -279,12 +279,14 @@ fn mount_vault_task_scheduler_recent_directory_survives_old_demand_backlog() -> 
     assert!(cache.install_directory("/", directory.clone(), children.into(), 0)?);
     for name in &names {
         let path = format!("/{name}");
-        assert!(cache.install_directory(&path, directory.clone(), Vec::new().into(), 1)?);
+        assert!(cache.install_directory(&path, VfsMeta { name: name.clone(),
+            ..directory.clone() }, Vec::new().into(), 1)?);
         cache.mark_directory_access(&path)?;
     }
     // Simulate the existing pre-watch refresh. No new directory reads occur
     // after this point; its last demand is serviced but it remains most recent.
-    assert!(cache.install_directory("/watch", directory, Vec::new().into(), 1)?);
+    assert!(cache.install_directory("/watch", VfsMeta { name: "watch".into(),
+        ..directory }, Vec::new().into(), 1)?);
     let selected = cache.refresh_targets(16, true)?;
     assert!(selected.iter().any(|(path, _)| path == "/watch"));
     let mut visited = std::collections::HashSet::new();

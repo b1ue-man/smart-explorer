@@ -3,6 +3,10 @@ use super::engine::{parent_path, Entry};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "entry_table_task_tests.rs"]
+mod task_tests;
+
 /// Keys are already normalized with the engine's case semantics. Both views
 /// change under the engine's one table mutex; mutable access cannot bypass the
 /// parent index. Index operations never acquire an Entry's state mutex.

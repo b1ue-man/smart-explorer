@@ -17,6 +17,12 @@ mod watch;
 mod vault_metadata;
 #[path = "vault_volume_byname.rs"]
 mod byname;
+#[path = "vault_volume_enumeration.rs"]
+mod enumeration;
+#[path = "vault_volume_errors.rs"]
+mod errors;
+#[path = "vault_open_task_tests.rs"]
+mod open_contract;
 
 struct MountedOptimization {
     filesystem: Option<DokanyFileSystem>,
@@ -42,6 +48,10 @@ impl MountedOptimization {
             backend.mkdir(directory);
         }
         volume_io::seed(&backend);
+        for path in ["/vault/dll-status.txt", "/vault/open-attrs.txt"] {
+            backend.put(path, b"note");
+        }
+        backend.mkdir("/vault/open-attrs-dir");
         let handle = bridge.backend.clone();
         let engine = Arc::new(MountEngine::open_host_cache(
             MountRuntimeConfig::new(id.clone(), MountMode::ReadWrite), handle, &spool,
@@ -68,6 +78,8 @@ impl MountedOptimization {
         )?);
         let mut storage = CallbackStorage::new(context, false);
         volume_io::install_counters(&mut storage.operations);
+        errors::install(&mut storage.operations);
+        open_contract::install(&mut storage.operations);
         // Official creation must clear even deliberately reused batching flags.
         storage.options.options |= OPTION_ALLOW_IPC_BATCHING;
         let filesystem = start_on_available_drive(&runtime, &mut storage, &candidates)

@@ -3,6 +3,10 @@ use super::engine::Entry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
+#[cfg(test)]
+#[path = "retirement_queue_task_tests.rs"]
+mod task_tests;
+
 #[derive(Default)]
 pub(super) struct RetirementQueue {
     candidates: Mutex<HashMap<usize, Weak<Entry>>>,

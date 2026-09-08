@@ -19,8 +19,20 @@ const WORKERS: usize = 16;
 pub(super) fn exercise(fixture: &mut MountedOptimization) -> io::Result<()> {
     let initial = counters(fixture);
     assert_eq!(initial.2, 0, "mount startup downloaded content");
+    // This must be the first nested-tree consumer: root preload alone is fine,
+    // but native enumeration/by-name/hot priming would hide a cold startup gap.
+    let node = Instant::now();
+    run_node(fixture)?;
+    let after_node = counters(fixture);
+    assert!(crate::vfs::Backend::list_dir(fixture.backend.as_ref(), "/watch")?.is_empty(),
+        "Node controlled save did not restore the native watch fixture namespace");
+    report("node-cold-names-lstat-watch", node.elapsed(), initial, after_node);
+    assert_eq!(after_node.2, 0, "Node metadata traversal downloaded file content");
+    assert!(after_node.0 > initial.0, "cold Node tree never reached daemon listing");
+    assert!(after_node.3 > 1, "independent cold Node listings never overlapped");
+
     let cold = Instant::now();
-    bounded_native(fixture, "cold recursive metadata", |root| {
+    bounded_native(fixture, "native recursive metadata after Node", |root| {
         check_directory(&root.join("large"), (0..BRANCHES)
             .map(|branch| (format!("b{branch:03}"), true)).collect(), false)?;
         scan_branches(root)?;
@@ -28,10 +40,8 @@ pub(super) fn exercise(fixture: &mut MountedOptimization) -> io::Result<()> {
             .map(|number| (format!("f{number:05}.md"), false)).collect(), false)
     })?;
     let after_cold = counters(fixture);
-    report("native-cold", cold.elapsed(), initial, after_cold);
+    report("native-after-node", cold.elapsed(), after_node, after_cold);
     assert_eq!(after_cold.2, 0, "recursive Windows metadata downloaded content");
-    assert!(after_cold.0 > initial.0, "cold tree never reached daemon listing");
-    assert!(after_cold.3 > 1, "independent daemon listings never overlapped");
 
     bounded_native(fixture, "native by-name and handle metadata", super::byname::exercise)?;
     // The complete pass can exceed TTL; prime a bounded exact subtree first,
@@ -47,12 +57,13 @@ pub(super) fn exercise(fixture: &mut MountedOptimization) -> io::Result<()> {
     assert_eq!((after_hot.0, after_hot.1, after_hot.2),
         (before_hot.0, before_hot.1, before_hot.2), "hot subtree performed remote work");
 
-    let node_before = counters(fixture);
-    let node = Instant::now();
-    run_node(fixture)?;
-    let node_after = counters(fixture);
-    report("node-recursive", node.elapsed(), node_before, node_after);
-    assert_eq!(node_after.2, 0, "Node metadata traversal downloaded file content");
+    bounded_native(fixture, "small-buffer native directory continuation", super::enumeration::exercise)?;
+    let private = fixture.storage().context.runtime.is_private();
+    bounded_native(fixture, "metadata DLL failure propagation", move |root| super::errors::exercise(root, private))?;
+    bounded_native(fixture, "ignored creation attributes and binary-ID admission", super::open_contract::exercise)?;
+    assert_eq!(fixture.backend.bytes("/vault/open-attrs.txt"), b"note",
+        "ignored/rejected creation attributes changed backend content");
+    assert_eq!(counters(fixture).2, 0, "native metadata acceptance downloaded content");
     eprintln!("[mount vault] exact manifest nested_dirs=4609 nested_files=16384 wide_files=50001");
     fixture.healthy()
 }
@@ -192,8 +203,8 @@ fn run_node(fixture: &mut MountedOptimization) -> io::Result<()> {
     let script = configured_file("SMART_EXPLORER_MOUNT_VAULT_NODE_SCRIPT")?;
     let mut child = NodeChild(Command::new(executable).arg(script).arg(fixture.root()?)
         .current_dir(fixture.temporary.path()).env_remove("NODE_OPTIONS")
-        // This affects only the checked-in child workload, never another app.
-        .env("UV_THREADPOOL_SIZE", WORKERS.to_string())
+        // Leave libuv's inherited/default pool intact; do not make this fixture
+        // pass by increasing an application's filesystem worker count.
         .stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn()?);
     let deadline = Instant::now() + Duration::from_secs(300);
     let result = (|| {

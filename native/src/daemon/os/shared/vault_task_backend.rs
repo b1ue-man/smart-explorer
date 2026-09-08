@@ -78,6 +78,27 @@ impl Drop for VaultTaskBridge {
 }
 
 #[test]
+fn mount_vault_task_rooted_case_sensitive_stat_reuses_fresh_terminal_observation() -> io::Result<()> {
+    let tree = VaultTree::new();
+    let raw: BackendHandle = tree.clone();
+    let resolver = super::rooted_backend_case::PathResolver {
+        backend: &raw, case_cache: None, root_validator: None,
+        root: "/", root_ancestors: &[], case_sensitive: true,
+    };
+    let before = tree.counters();
+    for index in 0..10_000 {
+        let metadata = resolver.stat(&["wide".into(), format!("f{index:05}.md")], &raw)?;
+        assert_eq!(metadata.name, format!("f{index:05}.md"));
+    }
+    let after = tree.counters();
+    assert_eq!(after.stats - before.stats, 20_000,
+        "one necessary parent validation and one fresh final stat per two-component path");
+    assert_eq!(after.lists, before.lists);
+    assert_eq!(after.reads, before.reads);
+    Ok(())
+}
+
+#[test]
 fn mount_vault_task_rooted_refresh_crosses_daemon_ttl() -> io::Result<()> {
     let mut bridge = VaultTaskBridge::new()?;
     bridge.source.mkdir("/external");

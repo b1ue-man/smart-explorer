@@ -325,12 +325,16 @@ impl Drop for MountRequestPermit {
 }
 
 #[cfg(test)]
+#[path = "mount_gate_bulk_task_tests.rs"]
+mod bulk_task_tests;
+
+#[cfg(test)]
 mod task_tests {
     use super::*;
     use std::sync::mpsc;
 
     #[test]
-    fn remote_drive_task_metadata_waiter_has_priority_over_a_new_transfer() -> io::Result<()> {
+    fn mount_vault_task_remote_drive_task_metadata_waiter_has_priority_over_a_new_transfer() -> io::Result<()> {
         let gate = MountRequestGate::new(1);
         let occupied = gate.enter()?;
         let (send, receive) = mpsc::channel();
@@ -385,7 +389,7 @@ mod task_tests {
     }
 
     #[test]
-    fn remote_drive_task_transfer_gate_times_out_instead_of_starving_the_drive() -> io::Result<()> {
+    fn mount_vault_task_remote_drive_task_transfer_gate_times_out_instead_of_starving_the_drive() -> io::Result<()> {
         let gate = MountRequestGate::new(1);
         let _occupied = gate.enter()?;
         let started = Instant::now();
@@ -406,7 +410,7 @@ mod task_tests {
     }
 
     #[test]
-    fn remote_drive_task_metadata_gate_uses_an_absolute_deadline() -> io::Result<()> {
+    fn mount_vault_task_remote_drive_task_metadata_gate_times_out_without_service_progress() -> io::Result<()> {
         let gate = MountRequestGate::new(1);
         let _occupied = gate.enter()?;
         let started = Instant::now();
@@ -420,7 +424,7 @@ mod task_tests {
     }
 
     #[test]
-    fn remote_drive_task_metadata_priority_is_a_bounded_burst() {
+    fn mount_vault_task_remote_drive_task_metadata_priority_is_a_bounded_burst() {
         let state = GateState {
             active: 0,
             transfer_waiters: 1,
