@@ -135,6 +135,28 @@ Microsoft's object attributes, Unicode-string, I/O-status and synchronous-call
 contracts were rechecked 2026-09-08. The remaining Win32 existing-object/create
 cases and backend-content invariants remain unchanged in the same suite.
 
+Run `34216455307` confirmed native disposition 4 and `STATUS_NOT_SUPPORTED`,
+then passed external create/change/delete notifications and the save/replace
+workload. It stopped at the existing 30-second mounted PowerShell deadline.
+That error alone does not identify shell startup, script loading, or a blocked
+filesystem callback. The next same-suite candidate adds a local owned `-File`
+startup control, flushed runtime/script phase messages, and bounded owned-PID/script-path
+callback entry/exit diagnostics that retain the original callback chain. The
+mounted invocation, its 30-second deadline and its real sibling script/data
+accesses remain unchanged. No production timeout is raised.
+
+Inspection also found a fixture cleanup coupling: dropping its child wrapper
+waited for PowerShell before the coordinator could unmount a stuck filesystem.
+The coordinator now owns child cleanup, stops further work, closes the mount,
+and then boundedly reaps the child before another runtime can start. The CLI,
+automatic-variable and process-termination contracts were reviewed against
+Microsoft's [Windows PowerShell 5.1 CLI](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1)
+and [.NET termination](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.kill?view=netframework-4.8.1)
+documentation on 2026-09-08. The local control runs with the mount live; provider
+startup may inspect drive roots, so its owned PID is traced in both phases. Expected
+acceptance is the same mounted script result, with diagnostics sufficient to
+locate any further delay; a local startup result cannot substitute for it.
+
 ## Stage one: current source findings
 
 - `handle_state/validation.rs` scans every live handle under global locks on

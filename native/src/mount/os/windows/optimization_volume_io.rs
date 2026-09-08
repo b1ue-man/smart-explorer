@@ -1,13 +1,12 @@
 //! Bounded application I/O using the mounted Windows pathname, not engine calls.
 use super::{MountedOptimization, OptimizationBackend};
-use super::super::super::{callbacks_io, dokany_abi::{DokanFileInfo, DokanOperations, NtStatus}};
+use super::super::super::{callbacks_io, dokany_abi::{DokanFileInfo, DokanOperations, NtStatus, OPTION_ALLOW_IPC_BATCHING}};
 use std::{
     ffi::c_void,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    path::Path,
     sync::{mpsc, Arc, Condvar, Mutex, atomic::{AtomicUsize, Ordering}},
     thread,
     time::{Duration, Instant},
@@ -16,6 +15,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
 };
 
+#[path = "optimization_script_probe.rs"]
+mod script_probe;
+
 const BURST_BYTES: &[u8] = b"bounded parallel mounted-file workload\n";
 static READS: AtomicUsize = AtomicUsize::new(0);
 static WRITES: AtomicUsize = AtomicUsize::new(0);
@@ -23,40 +25,47 @@ static FLUSHES: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) fn seed(backend: &OptimizationBackend) {
     for number in 0..24 { backend.put(&format!("/burst/{number:02}.txt"), BURST_BYTES); }
-    backend.put("/scripts/data.txt", b"sibling-value");
-    backend.put("/scripts/helper.ps1", br#"function Read-Sibling { [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'data.txt')) }
-"#);
-    backend.put("/scripts/child.ps1", br#"'child:' + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'data.txt'))
-"#);
-    backend.put("/scripts/main.ps1", br#"param([string]$ResultPath)
-$ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'helper.ps1')
-if ((Read-Sibling) -ne 'sibling-value') { throw 'mounted sibling read failed' }
-$childResult = & (Join-Path $PSScriptRoot 'child.ps1')
-if ($childResult -ne 'child:sibling-value') { throw 'mounted child script failed' }
-[IO.File]::WriteAllText($ResultPath, 'mounted-script-ok')
-"#);
+    script_probe::seed(backend);
 }
 
 pub(super) fn exercise(fixture: &mut MountedOptimization) -> io::Result<()> {
     let root = fixture.root()?;
     let backend = Arc::clone(&fixture.backend);
     let output = fixture.temporary.path().join("script-result.txt");
+    let private = fixture.storage().options.options & OPTION_ALLOW_IPC_BATCHING != 0;
+    let script = script_probe::ScriptProbe::new();
+    let runner = script.runner();
     let (send, receive) = mpsc::channel();
     let worker = thread::Builder::new().name("optimization-mounted-app".into()).spawn(move || {
+        eprintln!("[mount optimization] private={private} phase=save-workload-begin");
         let result = save_workload(&root, &backend)
-            .and_then(|()| run_script(&root, &output))
-            .and_then(|()| parallel_burst(&root));
+            .and_then(|()| {
+                eprintln!("[mount optimization] private={private} phase=save-workload-end");
+                runner.run(&root, &output, private)
+            })
+            .and_then(|()| {
+                runner.check_active()?;
+                eprintln!("[mount optimization] private={private} phase=parallel-burst-begin");
+                parallel_burst(&root)
+            });
         let _ = send.send(result);
     })?;
     let result = match receive.recv_timeout(Duration::from_secs(120)) {
         Ok(result) => result,
         Err(error) => Err(io::Error::other(format!("mounted app deadline: {error}"))),
     };
-    // Closing the instance releases outstanding mounted I/O before joining;
-    // the outer fatal deadline covers a broken driver that cannot close.
-    if result.is_err() { fixture.close(); }
-    worker.join().map_err(|_| io::Error::other("mounted app worker panicked"))?;
+    // The coordinator retains the child on script timeout. Request termination
+    // without waiting, then release mounted I/O before joining/reaping. Never
+    // let a worker's Drop wait for the process before this unmount can happen.
+    if result.is_err() {
+        script.cancel();
+        eprintln!("[mount optimization] private={private} phase=app-error-unmount-begin");
+        fixture.close();
+        eprintln!("[mount optimization] private={private} phase=app-error-unmount-end");
+    }
+    let joined = worker.join().map_err(|_| io::Error::other("mounted app worker panicked"));
+    script.reap();
+    joined?;
     result
 }
 
@@ -157,42 +166,6 @@ fn parallel_burst(root: &Path) -> io::Result<()> {
     }
     drop(workers);
     Ok(())
-}
-
-fn powershell() -> io::Result<PathBuf> {
-    let system = std::env::var_os("SystemRoot").ok_or_else(|| io::Error::other("SystemRoot absent"))?;
-    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    if !executable.is_file() { return Err(io::Error::other("Windows PowerShell unavailable")); }
-    Ok(executable)
-}
-
-struct ScriptChild(Child);
-impl Drop for ScriptChild {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-}
-
-fn run_script(root: &Path, output: &Path) -> io::Result<()> {
-    // stdout/stderr are inherited, avoiding pipe-capacity deadlocks. The script
-    // invokes a second .ps1 in this process; it creates no descendant process.
-    let mut child = ScriptChild(Command::new(powershell()?)
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(root.join("scripts/main.ps1")).arg(output)
-        .stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn()?);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if let Some(status) = child.0.try_wait()? {
-            if !status.success() { return Err(io::Error::other(format!("mounted script failed: {status}"))); }
-            assert_eq!(fs::read(output)?, b"mounted-script-ok");
-            return Ok(());
-        }
-        if Instant::now() >= deadline { return Err(io::Error::other("mounted PowerShell exceeded 30 seconds")); }
-        thread::sleep(Duration::from_millis(25));
-    }
 }
 
 fn wide(path: &Path) -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() }
