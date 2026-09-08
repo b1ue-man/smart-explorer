@@ -13,12 +13,59 @@ each entry or each continuation. Retention limits govern disposable cache, not
 whether valid directory results can be returned. Preserve confinement, sharing,
 read-only admission, dirty-file recovery, and the official-runtime fallback.
 
-The user explicitly requested manual source/API validation and correction before
-discussing further execution. No local or remote builds, tests, application/VM
-runs or release workflows are authorized in this phase. Commit and push source
-milestones with `[task candidate]`; do not bump the version. The later single
-remote task suite/release remains deferred, not silently replaced with local
-commands. Release observations remain at least half an hour apart.
+The source-first review ended at `53dc64f`. On 2026-09-08 the user requested a
+build to try the corrections. The active deliverable is now an installable
+Windows release, following one remote task suite and the existing terminal
+release wrapper. Local builds and test execution remain prohibited. Source
+milestones use `[task candidate]`; only the terminal wrapper bumps the version.
+Release observations remain at least half an hour apart.
+
+## Resumed delivery plan, 2026-09-08
+
+Stage-one inspection found that the existing mount task only accepts the old
+approved DLL, although the new source recipe requires different bytes. Its
+Node phase also runs after native cache warming and raises the worker pool.
+Some old cache assertions describe authority that the correction intentionally
+removed. These are gaps in the existing acceptance path, not new product scope.
+
+Research confirmed that the current
+[Windows 2025 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)
+lists Visual Studio 2022/v143 and a complete Windows SDK (checked 2026-09-08).
+The existing private builder can therefore prepare the revised pinned recipe
+in the same job; do not change the toolchain contract or run another pipeline.
+The second gap review checked Microsoft's
+[directory-query contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntquerydirectoryfile)
+and [handle-information errors](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle).
+Continuation needs an explicitly bounded native buffer, and metadata failures
+must reach the callback on an already-open handle to exercise DLL dispatch.
+Ordinary directory iteration and an unsupported by-name probe cannot substitute.
+
+Final execution milestones, depending on the source corrections below:
+
+1. Extend only `test-mount-optimization-task.ps1` and its existing workflow to
+   explicitly prepare or safely reuse recipe-bound private bytes. Preserve the
+   approved-only default for ordinary consumers and exact System32 identities.
+   Expected: one remote incremental library target embeds the new DLL, and the
+   suite exports that exact DLL, manifest, source archive and candidate approval.
+2. Consolidate acceptance into its existing `mount_vault_task` filter: cold
+   realpath/watch/names-plus-every-child-lstat without a thread-pool override;
+   native continuation/status/open-attribute boundaries; aggregate sharing and
+   reset scheduling; host/generic fresh authority and preload cursor ownership;
+   entry overlay/retirement indexes and progressing FIFO transport admission.
+   Reuse existing fixtures, including the wide/nested tree, and extract narrowly
+   scoped child modules where needed. Expected results are the seven behavioral
+   milestone contracts below; do not infer algorithmic complexity from timings.
+3. Commit and push all implementation and suite changes, refresh the native
+   graph, then invoke the one existing remote suite. Evaluate its logs; any
+   correction reuses that same entrypoint and incremental output, not new gates.
+4. Import only the exact passing dependency artifact, bind its approval to the
+   candidate/run/hashes, and commit/push it. Invoke the configured remote
+   `publish-release-local.ps1` automation once after its normal preflight. It
+   owns versioning, both-platform artifacts and publication. Expected: one
+   visible release and Windows installer containing the corrected source/DLL.
+
+The cold synthetic filesystem workload checks the affected application access
+pattern. It is not a claim that actual Obsidian has opened the user's vault.
 
 ## Stage one: current source findings
 
@@ -130,7 +177,8 @@ path or unchanged official DLL has constant cost.
    survive dispatch. Dependency: changed recipe requires newly prepared remote
    DLL/source bytes before a normal Windows build. Existing approved assets
    must not be relabeled or have their hashes falsified. Source preparation is
-   deferred in this code-only phase; old assets cannot approve the new patch.
+   now belongs to the resumed remote delivery plan; old assets cannot approve
+   the new patch.
 
 3. **Incremental metadata scheduling.** Replace whole-cache refresh sorting
    with maintained age/demand/recent ordering, and repeated preload scans with
@@ -203,15 +251,15 @@ path or unchanged official DLL has constant cost.
    bookkeeping, not repeated N-record scans; finish/reset races never use a
    completed Dokany request pointer.
 
-8. **Manual integration handoff.** Inspect all mutation hooks, API signatures,
+8. **Manual integration handoff (completed source-first phase).** Inspect all mutation hooks, API signatures,
    ownership/lock order, patched upstream context and complexity against the
    milestones. Perform only non-executing text/parsing checks; refresh the root
    Graphify graph after native changes. Commit coherent milestones and push the
    candidate. Report remaining dependencies plainly, including unprepared DLL
    bytes and absence of Windows/runtime acceptance. No test or release trigger.
 
-The expected results above define later acceptance questions, not permission to
-execute them now. If execution is subsequently agreed, consolidate these and
+The expected results above define the resumed remote acceptance questions.
+Consolidate these and
 the existing lazy-read-only guard into the one checked-in remote mount suite,
 with cold names-plus-every-child-lstat, realpath and the recursive watcher before
 warming. Do not substitute a Dirent scan, raise the application's thread pool,

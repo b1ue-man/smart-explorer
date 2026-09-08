@@ -173,8 +173,14 @@ That historical entrypoint is not an additional gate for the current
 optimization batch. Its relevant regression coverage runs inside
 `native/test-mount-optimization-task.ps1`, selected by the exact-candidate
 `.github/workflows/mount-optimization-task.yml` dispatch on `windows-2025`.
-The vault-metadata follow-up reuses the already approved private-DLL bytes; it
-does not rebuild that VS-2022/v143 dependency on the newer image. Its single
+The bulk-access follow-up passes `-PreparePrivateDependency` to prepare the
+changed pinned recipe, or reuse an intact recipe-bound cache, in that same job.
+The current Windows 2025 image supplies VS 2022/v143 (inventory checked
+2026-09-08); the builder still verifies its exact toolchain requirements.
+Without that explicit switch the entrypoint requires committed approved bytes.
+Successful acceptance exports the exact DLL/manifest/source archive with the
+candidate approval; retain those bytes before the terminal release, which must
+not rebuild or substitute the dependency. Its single
 entrypoint fetches SHA-pinned Node 24.20.0 x64 (libuv 1.52.1), records the actual
 Windows/API behavior, and reuses one source-and-payload-bound incremental library
 fixture. It selects only `mount_vault_task` through the actual rooted daemon/TCP
@@ -182,7 +188,8 @@ mount path, including the directly affected save/watch behavior, and
 records `approval.json` after success. The job timeout is 180 minutes; its one
 task invocation has 170 minutes. Use the same entrypoint for relevant fix retries,
 not the historical workflow or a second validation pipeline.
-See [MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) for this task's scope.
+See [MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md) for the current task's scope;
+[MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) records the preceding work.
 
 The separate protected-storage-analysis follow-up has one entrypoint,
 `native/test-analytics-access-task.ps1`, selected by the exact-SHA
