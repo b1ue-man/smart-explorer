@@ -120,7 +120,14 @@ Checked 2026-09-07:
   writable lazy open must not make an allowed metadata-only read eager. The
   correction reuses the existing engine mode/error contract, with no new API.
 
-## Stage two: bounded milestones and acceptance signals
+## Historical stage-two proposal (superseded 2026-09-08)
+
+The user has explicitly retained the code-first task: inspect and fix API and
+bulk-scaling defects throughout and below preload before considering further
+execution. A new user-supplied trace is **not** an implementation prerequisite.
+The current two-stage correction plan is [MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md).
+The following proposal is retained only to explain the earlier handoff and its
+later acceptance-workload requirements; its implementation hold no longer applies.
 
 1. **Identify the failing phase.** Obtain a minimal Windows startup observation:
    loading text/error and, if accessible, read-only counts from the already-open
@@ -158,7 +165,7 @@ Checked 2026-09-07:
    the existing complete remote wrapper once, verify publication and stop. Never
    infer a successful user-vault outcome from Linux startup or synthetic counts.
 
-## Second gap review / implementation hold
+## Historical second gap review / superseded implementation hold
 
 The inspected application timer measures inactivity between directory results,
 not the whole startup and not network byte throughput. Promise rejection is not
