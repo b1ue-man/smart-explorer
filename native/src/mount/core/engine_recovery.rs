@@ -8,7 +8,7 @@ use super::spool::{prepare_spool_root, WholeFileSpool};
 use super::startup::validate_backend_root;
 use super::types::{BackendRoot, DeleteToken, EntryCondition, MountRuntimeConfig};
 use crate::vfs::BackendHandle;
-use std::{collections::{HashMap, HashSet}, io, path::Path, sync::{Arc, Mutex, RwLock, atomic::{AtomicBool, AtomicU64, AtomicUsize}}};
+use std::{collections::{HashMap, HashSet}, io, path::Path, sync::{Arc, Mutex, RwLock, atomic::{AtomicU64, AtomicUsize}}};
 
 impl MountEngine {
     pub(super) fn open_at_root(
@@ -29,8 +29,8 @@ impl MountEngine {
         let spool_root = prepare_spool_root(spool_root)?;
         let (spool, recovered) = WholeFileSpool::open(&spool_root, &config.id)?;
         let spool = Arc::new(spool);
-        let mut entries = HashMap::new();
-        let retirement_pending = Arc::new(AtomicBool::new(true));
+        let mut entries = super::entry_table::EntryTable::new();
+        let retirements = Arc::new(super::retirement_queue::RetirementQueue::default());
         let mut spool_names = HashSet::new();
         for persisted in recovered.entries.into_values() {
             validate_recovered_path(projector.root().as_str(), &persisted.remote_path, false)?;
@@ -54,7 +54,7 @@ impl MountEngine {
                     Arc::new(Entry {
                         state: Mutex::new(EntryState::from_persisted(persisted)),
                         pins: AtomicUsize::new(0),
-                        retirement_pending: Arc::clone(&retirement_pending),
+                        retirements: Arc::clone(&retirements),
                     }),
                 )
                 .is_some()
@@ -158,7 +158,7 @@ impl MountEngine {
             clean_cache: super::clean_cache::CleanCache::default(),
             cache_space: Arc::new(super::cache_space::CacheSpace::default()),
             detached: Mutex::new(HashMap::new()),
-            retirement_pending,
+            retirements,
         };
         if validate_remote {
             engine.recover_pending_deletes()?;

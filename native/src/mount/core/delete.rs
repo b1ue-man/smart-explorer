@@ -349,7 +349,14 @@ impl MountEngine {
             let mut state = lock(&entry.state)?;
             if state.delete_token == Some(token.0) {
                 state.delete_token = None;
-                self.persist_restored_entry(&state)?;
+                if let Err(error) = self.persist_restored_entry(&state) {
+                    // Forget may have reached storage despite reporting an
+                    // error. Keep this object discoverable by the same retry;
+                    // do not publish its restored state as successfully applied.
+                    state.delete_token = Some(token.0);
+                    return Err(error);
+                }
+                entry.schedule_retirement();
             }
         }
         Ok(())
@@ -376,6 +383,7 @@ impl MountEngine {
                 state.delete_committed = true;
                 let path = state.remote_path.clone();
                 lock(&self.detached)?.insert(state.spool_name.clone(), entry.clone());
+                entry.schedule_retirement();
                 drop(state);
                 // The namespace name is gone as soon as Cleanup commits the
                 // delete. Old FILE_SHARE_DELETE handles retain this Arc and its
@@ -401,7 +409,8 @@ impl MountEngine {
     }
 
     fn has_visible_cached_child(&self, parent: &str) -> io::Result<bool> {
-        let entries = lock(&self.entries)?.values().cloned().collect::<Vec<_>>();
+        let entries = lock(&self.entries)?.children(&self.cache_key(parent))
+            .cloned().collect::<Vec<_>>();
         for entry in entries {
             let state = lock(&entry.state)?;
             if state.delete_token.is_none()

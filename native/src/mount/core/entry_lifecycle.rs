@@ -34,7 +34,7 @@ impl Deref for EntryPin {
 impl Drop for EntryPin {
     fn drop(&mut self) {
         if self.0.pins.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.0.retirement_pending.store(true, Ordering::Release);
+            self.0.retirements.enqueue(&self.0);
         }
     }
 }
@@ -87,46 +87,52 @@ impl MountEngine {
     pub(super) fn operation_reaper(&self) -> OperationReaper<'_> { OperationReaper(self) }
 
     pub(super) fn reap_after_operation(&self) {
-        if matches!(self.reap_unpinned(), Ok(true)) {
+        if !matches!(self.reap_unpinned(), Ok(false)) {
+            // One failed retirement must not prevent disposable content from
+            // other successfully retired candidates obeying its size budget.
             let _ = self.clean_cache.trim(&self.spool, self.config.cache.retained_bytes());
         }
     }
 
     fn reap_unpinned(&self) -> io::Result<bool> {
-        if !self.retirement_pending.swap(false, Ordering::AcqRel) { return Ok(false); }
+        if self.retirements.is_empty() { return Ok(false); }
         let _namespace = match self.namespace.try_write() {
             Ok(guard) => guard,
-            Err(TryLockError::WouldBlock) => {
-                self.retirement_pending.store(true, Ordering::Release);
-                return Ok(false);
-            }
+            Err(TryLockError::WouldBlock) => return Ok(false),
             Err(TryLockError::Poisoned(_)) => return Err(io::Error::other("mount namespace poisoned")),
         };
-        let mut entries = lock(&self.entries)?.values().cloned().collect::<Vec<_>>();
-        let detached = lock(&self.detached)?.values().cloned().collect::<Vec<_>>();
-        for entry in detached {
-            if !entries.iter().any(|live| Arc::ptr_eq(live, &entry)) { entries.push(entry); }
-        }
-        for entry in entries {
-            if entry.pins.load(Ordering::Acquire) == 0 {
-                if let Err(error) = self.cleanup_committed_entry(&entry) {
-                    self.retirement_pending.store(true, Ordering::Release);
-                    return Err(error);
-                }
+        // Taking a fixed batch also removes its deduplication keys before the
+        // pin check. If an entry was pinned again, its later last-pin drop can
+        // always schedule fresh work, even while this batch is being processed.
+        let mut first_error = None;
+        for candidate in self.retirements.take() {
+            let Some(entry) = candidate.upgrade() else { continue; };
+            if let Err(error) = self.cleanup_committed_entry(&entry) {
+                // Cleanup requeues this object. Continue so an error cannot
+                // discard the remainder or starve unrelated eligible entries.
+                if first_error.is_none() { first_error = Some(error); }
             }
         }
-        Ok(true)
+        match first_error { Some(error) => Err(error), None => Ok(true) }
     }
 
     pub fn maintain_cache(&self) -> io::Result<()> {
-        self.reap_unpinned()?;
-        self.clean_cache.trim(&self.spool, self.config.cache.retained_bytes())?;
+        let retirement = self.reap_unpinned();
+        let trimming = self.clean_cache.trim(&self.spool, self.config.cache.retained_bytes());
+        retirement?;
+        trimming?;
         self.maintain_space()
     }
 
     /// Caller owns namespace write protection. Pins cannot appear from a path
     /// lookup during retirement, and a zero count proves no handle can clone one.
     pub(super) fn cleanup_committed_entry(&self, entry: &Arc<Entry>) -> io::Result<()> {
+        let result = self.retire_entry(entry);
+        if result.is_err() { self.retirements.enqueue(entry); }
+        result
+    }
+
+    fn retire_entry(&self, entry: &Arc<Entry>) -> io::Result<()> {
         if entry.pins.load(Ordering::Acquire) != 0 { return Ok(()); }
         let mut state = lock(&entry.state)?;
         // A close can retain an unpinned Arc while another maintenance pass
@@ -170,5 +176,14 @@ impl MountEngine {
             self.cleanup_committed_entry(&entry)?;
         }
         self.clean_cache.evict_path(&self.spool, &self.cache_key(path.backend()))
+    }
+}
+
+impl Entry {
+    /// A transition can make a previously unpinned dirty/delete/recovery object
+    /// eligible without another handle ever opening it. A pinned object needs
+    /// no ticket here: its final pin drop supplies one independently.
+    pub(super) fn schedule_retirement(self: &Arc<Self>) {
+        if self.pins.load(Ordering::Acquire) == 0 { self.retirements.enqueue(self); }
     }
 }

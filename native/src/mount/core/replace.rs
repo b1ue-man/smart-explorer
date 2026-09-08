@@ -176,6 +176,7 @@ impl MountEngine {
             let name = destination_state.as_ref().map(|state| state.spool_name.clone())
                 .ok_or_else(|| io::Error::other("replace destination state is absent"))?;
             lock(&self.detached)?.insert(name, Arc::clone(entry));
+            entry.schedule_retirement();
         }
         self.invalidate_content(source.backend(), true);
         self.invalidate_content(destination_path.backend(), true);
@@ -208,6 +209,7 @@ impl MountEngine {
                     .is_ok()
                 {
                     state.condition = EntryCondition::Clean;
+                    source_entry.schedule_retirement();
                 }
                 return Err(error);
             }
@@ -311,6 +313,7 @@ impl MountEngine {
                         state.baseline = committed_baseline;
                         state.condition = EntryCondition::Clean;
                         state.clean_since = std::time::Instant::now();
+                        source_entry.schedule_retirement();
                         RenameOutcome::Complete
                     }
                     Err(error) => {

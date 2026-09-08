@@ -101,9 +101,7 @@ impl MountEngine {
         let parent = self.cache_key(path.backend());
         // Namespace read ownership makes these identity keys stable through
         // selection. Never wait for an unrelated file's upload state mutex.
-        let entries = lock(&self.entries)?.iter()
-            .filter(|(key, _)| parent_path(key) == parent)
-            .map(|(_, entry)| Arc::clone(entry)).collect::<Vec<_>>();
+        let entries = lock(&self.entries)?.children(&parent).cloned().collect::<Vec<_>>();
         let mut overlays = Vec::new();
         for entry in entries {
             let state = lock(&entry.state)?;
