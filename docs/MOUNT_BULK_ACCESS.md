@@ -3,7 +3,7 @@
 Code-first follow-up to [the Obsidian startup inspection](MOUNT_OBSIDIAN_STARTUP.md).
 The only live status is D4 in [TODO.md](TODO.md). Baseline: `bad4e2f`, inspected
 2026-09-08. The plan and source-only checkpoint below are retained history;
-the exact remote acceptance record follows.
+the exact remote acceptance and publication record follows.
 
 ## Goal and execution boundary
 
@@ -15,9 +15,9 @@ whether valid directory results can be returned. Preserve confinement, sharing,
 read-only admission, dirty-file recovery, and the official-runtime fallback.
 
 The source-first review ended at `53dc64f`. On 2026-09-08 the user requested a
-build to try the corrections. The active deliverable is now an installable
-Windows release, following one remote task suite and the existing terminal
-release wrapper. Local builds and test execution remain prohibited. Source
+build to try the corrections. The resulting installable Windows release is
+0.5.154, following one remote task suite and the existing terminal release
+wrapper. Local builds and test execution remain prohibited. Source
 milestones use `[task candidate]`; only the terminal wrapper bumps the version.
 Release observations remain at least half an hour apart.
 
@@ -57,9 +57,19 @@ fix for that timeout. Private continuation was nonzero; official batching stayed
 disabled. Recovery/teardown completed in both modes. Actual Obsidian/user-remote
 certification remains outside this synthetic workload.
 
-Approval is not publication. The existing terminal remote wrapper must consume
-these exact retained bytes and publish the installer; version truth remains
-Cargo/feed plus the matching visible GitHub Release.
+Publication completed on 2026-09-08: the existing terminal remote wrapper
+[run 34220047698](https://github.com/b1ue-man/smart-explorer/actions/runs/34220047698)
+consumed source `b66e68027c71c9eeb58399ee92daf7831594cba2`, including these exact
+retained dependency bytes, and published
+[v0.5.154](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.154) from
+release commit `6f828e8228d88c7877f2a3b5e470a891fcc9a294`. Its single internal
+[publication consumer](https://github.com/b1ue-man/smart-explorer/actions/runs/34227165765)
+also succeeded. Cargo/feed version, matching installer/tag, visible non-draft
+Release, all six payload hash sidecars, and all 18 published asset sizes and
+SHA-256 digests were checked against the committed files. Installer SHA-256:
+`8dbad9a7a57c03aa8b09130e40791b255e334b5a881e138ddee654db8f703055`.
+No local build or test execution was used. This completes candidate delivery,
+not certification of the user's actual Obsidian vault or physical remote.
 
 ## Resumed delivery plan, 2026-09-08
 
