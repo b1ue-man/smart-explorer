@@ -150,12 +150,16 @@ fn mount_vault_task_preload_cooldown_survives_unretained_publication_and_rearms_
     admit(&cache, &recovered, &points)?;
     assert!(!recovered.finish()?);
     assert!(cache.lock_state()?.preload.cursor(2).is_none());
+    let eviction_key = cache.key("/a");
     let mut retired = RetiredMetadata::default();
     {
         let mut state = cache.lock_state()?;
         // Exercise the real eviction hook, not invalidate(), which also removes
-        // parent authority. Case-folded lookup must rearm just this child.
-        super::super::support::remove_directory(&mut state, "/a", &mut retired);
+        // parent authority. This internal hook requires the canonical cache key,
+        // not the caller spelling; ordinal ignore-case keys upcase ASCII letters.
+        assert!(state.directories.contains_key(&eviction_key), "eviction target must be retained");
+        super::super::support::remove_directory(&mut state, &eviction_key, &mut retired);
+        assert!(!state.directories.contains_key(&eviction_key), "eviction must actually remove its target");
     }
     drop(retired);
     let evicted = cache.select_preload(2, 8)?;
