@@ -28,11 +28,16 @@ Node phase also runs after native cache warming and raises the worker pool.
 Some old cache assertions describe authority that the correction intentionally
 removed. These are gaps in the existing acceptance path, not new product scope.
 
-Research confirmed that the current
-[Windows 2025 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)
-lists Visual Studio 2022/v143 and a complete Windows SDK (checked 2026-09-08).
-The existing private builder can therefore prepare the revised pinned recipe
-in the same job; do not change the toolchain contract or run another pipeline.
+The generic Windows 2025 inventory still listed VS 2022, but actual run
+`34210045542` selected `windows-2025-vs2026/20260824.214.3` and failed its VS17
+preflight before compiling. The actual job identity overrides that inventory.
+The same task entrypoint now provisions missing VS 2022/v143 using Microsoft's
+fixed, SHA-256/signature-verified 17.14.39 Build Tools bootstrapper in a dedicated
+runner-only path. It preserves the DLL toolchain contract, existing VS instances
+and the single pipeline. Microsoft's [installer switches](https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio?view=vs-2022)
+and [component IDs](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022)
+were checked 2026-09-08: quiet/wait/no-restart, required C++ workload plus explicit
+x64 compiler and Windows SDK. A recipe-bound prepared dependency skips setup.
 The second gap review checked Microsoft's
 [directory-query contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntquerydirectoryfile)
 and [handle-information errors](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle).

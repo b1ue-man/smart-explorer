@@ -175,8 +175,13 @@ optimization batch. Its relevant regression coverage runs inside
 `.github/workflows/mount-optimization-task.yml` dispatch on `windows-2025`.
 The bulk-access entrypoint prepares the changed pinned recipe, or reuses an
 intact recipe-bound cache, in that same job without a workflow change.
-The current Windows 2025 image supplies VS 2022/v143 (inventory checked
-2026-09-08); the builder still verifies its exact toolchain requirements.
+Runner labels can move to VS 2026: run `34210045542` did so on 2026-09-08.
+When private bytes need preparation, `mount-task-toolchain.ps1` detects VS17 C++
+tools and, with the suite's `-InstallRuntime`, installs missing Build Tools from
+the fixed SHA-256/signature-verified Microsoft 17.14.39 bootstrapper. It uses a
+dedicated runner path, quiet/wait/no-restart and explicit compiler/SDK components,
+without altering other VS instances. The builder still verifies the exact
+VS2022/v143 provenance; prepared recipe-bound bytes skip this setup.
 Ordinary builds and the release wrapper still require committed approved bytes.
 Successful acceptance exports the exact DLL/manifest/source archive with the
 candidate approval; retain those bytes before the terminal release, which must
