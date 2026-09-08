@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use std::io;
 use std::time::Instant;
 
+#[cfg(test)]
+#[path = "schedule_task_tests.rs"]
+mod task_tests;
+
 #[derive(Default)]
 pub(super) struct ResetSchedule {
     pending: HashMap<u64, Links>,

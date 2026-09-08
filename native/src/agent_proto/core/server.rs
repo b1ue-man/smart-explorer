@@ -365,6 +365,10 @@ fn dispatch(
 }
 
 #[cfg(test)]
+#[path = "server_bulk_task_tests.rs"]
+mod bulk_task_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{cancel_request, join_workers, serve, transfer_channel};
     use crate::agent_proto::{write_frame, Frame, TRANSFER_FRAME_BACKLOG};

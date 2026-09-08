@@ -39,6 +39,9 @@ and [handle-information errors](https://learn.microsoft.com/en-us/windows/win32/
 Continuation needs an explicitly bounded native buffer, and metadata failures
 must reach the callback on an already-open handle to exercise DLL dispatch.
 Ordinary directory iteration and an unsupported by-name probe cannot substitute.
+The pinned [Node 24.20.0 filesystem API](https://github.com/nodejs/node/blob/v24.20.0/doc/api/fs.md)
+was checked for names-only `readdir`, per-child `lstat`, `realpath` and recursive
+`watch`; the application-pattern phase keeps the inherited/default libuv pool.
 
 Final execution milestones, depending on the source corrections below:
 
@@ -66,6 +69,24 @@ Final execution milestones, depending on the source corrections below:
 
 The cold synthetic filesystem workload checks the affected application access
 pattern. It is not a claim that actual Obsidian has opened the user's vault.
+
+Acceptance mapping within the single `mount_vault_task` invocation:
+
+| Source milestone | Focused acceptance boundary |
+| --- | --- |
+| 1: sharing/open contracts | `handle_state/*task_tests.rs`; real-request `vault_open_task_tests::exercise` checks ignored attributes, rejected creation and binary-ID ordering without content reads. |
+| 2: private DLL | `vault_volume_enumeration::exercise` checks 10,000 matching one-entry continuations, restart/filter/EOF/overflow; `vault_volume_errors::exercise` checks already-open metadata failure dispatch, with official behavior recorded separately. |
+| 3: host metadata | `bulk_metadata_task_tests`, `metadata_preload_task_tests`, existing metadata/flight/scheduler cases check publication fences, exact sibling-stat calls, cursor/retry/revision ownership and cache reuse. |
+| 4: overlays/retirement | `entry_table_task_tests`, `retirement_queue_task_tests` check dense parent indexes, weak identity batches, final pins and clean/dirty/recovery spool ownership. |
+| 5: admission/SSH | `mount_gate_bulk_task_tests`, selected existing gate cases and `server_bulk_task_tests` check FIFO, progress versus inactivity, cancellation, fairness and completed-worker capacity. |
+| 6: below-preload authority | VFS `vault_cache_task_tests` checks fresh unretained observations and unrelated flights; `vault_task_backend` checks fresh terminal stat reuse and rooted daemon/TCP integration. |
+| 7: callback supervision | `callback_timeout/*task_tests.rs` checks indexed resets, actual lease registration beyond the former cap, claim/finish ordering and no stale rearm. |
+
+The mounted integration starts cold Node names/lstat demand with its recursive
+watcher already installed, checks delivery to that same watcher after an owned
+save, then exercises native metadata, external notifications, replacement saves,
+sibling scripts and orderly teardown in both runtime modes. No standalone
+per-milestone invocations are added.
 
 ## Stage one: current source findings
 
@@ -259,8 +280,7 @@ path or unchanged official DLL has constant cost.
    bytes and absence of Windows/runtime acceptance. No test or release trigger.
 
 The expected results above define the resumed remote acceptance questions.
-Consolidate these and
-the existing lazy-read-only guard into the one checked-in remote mount suite,
+Consolidate these and the existing lazy-read-only guard into the one checked-in remote mount suite,
 with cold names-plus-every-child-lstat, realpath and the recursive watcher before
 warming. Do not substitute a Dirent scan, raise the application's thread pool,
 or publish intermediate milestones as separate releases.

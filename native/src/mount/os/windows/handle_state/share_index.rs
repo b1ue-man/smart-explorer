@@ -11,6 +11,10 @@ use super::super::handle_access::{
 use super::validation::snapshot_record;
 use super::{HandleRecord, HandleSnapshot, State};
 
+#[cfg(test)]
+#[path = "share_index_task_tests.rs"]
+mod task_tests;
+
 const SHARE_BITS: [u32; 3] = [FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE];
 
 fn requests(access: u32) -> [bool; 3] {

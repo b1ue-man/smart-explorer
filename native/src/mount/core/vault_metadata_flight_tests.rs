@@ -198,6 +198,34 @@ fn mount_vault_task_pressure_sharing_does_not_publish_unnotifiable_image() -> io
 }
 
 #[test]
+fn mount_vault_task_unretained_refresh_does_not_reload_parent_for_10000_sibling_stats() -> io::Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let backend = CountingBackend::new();
+    for index in 0..10_000 { backend.base.put(&format!("/f{index:05}"), b"old"); }
+    let engine = engine(backend.clone(), temporary.path())?;
+    assert_eq!(engine.list_dir_cached(r"\")?.len(), 10_000);
+    assert!(engine.metadata_cache.directory("/")?.is_some(), "initial image is still fresh");
+    engine.metadata_cache.test_change_budget(Some(0))?;
+    for index in 0..10_000 { backend.base.put(&format!("/f{index:05}"), b"new-body"); }
+    engine.refresh_metadata()?;
+    assert_eq!(backend.lists(), 2);
+    assert!(engine.metadata_cache.directory("/")?.is_none());
+    assert!(engine.metadata_cache.expired_parent("/f00000")?.is_none());
+    let stats = backend.base.stat_count();
+    for index in 0..10_000 {
+        assert_eq!(engine.cached_remote_stat(&format!("/f{index:05}"))?.size, 8);
+    }
+    assert_eq!(backend.base.stat_count(), stats + 10_000, "one exact stat per new sibling");
+    assert_eq!(backend.lists(), 2, "comparison-only baseline must not cause quadratic relisting");
+    assert_eq!(backend.base.read_count(), 0, "metadata demand never downloads file contents");
+    let demanded = engine.list_dir_cached(r"\")?;
+    assert_eq!(demanded.len(), 10_000);
+    assert!(demanded.iter().all(|entry| entry.size == 8));
+    assert_eq!(backend.lists(), 3, "explicit directory demand still fetches a complete new image");
+    Ok(())
+}
+
+#[test]
 fn mount_vault_task_completed_flights_expire_and_reject_invalidated_revisions() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let slot = cache.load_slot("/")?;

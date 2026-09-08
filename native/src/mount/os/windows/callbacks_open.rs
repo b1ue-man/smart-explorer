@@ -385,7 +385,7 @@ fn validate_creation_attributes(attributes: u32, is_directory: bool) -> Callback
 }
 
 #[test]
-fn mount_batching_task_no_follow_queries_preserve_link_and_id_boundaries() {
+fn mount_vault_task_no_follow_queries_preserve_link_and_id_boundaries() {
     const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     for options in [0, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE] {
         assert!(validate_create_options(options | OPEN_REPARSE_POINT).is_ok());

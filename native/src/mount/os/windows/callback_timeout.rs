@@ -10,6 +10,9 @@ use super::{DokanFileInfo, DokanyRuntime};
 mod schedule;
 use schedule::ResetSchedule;
 
+#[cfg(test)]
+mod bulk_timeout_task_tests;
+
 const RESET_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_ACTIVE_REPORTS: usize = 32;
 
@@ -43,6 +46,18 @@ struct RequestState {
     failed: bool,
     in_flight: bool,
     reported: bool,
+}
+
+impl State {
+    fn rearm_registered(&mut self, id: u64, request: &Arc<Request>, now: Instant) -> io::Result<()> {
+        if !self.stopped
+            && self.requests.get(&id)
+                .is_some_and(|registered| Arc::ptr_eq(registered, request))
+        {
+            self.schedule.arm(id, now)?;
+        }
+        Ok(())
+    }
 }
 
 impl CallbackTimeoutSupervisor {
@@ -308,12 +323,7 @@ fn run(runtime: DokanyRuntime, shared: Arc<Shared>) -> io::Result<()> {
         // Completion released the request mutex before taking shared again.
         // A concurrent finish may have removed this ID while waiting for the
         // FFI reset. Never rearm a removed request or retain a stale queue ticket.
-        if !state.stopped
-            && state.requests.get(&id)
-                .is_some_and(|registered| Arc::ptr_eq(registered, &request))
-        {
-            state.schedule.arm(id, Instant::now())?;
-        }
+        state.rearm_registered(id, &request, Instant::now())?;
     }
 }
 
