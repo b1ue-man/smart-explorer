@@ -149,15 +149,6 @@ pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()>
     let mut workers = Vec::new();
 
     loop {
-        if let Err(error) = reap_workers(&mut workers) {
-            abort_requests(&inbound, &cancels);
-            return match join_workers(&mut workers) {
-                Ok(()) => Err(error),
-                Err(shutdown) => Err(io::Error::other(format!(
-                    "agent request worker failed ({error}); worker shutdown failed: {shutdown}"
-                ))),
-            };
-        }
         let next = match read_frame(&mut r) {
             Ok(next) => next,
             Err(error) => {
@@ -174,6 +165,17 @@ pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()>
         let Some((id, frame)) = next else {
             break;
         };
+        // Input can block while every previous request finishes. Capacity
+        // must reflect completion after that wait, not the preceding frame.
+        if let Err(error) = reap_workers(&mut workers) {
+            abort_requests(&inbound, &cancels);
+            return match join_workers(&mut workers) {
+                Ok(()) => Err(error),
+                Err(shutdown) => Err(io::Error::other(format!(
+                    "agent request worker failed ({error}); worker shutdown failed: {shutdown}"
+                ))),
+            };
+        }
         match frame {
             Frame::Data(_) | Frame::TreeEntry { .. } | Frame::End => {
                 let tx = lock_or_recover(&inbound).get(&id).cloned();
