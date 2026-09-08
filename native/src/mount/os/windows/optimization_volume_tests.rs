@@ -23,6 +23,8 @@ mod enumeration;
 mod errors;
 #[path = "vault_open_task_tests.rs"]
 mod open_contract;
+#[path = "optimization_script_callbacks.rs"]
+mod script_callbacks;
 
 struct MountedOptimization {
     filesystem: Option<DokanyFileSystem>,
@@ -80,6 +82,7 @@ impl MountedOptimization {
         volume_io::install_counters(&mut storage.operations);
         errors::install(&mut storage.operations);
         open_contract::install(&mut storage.operations);
+        script_callbacks::install(&mut storage.operations);
         // Official creation must clear even deliberately reused batching flags.
         storage.options.options |= OPTION_ALLOW_IPC_BATCHING;
         let filesystem = start_on_available_drive(&runtime, &mut storage, &candidates)
