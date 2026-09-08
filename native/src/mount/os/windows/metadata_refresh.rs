@@ -62,12 +62,14 @@ fn run(engine: Arc<MountEngine>, stop: Arc<(Mutex<bool>, Condvar)>) {
             let _ = engine.refresh_metadata_while(|| is_stopped(&stop));
             next_refresh = Instant::now() + REFRESH_INTERVAL;
         }
-        let progressed = engine
-            .preload_metadata_batch_while(|| is_stopped(&stop))
-            .unwrap_or(0);
+        let progress = engine
+            .preload_metadata_progress_while(|| is_stopped(&stop))
+            .unwrap_or_default();
         // Productive bounded expansion can immediately refill. The configured
         // depth, retention budget, backend admission and stop checks still apply.
-        if progressed > 0 { continue; }
+        // A bounded cursor turn may inspect only regular files. Undiscovered
+        // entries are still productive work even when no directory was loaded.
+        if progress.loaded > 0 || progress.pending { continue; }
         let delay = next_refresh.saturating_duration_since(Instant::now());
         if wait_for_stop(&stop, delay) {
             return;

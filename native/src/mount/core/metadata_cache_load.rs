@@ -4,7 +4,8 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
-use super::{order, support::parent_and_name, CacheState, MetadataCache};
+use super::{order, support::{lookup_metadata_at, parent_and_name},
+    CacheState, CachedDirectory, MetadataCache};
 
 pub(in crate::mount) enum MetadataLookup {
     Found(VfsMeta),
@@ -24,6 +25,37 @@ pub(in crate::mount) enum Admission {
     Demand,
     Refresh,
     Speculative,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::mount) struct SnapshotPublication {
+    pub(in crate::mount) retained: bool,
+    // Captured at publication, never inferred from a later revision reread.
+    pub(in crate::mount) completed_revision: Option<u64>,
+}
+
+impl SnapshotPublication {
+    pub(super) fn obsolete() -> Self { Self { retained: false, completed_revision: None } }
+}
+
+/// Declare before acquiring global guards. It also owns temporary strong slot
+/// upgrades: their final drop can release a completed wide listing.
+#[derive(Default)]
+pub(super) struct RetiredMetadata {
+    directories: Vec<CachedDirectory>,
+    slots: Vec<Arc<LoadSlot>>,
+    completed: Vec<CompletedDirectory>,
+    changes: Vec<super::changes::PendingDiff>,
+}
+
+impl RetiredMetadata {
+    pub(super) fn directory(&mut self, directory: Option<CachedDirectory>) {
+        if let Some(directory) = directory { self.directories.push(directory); }
+    }
+
+    pub(super) fn diff(&mut self, diff: Option<super::changes::PendingDiff>) {
+        if let Some(diff) = diff { self.changes.push(diff); }
+    }
 }
 
 pub(in crate::mount) struct LoadSlot {
@@ -103,6 +135,13 @@ impl LoadSlot {
         self.revision.fetch_add(1, Ordering::AcqRel);
     }
 
+    pub(super) fn discard_completed(&self, retired: &mut RetiredMetadata) -> io::Result<()> {
+        let mut completed = self.completed.lock()
+            .map_err(|_| io::Error::other("metadata load result is unavailable"))?;
+        if let Some(completed) = completed.take() { retired.completed.push(completed); }
+        Ok(())
+    }
+
     pub(in crate::mount) fn completed_directory(&self) -> io::Result<Option<Arc<[VfsMeta]>>> {
         let completed = self.completed.lock()
             .map_err(|_| io::Error::other("metadata load result is unavailable"))?;
@@ -143,19 +182,63 @@ impl LoadSlot {
     }
 }
 
-pub(super) fn invalidate_slot(loads: &mut LoadTable, key: &str) {
+pub(super) fn invalidate_slot(loads: &mut LoadTable, key: &str, retired: &mut RetiredMetadata) {
     if let Some(slot) = loads.slots.get(key).and_then(Weak::upgrade) {
         slot.invalidate();
+        retired.slots.push(slot);
     }
 }
 
-pub(super) fn invalidate_descendants(loads: &mut LoadTable, parent: &str) {
+pub(super) fn invalidate_descendants(
+    loads: &mut LoadTable, parent: &str, retired: &mut RetiredMetadata,
+) {
     let prefix = format!("{}/", parent.trim_end_matches('/'));
     for (_, slot) in loads.slots.range(prefix.clone()..)
         .take_while(|(candidate, _)| candidate.starts_with(&prefix))
         .filter(|(candidate, _)| candidate.as_str() != parent)
     {
-        if let Some(slot) = slot.upgrade() { slot.invalidate(); }
+        if let Some(slot) = slot.upgrade() { slot.invalidate(); retired.slots.push(slot); }
+    }
+}
+
+pub(super) fn invalidate_direct_children(
+    loads: &mut LoadTable, parent: &str, retired: &mut RetiredMetadata,
+) {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+    let prefix = format!("{}/", parent.trim_end_matches('/'));
+    let mut lower = Included(prefix.clone());
+    loop {
+        let Some(path) = loads.slots.range((lower, Unbounded)).next()
+            .map(|(path, _)| path.clone()) else { break; };
+        if !path.starts_with(&prefix) { break; }
+        if path == parent { lower = Excluded(path); continue; }
+        if let Some((child, _)) = path[prefix.len()..].split_once('/') {
+            // Canonical keys use '/' separators. '0' is its immediate ASCII
+            // successor, so this jumps over exactly child + '/' descendants
+            // while preserving a sibling named child + '0' (Included bound).
+            lower = Included(format!("{prefix}{child}0"));
+        } else {
+            invalidate_slot(loads, &path, retired);
+            lower = Excluded(path);
+        }
+    }
+}
+
+pub(super) fn publish_observation(
+    loads: &mut LoadTable, key: &str, admission: Option<(&LoadSlot, u64)>,
+    retired: &mut RetiredMetadata,
+) -> io::Result<Option<u64>> {
+    if let Some((slot, revision)) = admission {
+        slot.discard_completed(retired)?;
+        slot.invalidate();
+        if let Some(indexed) = loads.slots.get(key).and_then(Weak::upgrade) {
+            if !std::ptr::eq(indexed.as_ref(), slot) { indexed.invalidate(); }
+            retired.slots.push(indexed);
+        }
+        Ok(Some(revision.wrapping_add(1)))
+    } else {
+        invalidate_slot(loads, key, retired);
+        Ok(None)
     }
 }
 
@@ -165,10 +248,11 @@ pub(super) fn invalidate_paths(
     _prefix: &str,
     recursive: bool,
     parent: Option<&str>,
+    retired: &mut RetiredMetadata,
 ) {
-    invalidate_slot(loads, key);
-    if recursive { invalidate_descendants(loads, key); }
-    if let Some(parent) = parent { invalidate_slot(loads, parent); }
+    invalidate_slot(loads, key, retired);
+    if recursive { invalidate_descendants(loads, key, retired); }
+    if let Some(parent) = parent { invalidate_slot(loads, parent, retired); }
 }
 
 pub(super) fn expire_observed_path(state: &mut CacheState, key: &str, parent: Option<&str>) {
@@ -186,9 +270,19 @@ impl MetadataCache {
         points: &super::super::metadata_point_cache::MetadataPointCache,
         metadata: Option<VfsMeta>,
     ) -> io::Result<bool> {
+        let mut retired = RetiredMetadata::default();
         let mut loads = self.lock_loads()?;
         let mut state = self.lock_state()?;
         if slot.revision() != revision {
+            return Ok(false);
+        }
+        // A retained parent may have published after the caller's last lookup
+        // without changing this unchanged child's revision. Recheck under the
+        // same load/state locks as publication, before installing a point or
+        // expiring snapshot authority. The caller then returns that authority.
+        if !matches!(lookup_metadata_at(&mut state, path, self.case_sensitive,
+            Instant::now(), false).0, MetadataLookup::Uncached)
+        {
             return Ok(false);
         }
         // Lock order: load table -> snapshot state -> point state. Point
@@ -201,10 +295,10 @@ impl MetadataCache {
         let parent = parent_and_name(path).map(|(parent, _)| self.key(parent));
         // An exact observation also supersedes a completed same-path listing
         // and any older refresh waiting to regain its installation guard.
-        invalidate_slot(&mut loads, &key);
-        invalidate_descendants(&mut loads, &key);
+        invalidate_slot(&mut loads, &key, &mut retired);
+        invalidate_descendants(&mut loads, &key, &mut retired);
         if let Some(parent) = &parent {
-            invalidate_slot(&mut loads, parent);
+            invalidate_slot(&mut loads, parent, &mut retired);
         }
         expire_observed_path(&mut state, &key, parent.as_deref());
         Ok(true)

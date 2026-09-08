@@ -1,7 +1,7 @@
 use super::{
-    identity_key, order, CacheState, CachedDirectory, MetadataLookup, MAX_CACHED_BYTES,
+    identity_key, order, CacheState, MetadataLookup, RetiredMetadata, MAX_CACHED_BYTES,
 };
-use super::load_support::{invalidate_descendants, invalidate_slot, LoadTable};
+use super::load_support::{invalidate_descendants, invalidate_direct_children, invalidate_slot, LoadTable};
 use crate::vfs::VfsMeta;
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -36,7 +36,7 @@ pub(super) fn lookup_metadata_at(
         let name_key = identity_key(case_sensitive, name);
         if demand { order::touch(state, &parent_key, true); }
         if let Some(cached) = state.directories.get(&parent_key) {
-            if cached.listing_expires_at > now {
+            if !cached.comparison_only && cached.listing_expires_at > now {
                 let metadata = cached.entry_index.get(&name_key)
                     .and_then(|index| cached.entries.get(*index));
                 if direct_child {
@@ -57,7 +57,7 @@ pub(super) fn lookup_metadata_at(
     let Some(cached) = state.directories.get(&key) else {
         return (MetadataLookup::Uncached, now);
     };
-    if cached.metadata_expires_at <= now {
+    if cached.comparison_only || cached.metadata_expires_at <= now {
         return (MetadataLookup::Uncached, now);
     }
     (MetadataLookup::Found(cached.metadata.clone()), cached.metadata_expires_at)
@@ -72,8 +72,9 @@ pub(super) fn evict_until(
     needed_entries: usize,
     needed_bytes: usize,
     _root_key: &str,
-    _keep_key: Option<&str>,
+    keep_key: Option<&str>,
     _needs_directory_slot: bool,
+    retired: &mut RetiredMetadata,
 ) {
     while !fits(state, needed_entries, needed_bytes) {
         // Retry hints are less valuable than demanded metadata. Reclaim their
@@ -82,16 +83,19 @@ pub(super) fn evict_until(
             order::remove_cooldown(state, &key);
             continue;
         }
-        let victim = state.recency.first().map(|(_, key)| key.clone());
+        // At most one protected replacement key is skipped. If it is the last
+        // retained candidate, fail admission instead of looping or evicting it.
+        let victim = state.recency.iter().find(|(_, key)| Some(key.as_str()) != keep_key)
+            .map(|(_, key)| key.clone());
         let Some(victim) = victim else {
             break;
         };
-        remove_directory(state, &victim);
+        remove_directory(state, &victim, retired);
     }
 }
 
-pub(super) fn remove_directory(state: &mut CacheState, key: &str) {
-    order::remove(state, key);
+pub(super) fn remove_directory(state: &mut CacheState, key: &str, retired: &mut RetiredMetadata) {
+    order::remove(state, key, retired);
 }
 
 fn replaced(old: &VfsMeta, new: &VfsMeta) -> bool {
@@ -106,10 +110,16 @@ fn object_replaced(old: &VfsMeta, new: &VfsMeta) -> bool {
 pub(super) fn reconcile_loads(
     loads: &mut LoadTable, parent: &str, entries: &[VfsMeta], index: &HashMap<String, usize>,
     previous: Option<(&[VfsMeta], &HashMap<String, usize>)>, case_sensitive: bool,
+    snapshot_retained: bool, retired: &mut RetiredMetadata,
 ) {
+    // An unretained image cannot reject stale point publication by serving its
+    // own authority, including for names absent from both comparison images.
+    // Retained images use the atomic install_point_if_current authority check;
+    // unchanged child directory flights therefore keep their revision.
+    if !snapshot_retained { invalidate_direct_children(loads, parent, retired); }
     let Some((previous, old_index)) = previous else {
         // Initial authority can disprove an already-running descendant fetch.
-        invalidate_descendants(loads, parent);
+        invalidate_descendants(loads, parent, retired);
         return;
     };
     for old in previous {
@@ -117,17 +127,17 @@ pub(super) fn reconcile_loads(
         let new = index.get(&key).and_then(|index| entries.get(*index));
         if new.is_some_and(|new| super::changes::same(old, new)) { continue; }
         let path = join(parent, &key);
-        invalidate_slot(loads, &path);
+        if snapshot_retained { invalidate_slot(loads, &path, retired); }
         if new.map_or(true, |new| replaced(old, new) || !new.is_dir || new.is_symlink) {
-            invalidate_descendants(loads, &path);
+            invalidate_descendants(loads, &path, retired);
         }
     }
     for new in entries {
         let key = identity_key(case_sensitive, &new.name);
         if !old_index.contains_key(&key) {
             let path = join(parent, &key);
-            invalidate_slot(loads, &path);
-            invalidate_descendants(loads, &path);
+            if snapshot_retained { invalidate_slot(loads, &path, retired); }
+            invalidate_descendants(loads, &path, retired);
         }
     }
 }
@@ -138,6 +148,7 @@ pub(super) fn reconcile_direct_children(
     entries: &[VfsMeta],
     case_sensitive: bool,
     previous: Option<(&[VfsMeta], &HashMap<String, usize>)>,
+    retired: &mut RetiredMetadata,
 ) {
     let plain_directories = entries
         .iter()
@@ -168,15 +179,44 @@ pub(super) fn reconcile_direct_children(
             if changed { removed.insert(join(parent_key, name)); }
         }
     }
+    // The new observation supersedes exact child metadata even when its own
+    // image cannot be retained. Unchanged directory objects keep their deeper
+    // snapshots; only replaced/removed objects lose an entire cached subtree.
+    for new in entries {
+        let key = join(parent_key, &identity_key(case_sensitive, &new.name));
+        if let Some(cached) = state.directories.get(&key) {
+            if !new.is_dir || new.is_symlink || replaced(&cached.metadata, new) {
+                removed.insert(key);
+            } else if !super::changes::same(&cached.metadata, new) {
+                order::expire(state, &key, Instant::now());
+            }
+        }
+    }
     for child in removed {
         let descendants = order::descendants(&state.directories, &child);
-        for descendant in descendants { remove_directory(state, &descendant); }
-        remove_directory(state, &child);
+        for descendant in descendants { remove_directory(state, &descendant, retired); }
+        remove_directory(state, &child, retired);
     }
 }
 
-pub(super) fn restore_directory(state: &mut CacheState, key: String, cached: CachedDirectory) {
-    order::insert(state, key, cached);
+pub(super) fn reconcile_parent_authority(
+    state: &mut CacheState, loads: &mut LoadTable, key: &str,
+    metadata: &VfsMeta, retired: &mut RetiredMetadata,
+) {
+    let mut current = key;
+    while let Some((parent, name)) = parent_and_name(current) {
+        let disproved = state.directories.get(parent).is_some_and(|cached| {
+            if cached.comparison_only || cached.listing_expires_at <= Instant::now() { return false; }
+            let old = cached.entry_index.get(name).and_then(|index| cached.entries.get(*index));
+            if current == key { old.map_or(true, |old| !super::changes::same(old, metadata)) }
+            else { !old.is_some_and(|old| old.is_dir && !old.is_symlink) }
+        });
+        if disproved {
+            order::expire(state, parent, Instant::now());
+            invalidate_slot(loads, parent, retired);
+        }
+        current = parent;
+    }
 }
 
 pub(super) fn meta_bytes(metadata: &VfsMeta) -> usize {
