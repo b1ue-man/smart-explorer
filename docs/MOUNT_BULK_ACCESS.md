@@ -2,7 +2,8 @@
 
 Code-first follow-up to [the Obsidian startup inspection](MOUNT_OBSIDIAN_STARTUP.md).
 The only live status is D4 in [TODO.md](TODO.md). Baseline: `bad4e2f`, inspected
-2026-09-08. This is an implementation plan, not a runtime acceptance claim.
+2026-09-08. The plan and source-only checkpoint below are retained history;
+the exact remote acceptance record follows.
 
 ## Goal and execution boundary
 
@@ -19,6 +20,46 @@ Windows release, following one remote task suite and the existing terminal
 release wrapper. Local builds and test execution remain prohibited. Source
 milestones use `[task candidate]`; only the terminal wrapper bumps the version.
 Release observations remain at least half an hour apart.
+
+## Accepted exact candidate, 2026-09-08
+
+The complete existing remote suite passed in
+[run 34218461978](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
+at `0bfdc0665ba746493304030dc18e89bde11e36d6`. Its `approval.json` records `PASS`.
+The exact prepared dependency was copied into the canonical tracked asset paths,
+not rebuilt or relabeled. Before import, raw payload/source hashes, sizes and
+normalized recipe/patch/builder bindings were compared to the approval/manifest.
+
+| Retained input | SHA-256 |
+| --- | --- |
+| `dokan2.dll` | `985735e1a36e33393f0ed7b733c17185953ed746e27232714a639b9447721b33` |
+| `manifest.json` | `6e4f32962d054f9f68df0b12e8a5beda8f1c4ea4ef0bcda2183e75a3a7c2aa0e` |
+| `corresponding-source.zip` | `7c7f7d3862419f74e9df1efd1c0052668450d521274852994f3f3c931190dbfd` |
+
+Provenance: VS `17.14.37614.0`, MSVC `14.44.35207`, SDK `10.0.26100.0`, v143/static
+CRT; upstream/recipe/patch/builder identities are in the retained manifest.
+The approving fixture SHA-256 is
+`f880e6ddd77919e38b2fa3b7cba6f25ed946fbf816a34924a4e30cf21cc2b66c`.
+The official System32 DLL stayed
+`75600aba867acbdfdb85fcd142b524da769bdc611b855a760aeb0c6e2eaae17a` and driver stayed
+`9549a20e63c22a2b068e635600b65f6b55d8be5122a6623997b1274a1a1f6235`.
+
+Both runtime modes completed cold Node names/lstat demand over 66,385 files and
+4,608 descendant directories, with no backend content reads during metadata.
+This run took about 16 seconds per cold pass; it is not a before/after benchmark
+or a universal performance guarantee. Exact native continuation, callback-error,
+creation-attribute, sharing/cache/scheduling contracts and save/replace/watch
+behavior passed. Mounted PowerShell main/helper/child/data access completed in
+535 ms privately and 413 ms officially; local startup took 4,641/308 ms. The
+earlier single PowerShell timeout was not reproduced or explained by this run;
+its added diagnostics and corrected fixture cleanup are not a claimed product
+fix for that timeout. Private continuation was nonzero; official batching stayed
+disabled. Recovery/teardown completed in both modes. Actual Obsidian/user-remote
+certification remains outside this synthetic workload.
+
+Approval is not publication. The existing terminal remote wrapper must consume
+these exact retained bytes and publish the installer; version truth remains
+Cargo/feed plus the matching visible GitHub Release.
 
 ## Resumed delivery plan, 2026-09-08
 
@@ -354,7 +395,9 @@ with cold names-plus-every-child-lstat, realpath and the recursive watcher befor
 warming. Do not substitute a Dirent scan, raise the application's thread pool,
 or publish intermediate milestones as separate releases.
 
-## Source handoff, 2026-09-08
+## Historical source-only handoff, 2026-09-08
+
+This records the earlier `53dc64f` checkpoint, superseded by remote acceptance above.
 
 The source candidate implements the milestones above. Sharing admission now
 uses per-path access counters; directory overlays use dense parent indexes;
