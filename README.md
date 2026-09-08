@@ -528,11 +528,13 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
    nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
    Zwischencommits sind keine Releases.
-   Der Mount-Metadaten-Block nutzte ausschließlich
+   Der Mount-Massenzugriffs-Block nutzt ausschließlich
    `mount-optimization-task.yml` auf Windows 2025 mit
    `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,
-   tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi; die bereits freigegebene
-   private DLL wird wiederverwendet.
+   tatsächlicher Daemon-/Mount-Pfad, beide Laufzeitmodi. Mit dem expliziten
+   `-PreparePrivateDependency` wird die geänderte private DLL im selben Job
+   vorbereitet bzw. rezeptgebunden wiederverwendet. Nur die dort akzeptierten
+   exakten Bytes werden anschließend für den Release übernommen.
    Der separate Speicheranalyse-Zugriffsfix nutzt ausschließlich
    `analytics-access-task.yml` mit `native/test-analytics-access-task.ps1`
    (Windows 2025, echte Zugriffs-/Token-Prüfung); er wiederholt nicht die
