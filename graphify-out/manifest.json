@@ -2820,9 +2820,9 @@
     "semantic_hash": "898667d1673a0a01145c7c3ab809855e"
   },
   "mount/os/windows/vault_open_task_tests.rs": {
-    "mtime": 1788859106.7608593,
-    "ast_hash": "ecc72ced26bfdd548305d9e3a7741540",
-    "semantic_hash": "ecc72ced26bfdd548305d9e3a7741540"
+    "mtime": 1788863682.4931931,
+    "ast_hash": "9743c357a8cd5f3843152b23226452a1",
+    "semantic_hash": "9743c357a8cd5f3843152b23226452a1"
   },
   "mount/os/windows/vault_volume_byname.rs": {
     "mtime": 1788728127.0570123,
