@@ -29,16 +29,18 @@ bounded changes:
   with `STATUS_INVALID_PARAMETER`. An invalid asynchronous pending status is
   still rejected by end-dispatch rather than sent as a completed operation.
 
-The two bulk-access corrections above were added on 2026-09-08 and checked
-against the exact pinned archive without building or loading a DLL. The source
-recipe is a candidate: the previously approved files in
-`native/assets/dokany-private/` do **not** contain these corrections and no longer
-match this recipe. They have deliberately not been relabeled. Before the next
-Windows build/acceptance, the remote preparation stage must produce new exact
-DLL/source bytes and pass their trusted override hashes to the build. Normal
-approved-asset verification fails closed until that new set is approved and
-committed. The official-runtime fallback remains unchanged and does not inherit
-these private-library corrections.
+The two bulk-access corrections above were added on 2026-09-08. Their exact
+remote-built DLL/source set passed the complete mount task in
+[run 34218461978](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
+at source `0bfdc0665ba746493304030dc18e89bde11e36d6` and is retained under
+`native/assets/dokany-private/`. Hashes and acceptance boundaries are recorded
+in [MOUNT_BULK_ACCESS.md](../../docs/MOUNT_BULK_ACCESS.md#accepted-exact-candidate-2026-09-08).
+The earlier source-only checkpoint kept the old approved bytes unchanged and
+failed normal recipe verification; that checkpoint is superseded, not relabeled.
+The README inside the exact corresponding-source archive records preparation
+before approval. Do not rewrite that archive to update its historical status.
+The official-runtime fallback remains unchanged and does not inherit these
+private-library corrections. Dependency approval alone is not publication.
 
 Primary sources checked 2026-09-06: [pinned source](https://github.com/dokan-dev/dokany/tree/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd),
 [project settings](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd/dokan/dokan.vcxproj),

@@ -22,9 +22,9 @@ The version is consistent across all four outputs because each reads it from
 `Cargo.toml`. Never hand-edit `version.txt` — the top-level release script
 writes it last.
 
-The mount-cache/private-Dokany source and exact dependency were approved by the
-[single remote task suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053)
-on 2026-09-06, before the terminal release. Approval alone is not publication;
+The bulk-access mount source and exact revised private-Dokany dependency were
+approved by the [single remote task suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
+on 2026-09-08, before the terminal release. Approval alone is not publication;
 use the versioned feed and matching GitHub Release for current release truth.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
@@ -125,10 +125,12 @@ run:
 - `native/assets/dokany-private/manifest.json`; and
 - `native/assets/dokany-private/corresponding-source.zip`.
 
-The retained set was approved in run `34049677053` at source
-`0101ea6f6aa41b35f80a60870702bae16c670f59`. Exact payload/provenance identities and
-the observed continuation/fallback behavior are recorded in
-[MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md#approved-exact-dependency-and-observed-behavior).
+The current retained set was approved in run `34218461978` at source
+`0bfdc0665ba746493304030dc18e89bde11e36d6`. Exact payload/provenance identities and
+observed continuation/fallback behavior are recorded in
+[MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md#accepted-exact-candidate-2026-09-08).
+The older `34049677053` approval is historical provenance for the preceding
+dependency in [MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md#approved-exact-dependency-and-observed-behavior).
 
 The terminal release must not rebuild this DLL, replace it with an independently
 prepared copy, or treat a preparation result alone as suite approval. Before

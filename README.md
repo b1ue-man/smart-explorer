@@ -108,14 +108,16 @@ Windows-Check `native/verify-mount-windows.ps1` prüft echte Laufwerkszugriffe
 mit Zeitlimit. Mit `&` in einer bereits geöffneten, nicht erhöhten PowerShell
 aufrufen; Details und Grenzen stehen in [MOUNT_BATCHING.md](docs/MOUNT_BATCHING.md).
 
-**Verifikation des Quellstands (2026-09-06):** Der Kandidat
-`0101ea6f6aa41b35f80a60870702bae16c670f59` wurde in der
-[Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34049677053)
-erfolgreich geprüft: Speichern/Replace, Skriptzugriffe und Änderungsbeobachter
-auf einem echten Windows-Mount, private Batch-Fortsetzung (`continuation > 0`),
-offizieller Fallback sowie Schutz ungespeicherter Inhalte und Cache-Frische.
+**Verifikation des Quellstands (2026-09-08):** Der Kandidat
+`0bfdc0665ba746493304030dc18e89bde11e36d6` wurde in der
+[Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
+erfolgreich geprüft: ungecachte große Node-Verzeichnisabfragen, Speichern/Replace,
+Skriptzugriffe und Änderungsbeobachter auf einem echten Windows-Mount, private
+Batch-Fortsetzung (`continuation > 0`), offizieller Fallback sowie Schutz
+ungespeicherter Inhalte und Cache-Frische. Die exakt geprüfte private DLL und
+ihr Quellarchiv sind übernommen; die System-DLL und der Treiber bleiben unverändert.
 Das ist ein Verhaltensnachweis, kein Nachweis einer Release-Veröffentlichung.
-Einzelheiten und Grenzen stehen in [MOUNT_OPTIMIZATION.md](docs/MOUNT_OPTIMIZATION.md).
+Einzelheiten und Grenzen stehen in [MOUNT_BULK_ACCESS.md](docs/MOUNT_BULK_ACCESS.md).
 
 Der Mount behält unbenutzte, saubere Dateiinhalte innerhalb derselben
 Einbindung in einem separaten LRU-Cache: standardmäßig **500 MiB pro Laufwerk**,
