@@ -55,6 +55,10 @@ commands. Release observations remain at least half an hour apart.
 - Rooted resolution already uses indexed case lookup below preload. It still
   repeatedly constructs growing prefixes, and a cold case-sensitive stat can
   fetch the final metadata during validation and again for the result.
+- The callback-timeout supervisor scans all active requests on every wakeup and
+  again for each due reset, taking each request mutex under its global mutex.
+  It also rejects the 4,097th live callback solely by a fixed count. This is
+  live-request bookkeeping, not a cache-retention or directory-validity budget.
 
 The wire encoder/decoder visits every result once. A 10,000-entry listing with
 32-byte UTF-8 names and no MD5 occupies 550,013 body bytes (550,017 framed), below
@@ -88,6 +92,15 @@ provider operation cannot be safely killed by forgetting its client request.
 The admission correction must preserve no-progress timeouts and must not claim
 to repair arbitrary hung backend workers. No unbounded thread spawning or
 speculative worker-count increase is planned.
+
+The supervisor follow-up was gap-reviewed before editing: all leases use one
+fixed reset interval. Arm deadlines under the scheduler mutex, in monotonic
+order, to allow an indexed FIFO rather than whole-table minima. The
+[pinned timeout implementation](https://github.com/dokan-dev/dokany/blob/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd/dokan/timeout.c)
+dereferences the request pointer during reset. Therefore removal must still
+wait for a claimed reset; queue optimization must never shorten that lifetime.
+[Instant's contract](https://doc.rust-lang.org/std/time/struct.Instant.html)
+was checked on 2026-09-08; scheduling must keep its own nondecreasing order.
 
 Complexity accounting includes input path/name bytes and returned metadata, not
 only object count: revalidating a path's ancestors is required for confinement.
@@ -134,6 +147,20 @@ path or unchanged official DLL has constant cost.
    discovery turn does not accidentally put the worker to sleep. Temporary
    snapshot removal/rollback must preserve scheduler ownership. Exact alphabetic
    tie ordering is not required; starvation freedom and recent demand are.
+   Final publication review also found the fresh-authority defect in this host
+   cache: retention/notification pressure must not leave an older successful
+   observation authoritative. Keep its comparison image, expire its authority
+   only after validating the new observation's load/ticket fences, and fence
+   affected point/descendant results. Failed or stale fetches must not do this.
+   An explicit publication outcome carries the exact completed load revision:
+   rejecting retention must still fence older fetches waiting to publish. A
+   comparison-only image must not trigger an implicit whole-parent reload for
+   each subsequent sibling stat; direct point requests remain available.
+   Unchanged retained-parent refreshes must not repeatedly cancel child loads.
+   Recheck snapshot authority atomically during point installation; use blanket
+   direct-flight fencing only where the new listing cannot be retained.
+   Eviction, invalidation and subtree reconciliation must carry retired wide
+   snapshots out of the global locks before destroying their last references.
 
 4. **Indexed live-file overlays and candidate retirement.** Encapsulate entry
    insertion/removal in a parent-indexed table. Replace global retirement sweeps
@@ -165,7 +192,18 @@ path or unchanged official DLL has constant cost.
    writes do not restart unrelated cold loads; confinement/collision checks
    and failure propagation are unchanged.
 
-7. **Manual integration handoff.** Inspect all mutation hooks, API signatures,
+7. **Incremental callback supervision.** Replace whole-request minima with
+   an indexed FIFO of fixed-interval reset deadlines, assigned under its one
+   mutex. Registration, removal and rearming inspect only the affected records;
+   completion cannot leave stale queue entries. Keep the existing reset API,
+   claim/finish pointer lifetime, failure reporting and shutdown behavior.
+   Remove the arbitrary live-callback count rejection; memory tracks actual
+   active leases, with no new worker per callback. Expected: N concurrent
+   registrations/completions and one reset round require expected O(N)
+   bookkeeping, not repeated N-record scans; finish/reset races never use a
+   completed Dokany request pointer.
+
+8. **Manual integration handoff.** Inspect all mutation hooks, API signatures,
    ownership/lock order, patched upstream context and complexity against the
    milestones. Perform only non-executing text/parsing checks; refresh the root
    Graphify graph after native changes. Commit coherent milestones and push the
@@ -178,3 +216,34 @@ the existing lazy-read-only guard into the one checked-in remote mount suite,
 with cold names-plus-every-child-lstat, realpath and the recursive watcher before
 warming. Do not substitute a Dirent scan, raise the application's thread pool,
 or publish intermediate milestones as separate releases.
+
+## Source handoff, 2026-09-08
+
+The source candidate implements the milestones above. Sharing admission now
+uses per-path access counters; directory overlays use dense parent indexes;
+last-pin/clean transitions enqueue affected retirement candidates. Refresh
+and preload scheduling maintain their own ordering/cursors, and callback timeout
+resets use an indexed deadline FIFO. The transport gate admits same-class work
+FIFO and measures missing metadata service progress instead of total queue age.
+
+Both metadata-cache layers retire obsolete authority after a successful current
+observation, independently of retention. Host comparison-only images preserve
+notification history without answering reads or forcing whole-parent fetches
+for each sibling stat. Publication returns the exact load revision, and wide
+snapshot destruction occurs after releasing global locks. Rooted stat reuses
+its fresh terminal observation; path confinement remains enforced.
+
+Manual review covered changed call sites, ownership and invalidation hooks,
+including cancellation, rejected preload retry, same-path rename and callback
+pointer lifetime. Static Rust AST parsing and source-size checks found no syntax
+or size violations; recipe JSON and the patch digest agree. The complete private
+patch also passed a non-applying context check against the hash-verified pinned
+upstream archive. These checks do not perform Rust type checking or establish
+Windows runtime behavior.
+
+No build, test, application run or release was started. Existing private DLL
+assets remain unchanged and cannot satisfy the new recipe: remote dependency
+preparation and the later agreed task-level Windows acceptance are still needed
+before distributing a working binary candidate. The official DLL/driver and
+compatibility fallback are unchanged. Remaining global complexity boundaries
+are described above; no measured speedup or universal O(N) guarantee is claimed.
