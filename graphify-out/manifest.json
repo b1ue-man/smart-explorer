@@ -2754,15 +2754,25 @@
     "ast_hash": "0ca17b47db156db2bc5075cfdef46977",
     "semantic_hash": "0ca17b47db156db2bc5075cfdef46977"
   },
+  "mount/os/windows/optimization_script_callbacks.rs": {
+    "mtime": 1788865127.4451358,
+    "ast_hash": "e0cb42287114a7c22a676dee9cf7c94b",
+    "semantic_hash": "e0cb42287114a7c22a676dee9cf7c94b"
+  },
+  "mount/os/windows/optimization_script_probe.rs": {
+    "mtime": 1788865127.4461358,
+    "ast_hash": "ee509b5302128c2ee9157d89ecf26f48",
+    "semantic_hash": "ee509b5302128c2ee9157d89ecf26f48"
+  },
   "mount/os/windows/optimization_volume_io.rs": {
-    "mtime": 1788715181.1824822,
-    "ast_hash": "cf06b76bf75ebc78d044d4fb9d31d9e0",
-    "semantic_hash": "cf06b76bf75ebc78d044d4fb9d31d9e0"
+    "mtime": 1788865003.9806716,
+    "ast_hash": "81c29fd054db7185a0cc7f05a28bb6d9",
+    "semantic_hash": "81c29fd054db7185a0cc7f05a28bb6d9"
   },
   "mount/os/windows/optimization_volume_tests.rs": {
-    "mtime": 1788858750.3249311,
-    "ast_hash": "1bfae077c1b00898f8aad58248da756f",
-    "semantic_hash": "1bfae077c1b00898f8aad58248da756f"
+    "mtime": 1788864834.1332808,
+    "ast_hash": "4973ffb0fb48f7ef90880378c4bf7625",
+    "semantic_hash": "4973ffb0fb48f7ef90880378c4bf7625"
   },
   "mount/os/windows/optimization_watch_tests.rs": {
     "mtime": 1788715063.0841265,
