@@ -1,5 +1,4 @@
 use crate::app::app_models::{TransferMsg, TransferProgress};
-use crate::app::platform_helpers::replace_file_atomic;
 use crate::app::transfer_helpers::{cleanup_partial, create_download_part, ensure_local_space};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -20,6 +19,7 @@ pub(super) fn download_file_progress(
     use std::io::{Read, Write};
 
     super::cancel::check_optional(cancel)?;
+    let read_size = be.read_size(src, expected).map_err(|error| error.to_string())?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         super::cancel::check_optional(cancel)?;
@@ -36,7 +36,9 @@ pub(super) fn download_file_progress(
             cleanup_partial(&part);
             return Err(error);
         }
-        let n = match reader.read(&mut buf) {
+        let limit = read_size.map(|length| length.saturating_sub(copied).saturating_add(1)
+            .min(buf.len() as u64) as usize).unwrap_or(buf.len());
+        let n = match reader.read(&mut buf[..limit]) {
             Ok(n) => n,
             Err(error) => {
                 drop(output);
@@ -51,6 +53,11 @@ pub(super) fn download_file_progress(
         }
         if n == 0 {
             break;
+        }
+        if read_size.is_some_and(|length| n as u64 > length.saturating_sub(copied)) {
+            drop(output);
+            cleanup_partial(&part);
+            return Err("Download-Quelle ist während der Übertragung gewachsen".to_string());
         }
         if let Err(error) = output.write_all(&buf[..n]) {
             drop(output);
@@ -76,16 +83,19 @@ pub(super) fn download_file_progress(
         cleanup_partial(&part);
         return Err(error);
     }
-    if expected != 0 && copied != expected {
+    if read_size.is_some_and(|length| copied != length) {
         cleanup_partial(&part);
         return Err(format!(
             "Download unvollstaendig: {copied} von {expected} Bytes"
         ));
     }
-    if let Err(error) = replace_file_atomic(&part, dest) {
+    // The destination was selected as absent, but another actor may create it
+    // during the download. Copy publication must never replace that entry.
+    if let Err(error) = crate::vfs::promote_local_copy(&part, dest) {
         cleanup_partial(&part);
-        return Err(error.to_string());
+        return Err(format!("Download-Ziel „{}“ ohne Ersetzen veröffentlichen ({:?}): {error}", dest.display(), error.kind()));
     }
-    super::cancel::check_optional(cancel)?;
+    // Publication was acknowledged. Cancellation may stop the next file, but
+    // must not retroactively hide this completed destination from accounting.
     Ok(dest.to_string_lossy().to_string())
 }

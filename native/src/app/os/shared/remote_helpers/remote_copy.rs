@@ -4,10 +4,10 @@ use super::entries::{
     TransferErrorLog,
 };
 use super::progress::send_transfer_progress;
+use super::upload_plan::DestinationNames;
 use super::uploads::upload_file_progress;
 use super::{
-    cleanup_temp_copy, find_remote_unique_name_avoiding, numbered_remote_name, open_temp_path,
-    rjoin,
+    cleanup_temp_copy, open_temp_path, rjoin,
 };
 use crate::app::app_models::{TransferKind, TransferMsg, TransferProgress};
 use crate::types::FilterDef;
@@ -21,7 +21,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
     paths: &[String],
     tgt: &dyn crate::vfs::Backend,
     dest_root: &str,
-    same_server: bool,
+    _same_server: bool,
     filter: Option<(FilterDef, String)>,
     tx: &crossbeam_channel::Sender<TransferMsg>,
     cancel: &AtomicBool,
@@ -31,7 +31,10 @@ pub(in crate::app) fn copy_remote_paths_progress(
     let mut dirs = Vec::new();
     let mut errors = TransferErrorLog::default();
     let mut budget = TransferCollectionBudget::default();
-    let mut reserved = std::collections::HashSet::new();
+    // Even same-backend copies use the owned local bridge: no replacing
+    // server-copy primitive or overlapping read/write on a single session.
+    let mut names = if super::cancel::requested(cancel) { None }
+        else { Some(DestinationNames::new(tgt, dest_root)) };
     for src_path in paths {
         if super::cancel::requested(cancel) {
             break;
@@ -49,20 +52,14 @@ pub(in crate::app) fn copy_remote_paths_progress(
             errors.push(format!("{src_path}: {error}"));
             break;
         }
-        let target_name = match find_remote_unique_name_avoiding(
-            tgt,
-            dest_root,
-            |index| numbered_remote_name(name, index),
-            &reserved,
-            cancel,
-        ) {
+        let Some(names) = names.as_mut() else { break; };
+        let target_name = match names.reserve(tgt, dest_root, name, cancel) {
             Ok(name) => name,
             Err(error) => {
                 errors.push(format!("{src_path}: {error}"));
                 break;
             }
         };
-        reserved.insert(rjoin(dest_root, &target_name));
         let collected = RemoteEntryCollector {
             be: src,
             filter: filter.as_ref(),
@@ -84,11 +81,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
             tx,
             TransferProgress::new(
                 TransferKind::RemoteCopy,
-                if same_server {
-                    "Kopiere remote"
-                } else {
-                    "Uebertrage remote"
-                },
+                "Uebertrage remote",
                 0,
                 0,
             ),
@@ -100,11 +93,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
     if !errors.is_empty() {
         let mut progress = TransferProgress::new(
             TransferKind::RemoteCopy,
-            if same_server {
-                "Kopiere remote"
-            } else {
-                "Uebertrage remote"
-            },
+            "Uebertrage remote",
             0,
             0,
         );
@@ -115,18 +104,10 @@ pub(in crate::app) fn copy_remote_paths_progress(
     dirs.sort();
     dirs.dedup();
     let file_bytes = files.iter().map(|f| f.size).fold(0u64, u64::saturating_add);
-    let bytes_total = if same_server {
-        file_bytes
-    } else {
-        file_bytes.saturating_mul(2)
-    };
+    let bytes_total = file_bytes.saturating_mul(2);
     let mut progress = TransferProgress::new(
         TransferKind::RemoteCopy,
-        if same_server {
-            "Kopiere remote"
-        } else {
-            "Uebertrage remote"
-        },
+        "Uebertrage remote",
         files.len() as u64,
         bytes_total,
     );
@@ -157,24 +138,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
         progress.current = file.rel.clone();
         progress.elapsed_ms = start.elapsed().as_millis() as u64;
         send_transfer_progress(tx, &progress, &mut last, true);
-        let result = if same_server {
-            if super::cancel::requested(cancel) {
-                break;
-            }
-            let parent_ready = dest
-                .rsplit_once('/')
-                .map(|(parent, _)| tgt.mkdir_all(parent))
-                .transpose()
-                .map_err(|error| error.to_string());
-            parent_ready.and_then(|_| {
-                super::cancel::check(cancel)?;
-                tgt.copy_file(&file.src, &dest)
-                    .map(|_| {
-                        progress.bytes_done = progress.bytes_done.saturating_add(file.size);
-                    })
-                    .map_err(|error| error.to_string())
-            })
-        } else {
+        let result = {
             let name = file.rel.rsplit('/').next().unwrap_or("datei");
             (|| -> Result<(), String> {
                 let tmp = open_temp_path(name)
@@ -197,17 +161,18 @@ pub(in crate::app) fn copy_remote_paths_progress(
                 uploaded
             })()
         };
-        if super::cancel::requested(cancel) {
-            break;
-        }
         match result {
             Ok(()) => {
                 progress.files_done = progress.files_done.saturating_add(1);
             }
+            Err(e) if e == super::cancel::CANCELED_ERROR => {}
             Err(e) => {
                 errors.push(format!("{}: {}", file.rel, e));
                 progress.errors = errors.total();
             }
+        }
+        if super::cancel::requested(cancel) {
+            break;
         }
         progress.elapsed_ms = start.elapsed().as_millis() as u64;
         send_transfer_progress(tx, &progress, &mut last, true);
