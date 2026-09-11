@@ -26,6 +26,8 @@ mod core;
 mod delete;
 #[path = "core/dispatch.rs"]
 mod dispatch;
+#[path = "os/shared/copy_transfer.rs"]
+mod copy_transfer;
 #[path = "os/shared/local.rs"]
 mod local;
 #[cfg(windows)]
@@ -36,8 +38,11 @@ mod local_platform;
 mod local_platform;
 #[path = "core/promotion.rs"]
 mod promotion;
+#[path = "core/scheme.rs"]
+mod scheme;
 
 pub use self::cache::CachingBackend;
+pub(crate) use self::copy_transfer::copy_between;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 pub use self::core::{
     Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
@@ -51,6 +56,7 @@ pub use self::delete::{
 #[allow(unused_imports)]
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
+pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
 pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 
 #[cfg(test)]

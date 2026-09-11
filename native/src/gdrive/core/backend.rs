@@ -196,6 +196,23 @@ impl Backend for GDriveBackend {
         open_writer(self, path)
     }
 
+    fn read_size(&self, path: &str, metadata_size: u64) -> VfsResult<Option<u64>> {
+        let mime = self.mime_of(path).ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidData, "Drive read type could not be determined",
+        ))?;
+        Ok(export_format(&mime).is_none().then_some(metadata_size))
+    }
+
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        super::copy_writer::open_writer(self, path)
+    }
+
+    fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        // Drive names are not unique. This exact-ID move verifies uniqueness
+        // and rolls back collisions; it is not an atomic name reservation.
+        self.promote_staged_file_no_replace(staged, destination)
+    }
+
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.rename_serialized(src, dst)
     }

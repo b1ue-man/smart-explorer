@@ -3,19 +3,7 @@ use std::sync::Arc;
 
 use super::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 
-/// Which backend owns a path. A 1-byte `Copy` tag so it can ride on `FileEntry`
-/// (added when the first remote backend is wired) without touching the hot
-/// local walk.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Scheme {
-    #[default]
-    Local,
-    Sftp,
-    Ftp,
-    Webdav,
-    GDrive,
-    Peer,
-}
+pub use super::scheme::Scheme;
 
 /// Backend-neutral directory entry / file metadata. Fields a remote backend
 /// can't supply (`btime`, `hidden`, `system`) default to `0` / `false`.
@@ -141,6 +129,22 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Create a private copy stage without updating any existing identity.
+    /// Defaults to exclusive namespace creation. ID-based providers may create
+    /// their own reserved ID instead, but must verify an unambiguous path on
+    /// successful flush. Neither opening nor failure authorizes path cleanup.
+    /// This weaker ID-provider contract is not a mounted exclusive-create API.
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_write_new(path)
+    }
+
+    /// Publish a copy without replacing another identity. ID providers may
+    /// verify unique naming and roll back their own ID on collision; this does
+    /// not promise an atomic sibling-name reservation for those providers.
+    fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_staged_no_replace(staged, destination)
+    }
+
     /// The local filename a download of `path` should be saved as. Defaults to
     /// `name`; backends that transform content on read (e.g. Google Drive
     /// exporting a Doc to .docx) override this to add the right extension.
@@ -148,24 +152,18 @@ pub trait Backend: Send + Sync {
         name.to_string()
     }
 
+    /// Expected read-stream length, including a known empty file. A provider
+    /// that transforms content on read must explicitly return None instead of
+    /// treating metadata size zero as an unknown-length sentinel.
+    fn read_size(&self, _path: &str, metadata_size: u64) -> VfsResult<Option<u64>> {
+        Ok(Some(metadata_size))
+    }
+
     /// Copy within THIS backend. The default streams read->write; `LocalBackend`
     /// overrides with `std::fs::copy`. Cross-backend copies are the caller's job
     /// (read from src backend, write to dst backend).
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
-        let mut r = self.open_read(src)?;
-        let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
-        let result = (|| {
-            let mut writer = self.open_write(&staged)?;
-            let copied = io::copy(&mut r, &mut writer)?;
-            writer.flush()?;
-            drop(writer);
-            super::promotion::promote_staged_replace(self, &staged, dst)?;
-            Ok(copied)
-        })();
-        if result.is_err() {
-            let _ = self.remove_file(&staged);
-        }
-        result
+        super::copy_transfer::copy_file(self, src, dst)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()>;
