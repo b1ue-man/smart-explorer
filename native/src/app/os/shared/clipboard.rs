@@ -1,10 +1,13 @@
 use super::prelude::*;
 use super::*;
-use crate::app::shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
+use super::clipboard_lifecycle::{prepare_filtered_clipboard, PreparedTempClipboard};
+use super::clipboard_state::PreparationResult;
+use crate::app::shared_platform_helpers::ClipboardEffect;
 
 impl App {
     pub(in crate::app) fn clipboard_copy_files(&mut self, cut: bool) {
         if !clipboard_file_ops_supported() {
+            self.error_msg = Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
             return;
         }
         if self.selection.is_empty() {
@@ -16,6 +19,11 @@ impl App {
         }
         // Remote selection -> materialize files/folders in temp, then put those
         // local paths on the clipboard so they paste into Explorer or back here.
+        if self.remote.is_some() && cut {
+            self.cancel_clipboard_preparation();
+            self.error_msg = Some("Remote-Ausschneiden wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
+            return;
+        }
         if let Some(rs) = &self.remote {
             let items: Vec<(String, String, bool)> = self
                 .entries
@@ -33,13 +41,16 @@ impl App {
             let filter = (items.iter().any(|(_, _, is_dir)| *is_dir) && self.filter_is_active())
                 .then(|| (self.filter.clone(), self.root_prefix()));
             let backend = rs.backend.clone();
+            let Some(stamp) = self.begin_clipboard_preparation() else { return };
             let n = items.len();
             let (tx, rx) = unbounded();
             let spawn = std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
-                    let local = download_remote_clipboard_items(&*backend, &items, filter);
-                    let _ = tx.send(local);
+                    let result = download_remote_clipboard_items(&*backend, &items, filter)
+                        .map(PreparedTempClipboard::new);
+                    // The owned result also cleans up if this receiver was replaced.
+                    let _ = tx.send(PreparationResult { stamp, result });
                 });
             match spawn {
                 Ok(_) => {
@@ -50,7 +61,7 @@ impl App {
                     ));
                 }
                 Err(error) => {
-                    self.clip_download_rx = None;
+                    self.cancel_clipboard_preparation();
                     self.error_msg = Some(format!(
                         "Zwischenablage-Download konnte nicht gestartet werden: {error}"
                     ));
@@ -75,68 +86,13 @@ impl App {
                 .collect();
             let filter = self.filter.clone();
             let prefix = self.root_prefix();
+            let Some(stamp) = self.begin_clipboard_preparation() else { return };
             let (tx, rx) = unbounded();
             let spawn = std::thread::Builder::new()
                 .name("clip-prepare".into())
                 .spawn(move || {
-                    let cf = CompiledFilter::compile(&filter);
-                    let mut out: Vec<ClipboardVirtualFile> = Vec::new();
-                    for e in &seeds {
-                        if e.is_dir && !e.is_symlink {
-                            let parent_norm = e.parent.trim_end_matches('/');
-                            let base = format!("{}/", parent_norm);
-                            let collected = crate::scanner::collect_recursive(
-                                &PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
-                                false,
-                                e.depth + 1,
-                                &std::sync::atomic::AtomicBool::new(false),
-                            );
-                            if !collected.is_complete() {
-                                let first = collected
-                                    .issues
-                                    .first()
-                                    .map(|issue| format!("{}: {}", issue.path, issue.detail))
-                                    .unwrap_or_else(|| "unvollständige Ordnererfassung".to_string());
-                                let total = collected.issues.len() as u64
-                                    + collected.suppressed_issues;
-                                let _ = tx.send(Err(format!(
-                                    "Gefilterte Zwischenablage konnte nicht vollständig erstellt werden ({total} Fehler): {first}"
-                                )));
-                                return;
-                            }
-                            for s in collected.entries {
-                                if !s.is_dir && cf.matches(&s, &prefix) {
-                                    let rel = s
-                                        .path
-                                        .strip_prefix(base.as_str())
-                                        .unwrap_or(s.name.as_ref())
-                                        .to_string();
-                                    out.push(ClipboardVirtualFile {
-                                        abs: s.path.replace('/', "\\"),
-                                        rel,
-                                        size: s.size,
-                                        mtime_ms: s.mtime_ms,
-                                    });
-                                    if out.len() >= 1_000_000 {
-                                        let _ = tx.send(Err(
-                                            "Gefilterte Zwischenablage überschreitet das Limit von 1.000.000 Dateien."
-                                                .to_string(),
-                                        ));
-                                        return;
-                                    }
-                                }
-                            }
-                        } else {
-                            // Explicitly selected files always go along.
-                            out.push(ClipboardVirtualFile {
-                                abs: e.path.replace('/', "\\"),
-                                rel: e.name.to_string(),
-                                size: e.size,
-                                mtime_ms: e.mtime_ms,
-                            });
-                        }
-                    }
-                    let _ = tx.send(Ok(out));
+                    let result = prepare_filtered_clipboard(seeds, filter, prefix);
+                    let _ = tx.send(PreparationResult { stamp, result });
                 });
             match spawn {
                 Ok(_) => {
@@ -147,7 +103,7 @@ impl App {
                     ));
                 }
                 Err(error) => {
-                    self.clip_prepare_rx = None;
+                    self.cancel_clipboard_preparation();
                     self.error_msg = Some(format!(
                         "Gefilterte Zwischenablage konnte nicht gestartet werden: {error}"
                     ));
@@ -167,6 +123,7 @@ impl App {
         } else {
             ClipboardEffect::Copy
         };
+        self.cancel_clipboard_preparation();
         match write_clipboard_files(&paths, effect) {
             Ok(_) => {
                 self.virtual_clip = None;
@@ -193,6 +150,10 @@ impl App {
 
     pub(in crate::app) fn clipboard_paste_files(&mut self) {
         if !clipboard_file_ops_supported() {
+            self.error_msg = Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
+            return;
+        }
+        if self.clipboard_paste_is_pending() {
             return;
         }
         if self.root_path.is_empty() {
@@ -202,29 +163,15 @@ impl App {
             ));
             return;
         }
-        // Remote view → upload the clipboard's files into the current remote
-        // folder via the backend (instead of a local std::fs copy).
-        if let Some(rs) = &self.remote {
-            let paths = match read_clipboard_files() {
-                Some((p, _)) if !p.is_empty() => p,
-                _ => {
-                    self.notice = Some((
-                        "Ctrl+V: Zwischenablage enthält keine Dateien".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                    return;
-                }
-            };
-            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
-            return;
-        }
-
-        let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-
-        // Fast path: the clipboard still holds OUR filtered virtual files —
-        // copy them directly without the COM stream round-trip.
+        // Resolve our virtual payload BEFORE choosing local copy or remote
+        // upload: a descriptor/stream clipboard need not contain CF_HDROP.
         if let Some((seq, pairs)) = self.virtual_clip.clone() {
             if virtual_clipboard_sequence() == Some(seq) {
+                if let Some(rs) = &self.remote {
+                    self.start_filtered_remote_upload(pairs, rs.backend.clone(), self.root_path.clone());
+                    return;
+                }
+                let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
                 let count = pairs.len();
                 if self.start_copy_job(CopyMode::Copy, true, move |tx| {
                     crate::copy::start_copy_pairs(pairs, dest, Conflict::Rename, tx)
@@ -241,12 +188,16 @@ impl App {
         }
 
         let (paths, is_cut) = match read_clipboard_files() {
-            Some(v) => v,
-            None => {
+            Ok(Some(v)) => v,
+            Ok(None) => {
                 self.notice = Some((
                     "Ctrl+V erkannt — aber Zwischenablage enthält keine Dateien".to_string(),
                     std::time::Instant::now(),
                 ));
+                return;
+            }
+            Err(error) => {
+                self.error_msg = Some(format!("Zwischenablage konnte nicht gelesen werden: {error}"));
                 return;
             }
         };
@@ -257,6 +208,15 @@ impl App {
             ));
             return;
         }
+        if let Some(rs) = &self.remote {
+            if is_cut {
+                self.error_msg = Some("Verschieben zu Remote wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
+                return;
+            }
+            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
+            return;
+        }
+        let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
         let count = paths.len();
         let mode = if is_cut {
             CopyMode::Move

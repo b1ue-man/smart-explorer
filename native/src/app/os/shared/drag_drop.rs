@@ -32,6 +32,10 @@ impl App {
         }
         // Remote view → upload the dropped files into the current remote folder.
         if let Some(rs) = &self.remote {
+            if shift {
+                self.error_msg = Some("Verschieben zu Remote wird nicht unterstützt. Bitte ohne Umschalttaste kopieren; die Quellen bleiben unverändert.".to_string());
+                return;
+            }
             self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
             return;
         }
@@ -69,7 +73,8 @@ impl App {
 
     /// Drop the dragged files into tab `t`'s folder. Handles every combination
     /// of local/remote source and target: local→local copy/move, local→remote
-    /// upload, remote→local download. Remote→remote isn't supported yet.
+    /// upload, remote→local download, remote→remote copy. Remote moves are
+    /// explicitly unsupported and must never silently become copies.
     pub(in crate::app) fn drop_files_into_tab(&mut self, t: usize, move_files: bool) {
         // Target backend: Some(handle) if the target tab is a remote view.
         let (dest_str, tgt_backend) = if t == self.active_tab {
@@ -89,13 +94,24 @@ impl App {
         if dest_str.is_empty() {
             return;
         }
-        let dest_fwd = dest_str.trim_end_matches('/').to_string();
-        let files: Vec<String> = std::mem::take(&mut self.drag_files)
-            .into_iter()
-            .filter(|p| p.rsplit_once('/').map(|(par, _)| par) != Some(dest_fwd.as_str()))
-            .collect();
+        // Keep a root's trailing slash (notably C:/); C: is drive-relative.
+        let dest_fwd = dest_str;
         let src_backend = self.drag_src.take();
         let src_filter = self.drag_filter.take();
+        if move_files && (src_backend.is_some() || tgt_backend.is_some()) {
+            self.drag_files.clear();
+            self.error_msg = Some("Remote-Verschieben wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
+            return;
+        }
+        let same_namespace = same_drop_namespace(src_backend.as_ref(), tgt_backend.as_ref());
+        let files: Vec<String> = std::mem::take(&mut self.drag_files)
+            .into_iter()
+            .filter(|p| {
+                !same_namespace
+                    || p.rsplit_once('/').map(|(par, _)| par)
+                        != Some(dest_fwd.trim_end_matches('/'))
+            })
+            .collect();
         if files.is_empty() {
             self.notice = Some((
                 "Dateien sind bereits im Ziel-Ordner.".to_string(),
@@ -302,6 +318,12 @@ impl App {
                     self.drag_out_started = true;
                     self.drag_active = false;
                     let files = std::mem::take(&mut self.drag_files);
+                    if shift && self.drag_src.is_some() {
+                        self.drag_src = None;
+                        self.drag_filter = None;
+                        self.error_msg = Some("Remote-Verschieben wird nicht unterstützt. Bitte ohne Umschalttaste kopieren; die Quellen bleiben unverändert.".to_string());
+                        return;
+                    }
                     let mut cleanup_after_drag = false;
                     // Remote source → materialize to temp copies first (Explorer
                     // needs real local paths). May briefly block on the download.
@@ -332,6 +354,11 @@ impl App {
                         Ok(crate::dragout::DragOutOutcome::Dropped(
                             crate::dragout::DragOutEffect::Move,
                         )) if !cleanup_after_drag => self.rescan(),
+                        Ok(crate::dragout::DragOutOutcome::Dropped(
+                            crate::dragout::DragOutEffect::Move,
+                        )) => {
+                            self.error_msg = Some("Das Ziel hat Verschieben gewählt; übertragen wurde nur die temporäre Kopie. Die Remote-Quelldateien bleiben unverändert.".to_string());
+                        }
                         Ok(_) => {}
                         Err(error) => {
                             self.error_msg = Some(format!("Drag-and-drop: {error}"));
@@ -382,4 +409,17 @@ impl App {
     }
 
     // ─── In-app folder picker (#17) ─────────────────────────────────────
+}
+
+/// Identical path strings imply identical locations only inside one namespace.
+/// Different backend handles are deliberately treated as different endpoints.
+pub(in crate::app) fn same_drop_namespace(
+    source: Option<&crate::vfs::BackendHandle>,
+    target: Option<&crate::vfs::BackendHandle>,
+) -> bool {
+    match (source, target) {
+        (None, None) => true,
+        (Some(source), Some(target)) => Arc::ptr_eq(source, target),
+        _ => false,
+    }
 }

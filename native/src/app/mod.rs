@@ -25,6 +25,12 @@ mod bisync_ui;
 mod central_tabs;
 #[path = "os/shared/clipboard.rs"]
 mod clipboard;
+#[path = "os/shared/clipboard_lifecycle.rs"]
+mod clipboard_lifecycle;
+#[path = "core/clipboard_state.rs"]
+mod clipboard_state;
+#[path = "os/shared/clipboard_upload.rs"]
+mod clipboard_upload;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
 #[path = "core/connection_state.rs"]

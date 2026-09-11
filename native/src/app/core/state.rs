@@ -299,7 +299,9 @@ pub struct App {
     pub(in crate::app) integration_ctx_menu: bool,
 
     // Filter-aware clipboard (virtual files)
-    pub(in crate::app) clip_prepare_rx: Option<Receiver<Result<Vec<ClipboardVirtualFile>, String>>>,
+    pub(in crate::app) clipboard_preparation: super::clipboard_state::ClipboardPreparation,
+    pub(in crate::app) clip_prepare_rx:
+        Option<Receiver<super::clipboard_state::PreparationResult<Vec<ClipboardVirtualFile>>>>,
     pub(in crate::app) virtual_clip: Option<(u32, Vec<(String, String)>)>, // (clipboard seq, (abs, rel))
 
     // Filesystem watcher state
@@ -415,7 +417,9 @@ pub struct App {
     pub(in crate::app) remote_ctx: Option<super::remote_context_menu::RemoteContextMenu>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
-    pub(in crate::app) clip_download_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    pub(in crate::app) clip_download_rx: Option<Receiver<super::clipboard_state::PreparationResult<
+        super::clipboard_lifecycle::PreparedTempClipboard,
+    >>>,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     pub(in crate::app) cloud_client_id_draft: String,

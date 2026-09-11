@@ -1,6 +1,5 @@
 use super::prelude::*;
 use super::*;
-use crate::app::shared_platform_helpers::ClipboardEffect;
 
 #[path = "remote_zip.rs"]
 mod zip;
@@ -380,98 +379,6 @@ impl App {
             if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
                 self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
             }
-        }
-    }
-
-    /// Upload local `paths` (files and/or folders, recursively) into the remote
-    /// folder `dest_root` via `backend`, off the UI thread. Used by Ctrl+V and
-    /// drag-drop into a remote view.
-    pub(in crate::app) fn start_remote_upload(
-        &mut self,
-        paths: Vec<String>,
-        backend: crate::vfs::BackendHandle,
-        dest_root: String,
-    ) {
-        if self.upload_rx.is_some() {
-            self.notice = Some((
-                "Es läuft bereits ein Upload — bitte warten.".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let n = paths.len();
-        let (tx, rx) = unbounded();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
-        let spawn = std::thread::Builder::new()
-            .name("remote-upload".into())
-            .spawn(move || {
-                upload_paths_progress(&*backend, &paths, &dest_root, &tx, &worker_cancel);
-            });
-        match spawn {
-            Ok(worker) => {
-                self.upload_rx = Some(rx);
-                self.transfer_cancel = Some(cancel);
-                self.transfer_worker = Some(worker);
-                self.transfer_progress = Some(TransferProgress::new(
-                    TransferKind::Upload,
-                    "Lade hoch",
-                    n as u64,
-                    0,
-                ));
-                self.notice = Some((
-                    format!("⬆ Lade {} Element(e) hoch…", n),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(error) => {
-                self.upload_rx = None;
-                self.transfer_progress = None;
-                self.transfer_cancel = None;
-                self.transfer_worker = None;
-                self.error_msg = Some(format!(
-                    "Remote-Upload konnte nicht gestartet werden: {error}"
-                ));
-            }
-        }
-    }
-
-    /// Once selected remote files have downloaded to temp, put them on the
-    /// Windows clipboard as CF_HDROP so they paste into Explorer.
-    pub(in crate::app) fn drain_clip_download(&mut self) {
-        let result = match self.clip_download_rx.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(result)) => result,
-            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
-            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.clip_download_rx = None;
-                self.error_msg = Some("Zwischenablage: Download-Worker wurde beendet".to_string());
-                return;
-            }
-        };
-        self.clip_download_rx = None;
-        let local = match result {
-            Ok(local) if !local.is_empty() => local,
-            Ok(_) => {
-                self.error_msg = Some("Zwischenablage: keine Dateien vorbereitet".to_string());
-                return;
-            }
-            Err(error) => {
-                self.error_msg = Some(format!("Zwischenablage: {error}"));
-                return;
-            }
-        };
-        match write_clipboard_files(&local, ClipboardEffect::Copy) {
-            Ok(_) => {
-                self.virtual_clip = None;
-                self.notice = Some((
-                    format!(
-                        "✓ {} Element(e) kopiert - in Explorer einfuegbar (Ctrl+V)",
-                        local.len()
-                    ),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(e) => self.error_msg = Some(format!("Zwischenablage: {}", e)),
         }
     }
 
