@@ -7,6 +7,8 @@ use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
 use serde::{Deserialize, Serialize};
 
 use super::core::eio;
+use super::fs_paths::norm_root;
+pub(super) use super::fs_paths::{join_under, split_clean};
 use super::wire::FsMeta;
 
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
@@ -306,34 +308,12 @@ fn clean_mount_label(label: &str) -> String {
     }
 }
 
-pub(super) fn split_clean(path: &str) -> io::Result<Vec<String>> {
-    let mut out = Vec::new();
-    for p in path.trim().trim_matches('/').split('/') {
-        if p.is_empty() {
-            continue;
-        }
-        if p == "." || p == ".." || p.contains('\\') || p.contains('\0') {
-            return Err(eio("Ungueltiger Pfad"));
-        }
-        out.push(p.to_string());
-    }
-    Ok(out)
-}
-
-pub(super) fn join_under(root: &str, rest: &[String]) -> String {
-    let root = root.replace('\\', "/");
-    if rest.is_empty() {
-        return norm_root(&root);
-    }
-    let base = norm_root(&root);
-    format!("{}/{}", base.trim_end_matches('/'), rest.join("/"))
-}
-
 pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
     let root_norm = norm_root(root);
     let root_os = to_os_path(&root_norm);
-    let root_canon = std::fs::canonicalize(&root_os)
-        .map_err(|e| eio(format!("Freigabe-Wurzel kann nicht gelesen werden: {e}")))?;
+    let root_canon = std::fs::canonicalize(&root_os).map_err(|error| {
+        io::Error::new(error.kind(), format!("Freigabe-Wurzel kann nicht gelesen werden: {error}"))
+    })?;
     let target_os = rest
         .iter()
         .fold(root_canon.clone(), |p, segment| p.join(segment));
@@ -381,26 +361,6 @@ fn to_os_path(path: &str) -> PathBuf {
 
 fn from_os_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-fn norm_root(root: &str) -> String {
-    let r = root.trim().replace('\\', "/");
-    if r.is_empty() {
-        return "/".to_string();
-    }
-    let b = r.as_bytes();
-    if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
-        return format!("{r}/");
-    }
-    if b.len() == 3 && b[1] == b':' && b[2] == b'/' && b[0].is_ascii_alphabetic() {
-        return r;
-    }
-    let trimmed = r.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 fn dir_meta(name: String) -> FsMeta {

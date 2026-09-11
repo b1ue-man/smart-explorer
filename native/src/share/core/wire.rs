@@ -237,6 +237,8 @@ impl From<FsWriteCapabilities> for crate::vfs::StagedWriteCapabilities {
 pub(crate) enum FsErrorKind {
     NotFound,
     PermissionDenied,
+    AlreadyExists,
+    Unsupported,
     #[serde(other)]
     Unknown,
 }
