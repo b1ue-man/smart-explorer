@@ -329,6 +329,7 @@ impl App {
             pending_initial_path: initial_path,
             integration_ctx_menu: Self::initial_context_menu_enabled(),
 
+            clipboard_preparation: Default::default(),
             clip_prepare_rx: None,
             virtual_clip: None,
 

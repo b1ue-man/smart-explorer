@@ -3,6 +3,17 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn update_keyboard(&mut self, ctx: &egui::Context) {
+        // The native poller observes foreground key presses even in text fields
+        // and dialogs. Drain before every early return so those commands cannot
+        // be replayed against the file selection after the dialog/focus changes.
+        let (clipboard_keys, disconnected) = take_clipboard_keys(self.clip_key_rx.as_ref());
+        if disconnected {
+            self.clip_key_rx = None;
+            self.clip_key_cancel = None;
+            self.error_msg = Some(
+                "Zwischenablage-Tastaturüberwachung wurde unerwartet beendet.".to_string(),
+            );
+        }
         if self.show_help {
             let close = ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F1)
@@ -391,28 +402,9 @@ impl App {
         // Drain the background clipboard-key poller (Windows). This is what
         // actually makes Ctrl+V work for a file clipboard — see clip_key_rx.
         if !typing && !renaming {
-            let mut clip_disconnected = false;
-            if let Some(rx) = self.clip_key_rx.as_ref() {
-                loop {
-                    match rx.try_recv() {
-                        Ok(ClipKey::Copy) => do_copy = true,
-                        Ok(ClipKey::Cut) => do_cut = true,
-                        Ok(ClipKey::Paste) => do_paste = true,
-                        Err(crossbeam_channel::TryRecvError::Empty) => break,
-                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                            clip_disconnected = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if clip_disconnected {
-                self.clip_key_rx = None;
-                self.clip_key_cancel = None;
-                self.error_msg = Some(
-                    "Zwischenablage-Tastaturüberwachung wurde unerwartet beendet.".to_string(),
-                );
-            }
+            do_copy |= clipboard_keys[0];
+            do_cut |= clipboard_keys[1];
+            do_paste |= clipboard_keys[2];
         }
 
         // File-clipboard ops, triggered by egui's semantic Copy/Cut/Paste
@@ -446,5 +438,19 @@ impl App {
             || self.picker.is_some()
             || self.rename_open.is_some()
             || (self.show_update_dialog && self.update_ready.is_some())
+    }
+}
+
+fn take_clipboard_keys(rx: Option<&Receiver<ClipKey>>) -> ([bool; 3], bool) {
+    let mut actions = [false; 3];
+    let Some(rx) = rx else { return (actions, false) };
+    loop {
+        match rx.try_recv() {
+            Ok(ClipKey::Copy) => actions[0] = true,
+            Ok(ClipKey::Cut) => actions[1] = true,
+            Ok(ClipKey::Paste) => actions[2] = true,
+            Err(crossbeam_channel::TryRecvError::Empty) => return (actions, false),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => return (actions, true),
+        }
     }
 }

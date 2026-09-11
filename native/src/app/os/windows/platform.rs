@@ -213,13 +213,27 @@ pub(in crate::app) fn write_clipboard_files(
     crate::shell_clipboard::write_files(paths, drop_effect).map_err(|e| e.to_string())
 }
 
-pub(in crate::app) fn read_clipboard_files() -> Option<(Vec<String>, bool)> {
-    crate::shell_clipboard::read_files()
+pub(in crate::app) fn write_clipboard_files_if_sequence(
+    paths: &[String],
+    effect: ClipboardEffect,
+    expected: u32,
+) -> Result<Option<u32>, String> {
+    let drop_effect = match effect {
+        ClipboardEffect::Copy => crate::shell_clipboard::DROPEFFECT_COPY,
+        ClipboardEffect::Move => crate::shell_clipboard::DROPEFFECT_MOVE,
+    };
+    crate::shell_clipboard::write_files_if_sequence(paths, drop_effect, expected)
+        .map_err(|e| e.to_string())
 }
 
-pub(in crate::app) fn set_virtual_clipboard(
+pub(in crate::app) fn read_clipboard_files() -> Result<Option<(Vec<String>, bool)>, String> {
+    crate::shell_clipboard::read_files().map_err(|e| e.to_string())
+}
+
+pub(in crate::app) fn set_virtual_clipboard_if_sequence(
     files: Vec<ClipboardVirtualFile>,
-) -> Result<u32, String> {
+    expected: u32,
+) -> Result<Option<u32>, String> {
     let files = files
         .into_iter()
         .map(|f| crate::virtual_clipboard::VirtualFile {
@@ -229,11 +243,18 @@ pub(in crate::app) fn set_virtual_clipboard(
             mtime_ms: f.mtime_ms,
         })
         .collect();
-    crate::virtual_clipboard::set_clipboard(files).map_err(|e| e.to_string())
+    if virtual_clipboard_sequence() != Some(expected) {
+        return Ok(None);
+    }
+    // OLE owns OpenClipboard internally and has no compare-and-set API. This
+    // late guard rejects stale completions, but cannot serialize another app's
+    // write between this check and OleSetClipboard. Never nest OpenClipboard.
+    crate::virtual_clipboard::set_clipboard(files).map(Some).map_err(|e| e.to_string())
 }
 
 pub(in crate::app) fn virtual_clipboard_sequence() -> Option<u32> {
-    Some(crate::virtual_clipboard::clipboard_sequence())
+    let sequence = crate::virtual_clipboard::clipboard_sequence();
+    (sequence != 0).then_some(sequence)
 }
 
 pub(in crate::app) fn clipboard_file_ops_supported() -> bool {

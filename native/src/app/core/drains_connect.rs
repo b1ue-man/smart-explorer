@@ -135,54 +135,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn drain_clip_prepare(&mut self) {
-        let result = match self.clip_prepare_rx.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(result)) => result,
-            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
-            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.clip_prepare_rx = None;
-                self.error_msg =
-                    Some("Gefilterte Zwischenablage wurde ohne Ergebnis beendet.".to_string());
-                return;
-            }
-        };
-        self.clip_prepare_rx = None;
-        let files = match result {
-            Ok(files) => files,
-            Err(error) => {
-                self.error_msg = Some(error);
-                return;
-            }
-        };
-        if files.is_empty() {
-            self.notice = Some((
-                "Keine Dateien entsprechen dem aktiven Filter".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let pairs: Vec<(String, String)> = files
-            .iter()
-            .map(|f| (f.abs.clone(), f.rel.clone()))
-            .collect();
-        let n = files.len();
-        match set_virtual_clipboard(files) {
-            Ok(seq) => {
-                self.virtual_clip = Some((seq, pairs));
-                self.notice = Some((
-                    format!(
-                        "✓ {} gefilterte Datei(en) kopiert — Einfügen (auch im Explorer) erhält die Ordnerstruktur",
-                        n
-                    ),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(e) => {
-                self.error_msg = Some(format!("Zwischenablage: {}", e));
-            }
-        }
-    }
-
     pub(in crate::app) fn drain_update(&mut self) {
         use crate::updater::UpdateMsg;
         let msg = match self.update_rx.as_ref().map(|rx| rx.try_recv()) {

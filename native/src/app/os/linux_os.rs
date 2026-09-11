@@ -88,13 +88,22 @@ pub(in crate::app) fn write_clipboard_files(
     Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
 }
 
-pub(in crate::app) fn read_clipboard_files() -> Option<(Vec<String>, bool)> {
-    None
+pub(in crate::app) fn write_clipboard_files_if_sequence(
+    _paths: &[String],
+    _effect: ClipboardEffect,
+    _expected: u32,
+) -> Result<Option<u32>, String> {
+    Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
 }
 
-pub(in crate::app) fn set_virtual_clipboard(
+pub(in crate::app) fn read_clipboard_files() -> Result<Option<(Vec<String>, bool)>, String> {
+    Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
+}
+
+pub(in crate::app) fn set_virtual_clipboard_if_sequence(
     _files: Vec<ClipboardVirtualFile>,
-) -> Result<u32, String> {
+    _expected: u32,
+) -> Result<Option<u32>, String> {
     Err("Virtuelle Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
 }
 
