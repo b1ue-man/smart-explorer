@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 struct RemoteDownloadRoot {
     src: String,
     name: String,
-    rel: String,
     is_dir: bool,
     files: Vec<super::entries::RemoteFileEntry>,
     dirs: Vec<String>,
@@ -80,11 +79,10 @@ fn collect_download_root(
         budget,
         cancel,
     }
-    .collect_with_meta(src, rel.clone(), true, meta, 0)?;
+    .collect_with_meta(src, rel, true, meta, 0)?;
     Ok(RemoteDownloadRoot {
         src: src.to_string(),
         name: root_name,
-        rel,
         is_dir,
         files,
         dirs,
@@ -104,13 +102,12 @@ fn download_remote_dir_for_clipboard(
     }
     std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
     if unfiltered && be.supports_bulk_tree() {
-        match be.get_tree(&root.src, local_dir) {
-            Ok(files) if files == root.files.len() as u64 => return Ok(()),
-            Ok(_) | Err(_) => {
-                std::fs::remove_dir_all(local_dir).map_err(|error| error.to_string())?;
-                std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
-            }
+        let files = be.get_tree(&root.src, local_dir)
+            .map_err(|error| format!("Bulk-Download „{}“: {error}; kein Wiederholungsversuch in einem möglicherweise teilweise beschriebenen Ziel", root.src))?;
+        if files != root.files.len() as u64 {
+            return Err(format!("Bulk-Download „{}“ lieferte {files} statt {} Dateien", root.src, root.files.len()));
         }
+        return Ok(());
     }
 
     let mut dirs: Vec<&str> = root.dirs.iter().map(String::as_str).collect();
@@ -336,39 +333,14 @@ pub(in crate::app) fn download_paths_progress(
         if super::cancel::requested(cancel) {
             break;
         }
-        if root.is_dir && filter.is_none() && be.supports_bulk_tree() {
-            let dest = dest_root.join(root.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-            progress.current = root.rel.clone();
-            progress.elapsed_ms = start.elapsed().as_millis() as u64;
-            send_transfer_progress(tx, &progress, &mut last, true);
-            if super::cancel::requested(cancel) {
-                break;
-            }
-            let bulk = be.get_tree(&root.src, &dest);
-            if super::cancel::requested(cancel) {
-                break;
-            }
-            if bulk.ok() == Some(root.files.len() as u64) {
-                progress.files_done = progress.files_done.saturating_add(root.files.len() as u64);
-                progress.bytes_done = progress.bytes_done.saturating_add(
-                    root.files
-                        .iter()
-                        .map(|f| f.size)
-                        .fold(0u64, u64::saturating_add),
-                );
-                progress.elapsed_ms = start.elapsed().as_millis() as u64;
-                send_transfer_progress(tx, &progress, &mut last, true);
-                continue;
-            }
-        }
-
-        let mut dirs = root.dirs;
-        dirs.sort();
-        dirs.dedup();
-        for dir in dirs {
+        // GetTree has no no-replace contract. Only private clipboard trees may
+        // use it; user destinations always receive protected per-file commits.
+        let mut seen_dirs = std::collections::HashSet::new();
+        for dir in &root.dirs {
             if super::cancel::requested(cancel) {
                 break 'roots;
             }
+            if !seen_dirs.insert(dir.as_str()) { continue; }
             let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
             if let Err(e) = std::fs::create_dir_all(&local) {
                 errors.push(format!("{}: {}", local.display(), e));
@@ -397,17 +369,18 @@ pub(in crate::app) fn download_paths_progress(
                 &mut last,
                 Some(cancel),
             );
-            if super::cancel::requested(cancel) {
-                break 'roots;
-            }
             match result {
                 Ok(_) => {
                     progress.files_done = progress.files_done.saturating_add(1);
                 }
+                Err(e) if e == super::cancel::CANCELED_ERROR => {}
                 Err(e) => {
                     errors.push(format!("{}: {}", file.rel, e));
                     progress.errors = errors.total();
                 }
+            }
+            if super::cancel::requested(cancel) {
+                break 'roots;
             }
             progress.elapsed_ms = start.elapsed().as_millis() as u64;
             send_transfer_progress(tx, &progress, &mut last, true);
