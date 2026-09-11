@@ -224,7 +224,13 @@ impl GDriveBackend {
     }
 }
 
-fn initiate(method: &str, url: &str, bearer: &str, size: u64, metadata: &str) -> VfsResult<String> {
+pub(super) fn initiate(
+    method: &str,
+    url: &str,
+    bearer: &str,
+    size: u64,
+    metadata: &str,
+) -> VfsResult<String> {
     let agent = ureq::AgentBuilder::new().redirects(0).build();
     let size = size.to_string();
     let response = open_once(drive_request(

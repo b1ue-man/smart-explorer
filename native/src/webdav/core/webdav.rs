@@ -241,6 +241,14 @@ impl Backend for WebdavBackend {
         )?))
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        Ok(Box::new(WebdavWriter::new_exclusive(
+            self.mutation_agent.clone(),
+            self.url_for(path),
+            self.auth.clone(),
+        )?))
+    }
+
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let staged = crate::vfs::unique_staging_path(self, dst, "copy")?;
         let result = (|| {

@@ -6,8 +6,13 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-fn request_err(error: ureq::Error) -> io::Error {
-    io::Error::other(error.to_string())
+fn request_err(error: ureq::Error, create_new: bool) -> io::Error {
+    let kind = if create_new && matches!(&error, ureq::Error::Status(412, _)) {
+        io::ErrorKind::AlreadyExists
+    } else {
+        io::ErrorKind::Other
+    };
+    io::Error::new(kind, error.to_string())
 }
 
 trait WebdavUpload: Send + Sync {
@@ -16,6 +21,7 @@ trait WebdavUpload: Send + Sync {
 
 struct UreqUpload {
     agent: ureq::Agent,
+    create_new: bool,
 }
 
 impl WebdavUpload for UreqUpload {
@@ -24,14 +30,30 @@ impl WebdavUpload for UreqUpload {
             .agent
             .put(url)
             .set("Content-Length", &length.to_string());
+        // RFC 9110 section 13.1.2: the server must reject an occupied
+        // resource without applying this PUT. A prior probe cannot do this.
+        let request = if self.create_new {
+            request.set("If-None-Match", "*")
+        } else {
+            request
+        };
         let request = if auth.is_empty() {
             request
         } else {
             request.set("Authorization", auth)
         };
-        let response = request.send(source).map_err(request_err)?;
+        let response = request
+            .send(source)
+            .map_err(|error| request_err(error, self.create_new))?;
         let status = response.status();
-        if (200..300).contains(&status) && status != 207 {
+        let committed = if self.create_new {
+            // A successfully created PUT representation must return 201.
+            // In particular, 202 is not an acknowledgement of completion.
+            status == 201
+        } else {
+            (200..300).contains(&status) && status != 207
+        };
+        if committed {
             Ok(())
         } else {
             Err(io::Error::other(format!(
@@ -54,13 +76,33 @@ pub(super) struct WebdavWriter {
 enum UploadState {
     Open,
     Committed,
-    FailedAmbiguous(String),
+    Failed {
+        kind: io::ErrorKind,
+        message: String,
+    },
 }
 
 impl WebdavWriter {
     pub(super) fn new(agent: ureq::Agent, url: String, auth: String) -> io::Result<Self> {
+        Self::with_mode(agent, url, auth, false)
+    }
+
+    pub(super) fn new_exclusive(
+        agent: ureq::Agent,
+        url: String,
+        auth: String,
+    ) -> io::Result<Self> {
+        Self::with_mode(agent, url, auth, true)
+    }
+
+    fn with_mode(
+        agent: ureq::Agent,
+        url: String,
+        auth: String,
+        create_new: bool,
+    ) -> io::Result<Self> {
         Ok(Self {
-            uploader: Arc::new(UreqUpload { agent }),
+            uploader: Arc::new(UreqUpload { agent, create_new }),
             url,
             auth,
             spool: tempfile::tempfile()?,
@@ -82,9 +124,9 @@ impl WebdavWriter {
     fn commit(&mut self) -> io::Result<()> {
         match &self.state {
             UploadState::Committed => return Ok(()),
-            UploadState::FailedAmbiguous(error) => {
-                return Err(io_err(format!(
-                    "WebDAV-Uploadstatus ist nach dem fehlgeschlagenen PUT unklar; der Upload wird nicht automatisch wiederholt: {error}"
+            UploadState::Failed { kind, message } => {
+                return Err(io::Error::new(*kind, format!(
+                    "WebDAV-PUT fehlgeschlagen; der Upload wird nicht automatisch wiederholt: {message}"
                 )))
             }
             UploadState::Open => {}
@@ -101,8 +143,10 @@ impl WebdavWriter {
                 Ok(())
             }
             Err(error) => {
-                self.state = UploadState::FailedAmbiguous(error.to_string());
-                self.spool.seek(SeekFrom::End(0))?;
+                self.state = UploadState::Failed {
+                    kind: error.kind(),
+                    message: error.to_string(),
+                };
                 Err(error)
             }
         }
@@ -119,8 +163,9 @@ impl Write for WebdavWriter {
         match &self.state {
             UploadState::Open => self.spool.write(data),
             UploadState::Committed => Err(io_err("Upload bereits abgeschlossen")),
-            UploadState::FailedAmbiguous(_) => Err(io_err(
-                "WebDAV-Uploadstatus ist unklar; weitere Daten werden nicht angenommen",
+            UploadState::Failed { kind, .. } => Err(io::Error::new(
+                *kind,
+                "WebDAV-PUT fehlgeschlagen; weitere Daten werden nicht angenommen",
             )),
         }
     }

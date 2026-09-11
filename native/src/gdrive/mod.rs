@@ -23,6 +23,8 @@ mod cache;
 mod changes;
 #[path = "core/core.rs"]
 mod core;
+#[path = "os/shared/copy_writer.rs"]
+mod copy_writer;
 #[path = "core/dedupe.rs"]
 mod dedupe;
 #[path = "core/folder_create_journal.rs"]

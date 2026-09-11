@@ -27,6 +27,9 @@ Windows adapters, GUI helpers, VFS promotion and Share server.
   application's own filtered virtual-file payload.
 - Background clipboard preparation has no publication sequence guard. Immediate
   paste may consume old contents and later completion may replace newer contents.
+- The Windows key poller queues commands while typing/dialogs are active, but
+  the GUI only drains them when file shortcuts become enabled again. Consume
+  and discard blocked commands each frame rather than replaying them later.
 - Cross-remote tab drops compare textual parents before backend identity.
 - Upload preflight chooses a free final name but commits with replacement;
   concurrent destination creation (including case aliases) can lose data.
@@ -62,6 +65,7 @@ drop is not a successful commit; explicit flush errors must reach the UI.
 | M2: clipboard payload and preparation lifecycle | app clipboard, preparation drains/state, filtered upload adapter | Sequence-matched filtered hierarchy pastes to remote; pending/stale preparations never paste or publish older data; unsupported remote moves leave sources untouched and are explicit. |
 | M3: cross-namespace routing | app drag/drop, Share copy operation/path/error codec | Same textual directory on different backends transfers; same peer across exports copies; rename remains same-export; path spelling and conflict errors are retained. |
 | M4: copy commit and truthful completion | remote upload/copy/download helpers | Concurrent destination creation is never overwritten by copy; explicit edit-save still replaces; bulk mismatch/failure is not replayed into an already-mutated final tree; cancellation records acknowledged commits. |
+| M4a: provider-compatible private stages | VFS copy-stage API, WebDAV writer, Drive create-only writer | WebDAV sends conditional creation; Drive only creates its own reserved ID and verifies name/parent/content without updating another ID; ordinary edit-save remains unchanged. |
 | M5: one focused integration suite | checked-in task entrypoint and remote CI | Real Windows clipboard feeds actual local -> Share upload and back/cross-export paths; directory/empty/Unicode/filter/collision/error/cancel cases cover M1-M4 with only affected incremental development binaries. |
 | M6: terminal delivery | existing complete-release wrapper | One remote release after suite success; installer, feed, tag and visible Release agree. No per-milestone release. |
 
@@ -79,6 +83,36 @@ A native owned window must not depend on whichever external application happens
 to be foreground. Allocation length bounds parsing; four-byte effect access must
 be checked; Windows performs ANSI filename conversion at its adapter boundary.
 Use checked-in Windows 0.58 declarations when editing signatures.
+
+Provider compatibility gap checked on 2026-09-11 against
+[HTTP conditional creation](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.2),
+[WebDAV destination overwrite](https://www.rfc-editor.org/rfc/rfc4918.html#section-10.6),
+[Drive generated upload IDs](https://developers.google.com/workspace/drive/api/guides/manage-uploads#use_a_pre-generated_id_to_upload_files),
+and [Drive file identity/names](https://developers.google.com/workspace/drive/api/reference/rest/v3/files).
+WebDAV and Drive advertise staged creation but currently inherit an unsupported
+exclusive writer. WebDAV can use `If-None-Match: *` and preserve HTTP 412 as a
+conflict. Drive can create a reserved object ID without touching another object,
+but cannot atomically reserve a sibling name. Add a copy-specific staging API
+whose ID-provider guarantee is explicit; do not weaken mounted exclusive-create
+contracts or claim Drive implements an atomic filesystem namespace. Its copy
+commit uses existing exact-ID rename, uniqueness verification and rollback.
+Both providers publish lazily on flush, so opening a writer proves no remote
+ownership. An ambiguous failure must not authorize path-based cleanup.
+The cache wrapper must forward both copy-stage methods and invalidate stages
+and final names after mutations. Downloads also need an explicit provider read
+length: zero bytes is a known empty file, not a generic unknown-size sentinel.
+Only transformed provider exports declare an unknown stream length. Acceptance
+must cover empty-file growth rejection and transformed reads without comparing
+their output length against the provider's stored-document size.
+
+The GUI copy path stops using final-tree bulk upload/download and same-backend `copy_file` where
+their interfaces cannot guarantee non-replacement after a name preflight.
+The existing temporary-file bridge avoids overlapping read/write sessions;
+this sacrifices the SSH bulk/server-side-copy shortcut. This is a deliberate
+copy-safety tradeoff, not a performance improvement. Explicit edit-save retains
+replacement semantics. Filtered OLE publication has no documented atomic
+expected-sequence API: retain a late sequence/generation guard, without claiming
+it eliminates an external write racing the OLE call itself.
 
 Keep helpers narrowly scoped and below the native file-size limits. Do not
 delete failed Share stages without ownership proof, flatten filtered relative

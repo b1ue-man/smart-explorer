@@ -237,6 +237,23 @@ impl Backend for CachingBackend {
     fn download_name(&self, path: &str, name: &str) -> String {
         self.inner.download_name(path, name)
     }
+    fn read_size(&self, path: &str, metadata_size: u64) -> VfsResult<Option<u64>> {
+        self.inner.read_size(path, metadata_size)
+    }
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.invalidate(path);
+        let result = self.inner.open_write_copy_stage(path);
+        self.invalidate(path);
+        result.map(|writer| Box::new(InvalidatingWriter::new(
+            writer, Arc::clone(&self.cache), path,
+        )) as Box<dyn Write + Send>)
+    }
+    fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        let result = self.inner.promote_copy_stage(staged, destination);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        result
+    }
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let r = self.inner.copy_file(src, dst);
         self.invalidate(dst);
