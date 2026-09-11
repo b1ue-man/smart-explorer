@@ -331,19 +331,7 @@ async fn handle_peer_stream(
             Err(error) => reply_err(&mut send, error).await,
         },
         FsRequest::CopyFile { src, dst } => {
-            let result = blocking_fs("Share copy file", move || {
-                run_authorized(write_authorization.as_ref(), || {
-                    let source = access.resolve(&src)?;
-                    let destination = access.resolve(&dst)?;
-                    access.require_same_backend(&source, &destination)?;
-                    source.backend.copy_file(&source.path, &destination.path)
-                })
-            })
-            .await;
-            match result {
-                Ok(size) => reply(&mut send, FsResponse::Data { size }).await,
-                Err(error) => reply_err(&mut send, error).await,
-            }
+            super::fs_copy::serve(&mut send, src, dst, access, write_authorization).await
         }
         FsRequest::RemoveFile { path } => {
             simple(

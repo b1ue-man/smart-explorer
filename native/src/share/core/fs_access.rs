@@ -63,6 +63,22 @@ impl FsAccess {
         }
     }
 
+    pub(super) fn copy_file(&self, source: &str, destination: &str) -> io::Result<u64> {
+        // Resolve both through this already-authorized export snapshot/lease.
+        // Keep the resulting backends (including network handles) alive until
+        // the destination's complete stage has been promoted.
+        let source = self.resolve(source)?;
+        let destination = self.resolve(destination)?;
+        if source.mount_key == destination.mount_key {
+            self.require_same_backend(&source, &destination)?;
+            source.backend.copy_file(&source.path, &destination.path)
+        } else {
+            super::fs_copy::copy_between(
+                &*source.backend, &source.path, &*destination.backend, &destination.path,
+            )
+        }
+    }
+
     pub(super) fn rename(
         &self,
         source: &str,

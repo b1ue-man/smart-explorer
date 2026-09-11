@@ -8,6 +8,8 @@ pub(super) fn response(error: &io::Error) -> FsResponse {
     let kind = match error.kind() {
         io::ErrorKind::NotFound => Some(FsErrorKind::NotFound),
         io::ErrorKind::PermissionDenied => Some(FsErrorKind::PermissionDenied),
+        io::ErrorKind::AlreadyExists => Some(FsErrorKind::AlreadyExists),
+        io::ErrorKind::Unsupported => Some(FsErrorKind::Unsupported),
         _ => None,
     };
     FsResponse::Err {
@@ -29,6 +31,8 @@ pub(super) fn into_io(kind: Option<FsErrorKind>, message: String) -> io::Error {
         Some(FsErrorKind::PermissionDenied) => {
             io::Error::new(io::ErrorKind::PermissionDenied, message)
         }
+        Some(FsErrorKind::AlreadyExists) => io::Error::new(io::ErrorKind::AlreadyExists, message),
+        Some(FsErrorKind::Unsupported) => io::Error::new(io::ErrorKind::Unsupported, message),
         Some(FsErrorKind::Unknown) | None => io::Error::other(message),
     }
 }

@@ -145,8 +145,12 @@ mod fs;
 mod fs_access;
 #[path = "core/fs_capabilities.rs"]
 mod fs_capabilities;
+#[path = "core/fs_copy.rs"]
+mod fs_copy;
 #[path = "core/fs_error.rs"]
 mod fs_error;
+#[path = "core/fs_paths.rs"]
+mod fs_paths;
 #[path = "core/handshake_limits.rs"]
 mod handshake_limits;
 #[path = "core/identity.rs"]
