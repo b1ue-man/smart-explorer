@@ -12,7 +12,7 @@ after the single remote task suite. No local builds, tests, or release execution
 The actual user endpoint/clipboard error is not yet known; code findings must
 not be presented as a reproduction of every reported failure.
 
-## Stage one: source-supported approach
+## Stage one: source-supported approach (inspection baseline)
 
 The graph query used existing vocabulary `clipboard copy paste peer share
 transfer remote backend write`, then source inspection followed the actual
@@ -89,9 +89,9 @@ Provider compatibility gap checked on 2026-09-11 against
 [WebDAV destination overwrite](https://www.rfc-editor.org/rfc/rfc4918.html#section-10.6),
 [Drive generated upload IDs](https://developers.google.com/workspace/drive/api/guides/manage-uploads#use_a_pre-generated_id_to_upload_files),
 and [Drive file identity/names](https://developers.google.com/workspace/drive/api/reference/rest/v3/files).
-WebDAV and Drive advertise staged creation but currently inherit an unsupported
-exclusive writer. WebDAV can use `If-None-Match: *` and preserve HTTP 412 as a
-conflict. Drive can create a reserved object ID without touching another object,
+At the inspection baseline, WebDAV and Drive advertised staged creation but
+inherited an unsupported exclusive writer. WebDAV can use `If-None-Match: *` and
+preserve HTTP 412 as a conflict. Drive can create a reserved object ID without touching another object,
 but cannot atomically reserve a sibling name. Add a copy-specific staging API
 whose ID-provider guarantee is explicit; do not weaken mounted exclusive-create
 contracts or claim Drive implements an atomic filesystem namespace. Its copy
@@ -146,6 +146,31 @@ only then may the existing complete-release workflow be dispatched once.
 
 ## Outcome
 
-Production changes are committed and pushed on `main` through `47b2a47`;
-workflow provisioning is `8bf3ab4`. The integrated task candidate and remote
-acceptance are pending. No claim of a released correction yet.
+Released as [0.5.155](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.155)
+on 2026-09-11. Production milestones through `47b2a47`, workflow `8bf3ab4`, and
+integrated candidate `ed600968ead1f04efa94a717bc8e8ce923044f69` were pushed to `main`.
+
+The [single remote Windows task run](https://github.com/b1ue-man/smart-explorer/actions/runs/34621537215)
+passed for that exact candidate. Its approval binds the development binary to
+SHA-256 `a1eb904e9795abef8454f9cd2dde2b2c8351c45a46339f913befafef439001c6`.
+Actual Windows clipboard/GUI calls fed authenticated loopback Share transfers,
+including filtered hierarchy and cross-peer routing. The same entrypoint covered
+conflict, cancellation, source-change, provider-request and cache boundaries.
+No local build or test execution was used.
+
+The [one complete remote release](https://github.com/b1ue-man/smart-explorer/actions/runs/34622765028)
+and its [artifact-only publication](https://github.com/b1ue-man/smart-explorer/actions/runs/34629673399)
+succeeded. Release commit/tag `116f6f4ce6c2fe765e2a89f38ab6412bd7f4e5d1` /
+`v0.5.155` agree with Cargo, the feed version and Windows build manifest; the
+manifest names the approved source candidate. Final inspection on 2026-09-11
+verified all six payload sidecars and matched the published asset digests to the
+committed installer, Windows/Linux app/updater/CLI, sidecars, share servers,
+context-menu DLL, Linux installer script and version file. The Windows installer
+SHA-256 is `6cb305f514c8ae50f139b5305ef20e33e2897418592d7789e7cbfea0d3edaf69`.
+
+Scope limits remain explicit: the user's exact endpoint/error was not supplied;
+this is not certification of a physical two-machine/relay route or every remote
+provider account. Native Linux file clipboard remains unsupported, remote
+cut/move is rejected without deleting sources, and the SSH performance and
+OLE/Drive atomicity boundaries above still apply. C1 implementation and delivery
+are complete; unrelated real-device certification remains on the live board.
