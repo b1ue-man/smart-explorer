@@ -10,6 +10,10 @@ use crate::vfs::VfsResult;
 use std::fs::File;
 use std::io::{self, Write};
 
+#[cfg(test)]
+#[path = "copy_writer_task_tests.rs"]
+mod copy_writer_task_tests;
+
 const MEDIA_TYPE: &str = "application/octet-stream";
 
 pub(super) fn open_writer(backend: &GDriveBackend, path: &str) -> VfsResult<Box<dyn Write + Send>> {

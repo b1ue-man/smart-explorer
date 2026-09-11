@@ -392,6 +392,14 @@ pub fn run_exec_platform_self_test() -> std::io::Result<()> {
 #[path = "core/backend_tests.rs"]
 mod backend_tests;
 #[cfg(test)]
+#[path = "core/copy_paste_task_fixture.rs"]
+mod copy_paste_task_fixture;
+#[cfg(test)]
+pub(crate) use copy_paste_task_fixture::CopyPastePeerFixture;
+#[cfg(test)]
+#[path = "core/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
+#[cfg(test)]
 #[path = "core/direct_ledger_retention_tests.rs"]
 mod direct_ledger_retention_tests;
 #[cfg(test)]

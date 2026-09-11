@@ -2,6 +2,10 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "copy_writer_task_tests.rs"]
+mod copy_writer_task_tests;
+
 fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
 }

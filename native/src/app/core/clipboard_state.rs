@@ -1,5 +1,9 @@
 //! Pure admission state shared by both asynchronous clipboard preparations.
 
+#[cfg(test)]
+#[path = "copy_paste_state_task_tests.rs"]
+mod copy_paste_task_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) struct PreparationStamp {
     generation: u64,

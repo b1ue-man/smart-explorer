@@ -454,3 +454,7 @@ fn take_clipboard_keys(rx: Option<&Receiver<ClipKey>>) -> ([bool; 3], bool) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "copy_paste_keyboard_task_tests.rs"]
+mod copy_paste_keyboard_task_tests;

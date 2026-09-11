@@ -7,6 +7,10 @@ use windows::{core::Result, Win32::{
 }};
 use super::{memory::{LockedGlobal, OwnedGlobal}, owner::Clipboard};
 
+#[cfg(test)]
+#[path = "copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
+
 /// No CF_HDROP is Ok(None); clipboard contention, malformed data, conversion
 /// failures and invalid effect payloads are errors, not an empty clipboard.
 pub fn read_files() -> Result<Option<(Vec<String>, bool)>> {

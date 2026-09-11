@@ -71,3 +71,6 @@ mod remote_drive_task_cache_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "os/shared/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
