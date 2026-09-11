@@ -118,12 +118,32 @@ impl Backend for CancelIoBackend {
         }
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        let writer = self.inner.open_write_new(path)?;
+        if self.on_write {
+            Ok(Box::new(CancelAfterWrite {
+                inner: writer,
+                cancel: self.cancel.clone(),
+            }))
+        } else {
+            Ok(writer)
+        }
+    }
+
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         self.inner.copy_file(src, dst)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.inner.rename(src, dst)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        self.inner.rename_no_replace(src, dst)
+    }
+
+    fn rename_overwrites(&self) -> bool {
+        self.inner.rename_overwrites()
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
@@ -220,7 +240,7 @@ fn canceled_download_removes_partial_staging_file() {
 }
 
 #[test]
-fn canceled_upload_removes_remote_staging_file() {
+fn canceled_upload_reports_retained_remote_staging_file() {
     let local = temp_dir("write_local");
     let remote = temp_dir("write_remote");
     std::fs::write(local.join("large.bin"), vec![9u8; 128 * 1024]).unwrap();
@@ -241,8 +261,16 @@ fn canceled_upload_removes_remote_staging_file() {
         &cancel,
     );
 
-    assert_eq!(terminal(&rx), (0, true, Vec::new()));
-    assert!(std::fs::read_dir(&remote).unwrap().next().is_none());
+    let (files, canceled, errors) = terminal(&rx);
+    assert_eq!(files, 0);
+    assert!(canceled);
+    let stages = std::fs::read_dir(&remote).unwrap()
+        .map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
+    assert_eq!(stages.len(), 1);
+    assert!(stages[0].file_name().unwrap().to_string_lossy().contains(".se-upload-"));
+    assert!(errors.iter().any(|error| error.contains(&fwd(&stages[0]))), "{errors:?}");
+    assert!(!remote.join("large.bin").exists());
+    assert_eq!(std::fs::read(local.join("large.bin")).unwrap(), vec![9u8; 128 * 1024]);
     let _ = std::fs::remove_dir_all(local);
     let _ = std::fs::remove_dir_all(remote);
 }

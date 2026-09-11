@@ -33,6 +33,12 @@ mod upload_stream;
 #[path = "remote_helpers/cancel_tests.rs"]
 mod cancel_tests;
 #[cfg(test)]
+#[path = "remote_helpers/copy_paste_task_backend.rs"]
+mod copy_paste_task_backend;
+#[cfg(test)]
+#[path = "remote_helpers/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
+#[cfg(test)]
 #[path = "remote_helpers/tests.rs"]
 mod tests;
 

@@ -3,6 +3,16 @@ use super::*;
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
+        Self::new_inner(just_updated, initial_path, true)
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn new_for_copy_task() -> Self {
+        assert_eq!(std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(), Ok("1"));
+        Self::new_inner(false, None, false)
+    }
+
+    fn new_inner(just_updated: bool, initial_path: Option<PathBuf>, background: bool) -> Self {
         // Clean up dead-session temp copies and mark this live session.
         let recoverable_temp_sessions = init_temp_session();
         let mut startup_daemon_error = None;
@@ -10,7 +20,7 @@ impl App {
             just_updated && crate::updater::update_startup_ack_pending();
         // Background sync is opt-in. Share may start a session worker later,
         // without registering that worker for logon or enabling scheduled jobs.
-        if crate::autostart::is_enabled() && !post_update_startup_pending {
+        if background && crate::autostart::is_enabled() && !post_update_startup_pending {
             if just_updated {
                 // Hand off to a fresh daemon running the new executable.
                 match crate::daemon::request_daemon_replacement() {
@@ -134,7 +144,7 @@ impl App {
         // A snoozed bundle remains the only candidate on the next launch.
         // Do not silently replace it with a new download before consent.
         let update_rx =
-            if post_update_startup_pending || staged_update.is_some() || staging_load_failed {
+            if !background || post_update_startup_pending || staged_update.is_some() || staging_load_failed {
                 None
             } else {
                 let (utx, urx) = unbounded();

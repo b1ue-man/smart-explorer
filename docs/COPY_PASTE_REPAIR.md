@@ -119,9 +119,33 @@ delete failed Share stages without ownership proof, flatten filtered relative
 paths, reinterpret transport/permission errors as absence, or implement
 copy-only promotion as a probe followed by replacing rename. Existing synthetic
 mount acceptance is not clipboard acceptance. The configured task pipeline must
-run Windows coverage; the current Git credential lacks workflow-write scope, so
-remote pipeline provisioning needs a supported credential before dispatch.
+run Windows coverage. The Git credential lacks workflow-write scope; the
+configured GitHub connector successfully provisioned the dedicated workflow on
+2026-09-11. No credential expansion or unrelated workflow reuse was needed.
+
+## Single task-suite integration
+
+`native/test-copy-paste-task.ps1` is the only task entrypoint, dispatched through
+`.github/workflows/copy-paste-task.yml` for one exact pushed candidate on Windows
+2025. It reuses the existing source-bound library-binary cache and may perform
+only the affected incremental library build. It selects `copy_paste_task_` with
+`--include-ignored --test-threads=1`; the explicit manifest prevents missing
+boundaries from silently passing. New opt-in cases assert the task environment
+instead of returning successful empty bodies. The job/entrypoint have 180/170
+minutes; the fixture process has its own bounded deadline and isolated app-data
+directories. App fixture initialization does not start daemon/update checks.
+
+Coverage maps M1 to real native clipboard publication/parsing/lock recovery;
+M2 to actual GUI copy/paste and asynchronous preparation over authenticated
+loopback Shares; M3 to cross-export data/authorization/error-code handling; M4
+to non-clobber upload/download, source size/change checks, cancellation and
+safe temporary bridging; M4a to actual loopback HTTP WebDAV/Drive requests and
+cache-wrapper contract forwarding. No external account credentials or relay
+service are needed. A successful run writes a source/binary-bound approval;
+only then may the existing complete-release workflow be dispatched once.
 
 ## Outcome
 
-Implementation and remote acceptance pending. No claim of delivered correction.
+Production changes are committed and pushed on `main` through `47b2a47`;
+workflow provisioning is `8bf3ab4`. The integrated task candidate and remote
+acceptance are pending. No claim of a released correction yet.

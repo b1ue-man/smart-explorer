@@ -31,6 +31,9 @@ mod clipboard_lifecycle;
 mod clipboard_state;
 #[path = "os/shared/clipboard_upload.rs"]
 mod clipboard_upload;
+#[cfg(all(test, windows))]
+#[path = "os/shared/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
 #[path = "core/connection_state.rs"]

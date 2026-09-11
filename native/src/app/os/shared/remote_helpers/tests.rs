@@ -148,12 +148,24 @@ impl Backend for BulkLocalBackend {
         self.inner.open_write(path)
     }
 
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_new(path)
+    }
+
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         self.inner.copy_file(src, dst)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.inner.rename(src, dst)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        self.inner.rename_no_replace(src, dst)
+    }
+
+    fn rename_overwrites(&self) -> bool {
+        self.inner.rename_overwrites()
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
@@ -264,7 +276,7 @@ fn remote_upload_copies_folder_tree_without_bulk() {
 }
 
 #[test]
-fn remote_upload_uses_bulk_tree_for_folder_backend() {
+fn remote_upload_preserves_copy_semantics_for_bulk_backend() {
     let local = temp_dir("upload_bulk_local");
     let remote = temp_dir("upload_bulk_remote");
     std::fs::create_dir_all(local.join("Gate/sub")).unwrap();
@@ -284,7 +296,7 @@ fn remote_upload_uses_bulk_tree_for_folder_backend() {
 
     let (progress, errors, canceled) = done_from(&rx);
     assert!(!canceled);
-    assert_eq!(be.put_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(be.put_calls.load(Ordering::Relaxed), 0);
     assert_eq!(progress.files_total, 2);
     assert_eq!(progress.files_done, 2);
     assert!(errors.is_empty(), "{errors:?}");
@@ -299,7 +311,7 @@ fn remote_upload_uses_bulk_tree_for_folder_backend() {
 }
 
 #[test]
-fn remote_download_uses_bulk_tree_for_folder_backend() {
+fn remote_download_preserves_copy_semantics_for_bulk_backend() {
     let remote = temp_dir("download_bulk_remote");
     let dest = temp_dir("download_bulk_dest");
     std::fs::create_dir_all(remote.join("Gate/sub")).unwrap();
@@ -320,7 +332,7 @@ fn remote_download_uses_bulk_tree_for_folder_backend() {
 
     let (progress, errors, canceled) = done_from(&rx);
     assert!(!canceled);
-    assert_eq!(be.get_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(be.get_calls.load(Ordering::Relaxed), 0);
     assert_eq!(progress.files_total, 2);
     assert_eq!(progress.files_done, 2);
     assert!(errors.is_empty(), "{errors:?}");

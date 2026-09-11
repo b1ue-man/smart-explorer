@@ -215,6 +215,17 @@ binary must include its source SHA and SHA-256. See
 Its release follows the completed mount v0.5.152 transaction; never overlap two
 artifact-mutating release transactions.
 
+For the local/Share/cross-remote clipboard repair, use only
+`native/test-copy-paste-task.ps1` through the exact-SHA
+`.github/workflows/copy-paste-task.yml` Windows 2025 dispatch. It reuses a
+source-bound development library binary or the affected incremental library
+build; it neither installs Dokany nor builds release artifacts. Its
+`copy_paste_task_` cases run sequentially with ignored cases included, isolated
+app-data directories, no app-startup daemon/update checks, and loopback-only
+Share/HTTP fixtures. The job/entrypoint timeouts are 180/170 minutes. The
+entrypoint records source and binary identity in `approval.json`; use that same
+suite for relevant fix retries. See [COPY_PASTE_REPAIR.md](COPY_PASTE_REPAIR.md).
+
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.
