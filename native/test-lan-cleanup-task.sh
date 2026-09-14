@@ -45,7 +45,7 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/gates.log" "$suite_tmp/analytics.log"
+        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/analytics.log" "$suite_tmp"/clippy-*.log
         rmdir "$suite_tmp"
     else
         echo "lan/cleanup task suite diagnostics: $suite_tmp" >&2
@@ -234,11 +234,14 @@ echo "lan/cleanup task suite: CLI surface parses the new commands"
 grep -q "presence" "$cli_log"
 grep -q "automatic re-pairing" "$cli_log"
 
-echo "lan/cleanup task suite: release gates the batch must pass (format of batch files, clippy, Windows check)"
-# The crate as a whole carries older formatting drift (docs/TODO.md), so the
-# format gate covers exactly the files this batch touched: each is checked on
-# its own through rustfmt's stdin mode, which never descends into other
-# modules. The batch base is the last commit before the batch.
+echo "lan/cleanup task suite: release gates for the batch's files (rustfmt, clippy on both targets)"
+# The crate as a whole carries older formatting and dead-code drift outside
+# this batch (docs/TODO.md, H1), so both gates cover exactly the files this
+# batch touched: every file is format-checked on its own through rustfmt's
+# stdin mode (which never descends into other modules), and clippy runs over
+# the whole crate for the host and the Windows target but only diagnostics
+# inside batch files fail the suite. A compile error anywhere still fails.
+# The batch base is the last commit before the batch.
 batch_base=ea324f4fb38f6f7e557295730ff0127e2337d88a
 if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
     git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
@@ -267,15 +270,43 @@ if [[ "$format_failures" -ne 0 ]]; then
     exit 1
 fi
 echo "lan/cleanup task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
-(
-    cd "$repo_root/native"
-    run_task cargo clippy --locked --lib --bins -- -D warnings
-    if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
-        run_task cargo check --locked --target x86_64-pc-windows-gnu --lib --bins
+
+# Clippy diagnostics are matched by their `src/...:line:col:` prefix in the
+# short message format; paths are relative to native/.
+batch_diagnostics() {
+    local log=$1 batch_file
+    for batch_file in "${batch_files[@]}"; do
+        grep -E "^${batch_file#native/}:[0-9]+:[0-9]+: (warning|error)" "$log" || true
+    done
+}
+clippy_targets=(host)
+if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
+    clippy_targets+=(x86_64-pc-windows-gnu)
+else
+    echo "x86_64-pc-windows-gnu target is not installed; Windows clippy skipped" >&2
+fi
+for clippy_target in "${clippy_targets[@]}"; do
+    clippy_log="$suite_tmp/clippy-$clippy_target.log"
+    if [[ "$clippy_target" == host ]]; then
+        (
+            cd "$repo_root/native"
+            run_task cargo clippy --locked --lib --bins --message-format short
+        ) 2>&1 | tee "$clippy_log"
     else
-        echo "x86_64-pc-windows-gnu target is not installed; Windows check skipped" >&2
+        (
+            cd "$repo_root/native"
+            run_task cargo clippy --locked --target "$clippy_target" --lib --bins \
+                --message-format short
+        ) 2>&1 | tee "$clippy_log"
     fi
-) 2>&1 | tee "$suite_tmp/gates.log"
+    batch_diagnostic_lines="$(batch_diagnostics "$clippy_log")"
+    if [[ -n "$batch_diagnostic_lines" ]]; then
+        printf '%s\n' "$batch_diagnostic_lines" >&2
+        echo "clippy ($clippy_target) reported diagnostics inside batch files" >&2
+        exit 1
+    fi
+    echo "lan/cleanup task suite: clippy ($clippy_target) is clean for the batch's files"
+done
 
 suite_succeeded=true
 echo "task-level suite passed with the exact expected milestone, integration, CLI, and gate results"
