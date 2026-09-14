@@ -312,10 +312,14 @@ batch_diagnostics() {
         }'
 }
 clippy_targets=(host)
-if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
-    clippy_targets+=(x86_64-pc-windows-gnu)
-else
+# The Windows target needs the rustup target and the mingw-w64 C compiler
+# (`ring` builds C sources); the remote workflow installs both.
+if ! rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
     echo "x86_64-pc-windows-gnu target is not installed; Windows clippy skipped" >&2
+elif ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+    echo "x86_64-w64-mingw32-gcc is not installed; Windows clippy skipped" >&2
+else
+    clippy_targets+=(x86_64-pc-windows-gnu)
 fi
 for clippy_target in "${clippy_targets[@]}"; do
     clippy_log="$suite_tmp/clippy-$clippy_target.log"
