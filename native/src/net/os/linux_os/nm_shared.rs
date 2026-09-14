@@ -37,8 +37,8 @@ fn manager(connection: &Connection) -> io::Result<Proxy<'static>> {
     Proxy::new(connection, DESTINATION, MANAGER_PATH, MANAGER_IFACE).map_err(eio)
 }
 
-fn proxy<'a>(connection: &Connection, path: &str, iface: &'a str) -> io::Result<Proxy<'a>> {
-    Proxy::new(connection, DESTINATION, path.to_string(), iface).map_err(eio)
+fn proxy<'a>(connection: &Connection, path: &'a str, iface: &'a str) -> io::Result<Proxy<'a>> {
+    Proxy::new(connection, DESTINATION, path, iface).map_err(eio)
 }
 
 pub(crate) fn connectivity_full(connection: &Connection) -> io::Result<bool> {

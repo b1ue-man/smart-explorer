@@ -2,7 +2,6 @@
 //! Nothing here assumes NetworkManager; the DHCP verdict stays `None` when no
 //! lease store is readable (NetworkManager fills it in when available).
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 use std::path::Path;
 
 use crate::net::InterfaceFacts;

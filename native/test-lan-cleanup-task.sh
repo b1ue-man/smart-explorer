@@ -45,7 +45,7 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$native_log" "$integration_log" "$cli_log"
+        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/gates.log"
         rmdir "$suite_tmp"
     else
         echo "lan/cleanup task suite diagnostics: $suite_tmp" >&2
@@ -54,7 +54,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in cargo grep mktemp tee; do
+for command_name in cargo grep mktemp rustup tee; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -207,5 +207,17 @@ echo "lan/cleanup task suite: CLI surface parses the new commands"
 grep -q "presence" "$cli_log"
 grep -q "automatic re-pairing" "$cli_log"
 
+echo "lan/cleanup task suite: release gates the batch must pass (format, clippy, Windows check)"
+(
+    cd "$repo_root/native"
+    run_task cargo fmt --all -- --check
+    run_task cargo clippy --locked --lib --bins -- -D warnings
+    if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
+        run_task cargo check --locked --target x86_64-pc-windows-gnu --lib --bins
+    else
+        echo "x86_64-pc-windows-gnu target is not installed; Windows check skipped" >&2
+    fi
+) 2>&1 | tee "$suite_tmp/gates.log"
+
 suite_succeeded=true
-echo "task-level suite passed with the exact expected milestone, integration, and CLI results"
+echo "task-level suite passed with the exact expected milestone, integration, CLI, and gate results"
