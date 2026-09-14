@@ -50,7 +50,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> io::Result<u32> {
 fn next_offset(bytes: &[u8], offset: usize) -> Option<usize> {
     let record = bytes.get(offset..)?;
     let next = u32_at(record, 0).ok()? as usize;
-    if next == 0 || next % 8 != 0 || next >= record.len() {
+    if next == 0 || !next.is_multiple_of(8) || next >= record.len() {
         return None;
     }
     offset.checked_add(next)
@@ -71,19 +71,21 @@ fn decode_inner(bytes: &[u8], offset: usize, layout: Layout) -> io::Result<Recor
     };
     let next = u32_at(bytes, 0)? as usize;
     let name_len = u32_at(bytes, offset_of!(FILE_FULL_DIR_INFO, FileNameLength))? as usize;
-    if name_len == 0 || name_len % 2 != 0 {
+    if name_len == 0 || !name_len.is_multiple_of(2) {
         return Err(invalid());
     }
     let end = name_offset.checked_add(name_len).ok_or_else(invalid)?;
-    if next != 0 && (next % 8 != 0 || next < end || next >= bytes.len()) {
+    if next != 0 && (!next.is_multiple_of(8) || next < end || next >= bytes.len()) {
         return Err(invalid());
     }
     let mut unrepresentable = false;
     let units: Vec<u16> = bytes
         .get(name_offset..end)
         .ok_or_else(invalid)?
-        .chunks_exact(2)
-        .map(|v| u16::from_le_bytes([v[0], v[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|unit| u16::from_le_bytes(*unit))
         .map(|unit| {
             if matches!(unit, 0 | 47 | 92) {
                 unrepresentable = true;
