@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn unique_names_are_untouched() {
+    fn lan_cleanup_task_unique_names_are_untouched() {
         let entries = vec![meta("a", "1", 1, true), meta("b", "2", 2, false)];
         let out = disambiguate(entries);
         let names: Vec<&str> = out.iter().map(|entry| entry.name.as_str()).collect();
@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_folders_keep_newest_plain_and_mark_the_rest() {
+    fn lan_cleanup_task_duplicate_folders_keep_newest_plain_and_mark_the_rest() {
         let entries = vec![
             meta("X", "olderid00001", 10, true),
             meta("X", "newerid00002", 20, true),
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_timestamps_break_ties_by_id() {
+    fn lan_cleanup_task_equal_timestamps_break_ties_by_id() {
         let entries = vec![meta("f", "b", 1, false), meta("f", "a", 1, false)];
         let out = disambiguate(entries);
         assert_eq!(out[0].id.as_deref(), Some("a"));
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_collision_with_literal_name_uses_full_id() {
+    fn lan_cleanup_task_marker_collision_with_literal_name_uses_full_id() {
         let entries = vec![
             meta("f", "abcdefgh1", 2, false),
             meta("f", "abcdefgh2", 1, false),
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_without_id_keep_their_raw_name() {
+    fn lan_cleanup_task_entries_without_id_keep_their_raw_name() {
         let mut second = meta("f", "", 1, false);
         second.id = None;
         let out = disambiguate(vec![meta("f", "a", 2, false), second]);
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_marker_rejects_non_markers() {
+    fn lan_cleanup_task_parse_marker_rejects_non_markers() {
         assert!(parse_marker("plain").is_none());
         assert!(parse_marker(" [drive-id abc]").is_none());
         assert!(parse_marker("x [drive-id ]").is_none());
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_and_prefix_selection() {
+    fn lan_cleanup_task_canonical_and_prefix_selection() {
         let siblings = vec![
             Sibling {
                 id: "abcd1111".into(),

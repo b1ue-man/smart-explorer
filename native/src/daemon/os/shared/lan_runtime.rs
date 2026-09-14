@@ -6,11 +6,14 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::net::{InterfaceFacts, LinkClass};
+use crate::share::lan_uplink_policy::PeerOnLink;
 use crate::share::{
     lan_presence_match, DirectContact, LanAnnouncement, LanEvent, LanFacility, LanPeerView,
     LanPresence, LanSettings, LanSighting, LanStatus, LinkView, ShareEvent, UplinkView,
     LAN_PRESENCE_TTL_SECS,
 };
+
+use super::lan_uplink_runtime::{UplinkRuntime, UplinkTickInput};
 
 const FACTS_INTERVAL: Duration = Duration::from_secs(5);
 const START_RETRY: Duration = Duration::from_secs(60);
@@ -41,6 +44,7 @@ pub(super) struct LanRuntime {
     /// Interface indexes this host currently shares its uplink on (Stage 2).
     shared_ifaces: Vec<u32>,
     uplink_view: UplinkView,
+    uplink: UplinkRuntime,
 }
 
 impl LanRuntime {
@@ -60,23 +64,16 @@ impl LanRuntime {
             unknown_devices: 0,
             shared_ifaces: Vec::new(),
             uplink_view: UplinkView::default(),
+            uplink: UplinkRuntime::new(),
         }
     }
 
-    pub(super) fn settings(&self) -> &LanSettings {
-        &self.settings
-    }
-
-    pub(super) fn facts(&self) -> &[InterfaceFacts] {
-        &self.facts
-    }
-
-    pub(super) fn set_shared_ifaces(&mut self, ifaces: Vec<u32>) {
-        self.shared_ifaces = ifaces;
-    }
-
-    pub(super) fn set_uplink_view(&mut self, view: UplinkView) {
-        self.uplink_view = view;
+    /// Stop an active sharing session synchronously (daemon shutdown).
+    pub(super) fn shutdown(&mut self) {
+        self.uplink.shutdown();
+        if let Some(presence) = self.presence.take() {
+            presence.withdraw();
+        }
     }
 
     /// Interfaces where a paired peer was seen recently.
@@ -142,14 +139,44 @@ impl LanRuntime {
                 self.reported.clear();
                 self.reported_hashes.clear();
             }
-            return events;
+        } else {
+            self.ensure_started();
+            self.refresh_announcement(&input);
+            self.drain_presence_events();
+            self.expire_sightings(input.now);
+            events.extend(self.reconcile(input.contacts, input.now));
         }
-        self.ensure_started();
-        self.refresh_announcement(&input);
-        self.drain_presence_events();
-        self.expire_sightings(input.now);
-        events.extend(self.reconcile(input.contacts, input.now));
+        self.tick_uplink(input.own_node_id, input.now);
         events
+    }
+
+    /// Feed the uplink policy with the current links and paired sightings.
+    fn tick_uplink(&mut self, own_node_id: Option<&str>, now: i64) {
+        let peer_ifaces = self.peer_ifaces(now);
+        let peers: Vec<PeerOnLink> = self
+            .paired_sightings(now)
+            .into_iter()
+            .map(|(hashed_id, uplink, ifaces)| PeerOnLink {
+                hashed_id,
+                uplink,
+                ifaces,
+            })
+            .collect();
+        let own_hashed_id = own_node_id
+            .map(lan_presence_match::hashed_lan_id)
+            .unwrap_or_default();
+        let settings = self.settings.clone();
+        let facts = self.facts.clone();
+        let view = self.uplink.tick(UplinkTickInput {
+            settings: &settings,
+            facts: &facts,
+            peer_ifaces: &peer_ifaces,
+            peers: &peers,
+            own_hashed_id: &own_hashed_id,
+            now,
+        });
+        self.shared_ifaces = self.uplink.shared_ifaces();
+        self.uplink_view = view;
     }
 
     fn refresh_settings(&mut self) {
@@ -171,7 +198,8 @@ impl LanRuntime {
         }
         self.last_facts_at = Some(Instant::now());
         match crate::net::gather_interface_facts() {
-            Ok(facts) => {
+            Ok(mut facts) => {
+                self.uplink.refine_facts(&mut facts);
                 self.facts = facts;
                 self.facts_error = None;
             }

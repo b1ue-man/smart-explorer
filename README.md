@@ -29,7 +29,11 @@ einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
 Einseitige Drive-Mirror-Jobs nutzen nach dem ersten Vollabgleich einen lokalen
 Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
 prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
-zurück.
+zurück. Drive erlaubt mehrere gleichnamige Einträge in einem Ordner: die
+neueste Kopie behält ihren Namen, jede weitere erscheint als
+`Name [drive-id abcd1234]` und bleibt so eindeutig öffnenbar, synchronisierbar
+und umbenennbar, statt den ganzen Ordner mit „duplicate child name" zu
+blockieren.
 
 **Idle-Verbindungen (ab 0.5.131):** SFTP und der SSH-Agent halten ihre
 authentifizierten Sitzungen aktiv; FTP/FTPS prueft unbenutzte Kontrollkanaele
@@ -363,6 +367,20 @@ eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koenne
 dort ebenfalls lokal geloescht werden; **Ablehnen** und **Widerrufen** bleiben
 die expliziten signierten Peer-Entscheidungen.
 
+**Entfernen** eines Direktgeraets loescht alles, was die Beziehung angelegt
+hat: Kontakt, Relation-Secret, die Autorisierung des Geraets samt Exec-Freigabe,
+alle seine Anfragen sowie ★-Favoriten, Ordner-Einstellungen, Laufwerks-Mounts
+und offene Tabs auf diesem Ziel; Sync-Setups bleiben erhalten und werden als
+„verwaist" markiert. Das Geraet landet unter **Entfernte Geraete** und kann sich
+nicht mehr automatisch wieder eintragen (weder ueber die Hintergrund-Reparatur
+noch ueber eine neue Anfrage mit dem bekannten Direkt-Code); eine bewusste neue
+Kopplung per PIN, Direkt-Code oder Annehmen hebt die Sperre auf, ebenso
+**Erneut zulassen**. Unter **Autorisierte Geraete** loescht **Geraet entfernen**
+beziehungsweise **Eintrag loeschen** auch alte oder widerrufene Freigaben
+vollstaendig (`se share grants delete`, `se share grants removed [--readmit]`).
+Favoriten auf Remotes heissen `<Remote> › <Ordner>` und oeffnen Share-Ziele
+direkt am gespeicherten Ordner.
+
 Meldet sich dieselbe Geraete-ID mit einem anderen Schluessel, Node-ID oder
 Fingerprint, bleibt die Anfrage sichtbar, wird aber als Identitaetskonflikt
 automatisch fail-closed abgelehnt. Text- und JSON-Ausgabe nennen den
@@ -379,9 +397,30 @@ liefert `se completions bash|zsh|fish|elvish|powershell`, zum Beispiel
 `se completions powershell | Out-String | Invoke-Expression`.
 
 Andere Verbindungen und Raeume entfernt `se connections remove` beziehungsweise
-`remove-room`.
+`remove-room`; auch dabei werden Favoriten, Ordner-Einstellungen und Mounts
+des Ziels mit entfernt.
+
+**Lokales Netz ohne Server (Teilen → LAN):** gekoppelte Geraete kuendigen ihre
+Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne
+erreichbaren Share-Server — etwa ueber ein direktes Kabel oder ein isoliertes
+LAN. Es wird nur eine gehashte Kennung verbreitet; fremde Geraete werden
+gezaehlt, aber nie verbunden, da Node-Pin, Relation-Secret und Grant weiterhin
+gelten. Ist kein Share-Server konfiguriert, laeuft der Worker rein lokal. Der
+LAN-Tab zeigt jede Netzwerkverbindung als „ohne Router (direkt)",
+„Internetzugang" oder „Netzwerk mit Router"; fehlt mDNS oder die
+Schnittstellenabfrage, steht dort „nicht verfuegbar: <Grund>". Optional teilt
+ein Geraet seinen **Internetzugang automatisch** mit gekoppelten Geraeten, die
+ohne Router direkt angeschlossen sind und selbst keinen Internetzugang melden:
+einmalige Freigabe (Windows-UAC fuer eine Aufgabenplanungs-Hilfe und den
+ICS-Dienst, Linux polkit-Regel fuer NetworkManager), danach startet und beendet
+sich die Freigabe von selbst (Start nach 5 s Stabilitaet, Ende 90 s nach dem
+Verschwinden des Geraets oder beim Verlust des eigenen Uplinks). Haben beide
+Seiten Internet, teilt niemand. Ohne ICS beziehungsweise NetworkManager plus
+dnsmasq meldet die App „Internet-Teilen nicht verfuegbar: <Grund>", die
+LAN-Erkennung arbeitet trotzdem. CLI: `se share lan [status|presence on|off|
+uplink enable|disable|stop|status]`.
 Headless Share laesst sich ueber `se share configure`, `identity`, `status`,
-`request`, `grants`, `export`, `room` und `worker` vollstaendig verwalten;
+`request`, `grants`, `export`, `room`, `lan` und `worker` vollstaendig verwalten;
 `status` unterscheidet dabei einen laufenden Worker von einer tatsaechlich
 verbundenen Signaling-Sitzung. Das vollstaendige Protokoll und die
 Statusbedeutungen stehen in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md).

@@ -63,7 +63,7 @@ fn share_remote_task_reciprocal_direct_fresh_autoaccepts_both_sides() {
 }
 
 #[test]
-fn share_remote_task_removed_peer_blocks_automatic_repair_until_user_pairs_again() {
+fn lan_cleanup_task_removed_peer_blocks_automatic_repair_until_user_pairs_again() {
     let peer_b = reciprocal_peer(3, "device-b", "Device B", "lookup-b", 13);
     let mut profiles = ShareProfiles::default();
     profiles

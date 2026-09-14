@@ -202,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instance_names_carry_the_hashed_id() {
+    fn lan_cleanup_task_instance_names_carry_the_hashed_id() {
         assert_eq!(
             id_from_fullname("se-0123456789abcdef._se-share._udp.local."),
             Some("0123456789abcdef".to_string())

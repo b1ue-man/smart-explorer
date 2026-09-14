@@ -266,7 +266,25 @@ The GUI's **Teilen** view shows three durable sections:
   a retry action that reuses the request ID.
 - **Autorisierte Geraete**: active grants and connectivity, with signed revoke
   for tracked grants. A legacy grant can only be disabled locally and is marked
-  as such.
+  as such. **Geraet entfernen** (active) / **Eintrag loeschen** (inactive)
+  delete the grant, its Exec grant and every request of that device completely
+  and record the device under **Entfernte Geraete**.
+- **Entfernte Geraete**: devices removed by the user. The record is what keeps
+  a peer that still holds this device's Direct code from re-installing itself
+  automatically: the reciprocal background repair answers `PolicyDenied` and
+  an auto-accepted access request is rejected. Any deliberate pairing (PIN
+  discovery, adding the Direct code, accepting a request) or **Erneut
+  zulassen** clears the record. CLI: `se share grants delete <selector>`,
+  `se share grants removed [--readmit <device>]`.
+
+Removing a Direct contact (`Entfernen`, `se connections remove-peer`) runs one
+profile transaction that deletes the contact, its relation secret, the grant
+for its remote device, tracked and legacy requests of that device (with replay
+tombstones while the bounded ledger has room) and writes the removed-device
+record; schema version 8 adds `removed_direct_peers`. Outside the profile the
+app also drops favourites and folder preferences under
+`share://direct/<id>/…`, stops drive mounts of that peer, closes its tabs and
+reports sync jobs that still reference it (they are kept and marked orphaned).
 
 The terminal exposes the same ledger:
 
@@ -332,6 +350,51 @@ pairing or while the service is online. Windows firewall setup is attempted
 automatically;
 if a normal rule fails, the app asks Windows for elevated firewall permission
 through UAC.
+
+## Local-Network Presence and Uplink Sharing
+
+Paired Direct devices can find each other without the signaling server. The
+worker announces `_se-share._udp.local.` over mDNS with TXT `v=1`,
+`id=<16 hex>` (the first 8 bytes of `SHA-256("se-lan-presence-v1|" + node
+id)`), `p4`/`p6` (bound Iroh UDP ports) and `up=0|1` (advisory "has own
+internet"). Sightings whose id matches an accepted contact's pinned node become
+`lan_candidates` on that contact (`ip:p4`, `[ip]:p6`, or `[fe80::x%<ifindex>]:p6`
+once per local interface for link-local IPv6) for `LAN_PRESENCE_TTL_SECS = 150`.
+Dialing merges them with a current server presence or synthesizes a presence
+from the contact pins when the server is unreachable; the Iroh TLS node pin
+and the relation session proof still authenticate every session, so the
+announcement is routing evidence only. With no server configured the worker
+runs in offline mode as long as LAN presence is enabled and accepted peers
+exist. Every facility (mDNS socket, interface enumeration, settings file)
+reports `nicht verfuegbar: <Grund>`; nothing is assumed.
+
+Interfaces are classified from typed facts (Linux: sysfs, `/proc/net/route`,
+`/proc/net/ipv6_route`, lease files or NetworkManager; Windows:
+`GetAdaptersAddresses` including gateways and the DHCPv4 server):
+`RouterLess` (up, no default gateway, no DHCP lease), `Uplink` (gateway plus
+the platform's internet verdict when it has one), `Routed`, `Inactive`. A link
+where a paired peer was seen never counts as uplink, so the receiving side of
+a shared connection does not report "has internet" back.
+
+Automatic uplink sharing is an opt-in (`lan_settings.json`:
+`uplink_sharing_enabled`). The first activation runs a one-time setup:
+Windows registers the on-demand Scheduled Task `Smart Explorer LAN-Uplink`
+(`se.exe --lan-uplink-helper`, highest privileges, one UAC prompt) and makes
+the `SharedAccess` service startable; Linux installs
+`/etc/polkit-1/rules.d/49-smart-explorer-lan-uplink.rules` through `pkexec`
+for `org.freedesktop.NetworkManager.settings.modify.system` and
+`network-control` (without `pkexec` the calls still go through and polkit may
+prompt on the desktop). The pure policy (`share/core/lan_uplink_policy.rs`)
+starts sharing on a `RouterLess` link after 5 s of a paired peer announcing
+`up=0` while this host has an `Uplink`, and stops 90 s after the peer vanished,
+15 s after the uplink was lost, on `se share lan uplink stop`, when the
+setting is disabled, or at daemon shutdown. Windows applies ICS
+(`HNetCfg.HNetShare`, public/private) through the elevated helper, which
+re-validates the request file (age, GUIDs, router-less private adapter);
+Linux activates a dedicated NetworkManager profile `Smart Explorer LAN-Uplink
+(<iface>)` with `ipv4.method=shared` (NAT + dnsmasq) and deletes it again on
+stop. `lan_uplink_state.json` records the active session so a restarted daemon
+reconciles it. Status: GUI **Teilen → LAN**, `se share lan [--json]`.
 
 ## Lifecycle Regression Guard
 

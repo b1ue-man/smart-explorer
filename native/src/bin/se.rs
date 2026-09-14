@@ -9,6 +9,9 @@ fn main() {
     if let Some(result) = smart_explorer::mount::run_host_if_requested(&arguments) {
         exit_mount_host(result);
     }
+    if let Some(result) = smart_explorer::net::run_uplink_helper_if_requested(&arguments) {
+        exit_uplink_helper(result);
+    }
     #[cfg(debug_assertions)]
     if is_internal_invocation(&arguments, "--share-exec-platform-self-test") {
         exit_internal_portable(smart_explorer::share::run_exec_platform_self_test());
@@ -33,6 +36,16 @@ fn exit_mount_host(result: Result<(), String>) -> ! {
         Ok(()) => std::process::exit(0),
         Err(error) => {
             eprintln!("se: internal mount host failed: {error}");
+            std::process::exit(1)
+        }
+    }
+}
+
+fn exit_uplink_helper(result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("se: LAN uplink helper failed: {error}");
             std::process::exit(1)
         }
     }

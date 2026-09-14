@@ -136,26 +136,26 @@ mod tests {
     }
 
     #[test]
-    fn apipa_without_gateway_is_router_less() {
+    fn lan_cleanup_task_apipa_without_gateway_is_router_less() {
         let facts = [iface(2, true, &["169.254.10.5", "fe80::1"], false, Some(false))];
         let classes = classify_links(&facts, &[], None, &[]);
         assert_eq!(classes[0].1, LinkClass::RouterLess);
     }
 
     #[test]
-    fn static_addresses_without_gateway_are_router_less_too() {
+    fn lan_cleanup_task_static_addresses_without_gateway_are_router_less_too() {
         let facts = [iface(3, true, &["10.0.0.2"], false, None)];
         assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::RouterLess);
     }
 
     #[test]
-    fn dhcp_lease_without_gateway_is_routed() {
+    fn lan_cleanup_task_dhcp_lease_without_gateway_is_routed() {
         let facts = [iface(3, true, &["192.168.1.7"], false, Some(true))];
         assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::Routed);
     }
 
     #[test]
-    fn gateway_is_uplink_unless_platform_denies_internet() {
+    fn lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet() {
         let facts = [iface(4, true, &["192.168.1.7"], true, Some(true))];
         assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::Uplink);
         assert_eq!(classify_links(&facts, &[], Some(&[4]), &[])[0].1, LinkClass::Uplink);
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_with_a_paired_peer_never_counts_as_uplink() {
+    fn lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink() {
         // The receiving side got DHCP from the sharing peer: its only gateway
         // is the peer, which must not read as "has own internet".
         let facts = [iface(5, true, &["192.168.137.20"], true, Some(true))];
@@ -171,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_and_inactive_links() {
+    fn lan_cleanup_task_shared_and_inactive_links() {
         let facts = [
             iface(6, true, &["192.168.137.1"], false, Some(false)),
             iface(7, false, &[], false, None),
@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn link_local_detection() {
+    fn lan_cleanup_task_link_local_detection() {
         assert!(is_link_local(&IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
         assert!(!is_link_local(&IpAddr::V4(Ipv4Addr::new(169, 253, 1, 1))));
         assert!(is_link_local(&"fe80::abcd".parse().unwrap()));
@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn scoped_candidates_round_trip() {
+    fn lan_cleanup_task_scoped_candidates_round_trip() {
         let text = scoped_v6_candidate("fe80::1".parse().unwrap(), 4433, 3);
         assert_eq!(text, "[fe80::1%3]:4433");
         let parsed = parse_candidate(&text).unwrap();

@@ -301,6 +301,35 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Never fabricate durable remote semantics for metadata the backend cannot
   preserve.
 
+## Share / local network
+
+- Google Drive allows several same-name siblings. `GDriveBackend::list_dir`
+  keeps the canonical copy (newest `modifiedTime`, then smaller id) under the
+  plain name and renders every further sibling as `Name [drive-id <8-char id
+  prefix>]`; `find_child`, cached-id validation, `stat` and rename resolve the
+  marker (literal same-named objects win over the marker reading). Do not
+  reintroduce a raw duplicate listing: every path-based walker rejects it.
+- Removing a Direct contact without a durable denial is not a removal: the
+  peer still holds our Direct code, so its reciprocal repair (`apply_reciprocal_direct_peer`)
+  or an auto-accepted access request re-creates the contact within seconds.
+  `removed_direct_peers` (schema 8) is that denial; only `PairingOrigin::UserPairing`
+  may clear it. Keep every new pairing path honest about its origin.
+- The worker snapshot replaces the GUI's profile copy on every poll. While a
+  reciprocal repair is in flight the worker still reloads the persisted
+  profile (without reconfiguring the service) so a removed peer does not
+  resurface from a stale in-memory snapshot.
+- LAN presence announces a hashed id, never the Iroh key, and matching a
+  sighting to a contact is routing evidence only; the session proof and TLS
+  node pin remain the authorization. Link-local IPv6 candidates carry the local
+  scope (`[fe80::1%3]:port`) and go through `net::parse_candidate`, because
+  `SocketAddr::from_str` rejects the `%scope` form.
+- Uplink sharing is deliberately opt-in and conservative: a spoofed
+  announcement could only trigger ICS/NetworkManager sharing on a link that
+  the helper itself verifies as router-less, and never on a routed network.
+  Every platform facility (ICS installed, `SharedAccess` startable, task
+  registered, NetworkManager owning its bus name, `dnsmasq` present, polkit)
+  is probed and reported as `nicht verfuegbar: <Grund>`; never assume it.
+
 ## Windows shell integration
 
 - **You cannot replace other apps' Open/Save dialogs system-wide.** No registered

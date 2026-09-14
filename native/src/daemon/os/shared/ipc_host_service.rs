@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn lan_only_operation_needs_no_server() {
+    fn lan_cleanup_task_lan_only_operation_needs_no_server() {
         assert!(share_service_requested(false, "", true, true));
         assert!(!share_service_requested(true, "", true, true));
         assert!(!share_service_requested(false, "", false, true));

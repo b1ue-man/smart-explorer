@@ -470,6 +470,7 @@ fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, generation: &str) 
 
 fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost) {
     log("daemon stopping (stop requested or unreadable stop control)");
+    share_host.shutdown_lan();
     share_host.stop_mounts();
     for error in supervisor.cancel_and_join() {
         log(&error);
