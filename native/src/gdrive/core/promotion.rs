@@ -35,15 +35,28 @@ impl GDriveBackend {
 
         let _paths = self.upload_path_pair_guard(&source, &destination)?;
         let _mutation = self.mutation_guard()?;
-        let (source_parent, source_name) = split_parent(&source);
+        let (source_parent, source_segment) = split_parent(&source);
         let (destination_parent, destination_name) = split_parent(&destination);
         let source_parent_id = self.resolve(&source_parent)?;
         let destination_parent_id = self.ensure_dir(&destination_parent)?;
-        let source_object = require_one(
-            self.named_objects(&source_parent_id, source_name)?,
+        // A duplicate marker addresses one exact same-name sibling; Drive
+        // itself knows that object under its plain name, which is also the
+        // name any rollback must restore.
+        let mut source_name = source_segment;
+        let mut source_object = require_one(
+            self.named_objects(&source_parent_id, source_segment)?,
             "Drive rename source",
-        )?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent"))?;
+        )?;
+        if source_object.is_none() {
+            if let Some((plain, prefix)) = super::duplicates::parse_marker(source_segment) {
+                source_object = self.marker_object(&source_parent_id, plain, prefix)?;
+                if source_object.is_some() {
+                    source_name = plain;
+                }
+            }
+        }
+        let source_object = source_object
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent"))?;
         require_absent(
             &self.named_objects(&destination_parent_id, destination_name)?,
             "Drive rename destination",

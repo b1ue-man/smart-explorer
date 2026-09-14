@@ -2,7 +2,7 @@ use super::api::{drive_request, export_ext, export_format, open_stream, API};
 use super::core::{cloud_urlenc, norm};
 use super::transfer::open_writer;
 use super::GDriveBackend;
-use crate::vfs::{Backend, DedupeCandidate, Scheme, VfsMeta, VfsResult};
+use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
@@ -36,93 +36,52 @@ impl Backend for GDriveBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let id = self.resolve(path)?;
-        let mut out = Vec::new();
-        let mut pending_ids: Vec<(String, String, String, Option<String>)> = Vec::new();
+        // Same-name siblings get a `[drive-id ...]` marker so path-based
+        // consumers see unique names; `find_child` resolves the marker back to
+        // the exact object. Every returned (possibly marked) path is cached.
+        let entries = self.list_dir_entries(path)?;
+        let base = norm(path);
+        let child_path = |name: &str| {
+            if base.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}/{}", base, name)
+            }
+        };
+        let mut mimes: HashMap<String, String> = HashMap::new();
         let mut name_counts: HashMap<String, usize> = HashMap::new();
-        let mut page_token: Option<String> = None;
-        loop {
-            let q = format!("'{}' in parents and trashed = false", id);
-            let mut url = format!(
-                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
-                API,
-                cloud_urlenc(&q)
-            );
-            if let Some(t) = &page_token {
-                url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
+        let mut raw = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if let (Some(id), Some(mime)) = (entry.meta.id.as_deref(), entry.mime.as_deref()) {
+                mimes.insert(id.to_string(), mime.to_string());
             }
-            let v = self.get_json(&url)?;
-            if let Some(files) = v["files"].as_array() {
-                let base = norm(path);
-                for f in files {
-                    let Some(m) = Self::meta_from_json(f, None) else {
-                        continue;
-                    };
-                    *name_counts.entry(m.name.clone()).or_default() += 1;
-                    if let Some(fid) = f["id"].as_str() {
-                        let child_path = if base.is_empty() {
-                            m.name.clone()
-                        } else {
-                            format!("{}/{}", base, m.name)
-                        };
-                        pending_ids.push((
-                            child_path,
-                            m.name.clone(),
-                            fid.to_string(),
-                            f["mimeType"].as_str().map(str::to_string),
-                        ));
-                    }
-                    out.push(m);
-                }
-            }
-            page_token = v["nextPageToken"].as_str().map(|s| s.to_string());
-            if page_token.is_none() {
-                break;
+            *name_counts.entry(entry.meta.name.clone()).or_default() += 1;
+            raw.push(entry.meta);
+        }
+        // A duplicate's plain name may now point at a different (newer)
+        // object than before, so drop every cached descendant of that name
+        // before the exact current mapping is remembered.
+        for (name, count) in &name_counts {
+            if *count > 1 {
+                self.forget_path_prefix(&child_path(name));
             }
         }
-        for (child_path, name, fid, mime) in pending_ids {
-            if name_counts.get(&name).copied() == Some(1) {
-                self.remember_path(&child_path, &fid, mime.as_deref())?;
-            } else {
-                self.forget_path_prefix(&child_path);
-            }
+        let listed = super::duplicates::disambiguate(raw);
+        for entry in &listed {
+            let Some(id) = entry.id.as_deref().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            self.remember_path(&child_path(&entry.name), id, mimes.get(id).map(String::as_str))?;
         }
         // Folder creation can use this complete snapshot to skip a redundant
         // lookup. File uploads still re-probe because Drive names are not unique.
         self.listed_guard()?.insert(norm(path));
         self.persist_path_cache();
-        Ok(out)
+        Ok(listed)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let key = norm(path);
-        if key.is_empty() {
-            return Ok(VfsMeta {
-                name: "/".into(),
-                is_dir: true,
-                is_symlink: false,
-                size: 0,
-                mtime_ms: 0,
-                btime_ms: 0,
-                hidden: false,
-                system: false,
-                id: None,
-                content_md5: None,
-            });
-        }
-        let id = self.resolve(&key)?;
-        let url = format!(
-            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
-            API, id
-        );
-        let v = self.get_json(&url)?;
-        let fallback = key.rsplit('/').next().filter(|s| !s.is_empty());
-        Self::meta_from_json(&v, fallback).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Drive-Metadaten ohne Namen",
-            )
-        })
+        self.stat_marker_aware(path)
     }
 
     fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
@@ -254,14 +213,6 @@ impl Backend for GDriveBackend {
         }
     }
 
-    fn plan_dedupe_recursive(
-        &self,
-        root: &str,
-        keep: &dyn Fn(&str) -> bool,
-    ) -> VfsResult<Vec<DedupeCandidate>> {
-        self.plan_duplicate_cleanup(root, keep)
-    }
-
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
         self.trash(path)
     }
@@ -302,4 +253,90 @@ impl Backend for GDriveBackend {
     fn changes_since(&self, _root: &str, cursor: &str) -> VfsResult<crate::vfs::VfsChangeBatch> {
         self.drive_changes_since(cursor)
     }
+}
+
+impl GDriveBackend {
+    /// The listing exactly as Drive returns it: same-name siblings keep their
+    /// raw name. Only the duplicate cleanup planner may consume this form.
+    /// The listing exactly as Drive returns it: same-name siblings keep their
+    /// raw name. `list_dir` renders it path-unique before anyone sees it.
+    fn list_dir_entries(&self, path: &str) -> VfsResult<Vec<RawEntry>> {
+        let id = self.resolve(path)?;
+        let mut out = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let q = format!("'{}' in parents and trashed = false", id);
+            let mut url = format!(
+                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
+                API,
+                cloud_urlenc(&q)
+            );
+            if let Some(t) = &page_token {
+                url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
+            }
+            let v = self.get_json(&url)?;
+            if let Some(files) = v["files"].as_array() {
+                for f in files {
+                    let Some(meta) = Self::meta_from_json(f, None) else {
+                        continue;
+                    };
+                    out.push(RawEntry {
+                        meta,
+                        mime: f["mimeType"].as_str().map(str::to_string),
+                    });
+                }
+            }
+            page_token = v["nextPageToken"].as_str().map(|s| s.to_string());
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// `stat` whose returned name matches the path segment even when that
+    /// segment carries a duplicate marker.
+    fn stat_marker_aware(&self, path: &str) -> VfsResult<VfsMeta> {
+        let key = norm(path);
+        if key.is_empty() {
+            return Ok(VfsMeta {
+                name: "/".into(),
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                mtime_ms: 0,
+                btime_ms: 0,
+                hidden: false,
+                system: false,
+                id: None,
+                content_md5: None,
+            });
+        }
+        let id = self.resolve(&key)?;
+        let url = format!(
+            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
+            API, id
+        );
+        let v = self.get_json(&url)?;
+        let segment = key.rsplit('/').next().filter(|s| !s.is_empty());
+        let mut meta = Self::meta_from_json(&v, segment).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Drive-Metadaten ohne Namen",
+            )
+        })?;
+        if let Some(segment) = segment {
+            if let Some((plain, _)) = super::duplicates::parse_marker(segment) {
+                if meta.name == plain {
+                    meta.name = segment.to_string();
+                }
+            }
+        }
+        Ok(meta)
+    }
+}
+
+struct RawEntry {
+    meta: VfsMeta,
+    mime: Option<String>,
 }

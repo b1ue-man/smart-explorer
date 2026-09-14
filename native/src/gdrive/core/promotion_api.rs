@@ -66,6 +66,29 @@ impl GDriveBackend {
         Err(invalid("Drive named-object query exceeded its page budget"))
     }
 
+    /// The exact object a `[drive-id <prefix>]` marker names among the
+    /// same-name siblings of `plain`, verified by id against its parent.
+    /// `None` when no sibling carries the prefix.
+    pub(super) fn marker_object(
+        &self,
+        parent_id: &str,
+        plain: &str,
+        prefix: &str,
+    ) -> VfsResult<Option<DriveObject>> {
+        let siblings = self.same_name_siblings(parent_id, plain)?;
+        let Some(id) = super::duplicates::select_by_prefix(&siblings, prefix)
+            .map_err(invalid)?
+        else {
+            return Ok(None);
+        };
+        let url = self.api_url(&format!(
+            "files/{}?fields=id,name,mimeType,size,md5Checksum,parents,trashed",
+            cloud_urlenc(&id)
+        ));
+        let json = self.get_json(&url)?;
+        parse_object(&json, parent_id, plain).map(Some)
+    }
+
     /// Change the name/parent of one exact Drive ID. The caller owns namespace
     /// locking and performs any required uniqueness verification.
     pub(super) fn rename_id(
