@@ -51,7 +51,7 @@ mod tests {
     use super::LanSettings;
 
     #[test]
-    fn defaults_and_round_trip() {
+    fn lan_cleanup_task_defaults_and_round_trip() {
         let settings = LanSettings::parse("").unwrap();
         assert!(settings.presence_enabled);
         assert!(!settings.uplink_sharing_enabled);

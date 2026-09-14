@@ -237,6 +237,8 @@ mod lan_settings;
 mod lan_settings_store;
 #[path = "core/lan_status.rs"]
 mod lan_status;
+#[path = "core/lan_uplink_policy.rs"]
+pub(crate) mod lan_uplink_policy;
 #[path = "core/profiles.rs"]
 mod profiles;
 #[path = "core/removed_direct_peers.rs"]

@@ -73,7 +73,7 @@ below.
 - [ ] `find_child`: query `name = '<plain>'` with `pageSize=100`, fields `id,modifiedTime`, choose via `select_child`.
 - [ ] `validate_cached_id`: compare the Drive name with the plain name and, for marker keys, require `id.starts_with(prefix)`.
 - [ ] `stat`: for marker paths return the marker name.
-- [ ] `dedupe.rs` and bisync duplicate-file logic keep using raw names (`list_dir_raw`).
+- [x] The separate Drive dedupe planner is retired: with disambiguated names the regular mirror plan already addresses every duplicate exactly, and a second ID-addressed deletion would collide with it.
 
 **Expected result:** a Drive root with two folders `X` lists `X` (newest) and
 `X [drive-id ...]`; both open; sync/bisync see two distinct directories; the

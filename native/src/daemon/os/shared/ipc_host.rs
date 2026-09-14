@@ -146,6 +146,13 @@ impl ShareHost {
         self.mounts.stop_all();
     }
 
+    /// Withdraw the LAN announcement and stop an active uplink share.
+    pub(crate) fn shutdown_lan(&self) {
+        if let Ok(mut lan) = self.lan.lock() {
+            lan.shutdown();
+        }
+    }
+
     /// Advance local-network presence with the current contacts, identity
     /// and Iroh ports; queue sightings for `drain_events` and refresh the
     /// status snapshot. Never blocks the host on multicast I/O.

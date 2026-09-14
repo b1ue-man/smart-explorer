@@ -349,7 +349,7 @@ mod tests {
     use crate::creds::{AuthKind, Protocol};
 
     #[test]
-    fn direct_scope_matches_only_its_own_paths() {
+    fn lan_cleanup_task_direct_scope_matches_only_its_own_paths() {
         let scope = RemovedEndpointScope::for_direct_contact("abc");
         assert!(scope.matches_key("share://direct/abc"));
         assert!(scope.matches_key("share://direct/abc/"));
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_url_connection_scope_uses_the_endpoint_prefix() {
+    fn lan_cleanup_task_saved_url_connection_scope_uses_the_endpoint_prefix() {
         let connection = SavedConnection {
             protocol: Protocol::Sftp,
             host: "example.com".into(),
@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn unc_connection_scope_uses_the_forward_slashed_root() {
+    fn lan_cleanup_task_unc_connection_scope_uses_the_forward_slashed_root() {
         let connection = SavedConnection {
             protocol: Protocol::Share,
             host: String::new(),
@@ -396,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn favourites_and_prefs_filter_by_scope() {
+    fn lan_cleanup_task_favourites_and_prefs_filter_by_scope() {
         let scope = RemovedEndpointScope::for_room("profile-1", "room-9");
         let text = "share://room/profile-1/dev-a/Docs\n/local/path\nshare://room/room-9/dev-b\n\n";
         let (kept, removed) = filter_favorites(text, &scope);
@@ -411,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn report_suffix_lists_only_what_happened() {
+    fn lan_cleanup_task_report_suffix_lists_only_what_happened() {
         let mut report = CleanupReport::default();
         assert_eq!(report.summary_suffix(), "");
         report.favorites_removed = 2;

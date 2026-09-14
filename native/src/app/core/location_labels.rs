@@ -136,7 +136,7 @@ mod tests {
     use super::location_basename;
 
     #[test]
-    fn basename_of_keys() {
+    fn lan_cleanup_task_basename_of_keys() {
         assert_eq!(location_basename("/home/user/Docs"), "Docs");
         assert_eq!(location_basename("/home/user/Docs/"), "Docs");
         assert_eq!(location_basename("C:"), "C:");

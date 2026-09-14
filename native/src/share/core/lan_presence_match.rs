@@ -247,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn hashed_ids_are_stable_short_and_not_the_key() {
+    fn lan_cleanup_task_hashed_ids_are_stable_short_and_not_the_key() {
         let id = hashed_lan_id("node-key");
         assert_eq!(id.len(), 16);
         assert_eq!(id, hashed_lan_id(" node-key "));
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn only_accepted_contacts_with_a_device_match() {
+    fn lan_cleanup_task_only_accepted_contacts_with_a_device_match() {
         let accepted = contact("a", true);
         let pending = contact("b", false);
         let contacts = vec![accepted.clone(), pending];
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn candidates_cover_v4_global_v6_and_scoped_link_local() {
+    fn lan_cleanup_task_candidates_cover_v4_global_v6_and_scoped_link_local() {
         let seen = sighting("x", &["169.254.1.2", "fe80::1", "2001:db8::5", "127.0.0.1"]);
         let candidates = candidates_for(&seen, &[3, 7]);
         assert_eq!(
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn peer_interfaces_follow_shared_prefixes() {
+    fn lan_cleanup_task_peer_interfaces_follow_shared_prefixes() {
         use crate::net::{InterfaceFacts, LinkClass};
         let links = vec![
             (
@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_presence_merges_or_synthesizes() {
+    fn lan_cleanup_task_effective_presence_merges_or_synthesizes() {
         let mut c = contact("a", true);
         assert!(effective_presence(&c, 100).is_none());
         c.lan_candidates = vec!["169.254.1.2:4000".into()];

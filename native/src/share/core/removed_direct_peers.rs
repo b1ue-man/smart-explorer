@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lookup_and_readmit() {
+    fn lan_cleanup_task_record_lookup_and_readmit() {
         let mut profiles = ShareProfiles::default();
         profiles.record_removed_direct_peer(&identity("a"), 10);
         assert!(profiles.removed_direct_peer(&identity("a")).is_some());
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn ledger_is_bounded_and_keeps_newest_records() {
+    fn lan_cleanup_task_ledger_is_bounded_and_keeps_newest_records() {
         let mut profiles = ShareProfiles::default();
         for index in 0..(MAX_REMOVED_DIRECT_PEERS + 5) {
             profiles.record_removed_direct_peer(&identity(&format!("d{index}")), index as i64);
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn re_recording_a_device_replaces_its_record() {
+    fn lan_cleanup_task_re_recording_a_device_replaces_its_record() {
         let mut profiles = ShareProfiles::default();
         profiles.record_removed_direct_peer(&identity("a"), 1);
         profiles.record_removed_direct_peer(&identity("a"), 2);
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_removes_contact_grant_and_records_denial() {
+    fn lan_cleanup_task_forgetting_removes_contact_grant_and_records_denial() {
         let mut profiles = ShareProfiles::default();
         profiles.direct_contacts.push(accepted_contact("c1", "a"));
         profiles.direct_contacts.push(accepted_contact("c2", "b"));
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_pending_contact_records_no_denial() {
+    fn lan_cleanup_task_forgetting_a_pending_contact_records_no_denial() {
         let mut profiles = ShareProfiles::default();
         let mut pending = accepted_contact("c1", "a");
         pending.remote_device_id = None;
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_grant_records_denial_for_its_device() {
+    fn lan_cleanup_task_deleting_a_grant_records_denial_for_its_device() {
         let mut profiles = ShareProfiles::default();
         let mut inactive = grant("a");
         inactive.state = DirectGrantState::Ignored;

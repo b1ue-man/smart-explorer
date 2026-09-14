@@ -127,7 +127,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ipv4_default_routes_are_detected_by_flag_and_destination() {
+    fn lan_cleanup_task_ipv4_default_routes_are_detected_by_flag_and_destination() {
         let text = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
                     eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
                     eth1\t0000FEA9\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n";
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn ipv6_default_routes_need_zero_prefix_and_gateway_flag() {
+    fn lan_cleanup_task_ipv6_default_routes_need_zero_prefix_and_gateway_flag() {
         let text = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 wlan0\n\
                     fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth1\n";
         assert_eq!(parse_ipv6_routes(text), ["wlan0"]);
