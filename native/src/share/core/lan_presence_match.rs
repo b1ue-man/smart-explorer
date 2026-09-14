@@ -131,10 +131,7 @@ pub fn peer_interfaces(
             IpAddr::V6(_) => false,
         });
         let v6_only_link_local = v4_peer.is_empty()
-            && sighting
-                .addrs
-                .iter()
-                .all(|ip| crate::net::is_link_local(ip))
+            && sighting.addrs.iter().all(crate::net::is_link_local)
             && *class == crate::net::LinkClass::RouterLess;
         if same_prefix || v6_only_link_local {
             out.push(facts.index);

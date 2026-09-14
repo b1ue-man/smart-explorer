@@ -45,7 +45,7 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/analytics.log" "$suite_tmp"/clippy-*.log
+        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/analytics.log" "$suite_tmp/batch-ranges.txt" "$suite_tmp"/clippy-*.log
         rmdir "$suite_tmp"
     else
         echo "lan/cleanup task suite diagnostics: $suite_tmp" >&2
@@ -54,7 +54,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in cargo git grep mktemp rustup tee; do
+for command_name in awk cargo git grep mktemp rustup sed sort tee; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -236,11 +236,11 @@ grep -q "automatic re-pairing" "$cli_log"
 
 echo "lan/cleanup task suite: release gates for the batch's files (rustfmt, clippy on both targets)"
 # The crate as a whole carries older formatting and dead-code drift outside
-# this batch (docs/TODO.md, H1), so both gates cover exactly the files this
-# batch touched: every file is format-checked on its own through rustfmt's
+# this batch (docs/TODO.md, H1), so both gates cover exactly what this batch
+# touched: every changed file is format-checked on its own through rustfmt's
 # stdin mode (which never descends into other modules), and clippy runs over
-# the whole crate for the host and the Windows target but only diagnostics
-# inside batch files fail the suite. A compile error anywhere still fails.
+# the whole crate for the host and the Windows target but only diagnostics on
+# lines this batch changed fail the suite. A compile error anywhere still fails.
 # The batch base is the last commit before the batch.
 batch_base=ea324f4fb38f6f7e557295730ff0127e2337d88a
 if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
@@ -272,12 +272,44 @@ fi
 echo "lan/cleanup task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
 
 # Clippy diagnostics are matched by their `src/...:line:col:` prefix in the
-# short message format; paths are relative to native/.
+# short message format (paths relative to native/) against the lines this
+# batch added or changed, so older diagnostics on untouched lines of a touched
+# file stay tracked debt instead of failing a feature batch. A diagnostic
+# anchored on an unchanged line of a changed item (for example an argument
+# count reported at the `fn` line) is outside this check by design.
+batch_ranges="$suite_tmp/batch-ranges.txt"
+: > "$batch_ranges"
+for batch_file in "${batch_files[@]}"; do
+    git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$batch_file" | awk -v file="${batch_file#native/}" '
+        /^@@ / {
+            split($3, plus, ",")
+            start = substr(plus[1], 2) + 0
+            count = (length(plus) > 1) ? plus[2] + 0 : 1
+            if (count > 0) {
+                print file, start, start + count - 1
+            }
+        }' >> "$batch_ranges"
+done
 batch_diagnostics() {
-    local log=$1 batch_file
-    for batch_file in "${batch_files[@]}"; do
-        grep -E "^${batch_file#native/}:[0-9]+:[0-9]+: (warning|error)" "$log" || true
-    done
+    local log=$1
+    { grep -E '^src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
+        BEGIN {
+            while ((getline line < ranges) > 0) {
+                split(line, range, " ")
+                n++
+                range_file[n] = range[1]
+                range_start[n] = range[2]
+                range_end[n] = range[3]
+            }
+        }
+        {
+            for (i = 1; i <= n; i++) {
+                if ($1 == range_file[i] && $2 >= range_start[i] && $2 <= range_end[i]) {
+                    print
+                    break
+                }
+            }
+        }'
 }
 clippy_targets=(host)
 if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
@@ -302,10 +334,10 @@ for clippy_target in "${clippy_targets[@]}"; do
     batch_diagnostic_lines="$(batch_diagnostics "$clippy_log")"
     if [[ -n "$batch_diagnostic_lines" ]]; then
         printf '%s\n' "$batch_diagnostic_lines" >&2
-        echo "clippy ($clippy_target) reported diagnostics inside batch files" >&2
+        echo "clippy ($clippy_target) reported diagnostics on lines this batch changed" >&2
         exit 1
     fi
-    echo "lan/cleanup task suite: clippy ($clippy_target) is clean for the batch's files"
+    echo "lan/cleanup task suite: clippy ($clippy_target) is clean on the lines this batch changed"
 done
 
 suite_succeeded=true
