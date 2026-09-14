@@ -1,12 +1,12 @@
 use super::core::random_token;
 use super::profile_persistence::ProfileChange;
-use super::removed_direct_peers::ForgottenDirectPeer;
 use super::profile_store::{
     credential_matches, delete_credential_verified, prepare_unique_credential, SecretString,
 };
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, RoomCode, ShareProfiles,
 };
+use super::removed_direct_peers::ForgottenDirectPeer;
 use super::room_relation::{
     canonical_room_display_name, RoomPersistenceOutcome, RoomRelationMaterial,
 };
@@ -92,8 +92,7 @@ impl ShareProfiles {
         name: &str,
     ) -> Result<(Self, String), String> {
         let material = RoomCode::parse(code)?.into_relation_material()?;
-        let (profiles, outcome) =
-            Self::add_room_material_persisted(default_home, &material, name)?;
+        let (profiles, outcome) = Self::add_room_material_persisted(default_home, &material, name)?;
         Ok((profiles, outcome.room_profile_id().to_string()))
     }
 

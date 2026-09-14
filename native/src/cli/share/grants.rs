@@ -29,7 +29,9 @@ enum GrantsCommand {
         about = "Delete an authorization entry (active or inactive) and every request of that device; the device is denied automatic re-pairing until paired again deliberately"
     )]
     Delete(DeleteArgs),
-    #[command(about = "List removed devices, or lift a removed device's automatic re-pairing block")]
+    #[command(
+        about = "List removed devices, or lift a removed device's automatic re-pairing block"
+    )]
     Removed(RemovedArgs),
     #[command(about = "Inspect, enable, or disable unrestricted per-device Exec grants")]
     Exec(grants_exec::ExecGrantArgs),
@@ -46,7 +48,10 @@ pub(super) struct DeleteArgs {
 
 #[derive(Args)]
 pub(super) struct RemovedArgs {
-    #[arg(long, help = "Device id of a removed device to allow automatic re-pairing again")]
+    #[arg(
+        long,
+        help = "Device id of a removed device to allow automatic re-pairing again"
+    )]
     pub(super) readmit: Option<String>,
 }
 

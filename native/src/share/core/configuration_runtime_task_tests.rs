@@ -10,17 +10,14 @@ use crate::share::types::{
 #[test]
 fn share_remote_task_reciprocal_direct_offline_snapshot_plans_nothing() {
     let snapshot = eligible_snapshot(true);
-    let online = DirectReciprocalCoordinator::detached_for_task_test(
-        snapshot.authorization_epoch,
-    );
+    let online = DirectReciprocalCoordinator::detached_for_task_test(snapshot.authorization_epoch);
     schedule_snapshot_with(&snapshot, &online, |_| Ok(Some(vec![71; 32])));
     assert_eq!(online.task_count_for_task_test(), 1);
 
     let mut offline_snapshot = snapshot;
     offline_snapshot.direct_online = false;
-    let offline = DirectReciprocalCoordinator::detached_for_task_test(
-        offline_snapshot.authorization_epoch,
-    );
+    let offline =
+        DirectReciprocalCoordinator::detached_for_task_test(offline_snapshot.authorization_epoch);
     let mut secret_reads = 0;
     schedule_snapshot_with(&offline_snapshot, &offline, |_| {
         secret_reads += 1;

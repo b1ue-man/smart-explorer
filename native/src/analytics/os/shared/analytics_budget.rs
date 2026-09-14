@@ -122,10 +122,19 @@ mod tests {
         // switch to aggregation instead of an abort.
         let diagnostics = Diagnostics::default();
         let budget = AnalyticsBudget::with_limits(1, 4, 2);
-        assert_eq!(budget.claim(Path::new("root"), 0, 4, &diagnostics), Retention::Keep);
-        assert_eq!(budget.claim(Path::new("second"), 1, 1, &diagnostics), Retention::Aggregate);
+        assert_eq!(
+            budget.claim(Path::new("root"), 0, 4, &diagnostics),
+            Retention::Keep
+        );
+        assert_eq!(
+            budget.claim(Path::new("second"), 1, 1, &diagnostics),
+            Retention::Aggregate
+        );
         assert!(budget.aggregating());
-        assert_eq!(budget.claim(Path::new("third"), 1, 1, &diagnostics), Retention::Aggregate);
+        assert_eq!(
+            budget.claim(Path::new("third"), 1, 1, &diagnostics),
+            Retention::Aggregate
+        );
         let outcome = diagnostics.finish(
             super::super::SizeNode {
                 name: "root".into(),
@@ -141,11 +150,17 @@ mod tests {
 
         let diagnostics = Diagnostics::default();
         let budget = AnalyticsBudget::with_limits(10, 3, 2);
-        assert_eq!(budget.claim(Path::new("root"), 0, 4, &diagnostics), Retention::Aggregate);
+        assert_eq!(
+            budget.claim(Path::new("root"), 0, 4, &diagnostics),
+            Retention::Aggregate
+        );
 
         let diagnostics = Diagnostics::default();
         let budget = AnalyticsBudget::with_limits(10, 10, 1);
-        assert_eq!(budget.claim(Path::new("deep"), 2, 1, &diagnostics), Retention::Aggregate);
+        assert_eq!(
+            budget.claim(Path::new("deep"), 2, 1, &diagnostics),
+            Retention::Aggregate
+        );
         assert!(!budget.depth_allowed(2));
         assert!(budget.depth_allowed(1));
     }

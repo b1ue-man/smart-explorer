@@ -21,10 +21,10 @@ mod backend;
 mod cache;
 #[path = "core/changes.rs"]
 mod changes;
-#[path = "core/core.rs"]
-mod core;
 #[path = "os/shared/copy_writer.rs"]
 mod copy_writer;
+#[path = "core/core.rs"]
+mod core;
 #[path = "core/duplicates.rs"]
 mod duplicates;
 #[path = "core/folder_create_journal.rs"]

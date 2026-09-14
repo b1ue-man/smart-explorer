@@ -1,9 +1,9 @@
 #[path = "core/agent_update_remote.rs"]
 mod agent_update_remote;
-#[path = "core/analytics_accessibility.rs"]
-mod analytics_accessibility;
 #[path = "core/analytics_access.rs"]
 mod analytics_access;
+#[path = "core/analytics_accessibility.rs"]
+mod analytics_accessibility;
 #[path = "core/analytics_window.rs"]
 mod analytics_window;
 pub(crate) use analytics_window::run_analysis_window;
@@ -31,16 +31,14 @@ mod clipboard_lifecycle;
 mod clipboard_state;
 #[path = "os/shared/clipboard_upload.rs"]
 mod clipboard_upload;
-#[cfg(all(test, windows))]
-#[path = "os/shared/copy_paste_task_tests.rs"]
-mod copy_paste_task_tests;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
 #[path = "core/connection_cleanup.rs"]
 mod connection_cleanup;
-pub use connection_cleanup::{
-    cleanup_removed_endpoint_state, CleanupReport, RemovedEndpointScope,
-};
+#[cfg(all(test, windows))]
+#[path = "os/shared/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
+pub use connection_cleanup::{cleanup_removed_endpoint_state, CleanupReport, RemovedEndpointScope};
 #[path = "core/connection_state.rs"]
 mod connection_state;
 #[path = "core/copy_dialog.rs"]
@@ -85,10 +83,10 @@ mod job_editor_ui;
 mod job_editor_validation;
 #[path = "core/landing.rs"]
 mod landing;
-#[path = "core/location_labels.rs"]
-mod location_labels;
 #[path = "core/landing_tiles.rs"]
 mod landing_tiles;
+#[path = "core/location_labels.rs"]
+mod location_labels;
 #[path = "core/menus_settings.rs"]
 mod menus_settings;
 #[path = "core/menus_sync.rs"]
@@ -103,10 +101,10 @@ mod mount_peer_roots;
 mod mount_runtime_ui;
 #[path = "core/mount_ui.rs"]
 mod mount_ui;
-#[path = "core/mount_ui_draft.rs"]
-mod mount_ui_draft;
 #[path = "core/mount_ui_cache_settings.rs"]
 mod mount_ui_cache_settings;
+#[path = "core/mount_ui_draft.rs"]
+mod mount_ui_draft;
 #[path = "core/mount_ui_helpers.rs"]
 mod mount_ui_helpers;
 #[path = "core/omni_accel.rs"]
@@ -151,16 +149,19 @@ mod remote_open;
 mod scanning;
 #[path = "core/share.rs"]
 mod share;
-#[path = "core/share_discovery_state.rs"]
-mod share_discovery_state;
 #[path = "core/share_discovery_events.rs"]
 mod share_discovery_events;
+#[path = "core/share_discovery_state.rs"]
+mod share_discovery_state;
 #[path = "core/share_discovery_ui.rs"]
 mod share_discovery_ui;
 #[path = "core/share_exec_jobs_ui.rs"]
 mod share_exec_jobs_ui;
 #[path = "core/share_exec_ui.rs"]
 mod share_exec_ui;
+#[cfg(test)]
+#[path = "core/share_remote_task_tests.rs"]
+mod share_remote_task_tests;
 #[path = "core/shell_toolbar.rs"]
 mod shell_toolbar;
 #[path = "core/shutdown.rs"]
@@ -190,9 +191,6 @@ mod temp_recovery_ui;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "core/share_remote_task_tests.rs"]
-mod share_remote_task_tests;
 #[path = "os/shared/transfer_helpers.rs"]
 mod transfer_helpers;
 #[path = "core/transfer_lifecycle.rs"]

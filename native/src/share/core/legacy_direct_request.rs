@@ -209,8 +209,7 @@ impl ShareProfiles {
                 && contact.remote_device_id.as_deref() == Some(peer.device_id.as_str())
                 && contact.remote_public_key.as_deref() == Some(peer.public_key.as_str())
                 && contact.expected_fingerprint == peer.fingerprint
-                && (contact.expected_node_id.is_empty()
-                    || contact.expected_node_id == peer.node_id)
+                && (contact.expected_node_id.is_empty() || contact.expected_node_id == peer.node_id)
         });
         let tracked_tombstone = self.direct_request_tombstones.iter().any(|tombstone| {
             tombstone.direction == DirectRequestDirection::Incoming

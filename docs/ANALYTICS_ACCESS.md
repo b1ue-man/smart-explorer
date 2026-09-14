@@ -268,7 +268,10 @@ listing with duplicate suppression. Unreadable reparse tags classify the entry
 as a plain file or folder. Every directory is scanned under `catch_unwind`;
 a panic becomes one issue for that directory. Windows roots are opened in the
 verbatim `\\?\` form (`os/windows/paths.rs`), so reserved device names,
-trailing dots/spaces and long paths are addressed literally; issue paths are
-shown without the prefix. Informational `notes` (aggregation) are reported
-separately from issues and never make a result partial. The panic logger is
-installed before the elevated-analysis branch.
+trailing dots/spaces and long paths are addressed literally; the root is made
+absolute by the scanner itself (folding `.`/`..`, anchoring relative input on
+the current directory) because `GetFullPathNameW` — and with it
+`std::path::absolute` — would already turn `C:\data\nul` into the NUL device;
+issue paths are shown without the prefix. Informational `notes` (aggregation)
+are reported separately from issues and never make a result partial. The panic
+logger is installed before the elevated-analysis branch.

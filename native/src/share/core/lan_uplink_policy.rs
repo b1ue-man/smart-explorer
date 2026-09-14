@@ -245,8 +245,14 @@ mod tests {
         let links = vec![link(2, LinkClass::RouterLess), link(3, LinkClass::Uplink)];
         let peers = vec![peer(2, false)];
         let mut policy = UplinkPolicy::default();
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 100), Decision::Idle(_)));
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 102), Decision::Idle(_)));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 100),
+            Decision::Idle(_)
+        ));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 102),
+            Decision::Idle(_)
+        ));
         assert_eq!(
             policy.evaluate(&input(&links, &peers, true), 106),
             Decision::Start {
@@ -255,9 +261,15 @@ mod tests {
             }
         );
         policy.mark_started(2, 3);
-        assert_eq!(policy.evaluate(&input(&links, &peers, true), 110), Decision::Keep);
+        assert_eq!(
+            policy.evaluate(&input(&links, &peers, true), 110),
+            Decision::Keep
+        );
         let none: Vec<PeerOnLink> = Vec::new();
-        assert_eq!(policy.evaluate(&input(&links, &none, true), 120), Decision::Keep);
+        assert_eq!(
+            policy.evaluate(&input(&links, &none, true), 120),
+            Decision::Keep
+        );
         assert!(matches!(
             policy.evaluate(&input(&links, &none, true), 120 + STOP_GRACE_SECS),
             Decision::Stop(_)
@@ -284,7 +296,10 @@ mod tests {
         );
         let mut unavailable = input(&links, &peers, true);
         unavailable.adapter_available = false;
-        assert!(matches!(policy.evaluate(&unavailable, 1), Decision::Idle(_)));
+        assert!(matches!(
+            policy.evaluate(&unavailable, 1),
+            Decision::Idle(_)
+        ));
     }
 
     #[test]
@@ -292,8 +307,14 @@ mod tests {
         let links = vec![link(2, LinkClass::RouterLess), link(3, LinkClass::Uplink)];
         let peers = vec![peer(2, true)];
         let mut policy = UplinkPolicy::default();
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 10), Decision::Idle(_)));
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 20), Decision::Idle(_)));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 10),
+            Decision::Idle(_)
+        ));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 20),
+            Decision::Idle(_)
+        ));
     }
 
     #[test]
@@ -303,7 +324,10 @@ mod tests {
         let mut policy = UplinkPolicy::default();
         policy.resume(2, 3);
         let lost = vec![link(2, LinkClass::RouterLess), link(3, LinkClass::Routed)];
-        assert_eq!(policy.evaluate(&input(&lost, &peers, true), 50), Decision::Keep);
+        assert_eq!(
+            policy.evaluate(&input(&lost, &peers, true), 50),
+            Decision::Keep
+        );
         assert!(matches!(
             policy.evaluate(&input(&lost, &peers, true), 50 + UPLINK_LOSS_SECS),
             Decision::Stop(_)
@@ -312,8 +336,14 @@ mod tests {
         policy.resume(2, 3);
         let mut stop = input(&links, &peers, true);
         stop.stop_requested = true;
-        assert_eq!(policy.evaluate(&stop, 60), Decision::Stop("auf Wunsch beendet".into()));
+        assert_eq!(
+            policy.evaluate(&stop, 60),
+            Decision::Stop("auf Wunsch beendet".into())
+        );
         policy.resume(2, 3);
-        assert!(matches!(policy.evaluate(&input(&links, &peers, false), 70), Decision::Stop(_)));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, false), 70),
+            Decision::Stop(_)
+        ));
     }
 }

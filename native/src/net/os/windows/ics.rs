@@ -12,7 +12,14 @@ const ICS_PRIVATE: u8 = 1;
 fn run_powershell(script: &str) -> io::Result<String> {
     use std::os::windows::process::CommandExt;
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -80,7 +87,9 @@ pub(crate) fn enable_sharing(public_guid: &str, private_guid: &str) -> io::Resul
     if out.trim().ends_with("ok") {
         Ok(())
     } else {
-        Err(io::Error::other(format!("ICS-Aktivierung ohne Bestaetigung: {out}")))
+        Err(io::Error::other(format!(
+            "ICS-Aktivierung ohne Bestaetigung: {out}"
+        )))
     }
 }
 
@@ -95,7 +104,9 @@ pub(crate) fn disable_sharing(public_guid: &str, private_guid: &str) -> io::Resu
     if out.trim().ends_with("ok") {
         Ok(())
     } else {
-        Err(io::Error::other(format!("ICS-Deaktivierung ohne Bestaetigung: {out}")))
+        Err(io::Error::other(format!(
+            "ICS-Deaktivierung ohne Bestaetigung: {out}"
+        )))
     }
 }
 

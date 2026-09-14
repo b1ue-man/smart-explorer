@@ -8,9 +8,7 @@ use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 use super::core::{eio, now_secs, public_fingerprint, verify_hmac};
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_reciprocal::DirectRelationMaterial;
-use super::direct_reciprocal_session::{
-    AuthenticatedDirectSession, DirectSessionAuthorization,
-};
+use super::direct_reciprocal_session::{AuthenticatedDirectSession, DirectSessionAuthorization};
 use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
 use super::fs::ShareExportConfig;
 use super::profiles::{fingerprint_matches, ShareProfiles};

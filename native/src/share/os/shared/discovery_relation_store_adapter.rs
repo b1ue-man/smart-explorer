@@ -26,7 +26,10 @@ impl fmt::Debug for SystemRelationStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SystemRelationStore")
-            .field("default_home", &self.default_home.as_ref().map(|_| "[CONFIGURED]"))
+            .field(
+                "default_home",
+                &self.default_home.as_ref().map(|_| "[CONFIGURED]"),
+            )
             .finish()
     }
 }
@@ -105,9 +108,9 @@ fn map_direct_error(error: DirectReciprocalPersistenceError) -> RelationStoreErr
         DirectReciprocalPersistenceError::Conflict(error) => {
             RelationStoreError::Conflict(DirectReciprocalError::Conflict(error).to_string())
         }
-        DirectReciprocalPersistenceError::PolicyDenied(error) => RelationStoreError::PolicyDenied(
-            DirectReciprocalError::PolicyDenied(error).to_string(),
-        ),
+        DirectReciprocalPersistenceError::PolicyDenied(error) => {
+            RelationStoreError::PolicyDenied(DirectReciprocalError::PolicyDenied(error).to_string())
+        }
         DirectReciprocalPersistenceError::Invalid(error) => {
             RelationStoreError::Invalid(error.to_string())
         }

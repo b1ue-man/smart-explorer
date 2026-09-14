@@ -419,9 +419,13 @@ pub struct App {
     pub(in crate::app) remote_ctx: Option<super::remote_context_menu::RemoteContextMenu>,
     /// In-flight download of selected remote files to temp for a Ctrl+C →
     /// Explorer paste. Result is the local temp paths to put on the clipboard.
-    pub(in crate::app) clip_download_rx: Option<Receiver<super::clipboard_state::PreparationResult<
-        super::clipboard_lifecycle::PreparedTempClipboard,
-    >>>,
+    pub(in crate::app) clip_download_rx: Option<
+        Receiver<
+            super::clipboard_state::PreparationResult<
+                super::clipboard_lifecycle::PreparedTempClipboard,
+            >,
+        >,
+    >,
 
     // ─── Cloud (OAuth) — slice 1: connect Google Drive ───────────────────
     pub(in crate::app) cloud_client_id_draft: String,
@@ -473,8 +477,7 @@ pub struct App {
     pub(in crate::app) share_worker_running: bool,
     pub(in crate::app) share_worker_relay_url: String,
     pub(in crate::app) share_worker_candidates: Vec<String>,
-    pub(in crate::app) share_discovery:
-        super::share_discovery_state::DiscoveryUiState,
+    pub(in crate::app) share_discovery: super::share_discovery_state::DiscoveryUiState,
 
     // Quick Share (Android) LAN discovery — started lazily when Teilen opens.
     pub(in crate::app) quickshare: Option<crate::quickshare::QuickShare>,

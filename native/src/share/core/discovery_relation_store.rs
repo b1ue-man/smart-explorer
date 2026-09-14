@@ -37,11 +37,7 @@ pub struct RelationStoreCommit {
 }
 
 impl RelationStoreCommit {
-    pub fn new(
-        profiles: ShareProfiles,
-        outcome: DiscoveryRelationOutcome,
-        changed: bool,
-    ) -> Self {
+    pub fn new(profiles: ShareProfiles, outcome: DiscoveryRelationOutcome, changed: bool) -> Self {
         Self {
             profiles,
             outcome,
@@ -130,8 +126,12 @@ impl fmt::Display for RelationStoreError {
         match self {
             Self::Unavailable(error) => write!(formatter, "relation store unavailable: {error}"),
             Self::Invalid(error) => write!(formatter, "invalid relation material: {error}"),
-            Self::Conflict(error) => write!(formatter, "relation conflicts with local state: {error}"),
-            Self::PolicyDenied(error) => write!(formatter, "relation denied by local policy: {error}"),
+            Self::Conflict(error) => {
+                write!(formatter, "relation conflicts with local state: {error}")
+            }
+            Self::PolicyDenied(error) => {
+                write!(formatter, "relation denied by local policy: {error}")
+            }
             Self::Persistence(error) => write!(formatter, "relation persistence failed: {error}"),
         }
     }
@@ -228,7 +228,8 @@ impl InMemoryRelationStore {
                 "Direct contact lookup id does not match its credential".into(),
             ));
         }
-        self.direct_material.insert(contact_id.to_string(), material);
+        self.direct_material
+            .insert(contact_id.to_string(), material);
         Ok(())
     }
 
@@ -344,7 +345,11 @@ impl RelationStore for InMemoryRelationStore {
         }
         self.profiles = candidate;
         let outcome = canonical_direct_outcome(&self.profiles, contact_id)?;
-        Ok(RelationStoreCommit::new(self.profiles.clone(), outcome, changed))
+        Ok(RelationStoreCommit::new(
+            self.profiles.clone(),
+            outcome,
+            changed,
+        ))
     }
 
     fn persist_room(
@@ -360,10 +365,9 @@ impl RelationStore for InMemoryRelationStore {
             .iter()
             .find(|room| room.room_id == material.room_id())
         {
-            let existing_material = self
-                .room_material
-                .get(&room.id)
-                .ok_or_else(|| RelationStoreError::Persistence("Room credential is missing".into()))?;
+            let existing_material = self.room_material.get(&room.id).ok_or_else(|| {
+                RelationStoreError::Persistence("Room credential is missing".into())
+            })?;
             if existing_material != material {
                 return Err(RelationStoreError::Conflict(
                     "Room credential differs from the authenticated offer".into(),
@@ -406,9 +410,7 @@ impl RelationStore for InMemoryRelationStore {
 fn map_direct_domain_error(error: DirectReciprocalError) -> RelationStoreError {
     match error {
         DirectReciprocalError::PolicyDenied(error) => {
-            RelationStoreError::PolicyDenied(
-                DirectReciprocalError::PolicyDenied(error).to_string(),
-            )
+            RelationStoreError::PolicyDenied(DirectReciprocalError::PolicyDenied(error).to_string())
         }
         DirectReciprocalError::Conflict(error) => {
             RelationStoreError::Conflict(DirectReciprocalError::Conflict(error).to_string())

@@ -201,8 +201,7 @@ pub fn persist_reciprocal_direct_peer(
                 return Err(TRANSACTION_ABORTED.to_string());
             }
             let mut candidate = profiles.clone();
-            match candidate.apply_reciprocal_direct_peer(peer, &generated_contact_id, now, origin)
-            {
+            match candidate.apply_reciprocal_direct_peer(peer, &generated_contact_id, now, origin) {
                 Ok(outcome) => {
                     *profiles = candidate;
                     applied = outcome;

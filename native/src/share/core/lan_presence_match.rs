@@ -23,7 +23,10 @@ pub fn hashed_lan_id(node_id: &str) -> String {
     hasher.update(b"|");
     hasher.update(node_id.trim().as_bytes());
     let digest = hasher.finalize();
-    digest[..8].iter().map(|byte| format!("{byte:02x}")).collect()
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,7 +131,10 @@ pub fn peer_interfaces(
             IpAddr::V6(_) => false,
         });
         let v6_only_link_local = v4_peer.is_empty()
-            && sighting.addrs.iter().all(|ip| crate::net::is_link_local(ip))
+            && sighting
+                .addrs
+                .iter()
+                .all(|ip| crate::net::is_link_local(ip))
             && *class == crate::net::LinkClass::RouterLess;
         if same_prefix || v6_only_link_local {
             out.push(facts.index);
@@ -315,8 +321,14 @@ mod tests {
                 LinkClass::Uplink,
             ),
         ];
-        assert_eq!(peer_interfaces(&sighting("x", &["169.254.1.2"]), &links), [2]);
-        assert_eq!(peer_interfaces(&sighting("x", &["192.168.1.30"]), &links), [3]);
+        assert_eq!(
+            peer_interfaces(&sighting("x", &["169.254.1.2"]), &links),
+            [2]
+        );
+        assert_eq!(
+            peer_interfaces(&sighting("x", &["192.168.1.30"]), &links),
+            [3]
+        );
         assert_eq!(peer_interfaces(&sighting("x", &["fe80::1"]), &links), [2]);
         assert!(peer_interfaces(&sighting("x", &["10.9.9.9"]), &links).is_empty());
     }

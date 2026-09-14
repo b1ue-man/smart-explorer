@@ -25,8 +25,7 @@ use super::discovery_wire::{OpaqueKe3ConnectorBundle, PublisherBundle};
 use super::room_relation::{RoomRelationMaterial, RoomRelationOffer};
 use super::types::DirectAccessState;
 
-const WIRE_FIXTURE: &str =
-    include_str!("../../../../testdata/share-discovery-wire-v1.jsonl");
+const WIRE_FIXTURE: &str = include_str!("../../../../testdata/share-discovery-wire-v1.jsonl");
 
 #[derive(Deserialize)]
 struct FixtureLine {
@@ -41,7 +40,11 @@ fn share_remote_task_discovery_wire_fixture_roundtrips() {
     let mut server_messages = 0;
     for (index, line) in WIRE_FIXTURE.lines().enumerate() {
         assert!(!line.is_empty(), "blank fixture line {}", index + 1);
-        assert!(line.len() < 2 * 1024, "oversized fixture line {}", index + 1);
+        assert!(
+            line.len() < 2 * 1024,
+            "oversized fixture line {}",
+            index + 1
+        );
         let fixture: FixtureLine = serde_json::from_str(line)
             .unwrap_or_else(|error| panic!("fixture line {}: {error}", index + 1));
         match fixture.direction.as_str() {
@@ -159,7 +162,13 @@ fn share_remote_task_discovery_lease_renewal_exchange_order_and_rejections() {
     assert_eq!(offer.next_publish_at, now + Duration::from_secs(200));
     offer.last_publish_sent_at = None;
     assert!(offer.publish_due(now + Duration::from_secs(200)));
-    assert_eq!(offer.request(now + Duration::from_secs(301)).unwrap().lease_secs, 300);
+    assert_eq!(
+        offer
+            .request(now + Duration::from_secs(301))
+            .unwrap()
+            .lease_secs,
+        300
+    );
     assert_eq!(
         offer
             .request(now + Duration::from_millis(600_500))
@@ -171,7 +180,9 @@ fn share_remote_task_discovery_lease_renewal_exchange_order_and_rejections() {
 
     let mut exchange = ActiveDiscoveryExchange::connector("exchange".into(), "discovery".into());
     exchange.accept_opened("discovery").unwrap();
-    exchange.accept_packet(PairingPacketKind::OpaqueKe2).unwrap();
+    exchange
+        .accept_packet(PairingPacketKind::OpaqueKe2)
+        .unwrap();
     exchange
         .accept_port_packet(PairingPacketKind::OpaqueKe3Bundle)
         .unwrap();
@@ -224,13 +235,17 @@ fn share_remote_task_discovery_persists_direct_and_room_relations_idempotently()
     );
 
     let mut store = InMemoryRelationStore::default();
-    let first = store.persist_direct(&peer, PairingOrigin::UserPairing).unwrap();
+    let first = store
+        .persist_direct(&peer, PairingOrigin::UserPairing)
+        .unwrap();
     assert!(first.changed());
     assert!(matches!(
         first.outcome(),
         DiscoveryRelationOutcome::DirectInstalled { .. }
     ));
-    let second = store.persist_direct(&peer, PairingOrigin::UserPairing).unwrap();
+    let second = store
+        .persist_direct(&peer, PairingOrigin::UserPairing)
+        .unwrap();
     assert!(!second.changed());
     assert_eq!(store.profiles().direct_contacts.len(), 1);
     assert_eq!(
@@ -251,7 +266,9 @@ fn share_remote_task_discovery_persists_direct_and_room_relations_idempotently()
         .persist_room(&room_material, "  Fixture Room  ")
         .unwrap();
     assert!(first.changed());
-    let second = store.persist_room(&room_material, "ignored rename").unwrap();
+    let second = store
+        .persist_room(&room_material, "ignored rename")
+        .unwrap();
     assert!(!second.changed());
     assert_eq!(store.profiles().rooms.len(), 1);
     assert_eq!(store.profiles().rooms[0].name, "Fixture Room");
@@ -283,11 +300,11 @@ fn complete_pairing(pin: &[u8], suffix: &str) {
 fn bindings(
     kind: DiscoveryKind,
     suffix: &str,
-) -> (DiscoveryOfferBinding, super::discovery_domain::DiscoveryExchangeBinding) {
-    let offer = DiscoveryOfferBinding::new(
-        kind,
-        OfferId::new(format!("offer-{suffix}")).unwrap(),
-    );
+) -> (
+    DiscoveryOfferBinding,
+    super::discovery_domain::DiscoveryExchangeBinding,
+) {
+    let offer = DiscoveryOfferBinding::new(kind, OfferId::new(format!("offer-{suffix}")).unwrap());
     let exchange = offer.for_exchange(
         DiscoveryId::new(format!("discovery-{suffix}")).unwrap(),
         ExchangeId::new(format!("exchange-{suffix}")).unwrap(),

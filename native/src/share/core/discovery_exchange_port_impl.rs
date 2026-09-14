@@ -1,30 +1,36 @@
 use std::collections::HashMap;
+#[path = "discovery_exchange_port_helpers.rs"]
+mod exchange_port_helpers;
 #[path = "discovery_exchange_port_state.rs"]
 mod exchange_port_state;
 
+use exchange_port_helpers::{
+    invalid_error, pairing_bundle_from_connector, pairing_bundle_from_publisher, persisted_packet,
+    persistence_error, protocol_error, protocol_message, require_packet, send_packet, target_error,
+    validate_pin_length,
+};
 use exchange_port_state::{ExchangeState, PreparedOfferState, UsedIdTracker};
 
 use super::direct_reciprocal::DirectReciprocalPeer;
-use super::removed_direct_peers::PairingOrigin;
 use super::discovery_bundle::{ConnectorApplicationBundle, PublisherApplicationBundle};
-use super::discovery_domain::{DiscoveryId, DiscoveryOfferBinding, ExchangeId, OfferId, PairingBundle};
-use super::discovery_pake::{ConnectorAwaitingKe2, PublisherOffer};
-use super::discovery_relation_store::{
-    DiscoveryRelationOutcome, RelationStore, RelationStoreCommit, RelationStoreError,
+use super::discovery_domain::{
+    DiscoveryId, DiscoveryOfferBinding, ExchangeId, OfferId, PairingBundle,
 };
+use super::discovery_pake::{ConnectorAwaitingKe2, PublisherOffer};
+use super::discovery_relation_store::{DiscoveryRelationOutcome, RelationStore};
 use super::discovery_signal_port::{
     DiscoveryDirectPeerSource, DiscoveryExchangePort, DiscoveryPortAction, DiscoveryPortError,
-    DiscoveryPortPacket, PersistedDiscoveryPacket, PreparedDiscoveryOffer,
+    PreparedDiscoveryOffer,
 };
 use super::discovery_signal_types::{
     DiscoveryAdvertisement, DiscoveryKind, DiscoveryPublishTarget, PairingCloseReason,
     PairingPacketKind, DISCOVERY_PAIRING_SUITE, DISCOVERY_PAIRING_VERSION,
-    DISCOVERY_PIN_MAX_BYTES,
 };
 use super::discovery_wire::{
     ConnectorCommit, OpaqueKe1, OpaqueKe2, OpaqueKe3ConnectorBundle, PublisherBundle,
     PublisherCommit,
 };
+use super::removed_direct_peers::PairingOrigin;
 use super::room_relation::RoomJoinIntent;
 
 pub(crate) struct DiscoveryExchangePortImpl {
@@ -121,7 +127,9 @@ impl DiscoveryExchangePortImpl {
                 )
                 .map_err(protocol_error)?;
                 if application.kind() != received.binding().offer().kind() {
-                    return Err(protocol_message("publisher bundle kind does not match exchange"));
+                    return Err(protocol_message(
+                        "publisher bundle kind does not match exchange",
+                    ));
                 }
 
                 // Do not expose the exact commit ciphertext before persistence.
@@ -163,10 +171,9 @@ impl DiscoveryExchangePortImpl {
             }
             ExchangeState::PublisherAwaitingKe3 { state, target } => {
                 require_packet(packet_kind, PairingPacketKind::OpaqueKe3Bundle)?;
-                let packet = OpaqueKe3ConnectorBundle::from_bytes(payload)
-                    .map_err(protocol_error)?;
-                let (received, encrypted_bundle) =
-                    state.finish(packet).map_err(protocol_error)?;
+                let packet =
+                    OpaqueKe3ConnectorBundle::from_bytes(payload).map_err(protocol_error)?;
+                let (received, encrypted_bundle) = state.finish(packet).map_err(protocol_error)?;
                 let application = ConnectorApplicationBundle::decode_plaintext(
                     encrypted_bundle.payload().to_vec(),
                 )
@@ -174,7 +181,9 @@ impl DiscoveryExchangePortImpl {
                 if application.kind() != received.binding().offer().kind()
                     || application.kind() != target.kind()
                 {
-                    return Err(protocol_message("connector bundle kind does not match target"));
+                    return Err(protocol_message(
+                        "connector bundle kind does not match target",
+                    ));
                 }
 
                 match (target, application) {
@@ -253,9 +262,10 @@ impl DiscoveryExchangePortImpl {
                     )),
                 ))
             }
-            ExchangeState::ConnectorComplete { .. }
-            | ExchangeState::PublisherComplete { .. } => {
-                Err(protocol_message("pairing packet received after cryptographic completion"))
+            ExchangeState::ConnectorComplete { .. } | ExchangeState::PublisherComplete { .. } => {
+                Err(protocol_message(
+                    "pairing packet received after cryptographic completion",
+                ))
             }
         }
     }
@@ -310,7 +320,9 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         pin: &[u8],
     ) -> Result<DiscoveryPortAction, DiscoveryPortError> {
         if !advertisement.is_compatible() {
-            return Err(protocol_message("advertisement uses an incompatible pairing suite"));
+            return Err(protocol_message(
+                "advertisement uses an incompatible pairing suite",
+            ));
         }
         let offer_id = OfferId::new(advertisement.offer_id.clone()).map_err(invalid_error)?;
         let discovery_id =
@@ -377,10 +389,7 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
             exchange_id.to_string(),
             ExchangeState::PublisherAwaitingKe3 { state, target },
         );
-        Ok(send_packet(
-            PairingPacketKind::OpaqueKe2,
-            ke2.into_bytes(),
-        ))
+        Ok(send_packet(PairingPacketKind::OpaqueKe2, ke2.into_bytes()))
     }
 
     fn handle_packet(
@@ -427,74 +436,4 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
     fn cancel_exchange(&mut self, exchange_id: &str) {
         self.exchanges.remove(exchange_id);
     }
-}
-
-fn pairing_bundle_from_connector(
-    bundle: &ConnectorApplicationBundle,
-) -> Result<PairingBundle, DiscoveryPortError> {
-    let plaintext = bundle.encode_plaintext().map_err(protocol_error)?;
-    PairingBundle::new(bundle.kind(), plaintext.as_slice().to_vec()).map_err(protocol_error)
-}
-
-fn pairing_bundle_from_publisher(
-    bundle: &PublisherApplicationBundle,
-) -> Result<PairingBundle, DiscoveryPortError> {
-    let plaintext = bundle.encode_plaintext().map_err(protocol_error)?;
-    PairingBundle::new(bundle.kind(), plaintext.as_slice().to_vec()).map_err(protocol_error)
-}
-
-fn send_packet(kind: PairingPacketKind, payload: Vec<u8>) -> DiscoveryPortAction {
-    DiscoveryPortAction::SendPacket(DiscoveryPortPacket { kind, payload })
-}
-
-fn persisted_packet(
-    commit: RelationStoreCommit,
-    kind: PairingPacketKind,
-    payload: Vec<u8>,
-) -> DiscoveryPortAction {
-    DiscoveryPortAction::PersistedAndSend(PersistedDiscoveryPacket {
-        commit,
-        packet: DiscoveryPortPacket { kind, payload },
-    })
-}
-
-fn require_packet(
-    actual: PairingPacketKind,
-    expected: PairingPacketKind,
-) -> Result<(), DiscoveryPortError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(protocol_message("pairing packet arrived in the wrong typestate"))
-    }
-}
-
-fn validate_pin_length(pin: &[u8]) -> Result<(), DiscoveryPortError> {
-    if pin.len() > DISCOVERY_PIN_MAX_BYTES {
-        Err(DiscoveryPortError::InvalidRequest(
-            "PIN exceeds the supported byte limit".to_string(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn invalid_error(error: impl ToString) -> DiscoveryPortError {
-    DiscoveryPortError::InvalidRequest(error.to_string())
-}
-
-fn protocol_error(error: impl ToString) -> DiscoveryPortError {
-    DiscoveryPortError::Protocol(error.to_string())
-}
-
-fn protocol_message(message: &str) -> DiscoveryPortError {
-    DiscoveryPortError::Protocol(message.to_string())
-}
-
-fn target_error(error: RelationStoreError) -> DiscoveryPortError {
-    DiscoveryPortError::TargetUnavailable(error.to_string())
-}
-
-fn persistence_error(error: RelationStoreError) -> DiscoveryPortError {
-    DiscoveryPortError::Persistence(error.to_string())
 }

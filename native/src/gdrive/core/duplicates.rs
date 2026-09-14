@@ -124,7 +124,10 @@ pub(super) fn select_canonical(siblings: &[Sibling]) -> Option<String> {
 
 /// The sibling addressed by a marker's id prefix. An ambiguous prefix fails
 /// closed instead of guessing.
-pub(super) fn select_by_prefix(siblings: &[Sibling], prefix: &str) -> Result<Option<String>, String> {
+pub(super) fn select_by_prefix(
+    siblings: &[Sibling],
+    prefix: &str,
+) -> Result<Option<String>, String> {
     let matches: Vec<&Sibling> = siblings
         .iter()
         .filter(|sibling| sibling.id.starts_with(prefix))

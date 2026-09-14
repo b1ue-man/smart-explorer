@@ -34,42 +34,45 @@ fn analytics_access_task_automatic_query_fallback_preserves_access_denial() {
             }
         })
         .unwrap();
-    assert_eq!(
-        calls,
-        [FileIdExtdDirectoryRestartInfo, FileFullDirectoryRestartInfo]
-    );
     assert!(matches!(full.layout, Layout::Full));
     assert!(full.fallback.is_none());
     assert_contents(full);
+    // The listing continues with the full class until the provider reports
+    // the end; the extended class is never asked again.
+    assert_eq!(
+        calls[..2],
+        [FileIdExtdDirectoryRestartInfo, FileFullDirectoryRestartInfo]
+    );
+    assert!(calls[2..]
+        .iter()
+        .all(|class| *class == FileFullDirectoryInfo));
 
     let mut calls = Vec::new();
-    let ordinary =
-        read_directory_with_query(fixture.path(), Layout::Extended, |_, class, _| {
-            calls.push(class);
-            Err(io::Error::from_raw_os_error(50))
-        })
-        .unwrap();
+    let ordinary = read_directory_with_query(fixture.path(), Layout::Extended, |_, class, _| {
+        calls.push(class);
+        Err(io::Error::from_raw_os_error(50))
+    })
+    .unwrap();
+    assert!(ordinary.fallback.is_some());
+    assert_contents(ordinary);
     assert_eq!(
         calls,
         [FileIdExtdDirectoryRestartInfo, FileFullDirectoryRestartInfo]
     );
-    assert!(ordinary.fallback.is_some());
-    assert_contents(ordinary);
 
     // A denial at either query boundary is not an unsupported-class signal.
     // The ordinary listing above proves a wrong fallback would hide it.
     for deny_full in [false, true] {
         let mut calls = Vec::new();
-        let result =
-            read_directory_with_query(fixture.path(), Layout::Extended, |_, class, _| {
-                calls.push(class);
-                let code = if deny_full && class == FileIdExtdDirectoryRestartInfo {
-                    87
-                } else {
-                    5
-                };
-                Err(io::Error::from_raw_os_error(code))
-            });
+        let result = read_directory_with_query(fixture.path(), Layout::Extended, |_, class, _| {
+            calls.push(class);
+            let code = if deny_full && class == FileIdExtdDirectoryRestartInfo {
+                87
+            } else {
+                5
+            };
+            Err(io::Error::from_raw_os_error(code))
+        });
         let error = result
             .err()
             .expect("query denial must fail directory startup");
@@ -115,6 +118,10 @@ fn analytics_access_task_midway_query_failure_finishes_through_ordinary_listing(
     names.dedup();
     assert_eq!(names.len(), 40, "every entry is yielded exactly once");
     assert_eq!(errors, 0);
+    assert!(
+        calls >= 2,
+        "the failing continuation must have been attempted"
+    );
 }
 
 #[test]
@@ -160,8 +167,12 @@ fn analytics_access_task_full_record_fallback_and_reparse_classification() {
     for code in [5, 32, 18, 1117] {
         assert!(!unsupported(&io::Error::from_raw_os_error(code)));
     }
-    assert!(enumeration_ended(&io::Error::from_raw_os_error(ERROR_NO_MORE_FILES as i32)));
-    assert!(enumeration_ended(&io::Error::from_raw_os_error(ERROR_HANDLE_EOF as i32)));
+    assert!(enumeration_ended(&io::Error::from_raw_os_error(
+        ERROR_NO_MORE_FILES as i32
+    )));
+    assert!(enumeration_ended(&io::Error::from_raw_os_error(
+        ERROR_HANDLE_EOF as i32
+    )));
     // An unreadable reparse tag never drops the entry.
     assert_eq!(reparse_tag(Path::new(r"\\?\C:\definitely\missing\path")), 0);
 }

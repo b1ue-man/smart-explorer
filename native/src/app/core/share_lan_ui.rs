@@ -12,7 +12,11 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("Erkennung (mDNS): {}", status.presence.label()));
         if let Some(id) = &status.announced_id {
-            ui.label(RichText::new(format!("eigene Kennung {id}")).small().color(Color32::from_gray(140)));
+            ui.label(
+                RichText::new(format!("eigene Kennung {id}"))
+                    .small()
+                    .color(Color32::from_gray(140)),
+            );
         }
     });
     let mut presence_enabled = matches!(

@@ -8,7 +8,10 @@ impl App {
 
     #[cfg(test)]
     pub(in crate::app) fn new_for_copy_task() -> Self {
-        assert_eq!(std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(),
+            Ok("1")
+        );
         Self::new_inner(false, None, false)
     }
 
@@ -143,24 +146,27 @@ impl App {
 
         // A snoozed bundle remains the only candidate on the next launch.
         // Do not silently replace it with a new download before consent.
-        let update_rx =
-            if !background || post_update_startup_pending || staged_update.is_some() || staging_load_failed {
-                None
-            } else {
-                let (utx, urx) = unbounded();
-                match crate::updater::check_async(utx, false) {
-                    Ok(()) => Some(urx),
-                    Err(error) => {
-                        let detail =
-                            format!("Automatische Update-Prüfung konnte nicht starten: {error}");
-                        startup_update_error = Some(match startup_update_error {
-                            Some(existing) => format!("{existing}\n{detail}"),
-                            None => detail,
-                        });
-                        None
-                    }
+        let update_rx = if !background
+            || post_update_startup_pending
+            || staged_update.is_some()
+            || staging_load_failed
+        {
+            None
+        } else {
+            let (utx, urx) = unbounded();
+            match crate::updater::check_async(utx, false) {
+                Ok(()) => Some(urx),
+                Err(error) => {
+                    let detail =
+                        format!("Automatische Update-Prüfung konnte nicht starten: {error}");
+                    startup_update_error = Some(match startup_update_error {
+                        Some(existing) => format!("{existing}\n{detail}"),
+                        None => detail,
+                    });
+                    None
                 }
-            };
+            }
+        };
         let show_update_dialog = staged_update.is_some();
         let update_ready = staged_update.map(ReadyUpdate::Staged);
 

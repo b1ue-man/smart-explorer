@@ -55,8 +55,9 @@ impl GDriveBackend {
                 }
             }
         }
-        let source_object = source_object
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent"))?;
+        let source_object = source_object.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent")
+        })?;
         require_absent(
             &self.named_objects(&destination_parent_id, destination_name)?,
             "Drive rename destination",

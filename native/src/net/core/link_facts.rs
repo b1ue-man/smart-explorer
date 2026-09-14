@@ -122,7 +122,13 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    fn iface(index: u32, up: bool, addrs: &[&str], has_gateway: bool, dhcp: Option<bool>) -> InterfaceFacts {
+    fn iface(
+        index: u32,
+        up: bool,
+        addrs: &[&str],
+        has_gateway: bool,
+        dhcp: Option<bool>,
+    ) -> InterfaceFacts {
         InterfaceFacts {
             name: format!("if{index}"),
             adapter_id: format!("id{index}"),
@@ -137,7 +143,13 @@ mod tests {
 
     #[test]
     fn lan_cleanup_task_apipa_without_gateway_is_router_less() {
-        let facts = [iface(2, true, &["169.254.10.5", "fe80::1"], false, Some(false))];
+        let facts = [iface(
+            2,
+            true,
+            &["169.254.10.5", "fe80::1"],
+            false,
+            Some(false),
+        )];
         let classes = classify_links(&facts, &[], None, &[]);
         assert_eq!(classes[0].1, LinkClass::RouterLess);
     }
@@ -145,21 +157,36 @@ mod tests {
     #[test]
     fn lan_cleanup_task_static_addresses_without_gateway_are_router_less_too() {
         let facts = [iface(3, true, &["10.0.0.2"], false, None)];
-        assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::RouterLess);
+        assert_eq!(
+            classify_links(&facts, &[], None, &[])[0].1,
+            LinkClass::RouterLess
+        );
     }
 
     #[test]
     fn lan_cleanup_task_dhcp_lease_without_gateway_is_routed() {
         let facts = [iface(3, true, &["192.168.1.7"], false, Some(true))];
-        assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::Routed);
+        assert_eq!(
+            classify_links(&facts, &[], None, &[])[0].1,
+            LinkClass::Routed
+        );
     }
 
     #[test]
     fn lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet() {
         let facts = [iface(4, true, &["192.168.1.7"], true, Some(true))];
-        assert_eq!(classify_links(&facts, &[], None, &[])[0].1, LinkClass::Uplink);
-        assert_eq!(classify_links(&facts, &[], Some(&[4]), &[])[0].1, LinkClass::Uplink);
-        assert_eq!(classify_links(&facts, &[], Some(&[]), &[])[0].1, LinkClass::Routed);
+        assert_eq!(
+            classify_links(&facts, &[], None, &[])[0].1,
+            LinkClass::Uplink
+        );
+        assert_eq!(
+            classify_links(&facts, &[], Some(&[4]), &[])[0].1,
+            LinkClass::Uplink
+        );
+        assert_eq!(
+            classify_links(&facts, &[], Some(&[]), &[])[0].1,
+            LinkClass::Routed
+        );
     }
 
     #[test]
@@ -167,7 +194,10 @@ mod tests {
         // The receiving side got DHCP from the sharing peer: its only gateway
         // is the peer, which must not read as "has own internet".
         let facts = [iface(5, true, &["192.168.137.20"], true, Some(true))];
-        assert_eq!(classify_links(&facts, &[5], None, &[])[0].1, LinkClass::Routed);
+        assert_eq!(
+            classify_links(&facts, &[5], None, &[])[0].1,
+            LinkClass::Routed
+        );
     }
 
     #[test]
@@ -207,7 +237,10 @@ mod tests {
             }
             SocketAddr::V4(_) => panic!("expected v6"),
         }
-        assert_eq!(scoped_v6_candidate("2001:db8::1".parse().unwrap(), 1, 3), "[2001:db8::1]:1");
+        assert_eq!(
+            scoped_v6_candidate("2001:db8::1".parse().unwrap(), 1, 3),
+            "[2001:db8::1]:1"
+        );
         assert_eq!(parse_candidate("10.0.0.1:80").unwrap().port(), 80);
         assert!(parse_candidate("[fe80::1%x]:1").is_none());
         assert!(parse_candidate("nonsense").is_none());

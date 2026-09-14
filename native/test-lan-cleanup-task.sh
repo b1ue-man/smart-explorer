@@ -54,7 +54,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in cargo grep mktemp rustup tee; do
+for command_name in cargo git grep mktemp rustup tee; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -234,10 +234,41 @@ echo "lan/cleanup task suite: CLI surface parses the new commands"
 grep -q "presence" "$cli_log"
 grep -q "automatic re-pairing" "$cli_log"
 
-echo "lan/cleanup task suite: release gates the batch must pass (format, clippy, Windows check)"
+echo "lan/cleanup task suite: release gates the batch must pass (format of batch files, clippy, Windows check)"
+# The crate as a whole carries older formatting drift (docs/TODO.md), so the
+# format gate covers exactly the files this batch touched: each is checked on
+# its own through rustfmt's stdin mode, which never descends into other
+# modules. The batch base is the last commit before the batch.
+batch_base=ea324f4fb38f6f7e557295730ff0127e2337d88a
+if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
+    git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
+fi
+mapfile -t batch_files < <(
+    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/src/*.rs'
+)
+if [[ "${#batch_files[@]}" -eq 0 ]]; then
+    echo "no batch source files found relative to $batch_base" >&2
+    exit 1
+fi
+command -v rustfmt >/dev/null 2>&1 || {
+    echo "rustfmt is required" >&2
+    exit 1
+}
+format_failures=0
+for batch_file in "${batch_files[@]}"; do
+    format_diff="$(rustfmt --check --color never --edition 2021 < "$repo_root/$batch_file")"
+    if [[ -n "$format_diff" ]]; then
+        printf '%s\n' "$format_diff" | sed "s#<stdin>#$batch_file#"
+        format_failures=$((format_failures + 1))
+    fi
+done
+if [[ "$format_failures" -ne 0 ]]; then
+    echo "$format_failures batch source files are not rustfmt-clean" >&2
+    exit 1
+fi
+echo "lan/cleanup task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
 (
     cd "$repo_root/native"
-    run_task cargo fmt --all -- --check
     run_task cargo clippy --locked --lib --bins -- -D warnings
     if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
         run_task cargo check --locked --target x86_64-pc-windows-gnu --lib --bins

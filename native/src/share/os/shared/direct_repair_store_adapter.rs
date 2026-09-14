@@ -5,9 +5,7 @@ use super::direct_reciprocal_store::{
     DirectRepairPersistPhase, DirectRepairPersistRequest, DirectRepairStore,
     DirectRepairStoreError, DirectRepairStoreReceipt,
 };
-use super::direct_reciprocal_wire::{
-    DirectRepairDigest, DirectRepairId, DirectRepairPersisted,
-};
+use super::direct_reciprocal_wire::{DirectRepairDigest, DirectRepairId, DirectRepairPersisted};
 use super::discovery_relation_store::{RelationStore, RelationStoreError};
 use super::removed_direct_peers::PairingOrigin;
 

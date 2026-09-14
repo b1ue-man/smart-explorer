@@ -21,8 +21,8 @@ impl UplinkState {
         if !metadata.file_type().is_file() || metadata.len() > MAX_BYTES {
             return Err("Uplink-Status-Datei ist ungueltig".into());
         }
-        let text =
-            std::fs::read_to_string(&path).map_err(|error| format!("Uplink-Status lesen: {error}"))?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("Uplink-Status lesen: {error}"))?;
         Self::parse(&text)
     }
 

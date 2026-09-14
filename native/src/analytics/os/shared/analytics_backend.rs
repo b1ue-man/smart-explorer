@@ -1,4 +1,6 @@
-use super::{AnalyticsBudget, Diagnostics, Progress, ScanOutcome, SizeNode, MAX_RETAINED_FILES_PER_DIRECTORY};
+use super::{
+    AnalyticsBudget, Diagnostics, Progress, ScanOutcome, SizeNode, MAX_RETAINED_FILES_PER_DIRECTORY,
+};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -112,7 +114,12 @@ pub(super) fn fold_large_directory(
     }
     let (dirs, mut files): (Vec<ChildMeta>, Vec<ChildMeta>) =
         children.into_iter().partition(|child| child.is_dir);
-    files.sort_by(|left, right| right.size.cmp(&left.size).then_with(|| left.name.cmp(&right.name)));
+    files.sort_by(|left, right| {
+        right
+            .size
+            .cmp(&left.size)
+            .then_with(|| left.name.cmp(&right.name))
+    });
     let folded: Vec<ChildMeta> = files.split_off(MAX_RETAINED_FILES_PER_DIRECTORY);
     let folded_size = folded
         .iter()

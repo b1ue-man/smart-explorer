@@ -57,7 +57,9 @@ impl WindowsIcsAdapter {
             Ok(false) => Facility::Unavailable(
                 "Aufgabe 'Smart Explorer LAN-Uplink' fehlt; Einrichtung erneut ausfuehren".into(),
             ),
-            Err(error) => Facility::Unavailable(format!("Aufgabenplanung nicht abfragbar: {error}")),
+            Err(error) => {
+                Facility::Unavailable(format!("Aufgabenplanung nicht abfragbar: {error}"))
+            }
         }
     }
 }
@@ -120,7 +122,9 @@ impl UplinkAdapter for WindowsIcsAdapter {
     }
 }
 
-pub(crate) fn run_helper_if_requested(arguments: &[std::ffi::OsString]) -> Option<std::io::Result<()>> {
+pub(crate) fn run_helper_if_requested(
+    arguments: &[std::ffi::OsString],
+) -> Option<std::io::Result<()>> {
     if arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new(uplink_helper::HELPER_MODE) {
         Some(uplink_helper::run_helper())
     } else {

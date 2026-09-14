@@ -125,7 +125,11 @@ impl ShareProfiles {
     /// The in-memory half of "remove this Direct peer completely". Returns
     /// `None` when no such contact exists (already forgotten). Idempotent, so a
     /// persisted compare-and-swap may replay it.
-    pub fn forget_direct_peer(&mut self, contact_id: &str, now: i64) -> Option<ForgottenDirectPeer> {
+    pub fn forget_direct_peer(
+        &mut self,
+        contact_id: &str,
+        now: i64,
+    ) -> Option<ForgottenDirectPeer> {
         let index = self
             .direct_contacts
             .iter()
@@ -138,7 +142,9 @@ impl ShareProfiles {
             identity: identity.clone(),
             ..ForgottenDirectPeer::default()
         };
-        let device_id = identity.as_ref().map(|identity| identity.device_id.as_str());
+        let device_id = identity
+            .as_ref()
+            .map(|identity| identity.device_id.as_str());
         if let Some(device_id) = device_id {
             let before = self.direct_grants.len();
             self.direct_grants
@@ -263,7 +269,10 @@ mod tests {
         for index in 0..(MAX_REMOVED_DIRECT_PEERS + 5) {
             profiles.record_removed_direct_peer(&identity(&format!("d{index}")), index as i64);
         }
-        assert_eq!(profiles.removed_direct_peers.len(), MAX_REMOVED_DIRECT_PEERS);
+        assert_eq!(
+            profiles.removed_direct_peers.len(),
+            MAX_REMOVED_DIRECT_PEERS
+        );
         assert!(profiles.removed_direct_peer_for_device("d0").is_none());
         assert!(profiles
             .removed_direct_peer_for_device(&format!("d{}", MAX_REMOVED_DIRECT_PEERS + 4))
@@ -287,10 +296,15 @@ mod tests {
         profiles.direct_grants.push(grant("a"));
         profiles.direct_grants.push(grant("b"));
 
-        let outcome = profiles.forget_direct_peer("c1", 50).expect("contact exists");
+        let outcome = profiles
+            .forget_direct_peer("c1", 50)
+            .expect("contact exists");
         assert_eq!(outcome.contact_id, "c1");
         assert_eq!(outcome.grants_removed, 1);
-        assert_eq!(outcome.identity.as_ref().map(|i| i.device_id.as_str()), Some("a"));
+        assert_eq!(
+            outcome.identity.as_ref().map(|i| i.device_id.as_str()),
+            Some("a")
+        );
         assert!(profiles.direct_contacts.iter().all(|c| c.id != "c1"));
         assert!(profiles.direct_grants.iter().all(|g| g.device_id != "a"));
         assert_eq!(profiles.direct_grants.len(), 1);
@@ -306,7 +320,9 @@ mod tests {
         pending.remote_device_id = None;
         pending.access_state = DirectAccessState::Pending;
         profiles.direct_contacts.push(pending);
-        let outcome = profiles.forget_direct_peer("c1", 5).expect("contact exists");
+        let outcome = profiles
+            .forget_direct_peer("c1", 5)
+            .expect("contact exists");
         assert!(outcome.identity.is_none());
         assert!(profiles.removed_direct_peers.is_empty());
         assert!(profiles.direct_contacts.is_empty());

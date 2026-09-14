@@ -8,20 +8,16 @@ use crossbeam_channel::Receiver;
 
 use super::backend::ShareIrohNode;
 use super::core::eio;
-use super::discovery_signal_commands::DiscoverySignalRuntime;
-use super::discovery_signal_offline::{
-    wait_for_connection, wait_offline_backoff, ConnectionWait,
-};
-use super::discovery_signal_port::DiscoveryExchangePort;
 use super::direct_reciprocal_coordinator::{
     DirectReciprocalCoordinator, DirectRepairCompletionReceiver,
 };
+use super::discovery_signal_commands::DiscoverySignalRuntime;
+use super::discovery_signal_offline::{wait_for_connection, wait_offline_backoff, ConnectionWait};
+use super::discovery_signal_port::DiscoveryExchangePort;
 use super::identity::ShareIdentity;
 use super::keepalive::SIGNAL_MAINTENANCE_POLICY;
 use super::profiles::ShareProfiles;
-use super::signal_commands::{
-    run_connected_command, ConnectedCommandRuntime,
-};
+use super::signal_commands::{run_connected_command, ConnectedCommandRuntime};
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_connector::{spawn_connect, NegotiatedSignal};
 use super::signal_presence::build_presence;
@@ -215,7 +211,9 @@ fn run_connected(mut negotiated: NegotiatedSignal, runtime: &mut WorkerRuntime<'
             }
             if outcome.should_reconnect {
                 runtime.discovery.disconnected(runtime.events);
-                let _ = runtime.events.send(ShareEvent::ServerDisconnected("Signaling-Kommando fehlgeschlagen".into()));
+                let _ = runtime.events.send(ShareEvent::ServerDisconnected(
+                    "Signaling-Kommando fehlgeschlagen".into(),
+                ));
                 return false;
             }
             if outcome.should_stop {

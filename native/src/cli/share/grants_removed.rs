@@ -84,11 +84,17 @@ pub(super) fn delete(args: DeleteArgs, json: bool) -> Result<(), String> {
 }
 
 pub(super) fn removed(args: RemovedArgs, json: bool) -> Result<(), String> {
-    if let Some(device_id) = args.readmit.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
-        let (_profiles, change) = crate::share::ShareProfiles::readmit_removed_direct_peer_persisted(
-            Some(super::super::default_home()),
-            device_id,
-        )?;
+    if let Some(device_id) = args
+        .readmit
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        let (_profiles, change) =
+            crate::share::ShareProfiles::readmit_removed_direct_peer_persisted(
+                Some(super::super::default_home()),
+                device_id,
+            )?;
         if !change.changed {
             return Err(format!("removed device not found: {device_id}"));
         }
@@ -150,4 +156,3 @@ pub(super) fn removed(args: RemovedArgs, json: bool) -> Result<(), String> {
     }
     Ok(())
 }
-

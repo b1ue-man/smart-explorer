@@ -2,9 +2,11 @@
 use clap::{Args, Subcommand};
 
 #[derive(Args)]
-#[command(long_about = "Show paired devices found on the local network, the classification of \
+#[command(
+    long_about = "Show paired devices found on the local network, the classification of \
 every network link, and the state of automatic internet sharing. Without a subcommand this \
-prints the status; `presence` and `uplink` change the settings the daemon acts on.")]
+prints the status; `presence` and `uplink` change the settings the daemon acts on."
+)]
 pub(super) struct LanArgs {
     #[arg(long, global = true, help = "Print machine-readable JSON")]
     json: bool,
@@ -36,7 +38,9 @@ struct UplinkArgs {
 
 #[derive(Subcommand)]
 enum UplinkCommand {
-    #[command(about = "Opt in; the daemon runs the one-time platform setup (UAC/polkit) and then shares automatically")]
+    #[command(
+        about = "Opt in; the daemon runs the one-time platform setup (UAC/polkit) and then shares automatically"
+    )]
     Enable,
     #[command(about = "Opt out and stop any active sharing")]
     Disable,
@@ -64,21 +68,39 @@ pub(super) fn run(args: LanArgs) -> Result<(), String> {
                     settings.uplink_stop_requested_at = None;
                 })?;
                 let (worker_state, worker_error) = worker_refresh();
-                print_settings("uplink_enable", &settings, worker_state, worker_error, args.json)
+                print_settings(
+                    "uplink_enable",
+                    &settings,
+                    worker_state,
+                    worker_error,
+                    args.json,
+                )
             }
             UplinkCommand::Disable => {
                 let settings = crate::share::LanSettings::update(|settings| {
                     settings.uplink_sharing_enabled = false;
                 })?;
                 let (worker_state, worker_error) = worker_refresh();
-                print_settings("uplink_disable", &settings, worker_state, worker_error, args.json)
+                print_settings(
+                    "uplink_disable",
+                    &settings,
+                    worker_state,
+                    worker_error,
+                    args.json,
+                )
             }
             UplinkCommand::Stop => {
                 let settings = crate::share::LanSettings::update(|settings| {
                     settings.uplink_stop_requested_at = Some(crate::share::core_now_secs());
                 })?;
                 let (worker_state, worker_error) = worker_refresh();
-                print_settings("uplink_stop", &settings, worker_state, worker_error, args.json)
+                print_settings(
+                    "uplink_stop",
+                    &settings,
+                    worker_state,
+                    worker_error,
+                    args.json,
+                )
             }
             UplinkCommand::Status => status(args.json, true),
         },

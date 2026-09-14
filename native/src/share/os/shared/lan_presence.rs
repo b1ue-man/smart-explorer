@@ -91,7 +91,10 @@ impl LanPresence {
             .announced
             .lock()
             .map_err(|_| "mDNS-Ankuendigung ist gesperrt".to_string())?;
-        if guard.as_ref().is_some_and(|(_, current)| current == announcement) {
+        if guard
+            .as_ref()
+            .is_some_and(|(_, current)| current == announcement)
+        {
             return Ok(());
         }
         if let Some((fullname, _)) = guard.take() {
@@ -188,7 +191,13 @@ fn hostname() -> String {
 fn sanitize(value: &str) -> String {
     let out: String = value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     if out.trim_matches('-').is_empty() {
         "smart-explorer".to_string()

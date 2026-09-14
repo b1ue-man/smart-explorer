@@ -380,11 +380,10 @@ fn authenticated_decision(
             source: LegacyDirectDecisionSource::ExistingGrant,
             install_grant: false,
         },
-        None
-            if matches!(
-                previous,
-                LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
-            ) =>
+        None if matches!(
+            previous,
+            LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
+        ) =>
         {
             AuthenticatedDecision {
                 decision: LegacyDirectDecisionState::Rejected,

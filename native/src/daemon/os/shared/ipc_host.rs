@@ -22,10 +22,10 @@ pub(super) mod legacy_events;
 mod mount_probe;
 #[path = "ipc_host_profile_merge.rs"]
 pub(super) mod profile_merge;
-#[path = "ipc_host_stop.rs"]
-mod stop;
 #[path = "ipc_host_service.rs"]
 mod service_lifecycle;
+#[path = "ipc_host_stop.rs"]
+mod stop;
 #[path = "ipc_host_ui_events.rs"]
 pub(super) mod ui_events;
 
@@ -163,7 +163,10 @@ impl ShareHost {
             };
             (
                 state.profiles.direct_contacts.clone(),
-                state.identity.as_ref().map(|identity| identity.node_id.clone()),
+                state
+                    .identity
+                    .as_ref()
+                    .map(|identity| identity.node_id.clone()),
                 state
                     .service
                     .as_ref()
@@ -225,7 +228,8 @@ impl ShareHost {
             // stale in-memory snapshot. Exec-grant recovery owns the profile
             // while a journal entry is pending, so leave it alone then.
             if matches!(exec_grant_journal::load_pending(), Ok(None)) {
-                if let Ok(profiles) = crate::share::ShareProfiles::load_checked(Some(default_home()))
+                if let Ok(profiles) =
+                    crate::share::ShareProfiles::load_checked(Some(default_home()))
                 {
                     state.profiles = profiles;
                     state.profiles_error = None;
