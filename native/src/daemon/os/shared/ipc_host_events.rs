@@ -7,11 +7,10 @@ impl ShareHost {
             Ok(state) => state,
             Err(_) => return,
         };
-        let events: Vec<_> = state
-            .service
-            .as_ref()
-            .map(|service| service.events.try_iter().collect())
-            .unwrap_or_default();
+        let mut events: Vec<_> = std::mem::take(&mut state.pending_lan_events);
+        if let Some(service) = state.service.as_ref() {
+            events.extend(service.events.try_iter());
+        }
         let retrying_profile_commit = state.pending_profiles_base.is_some();
         let retrying_direct_events = !state.pending_direct_events.is_empty();
         let retrying_legacy_events = !state.pending_legacy_events.is_empty();
@@ -267,6 +266,53 @@ impl ShareHost {
                     }
                 }
                 Event::Discovery(_) => {}
+                Event::LanPeerSeen {
+                    contact_id,
+                    candidates,
+                    uplink,
+                } => {
+                    if let Some(contact) = state
+                        .profiles
+                        .direct_contacts
+                        .iter_mut()
+                        .find(|contact| contact.id == contact_id)
+                    {
+                        contact.lan_candidates = candidates;
+                        contact.lan_seen_at = Some(crate::share::core_now_secs());
+                        contact.lan_uplink = Some(uplink);
+                        contact.last_seen = Some(crate::share::core_now_secs());
+                        if matches!(
+                            contact.status,
+                            crate::share::ShareStatus::Offline | crate::share::ShareStatus::Waiting
+                        ) && contact.access_state == crate::share::DirectAccessState::Accepted
+                        {
+                            contact.status = crate::share::ShareStatus::Available;
+                        }
+                        changed = true;
+                    }
+                }
+                Event::LanPeerLost { contact_id } => {
+                    if let Some(contact) = state
+                        .profiles
+                        .direct_contacts
+                        .iter_mut()
+                        .find(|contact| contact.id == contact_id)
+                    {
+                        contact.lan_candidates.clear();
+                        contact.lan_seen_at = None;
+                        contact.lan_uplink = None;
+                        let server_presence = contact
+                            .presence
+                            .as_ref()
+                            .is_some_and(|presence| presence.is_current_at(crate::share::core_now_secs()));
+                        if !server_presence
+                            && contact.status == crate::share::ShareStatus::Available
+                        {
+                            contact.status = crate::share::ShareStatus::Offline;
+                        }
+                        changed = true;
+                    }
+                }
             }
             if let Some(event) = ui_event {
                 super::ipc_host::ui_events::push(&mut state.ui_events, event);

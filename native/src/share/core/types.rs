@@ -165,6 +165,15 @@ pub struct DirectContact {
     pub accepted_at: Option<i64>,
     #[serde(default)]
     pub accepted_public_key: Option<String>,
+    /// Routing evidence from the local network (mDNS): `ip:port` candidates
+    /// of this peer's Iroh endpoint, valid until `lan_seen_at + TTL`.
+    #[serde(default)]
+    pub lan_candidates: Vec<String>,
+    #[serde(default)]
+    pub lan_seen_at: Option<i64>,
+    /// The peer's own advisory "I have internet" flag from its announcement.
+    #[serde(default)]
+    pub lan_uplink: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -431,6 +440,16 @@ pub enum ShareEvent {
     /// Secret-free notification emitted only after a persisted reciprocal or
     /// discovery exchange has completed its application-level acknowledgement.
     RuntimeProfilesCommitted,
+    /// A paired Direct peer announced itself on the local network.
+    LanPeerSeen {
+        contact_id: String,
+        candidates: Vec<String>,
+        uplink: bool,
+    },
+    /// The peer's announcement disappeared or expired.
+    LanPeerLost {
+        contact_id: String,
+    },
 }
 
 pub(crate) struct PendingShareCmd {

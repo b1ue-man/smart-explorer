@@ -11,7 +11,20 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         .identity
         .clone()
         .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())?;
-    if !share_service_requested(state.suspended, &state.server, state.profiles.auto_connect) {
+    let lan_presence = crate::share::LanSettings::load()
+        .map(|settings| settings.presence_enabled)
+        .unwrap_or(false);
+    let has_direct_peers = state
+        .profiles
+        .direct_contacts
+        .iter()
+        .any(|contact| contact.access_state == crate::share::DirectAccessState::Accepted);
+    if !share_service_requested(
+        state.suspended,
+        &state.server,
+        state.profiles.auto_connect,
+        lan_presence && has_direct_peers,
+    ) {
         if let Some(service) = state.service.take() {
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
@@ -66,8 +79,15 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
     Ok(())
 }
 
-fn share_service_requested(suspended: bool, server: &str, auto_connect: bool) -> bool {
-    !suspended && !server.trim().is_empty() && auto_connect
+/// The service runs for a configured server, or without one when local
+/// presence can still reach accepted Direct peers.
+fn share_service_requested(
+    suspended: bool,
+    server: &str,
+    auto_connect: bool,
+    lan_only_possible: bool,
+) -> bool {
+    !suspended && auto_connect && (!server.trim().is_empty() || lan_only_possible)
 }
 
 pub(in crate::daemon) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
@@ -113,9 +133,16 @@ mod tests {
 
     #[test]
     fn explicit_stop_barrier_blocks_periodic_auto_connect_reload() {
-        assert!(share_service_requested(false, "127.0.0.1:9", true));
-        assert!(!share_service_requested(true, "127.0.0.1:9", true));
-        assert!(!share_service_requested(false, "", true));
-        assert!(!share_service_requested(false, "127.0.0.1:9", false));
+        assert!(share_service_requested(false, "127.0.0.1:9", true, false));
+        assert!(!share_service_requested(true, "127.0.0.1:9", true, false));
+        assert!(!share_service_requested(false, "", true, false));
+        assert!(!share_service_requested(false, "127.0.0.1:9", false, false));
+    }
+
+    #[test]
+    fn lan_only_operation_needs_no_server() {
+        assert!(share_service_requested(false, "", true, true));
+        assert!(!share_service_requested(true, "", true, true));
+        assert!(!share_service_requested(false, "", false, true));
     }
 }

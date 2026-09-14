@@ -112,7 +112,12 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    # `IP_ADAPTER_ADDRESSES_LH` references Ndis/WinSock types; the LAN link
+    # classification (net/os/windows/interfaces.rs) reads it.
+    "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_WNet",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_Security_WinTrust",

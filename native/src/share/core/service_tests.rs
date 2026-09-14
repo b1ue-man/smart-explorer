@@ -62,6 +62,9 @@ fn configure_requires_worker_ack_before_reporting_success() {
         request_sent_at: None,
         accepted_at: None,
         accepted_public_key: None,
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     };
     let room = RoomProfile {
         id: "room-profile-a".into(),
@@ -233,6 +236,9 @@ fn direct_accept_or_reject_requires_signed_owner_presence() {
         request_sent_at: None,
         accepted_at: None,
         accepted_public_key: None,
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     };
     svc.auth.lock().unwrap().direct_contacts = vec![contact];
     let signed = build_presence("direct", "lookup-owner", &owner, &secret, &svc.iroh).unwrap();
@@ -284,6 +290,9 @@ fn presence_binds_node_id_and_relay_url() {
         request_sent_at: None,
         accepted_at: None,
         accepted_public_key: None,
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     };
     svc.auth.lock().unwrap().direct_contacts = vec![contact];
     let presence = build_presence("direct", relation_id, &owner, &secret, &svc.iroh).unwrap();

@@ -164,6 +164,7 @@ impl App {
         self.share_worker_running = snapshot.running;
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
+        self.share_lan_status = snapshot.lan;
         if self
             .share_profiles
             .legacy_direct_requests
@@ -326,6 +327,36 @@ impl App {
                 }
                 E::Discovery(event) => self.apply_share_discovery_event(event),
                 E::RuntimeProfilesCommitted => {}
+                E::LanPeerSeen {
+                    contact_id,
+                    candidates,
+                    uplink,
+                } => {
+                    if let Some(contact) = self
+                        .share_profiles
+                        .direct_contacts
+                        .iter()
+                        .find(|contact| contact.id == contact_id)
+                    {
+                        if contact.auto_open
+                            && contact.access_state == crate::share::DirectAccessState::Accepted
+                            && can_auto_open
+                        {
+                            auto_open_target = Some(crate::share::PeerOpenTarget::Direct {
+                                contact_id: contact.id.clone(),
+                            });
+                        }
+                        self.append_share_diag(format!(
+                            "LAN: {} gesehen ({}; Internet={})\n",
+                            contact.display_name,
+                            candidates.join(", "),
+                            if uplink { "ja" } else { "nein" }
+                        ));
+                    }
+                }
+                E::LanPeerLost { contact_id } => {
+                    self.append_share_diag(format!("LAN: {contact_id} nicht mehr sichtbar\n"));
+                }
                 E::RoomRoster { .. } | E::RoomJoined { .. } | E::RoomLeft { .. } => {}
             }
         }

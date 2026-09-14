@@ -147,6 +147,9 @@ impl ShareProfiles {
             request_sent_at: Some(super::core::now_secs()),
             accepted_at: None,
             accepted_public_key: None,
+            lan_candidates: Vec::new(),
+            lan_seen_at: None,
+            lan_uplink: None,
         });
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));

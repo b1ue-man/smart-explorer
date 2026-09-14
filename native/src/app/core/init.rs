@@ -450,6 +450,8 @@ impl App {
             share_opening: None,
             share_opening_origin: None,
             share_opening_path: None,
+            share_lan_status: crate::share::LanStatus::default(),
+            share_lan_notice: None,
             share_status: String::new(),
             share_worker_running: false,
             share_worker_relay_url: String::new(),

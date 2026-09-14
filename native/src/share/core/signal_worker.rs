@@ -59,6 +59,20 @@ pub(super) fn worker(
         discovery: &mut discovery,
         repair_completions: &repair_completions,
     };
+    // Without a signaling server the worker stays in offline mode: Direct
+    // peers are still reachable through local-network presence, and every
+    // command is acknowledged by the offline runtime.
+    if server.trim().is_empty() {
+        let _ = events.send(ShareEvent::Status(
+            "Kein Share-Server konfiguriert: Direktgeraete nur ueber das lokale Netz".into(),
+        ));
+        while !stopped_flag.load(Ordering::Relaxed) {
+            if wait_offline_backoff(Duration::from_secs(30), &mut runtime) {
+                break;
+            }
+        }
+        return;
+    }
     while !stopped && !stopped_flag.load(Ordering::Relaxed) {
         let connector = match spawn_connect(server.clone(), identity.clone()) {
             Ok(connector) => connector,
