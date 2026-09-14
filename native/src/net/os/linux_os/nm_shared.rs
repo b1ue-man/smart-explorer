@@ -134,16 +134,18 @@ fn find_profiles(connection: &Connection, iface: &str) -> io::Result<Vec<OwnedOb
     let wanted = profile_name(iface);
     let mut found = Vec::new();
     for path in paths {
-        let profile = proxy(connection, path.as_str(), CONNECTION_IFACE)?;
-        let all: HashMap<String, HashMap<String, OwnedValue>> =
-            match profile.call("GetSettings", &()) {
-                Ok(all) => all,
-                Err(_) => continue,
-            };
-        let id = all
-            .get("connection")
-            .and_then(|section| section.get("id"))
-            .and_then(|value| String::try_from(value.clone()).ok());
+        // The proxy borrows the path; finish with it before the path moves.
+        let id = {
+            let profile = proxy(connection, path.as_str(), CONNECTION_IFACE)?;
+            let all: HashMap<String, HashMap<String, OwnedValue>> =
+                match profile.call("GetSettings", &()) {
+                    Ok(all) => all,
+                    Err(_) => continue,
+                };
+            all.get("connection")
+                .and_then(|section| section.get("id"))
+                .and_then(|value| String::try_from(value.clone()).ok())
+        };
         if id.as_deref() == Some(wanted.as_str()) {
             found.push(path);
         }

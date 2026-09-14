@@ -65,6 +65,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
+          # The fix loop reruns this same suite; keep the dependency build
+          # when a candidate fails so only the changed crate is rebuilt.
+          cache-on-failure: true
 
       - name: Run the single task-level suite
         shell: bash
