@@ -25,8 +25,8 @@ mod changes;
 mod core;
 #[path = "os/shared/copy_writer.rs"]
 mod copy_writer;
-#[path = "core/dedupe.rs"]
-mod dedupe;
+#[path = "core/duplicates.rs"]
+mod duplicates;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
 #[path = "core/metadata.rs"]

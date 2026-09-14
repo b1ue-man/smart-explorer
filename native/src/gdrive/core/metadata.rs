@@ -103,7 +103,18 @@ impl GDriveBackend {
             Ok(v) => v,
             Err(_) => return Ok(false),
         };
-        if !super::cache::validation_matches(&v, name, &parent_id) {
+        // A marker segment names the plain object plus an id prefix; the id we
+        // hold must still carry that prefix, and the object must still be a
+        // child of the same parent under its plain name.
+        let matches = match super::duplicates::parse_marker(name) {
+            Some((plain, prefix)) if id.starts_with(prefix) => {
+                super::cache::validation_matches(&v, plain, &parent_id)
+                    || super::cache::validation_matches(&v, name, &parent_id)
+            }
+            Some(_) => super::cache::validation_matches(&v, name, &parent_id),
+            None => super::cache::validation_matches(&v, name, &parent_id),
+        };
+        if !matches {
             return Ok(false);
         }
         if let Some(mime) = v["mimeType"].as_str() {
@@ -113,23 +124,57 @@ impl GDriveBackend {
         Ok(true)
     }
 
+    /// The exact child object for one path segment. Drive allows same-name
+    /// siblings: the plain name selects the canonical sibling (newest, then the
+    /// smaller id, matching `list_dir`), and a `[drive-id <prefix>]` marker
+    /// selects that exact sibling. A literal object carrying a marker-shaped
+    /// name always wins over the marker interpretation.
     pub(super) fn find_child(&self, parent_id: &str, name: &str) -> VfsResult<Option<String>> {
+        let literal = self.same_name_siblings(parent_id, name)?;
+        if let Some(id) = super::duplicates::select_canonical(&literal) {
+            return Ok(Some(id));
+        }
+        let Some((plain, prefix)) = super::duplicates::parse_marker(name) else {
+            return Ok(None);
+        };
+        let siblings = self.same_name_siblings(parent_id, plain)?;
+        super::duplicates::select_by_prefix(&siblings, prefix)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    pub(super) fn same_name_siblings(
+        &self,
+        parent_id: &str,
+        name: &str,
+    ) -> VfsResult<Vec<super::duplicates::Sibling>> {
         let q = format!(
             "'{}' in parents and name = '{}' and trashed = false",
             parent_id,
-            name.replace('\'', "\\'")
+            name.replace('\\', "\\\\").replace('\'', "\\'")
         );
         let url = format!(
-            "{}/files?q={}&fields=files(id,name)&pageSize=1",
+            "{}/files?q={}&fields=files(id,name,modifiedTime)&pageSize=100",
             API,
             cloud_urlenc(&q)
         );
         let v = self.get_json(&url)?;
         Ok(v["files"]
             .as_array()
-            .and_then(|a| a.first())
-            .and_then(|f| f["id"].as_str())
-            .map(|s| s.to_string()))
+            .map(|files| {
+                files
+                    .iter()
+                    .filter(|f| f["name"].as_str() == Some(name))
+                    .filter_map(|f| {
+                        let id = f["id"].as_str()?.to_string();
+                        let mtime_ms = f["modifiedTime"]
+                            .as_str()
+                            .and_then(parse_rfc3339_ms)
+                            .unwrap_or(0);
+                        Some(super::duplicates::Sibling { id, mtime_ms })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     pub(super) fn meta_from_json(
