@@ -45,7 +45,7 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/gates.log"
+        rm -f "$native_log" "$integration_log" "$cli_log" "$suite_tmp/gates.log" "$suite_tmp/analytics.log"
         rmdir "$suite_tmp"
     else
         echo "lan/cleanup task suite diagnostics: $suite_tmp" >&2
@@ -140,6 +140,26 @@ native_tests=(
     lan_cleanup_task_uplink_loss_stop_request_and_disable_stop_sharing
 )
 
+# Storage-analysis hardening: no early stop, exact totals with folded files,
+# unrepresentable/erroring entries recorded instead of aborting.
+analytics_tests=(
+    analytics_access_task_sizes_and_counts
+    analytics_access_task_missing_local_root_is_failed_not_empty_success
+    analytics_access_task_first_entry_error_preserves_readable_sibling
+    analytics_access_task_huge_directory_keeps_exact_totals_with_folded_files
+    analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_directory
+    analytics_access_task_backend_child_error_is_partial_and_root_error_is_failed
+    analytics_access_task_existing_budget_stops_honestly
+    analytics_access_task_diagnostics_keep_denial_identity_when_report_is_full
+    analytics_access_task_cancellation_never_becomes_partial_success
+    analytics_access_task_exact_startup_admission
+    analytics_access_task_report_lists_each_retained_path_and_omissions
+    analytics_access_task_new_scan_resets_prompt_without_canceling_consented_launch
+    analytics_access_task_remote_access_never_requests_local_privileges
+    analytics_access_task_treemap_origin_change_invalidates_geometry
+    analytics_access_task_invalid_startup_cannot_spawn_or_restart_a_scan
+)
+
 # Directly affected integrations: profile schema 8 migration and the worker
 # start condition.
 integration_tests=(
@@ -185,6 +205,13 @@ fi
     run_task cargo test --locked --lib lan_cleanup_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
+
+echo "lan/cleanup task suite: storage-analysis hardening"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --lib analytics_access_task_ -- --test-threads=1
+) 2>&1 | tee "$suite_tmp/analytics.log"
+verify_test_log "$suite_tmp/analytics.log" "${#analytics_tests[@]}" "${analytics_tests[@]}"
 
 echo "lan/cleanup task suite: affected integrations"
 (

@@ -303,6 +303,19 @@ mit Administratorrechten verbleiben; lokale UAC ersetzt keine Remote-Zugangsdate
 Technik und Veröffentlichungsnachweis stehen in
 [docs/ANALYTICS_ACCESS.md](docs/ANALYTICS_ACCESS.md).
 
+**Speicheranalyse bricht nicht mehr vorzeitig ab:** Ein Lesefehler, ein
+verweigerter Ordner, ein Verzeichniseintrag mit nicht darstellbarem Namen
+(NUL/Trennzeichen, reservierte Gerätenamen wie `nul`/`con`), ein Anbieter, der
+mitten in der Auflistung aussteigt, ein interner Fehler in einem Ordner oder
+das frühere feste Knoten-Limit beenden den Scan nicht mehr; sie werden als
+Leseproblem gemeldet, und alles Lesbare wird weiter erfasst. Windows-Pfade
+werden dafür intern in der `\\?\`-Form geöffnet (lange Pfade, reservierte
+Namen), Einträge werden bei Bedarf über die normale Auflistung ohne Dopplung
+nachgeholt, und die Scan-Threads laufen mit großem Stack. Größen und Zähler
+bleiben immer vollständig: sehr große Ordner behalten ihre 4096 größten Dateien
+einzeln und fassen den Rest in einem Eintrag `… N weitere Eintraege` zusammen;
+oberhalb von 6 Mio. Knoten wird nur noch zusammengefasst, nie abgebrochen.
+
 **Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** arbeitet auch
 ohne GUI-Sitzung und nutzt dieselben gespeicherten Verbindungen, App-Daten,
 Zugangsdaten, Share-Profile und den Daemon wie die GUI. Unter Windows liegen

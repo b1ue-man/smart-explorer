@@ -170,8 +170,11 @@ impl App {
         // A bare drive letter ("C:") must become a root ("C:\") or read_dir
         // would target the drive's *current directory* instead of its root.
         let worker_source = source.clone();
+        // Deep trees recurse on this thread when the parallel pool is not
+        // allowed; reserve the same stack the pool workers get.
         let spawn = std::thread::Builder::new()
             .name("storage-analytics".into())
+            .stack_size(crate::analytics::SCAN_THREAD_STACK_BYTES)
             .spawn(move || {
                 let outcome = scan_storage_source(worker_source, &p2);
                 let _ = tx.send(outcome);
@@ -181,6 +184,7 @@ impl App {
         self.analytics_tree = None;
         self.analytics_issues.clear();
         self.analytics_suppressed_issues = 0;
+        self.analytics_notes.clear();
         self.analytics_invalidate();
         match spawn {
             Ok(_) => {
@@ -227,6 +231,13 @@ impl App {
                 self.analytics_tree = outcome.tree;
                 self.analytics_issues = outcome.issues;
                 self.analytics_suppressed_issues = outcome.suppressed_issues;
+                self.analytics_notes = outcome.notes;
+                if outcome.aggregated_files > 0 {
+                    self.analytics_notes.push(format!(
+                        "{} Datei(en) sind nur in den Ordnergroessen enthalten (grosse Ordner werden zusammengefasst).",
+                        outcome.aggregated_files
+                    ));
+                }
                 self.analytics_invalidate();
                 self.log_analytics_outcome();
             }

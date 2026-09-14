@@ -1,4 +1,4 @@
-use super::{AnalyticsBudget, Diagnostics, Progress, ScanOutcome, SizeNode};
+use super::{AnalyticsBudget, Diagnostics, Progress, ScanOutcome, SizeNode, MAX_RETAINED_FILES_PER_DIRECTORY};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -82,22 +82,50 @@ fn collect_children(
         if metadata.is_symlink {
             continue;
         }
+        // Retention is bounded, counting is not: the claim only decides
+        // whether this child keeps an own node.
         let path = child_path(directory, &metadata.name);
-        if !budget.claim(
+        let _ = budget.claim(
             Path::new(&path),
             depth.saturating_add(1),
             path.len().saturating_add(metadata.name.len()) as u64,
             diagnostics,
-        ) {
-            break;
-        }
+        );
         children.push(ChildMeta {
             name: metadata.name,
             is_dir: metadata.is_dir,
             size: metadata.size,
         });
     }
-    Ok(children)
+    Ok(fold_large_directory(children, diagnostics))
+}
+
+/// Keep every directory and the largest files individually; fold the rest of
+/// a huge directory into one aggregate child with the exact remaining size.
+pub(super) fn fold_large_directory(
+    children: Vec<ChildMeta>,
+    diagnostics: &Diagnostics,
+) -> Vec<ChildMeta> {
+    let file_count = children.iter().filter(|child| !child.is_dir).count();
+    if file_count <= MAX_RETAINED_FILES_PER_DIRECTORY {
+        return children;
+    }
+    let (dirs, mut files): (Vec<ChildMeta>, Vec<ChildMeta>) =
+        children.into_iter().partition(|child| child.is_dir);
+    files.sort_by(|left, right| right.size.cmp(&left.size).then_with(|| left.name.cmp(&right.name)));
+    let folded: Vec<ChildMeta> = files.split_off(MAX_RETAINED_FILES_PER_DIRECTORY);
+    let folded_size = folded
+        .iter()
+        .fold(0u64, |total, child| total.saturating_add(child.size));
+    diagnostics.count_aggregated_files(folded.len() as u64);
+    let mut out = dirs;
+    out.extend(files);
+    out.push(ChildMeta {
+        name: format!("… {} weitere Eintraege", folded.len()),
+        is_dir: false,
+        size: folded_size,
+    });
+    out
 }
 
 fn scan_parallel(
@@ -129,7 +157,7 @@ fn scan_parallel(
     let root = normalized(root);
     let mut listings = HashMap::new();
     let mut frontier = vec![(root.clone(), 0u32)];
-    while !frontier.is_empty() && !progress.cancel.load(Ordering::Relaxed) && !budget.stopped() {
+    while !frontier.is_empty() && !progress.cancel.load(Ordering::Relaxed) {
         let level = pool.install(|| {
             frontier
                 .par_iter()
@@ -220,7 +248,17 @@ fn scan_serial(
     depth: u32,
     is_root: bool,
 ) -> SizeNode {
-    if progress.cancel.load(Ordering::Relaxed) || budget.stopped() {
+    if progress.cancel.load(Ordering::Relaxed) || !budget.depth_allowed(depth) {
+        if !progress.cancel.load(Ordering::Relaxed) {
+            diagnostics.record(
+                directory,
+                format!(
+                    "Verzeichnistiefe ueber {} wird nicht weiter erfasst",
+                    budget.max_depth()
+                ),
+                is_root,
+            );
+        }
         return SizeNode {
             name,
             size: 0,
@@ -239,7 +277,7 @@ fn scan_serial(
     let mut size = 0u64;
     let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
     for child in listed {
-        if progress.cancel.load(Ordering::Relaxed) || budget.stopped() {
+        if progress.cancel.load(Ordering::Relaxed) {
             break;
         }
         if child.is_dir {
