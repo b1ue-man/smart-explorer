@@ -226,6 +226,20 @@ Share/HTTP fixtures. The job/entrypoint timeouts are 180/170 minutes. The
 entrypoint records source and binary identity in `approval.json`; use that same
 suite for relevant fix retries. See [COPY_PASTE_REPAIR.md](COPY_PASTE_REPAIR.md).
 
+For the connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing
+batch, use only `native/test-lan-cleanup-task.sh` through the exact-SHA
+`.github/workflows/lan-cleanup-task.yml` Ubuntu dispatch. It runs the
+`lan_cleanup_task_` and `analytics_access_task_` library cases plus four
+directly affected integrations with one build job, checks the new CLI surface,
+and then gates only what the batch changed: rustfmt per changed file (stdin
+mode, never descending into other modules) and clippy for the host and the
+`x86_64-pc-windows-gnu` target (the workflow installs mingw-w64 for `ring`),
+matched against the lines the batch added or changed; a compile error anywhere
+still fails it. The job/step timeouts are 90/80 minutes and the Cargo cache is
+kept on failure so fix reruns rebuild only the crate. Formatting and dead-code
+drift outside the batch stays tracked as [TODO.md](TODO.md) H1 rather than
+failing a feature batch.
+
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.
