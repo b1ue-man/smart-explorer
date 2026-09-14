@@ -58,6 +58,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
             name: "readable.bin".into(),
             kind: EntryKind::File,
             size: 7,
+            unreachable: false,
         }),
     ];
     let tree = scan_entries(
@@ -80,6 +81,97 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
     assert_eq!(&*tree.children[0].name, "readable.bin");
     assert_eq!(progress.files.load(Ordering::Relaxed), 1);
     assert_eq!(progress.bytes.load(Ordering::Relaxed), 7);
+}
+
+#[test]
+fn analytics_access_task_huge_directory_keeps_exact_totals_with_folded_files() {
+    let fixture = tempfile::tempdir().unwrap();
+    let base = fixture.path().join("many");
+    std::fs::create_dir_all(&base).unwrap();
+    let count = MAX_RETAINED_FILES_PER_DIRECTORY + 12;
+    let mut expected = 0u64;
+    for index in 0..count {
+        let size = (index % 7) as u64 + 1;
+        expected += size;
+        std::fs::write(base.join(format!("f{index:05}")), vec![0u8; size as usize]).unwrap();
+    }
+    let p = Progress::default();
+    let outcome = scan(&base, &p);
+    assert_eq!(outcome.status, ScanStatus::Complete, "{:?}", outcome.issues);
+    let root = outcome.tree.unwrap();
+    assert_eq!(root.size, expected, "every file is counted");
+    assert_eq!(p.files.load(Ordering::Relaxed), count as u64);
+    assert_eq!(root.children.len(), MAX_RETAINED_FILES_PER_DIRECTORY + 1);
+    let folded = root
+        .children
+        .iter()
+        .find(|child| child.name.starts_with("…"))
+        .expect("aggregate node for the folded files");
+    assert!(!folded.is_dir);
+    assert_eq!(outcome.aggregated_files, 12);
+    let retained: u64 = root
+        .children
+        .iter()
+        .filter(|child| !child.name.starts_with("…"))
+        .map(|child| child.size)
+        .sum();
+    assert_eq!(retained + folded.size, expected);
+    // The largest files are the ones kept individually.
+    assert!(root
+        .children
+        .iter()
+        .filter(|child| !child.name.starts_with("…"))
+        .all(|child| child.size >= 1));
+}
+
+#[test]
+fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_directory() {
+    let fixture = tempfile::tempdir().unwrap();
+    let progress = Progress::default();
+    let diagnostics = Diagnostics::default();
+    let budget = AnalyticsBudget::default();
+    let traversal = Traversal {
+        progress: &progress,
+        diagnostics: &diagnostics,
+        budget: &budget,
+        parallel: false,
+    };
+    let entries = vec![
+        Ok(LocalEntry {
+            name: "weird\u{fffd}dir".into(),
+            kind: EntryKind::Directory,
+            size: 0,
+            unreachable: true,
+        }),
+        Err(io::Error::new(io::ErrorKind::InvalidData, "Ungueltiger Eintrag")),
+        Ok(LocalEntry {
+            name: "nul\u{fffd}".into(),
+            kind: EntryKind::File,
+            size: 5,
+            unreachable: true,
+        }),
+        Ok(LocalEntry {
+            name: "after.bin".into(),
+            kind: EntryKind::File,
+            size: 9,
+            unreachable: false,
+        }),
+    ];
+    let tree = scan_entries(
+        &traversal,
+        fixture.path(),
+        "root".into(),
+        Ok(entries.into_iter()),
+        0,
+        true,
+    );
+    let outcome = diagnostics.finish(tree, false);
+    assert_eq!(outcome.status, ScanStatus::Partial);
+    assert_eq!(outcome.issues.len(), 2, "{:?}", outcome.issues);
+    let tree = outcome.tree.expect("root stays readable");
+    assert_eq!(tree.size, 14, "unrepresentable files are still counted");
+    assert_eq!(progress.files.load(Ordering::Relaxed), 2);
+    assert!(tree.children.iter().any(|child| &*child.name == "after.bin"));
 }
 
 #[test]

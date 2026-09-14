@@ -44,6 +44,9 @@ pub mod zipfs;
 
 pub fn run_gui() -> eframe::Result<()> {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    // Crash evidence first: the elevated analysis window used to run without
+    // the panic logger, so a failing scan left no trace.
+    install_panic_logger();
     // This exact-purpose UAC route must precede all ordinary GUI side effects.
     match analytics::parse_analysis_startup(&raw_args) {
         Ok(Some(request)) => return app::run_analysis_window(Ok(request)),
@@ -54,7 +57,6 @@ pub fn run_gui() -> eframe::Result<()> {
         result.unwrap_or_else(|error| panic!("remote-exec supervisor failed: {error}"));
         return Ok(());
     }
-    install_panic_logger();
 
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--sync-daemon") {

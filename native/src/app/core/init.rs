@@ -191,6 +191,7 @@ impl App {
             analytics_state: StorageRunState::Idle,
             analytics_issues: Vec::new(),
             analytics_suppressed_issues: 0,
+            analytics_notes: Vec::new(),
             analytics_access: analytics_access::AnalyticsAccess::default(),
             analytics_focus: Vec::new(),
             analytics_scan: None,

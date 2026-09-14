@@ -235,3 +235,40 @@ No local builds or tests were run. Source formatting, static parsing and artifac
 hash comparisons do not execute Rust compilation/linking, test binaries or the
 release wrapper. The analysis access correction is shipped; remaining unrelated
 analytics work stays on the live TODO board.
+
+## Hardening against premature termination (2026-09-14)
+
+Field reports of the storage analysis "crashing" and reporting a fraction of
+the drive, also with administrator rights, had five independent sources in
+the code, none of them permission related:
+
+1. `AnalyticsBudget` stopped the whole scan at 1 000 000 nodes (or 128 MiB of
+   names, or depth 512). A typical Windows system drive exceeds that, so the
+   result was silently truncated and marked partial by one issue line.
+2. `directory_records::decode` rejected any record whose name contained a
+   NUL or separator unit; the enumerator then ended the *entire directory*.
+3. A provider error part-way through `GetFileInformationByHandleEx`
+   continuation, or an undecodable batch header, also ended the directory.
+4. A failing reparse-tag lookup for a child dropped that child.
+5. A panic anywhere below `scan()` propagated out of the Rayon pool and left
+   the GUI with "Scan-Thread wurde ohne Ergebnis beendet"; the elevated
+   analysis window additionally ran without the panic logger, and deep trees
+   recursed on 2 MiB thread stacks.
+
+The scanner now never ends early except on cancellation. The budget only
+bounds *retention*: beyond 6 000 000 nodes or 768 MiB of names files fold into
+one aggregate node per directory (`… N weitere Eintraege`) and directories
+keep exact recursive sizes; every directory keeps at most its 4096 largest
+files individually; depth 2048 is the recursion limit and the scan threads
+reserve 64 MiB stacks. Records with forbidden name units are sanitized, kept
+and counted (`LocalEntry::unreachable` stops only the descent into such a
+directory). A malformed record is skipped by its header offset; an unusable
+header or a mid-way provider failure switches the directory to the ordinary
+listing with duplicate suppression. Unreadable reparse tags classify the entry
+as a plain file or folder. Every directory is scanned under `catch_unwind`;
+a panic becomes one issue for that directory. Windows roots are opened in the
+verbatim `\\?\` form (`os/windows/paths.rs`), so reserved device names,
+trailing dots/spaces and long paths are addressed literally; issue paths are
+shown without the prefix. Informational `notes` (aggregation) are reported
+separately from issues and never make a result partial. The panic logger is
+installed before the elevated-analysis branch.

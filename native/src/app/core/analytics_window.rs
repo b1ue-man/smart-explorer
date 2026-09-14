@@ -83,6 +83,7 @@ impl AnalysisWindow {
         let (tx, rx) = crossbeam_channel::bounded(1);
         match std::thread::Builder::new()
             .name("admin-storage-analytics".into())
+            .stack_size(analytics::SCAN_THREAD_STACK_BYTES)
             .spawn(move || {
                 let outcome = analytics::scan(std::path::Path::new(&root), &progress);
                 let _ = tx.send(outcome);
@@ -162,7 +163,13 @@ impl eframe::App for AnalysisWindow {
                     ScanStatus::Failed => "Analyse fehlgeschlagen; Details unten.",
                     ScanStatus::Canceled => "Analyse abgebrochen.",
                 });
-                issues_ui(ui, &outcome.issues, outcome.suppressed_issues, outcome.permission_denied);
+                issues_ui(
+                    ui,
+                    &outcome.issues,
+                    outcome.suppressed_issues,
+                    outcome.permission_denied,
+                    &outcome.notes,
+                );
                 if outcome.permission_denied > 0 {
                     ui.label("Sicherungsleserechte wurden verwendet. Verbleibende Sperren können vom Dateisystem oder Anbieter erzwungen werden; sie wurden nicht stillschweigend übersprungen.");
                 }

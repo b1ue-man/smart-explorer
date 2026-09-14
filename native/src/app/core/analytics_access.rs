@@ -52,7 +52,20 @@ pub(super) fn issue_report(issues: &[ScanIssue], suppressed: u64, denied: u64) -
     report
 }
 
-pub(super) fn issues_ui(ui: &mut egui::Ui, issues: &[ScanIssue], suppressed: u64, denied: u64) {
+pub(super) fn issues_ui(
+    ui: &mut egui::Ui,
+    issues: &[ScanIssue],
+    suppressed: u64,
+    denied: u64,
+    notes: &[String],
+) {
+    for note in notes {
+        ui.label(
+            egui::RichText::new(note)
+                .small()
+                .color(egui::Color32::from_gray(150)),
+        );
+    }
     if issues.is_empty() && suppressed == 0 {
         return;
     }

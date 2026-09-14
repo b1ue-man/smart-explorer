@@ -242,7 +242,8 @@ impl App {
                         StorageRunState::Running | StorageRunState::Complete => {}
                     }
                     analytics_access::issues_ui(ui, &self.analytics_issues,
-                        self.analytics_suppressed_issues, self.analytics_access.permission_denied);
+                        self.analytics_suppressed_issues, self.analytics_access.permission_denied,
+                        &self.analytics_notes);
                     request_access = analytics_access::access_ui(ui, &self.analytics_access);
                     ui.separator();
 

@@ -44,6 +44,15 @@ pub(super) fn read_directory(
             name: entry.file_name(),
             kind,
             size,
+            unreachable: false,
         })
     }))
+}
+
+pub(super) fn normalize_scan_root(root: &Path) -> std::path::PathBuf {
+    root.to_path_buf()
+}
+
+pub(super) fn display_path(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }

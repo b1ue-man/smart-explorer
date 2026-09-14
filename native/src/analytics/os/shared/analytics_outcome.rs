@@ -73,6 +73,11 @@ pub struct ScanOutcome {
     pub issues: Vec<ScanIssue>,
     pub suppressed_issues: u64,
     pub permission_denied: u64,
+    /// Informational remarks that do not make the result partial (for
+    /// example that a huge directory's files were folded into one node).
+    pub notes: Vec<String>,
+    /// Files counted into their directory's size without an own tree node.
+    pub aggregated_files: u64,
 }
 
 impl ScanOutcome {
@@ -83,6 +88,8 @@ impl ScanOutcome {
             issues: Vec::new(),
             suppressed_issues: 0,
             permission_denied: 0,
+            notes: Vec::new(),
+            aggregated_files: 0,
         }
     }
 
@@ -96,6 +103,8 @@ impl ScanOutcome {
             }],
             suppressed_issues: 0,
             permission_denied: 0,
+            notes: Vec::new(),
+            aggregated_files: 0,
         }
     }
 
@@ -106,9 +115,13 @@ impl ScanOutcome {
             issues: Vec::new(),
             suppressed_issues: 0,
             permission_denied: 0,
+            notes: Vec::new(),
+            aggregated_files: 0,
         }
     }
 }
+
+const MAX_SCAN_NOTES: usize = 16;
 
 #[derive(Default)]
 pub(super) struct Diagnostics {
@@ -116,9 +129,23 @@ pub(super) struct Diagnostics {
     suppressed: AtomicU64,
     root_failed: AtomicBool,
     permission_denied: AtomicU64,
+    notes: Mutex<Vec<String>>,
+    aggregated_files: AtomicU64,
 }
 
 impl Diagnostics {
+    /// An informational remark; never turns a complete result partial.
+    pub(super) fn note(&self, text: impl Into<String>) {
+        let mut notes = self.notes.lock().unwrap_or_else(|p| p.into_inner());
+        if notes.len() < MAX_SCAN_NOTES {
+            notes.push(text.into());
+        }
+    }
+
+    pub(super) fn count_aggregated_files(&self, count: u64) {
+        self.aggregated_files.fetch_add(count, Ordering::Relaxed);
+    }
+
     pub(super) fn record_io(&self, path: impl Into<String>, error: &std::io::Error, is_root: bool) {
         if error.kind() == std::io::ErrorKind::PermissionDenied {
             self.permission_denied.fetch_add(1, Ordering::Relaxed);
@@ -162,6 +189,8 @@ impl Diagnostics {
             issues,
             suppressed_issues,
             permission_denied: self.permission_denied.load(Ordering::Relaxed),
+            notes: self.notes.into_inner().unwrap_or_else(|p| p.into_inner()),
+            aggregated_files: self.aggregated_files.load(Ordering::Relaxed),
         }
     }
 }
