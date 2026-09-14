@@ -25,6 +25,11 @@ enum LifecycleAction {
     RevokeUnlinkedLegacyGrant {
         device_id: String,
     },
+    /// Delete the authorization (and the contact behind it, when one exists)
+    /// completely; the device is denied automatic re-pairing.
+    RemoveDevice {
+        device_id: String,
+    },
     SelectExports,
 }
 
@@ -83,6 +88,8 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
             authorized_card(ui, device, &mut action);
         }
     }
+
+    super::removed_devices_ui::ui(app, ui);
 
     ui.separator();
     crate::app::share_exec_ui::ui_exec_grants(app, ui);
@@ -293,6 +300,22 @@ fn authorized_card(
                 });
             }
         }
+        let remove_label = if device.authorization.starts_with("active") {
+            "Geraet entfernen"
+        } else {
+            "Eintrag loeschen"
+        };
+        if ui
+            .button(remove_label)
+            .on_hover_text(
+                "Loescht Autorisierung, Anfragen und (falls vorhanden) das Direktgeraet vollstaendig. Das Geraet kann sich erst nach einer erneuten bewussten Kopplung wieder verbinden.",
+            )
+            .clicked()
+        {
+            *action = Some(LifecycleAction::RemoveDevice {
+                device_id: device.device_id.clone(),
+            });
+        }
     });
     ui.add_space(4.0);
 }
@@ -348,6 +371,18 @@ fn perform_action(app: &mut App, action: LifecycleAction) {
                     );
                 }
                 Err(error) => app.error_msg = Some(format!("Legacy-Freigabe: {error}")),
+            }
+        }
+        LifecycleAction::RemoveDevice { device_id } => {
+            let contact_id = app
+                .share_profiles
+                .direct_contacts
+                .iter()
+                .find(|contact| contact.remote_device_id.as_deref() == Some(device_id.as_str()))
+                .map(|contact| contact.id.clone());
+            match contact_id {
+                Some(contact_id) => app.remove_direct_peer_completely(&contact_id),
+                None => app.delete_direct_grant_entry(&device_id),
             }
         }
         LifecycleAction::SelectExports => {

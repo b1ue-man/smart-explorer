@@ -165,6 +165,18 @@ impl ShareHost {
             .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
         {
             state.last_reload = Instant::now();
+            // The service keeps its runtime state until the repair finishes,
+            // but the persisted profile is the canonical view handed to the
+            // GUI: a peer the user just removed must not resurface from a
+            // stale in-memory snapshot. Exec-grant recovery owns the profile
+            // while a journal entry is pending, so leave it alone then.
+            if matches!(exec_grant_journal::load_pending(), Ok(None)) {
+                if let Ok(profiles) = crate::share::ShareProfiles::load_checked(Some(default_home()))
+                {
+                    state.profiles = profiles;
+                    state.profiles_error = None;
+                }
+            }
             return Ok(true);
         }
         state.last_reload = Instant::now();

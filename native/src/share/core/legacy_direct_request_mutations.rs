@@ -217,6 +217,37 @@ impl ShareProfiles {
         Ok(true)
     }
 
+    /// Remove every legacy request of a forgotten device regardless of its
+    /// authorization state; the caller has already removed the grant and
+    /// recorded the durable denial. Tombstones are best-effort within the
+    /// bounded ledger. Returns the number of removed requests.
+    pub(super) fn delete_legacy_direct_requests_for_device(
+        &mut self,
+        device_id: &str,
+        now: i64,
+    ) -> usize {
+        self.prune_legacy_tombstones(now);
+        let (matching, keep): (Vec<LegacyDirectRequestEntry>, Vec<LegacyDirectRequestEntry>) =
+            std::mem::take(&mut self.legacy_direct_requests)
+                .into_iter()
+                .partition(|entry| entry.peer.device_id == device_id);
+        self.legacy_direct_requests = keep;
+        let removed = matching.len();
+        for entry in matching {
+            if self.legacy_direct_request_tombstones.len() >= MAX_LEGACY_DIRECT_TOMBSTONES {
+                break;
+            }
+            self.legacy_direct_request_tombstones
+                .push(LegacyDirectRequestTombstone {
+                    selector: entry.selector,
+                    event_id: entry.evidence.event_id,
+                    deleted_at: now,
+                    retain_until: entry.evidence.expires_at.max(now),
+                });
+        }
+        removed
+    }
+
     pub fn legacy_answers_due(&self, now: i64) -> Vec<LegacyDirectAnswer> {
         self.legacy_direct_requests
             .iter()

@@ -325,10 +325,15 @@ fn corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty() {
         ..MemoryStorage::default()
     };
     let migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-    assert_eq!(migrated.schema_version, 7);
+    assert_eq!(migrated.schema_version, 8);
     assert!(migrated.legacy_direct_requests.is_empty());
 
-    storage.raw = Some(r#"{"schema_version":8}"#.into());
+    storage.raw = Some(r#"{"schema_version":7}"#.into());
+    let migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
+    assert_eq!(migrated.schema_version, 8);
+    assert!(migrated.removed_direct_peers.is_empty());
+
+    storage.raw = Some(r#"{"schema_version":9}"#.into());
     assert!(ShareProfiles::load_checked_with(None, &mut storage).is_err());
 }
 

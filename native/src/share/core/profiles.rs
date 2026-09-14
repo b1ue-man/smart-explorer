@@ -7,12 +7,14 @@ use super::direct_request_tombstone::DirectRequestTombstone;
 use super::exec_policy::{reset_all_for_legacy_migration, ExecGrant};
 use super::fs::ShareExportConfig;
 use super::legacy_direct_request::{LegacyDirectRequestEntry, LegacyDirectRequestTombstone};
+use super::removed_direct_peers::RemovedDirectPeer;
 use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
-pub(super) const SHARE_PROFILE_VERSION: u32 = 7;
+pub(super) const SHARE_PROFILE_VERSION: u32 = 8;
+pub(super) const REMOVED_PEERS_PREVIOUS_VERSION: u32 = 7;
 pub(super) const TOMBSTONE_SHARE_PROFILE_VERSION: u32 = 6;
 pub(super) const PREVIOUS_SHARE_PROFILE_VERSION: u32 = 5;
 pub(super) const LEGACY_SHARE_PROFILE_VERSION: u32 = 4;
@@ -54,6 +56,10 @@ pub struct ShareProfiles {
     pub legacy_direct_requests: Vec<LegacyDirectRequestEntry>,
     #[serde(default)]
     pub(crate) legacy_direct_request_tombstones: Vec<LegacyDirectRequestTombstone>,
+    /// Devices the user removed; blocks automatic re-installation until the
+    /// user pairs them again deliberately.
+    #[serde(default)]
+    pub removed_direct_peers: Vec<RemovedDirectPeer>,
     #[serde(default)]
     pub rooms: Vec<RoomProfile>,
 }
@@ -71,6 +77,7 @@ impl Default for ShareProfiles {
             direct_request_tombstones: Vec::new(),
             legacy_direct_requests: Vec::new(),
             legacy_direct_request_tombstones: Vec::new(),
+            removed_direct_peers: Vec::new(),
             rooms: Vec::new(),
         }
     }

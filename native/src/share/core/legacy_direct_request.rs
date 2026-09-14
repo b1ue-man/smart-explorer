@@ -230,11 +230,13 @@ impl ShareProfiles {
             .legacy_direct_request_tombstones
             .iter()
             .any(|tombstone| tombstone.selector == selector);
+        let removed_peer = self.removed_direct_peer(peer).is_some();
         ignored_grant
             || ignored_contact
             || tracked_tombstone
             || user_denial
             || legacy_tombstone
+            || removed_peer
     }
 }
 

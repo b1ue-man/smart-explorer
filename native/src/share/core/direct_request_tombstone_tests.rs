@@ -250,7 +250,7 @@ fn v5_profile_migration_preserves_exec_and_defaults_tombstones_empty() {
     let mut storage = V5Storage(Some(serde_json::to_string(&value).unwrap()), false);
 
     let migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-    assert_eq!(migrated.schema_version, 7);
+    assert_eq!(migrated.schema_version, 8);
     assert!(migrated.direct_grants[0].exec.enabled);
     assert!(migrated.direct_request_tombstones.is_empty());
 }

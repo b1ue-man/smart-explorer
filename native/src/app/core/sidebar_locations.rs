@@ -84,14 +84,7 @@ impl App {
             let mut unstar: Option<String> = None;
             for f in &favs {
                 ui.horizontal(|ui| {
-                    let label = {
-                        let base = f.trim_end_matches('/').rsplit('/').next().unwrap_or(f);
-                        if base.is_empty() {
-                            f.as_str()
-                        } else {
-                            base
-                        }
-                    };
+                    let label = self.location_label(f);
                     if ui
                         .selectable_label(self.location_key(&self.root_path) == *f, label)
                         .on_hover_text(f)

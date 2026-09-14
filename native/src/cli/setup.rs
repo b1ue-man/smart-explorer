@@ -107,17 +107,38 @@ pub(crate) fn remove_peer(selector: Option<&str>) -> Result<String, String> {
             ));
         }
     };
-    let (_committed, change) = crate::share::ShareProfiles::remove_direct_contact_persisted(
-        Some(default_home()),
-        &contact.id,
-    )
-    .map_err(|error| format!("remove peer {}: {error}", contact.id))?;
+    let (_committed, change, forgotten) =
+        crate::share::ShareProfiles::forget_direct_peer_persisted(
+            Some(default_home()),
+            &contact.id,
+        )
+        .map_err(|error| format!("remove peer {}: {error}", contact.id))?;
+    let cleanup = crate::app::cleanup_removed_endpoint_state(
+        &crate::app::RemovedEndpointScope::for_direct_contact(&contact.id),
+    );
     if let Some(warning) = change.cleanup_warning {
         return Err(format!("removed peer {}, but {warning}", contact.id));
     }
+    let details = forgotten
+        .map(|peer| {
+            format!(
+                "; grants={} requests={} legacy={}{}",
+                peer.grants_removed,
+                peer.requests_removed,
+                peer.legacy_requests_removed,
+                if peer.identity.is_some() {
+                    "; automatic re-pairing blocked until paired again"
+                } else {
+                    ""
+                }
+            )
+        })
+        .unwrap_or_default();
     Ok(format!(
-        "Removed peer {}{}",
+        "Removed peer {}{}{}{}",
         contact.id,
+        details,
+        cleanup.summary_suffix(),
         worker_refresh_suffix()
     ))
 }

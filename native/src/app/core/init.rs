@@ -449,6 +449,7 @@ impl App {
             share_open_rx: None,
             share_opening: None,
             share_opening_origin: None,
+            share_opening_path: None,
             share_status: String::new(),
             share_worker_running: false,
             share_worker_relay_url: String::new(),

@@ -5,6 +5,7 @@ mod exchange_port_state;
 use exchange_port_state::{ExchangeState, PreparedOfferState, UsedIdTracker};
 
 use super::direct_reciprocal::DirectReciprocalPeer;
+use super::removed_direct_peers::PairingOrigin;
 use super::discovery_bundle::{ConnectorApplicationBundle, PublisherApplicationBundle};
 use super::discovery_domain::{DiscoveryId, DiscoveryOfferBinding, ExchangeId, OfferId, PairingBundle};
 use super::discovery_pake::{ConnectorAwaitingKe2, PublisherOffer};
@@ -128,7 +129,7 @@ impl DiscoveryExchangePortImpl {
                 let commit = match application {
                     PublisherApplicationBundle::Direct(peer) => self
                         .relation_store
-                        .persist_direct(&peer)
+                        .persist_direct(&peer, PairingOrigin::UserPairing)
                         .map_err(persistence_error)?,
                     PublisherApplicationBundle::Room(offer) => self
                         .relation_store
@@ -185,7 +186,7 @@ impl DiscoveryExchangePortImpl {
                             .map_err(protocol_error)?;
                         let commit = self
                             .relation_store
-                            .persist_direct(&peer)
+                            .persist_direct(&peer, PairingOrigin::UserPairing)
                             .map_err(persistence_error)?;
                         let completion = commit.outcome().clone();
                         Ok((

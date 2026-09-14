@@ -215,7 +215,7 @@ impl App {
             ));
         }
         for path in favorites.iter().take(8) {
-            let label = landing_basename(path);
+            let label = self.location_label(path);
             tiles.push(LandingTile::action(
                 label,
                 path,

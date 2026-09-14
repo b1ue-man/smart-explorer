@@ -1,5 +1,6 @@
 use super::core::random_token;
 use super::profile_persistence::ProfileChange;
+use super::removed_direct_peers::ForgottenDirectPeer;
 use super::profile_store::{
     credential_matches, delete_credential_verified, prepare_unique_credential, SecretString,
 };
@@ -160,27 +161,21 @@ impl ShareProfiles {
         Ok((profiles, outcome))
     }
 
-    pub fn remove_direct_contact_persisted(
+    /// Remove a Direct peer completely: contact, relation secret, the peer's
+    /// grant, every request of that device, and a durable denial of automatic
+    /// re-installation (see `removed_direct_peers`). Replays safely under the
+    /// compare-and-swap; an already removed contact reports `changed = false`.
+    pub fn forget_direct_peer_persisted(
         default_home: Option<String>,
         contact_id: &str,
-    ) -> Result<(Self, ProfileChange), String> {
-        let mut changed = false;
+    ) -> Result<(Self, ProfileChange, Option<ForgottenDirectPeer>), String> {
+        let now = super::core::now_secs();
+        let mut forgotten = None;
         let profiles = Self::mutate_persisted(default_home, |profiles| {
-            if profiles
-                .direct_contacts
-                .iter()
-                .any(|contact| contact.id == contact_id)
-            {
-                changed = true;
-                profiles
-                    .direct_contacts
-                    .retain(|contact| contact.id != contact_id);
-                profiles
-                    .direct_requests
-                    .retain(|request| request.contact_id.as_deref() != Some(contact_id));
-            }
+            forgotten = profiles.forget_direct_peer(contact_id, now);
             Ok(())
         })?;
+        let changed = forgotten.is_some();
         let cleanup_warning = changed
             .then(|| delete_credential_verified(&direct_contact_secret_account(contact_id)))
             .and_then(Result::err)
@@ -190,6 +185,47 @@ impl ShareProfiles {
             ProfileChange {
                 changed,
                 cleanup_warning,
+            },
+            forgotten,
+        ))
+    }
+
+    /// Delete a leftover authorization (active or inactive) for `device_id`
+    /// together with its requests, denying automatic re-installation.
+    pub fn delete_direct_grant_persisted(
+        default_home: Option<String>,
+        device_id: &str,
+    ) -> Result<(Self, ProfileChange), String> {
+        let now = super::core::now_secs();
+        let mut changed = false;
+        let profiles = Self::mutate_persisted(default_home, |profiles| {
+            changed = profiles.delete_direct_grant(device_id, now);
+            Ok(())
+        })?;
+        Ok((
+            profiles,
+            ProfileChange {
+                changed,
+                cleanup_warning: None,
+            },
+        ))
+    }
+
+    /// Lift the denial for a removed device so it may pair automatically again.
+    pub fn readmit_removed_direct_peer_persisted(
+        default_home: Option<String>,
+        device_id: &str,
+    ) -> Result<(Self, ProfileChange), String> {
+        let mut changed = false;
+        let profiles = Self::mutate_persisted(default_home, |profiles| {
+            changed = profiles.readmit_removed_direct_peer(device_id);
+            Ok(())
+        })?;
+        Ok((
+            profiles,
+            ProfileChange {
+                changed,
+                cleanup_warning: None,
             },
         ))
     }

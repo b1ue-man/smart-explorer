@@ -7,6 +7,7 @@ use super::direct_reciprocal::{
     DirectReciprocalApply, DirectReciprocalError, DirectReciprocalPeer, DirectRelationMaterial,
 };
 use super::profiles::ShareProfiles;
+use super::removed_direct_peers::PairingOrigin;
 use super::room_relation::{
     canonical_room_display_name, RoomRelationMaterial, RoomRelationOffer, RoomRelationSnapshot,
 };
@@ -105,6 +106,7 @@ pub trait RelationStore: Send {
     fn persist_direct(
         &mut self,
         peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError>;
 
     fn persist_room(
@@ -175,6 +177,7 @@ impl RelationStore for UnavailableRelationStore {
     fn persist_direct(
         &mut self,
         _peer: &DirectReciprocalPeer,
+        _origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError> {
         Err(RelationStoreError::Unavailable(self.reason.clone()))
     }
@@ -314,11 +317,12 @@ impl RelationStore for InMemoryRelationStore {
     fn persist_direct(
         &mut self,
         peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError> {
         let generated_id = self.next_available_id("direct")?;
         let mut candidate = self.profiles.clone();
         let applied = candidate
-            .apply_reciprocal_direct_peer(peer, &generated_id, super::core::now_secs())
+            .apply_reciprocal_direct_peer(peer, &generated_id, super::core::now_secs(), origin)
             .map_err(map_direct_domain_error)?;
         let (contact_id, changed) = match applied {
             DirectReciprocalApply::Changed { contact_id } => (contact_id, true),

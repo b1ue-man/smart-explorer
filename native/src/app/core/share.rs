@@ -17,6 +17,12 @@ mod poll_status;
 mod profile_cache;
 #[path = "share_profile_edits.rs"]
 mod profile_edits;
+#[path = "share_navigation.rs"]
+mod navigation;
+#[path = "share_removal_ui.rs"]
+mod removal_ui;
+#[path = "share_removed_devices_ui.rs"]
+mod removed_devices_ui;
 #[path = "share_lifecycle_view.rs"]
 mod share_lifecycle_view;
 
@@ -681,23 +687,7 @@ impl App {
         }
         let persisted = !changed || self.commit_share_profiles(previous_profiles);
         if let Some(id) = remove.filter(|_| persisted) {
-            match crate::share::ShareProfiles::remove_direct_contact_persisted(
-                Some(dirs_home().to_string_lossy().replace('\\', "/")),
-                &id,
-            ) {
-                Ok((profiles, change)) => {
-                    self.share_profiles = profiles;
-                    if let Some(warning) = change.cleanup_warning {
-                        self.error_msg = Some(warning);
-                    }
-                    if change.changed {
-                        let _ = self.configure_share_service();
-                    }
-                }
-                Err(error) => {
-                    self.error_msg = Some(format!("Direktgeraet nicht entfernt: {error}"));
-                }
-            }
+            self.remove_direct_peer_completely(&id);
         }
         if let Some(contact_id) = request_direct.filter(|_| persisted) {
             let _ = lifecycle_ui::queue_contact(self, &contact_id);
@@ -920,21 +910,7 @@ impl App {
             let _ = self.share_cmd(crate::share::ShareCmd::LeaveRoom { room_id });
         }
         if let Some(id) = remove_room.filter(|_| persisted) {
-            match crate::share::ShareProfiles::remove_room_persisted(
-                Some(dirs_home().to_string_lossy().replace('\\', "/")),
-                &id,
-            ) {
-                Ok((profiles, change)) => {
-                    self.share_profiles = profiles;
-                    if let Some(warning) = change.cleanup_warning {
-                        self.error_msg = Some(warning);
-                    }
-                    if change.changed {
-                        let _ = self.configure_share_service();
-                    }
-                }
-                Err(error) => self.error_msg = Some(format!("Raum nicht entfernt: {error}")),
-            }
+            self.remove_room_completely(&id);
         }
         if let Some(target) = open_target {
             self.open_share_target(target);

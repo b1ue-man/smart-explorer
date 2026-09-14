@@ -9,6 +9,7 @@ use super::direct_reciprocal_wire::{
     DirectRepairDigest, DirectRepairId, DirectRepairPersisted,
 };
 use super::discovery_relation_store::{RelationStore, RelationStoreError};
+use super::removed_direct_peers::PairingOrigin;
 
 const DEFAULT_REPLAY_CAPACITY: usize = 1_024;
 
@@ -120,7 +121,7 @@ where
 
         let commit = self
             .relation_store
-            .persist_direct(request.peer())
+            .persist_direct(request.peer(), PairingOrigin::AutomaticRepair)
             .map_err(map_relation_store_error)?;
         let persisted = if commit.changed() {
             DirectRepairPersisted::Changed

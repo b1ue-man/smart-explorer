@@ -111,6 +111,12 @@ impl App {
     /// Navigate to a favourite/location: a remote endpoint URL re-opens its
     /// connection at that path; a local path scans directly.
     pub(in crate::app) fn navigate_to_location(&mut self, loc: &str) {
+        // Share peers are ID-addressed (`share://direct/<id>/path`): they open
+        // through the Share worker, never through a saved-connection lookup.
+        if let Some((target, path)) = crate::share::PeerOpenTarget::from_endpoint(loc) {
+            self.open_share_target_at(target, Some(path));
+            return;
+        }
         if crate::connect::is_remote_url(loc) {
             if let Some((c, path)) = crate::connect::saved_and_path(loc) {
                 self.connect_saved_at(&c, &path);

@@ -353,20 +353,7 @@ impl App {
                 .request_repaint_after(std::time::Duration::from_millis(200));
         }
         if let Some(acc) = to_remove {
-            match crate::creds::remove_connection(&acc) {
-                Ok(()) => {
-                    self.saved_connections = crate::creds::load_connections();
-                    self.notice = Some((
-                        "Gespeicherte Verbindung entfernt".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                }
-                Err(error) => {
-                    self.error_msg = Some(format!(
-                        "Gespeicherte Verbindung konnte nicht entfernt werden: {error}"
-                    ));
-                }
-            }
+            self.remove_saved_connection_completely(&acc);
         }
         if let Some(c) = to_connect {
             self.connect_saved(&c);
