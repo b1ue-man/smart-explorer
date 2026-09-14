@@ -36,6 +36,11 @@ mod clipboard_upload;
 mod copy_paste_task_tests;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
+#[path = "core/connection_cleanup.rs"]
+mod connection_cleanup;
+pub use connection_cleanup::{
+    cleanup_removed_endpoint_state, CleanupReport, RemovedEndpointScope,
+};
 #[path = "core/connection_state.rs"]
 mod connection_state;
 #[path = "core/copy_dialog.rs"]
@@ -80,6 +85,8 @@ mod job_editor_ui;
 mod job_editor_validation;
 #[path = "core/landing.rs"]
 mod landing;
+#[path = "core/location_labels.rs"]
+mod location_labels;
 #[path = "core/landing_tiles.rs"]
 mod landing_tiles;
 #[path = "core/menus_settings.rs"]

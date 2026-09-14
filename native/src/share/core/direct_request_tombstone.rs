@@ -206,6 +206,53 @@ impl ShareProfiles {
         Ok(Some(true))
     }
 
+    /// Remove every tracked request of a forgotten peer: outgoing requests
+    /// bound to `contact_id` and, when the device is known, every request in
+    /// either direction naming that device. Tombstones are written while the
+    /// bounded ledger has room; the removed-peer record carries the durable
+    /// denial, so a full ledger only costs replay hints. Returns
+    /// `(requests removed, tombstones skipped)`.
+    pub(super) fn delete_direct_requests_for_forgotten_peer(
+        &mut self,
+        contact_id: &str,
+        device_id: Option<&str>,
+        now: i64,
+    ) -> (usize, usize) {
+        let now = now.max(0);
+        self.prune_direct_request_tombstones(now);
+        let (matching, keep): (Vec<DirectRequestEntry>, Vec<DirectRequestEntry>) =
+            std::mem::take(&mut self.direct_requests)
+                .into_iter()
+                .partition(|entry| {
+                    (!contact_id.is_empty() && entry.contact_id.as_deref() == Some(contact_id))
+                        || device_id.is_some_and(|device_id| {
+                            let request = &entry.record.request;
+                            match entry.direction {
+                                DirectRequestDirection::Incoming => {
+                                    request.requester.device_id == device_id
+                                }
+                                DirectRequestDirection::Outgoing => {
+                                    request.target.device_id == device_id
+                                }
+                            }
+                        })
+                });
+        self.direct_requests = keep;
+        let mut skipped = 0usize;
+        let removed = matching.len();
+        for entry in matching {
+            match tombstone_for(&entry, now) {
+                Ok(tombstone)
+                    if self.direct_request_tombstones.len() < MAX_DIRECT_REQUEST_TOMBSTONES =>
+                {
+                    self.direct_request_tombstones.push(tombstone);
+                }
+                _ => skipped += 1,
+            }
+        }
+        (removed, skipped)
+    }
+
     pub(crate) fn prune_direct_request_tombstones(&mut self, now: i64) -> usize {
         let before = self.direct_request_tombstones.len();
         self.direct_request_tombstones

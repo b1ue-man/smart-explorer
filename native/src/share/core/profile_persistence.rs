@@ -3,7 +3,8 @@ use super::fs::SharedRoot;
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
     ShareProfiles, LEGACY_SHARE_PROFILE_VERSION, OLDEST_SHARE_PROFILE_VERSION,
-    PREVIOUS_SHARE_PROFILE_VERSION, SHARE_PROFILE_VERSION, TOMBSTONE_SHARE_PROFILE_VERSION,
+    PREVIOUS_SHARE_PROFILE_VERSION, REMOVED_PEERS_PREVIOUS_VERSION, SHARE_PROFILE_VERSION,
+    TOMBSTONE_SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -36,7 +37,9 @@ impl ShareProfiles {
         profiles.storage_revision = revision;
         match profiles.schema_version {
             SHARE_PROFILE_VERSION => {}
-            TOMBSTONE_SHARE_PROFILE_VERSION | PREVIOUS_SHARE_PROFILE_VERSION => {
+            REMOVED_PEERS_PREVIOUS_VERSION
+            | TOMBSTONE_SHARE_PROFILE_VERSION
+            | PREVIOUS_SHARE_PROFILE_VERSION => {
                 profiles.schema_version = SHARE_PROFILE_VERSION;
             }
             OLDEST_SHARE_PROFILE_VERSION | LEGACY_SHARE_PROFILE_VERSION => {
@@ -170,20 +173,13 @@ impl ShareProfiles {
         contact_id: &str,
         storage: &mut impl ProfilePersistence,
     ) -> Result<ProfileChange, String> {
-        if !self
-            .direct_contacts
-            .iter()
-            .any(|contact| contact.id == contact_id)
+        let mut candidate = self.clone();
+        if candidate
+            .forget_direct_peer(contact_id, super::core::now_secs())
+            .is_none()
         {
             return Ok(ProfileChange::default());
         }
-        let mut candidate = self.clone();
-        candidate
-            .direct_contacts
-            .retain(|contact| contact.id != contact_id);
-        candidate
-            .direct_requests
-            .retain(|request| request.contact_id.as_deref() != Some(contact_id));
         candidate.save_with(storage)?;
         *self = candidate;
         let cleanup_warning = storage

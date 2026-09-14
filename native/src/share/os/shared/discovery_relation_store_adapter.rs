@@ -9,6 +9,7 @@ use super::discovery_relation_store::{
     RelationStoreError,
 };
 use super::profiles::ShareProfiles;
+use super::removed_direct_peers::PairingOrigin;
 use super::room_relation::{RoomRelationMaterial, RoomRelationOffer, RoomRelationSnapshot};
 
 pub struct SystemRelationStore {
@@ -54,8 +55,9 @@ impl RelationStore for SystemRelationStore {
     fn persist_direct(
         &mut self,
         peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError> {
-        let result = persist_reciprocal_direct_peer(self.default_home.clone(), peer)
+        let result = persist_reciprocal_direct_peer(self.default_home.clone(), peer, origin)
             .map_err(map_direct_error)?;
         let changed = result.outcome().changed();
         let contact_id = result.outcome().contact_id().to_string();

@@ -9,6 +9,7 @@ use super::profile_store::{
     credential_matches, delete_credential_verified, prepare_unique_credential, SecretString,
 };
 use super::profiles::{direct_contact_secret_account, ShareProfiles};
+use super::removed_direct_peers::PairingOrigin;
 
 const MAX_RELATION_REBASES: usize = 8;
 const TRANSACTION_ABORTED: &str = "reciprocal Direct profile precondition failed";
@@ -138,6 +139,7 @@ impl Drop for PreparedCredential {
 pub fn persist_reciprocal_direct_peer(
     default_home: Option<String>,
     peer: &DirectReciprocalPeer,
+    origin: PairingOrigin,
 ) -> Result<DirectReciprocalPersistenceResult, DirectReciprocalPersistenceError> {
     let generated_contact_id = random_token(10).map_err(|error| {
         DirectReciprocalPersistenceError::Persistence(format!(
@@ -152,8 +154,9 @@ pub fn persist_reciprocal_direct_peer(
     for _ in 0..MAX_RELATION_REBASES {
         let preview = ShareProfiles::load_checked(default_home.clone())
             .map_err(DirectReciprocalPersistenceError::Persistence)?;
-        let preview_outcome = evaluate_candidate(&preview, peer, &generated_contact_id, now)
-            .map_err(map_domain_error)?;
+        let preview_outcome =
+            evaluate_candidate(&preview, peer, &generated_contact_id, now, origin)
+                .map_err(map_domain_error)?;
         let preview_contact_id = apply_contact_id(&preview_outcome);
 
         if preview_contact_id == generated_contact_id {
@@ -175,7 +178,7 @@ pub fn persist_reciprocal_direct_peer(
         };
         let transaction = ShareProfiles::mutate_persisted(default_home.clone(), |profiles| {
             let candidate_outcome =
-                match evaluate_candidate(profiles, peer, &generated_contact_id, now) {
+                match evaluate_candidate(profiles, peer, &generated_contact_id, now, origin) {
                     Ok(outcome) => outcome,
                     Err(error) => {
                         abort = Some(TransactionAbort::Domain(error));
@@ -198,7 +201,8 @@ pub fn persist_reciprocal_direct_peer(
                 return Err(TRANSACTION_ABORTED.to_string());
             }
             let mut candidate = profiles.clone();
-            match candidate.apply_reciprocal_direct_peer(peer, &generated_contact_id, now) {
+            match candidate.apply_reciprocal_direct_peer(peer, &generated_contact_id, now, origin)
+            {
                 Ok(outcome) => {
                     *profiles = candidate;
                     applied = outcome;
@@ -258,9 +262,10 @@ fn evaluate_candidate(
     peer: &DirectReciprocalPeer,
     generated_contact_id: &str,
     now: i64,
+    origin: PairingOrigin,
 ) -> Result<DirectReciprocalApply, DirectReciprocalError> {
     let mut candidate = profiles.clone();
-    candidate.apply_reciprocal_direct_peer(peer, generated_contact_id, now)
+    candidate.apply_reciprocal_direct_peer(peer, generated_contact_id, now, origin)
 }
 
 fn require_matching_credential(

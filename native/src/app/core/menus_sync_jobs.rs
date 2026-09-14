@@ -47,6 +47,11 @@ impl App {
         let mut toggle_id: Option<String> = None;
         let mut new_blank = false;
         let jobs = self.sync_jobs.clone();
+        let orphaned: std::collections::HashSet<String> = jobs
+            .iter()
+            .filter(|job| self.sync_job_is_orphaned(job))
+            .map(|job| job.id.clone())
+            .collect();
         let results = crate::syncjobs::load_results();
         egui::Window::new("⚙ Sync-Setups")
             .open(&mut open)
@@ -80,6 +85,10 @@ impl App {
                                 ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
                                 if !j.enabled {
                                     ui.colored_label(Color32::from_gray(130), "⏸ deaktiviert");
+                                }
+                                if orphaned.contains(&j.id) {
+                                    ui.colored_label(Color32::from_rgb(255, 185, 120), "⚠ verwaist")
+                                        .on_hover_text("Die Verbindung dieses Setups wurde entfernt. Das Setup bleibt erhalten, kann aber erst nach einer neuen Verbindung wieder laufen.");
                                 }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.small_button("✕").on_hover_text("Setup löschen").clicked() {

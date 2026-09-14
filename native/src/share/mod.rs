@@ -229,6 +229,8 @@ mod profile_persistence;
 mod profile_store;
 #[path = "core/profiles.rs"]
 mod profiles;
+#[path = "core/removed_direct_peers.rs"]
+mod removed_direct_peers;
 #[path = "core/room_relation.rs"]
 mod room_relation;
 #[cfg(test)]
@@ -358,6 +360,9 @@ pub use self::legacy_direct_request::{
     LegacyDirectRequestEntry, MAX_LEGACY_DIRECT_REQUESTS, MAX_LEGACY_PRESENCE_FUTURE_SECS,
 };
 pub use self::profile_persistence::ProfileChange;
+pub use self::removed_direct_peers::{
+    ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
+};
 pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
 pub use self::service::ShareService;

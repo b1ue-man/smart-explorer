@@ -2,6 +2,7 @@ use std::fmt;
 
 use super::direct_protocol::{validate_direct_lookup_id, DirectPeerIdentity, DirectProtocolError};
 use super::profiles::{DirectCode, ShareProfiles};
+use super::removed_direct_peers::PairingOrigin;
 use super::types::{DirectAccessState, DirectContact, DirectGrant, DirectGrantState};
 
 /// The Direct-code material which is durable for one reciprocal relationship.
@@ -124,6 +125,8 @@ pub enum DirectReciprocalConflict {
 pub enum DirectReciprocalPolicyDenied {
     ContactIgnored { device_id: String },
     GrantIgnored { device_id: String },
+    /// The user removed this device; only a deliberate pairing readmits it.
+    PeerRemoved { device_id: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +176,12 @@ impl fmt::Display for DirectReciprocalError {
                     "Direct grant is explicitly ignored for device {device_id}"
                 )
             }
+            Self::PolicyDenied(DirectReciprocalPolicyDenied::PeerRemoved { device_id }) => {
+                write!(
+                    formatter,
+                    "Direct peer {device_id} was removed by the user; pair it again deliberately"
+                )
+            }
         }
     }
 }
@@ -194,9 +203,26 @@ impl ShareProfiles {
         peer: &DirectReciprocalPeer,
         new_contact_id: &str,
         now: i64,
+        origin: PairingOrigin,
     ) -> Result<DirectReciprocalApply, DirectReciprocalError> {
         let identity = peer.identity();
         let material = peer.material();
+        // A removed device stays out until the user pairs it again; the
+        // background repair never overrides that decision.
+        if self.removed_direct_peer(identity).is_some() {
+            match origin {
+                PairingOrigin::AutomaticRepair => {
+                    return Err(DirectReciprocalError::PolicyDenied(
+                        DirectReciprocalPolicyDenied::PeerRemoved {
+                            device_id: identity.device_id.clone(),
+                        },
+                    ));
+                }
+                PairingOrigin::UserPairing => {
+                    self.readmit_removed_direct_peer(&identity.device_id);
+                }
+            }
+        }
         let contact_index = self.reciprocal_contact_index(peer)?;
         let contact_id = match contact_index {
             Some(index) => self.direct_contacts[index].id.clone(),

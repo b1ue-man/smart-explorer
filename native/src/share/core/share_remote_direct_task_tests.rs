@@ -1,3 +1,4 @@
+use super::removed_direct_peers::PairingOrigin;
 use super::core::{hmac_proof, presence_payload, public_fingerprint};
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_reciprocal::{
@@ -31,10 +32,10 @@ fn share_remote_task_reciprocal_direct_fresh_autoaccepts_both_sides() {
     let mut profiles_b = ShareProfiles::default();
 
     let applied_a = profiles_a
-        .apply_reciprocal_direct_peer(&peer_b, "contact-b", 100)
+        .apply_reciprocal_direct_peer(&peer_b, "contact-b", 100, PairingOrigin::UserPairing)
         .unwrap();
     let applied_b = profiles_b
-        .apply_reciprocal_direct_peer(&peer_a, "contact-a", 100)
+        .apply_reciprocal_direct_peer(&peer_a, "contact-a", 100, PairingOrigin::UserPairing)
         .unwrap();
     assert_eq!(
         applied_a,
@@ -53,12 +54,55 @@ fn share_remote_task_reciprocal_direct_fresh_autoaccepts_both_sides() {
 
     assert_eq!(
         profiles_a
-            .apply_reciprocal_direct_peer(&peer_b, "unused", 200)
+            .apply_reciprocal_direct_peer(&peer_b, "unused", 200, PairingOrigin::UserPairing)
             .unwrap(),
         DirectReciprocalApply::AlreadyComplete {
             contact_id: "contact-b".into()
         }
     );
+}
+
+#[test]
+fn share_remote_task_removed_peer_blocks_automatic_repair_until_user_pairs_again() {
+    let peer_b = reciprocal_peer(3, "device-b", "Device B", "lookup-b", 13);
+    let mut profiles = ShareProfiles::default();
+    profiles
+        .apply_reciprocal_direct_peer(&peer_b, "contact-b", 100, PairingOrigin::UserPairing)
+        .unwrap();
+    assert_complete_relation(&profiles, &peer_b, "contact-b");
+
+    // Removing the contact deletes the grant and records the denial.
+    let forgotten = profiles.forget_direct_peer("contact-b", 150).expect("contact exists");
+    assert_eq!(forgotten.grants_removed, 1);
+    assert!(profiles.direct_contacts.is_empty());
+    assert!(profiles.direct_grants.is_empty());
+    assert!(profiles.removed_direct_peer(peer_b.identity()).is_some());
+    assert!(profiles.direct_auto_accept_denied("lookup-local", peer_b.identity()));
+
+    // The peer's background repair is refused without changing the profile.
+    let denied = profiles
+        .apply_reciprocal_direct_peer(&peer_b, "contact-again", 200, PairingOrigin::AutomaticRepair)
+        .unwrap_err();
+    assert_eq!(
+        denied,
+        DirectReciprocalError::PolicyDenied(DirectReciprocalPolicyDenied::PeerRemoved {
+            device_id: "device-b".into()
+        })
+    );
+    assert!(profiles.direct_contacts.is_empty());
+
+    // A deliberate pairing readmits the device and installs the relation.
+    let applied = profiles
+        .apply_reciprocal_direct_peer(&peer_b, "contact-again", 300, PairingOrigin::UserPairing)
+        .unwrap();
+    assert_eq!(
+        applied,
+        DirectReciprocalApply::Changed {
+            contact_id: "contact-again".into()
+        }
+    );
+    assert!(profiles.removed_direct_peer(peer_b.identity()).is_none());
+    assert_complete_relation(&profiles, &peer_b, "contact-again");
 }
 
 #[test]
@@ -106,7 +150,7 @@ fn share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_
         DirectGrantState::Ignored,
     ));
     assert_eq!(
-        denied_profiles.apply_reciprocal_direct_peer(&remote, "denied", 100),
+        denied_profiles.apply_reciprocal_direct_peer(&remote, "denied", 100, PairingOrigin::UserPairing),
         Err(DirectReciprocalError::PolicyDenied(
             DirectReciprocalPolicyDenied::GrantIgnored {
                 device_id: "remote".into()
@@ -118,10 +162,10 @@ fn share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_
     let replacement = reciprocal_peer(6, "same-device", "Replacement", "new-lookup", 6);
     let mut profiles = ShareProfiles::default();
     profiles
-        .apply_reciprocal_direct_peer(&trusted, "trusted", 100)
+        .apply_reciprocal_direct_peer(&trusted, "trusted", 100, PairingOrigin::UserPairing)
         .unwrap();
     assert_eq!(
-        profiles.apply_reciprocal_direct_peer(&replacement, "replacement", 101),
+        profiles.apply_reciprocal_direct_peer(&replacement, "replacement", 101, PairingOrigin::UserPairing),
         Err(DirectReciprocalError::Conflict(
             DirectReciprocalConflict::ContactIdentity {
                 device_id: "same-device".into()

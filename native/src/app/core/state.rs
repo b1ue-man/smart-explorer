@@ -460,6 +460,9 @@ pub struct App {
     pub(in crate::app) share_open_rx: Option<ShareOpenRx>,
     pub(in crate::app) share_opening: Option<crate::share::PeerOpenTarget>,
     pub(in crate::app) share_opening_origin: Option<String>,
+    /// Folder to open once the pending Share connection is ready (favourites
+    /// re-open a peer at their exact path instead of `/`).
+    pub(in crate::app) share_opening_path: Option<String>,
     pub(in crate::app) share_status: String,
     pub(in crate::app) share_worker_running: bool,
     pub(in crate::app) share_worker_relay_url: String,

@@ -54,7 +54,12 @@ impl App {
                         self.net_conn = None;
                         self.notice =
                             Some((format!("Verbunden: {}", label), std::time::Instant::now()));
-                        self.start_scan(PathBuf::from("/"));
+                        let start = self
+                            .share_opening_path
+                            .take()
+                            .filter(|path| !path.trim().is_empty())
+                            .unwrap_or_else(|| "/".to_string());
+                        self.start_scan(PathBuf::from(start));
                     } else {
                         self.notice = Some((
                             format!("Bereits verbunden: {}", label),
@@ -75,6 +80,7 @@ impl App {
             self.share_open_rx = None;
             self.share_opening = None;
             self.share_opening_origin = None;
+            self.share_opening_path = None;
         }
 
         let mut poll_result = None;

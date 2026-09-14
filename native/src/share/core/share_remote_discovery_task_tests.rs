@@ -1,3 +1,4 @@
+use super::removed_direct_peers::PairingOrigin;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -223,13 +224,13 @@ fn share_remote_task_discovery_persists_direct_and_room_relations_idempotently()
     );
 
     let mut store = InMemoryRelationStore::default();
-    let first = store.persist_direct(&peer).unwrap();
+    let first = store.persist_direct(&peer, PairingOrigin::UserPairing).unwrap();
     assert!(first.changed());
     assert!(matches!(
         first.outcome(),
         DiscoveryRelationOutcome::DirectInstalled { .. }
     ));
-    let second = store.persist_direct(&peer).unwrap();
+    let second = store.persist_direct(&peer, PairingOrigin::UserPairing).unwrap();
     assert!(!second.changed());
     assert_eq!(store.profiles().direct_contacts.len(), 1);
     assert_eq!(
