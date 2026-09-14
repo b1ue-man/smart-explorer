@@ -72,11 +72,13 @@ pub fn classify_links(
     facts
         .iter()
         .map(|iface| {
+            // A link this host shares its uplink on keeps the router-less
+            // class although ICS/NetworkManager gave it a gateway address.
+            let router_less = shared_ifaces.contains(&iface.index)
+                || (!iface.has_gateway && iface.dhcp_lease != Some(true));
             let class = if !iface.up || iface.loopback {
                 LinkClass::Inactive
-            } else if shared_ifaces.contains(&iface.index) {
-                LinkClass::RouterLess
-            } else if !iface.has_gateway && iface.dhcp_lease != Some(true) {
+            } else if router_less {
                 LinkClass::RouterLess
             } else if iface.has_gateway
                 && !peer_ifaces.contains(&iface.index)
