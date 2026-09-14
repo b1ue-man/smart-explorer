@@ -39,9 +39,8 @@ fn current_user() -> io::Result<String> {
 }
 
 pub(crate) fn pkexec_available() -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join("pkexec").is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("pkexec").is_file()))
 }
 
 /// Install the rule through one `pkexec` prompt.

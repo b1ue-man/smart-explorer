@@ -32,7 +32,12 @@ const BUFFER_WORDS: usize = 8192;
 const MAX_BUFFER_WORDS: usize = 8192 * 16;
 const NAME_SURROGATE: u32 = 0x2000_0000;
 
-pub(in crate::analytics::os) struct Directory {
+/// The information-class query behind every batch; tests substitute a
+/// provider that fails part-way.
+type Query<'a> =
+    Box<dyn FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a>;
+
+pub(in crate::analytics::os) struct Directory<'a> {
     path: PathBuf,
     file: File,
     buffer: Vec<u64>,
@@ -45,6 +50,7 @@ pub(in crate::analytics::os) struct Directory {
     /// ordinary listing does not repeat them.
     yielded: HashSet<OsString>,
     dedupe: bool,
+    query: Query<'a>,
 }
 
 fn open(path: &Path, access: u32) -> io::Result<File> {
@@ -97,19 +103,19 @@ fn enumeration_ended(error: &io::Error) -> bool {
     )
 }
 
-pub(in crate::analytics::os) fn read_directory(path: &Path) -> io::Result<Directory> {
+pub(in crate::analytics::os) fn read_directory(path: &Path) -> io::Result<Directory<'static>> {
     read_directory_with_layout(path, Layout::Extended)
 }
 
-fn read_directory_with_layout(path: &Path, layout: Layout) -> io::Result<Directory> {
+fn read_directory_with_layout(path: &Path, layout: Layout) -> io::Result<Directory<'static>> {
     read_directory_with_query(path, layout, query_directory)
 }
 
-fn read_directory_with_query(
+fn read_directory_with_query<'a>(
     path: &Path,
     layout: Layout,
-    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()>,
-) -> io::Result<Directory> {
+    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a,
+) -> io::Result<Directory<'a>> {
     let file = open(path, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)?;
     // The attribute probe is advisory: a provider that cannot answer it still
     // gets to enumerate, and a non-directory shows up as an enumeration error.
@@ -135,10 +141,11 @@ fn read_directory_with_query(
         fallback: None,
         yielded: HashSet::new(),
         dedupe: false,
+        query: Box::new(query),
     };
     // Establish the listing here so callers can distinguish a failed root
     // from an individual entry that fails after enumeration has begun.
-    if !directory.refill_with(query)? {
+    if !directory.refill()? {
         directory.ended = true;
     }
     Ok(directory)
@@ -163,15 +170,8 @@ fn query_directory(
     Ok(())
 }
 
-impl Directory {
+impl Directory<'_> {
     fn refill(&mut self) -> io::Result<bool> {
-        self.refill_with(query_directory)
-    }
-
-    fn refill_with(
-        &mut self,
-        mut query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()>,
-    ) -> io::Result<bool> {
         loop {
             self.buffer.fill(0);
             let class = match (self.layout, self.started) {
@@ -180,7 +180,7 @@ impl Directory {
                 (Layout::Full, false) => FileFullDirectoryRestartInfo,
                 (Layout::Full, true) => FileFullDirectoryInfo,
             };
-            let error = match query(&self.file, class, &mut self.buffer) {
+            let error = match (self.query)(&self.file, class, &mut self.buffer) {
                 Ok(()) => {
                     self.started = true;
                     self.cursor = Some(0);
@@ -283,7 +283,10 @@ impl Directory {
             };
             let record = match directory_records::decode(bytes, offset, self.layout) {
                 Ok(record) => record,
-                Err(directory_records::DecodeError { next: Some(next), error }) => {
+                Err(directory_records::DecodeError {
+                    next: Some(next),
+                    error,
+                }) => {
                     // One malformed record is skipped, not the directory.
                     self.cursor = Some(next);
                     return Err(io::Error::new(
@@ -353,7 +356,7 @@ fn kind(attributes: u32, tag: u32) -> EntryKind {
     }
 }
 
-impl Iterator for Directory {
+impl Iterator for Directory<'_> {
     type Item = io::Result<LocalEntry>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.ended {

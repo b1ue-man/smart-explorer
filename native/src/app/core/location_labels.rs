@@ -62,9 +62,7 @@ impl App {
                     && connection.port == port
             });
             return Some(match saved {
-                Some(connection) if !connection.label.trim().is_empty() => {
-                    connection.label.clone()
-                }
+                Some(connection) if !connection.label.trim().is_empty() => connection.label.clone(),
                 _ if user.is_empty() => host,
                 _ => format!("{user}@{host}"),
             });
@@ -119,9 +117,10 @@ impl App {
             return false;
         }
         match crate::connect::parse_remote_url(key) {
-            Some((proto, user, host, port, _)) => !self.saved_connections.iter().any(|c| {
-                c.protocol == proto && c.user == user && c.host == host && c.port == port
-            }),
+            Some((proto, user, host, port, _)) => !self
+                .saved_connections
+                .iter()
+                .any(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port),
             None => false,
         }
     }

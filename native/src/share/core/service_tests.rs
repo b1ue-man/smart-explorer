@@ -333,8 +333,7 @@ pub(super) fn test_service() -> ShareService {
     }));
     let iroh = ShareIrohNode::start("127.0.0.1:0", &identity, auth.clone(), ev_tx).unwrap();
     let reciprocal = Arc::new(DirectReciprocalCoordinator::detached_for_task_test(0));
-    iroh.install_direct_repair_coordinator(&reciprocal)
-        .unwrap();
+    iroh.install_direct_repair_coordinator(&reciprocal).unwrap();
     ShareService {
         events: ev_rx,
         cmds: cmd_tx,

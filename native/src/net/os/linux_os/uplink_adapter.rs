@@ -43,9 +43,8 @@ impl NetworkManagerAdapter {
 }
 
 fn dnsmasq_available() -> bool {
-    let from_path = std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join("dnsmasq").is_file())
-    });
+    let from_path = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("dnsmasq").is_file()));
     from_path
         || ["/usr/sbin/dnsmasq", "/sbin/dnsmasq", "/usr/bin/dnsmasq"]
             .iter()
@@ -54,9 +53,7 @@ fn dnsmasq_available() -> bool {
 
 impl UplinkAdapter for NetworkManagerAdapter {
     fn probe(&mut self, _setup_done: bool) -> Facility {
-        let fresh = self
-            .probed_at
-            .is_some_and(|at| at.elapsed() < PROBE_CACHE);
+        let fresh = self.probed_at.is_some_and(|at| at.elapsed() < PROBE_CACHE);
         if !fresh {
             self.facility = Self::probe_now();
             self.probed_at = Some(Instant::now());
@@ -80,12 +77,14 @@ impl UplinkAdapter for NetworkManagerAdapter {
 
     fn enable(&mut self, private: &UplinkTarget, _public: &UplinkTarget) -> Result<(), String> {
         let connection = nm_shared::connect().map_err(|error| error.to_string())?;
-        nm_shared::enable_shared(&connection, &private.adapter_id).map_err(|error| error.to_string())
+        nm_shared::enable_shared(&connection, &private.adapter_id)
+            .map_err(|error| error.to_string())
     }
 
     fn disable(&mut self, private: &UplinkTarget, _public: &UplinkTarget) -> Result<(), String> {
         let connection = nm_shared::connect().map_err(|error| error.to_string())?;
-        nm_shared::disable_shared(&connection, &private.adapter_id).map_err(|error| error.to_string())
+        nm_shared::disable_shared(&connection, &private.adapter_id)
+            .map_err(|error| error.to_string())
     }
 
     fn sharing_active(&mut self, private: &UplinkTarget) -> Result<Option<bool>, String> {

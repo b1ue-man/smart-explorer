@@ -7,22 +7,22 @@ mod drain;
 mod helpers;
 #[path = "share_identity_rotation.rs"]
 mod identity_rotation;
+#[path = "share_lan_ui.rs"]
+mod lan_ui;
+#[path = "share_lan_uplink_ui.rs"]
+mod lan_uplink_ui;
 #[path = "share_legacy_lifecycle_ui.rs"]
 mod legacy_lifecycle_ui;
 #[path = "share_lifecycle_ui.rs"]
 mod lifecycle_ui;
+#[path = "share_navigation.rs"]
+mod navigation;
 #[path = "share_poll_status.rs"]
 mod poll_status;
 #[path = "share_profile_cache.rs"]
 mod profile_cache;
 #[path = "share_profile_edits.rs"]
 mod profile_edits;
-#[path = "share_lan_ui.rs"]
-mod lan_ui;
-#[path = "share_lan_uplink_ui.rs"]
-mod lan_uplink_ui;
-#[path = "share_navigation.rs"]
-mod navigation;
 #[path = "share_removal_ui.rs"]
 mod removal_ui;
 #[path = "share_removed_devices_ui.rs"]

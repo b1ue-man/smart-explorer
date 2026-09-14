@@ -301,10 +301,9 @@ impl ShareHost {
                         contact.lan_candidates.clear();
                         contact.lan_seen_at = None;
                         contact.lan_uplink = None;
-                        let server_presence = contact
-                            .presence
-                            .as_ref()
-                            .is_some_and(|presence| presence.is_current_at(crate::share::core_now_secs()));
+                        let server_presence = contact.presence.as_ref().is_some_and(|presence| {
+                            presence.is_current_at(crate::share::core_now_secs())
+                        });
                         if !server_presence
                             && contact.status == crate::share::ShareStatus::Available
                         {
@@ -319,11 +318,7 @@ impl ShareHost {
             }
         }
         let canonical_reloaded = if runtime_profiles_committed {
-            match reload_committed_profiles(
-                &mut state,
-                &previous_profiles,
-                changed,
-            ) {
+            match reload_committed_profiles(&mut state, &previous_profiles, changed) {
                 Ok(()) => true,
                 Err(error) => {
                     state.profiles_error = Some(error.clone());

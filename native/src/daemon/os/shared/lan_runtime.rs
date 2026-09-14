@@ -254,7 +254,9 @@ impl LanRuntime {
         let Some(presence) = &self.presence else {
             return;
         };
-        let own = presence.announced().map(|announcement| announcement.hashed_id);
+        let own = presence
+            .announced()
+            .map(|announcement| announcement.hashed_id);
         let drained: Vec<LanEvent> = presence.events().try_iter().collect();
         for event in drained {
             match event {
@@ -302,12 +304,12 @@ impl LanRuntime {
         self.reported_hashes = seen_hashes;
         let mut events = Vec::new();
         for (contact_id, (candidates, uplink)) in &seen_now {
-            let unchanged = self
-                .reported
-                .get(contact_id)
-                .is_some_and(|(previous, previous_uplink)| {
-                    previous == candidates && previous_uplink == uplink
-                });
+            let unchanged =
+                self.reported
+                    .get(contact_id)
+                    .is_some_and(|(previous, previous_uplink)| {
+                        previous == candidates && previous_uplink == uplink
+                    });
             let stale = contacts
                 .iter()
                 .find(|contact| &contact.id == contact_id)

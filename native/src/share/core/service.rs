@@ -6,13 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::backend::{PeerBackend, ShareIrohNode};
+use super::core::{eio, now_secs};
 use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::direct_reciprocal_transport::shared_direct_repair_store;
 use super::direct_repair_store_adapter::DirectRepairRelationStoreAdapter;
 use super::discovery_exchange_port_impl::DiscoveryExchangePortImpl;
 use super::discovery_relation_store_adapter::SystemRelationStore;
 use super::discovery_signal_port::direct_peer_from_identity;
-use super::core::{eio, now_secs};
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
 use super::types::{
@@ -226,13 +226,13 @@ impl ShareService {
                 // dialable as soon as either source is current.
                 let presence = super::lan_presence_match::effective_presence(contact, now_secs())
                     .ok_or_else(|| {
-                        if contact.presence.is_some() || contact.lan_seen_at.is_some() {
-                            "Direktgeraet ist nicht online (gespeicherte Presence ist abgelaufen)"
-                                .to_string()
-                        } else {
-                            "Direktgeraet ist nicht online".to_string()
-                        }
-                    })?;
+                    if contact.presence.is_some() || contact.lan_seen_at.is_some() {
+                        "Direktgeraet ist nicht online (gespeicherte Presence ist abgelaufen)"
+                            .to_string()
+                    } else {
+                        "Direktgeraet ist nicht online".to_string()
+                    }
+                })?;
                 let secret = ShareProfiles::direct_secret_checked(contact)?
                     .ok_or_else(|| "Direkt-Secret fehlt".to_string())?;
                 let expected_node_id = if contact.expected_node_id.trim().is_empty() {

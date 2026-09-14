@@ -48,7 +48,10 @@ pub(crate) fn connectivity_full(connection: &Connection) -> io::Result<bool> {
     Ok(level == NM_CONNECTIVITY_FULL)
 }
 
-pub(crate) fn device_path(connection: &Connection, iface: &str) -> io::Result<Option<OwnedObjectPath>> {
+pub(crate) fn device_path(
+    connection: &Connection,
+    iface: &str,
+) -> io::Result<Option<OwnedObjectPath>> {
     match manager(connection)?.call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &(iface,)) {
         Ok(path) => Ok(Some(path)),
         Err(error) => {
@@ -74,7 +77,10 @@ pub(crate) fn dhcp_lease(connection: &Connection, iface: &str) -> io::Result<Opt
 }
 
 /// The active connection profile id on `iface`, if any.
-pub(crate) fn active_profile_id(connection: &Connection, iface: &str) -> io::Result<Option<String>> {
+pub(crate) fn active_profile_id(
+    connection: &Connection,
+    iface: &str,
+) -> io::Result<Option<String>> {
     let Some(path) = device_path(connection, iface)? else {
         return Ok(None);
     };
@@ -156,7 +162,10 @@ fn find_profiles(connection: &Connection, iface: &str) -> io::Result<Vec<OwnedOb
 /// Create (or reuse) the shared profile for `iface` and activate it.
 pub(crate) fn enable_shared(connection: &Connection, iface: &str) -> io::Result<()> {
     if !crate::net::valid_adapter_id(iface) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Schnittstellenname ungueltig"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Schnittstellenname ungueltig",
+        ));
     }
     let device = device_path(connection, iface)?
         .ok_or_else(|| eio(format!("NetworkManager kennt {iface} nicht")))?;
@@ -195,7 +204,10 @@ pub(crate) fn enable_shared(connection: &Connection, iface: &str) -> io::Result<
 /// normal (autoconnect) configuration.
 pub(crate) fn disable_shared(connection: &Connection, iface: &str) -> io::Result<()> {
     if !crate::net::valid_adapter_id(iface) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Schnittstellenname ungueltig"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Schnittstellenname ungueltig",
+        ));
     }
     let mut first_error = None;
     for path in find_profiles(connection, iface)? {

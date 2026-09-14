@@ -1,51 +1,50 @@
 #[cfg(windows)]
-#[path = "os/windows.rs"]
-mod platform;
-#[cfg(target_os = "linux")]
-#[path = "os/linux_os.rs"]
-mod platform;
-#[cfg(windows)]
 #[path = "os/windows/interfaces.rs"]
 mod interfaces;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/interfaces.rs"]
 mod interfaces;
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod platform;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os.rs"]
+mod platform;
 
 #[cfg(windows)]
 #[path = "os/windows/ics.rs"]
 mod ics;
-#[cfg(windows)]
-#[path = "os/windows/uplink_helper.rs"]
-mod uplink_helper;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/nm_shared.rs"]
+mod nm_shared;
 #[cfg(windows)]
 #[path = "os/windows/uplink_adapter.rs"]
 mod uplink_adapter;
 #[cfg(target_os = "linux")]
-#[path = "os/linux_os/nm_shared.rs"]
-mod nm_shared;
+#[path = "os/linux_os/uplink_adapter.rs"]
+mod uplink_adapter;
+#[cfg(windows)]
+#[path = "os/windows/uplink_helper.rs"]
+mod uplink_helper;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/uplink_polkit.rs"]
 mod uplink_polkit;
-#[cfg(target_os = "linux")]
-#[path = "os/linux_os/uplink_adapter.rs"]
-mod uplink_adapter;
 #[path = "os/shared/uplink_state_store.rs"]
 mod uplink_state_store;
 
 #[path = "core/backend.rs"]
 mod backend;
-#[path = "core/link_facts.rs"]
-mod link_facts;
 #[path = "core/net.rs"]
 mod imp;
+#[path = "core/link_facts.rs"]
+mod link_facts;
 #[path = "core/uplink.rs"]
 mod uplink;
 
 pub use backend::UncBackend;
 pub use imp::*;
 pub use link_facts::{
-    classify_links, is_link_local, parse_candidate, scoped_v6_candidate, InterfaceFacts,
-    LinkClass,
+    classify_links, is_link_local, parse_candidate, scoped_v6_candidate, InterfaceFacts, LinkClass,
 };
 pub use uplink::{
     valid_adapter_id, Facility, SharingRecord, UnsupportedAdapter, UplinkAdapter, UplinkState,

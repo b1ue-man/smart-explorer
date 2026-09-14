@@ -58,7 +58,13 @@ fn response_path() -> PathBuf {
 fn powershell(args: &[&str]) -> io::Result<std::process::Output> {
     use std::os::windows::process::CommandExt;
     std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ])
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -132,11 +138,18 @@ pub(crate) fn setup_once() -> io::Result<String> {
 }
 
 /// Hand one operation to the elevated task and wait for its answer.
-pub(crate) fn run_via_task(op: HelperOp, public: &UplinkTarget, private: &UplinkTarget) -> io::Result<()> {
+pub(crate) fn run_via_task(
+    op: HelperOp,
+    public: &UplinkTarget,
+    private: &UplinkTarget,
+) -> io::Result<()> {
     if !crate::net::valid_adapter_id(&public.adapter_id)
         || !crate::net::valid_adapter_id(&private.adapter_id)
     {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Adapter-GUID ist ungueltig"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Adapter-GUID ist ungueltig",
+        ));
     }
     std::fs::create_dir_all(directory())?;
     let nonce = format!(
@@ -221,9 +234,14 @@ fn validate_and_apply(request: &HelperRequest) -> io::Result<String> {
     }
     if !crate::net::valid_adapter_id(&request.public_guid)
         || !crate::net::valid_adapter_id(&request.private_guid)
-        || request.public_guid.eq_ignore_ascii_case(&request.private_guid)
+        || request
+            .public_guid
+            .eq_ignore_ascii_case(&request.private_guid)
     {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Adapter-GUIDs sind ungueltig"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Adapter-GUIDs sind ungueltig",
+        ));
     }
     let settings = crate::share::LanSettings::load().map_err(io::Error::other)?;
     match request.op {

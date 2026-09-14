@@ -71,7 +71,11 @@ impl Backend for GDriveBackend {
             let Some(id) = entry.id.as_deref().filter(|id| !id.is_empty()) else {
                 continue;
             };
-            self.remember_path(&child_path(&entry.name), id, mimes.get(id).map(String::as_str))?;
+            self.remember_path(
+                &child_path(&entry.name),
+                id,
+                mimes.get(id).map(String::as_str),
+            )?;
         }
         // Folder creation can use this complete snapshot to skip a redundant
         // lookup. File uploads still re-probe because Drive names are not unique.
@@ -156,9 +160,12 @@ impl Backend for GDriveBackend {
     }
 
     fn read_size(&self, path: &str, metadata_size: u64) -> VfsResult<Option<u64>> {
-        let mime = self.mime_of(path).ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidData, "Drive read type could not be determined",
-        ))?;
+        let mime = self.mime_of(path).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Drive read type could not be determined",
+            )
+        })?;
         Ok(export_format(&mime).is_none().then_some(metadata_size))
     }
 

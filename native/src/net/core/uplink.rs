@@ -127,7 +127,8 @@ impl UplinkState {
     }
 
     pub fn encode(&self) -> Result<String, String> {
-        serde_json::to_string_pretty(self).map_err(|error| format!("Uplink-Status kodieren: {error}"))
+        serde_json::to_string_pretty(self)
+            .map_err(|error| format!("Uplink-Status kodieren: {error}"))
     }
 }
 
@@ -139,11 +140,11 @@ pub fn valid_adapter_id(id: &str) -> bool {
     if trimmed.is_empty() || trimmed.len() > 64 {
         return false;
     }
-    if let Some(inner) = trimmed.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) {
-        return inner.len() == 36
-            && inner
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c == '-');
+    if let Some(inner) = trimmed
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    {
+        return inner.len() == 36 && inner.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
     }
     trimmed
         .chars()

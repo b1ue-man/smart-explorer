@@ -12,16 +12,18 @@ pub(crate) fn gather_interface_facts() -> Result<Vec<InterfaceFacts>, String> {
     let gateways = gateway_interfaces();
     let mut facts: BTreeMap<String, InterfaceFacts> = BTreeMap::new();
     for iface in interfaces {
-        let entry = facts.entry(iface.name.clone()).or_insert_with(|| InterfaceFacts {
-            name: iface.name.clone(),
-            adapter_id: iface.name.clone(),
-            index: iface.index.unwrap_or(0),
-            up: operstate_up(&iface.name),
-            loopback: iface.is_loopback(),
-            addrs: Vec::new(),
-            has_gateway: gateways.iter().any(|gateway| gateway == &iface.name),
-            dhcp_lease: dhcp_lease_hint(&iface.name, iface.index),
-        });
+        let entry = facts
+            .entry(iface.name.clone())
+            .or_insert_with(|| InterfaceFacts {
+                name: iface.name.clone(),
+                adapter_id: iface.name.clone(),
+                index: iface.index.unwrap_or(0),
+                up: operstate_up(&iface.name),
+                loopback: iface.is_loopback(),
+                addrs: Vec::new(),
+                has_gateway: gateways.iter().any(|gateway| gateway == &iface.name),
+                dhcp_lease: dhcp_lease_hint(&iface.name, iface.index),
+            });
         let ip = iface.ip();
         if !entry.addrs.contains(&ip) {
             entry.addrs.push(ip);
@@ -127,7 +129,8 @@ mod tests {
 
     #[test]
     fn lan_cleanup_task_ipv4_default_routes_are_detected_by_flag_and_destination() {
-        let text = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+        let text =
+            "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
                     eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
                     eth1\t0000FEA9\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n";
         assert_eq!(parse_ipv4_routes(text), ["eth0"]);

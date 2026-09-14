@@ -123,10 +123,16 @@ pub enum DirectReciprocalConflict {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirectReciprocalPolicyDenied {
-    ContactIgnored { device_id: String },
-    GrantIgnored { device_id: String },
+    ContactIgnored {
+        device_id: String,
+    },
+    GrantIgnored {
+        device_id: String,
+    },
     /// The user removed this device; only a deliberate pairing readmits it.
-    PeerRemoved { device_id: String },
+    PeerRemoved {
+        device_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -264,9 +270,9 @@ impl ShareProfiles {
                 },
             ));
         }
-        if grant_index.is_some_and(|index| {
-            self.direct_grants[index].state == DirectGrantState::Ignored
-        }) {
+        if grant_index
+            .is_some_and(|index| self.direct_grants[index].state == DirectGrantState::Ignored)
+        {
             return Err(DirectReciprocalError::PolicyDenied(
                 DirectReciprocalPolicyDenied::GrantIgnored {
                     device_id: identity.device_id.clone(),

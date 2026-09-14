@@ -92,20 +92,29 @@ impl RemovedEndpointScope {
             (
                 MountScope::DirectContact(contact_id),
                 MountSource::Peer {
-                    target: PeerMountTarget::Direct { contact_id: mounted },
+                    target:
+                        PeerMountTarget::Direct {
+                            contact_id: mounted,
+                        },
                     ..
                 },
             ) => contact_id == mounted,
             (
                 MountScope::Room(room_id),
                 MountSource::Peer {
-                    target: PeerMountTarget::RoomDevice { room_id: mounted, .. },
+                    target:
+                        PeerMountTarget::RoomDevice {
+                            room_id: mounted, ..
+                        },
                     ..
                 },
             ) => room_id == mounted,
-            (MountScope::SavedRemote(account), MountSource::SavedRemote { account: mounted, .. }) => {
-                account == mounted
-            }
+            (
+                MountScope::SavedRemote(account),
+                MountSource::SavedRemote {
+                    account: mounted, ..
+                },
+            ) => account == mounted,
             _ => false,
         }
     }
@@ -255,7 +264,10 @@ fn remove_dir_sort(scope: &RemovedEndpointScope) -> std::io::Result<usize> {
     Ok(removed)
 }
 
-pub(crate) fn filter_dir_sort(map: &mut HashMap<String, bool>, scope: &RemovedEndpointScope) -> usize {
+pub(crate) fn filter_dir_sort(
+    map: &mut HashMap<String, bool>,
+    scope: &RemovedEndpointScope,
+) -> usize {
     let before = map.len();
     map.retain(|key, _| !scope.matches_key(key));
     before - map.len()
@@ -297,7 +309,10 @@ fn orphaned_sync_jobs(scope: &RemovedEndpointScope) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn job_references_scope(job: &crate::syncjobs::SyncJob, scope: &RemovedEndpointScope) -> bool {
+pub(crate) fn job_references_scope(
+    job: &crate::syncjobs::SyncJob,
+    scope: &RemovedEndpointScope,
+) -> bool {
     scope.matches_key(&job.source) || scope.matches_key(&job.target)
 }
 
@@ -328,7 +343,10 @@ impl super::App {
         let inactive: Vec<usize> = (0..self.tabs.len())
             .filter(|&index| index != self.active_tab)
             .filter(|&index| {
-                tab_matches(self.tabs[index].remote.as_ref(), &self.tabs[index].root_path)
+                tab_matches(
+                    self.tabs[index].remote.as_ref(),
+                    &self.tabs[index].root_path,
+                )
             })
             .collect();
         for index in inactive.into_iter().rev() {

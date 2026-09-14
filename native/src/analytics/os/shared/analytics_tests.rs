@@ -143,7 +143,10 @@ fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_dire
             size: 0,
             unreachable: true,
         }),
-        Err(io::Error::new(io::ErrorKind::InvalidData, "Ungueltiger Eintrag")),
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Ungueltiger Eintrag",
+        )),
         Ok(LocalEntry {
             name: "nul\u{fffd}".into(),
             kind: EntryKind::File,
@@ -171,7 +174,10 @@ fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_dire
     let tree = outcome.tree.expect("root stays readable");
     assert_eq!(tree.size, 14, "unrepresentable files are still counted");
     assert_eq!(progress.files.load(Ordering::Relaxed), 2);
-    assert!(tree.children.iter().any(|child| &*child.name == "after.bin"));
+    assert!(tree
+        .children
+        .iter()
+        .any(|child| &*child.name == "after.bin"));
 }
 
 #[test]

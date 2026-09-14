@@ -76,8 +76,7 @@ impl GDriveBackend {
         prefix: &str,
     ) -> VfsResult<Option<DriveObject>> {
         let siblings = self.same_name_siblings(parent_id, plain)?;
-        let Some(id) = super::duplicates::select_by_prefix(&siblings, prefix)
-            .map_err(invalid)?
+        let Some(id) = super::duplicates::select_by_prefix(&siblings, prefix).map_err(invalid)?
         else {
             return Ok(None);
         };

@@ -1,9 +1,8 @@
-use super::removed_direct_peers::PairingOrigin;
 use super::core::{hmac_proof, presence_payload, public_fingerprint};
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_reciprocal::{
-    DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError,
-    DirectReciprocalPeer, DirectReciprocalPolicyDenied, DirectRelationMaterial,
+    DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError, DirectReciprocalPeer,
+    DirectReciprocalPolicyDenied, DirectRelationMaterial,
 };
 use super::direct_reciprocal_session::{
     AuthenticatedDirectSession, DirectRepairInitiator, DirectRepairReceiver,
@@ -14,14 +13,15 @@ use super::direct_reciprocal_store::{
     DirectRepairStoreError, DirectRepairStoreReceipt,
 };
 use super::direct_reciprocal_wire::{
-    decode_direct_repair_frame, encode_direct_repair_frame, DirectRepairHello,
-    DirectRepairMessage, DirectRepairOffer, DirectRepairPersisted,
+    decode_direct_repair_frame, encode_direct_repair_frame, DirectRepairHello, DirectRepairMessage,
+    DirectRepairOffer, DirectRepairPersisted,
 };
 use super::identity::ShareIdentity;
 use super::legacy_direct_request::{
     LegacyDirectDecisionSource, LegacyDirectDecisionState, LegacyDirectDeliveryState,
 };
 use super::profiles::ShareProfiles;
+use super::removed_direct_peers::PairingOrigin;
 use super::types::{DirectAccessState, DirectGrant, DirectGrantState, PeerPresence};
 
 #[test]
@@ -72,7 +72,7 @@ fn lan_cleanup_task_removed_peer_blocks_automatic_repair_until_user_pairs_again(
     assert_complete_relation(&profiles, &peer_b, "contact-b");
 
     // Removing the contact deletes the grant and records the denial.
-    let forgotten = profiles.forget_direct_peer("contact-b", 150).expect("contact exists");
+    let forgotten = profiles.forget_direct_peer("contact-b", 150).unwrap();
     assert_eq!(forgotten.grants_removed, 1);
     assert!(profiles.direct_contacts.is_empty());
     assert!(profiles.direct_grants.is_empty());
@@ -81,7 +81,7 @@ fn lan_cleanup_task_removed_peer_blocks_automatic_repair_until_user_pairs_again(
 
     // The peer's background repair is refused without changing the profile.
     let denied = profiles
-        .apply_reciprocal_direct_peer(&peer_b, "contact-again", 200, PairingOrigin::AutomaticRepair)
+        .apply_reciprocal_direct_peer(&peer_b, "again", 200, PairingOrigin::AutomaticRepair)
         .unwrap_err();
     assert_eq!(
         denied,
@@ -93,16 +93,14 @@ fn lan_cleanup_task_removed_peer_blocks_automatic_repair_until_user_pairs_again(
 
     // A deliberate pairing readmits the device and installs the relation.
     let applied = profiles
-        .apply_reciprocal_direct_peer(&peer_b, "contact-again", 300, PairingOrigin::UserPairing)
+        .apply_reciprocal_direct_peer(&peer_b, "again", 300, PairingOrigin::UserPairing)
         .unwrap();
-    assert_eq!(
-        applied,
-        DirectReciprocalApply::Changed {
-            contact_id: "contact-again".into()
-        }
-    );
+    let expected = DirectReciprocalApply::Changed {
+        contact_id: "again".into(),
+    };
+    assert_eq!(applied, expected);
     assert!(profiles.removed_direct_peer(peer_b.identity()).is_none());
-    assert_complete_relation(&profiles, &peer_b, "contact-again");
+    assert_complete_relation(&profiles, &peer_b, "again");
 }
 
 #[test]
@@ -142,15 +140,22 @@ fn share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_
         DirectSessionAuthorization::ExplicitPolicyDenied,
         true,
     );
-    assert!(matches!(denied, Err(DirectRepairSessionError::PolicyDenied)));
+    assert!(matches!(
+        denied,
+        Err(DirectRepairSessionError::PolicyDenied)
+    ));
 
     let mut denied_profiles = ShareProfiles::default();
-    denied_profiles.direct_grants.push(grant_for(
-        remote.identity(),
-        DirectGrantState::Ignored,
-    ));
+    denied_profiles
+        .direct_grants
+        .push(grant_for(remote.identity(), DirectGrantState::Ignored));
     assert_eq!(
-        denied_profiles.apply_reciprocal_direct_peer(&remote, "denied", 100, PairingOrigin::UserPairing),
+        denied_profiles.apply_reciprocal_direct_peer(
+            &remote,
+            "denied",
+            100,
+            PairingOrigin::UserPairing
+        ),
         Err(DirectReciprocalError::PolicyDenied(
             DirectReciprocalPolicyDenied::GrantIgnored {
                 device_id: "remote".into()
@@ -165,7 +170,12 @@ fn share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_
         .apply_reciprocal_direct_peer(&trusted, "trusted", 100, PairingOrigin::UserPairing)
         .unwrap();
     assert_eq!(
-        profiles.apply_reciprocal_direct_peer(&replacement, "replacement", 101, PairingOrigin::UserPairing),
+        profiles.apply_reciprocal_direct_peer(
+            &replacement,
+            "replacement",
+            101,
+            PairingOrigin::UserPairing
+        ),
         Err(DirectReciprocalError::Conflict(
             DirectReciprocalConflict::ContactIdentity {
                 device_id: "same-device".into()
@@ -244,10 +254,9 @@ fn share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial() {
     let conflicting_identity =
         DirectPeerIdentity::from_secret("legacy-peer", "Existing", &conflicting_key);
     let mut conflict = ShareProfiles::default();
-    conflict.direct_grants.push(grant_for(
-        &conflicting_identity,
-        DirectGrantState::Accepted,
-    ));
+    conflict
+        .direct_grants
+        .push(grant_for(&conflicting_identity, DirectGrantState::Accepted));
     assert!(conflict
         .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 100)
         .unwrap());
@@ -453,12 +462,7 @@ fn local_identity() -> ShareIdentity {
     }
 }
 
-fn legacy_presence(
-    local: &ShareIdentity,
-    seed: u8,
-    nonce: &str,
-    expires_at: i64,
-) -> PeerPresence {
+fn legacy_presence(local: &ShareIdentity, seed: u8, nonce: &str, expires_at: i64) -> PeerPresence {
     let key = iroh::SecretKey::from_bytes(&[seed; 32]);
     let public_key = key.public().to_string();
     let mut presence = PeerPresence {

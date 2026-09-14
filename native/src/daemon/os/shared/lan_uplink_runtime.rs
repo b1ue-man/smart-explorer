@@ -18,8 +18,13 @@ const INTERNET_PROBE_INTERVAL: Duration = Duration::from_secs(20);
 
 enum PendingKind {
     Setup,
-    Start { private: UplinkTarget, public: UplinkTarget },
-    Stop { reason: String },
+    Start {
+        private: UplinkTarget,
+        public: UplinkTarget,
+    },
+    Stop {
+        reason: String,
+    },
 }
 
 struct Pending {
@@ -174,7 +179,8 @@ impl UplinkRuntime {
         match self.adapter.sharing_active(&private) {
             Ok(Some(true)) | Ok(None) => {
                 log("lan uplink: resuming sharing session found at start");
-                self.policy.resume(record.private_index, record.public_index);
+                self.policy
+                    .resume(record.private_index, record.public_index);
             }
             Ok(Some(false)) => {
                 log("lan uplink: recorded session is no longer active; clearing");
@@ -182,8 +188,11 @@ impl UplinkRuntime {
                 let _ = self.state.save();
             }
             Err(error) => {
-                log(&format!("lan uplink: could not verify recorded session: {error}"));
-                self.policy.resume(record.private_index, record.public_index);
+                log(&format!(
+                    "lan uplink: could not verify recorded session: {error}"
+                ));
+                self.policy
+                    .resume(record.private_index, record.public_index);
             }
         }
     }
@@ -229,7 +238,10 @@ impl UplinkRuntime {
                     "lan uplink: starting sharing {} -> {}",
                     public.name, private.name
                 ));
-                self.reason = format!("Freigabe wird eingerichtet: {} → {}", public.name, private.name);
+                self.reason = format!(
+                    "Freigabe wird eingerichtet: {} → {}",
+                    public.name, private.name
+                );
                 self.pending = Some(Pending {
                     kind: PendingKind::Start { private, public },
                     result: rx,

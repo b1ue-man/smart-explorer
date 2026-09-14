@@ -78,7 +78,9 @@ impl App {
             Ok((profiles, change)) => {
                 self.share_profiles = profiles;
                 let headline = if change.changed {
-                    format!("Autorisierung {device_id} geloescht; automatische Wiederkopplung gesperrt")
+                    format!(
+                        "Autorisierung {device_id} geloescht; automatische Wiederkopplung gesperrt"
+                    )
                 } else {
                     format!("Autorisierung {device_id} war bereits geloescht")
                 };

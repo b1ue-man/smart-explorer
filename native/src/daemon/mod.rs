@@ -49,12 +49,12 @@ mod ipc_storage;
 mod ipc_storage;
 #[path = "os/shared/job.rs"]
 mod job;
+#[path = "os/shared/job_supervisor.rs"]
+mod job_supervisor;
 #[path = "os/shared/lan_runtime.rs"]
 mod lan_runtime;
 #[path = "os/shared/lan_uplink_runtime.rs"]
 mod lan_uplink_runtime;
-#[path = "os/shared/job_supervisor.rs"]
-mod job_supervisor;
 #[path = "os/shared/line.rs"]
 mod line;
 #[path = "os/shared/locks.rs"]

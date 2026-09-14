@@ -9,8 +9,8 @@ use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::eio;
-use super::direct_reciprocal_transport::SharedDirectRepairStore;
 use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
+use super::direct_reciprocal_transport::SharedDirectRepairStore;
 use super::endpoint_routes::{EndpointRoutes, PublishedEndpointRoutes};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
@@ -117,9 +117,7 @@ impl ShareIrohNode {
             exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
-            runtime_transition_slot: Arc::new(Semaphore::new(
-                RUNTIME_TRANSITION_PERMITS as usize,
-            )),
+            runtime_transition_slot: Arc::new(Semaphore::new(RUNTIME_TRANSITION_PERMITS as usize)),
             peer_handshake_slots: PeerHandshakeLimiter::new(
                 MAX_PENDING_HANDSHAKES_PER_ENDPOINT,
                 MAX_PENDING_APPLICATION_HANDSHAKES,

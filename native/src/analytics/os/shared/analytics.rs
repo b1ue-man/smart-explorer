@@ -24,8 +24,8 @@ mod budget;
 #[path = "analytics_outcome.rs"]
 mod outcome;
 pub use backend::scan_backend;
-use budget::{AnalyticsBudget, Retention};
 pub(super) use budget::MAX_RETAINED_FILES_PER_DIRECTORY;
+use budget::{AnalyticsBudget, Retention};
 use outcome::Diagnostics;
 pub use outcome::{ScanIssue, ScanOutcome, ScanStatus};
 
@@ -210,7 +210,12 @@ fn scan_entries(
                 if ent.kind == EntryKind::Directory {
                     if ent.unreachable {
                         diagnostics.record(
-                            format!("{}{}{}", crate::analytics::os::display_path(dir), std::path::MAIN_SEPARATOR, nm),
+                            format!(
+                                "{}{}{}",
+                                crate::analytics::os::display_path(dir),
+                                std::path::MAIN_SEPARATOR,
+                                nm
+                            ),
                             "Ordnername ist nicht als Pfad darstellbar; Inhalt nicht erfasst",
                             false,
                         );
@@ -230,11 +235,9 @@ fn scan_entries(
                 }
             }
         }
-        Err(error) => diagnostics.record_io(
-            crate::analytics::os::display_path(dir),
-            &error,
-            is_root,
-        ),
+        Err(error) => {
+            diagnostics.record_io(crate::analytics::os::display_path(dir), &error, is_root)
+        }
     }
 
     p.files.fetch_add(own_files, Ordering::Relaxed);
@@ -246,7 +249,8 @@ fn scan_entries(
     if files.len() > MAX_RETAINED_FILES_PER_DIRECTORY {
         files.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     }
-    let mut file_nodes: Vec<SizeNode> = Vec::with_capacity(files.len().min(MAX_RETAINED_FILES_PER_DIRECTORY));
+    let mut file_nodes: Vec<SizeNode> =
+        Vec::with_capacity(files.len().min(MAX_RETAINED_FILES_PER_DIRECTORY));
     for (index, (file_name, size)) in files.into_iter().enumerate() {
         let retained = index < MAX_RETAINED_FILES_PER_DIRECTORY
             && budget.claim(
