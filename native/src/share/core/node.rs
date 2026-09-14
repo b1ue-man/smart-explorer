@@ -138,6 +138,19 @@ impl ShareIrohNode {
         self.routes.published(&self.endpoint).candidates
     }
 
+    /// `(IPv4 port, IPv6 port)` of the bound Iroh sockets.
+    pub(crate) fn bound_ports(&self) -> (Option<u16>, Option<u16>) {
+        let mut v4 = None;
+        let mut v6 = None;
+        for socket in self.endpoint.bound_sockets() {
+            match socket {
+                std::net::SocketAddr::V4(addr) => v4 = v4.or(Some(addr.port())),
+                std::net::SocketAddr::V6(addr) => v6 = v6.or(Some(addr.port())),
+            }
+        }
+        (v4, v6)
+    }
+
     pub(super) fn published_routes(&self) -> PublishedEndpointRoutes {
         self.routes.published(&self.endpoint)
     }

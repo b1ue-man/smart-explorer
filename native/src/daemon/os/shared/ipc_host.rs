@@ -47,6 +47,8 @@ pub(crate) struct ShareHost {
     pub(super) exec_state: Arc<super::exec_state::ExecState>,
     exec_grant_lock: Arc<Mutex<()>>,
     pub(super) mounts: super::mount_manager::MountManager,
+    /// Local-network presence and uplink sharing, ticked with the host.
+    pub(super) lan: Arc<Mutex<super::lan_runtime::LanRuntime>>,
 }
 
 pub(super) struct ShareHostState {
@@ -70,6 +72,9 @@ pub(super) struct ShareHostState {
     pub(super) pending_direct_events: Vec<direct_event_queue::PendingDirectEvent>,
     pub(super) pending_legacy_events: Vec<(String, crate::share::PeerPresence)>,
     pub(super) exec_retry: Option<exec_grant_journal::ExecGrantPersistResult>,
+    /// LAN sightings/losses waiting to be applied like service events.
+    pub(super) pending_lan_events: Vec<crate::share::ShareEvent>,
+    pub(super) lan_status: crate::share::LanStatus,
 }
 
 impl ShareHost {
@@ -95,6 +100,8 @@ impl ShareHost {
             pending_direct_events: Vec::new(),
             pending_legacy_events: Vec::new(),
             exec_retry: None,
+            pending_lan_events: Vec::new(),
+            lan_status: crate::share::LanStatus::default(),
         };
         ShareHost {
             state: Arc::new(Mutex::new(state)),
@@ -103,6 +110,7 @@ impl ShareHost {
             exec_state: Arc::new(super::exec_state::ExecState::new()),
             exec_grant_lock: Arc::new(Mutex::new(())),
             mounts: super::mount_manager::MountManager::default(),
+            lan: Arc::new(Mutex::new(super::lan_runtime::LanRuntime::new())),
         }
     }
 
@@ -120,6 +128,7 @@ impl ShareHost {
 
     pub(crate) fn tick(&self) {
         self.mounts.tick();
+        self.lan_tick();
         self.drain_events();
         let should_reload = self
             .state
@@ -135,6 +144,44 @@ impl ShareHost {
 
     pub(crate) fn stop_mounts(&self) {
         self.mounts.stop_all();
+    }
+
+    /// Advance local-network presence with the current contacts, identity
+    /// and Iroh ports; queue sightings for `drain_events` and refresh the
+    /// status snapshot. Never blocks the host on multicast I/O.
+    fn lan_tick(&self) {
+        let (contacts, node_id, ports) = {
+            let Ok(state) = self.state.lock() else {
+                return;
+            };
+            (
+                state.profiles.direct_contacts.clone(),
+                state.identity.as_ref().map(|identity| identity.node_id.clone()),
+                state
+                    .service
+                    .as_ref()
+                    .map(|service| service.bound_ports())
+                    .unwrap_or((None, None)),
+            )
+        };
+        let now = crate::share::core_now_secs();
+        let Ok(mut lan) = self.lan.lock() else {
+            return;
+        };
+        let uplink_advisory = lan.uplink_advisory(now);
+        let events = lan.tick(super::lan_runtime::LanTickInput {
+            contacts: &contacts,
+            own_node_id: node_id.as_deref(),
+            ports,
+            uplink_advisory,
+            now,
+        });
+        let status = lan.status(&contacts, now);
+        drop(lan);
+        if let Ok(mut state) = self.state.lock() {
+            state.pending_lan_events.extend(events);
+            state.lan_status = status;
+        }
     }
 
     pub(crate) fn reload_now(&self) -> Result<bool, String> {
@@ -320,6 +367,7 @@ impl ShareHost {
             last_error: state.signal_error.clone(),
             relay_url,
             candidates,
+            lan: state.lan_status.clone(),
         }
     }
 

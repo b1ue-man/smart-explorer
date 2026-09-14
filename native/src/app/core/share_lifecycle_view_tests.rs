@@ -95,6 +95,9 @@ fn outgoing_projection_separates_relay_forwarding_from_peer_receipt() {
         request_sent_at: Some(100),
         accepted_at: Some(200),
         accepted_public_key: Some(target.public_key.clone()),
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     });
     let (_, outgoing) = request_views(&profiles, 201);
     assert_eq!(outgoing[0].decision, DirectDecisionState::Accepted);

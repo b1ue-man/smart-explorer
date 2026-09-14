@@ -128,6 +128,9 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         request_sent_at: None,
         accepted_at: Some(1),
         accepted_public_key: Some(b.public_key.clone()),
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     }];
     let mut stale_initial = endpoint.clone();
     stale_initial.presence.expires_at = crate::share::core_now_secs() - 1;

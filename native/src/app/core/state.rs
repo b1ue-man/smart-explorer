@@ -463,6 +463,10 @@ pub struct App {
     /// Folder to open once the pending Share connection is ready (favourites
     /// re-open a peer at their exact path instead of `/`).
     pub(in crate::app) share_opening_path: Option<String>,
+    /// Local-network presence/uplink state as last reported by the worker.
+    pub(in crate::app) share_lan_status: crate::share::LanStatus,
+    /// Pending outcome text of the one-time uplink setup, shown in the LAN tab.
+    pub(in crate::app) share_lan_notice: Option<String>,
     pub(in crate::app) share_status: String,
     pub(in crate::app) share_worker_running: bool,
     pub(in crate::app) share_worker_relay_url: String,

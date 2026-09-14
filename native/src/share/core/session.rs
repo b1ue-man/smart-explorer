@@ -248,10 +248,12 @@ pub(super) fn endpoint_addr(
         return Err(eio("Peer-Presence ist abgelaufen"));
     }
     let node: EndpointId = presence.node_id.parse().map_err(eio)?;
+    // LAN candidates may carry a link-local IPv6 scope (`[fe80::1%3]:port`),
+    // which the standard parser rejects.
     let mut addrs: Vec<TransportAddr> = presence
         .candidates
         .iter()
-        .filter_map(|candidate| candidate.parse::<SocketAddr>().ok())
+        .filter_map(|candidate| crate::net::parse_candidate(candidate))
         .map(TransportAddr::Ip)
         .collect();
     if let Some(relay) = parse_relay_url(&relay_url_from_endpoint(&presence.relay_url)) {

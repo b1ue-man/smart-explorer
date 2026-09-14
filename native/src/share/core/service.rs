@@ -184,6 +184,11 @@ impl ShareService {
         self.iroh.candidates()
     }
 
+    /// Locally bound Iroh UDP ports `(IPv4, IPv6)` for the LAN announcement.
+    pub fn bound_ports(&self) -> (Option<u16>, Option<u16>) {
+        self.iroh.bound_ports()
+    }
+
     pub(crate) fn reciprocal_repair_in_flight(&self) -> bool {
         self.reciprocal.repair_in_flight() || self.iroh.reciprocal_transition_in_flight()
     }
@@ -217,16 +222,17 @@ impl ShareService {
                     .iter()
                     .find(|c| &c.id == contact_id)
                     .ok_or_else(|| "Direktgeraet nicht gefunden".to_string())?;
-                let presence = contact
-                    .presence
-                    .clone()
-                    .ok_or_else(|| "Direktgeraet ist nicht online".to_string())?;
-                if !presence.is_current_at(now_secs()) {
-                    return Err(
-                        "Direktgeraet ist nicht online (gespeicherte Presence ist abgelaufen)"
-                            .into(),
-                    );
-                }
+                // Server presence, LAN evidence, or both merged: the peer is
+                // dialable as soon as either source is current.
+                let presence = super::lan_presence_match::effective_presence(contact, now_secs())
+                    .ok_or_else(|| {
+                        if contact.presence.is_some() || contact.lan_seen_at.is_some() {
+                            "Direktgeraet ist nicht online (gespeicherte Presence ist abgelaufen)"
+                                .to_string()
+                        } else {
+                            "Direktgeraet ist nicht online".to_string()
+                        }
+                    })?;
                 let secret = ShareProfiles::direct_secret_checked(contact)?
                     .ok_or_else(|| "Direkt-Secret fehlt".to_string())?;
                 let expected_node_id = if contact.expected_node_id.trim().is_empty() {

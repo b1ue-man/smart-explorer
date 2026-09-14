@@ -211,6 +211,9 @@ pub struct ShareWorkerSnapshot {
     pub last_error: Option<String>,
     pub relay_url: String,
     pub candidates: Vec<String>,
+    /// Local-network presence and uplink-sharing state.
+    #[serde(default)]
+    pub lan: crate::share::LanStatus,
 }
 
 #[derive(Serialize, Deserialize)]

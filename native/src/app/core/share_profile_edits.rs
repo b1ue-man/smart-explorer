@@ -158,6 +158,9 @@ mod tests {
             request_sent_at: None,
             accepted_at: None,
             accepted_public_key: None,
+            lan_candidates: Vec::new(),
+            lan_seen_at: None,
+            lan_uplink: None,
         }
     }
 }

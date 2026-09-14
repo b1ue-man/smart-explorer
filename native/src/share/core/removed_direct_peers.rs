@@ -223,6 +223,9 @@ mod tests {
             request_sent_at: None,
             accepted_at: Some(1),
             accepted_public_key: Some(format!("key-{device_id}")),
+            lan_candidates: Vec::new(),
+            lan_seen_at: None,
+            lan_uplink: None,
         }
     }
 

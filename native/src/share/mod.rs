@@ -227,6 +227,16 @@ mod profile_operations;
 mod profile_persistence;
 #[path = "os/shared/profile_store.rs"]
 mod profile_store;
+#[path = "os/shared/lan_presence.rs"]
+mod lan_presence;
+#[path = "core/lan_presence_match.rs"]
+pub(crate) mod lan_presence_match;
+#[path = "core/lan_settings.rs"]
+mod lan_settings;
+#[path = "os/shared/lan_settings_store.rs"]
+mod lan_settings_store;
+#[path = "core/lan_status.rs"]
+mod lan_status;
 #[path = "core/profiles.rs"]
 mod profiles;
 #[path = "core/removed_direct_peers.rs"]
@@ -358,6 +368,12 @@ pub use self::legacy_direct_request::{
     LegacyDirectAnswer, LegacyDirectDecisionDelivery, LegacyDirectDecisionSource,
     LegacyDirectDecisionState, LegacyDirectDeliveryState, LegacyDirectPresenceEvidence,
     LegacyDirectRequestEntry, MAX_LEGACY_DIRECT_REQUESTS, MAX_LEGACY_PRESENCE_FUTURE_SECS,
+};
+pub use self::lan_presence::{LanAnnouncement, LanEvent, LanPresence};
+pub use self::lan_presence_match::{LanSighting, LAN_PRESENCE_TTL_SECS};
+pub use self::lan_settings::LanSettings;
+pub use self::lan_status::{
+    LanFacility, LanPeerView, LanStatus, LinkView, UplinkSharingState, UplinkView,
 };
 pub use self::profile_persistence::ProfileChange;
 pub use self::removed_direct_peers::{

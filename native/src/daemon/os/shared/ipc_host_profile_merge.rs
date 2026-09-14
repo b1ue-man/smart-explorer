@@ -34,6 +34,9 @@ pub(crate) fn merge_worker_updates(
             current.request_sent_at = updated.request_sent_at;
             current.accepted_at = updated.accepted_at;
             current.accepted_public_key = updated.accepted_public_key.clone();
+            current.lan_candidates = updated.lan_candidates.clone();
+            current.lan_seen_at = updated.lan_seen_at;
+            current.lan_uplink = updated.lan_uplink;
         }
     }
 
@@ -67,6 +70,9 @@ fn runtime_contact_changed(
         || previous.request_sent_at != updated.request_sent_at
         || previous.accepted_at != updated.accepted_at
         || previous.accepted_public_key != updated.accepted_public_key
+        || previous.lan_candidates != updated.lan_candidates
+        || previous.lan_seen_at != updated.lan_seen_at
+        || previous.lan_uplink != updated.lan_uplink
 }
 
 fn merge_members(
@@ -155,6 +161,9 @@ mod tests {
             request_sent_at: None,
             accepted_at: None,
             accepted_public_key: None,
+            lan_candidates: Vec::new(),
+            lan_seen_at: None,
+            lan_uplink: None,
         }
     }
 }

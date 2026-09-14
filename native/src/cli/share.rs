@@ -9,6 +9,8 @@ mod exports;
 mod grants;
 #[path = "share/identity_command.rs"]
 mod identity_command;
+#[path = "share/lan.rs"]
+mod lan;
 #[path = "share/lifecycle_output.rs"]
 pub(super) mod lifecycle_output;
 #[path = "share/request_selection.rs"]
@@ -52,6 +54,8 @@ enum Command {
     Room(RoomArgs),
     #[command(about = "Refresh or stop the headless Share worker")]
     Worker(WorkerArgs),
+    #[command(about = "Local-network presence of paired devices and automatic internet sharing")]
+    Lan(lan::LanArgs),
 }
 
 #[derive(Args)]
@@ -102,6 +106,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
             RoomCommand::Create { name } => create_room(&name)?,
         },
         Some(Command::Worker(args)) => worker(args.command)?,
+        Some(Command::Lan(args)) => lan::run(args)?,
     }
     Ok(0)
 }

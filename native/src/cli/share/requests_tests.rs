@@ -41,6 +41,9 @@ fn cli_retry_selection_includes_a_legacy_forwarded_request() {
         request_sent_at: Some(10),
         accepted_at: None,
         accepted_public_key: None,
+        lan_candidates: Vec::new(),
+        lan_seen_at: None,
+        lan_uplink: None,
     });
     profiles
         .queue_outgoing_direct_request("contact", request)

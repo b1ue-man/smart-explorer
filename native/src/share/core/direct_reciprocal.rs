@@ -323,6 +323,9 @@ impl ShareProfiles {
                 request_sent_at: None,
                 accepted_at: Some(now),
                 accepted_public_key: Some(identity.public_key.clone()),
+                lan_candidates: Vec::new(),
+                lan_seen_at: None,
+                lan_uplink: None,
             });
             changed = true;
         }

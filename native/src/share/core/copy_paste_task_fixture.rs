@@ -117,6 +117,9 @@ impl CopyPastePeerFixture {
             request_sent_at: None,
             accepted_at: Some(now_secs()),
             accepted_public_key: Some(host.public_key.clone()),
+            lan_candidates: Vec::new(),
+            lan_seen_at: None,
+            lan_uplink: None,
         });
         let client_auth = Arc::new(Mutex::new(client_state));
         let (client_events, _client_events_rx) = crossbeam_channel::bounded(64);
