@@ -56,8 +56,15 @@ Primary sources checked 2026-09-15:
 - The collapsed search must open on Ctrl+F, and active filters remain indicated
   while collapsed. Long reports need clipboard assertions on the click frame,
   since egui platform output is transient.
+- Inspection of egui 0.29.1 `menu.rs` showed that menus consume Escape during
+  layout, after `frame_keyboard.rs`. The latter now defers file shortcuts to
+  open popup/menu areas, preserving the selection when Escape closes a menu.
 
 ## Status
 
-Planning and both research passes complete. Implementation and remote acceptance
-pending. Live open work remains on `docs/TODO.md`.
+D1 is implemented in `d134c8c`; D2 in `b7aa220`. The existing combined entrypoint
+now maps D1–D4, including the pending Drive corrections and real scan-to-clipboard
+flow. Static Rust parsing and module size checks completed without local native
+execution. Acceptance images/logs and subsequent publication are recorded by the
+[existing workflows](https://github.com/b1ue-man/smart-explorer/actions). Live
+open work remains on `docs/TODO.md`; this plan records implementation evidence.

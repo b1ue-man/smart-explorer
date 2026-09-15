@@ -76,3 +76,9 @@ and text checks have run. The full supplied failure (F3) remains unconfirmed;
 do not claim the user's scan repaired from the `/` excerpt. Remote acceptance
 and the terminal release belong to the completed follow-up batch. Live open
 status is tracked as G2 in `docs/TODO.md`.
+
+The [desktop correction batch](2026-09-15-desktop-gui-correction.md) now includes
+F1/F2 in the same existing remote entrypoint: real empty/intermediate pages,
+strict invalid responses, mutation absence safety, and an HTTP failure through
+the scan channel to the readable report and full clipboard output. F3 remains
+a live evidence gap rather than an inferred authentication diagnosis.

@@ -62,9 +62,12 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
         self.time += 0.2;
+        let modifiers = events.iter().find_map(|event| match event {
+            egui::Event::Key { modifiers, .. } => Some(*modifiers), _ => None,
+        }).unwrap_or_default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
-            time: Some(self.time), events, focused: true,
+            time: Some(self.time), events, modifiers, focused: true,
             hovered_files: if self.hover_file { vec![egui::HoveredFile::default()] } else { Vec::new() },
             ..Default::default()
         };
@@ -83,21 +86,30 @@ impl Harness {
         self.frame(Vec::new())
     }
 
-    fn click(&mut self, label: &str) {
+    fn click(&mut self, label: &str) -> String {
         let pos = self.capture.target(label);
+        let mut copied = String::new();
         for pressed in [true, false] {
-            self.frame(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+            let output = self.frame(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
                 pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
             }]);
+            if !output.platform_output.copied_text.is_empty() {
+                copied = output.platform_output.copied_text;
+            }
         }
         self.settle();
+        copied
     }
 
     fn key(&mut self, key: egui::Key) {
+        self.key_with_modifiers(key, egui::Modifiers::NONE);
+    }
+
+    fn key_with_modifiers(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
         self.frame(vec![egui::Event::Key { key, physical_key: None, pressed: true,
-            repeat: false, modifiers: egui::Modifiers::NONE }]);
+            repeat: false, modifiers }]);
         self.frame(vec![egui::Event::Key { key, physical_key: None, pressed: false,
-            repeat: false, modifiers: egui::Modifiers::NONE }]);
+            repeat: false, modifiers }]);
     }
 
     fn save(&mut self, name: &str) {
@@ -132,10 +144,24 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             let mut h = Harness::new(dark, size);
             h.workspace();
             h.save(&format!("workspace-{name}-{mode}"));
-            for label in ["Datei", "Verbindungen", "Teilen", "Sync", "Ansicht", "Einstellungen", "Filter", "Bericht.md"] {
+            for label in ["Neu", "Verbindung", "Sync", "Ansicht", "Einstellungen", "Filter & Suche", "»", "Bericht.md"] {
                 h.assert_visible(label);
             }
             assert!(!h.capture.contains("Erstellt") && !h.capture.contains("Tiefe"));
+            assert!(!h.capture.contains("Dateien suchen…"));
+            assert!(h.capture.target("Bericht.md").y < 160.0, "toolbar crowds the file list");
+            let command_y = h.capture.target("Verbindung").y;
+            for label in ["◀", "↑", "Neu", "Sync", "Einstellungen", "Ansicht", "»"] {
+                assert!((h.capture.target(label).y - command_y).abs() < 3.0, "{label} left the toolbar row");
+            }
+            h.click("Bericht.md");
+            h.click("»");
+            h.assert_visible("Kopieren   Ctrl+C");
+            if name == "minimum" { h.assert_visible("Share-Server"); }
+            h.key(egui::Key::Escape);
+            h.settle();
+            assert!(!h.capture.contains("Kopieren   Ctrl+C"));
+            assert_eq!(h.app.selection.len(), 1, "closing a menu cleared the selection");
             h.click("Bericht.md");
             assert_eq!(h.app.selection.len(), 1);
             assert!(h.app.selection.contains(&h.app.entries[1].key()));
@@ -145,23 +171,28 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             h.hover_file = false;
             h.settle();
 
-            h.click("Dateien suchen…");
+            h.key_with_modifiers(egui::Key::F, egui::Modifiers::COMMAND);
+            h.settle();
+            assert!(h.app.show_filters && h.ctx.wants_keyboard_input());
             h.frame(vec![egui::Event::Text("Bericht".into())]);
             h.app.flush_text_filter();
             h.settle();
             assert_eq!(h.app.view.len(), 1);
-            h.click("Filter · aktiv");
-            assert!(h.app.show_filters);
-            assert!((h.capture.target("Zurücksetzen").y - h.capture.target("Filter · aktiv").y).abs() < 2.0);
+            h.assert_visible("Filter & Suche · aktiv");
+            assert!((h.capture.target("Zurücksetzen").y - h.capture.target("enthält").y).abs() < 3.0);
             h.save(&format!("filters-{name}-{mode}"));
+            h.click("Filter & Suche · aktiv");
+            assert!(!h.app.show_filters);
+            assert_eq!(h.app.view.len(), 1);
+            h.assert_visible("Filter & Suche · aktiv");
+            h.click("Filter & Suche · aktiv");
             h.click("Zurücksetzen");
             assert_eq!(h.app.view.len(), 4);
             assert!(h.app.folder_search_rx.is_none() && h.app.filter_pending_at.is_none());
             h.app.show_filters = false;
             h.app.appearance.detailed_columns = true;
             h.settle();
-            assert!(h.capture.labels.iter().any(|(text, rect, clip)| text == "Pfad"
-                && rect.top() > 150.0 && clip.contains(rect.center())), "Path table header is missing");
+            h.assert_visible("Pfad");
             h.save(&format!("details-{name}-{mode}"));
             h.app.appearance.detailed_columns = false;
             let mut other = super::TabState::default();
@@ -233,9 +264,12 @@ fn gui_design_task_start_page_and_chart_visuals() {
         h.save(&format!("start-{mode}"));
         h.assert_visible("Ordner öffnen");
         assert!(!h.capture.contains("Index bauen"));
-        // Explicitly expand the drive section to exercise capacity labels.
-        h.click("Laufwerke");
+        h.assert_visible("Ordnerindex…");
+        h.assert_visible("Laufwerke");
         h.save(&format!("start-drives-{mode}"));
+        let meta = h.capture.target("Laufwerk");
+        let meter = h.capture.target(&format!("{} belegt", crate::format::format_bytes(700_000_000_000)));
+        assert!(meter.y > meta.y + 15.0, "capacity label overlaps metadata");
         h.workspace();
         h.app.show_analytics = true;
         h.app.analytics_tree = Some(crate::analytics::SizeNode {
@@ -246,5 +280,75 @@ fn gui_design_task_start_page_and_chart_visuals() {
             }).collect(),
         });
         h.save(&format!("analytics-{mode}"));
+    }
+}
+
+#[test]
+#[ignore = "run only through the isolated remote GUI task entrypoint"]
+fn gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard() {
+    use crate::gdrive::gui_task_http::{step, Fixture, Reply};
+    use crate::scanner::ScanMessage;
+    for dark in [false, true] {
+        let mode = if dark { "dark" } else { "light" };
+        let mut h = Harness::new(dark, [900.0, 600.0]);
+        let fixture = Fixture::new(vec![step("GET", "/drive/v3/files", Reply::HttpError(403,
+            serde_json::json!({"error": {"message": "Zugriff auf diesen Ordner verweigert",
+                "errors": [{"reason": "insufficientFilePermissions"}]}})))]);
+        let backend: crate::vfs::BackendHandle = std::sync::Arc::new(fixture.backend());
+        h.app.root_path = "/".into();
+        h.app.remote = Some(crate::connect::RemoteState {
+            backend: backend.clone(), label: "Google Drive".into(), agent_version: None,
+            zip_return: None, sftp: None, account: None, endpoint_prefix: Some("gdrive://".into()),
+        });
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let handle = crate::rscan::start_scan_backend(backend, "/".into(), None, tx);
+        let (tx, collected) = crossbeam_channel::unbounded();
+        loop {
+            let message = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            let done = matches!(message, ScanMessage::Done(_));
+            tx.send(message).unwrap();
+            if done { break; }
+        }
+        handle.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let app = &mut h.app;
+        let (_, done) = super::drain_scan_channel(&collected, &mut app.entries,
+            &mut app.progress, &mut app.failed_paths, &mut app.error_msg);
+        assert!(done);
+        assert_eq!(app.progress.errors, 1);
+        assert_eq!(app.failed_paths.len(), 1);
+        assert_eq!(app.failed_paths[0].0, "/");
+        assert!(app.error_msg.is_none(), "ordinary listing errors belong to failed paths");
+        fixture.finish();
+        let report = app.error_log_text();
+        for text in [env!("CARGO_PKG_VERSION"), "Scan-Quelle: Google Drive", "Scan-Wurzel: /",
+            "Pfad: /", "Ursache: list_dir: HTTP 403", "insufficientFilePermissions"] {
+            assert!(report.contains(text), "missing {text}: {report}");
+        }
+        app.show_errors_dialog = true;
+        h.save(&format!("drive-error-{mode}"));
+        assert_eq!(h.click("Alles kopieren"), report);
+
+        // The viewport shows a bounded read-only slice; copying keeps every
+        // path/cause, including the final line and explicitly missing details.
+        for index in 1..=80 {
+            h.app.failed_paths.push((format!("/Ordner {index}/Langer Pfad zur I/O-Diagnose"),
+                format!("Fehler {index}: {}", "Ausführliche Ursache mit Umlauten äöü. ".repeat(6))));
+        }
+        h.app.failed_paths.push(("/ohne Fehlertext".into(), String::new()));
+        h.app.progress.errors = 100;
+        h.app.error_msg = Some("Zusätzlicher App-Fehler".into());
+        h.app.capture_current_error();
+        let report = h.app.error_log_text();
+        assert!(report.contains("Der Vorgang hat keinen Fehlertext übermittelt."));
+        assert!(report.contains("Weitere Fehler ohne gespeicherten Pfad: 18"));
+        h.save(&format!("drive-error-long-{mode}"));
+        h.assert_visible("Alles kopieren");
+        h.assert_visible("Schließen");
+        assert_eq!(h.click("Alles kopieren"), report);
+        h.click("App-Protokoll leeren");
+        h.app.capture_current_error();
+        assert!(h.app.app_errors.is_empty() && h.app.error_msg.is_none());
+        assert_eq!(h.app.failed_paths.len(), 82);
+        assert!(!h.app.error_log_text().contains("Zusätzlicher App-Fehler"));
     }
 }

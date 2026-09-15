@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The single remote suite for GUI clarity and the Drive path-name repair.
+# The single remote suite for the desktop GUI correction and Drive follow-up.
 # Codex must not invoke this entrypoint on a workstation.
 set -Eeuo pipefail
 
@@ -71,12 +71,10 @@ for name in expected:
 assert f'{len(expected)} passed; 0 failed; 0 ignored;' in output
 report = {'candidate': candidate, 'binary': str(binary),
           'binary_sha256': hashlib.file_digest(binary.open('rb'), 'sha256').hexdigest(),
-          'milestones': {'M1': 'theme contrast, migration and runtime switching',
-                         'M2': 'workspace selection, filters and split panes at both sizes',
-                         'M3': 'start page, navigation and drive capacity',
-                         'M4': 'settings, dialog focus and feature windows',
-                         'M5': 'real egui geometry and software-rendered visual artifacts',
-                         'M6': 'Drive scan, IDs, cache, pagination and mutation metadata'},
+          'milestones': {'D1': 'compact neutral shell, same-row toolbar, search focus, filtering and split panes',
+                         'D2': 'unboxed locations, capacity alignment, settings and bounded feature dialogs',
+                         'D3': 'Drive empty-page semantics, safe names/mutations and full scan-report clipboard',
+                         'D4': 'source-bound real egui geometry and software-rendered visual artifacts'},
           'expected_cases': expected}
 (logs / 'approval.json').write_text(json.dumps(report, indent=2) + '\n')
 PY

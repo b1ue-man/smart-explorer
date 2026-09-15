@@ -7,16 +7,18 @@ Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextm
 Breite Datei-/Detailspalten bleiben per horizontalem Scroll erreichbar, auch
 wenn ein Detailbereich die verfügbare Tabellenbreite verkleinert.
 
-**Oberfläche:** Die Pfadleiste hat eine eigene Zeile; die Suche bleibt direkt
-sichtbar. **Filter** öffnet die erweiterten Kriterien und zeigt aktive Filter
-an. **Ansicht** enthält Split-Ansicht, Detailspalten und kompakte Zeilen.
-Unter **Einstellungen → Darstellung** stehen **Hell**, **Dunkel** und
-**Wie im System** zur Wahl. Startseite und Seitenleiste zeigen kurze Listen;
-weitere Einträge und Verwaltungsfunktionen sind bei Bedarf aufklappbar.
+**Oberfläche:** Pfad und Befehle liegen in einer kompakten Werkzeugleiste.
+**Filter & Suche** klappt die Suchkriterien auf; **Ctrl+F** öffnet die Suche
+und setzt den Fokus ins Suchfeld. Aktive Filter bleiben am eingeklappten
+Bereich erkennbar. **Ansicht** enthält Split-Ansicht, Detailspalten und kompakte
+Zeilen. Unter **Einstellungen → Darstellung** stehen **Hell**, **Dunkel** und
+**Wie im System** zur Wahl. Die Oberfläche verwendet schlichte Desktop-Listen,
+Menüs und Dialoge; Orte in der Seitenleiste sind direkt erreichbar.
+Bei schmalen Fenstern enthält **»** die zusätzlichen Befehle und **Share-Server**.
 
 **Remote/Cloud (ab 0.4.x):** durchsucht **SFTP**, **FTP/FTPS**, **WebDAV**
 (Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
-einheitliche `Backend`-Schnittstelle (**Verbindungen** in der Befehlsleiste); Zugangsdaten im
+einheitliche `Backend`-Schnittstelle (**Verbindung** in der Werkzeugleiste); Zugangsdaten im
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
 den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
@@ -102,8 +104,9 @@ dem konkret abweichenden Wert gemeldet. Stand der Primärquellenprüfung:
 [Treiber-Header mit `DOKAN_DRIVER_VERSION 0x0000190`](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/sys/public.h),
 [`DokanVersion`/`DokanDriverVersion`-Implementierung](https://github.com/dokan-dev/dokany/blob/v2.3.1.1000/dokan/version.c)).
 
-In der GUI startet das Laufwerkssymbol neben einer gespeicherten Verbindung,
-Google Drive oder einem Share-Gerät den Dialog **Remote als Laufwerk**; das
+In der Seitenleiste öffnet **⋯ → Als Laufwerk einbinden…** neben einer
+gespeicherten Verbindung, Google Drive oder einem Share-Gerät den Dialog
+**Remote als Laufwerk**; das
 Toolbar-Laufwerkssymbol öffnet den Manager zum Auswerfen oder erneuten
 Verbinden. Der Terminal-Companion bietet dieselbe Steuerung:
 
@@ -275,7 +278,7 @@ versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
 der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
-Dateisystemdaten im Klartext. **Teilen** in der Befehlsleiste; Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
+Dateisystemdaten im Klartext. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
@@ -389,7 +392,7 @@ signierten Widerruf traegt; danach kann auch sie geloescht werden. `show`,
 `retry` und `delete` waehlen wie die Entscheidungsbefehle den einzigen passenden
 Eintrag automatisch. `se share grants` zeigt ohne Unterbefehl
 aktive und inaktive Autorisierungen; `se share grants revoke` waehlt die einzige
-aktive Freigabe automatisch. In der GUI trennt **Teilen** offene Anfragen vom
+aktive Freigabe automatisch. In der GUI trennt **Share-Server** offene Anfragen vom
 eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koennen
 dort ebenfalls lokal geloescht werden; **Ablehnen** und **Widerrufen** bleiben
 die expliziten signierten Peer-Entscheidungen.

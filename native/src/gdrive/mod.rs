@@ -61,7 +61,7 @@ pub use state::GDriveBackend;
 
 #[cfg(test)]
 #[path = "core/gui_task_http.rs"]
-mod gui_task_http;
+pub(crate) mod gui_task_http;
 #[cfg(test)]
 #[path = "core/gui_task_tests.rs"]
 mod gui_task_tests;

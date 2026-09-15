@@ -10,24 +10,24 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
-pub(super) struct Request {
-    pub(super) method: String,
-    pub(super) target: String,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) target: String,
     headers: HashMap<String, String>,
-    pub(super) body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
 }
 
-pub(super) enum Reply { Json(Value), Status(u16), Session, Bytes(String) }
-pub(super) struct Step { method: &'static str, path: &'static str, reply: Reply }
+pub(crate) enum Reply { Json(Value), Status(u16), HttpError(u16, Value), Session, Bytes(String) }
+pub(crate) struct Step { method: &'static str, path: &'static str, reply: Reply }
 struct Capture { requests: Vec<Request>, pending: usize, errors: Vec<String> }
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     base: String,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<Capture>>,
 }
 
 impl Fixture {
-    pub(super) fn new(steps: Vec<Step>) -> Self {
+    pub(crate) fn new(steps: Vec<Step>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -63,6 +63,7 @@ impl Fixture {
                         Reply::Bytes(body) => (200, String::new(), body),
                         Reply::Json(value) => (200, String::new(), value.to_string()),
                         Reply::Status(status) => (status, String::new(), "{}".into()),
+                        Reply::HttpError(status, value) => (status, String::new(), value.to_string()),
                         Reply::Session => (200, format!("Location: {server_base}/session\r\n"), String::new()),
                     };
                     let response = format!(
@@ -79,13 +80,13 @@ impl Fixture {
         Self { base, stop, worker: Some(worker) }
     }
 
-    pub(super) fn backend(&self) -> GDriveBackend {
+    pub(crate) fn backend(&self) -> GDriveBackend {
         // Memory-only fake credentials and disabled persistent cache. All
         // metadata and upload URIs derive from this dynamically bound origin.
         GDriveBackend::test_backend(&format!("{}/drive/v3", self.base))
     }
 
-    pub(super) fn finish(mut self) -> Vec<Request> {
+    pub(crate) fn finish(mut self) -> Vec<Request> {
         self.stop.store(true, Ordering::SeqCst);
         let capture = self.worker.take().unwrap().join().unwrap();
         assert!(capture.errors.is_empty(), "{:?}", capture.errors);
@@ -141,7 +142,7 @@ fn read_until(stream: &mut TcpStream, mut target: &mut [u8], deadline: Instant) 
     Ok(())
 }
 
-pub(super) fn step(method: &'static str, path: &'static str, reply: Reply) -> Step {
+pub(crate) fn step(method: &'static str, path: &'static str, reply: Reply) -> Step {
     Step { method, path, reply }
 }
 
