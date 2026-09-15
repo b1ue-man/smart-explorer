@@ -66,3 +66,13 @@ Primary sources checked on 2026-09-15:
 - No local build, test or native execution. Commit coherent milestones, push
   the completed candidate, evaluate the one remote entrypoint, then use the
   established terminal release wrapper once after the complete batch is ready.
+
+## Implementation checkpoint
+
+F1 is implemented in `edcc3a5`; F2 in `de9d183`. Clearing the app log also clears
+its current error so the next frame cannot immediately recreate the cleared
+entry; retained scan-path diagnostics remain available. Only static Rust syntax
+and text checks have run. The full supplied failure (F3) remains unconfirmed;
+do not claim the user's scan repaired from the `/` excerpt. Remote acceptance
+and the terminal release belong to the completed follow-up batch. Live open
+status is tracked as G2 in `docs/TODO.md`.
