@@ -326,7 +326,7 @@ impl App {
                     if resp.changed() {
                         changed = true;
                     }
-                    if ui.small_button("✕").clicked() {
+                    if ui.small_button("×").clicked() {
                         *field = None;
                         changed = true;
                     }

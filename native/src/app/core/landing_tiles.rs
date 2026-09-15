@@ -207,7 +207,7 @@ fn paint_landing_tile(
     }
     if response.has_focus() {
         ui.painter().rect_stroke(rect.shrink(1.0), 2.0,
-            egui::Stroke::new(2.0, theme::accent(ui)));
+            egui::Stroke::new(2.0_f32, theme::accent(ui)));
     }
 
     let accent = if tile.warn {

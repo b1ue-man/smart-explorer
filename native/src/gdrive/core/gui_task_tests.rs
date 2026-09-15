@@ -237,7 +237,10 @@ fn gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundar
     }
     // An invalid absence response must not start a create/upload mutation.
     let fixture = Fixture::new(vec![step("GET", FILES, Reply::Json(json!({"files": false})))]);
-    assert!(fixture.backend().open_write("I%2FO").is_err());
+    let mut writer = fixture.backend().open_write("I%2FO").unwrap();
+    writer.write_all(b"abc").unwrap();
+    assert_eq!(writer.flush().unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    drop(writer);
     assert_eq!(fixture.finish().len(), 1);
 }
 

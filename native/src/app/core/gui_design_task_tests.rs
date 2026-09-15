@@ -76,7 +76,7 @@ fn gui_design_task_theme_switch_keeps_custom_styles() {
         assert_eq!(ctx.theme(), system);
         assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 13.0);
     }
-    assert!(ctx.fonts(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), "←→↑⋯")));
+    assert!(ctx.fonts(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), "←→↑⋯◀▶✏⟳☆»×")));
     ctx.set_theme(egui::Theme::Light);
     let _ = ctx.run(egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() }, |_| {});
     assert_eq!(ctx.theme(), egui::Theme::Light);

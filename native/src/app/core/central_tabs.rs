@@ -329,7 +329,7 @@ impl App {
                 if selected
                     && self.tabs.len() > 1
                     && ui
-                        .small_button("✕")
+                        .small_button("×")
                         .on_hover_text("Tab schließen (Ctrl+W)")
                         .clicked()
                 {

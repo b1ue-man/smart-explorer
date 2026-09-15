@@ -68,3 +68,21 @@ flow. Static Rust parsing and module size checks completed without local native
 execution. Acceptance images/logs and subsequent publication are recorded by the
 [existing workflows](https://github.com/b1ue-man/smart-explorer/actions). Live
 open work remains on `docs/TODO.md`; this plan records implementation evidence.
+
+### Remote review correction
+
+The [first correction run](https://github.com/b1ue-man/smart-explorer/actions/runs/35008277267)
+produced real light/dark images and exercised the restored shell and report.
+Visual review found centered sidebar labels and an unsupported pencil glyph.
+Pinned egui `Layout::left_to_right` defaults its main alignment to Center;
+explicit Min alignment corrects the location rows. Static font character tables
+confirm that the bundled fonts contain `✏` and `×`, whereas `✎` and `✕` are
+absent. The same close-glyph correction covers tabs, date filters and saved
+sync setups. New stroke widths also explicitly use `f32`, resolving the
+compiler warning from this candidate.
+
+The Drive mutation-absence fixture initially asserted at `open_write`, which
+only creates a private spool. The actual upload boundary is `flush`, as defined
+by `DriveWriter::commit`; the fixture now writes and flushes before requiring
+the invalid listing error and confirming that no mutation request was sent.
+The same remote entrypoint verifies these corrections together.

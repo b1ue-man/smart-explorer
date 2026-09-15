@@ -149,6 +149,12 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             }
             assert!(!h.capture.contains("Erstellt") && !h.capture.contains("Tiefe"));
             assert!(!h.capture.contains("Dateien suchen…"));
+            let sidebar_labels: Vec<_> = ["Persönlicher Ordner", "Desktop", "Dokumente", "Downloads", "Bilder", "Musik", "Videos"]
+                .iter().map(|label| h.capture.labels.iter().rev()
+                    .find(|(text, rect, clip)| text == label && rect.left() < 190.0 && clip.contains(rect.center()))
+                    .unwrap().1.left()).collect();
+            assert!(sidebar_labels.iter().all(|left| (left - sidebar_labels[0]).abs() < 1.0),
+                "sidebar labels are not aligned: {sidebar_labels:?}");
             assert!(h.capture.target("Bericht.md").y < 160.0, "toolbar crowds the file list");
             let command_y = h.capture.target("Verbindung").y;
             for label in ["◀", "↑", "Neu", "Sync", "Einstellungen", "Ansicht", "»"] {
