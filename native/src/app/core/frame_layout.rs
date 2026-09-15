@@ -51,6 +51,9 @@ impl App {
 
         self.ui_central(ctx);
 
+        if self.settings.open {
+            self.ui_settings(ctx);
+        }
         if self.copy_open {
             self.ui_copy_dialog(ctx);
         }

@@ -18,14 +18,17 @@ impl App {
         };
 
         egui::Window::new(title)
-            .fixed_size([560.0, 280.0])
+            .default_size([600.0, 380.0])
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
+            .vscroll(true)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(format!("{} Einträge ausgewählt", self.selection.len()));
                 ui.add_enabled_ui(!running, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Modus:");
                         ui.radio_value(&mut self.copy_mode_pending, CopyMode::Copy, "kopieren");
                         ui.radio_value(
@@ -37,15 +40,15 @@ impl App {
                 });
                 ui.colored_label(
                     theme::muted(ui),
-                    "Ordner werden rekursiv expandiert; nur Dateien die dem aktuellen Filter entsprechen werden kopiert. Ordnerstruktur wird erhalten, leere Ordner weggelassen.",
+                    "Es werden nur Dateien übernommen, die zum aktuellen Filter passen.",
                 );
                 ui.add_space(6.0);
                 ui.add_enabled_ui(!running, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Ziel:");
                         ui.add(
                             egui::TextEdit::singleline(&mut self.copy_dest)
-                                .desired_width(360.0)
+                                .desired_width((ui.available_width() - 100.0).max(160.0))
                                 .hint_text("Zielordner…"),
                         );
                         if ui.button("Wählen…").clicked() {
@@ -57,7 +60,7 @@ impl App {
                         &mut self.copy_preserve,
                         "Ordnerstruktur erhalten (leere Ordner werden weggelassen)",
                     );
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Bei Konflikt:");
                         ui.radio_value(&mut self.copy_conflict, Conflict::Rename, "umbenennen");
                         ui.radio_value(
@@ -98,12 +101,12 @@ impl App {
                 }
 
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
                                 !self.copy_dest.is_empty() && !running,
-                                egui::Button::new(RichText::new("Start").strong()),
+                                egui::Button::new(RichText::new(if displayed_mode == CopyMode::Copy { "Kopieren" } else { "Verschieben" }).strong()),
                             )
                             .clicked()
                         {

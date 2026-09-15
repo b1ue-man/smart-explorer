@@ -10,7 +10,7 @@ impl App {
         if let Some((path, draft)) = self.rename_open.as_mut() {
             let title = path.rsplit('/').next().unwrap_or("").to_string();
             egui::Window::new(format!("Umbenennen: {}", title))
-                .fixed_size([420.0, 80.0])
+                .default_size([440.0, 140.0])
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -157,11 +157,14 @@ impl App {
         let mut do_connect = false;
         let mut close = false;
         let mut open = true;
-        egui::Window::new("Verbinden (SFTP / FTP / Netzlaufwerk)")
+        egui::Window::new("Neue Verbindung")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .fixed_size([440.0, 0.0])
+            .default_size([520.0, 480.0])
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
+            .vscroll(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 let f = &mut self.connect_form;
@@ -245,12 +248,12 @@ impl App {
 
                 if f.protocol == Protocol::Sftp {
                     ui.checkbox(&mut f.use_key, "Mit Schlüsseldatei anmelden");
-                    ui.checkbox(&mut f.use_agent, "⚡ Remote-Agent (experimentell)")
+                    ui.checkbox(&mut f.use_agent, "Remote-Agent verwenden")
                         .on_hover_text(
                             "Lädt beim Verbinden einen kleinen Helfer auf den Server und führt \
                              Erkundung/Analyse dort lokal aus (statt vieler Netzwerk-Roundtrips). \
                              Opt-in; fällt bei Problemen automatisch auf normales SFTP zurück. \
-                             Noch keine Agent-Binaries gebündelt — siehe docs/SSH_AGENT_PLAN.md.",
+                             Der Zugriff bleibt bei Problemen über SFTP möglich.",
                         );
                 }
                 if f.protocol == Protocol::Sftp && f.use_key {
@@ -382,7 +385,8 @@ impl App {
         egui::Window::new("Tastenkürzel")
             .open(&mut open)
             .resizable(true)
-            .default_size([520.0, 560.0])
+            .default_size([600.0, 520.0])
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

@@ -33,8 +33,10 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([600.0, 650.0])
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height((ctx.screen_rect().height() - 160.0).max(180.0)).show(ui, |ui| {
                 egui::Grid::new("job_editor_grid")
                     .num_columns(2)
                     .spacing([10.0, 8.0])

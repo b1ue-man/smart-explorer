@@ -4,7 +4,7 @@ use super::{
     analytics_access::issues_ui,
     analytics_accessibility::treemap_accessible_list,
     app_models::TmCell,
-    treemap::{nested_treemap, treemap_needs_layout, TM_HEADER},
+    treemap::{nested_treemap, treemap_needs_layout},
 };
 use crate::{
     analytics::{self, AnalysisStartup, Progress, ScanOutcome, ScanStatus, SizeNode},
@@ -185,17 +185,7 @@ impl eframe::App for AnalysisWindow {
                 if let Some(node) = node { nested_treemap(rect, node, base.trim_end_matches('/'), 0, None, &mut self.cells); }
                 self.cells_rect = rect;
             }
-            let painter = ui.painter_at(rect);
-            for cell in &self.cells {
-                painter.rect_filled(cell.rect, 1.0, if cell.container { cell.color.gamma_multiply(0.4) } else { cell.color });
-                let label_rect = if cell.container { egui::Rect::from_min_max(cell.rect.min,
-                    egui::pos2(cell.rect.max.x, cell.rect.min.y + TM_HEADER)) } else { cell.rect };
-                if label_rect.width() > 40.0 && label_rect.height() >= 15.0 {
-                    painter.with_clip_rect(label_rect.shrink(2.0)).text(label_rect.min + egui::vec2(3.0, 1.0),
-                        egui::Align2::LEFT_TOP, format!("{}  {}", cell.name, format_bytes(cell.size)),
-                        egui::FontId::proportional(11.0), egui::Color32::WHITE);
-                }
-            }
+            super::analytics_paint::paint(ui, rect, &self.cells);
             if let Some(pos) = response.hover_pos() {
                 if let Some(cell) = self.cells.iter().rev().find(|cell| cell.rect.contains(pos)) {
                     let clicked = response.clicked();
