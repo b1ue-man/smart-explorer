@@ -2,6 +2,10 @@ use super::prelude::*;
 use super::*;
 
 impl App {
+    pub(crate) fn configure_appearance(&self, ctx: &egui::Context) {
+        theme::install(ctx, self.appearance.mode);
+    }
+
     fn save_recent(recent: &[String]) -> std::io::Result<()> {
         std::fs::write(settings_path(), recent.join("\n"))
     }
@@ -54,6 +58,7 @@ impl App {
         if let Err(error) = (UiState {
             show_filters: self.show_filters,
             show_summary: self.show_summary,
+            appearance: self.appearance,
         })
         .save()
         {

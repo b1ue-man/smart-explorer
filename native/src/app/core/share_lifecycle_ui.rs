@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::share_lifecycle_view::{
     authorized_device_views, request_views, AuthorizedDeviceView, RequestView,
 };
@@ -175,7 +176,7 @@ fn request_card(
         if incoming && request.can_decide {
             if request.identity_conflict {
                 ui.colored_label(
-                    Color32::from_rgb(255, 120, 120),
+                    theme::danger(ui),
                     "Identitaetskonflikt: Akzeptieren ist gesperrt. Die Konfliktzeile nennt die bestehende Freigabe oder Anfrage, die zuerst aufgeloest werden muss; alternativ diese Anfrage ablehnen oder loeschen.",
                 );
             }
@@ -281,7 +282,7 @@ fn authorized_card(
             }
         } else if let Some(selector) = &device.accepted_legacy_request {
             ui.colored_label(
-                Color32::from_rgb(255, 185, 120),
+                theme::warning(ui),
                 "Legacy-Freigabe; ein Widerruf ist nur lokal und ungetrackt.",
             );
             if ui.button("Legacy-Freigabe lokal sperren").clicked() {
@@ -469,7 +470,7 @@ fn refresh_after_action(app: &mut App, notice: String) -> bool {
 }
 
 fn section_heading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).small().color(Color32::from_gray(140)));
+    ui.label(RichText::new(text).small().color(theme::muted(ui)));
 }
 
 fn default_home() -> String {

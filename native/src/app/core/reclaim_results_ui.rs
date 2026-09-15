@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 
 pub(in crate::app) fn ui_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
@@ -64,7 +65,7 @@ pub(in crate::app) fn ui_item(
             ui.label(
                 RichText::new("behalten")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
         }
         let date = if item.mtime_ms > 0 {
@@ -72,7 +73,7 @@ pub(in crate::app) fn ui_item(
         } else {
             "-".to_string()
         };
-        ui.label(RichText::new(date).small().color(Color32::from_gray(150)));
+        ui.label(RichText::new(date).small().color(theme::muted(ui)));
         ui.add(egui::Label::new(&item.name).truncate())
             .on_hover_text(&item.path);
         let reason = if item.reason.is_empty() {
@@ -80,7 +81,7 @@ pub(in crate::app) fn ui_item(
         } else {
             format!("{} · {}", item.reason, item.confidence.label())
         };
-        ui.label(RichText::new(reason).small().color(Color32::from_gray(150)));
+        ui.label(RichText::new(reason).small().color(theme::muted(ui)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Anzeigen").clicked() {
                 *reveal = Some(item.path.clone());
@@ -105,7 +106,7 @@ fn reclaim_selection_label(item: &crate::analytics::ReclaimItem) -> String {
 }
 
 pub(in crate::app) fn ui_empty(ui: &mut egui::Ui) {
-    ui.colored_label(Color32::from_gray(140), "(keine)");
+    ui.colored_label(theme::muted(ui), "(keine)");
 }
 
 pub(in crate::app) fn select_items(

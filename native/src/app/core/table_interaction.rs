@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -149,7 +150,7 @@ impl App {
             painter.rect_stroke(
                 rect,
                 0.0,
-                egui::Stroke::new(1.0_f32, Color32::from_rgb(90, 140, 255)),
+                egui::Stroke::new(1.0_f32, theme::accent(ui)),
             );
         }
 

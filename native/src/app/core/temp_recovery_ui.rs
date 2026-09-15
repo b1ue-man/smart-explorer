@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::delete_worker::DeleteReporter;
@@ -9,24 +10,24 @@ impl App {
         ui.label(
             RichText::new("REMOTE-WIEDERHERSTELLUNG")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         let count = match recovery_session_count() {
             Ok(count) => count,
             Err(error) => {
                 ui.colored_label(
-                    Color32::from_rgb(230, 120, 100),
+                    theme::danger(ui),
                     format!("Wiederherstellungsdaten konnten nicht geprüft werden: {error}"),
                 );
                 return;
             }
         };
         if count == 0 {
-            ui.colored_label(Color32::from_gray(140), "Keine erhaltenen Sitzungen.");
+            ui.colored_label(theme::muted(ui), "Keine erhaltenen Sitzungen.");
             return;
         }
         ui.colored_label(
-            Color32::from_rgb(255, 190, 90),
+            theme::warning(ui),
             format!(
                 "{count} Sitzung(en) mit lokalen Remote-Datei-Kopien unter {}.",
                 temp_root().display()

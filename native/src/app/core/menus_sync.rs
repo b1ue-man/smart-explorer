@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -8,7 +9,7 @@ impl App {
             ui.label(
                 RichText::new("VERBINDEN")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             if (self.remote.is_some() || self.net_conn.is_some())
                 && ui
@@ -21,7 +22,7 @@ impl App {
             }
         });
         if let Some(rs) = &self.remote {
-            ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
+            ui.colored_label(theme::accent(ui), format!("● {}", rs.label));
         }
         if ui
             .small_button("＋ Neue Verbindung")
@@ -52,7 +53,7 @@ impl App {
             ui.label(
                 RichText::new("WEITERE (ältere)")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             for c in conns.iter().skip(SIDEBAR_CONN_CAP) {
                 ui.horizontal(|ui| {
@@ -75,7 +76,7 @@ impl App {
             }
         } else if !conns.is_empty() {
             ui.colored_label(
-                Color32::from_gray(120),
+                theme::muted(ui),
                 "Gespeicherte Verbindungen: in der Sidebar links.",
             );
         }
@@ -139,7 +140,7 @@ impl App {
             }
             let n = self.sync_jobs.len();
             if n > 0 {
-                ui.colored_label(Color32::from_gray(140), format!("({n})"));
+                ui.colored_label(theme::muted(ui), format!("({n})"));
             }
         });
         // Quick-create from the current location.
@@ -163,7 +164,7 @@ impl App {
         ui.label(
             RichText::new("HINTERGRUND")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         let mut bg = crate::autostart::is_enabled();
         if ui
@@ -222,17 +223,17 @@ impl App {
         if bg && crate::daemon::is_running() {
             let age = crate::daemon::last_heartbeat_age().unwrap_or(0);
             ui.colored_label(
-                Color32::from_rgb(120, 200, 255),
+                theme::accent(ui),
                 format!("● Dienst aktiv (vor {age}s)"),
             );
         } else if bg {
             ui.colored_label(
-                Color32::from_gray(150),
+                theme::muted(ui),
                 "Dienst startet beim nächsten Anmelden.",
             );
         } else if crate::daemon::is_running() {
             ui.colored_label(
-                Color32::from_gray(150),
+                theme::muted(ui),
                 "Hintergrund-Sync aus · Share-Sitzungsdienst aktiv.",
             );
         }
@@ -259,7 +260,7 @@ impl App {
                     }
                 }
                 Err(error) => {
-                    ui.colored_label(Color32::from_rgb(230, 120, 100), "nicht lesbar")
+                    ui.colored_label(theme::danger(ui), "nicht lesbar")
                         .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
                 }
             }
@@ -269,19 +270,19 @@ impl App {
         ui.horizontal(|ui| {
             match crate::daemon::pause_remaining() {
                 Ok(Some(r)) if r == i64::MAX => {
-                    ui.colored_label(Color32::from_rgb(230, 180, 90), "⏸ pausiert (dauerhaft)");
+                    ui.colored_label(theme::warning(ui), "⏸ pausiert (dauerhaft)");
                 }
                 Ok(Some(r)) => {
                     ui.colored_label(
-                        Color32::from_rgb(230, 180, 90),
+                        theme::warning(ui),
                         format!("⏸ pausiert (noch {} min)", (r / 60).max(1)),
                     );
                 }
                 Ok(None) => {
-                    ui.colored_label(Color32::from_gray(140), "Pause:");
+                    ui.colored_label(theme::muted(ui), "Pause:");
                 }
                 Err(error) => {
-                    ui.colored_label(Color32::from_rgb(230, 120, 100), "⏸ Status nicht lesbar")
+                    ui.colored_label(theme::danger(ui), "⏸ Status nicht lesbar")
                         .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
                 }
             }
@@ -337,7 +338,7 @@ impl App {
             }
             Err(error) => {
                 ui.colored_label(
-                    Color32::from_rgb(230, 120, 100),
+                    theme::danger(ui),
                     "Automatische Pause nicht lesbar · Hintergrund-Sync gesperrt",
                 )
                 .on_hover_text(error.to_string());
@@ -347,7 +348,7 @@ impl App {
         ui.label(
             RichText::new("Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.")
                 .small()
-                .color(Color32::from_gray(120)),
+                .color(theme::muted(ui)),
         );
     }
 

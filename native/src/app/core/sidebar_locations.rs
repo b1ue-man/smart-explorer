@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -21,20 +22,20 @@ impl App {
         ui.label(
             RichText::new("Ordnersuche → Suchleiste oben (Ctrl+F)")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
 
         ui.horizontal(|ui| {
             if self.index_building {
                 ui.colored_label(
-                    Color32::from_gray(140),
+                    theme::muted(ui),
                     format!("⟳ Indizieren… {} Ordner", self.index_progress),
                 );
                 if ui.small_button("Stop").clicked() {
                     self.cancel_index_build();
                 }
             } else if self.folder_index.is_empty() {
-                ui.colored_label(Color32::from_gray(140), "Kein Index");
+                ui.colored_label(theme::muted(ui), "Kein Index");
                 if ui
                     .small_button("Bauen")
                     .on_hover_text("Scannt alle Laufwerke einmalig nach Ordnern (etwa 30-90s)")
@@ -45,7 +46,7 @@ impl App {
             } else {
                 let count = self.folder_index.len();
                 ui.colored_label(
-                    Color32::from_gray(140),
+                    theme::muted(ui),
                     format!(
                         "Index: {} Ordner",
                         count.to_string().chars().rev().enumerate().fold(
@@ -77,7 +78,7 @@ impl App {
             ui.label(
                 RichText::new("★ FAVORITEN")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             let favs = self.favorites.clone();
             let mut nav: Option<String> = None;
@@ -115,7 +116,7 @@ impl App {
         ui.label(
             RichText::new("SCHNELLZUGRIFF")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         let home = self.home.clone();
         for (label, sub) in [
@@ -149,7 +150,7 @@ impl App {
             ui.label(
                 RichText::new("LAUFWERKE")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             let infos = self.drive_info.clone();
             for (d, free, total) in infos {
@@ -181,7 +182,7 @@ impl App {
             ui.label(
                 RichText::new("ZULETZT")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             let recent = self.recent.clone();
             for r in recent {

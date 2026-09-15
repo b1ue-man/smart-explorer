@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 
 /// A virtualized, keyboard- and screen-reader-friendly representation of the
@@ -23,7 +24,7 @@ pub(super) fn treemap_accessible_list(
                     "Virtuelle Liste der aktuellen Ebene; Ordner öffnen die nächste Ebene.",
                 )
                 .small()
-                .color(Color32::from_gray(150)),
+                .color(theme::muted(ui)),
             );
             let row_height = ui.spacing().interact_size.y.max(24.0);
             egui::ScrollArea::vertical()

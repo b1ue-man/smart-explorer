@@ -189,6 +189,7 @@ impl App {
 
             show_filters: ui_state.show_filters,
             show_summary: ui_state.show_summary,
+            appearance: ui_state.appearance,
             dirs_first: DEFAULT_DIRS_FIRST,
             dir_sort: load_dir_sort(),
             show_analytics: false,

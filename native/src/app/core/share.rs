@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -482,7 +483,7 @@ impl App {
         ui.label(
             RichText::new("DIESES GERAET")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             ui.label("Direkt-Code:");
@@ -496,7 +497,7 @@ impl App {
                 }
             } else {
                 ui.colored_label(
-                    Color32::from_rgb(255, 120, 120),
+                    theme::danger(ui),
                     self.share_identity_error
                         .as_deref()
                         .unwrap_or("Share-Identitaet nicht verfuegbar"),
@@ -544,7 +545,7 @@ impl App {
         });
         if self.share_regenerate_direct_confirm {
             ui.colored_label(
-                Color32::from_rgb(255, 185, 120),
+                theme::warning(ui),
                 "Neuer Code invalidiert alte Direktkontakte zu diesem Geraet.",
             );
             ui.horizontal_wrapped(|ui| {
@@ -567,7 +568,7 @@ impl App {
         ui.label(
             RichText::new("DIREKTGERAET HINZUFUEGEN")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -612,7 +613,7 @@ impl App {
         ui.label(
             RichText::new("GESPEICHERTE DIREKTGERAETE")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         let mut remove: Option<String> = None;
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
@@ -716,7 +717,7 @@ impl App {
         ui.label(
             RichText::new("RAUM ERSTELLEN")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -754,7 +755,7 @@ impl App {
         ui.label(
             RichText::new("RAUM BEITRETEN")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -799,7 +800,7 @@ impl App {
         ui.label(
             RichText::new("GESPEICHERTE RAEUME")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         let mut remove_room: Option<String> = None;
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
@@ -1146,7 +1147,7 @@ impl App {
                     egui::Label::new(
                         RichText::new(self.share_diag_log.as_str())
                             .monospace()
-                            .color(Color32::from_gray(210)),
+                            .color(theme::muted(ui)),
                     )
                     .wrap(),
                 );

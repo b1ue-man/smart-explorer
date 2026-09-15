@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -360,11 +361,11 @@ impl App {
         ui.label(
             RichText::new("TOP-DATEITYPEN")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         for (k, count, bytes) in &s.by_ext {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(80, 140, 255), RichText::new(k).strong());
+                ui.colored_label(theme::accent(ui), RichText::new(k).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format_bytes(*bytes));
                     ui.label(format!("{} ×", count));
@@ -376,11 +377,11 @@ impl App {
         ui.label(
             RichText::new("GRÖSSTE DATEIEN")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         for (name, path, size) in s.top.iter().take(10) {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(80, 140, 255), format_bytes(*size));
+                ui.colored_label(theme::accent(ui), format_bytes(*size));
                 ui.add(egui::Label::new(name).truncate())
                     .on_hover_text(path);
             });

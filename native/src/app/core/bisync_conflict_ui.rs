@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::bisync_conflicts::{ConflictBulkRun, ConflictSide};
 use super::prelude::*;
 use super::*;
@@ -241,7 +242,7 @@ impl App {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.colored_label(
-                    Color32::from_rgb(230, 160, 100),
+                    theme::warning(ui),
                     "Die Dateien wurden aufgelöst, aber der neue Synchronisationsstand ist noch nicht dauerhaft gespeichert.",
                 );
                 if ui.button("Speichern erneut versuchen").clicked() {

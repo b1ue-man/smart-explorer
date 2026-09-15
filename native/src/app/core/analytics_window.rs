@@ -25,7 +25,8 @@ pub(crate) fn run_analysis_window(request: Result<AnalysisStartup, String>) -> e
         "Smart Explorer – Administrator-Speicheranalyse",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            let preferences = super::shared_platform_helpers::UiState::load();
+            super::theme::install(&cc.egui_ctx, preferences.appearance.mode);
             Ok(Box::new(AnalysisWindow::new(request)))
         }),
     )

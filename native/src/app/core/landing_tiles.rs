@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 
 #[derive(Clone)]
@@ -72,7 +73,7 @@ pub(super) fn ui_landing_section(
     let header = egui::CollapsingHeader::new(
         RichText::new(format!("{} ({})", title, tiles.len()))
             .strong()
-            .color(Color32::from_gray(180)),
+            .color(theme::muted(ui)),
     )
     .id_salt(("landing_section", title))
     .default_open(default_open)
@@ -85,7 +86,7 @@ pub(super) fn ui_landing_section(
 
 fn landing_tile_grid(ui: &mut egui::Ui, tiles: &[LandingTile], action: &mut Option<LandingAction>) {
     if tiles.is_empty() {
-        ui.colored_label(Color32::from_gray(125), "Leer");
+        ui.colored_label(theme::muted(ui), "Leer");
         return;
     }
     let gap = 8.0;
@@ -190,7 +191,7 @@ fn paint_landing_tile(
         ui.visuals().faint_bg_color
     };
     let stroke_color = if tile.warn {
-        Color32::from_rgb(220, 150, 80)
+        theme::warning(ui)
     } else {
         ui.visuals().widgets.inactive.bg_stroke.color
     };
@@ -202,11 +203,11 @@ fn paint_landing_tile(
     );
 
     let accent = if tile.warn {
-        Color32::from_rgb(220, 150, 80)
+        theme::warning(ui)
     } else if tile.action.is_some() {
         ui.visuals().selection.bg_fill
     } else {
-        Color32::from_gray(100)
+        theme::muted(ui)
     };
     ui.painter().rect_filled(
         egui::Rect::from_min_max(
@@ -237,13 +238,13 @@ fn paint_landing_tile(
         ),
         &tile.detail,
         egui::TextStyle::Small.resolve(ui.style()),
-        Color32::from_gray(135),
+        theme::muted(ui),
     );
     if !tile.meta.is_empty() {
         let color = if tile.warn {
-            Color32::from_rgb(230, 175, 95)
+            theme::warning(ui)
         } else {
-            Color32::from_gray(150)
+            theme::muted(ui)
         };
         paint_landing_text(
             ui,
@@ -279,7 +280,7 @@ fn paint_landing_tile(
             ),
             label,
             egui::TextStyle::Small.resolve(ui.style()),
-            Color32::from_gray(135),
+            theme::muted(ui),
         );
     }
 }

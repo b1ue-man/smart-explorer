@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -36,7 +37,7 @@ impl App {
 
     pub(in crate::app) fn ui_quickshare_devices(&mut self, ui: &mut egui::Ui) {
         if let Some(error) = self.quickshare_error.clone() {
-            ui.colored_label(Color32::from_rgb(255, 150, 120), error);
+            ui.colored_label(theme::warning(ui), error);
             if ui.button("LAN-Suche erneut versuchen").clicked() {
                 self.quickshare_error = None;
             }
@@ -45,7 +46,7 @@ impl App {
             ui.label("LAN-Suche wird gestartet …");
         } else if self.qs_devices.is_empty() {
             ui.colored_label(
-                Color32::from_gray(140),
+                theme::muted(ui),
                 "Suche … Auf Android Quick Share fuer andere Geraete sichtbar machen.",
             );
         }
@@ -63,7 +64,7 @@ impl App {
                 "Die LAN-Erkennung ist funktionsfaehig. Dateiuebertragung zu Android Quick Share ist noch nicht implementiert; fuer Geraete mit Smart Explorer oben Direkt oder Raum verwenden.",
             )
             .small()
-            .color(Color32::from_gray(120)),
+            .color(theme::muted(ui)),
         );
     }
 }

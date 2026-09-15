@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::App;
 use eframe::egui::{self, Color32, RichText};
 
@@ -25,7 +26,7 @@ pub(in crate::app) fn ui_exec_grants(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         RichText::new("REMOTE-AUSFUEHRUNG PRO GERAET")
             .small()
-            .color(Color32::from_gray(140)),
+            .color(theme::muted(ui)),
     );
     ui.small(
         "Dateifreigaben erlauben niemals automatisch Codeausfuehrung. Exec gilt nur fuer die angezeigte, exakt gepinnte Geraeteidentitaet.",
@@ -43,7 +44,7 @@ pub(in crate::app) fn ui_exec_grants(app: &mut App, ui: &mut egui::Ui) {
         ui.label(format!("Kapselung: {}", provider.provider));
         if !provider.available {
             ui.colored_label(
-                Color32::from_rgb(230, 100, 100),
+                theme::danger(ui),
                 format!("nicht verfuegbar — {}", provider.detail),
             );
         }
@@ -83,16 +84,16 @@ fn exec_device_card(
             "DEAKTIVIERT — keine Remote-Codeausfuehrung"
         };
         let color = if view.enabled {
-            Color32::from_rgb(235, 105, 95)
+            theme::danger(ui)
         } else {
-            Color32::from_rgb(120, 205, 145)
+            theme::success(ui)
         };
         ui.colored_label(color, RichText::new(status).strong());
         ui.small(format!("Exec-Policy-Revision: {}", view.policy_revision));
 
         if !view.base_authorized {
             ui.colored_label(
-                Color32::from_rgb(255, 185, 120),
+                theme::warning(ui),
                 "Basisfreigabe ist inaktiv; Exec kann nicht aktiviert werden.",
             );
         }
@@ -132,12 +133,12 @@ fn activation_controls(
 
     let warning = exec_warning(provider);
     ui.colored_label(
-        Color32::from_rgb(245, 95, 85),
+        theme::danger(ui),
         RichText::new(&warning.full_access).strong(),
     );
     if let Some(elevated) = warning.elevated {
         ui.colored_label(
-            Color32::from_rgb(245, 70, 70),
+            theme::danger(ui),
             RichText::new(elevated).strong(),
         );
     }

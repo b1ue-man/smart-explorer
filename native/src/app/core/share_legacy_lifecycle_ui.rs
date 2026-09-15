@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::*;
 
 enum LegacyAction {
@@ -30,7 +31,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.separator();
     heading(ui, "LEGACY-ANFRAGEN — LOKAL PERSISTIERT");
     ui.colored_label(
-        Color32::from_rgb(255, 185, 120),
+        theme::warning(ui),
         "Legacy-Anfragen sind HMAC-authentifiziert und lokal gespeichert. Der alte Peer bestaetigt Empfang oder Entscheidung nicht; Versand bleibt immer unbestaetigt.",
     );
     let mut action = None;
@@ -222,7 +223,7 @@ fn perform(app: &mut App, action: LegacyAction) {
 }
 
 fn heading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).small().color(Color32::from_gray(140)));
+    ui.label(RichText::new(text).small().color(theme::muted(ui)));
 }
 
 fn default_home() -> String {

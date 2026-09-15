@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::analytics_accessibility::treemap_accessible_list;
@@ -91,7 +92,7 @@ impl App {
                         ui.label(
                             RichText::new("Scannen:")
                                 .small()
-                                .color(Color32::from_gray(150)),
+                                .color(theme::muted(ui)),
                         );
                         for (root, free, total) in &drives {
                             let used = total.saturating_sub(*free);
@@ -206,26 +207,26 @@ impl App {
                             ui.label(
                                 RichText::new("· Klick = reinzoomen")
                                     .small()
-                                    .color(Color32::from_gray(130)),
+                                    .color(theme::muted(ui)),
                             );
                         });
                     }
                     match run_state {
                         StorageRunState::Idle => {
                             ui.colored_label(
-                                Color32::from_gray(150),
+                                theme::muted(ui),
                                 "Waehlen Sie ein Laufwerk, einen Ordner oder die aktuelle Remote-Verbindung.",
                             );
                         }
                         StorageRunState::Canceled => {
                             ui.colored_label(
-                                Color32::from_rgb(255, 190, 90),
+                                theme::warning(ui),
                                 "Scan abgebrochen. Ein neuer Scan startet nur nach Ihrer Auswahl.",
                             );
                         }
                         StorageRunState::Partial => {
                             ui.colored_label(
-                                Color32::from_rgb(255, 190, 90),
+                                theme::warning(ui),
                                 format!("Teilresultat: {issue_count} Pfad(e) konnten nicht gelesen werden."),
                             );
                         }
@@ -235,7 +236,7 @@ impl App {
                                 .map(|issue| format!("{}: {}", issue.path, issue.detail))
                                 .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
                             ui.colored_label(
-                                Color32::from_rgb(255, 120, 100),
+                                theme::danger(ui),
                                 format!("Scan fehlgeschlagen: {detail}"),
                             );
                         }

@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -318,7 +319,7 @@ impl App {
                 ui.separator();
                 let validation = ed.build_sync_job(existing_job.as_ref());
                 if let Err(error) = &validation {
-                    ui.colored_label(Color32::from_rgb(230, 120, 120), error);
+                    ui.colored_label(theme::danger(ui), error);
                 }
                 ui.horizontal(|ui| {
                     if ui

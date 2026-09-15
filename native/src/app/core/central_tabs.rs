@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -77,7 +78,7 @@ impl App {
                             } else {
                                 ui.label(
                                     RichText::new(format!("○ {}", title))
-                                        .color(Color32::from_gray(150)),
+                                        .color(theme::muted(ui)),
                                 )
                             };
                             // Right-click either pane header → sync the two open
@@ -137,7 +138,7 @@ impl App {
             ui.painter().rect_stroke(
                 fr.shrink(1.0),
                 4.0,
-                egui::Stroke::new(2.0_f32, Color32::from_rgb(90, 150, 220)),
+                egui::Stroke::new(2.0_f32, theme::accent(ui)),
             );
             if sync_panes_req {
                 self.sync_split_panes();
@@ -312,7 +313,7 @@ impl App {
                     ui.painter().rect_stroke(
                         resp.rect.expand(1.0),
                         3.0,
-                        egui::Stroke::new(2.0_f32, Color32::from_rgb(120, 200, 255)),
+                        egui::Stroke::new(2.0_f32, theme::accent(ui)),
                     );
                 }
                 if resp.clicked() && !selected {

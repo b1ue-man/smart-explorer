@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -29,7 +30,7 @@ impl App {
                 ui.label(
                     RichText::new("A = Quelle (links), B = Ziel (rechts). Gleiche Zeile auf beiden Seiten = Konflikt → genau EINE Seite wählen (Zeilen werden nicht zusammengefügt). Nur-eine-Seite-Zeilen kannst du einzeln übernehmen/weglassen.")
                         .small()
-                        .color(Color32::from_gray(150)),
+                        .color(theme::muted(ui)),
                 );
                 ui.horizontal(|ui| {
                     if ui.small_button("Alle A").clicked() {
@@ -40,9 +41,9 @@ impl App {
                     }
                 });
                 ui.separator();
-                let gray = Color32::from_gray(150);
-                let green = Color32::from_rgb(120, 200, 120);
-                let blue = Color32::from_rgb(120, 180, 230);
+                let gray = theme::muted(ui);
+                let green = theme::success(ui);
+                let blue = theme::accent(ui);
                 let colw = ((ui.available_width() - 40.0) / 2.0).max(120.0);
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("merge_grid").num_columns(2).striped(true).min_col_width(colw).show(ui, |ui| {
@@ -67,7 +68,7 @@ impl App {
                                     ui.label(RichText::new(l).monospace().color(green));
                                 } else {
                                     ui.add_space(20.0);
-                                    ui.label(RichText::new("∅").monospace().color(Color32::from_gray(90)));
+                                    ui.label(RichText::new("∅").monospace().color(theme::muted(ui)));
                                 }
                             });
                             // Right (B) cell.
@@ -87,7 +88,7 @@ impl App {
                                     ui.label(RichText::new(l).monospace().color(blue));
                                 } else {
                                     ui.add_space(20.0);
-                                    ui.label(RichText::new("∅").monospace().color(Color32::from_gray(90)));
+                                    ui.label(RichText::new("∅").monospace().color(theme::muted(ui)));
                                 }
                             });
                             ui.end_row();

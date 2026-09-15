@@ -103,8 +103,9 @@ pub fn run_gui() -> eframe::Result<()> {
         "Smart Explorer",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(eframe::egui::Visuals::dark());
-            Ok(Box::new(app::App::new(just_updated, initial_path)))
+            let app = app::App::new(just_updated, initial_path);
+            app.configure_appearance(&cc.egui_ctx);
+            Ok(Box::new(app))
         }),
     )
 }

@@ -1,3 +1,4 @@
+use crate::app::theme;
 //! "LAN" tab of the Share view: local-network presence of paired devices,
 //! link classification, and (Stage 2) automatic uplink sharing.
 use super::*;
@@ -7,7 +8,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         RichText::new("GEKOPPELTE GERAETE IM LOKALEN NETZ")
             .small()
-            .color(Color32::from_gray(140)),
+            .color(theme::muted(ui)),
     );
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("Erkennung (mDNS): {}", status.presence.label()));
@@ -15,7 +16,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.label(
                 RichText::new(format!("eigene Kennung {id}"))
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
         }
     });
@@ -64,7 +65,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
                 status.unknown_devices
             ))
             .small()
-            .color(Color32::from_gray(140)),
+            .color(theme::muted(ui)),
         );
     }
 
@@ -72,11 +73,11 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         RichText::new("NETZWERKVERBINDUNGEN")
             .small()
-            .color(Color32::from_gray(140)),
+            .color(theme::muted(ui)),
     );
     if let Some(error) = &status.links_error {
         ui.colored_label(
-            Color32::from_rgb(255, 120, 120),
+            theme::danger(ui),
             format!("Schnittstellen nicht lesbar: {error}"),
         );
     }
@@ -88,12 +89,12 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.label(RichText::new(&link.name).strong());
             ui.label(&link.class);
             if link.peer_present {
-                ui.colored_label(Color32::from_rgb(120, 200, 255), "gekoppeltes Geraet hier");
+                ui.colored_label(theme::accent(ui), "gekoppeltes Geraet hier");
             }
             ui.label(
                 RichText::new(link.addrs.join(", "))
                     .small()
-                    .color(Color32::from_gray(150)),
+                    .color(theme::muted(ui)),
             );
         });
     }

@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -12,11 +13,11 @@ impl App {
         ui.label(
             RichText::new("CLOUD (GOOGLE DRIVE)")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         if crate::cloud::is_connected(p) {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(120, 200, 255), "● Verbunden");
+                ui.colored_label(theme::accent(ui), "● Verbunden");
                 if ui
                     .small_button("☁ Drive öffnen")
                     .on_hover_text("Google Drive durchsuchen")
@@ -123,7 +124,7 @@ impl App {
                     "4. Anmeldedaten → OAuth-Client-ID → Typ „Desktop-App“ (keine Redirect-URI nötig).",
                     "5. Client-ID (+ ggf. Secret) oben einfügen → „Mit Google verbinden“.",
                 ] {
-                    ui.label(RichText::new(line).small().color(Color32::from_gray(180)));
+                    ui.label(RichText::new(line).small().color(theme::muted(ui)));
                 }
                 ui.hyperlink_to("→ Google Cloud Console öffnen", "https://console.cloud.google.com");
                 ui.label(
@@ -132,7 +133,7 @@ impl App {
                          dann einfach erneut verbinden. Details: docs/CLOUD_SETUP.md.",
                     )
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
                 );
             });
         ui.separator();
@@ -147,7 +148,7 @@ impl App {
         ui.label(
             RichText::new("SHARE-SERVER")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.add(
             egui::TextEdit::singleline(&mut self.share_server_draft)
@@ -206,10 +207,10 @@ impl App {
         ui.label(
             RichText::new("UPDATE")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         ui.colored_label(
-            Color32::from_gray(140),
+            theme::muted(ui),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
         if !self.show_update_dialog {
@@ -255,7 +256,7 @@ impl App {
         // Rollback to a previously-installed version + pause/resume auto-update.
         if let Some(pinned) = crate::updater::pinned_version() {
             ui.colored_label(
-                Color32::from_rgb(255, 190, 90),
+                theme::warning(ui),
                 format!("⏸ Auto-Update pausiert (zurückgerollt auf v{})", pinned),
             );
             if ui.small_button("Auf neueste aktualisieren").clicked() {
@@ -292,7 +293,7 @@ impl App {
         // the main-branch feed version).
         if let Some(newest) = self.update_release_available.clone() {
             ui.colored_label(
-                Color32::from_rgb(120, 220, 130),
+                theme::success(ui),
                 format!("⬆ Update verfügbar: v{newest}"),
             );
             if ui
@@ -308,7 +309,7 @@ impl App {
         ui.label(
             RichText::new("Frühere Versionen (Releases)")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         if self.remote_versions_rx.is_some() {
             ui.horizontal(|ui| {
@@ -316,7 +317,7 @@ impl App {
                 ui.label(
                     RichText::new("lade Release-Liste…")
                         .small()
-                        .color(Color32::from_gray(120)),
+                        .color(theme::muted(ui)),
                 );
             });
             ui.ctx()
@@ -330,7 +331,7 @@ impl App {
                 .collect();
             if list.is_empty() {
                 ui.colored_label(
-                    Color32::from_gray(110),
+                    theme::muted(ui),
                     "(keine — Feed ist kein GitHub-Repo, oder offline)",
                 );
             } else {
@@ -360,7 +361,7 @@ impl App {
                 ui.label(
                     RichText::new("lade Version…")
                         .small()
-                        .color(Color32::from_gray(120)),
+                        .color(theme::muted(ui)),
                 );
             });
             ui.ctx()
@@ -378,7 +379,7 @@ impl App {
             ui.label(
                 RichText::new("Lokal gesichert")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             egui::ScrollArea::vertical()
                 .id_salt("rollback_local")
@@ -427,7 +428,7 @@ impl App {
             ui.label(
                 RichText::new("INTEGRATION")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
 
             let resp = ui
@@ -459,7 +460,7 @@ impl App {
             }
 
             ui.colored_label(
-                Color32::from_gray(110),
+                theme::muted(ui),
                 "Hinweis: Der Eintrag liegt unter „Weitere Optionen anzeigen“ (Win11).",
             );
         }

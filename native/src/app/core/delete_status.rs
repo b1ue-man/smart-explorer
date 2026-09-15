@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::{DeleteKind, DeleteOrigin, DeletePhase, DeleteProgress};
 
 pub(super) fn ui_delete_progress(
@@ -30,11 +31,11 @@ pub(super) fn ui_delete_progress(
     ui.label(
         eframe::egui::RichText::new(detail)
             .small()
-            .color(eframe::egui::Color32::from_gray(160)),
+            .color(eframe::theme::muted(ui)),
     );
     if canceling {
         ui.colored_label(
-            eframe::egui::Color32::from_rgb(230, 190, 90),
+            eframe::theme::warning(ui),
             "Abbruch läuft…",
         );
         false

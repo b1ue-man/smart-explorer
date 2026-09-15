@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::{App, StorageRunState, StorageScanSource};
 use crate::analytics::ScanIssue;
 use eframe::egui;
@@ -63,7 +64,7 @@ pub(super) fn issues_ui(
         ui.label(
             egui::RichText::new(note)
                 .small()
-                .color(egui::Color32::from_gray(150)),
+                .color(theme::muted(ui)),
         );
     }
     if issues.is_empty() && suppressed == 0 {

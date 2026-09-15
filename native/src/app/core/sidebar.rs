@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -11,7 +12,7 @@ impl App {
             ui.label(
                 RichText::new("VERBINDUNGEN")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -42,11 +43,11 @@ impl App {
         // Active connection indicator + one-click disconnect.
         if let Some(rs) = &self.remote {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(120, 200, 255), format!("● {}", rs.label));
+                ui.colored_label(theme::accent(ui), format!("● {}", rs.label));
                 // SSH remote agent: show it's active, or offer to activate it on
                 // THIS already-connected session (no reconnect, #24).
                 if let Some(ver) = &rs.agent_version {
-                    ui.colored_label(Color32::from_rgb(120, 230, 140), "⚡ Agent")
+                    ui.colored_label(theme::success(ui), "⚡ Agent")
                         .on_hover_text(format!(
                             "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse/Transfers laufen serverseitig"
                         ));
@@ -64,7 +65,7 @@ impl App {
                 } else if rs.sftp.is_some() {
                     if agent_activating {
                         ui.add(egui::Spinner::new().size(14.0));
-                        ui.label(RichText::new("Agent…").small().color(Color32::from_gray(150)));
+                        ui.label(RichText::new("Agent…").small().color(theme::muted(ui)));
                     } else if ui
                         .small_button("⚡ Agent aktivieren")
                         .on_hover_text(
@@ -85,7 +86,7 @@ impl App {
             });
         } else if self.net_conn.is_some() {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(120, 200, 255), "● Netzlaufwerk");
+                ui.colored_label(theme::accent(ui), "● Netzlaufwerk");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("⏏")
@@ -109,7 +110,7 @@ impl App {
             ui.horizontal(|ui| {
                 let txt = RichText::new("☁ Google Drive").small();
                 let txt = if gdrive_active {
-                    txt.color(Color32::from_rgb(120, 200, 255))
+                    txt.color(theme::accent(ui))
                 } else {
                     txt
                 };
@@ -144,7 +145,7 @@ impl App {
         let conns: Vec<crate::creds::SavedConnection> =
             self.saved_connections.iter().rev().cloned().collect();
         if conns.is_empty() {
-            ui.colored_label(Color32::from_gray(120), "(noch keine gespeichert)");
+            ui.colored_label(theme::muted(ui), "(noch keine gespeichert)");
         }
         for c in conns.iter().take(SIDEBAR_CONN_CAP) {
             ui.horizontal(|ui| {
@@ -175,7 +176,7 @@ impl App {
         }
         if conns.len() > SIDEBAR_CONN_CAP {
             ui.colored_label(
-                Color32::from_gray(120),
+                theme::muted(ui),
                 format!(
                     "+{} ältere im Menü „Verbindung“",
                     conns.len() - SIDEBAR_CONN_CAP
@@ -190,7 +191,7 @@ impl App {
                 ui.label(
                     RichText::new("SHARE DIREKT")
                         .small()
-                        .color(Color32::from_gray(140)),
+                        .color(theme::muted(ui)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
@@ -256,7 +257,7 @@ impl App {
                 ui.label(
                     RichText::new("SHARE RAEUME")
                         .small()
-                        .color(Color32::from_gray(140)),
+                        .color(theme::muted(ui)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
@@ -285,7 +286,7 @@ impl App {
                         r.members.len()
                     ))
                     .small()
-                    .color(Color32::from_gray(150)),
+                    .color(theme::muted(ui)),
                 );
                 for m in r.members {
                     ui.horizontal(|ui| {
