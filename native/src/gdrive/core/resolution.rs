@@ -123,12 +123,8 @@ impl GDriveBackend {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(token)));
             }
             let json = self.get_json(&url)?;
-            if json["incompleteSearch"].as_bool() == Some(true) {
-                return Err(io::Error::other("Drive returned an incomplete name query"));
-            }
-            let files = json["files"].as_array()
-                .ok_or_else(|| io::Error::other("Drive name query has no files array"))?;
-            for file in files {
+            let page = super::file_list::FileListPage::parse(&json)?;
+            for file in page.files {
                 let id = file["id"].as_str().filter(|id| !id.is_empty())
                     .ok_or_else(|| io::Error::other("Drive name query has no object ID"))?;
                 if file["name"].as_str() != Some(name) || !ids.insert(id.to_string()) {
@@ -139,7 +135,7 @@ impl GDriveBackend {
                     mtime_ms: file["modifiedTime"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0),
                 });
             }
-            token = json["nextPageToken"].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+            token = page.next_token.map(str::to_owned);
             let Some(next) = &token else { return Ok(siblings); };
             if !seen.insert(next.clone()) {
                 return Err(io::Error::other("Drive repeated a name-query page token"));

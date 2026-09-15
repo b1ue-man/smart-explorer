@@ -27,6 +27,8 @@ mod copy_writer;
 mod core;
 #[path = "core/duplicates.rs"]
 mod duplicates;
+#[path = "core/file_list.rs"]
+mod file_list;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
 #[path = "core/metadata.rs"]
