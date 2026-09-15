@@ -1,7 +1,7 @@
 //! Shared presentation tokens for every window, including custom-painted UI.
 use eframe::egui::{self, Color32, FontId, Margin, Rounding, Stroke, TextStyle};
 
-pub(super) const TABLE_HEADER_HEIGHT: f32 = 34.0;
+pub(super) const TABLE_HEADER_HEIGHT: f32 = 24.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Palette {
@@ -25,21 +25,21 @@ impl Palette {
         let rgb = Color32::from_rgb;
         if dark {
             Self {
-                surface: rgb(24, 30, 40), panel: rgb(30, 37, 49),
-                subtle: rgb(36, 45, 59), text: rgb(236, 241, 248),
-                muted: rgb(177, 190, 208), border: rgb(65, 78, 96),
-                control_border: rgb(120, 137, 160), accent: rgb(129, 181, 255),
-                selection: rgb(43, 70, 110), selected_text: rgb(242, 247, 255),
+                surface: rgb(27, 27, 27), panel: rgb(32, 32, 32),
+                subtle: rgb(40, 40, 40), text: rgb(225, 225, 225),
+                muted: rgb(175, 175, 175), border: rgb(65, 65, 65),
+                control_border: rgb(125, 125, 125), accent: rgb(125, 180, 235),
+                selection: rgb(40, 65, 90), selected_text: rgb(240, 245, 250),
                 success: rgb(125, 216, 166), warning: rgb(255, 203, 120),
                 danger: rgb(255, 154, 158),
             }
         } else {
             Self {
-                surface: rgb(255, 255, 255), panel: rgb(245, 247, 250),
-                subtle: rgb(235, 240, 247), text: rgb(25, 36, 53),
-                muted: rgb(74, 88, 108), border: rgb(199, 208, 221),
-                control_border: rgb(108, 123, 144), accent: rgb(25, 83, 158),
-                selection: rgb(214, 230, 252), selected_text: rgb(18, 53, 104),
+                surface: rgb(255, 255, 255), panel: rgb(245, 245, 245),
+                subtle: rgb(237, 237, 237), text: rgb(30, 30, 30),
+                muted: rgb(85, 85, 85), border: rgb(195, 195, 195),
+                control_border: rgb(115, 115, 115), accent: rgb(25, 80, 145),
+                selection: rgb(211, 228, 245), selected_text: rgb(20, 45, 75),
                 success: rgb(25, 106, 63), warning: rgb(135, 76, 10),
                 danger: rgb(173, 38, 50),
             }
@@ -58,17 +58,17 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
     let mut style = theme.default_style();
     let p = Palette::new(theme == egui::Theme::Dark);
     style.text_styles.extend([
-        (TextStyle::Body, FontId::proportional(14.0)),
-        (TextStyle::Button, FontId::proportional(14.0)),
-        (TextStyle::Small, FontId::proportional(12.0)),
-        (TextStyle::Heading, FontId::proportional(22.0)),
-        (TextStyle::Monospace, FontId::monospace(13.0)),
+        (TextStyle::Body, FontId::proportional(13.0)),
+        (TextStyle::Button, FontId::proportional(13.0)),
+        (TextStyle::Small, FontId::proportional(11.5)),
+        (TextStyle::Heading, FontId::proportional(18.0)),
+        (TextStyle::Monospace, FontId::monospace(12.0)),
     ]);
-    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    style.spacing.interact_size.y = 30.0;
-    style.spacing.window_margin = Margin::same(16.0);
-    style.spacing.menu_margin = Margin::same(10.0);
+    style.spacing.item_spacing = egui::vec2(6.0, 3.0);
+    style.spacing.button_padding = egui::vec2(5.0, 2.0);
+    style.spacing.interact_size.y = 22.0;
+    style.spacing.window_margin = Margin::same(8.0);
+    style.spacing.menu_margin = Margin::same(6.0);
     style.spacing.indent = 16.0;
     style.spacing.combo_height = 280.0;
     style.spacing.scroll = egui::style::ScrollStyle::solid();
@@ -83,19 +83,17 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
     v.hyperlink_color = p.accent;
     v.warn_fg_color = p.warning;
     v.error_fg_color = p.danger;
-    v.window_rounding = Rounding::same(10.0);
-    v.menu_rounding = Rounding::same(8.0);
+    v.window_rounding = Rounding::same(2.0);
+    v.menu_rounding = Rounding::same(2.0);
+    v.window_highlight_topmost = false;
     v.window_stroke = Stroke::new(1.0_f32, p.border);
     v.selection.bg_fill = p.selection;
     v.selection.stroke = Stroke::new(1.5_f32, p.selected_text);
     v.text_cursor.stroke = Stroke::new(2.0_f32, p.accent);
     for widget in [&mut v.widgets.noninteractive, &mut v.widgets.inactive,
         &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
-        widget.bg_fill = p.subtle;
-        widget.weak_bg_fill = p.subtle;
-        widget.bg_stroke = Stroke::new(1.0_f32, p.control_border);
-        widget.fg_stroke = Stroke::new(1.5_f32, p.text);
-        widget.rounding = Rounding::same(6.0);
+        widget.fg_stroke = Stroke::new(1.0_f32, p.text);
+        widget.rounding = Rounding::same(2.0);
         widget.expansion = 0.0;
     }
     v.widgets.noninteractive.bg_fill = p.surface;
@@ -103,15 +101,8 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
     // egui derives hint/weak text by tinting toward this color. A muted target
     // keeps hints readable in 0.29, which has no separate weak-text override.
     v.widgets.noninteractive.weak_bg_fill = p.muted;
-    v.widgets.hovered.bg_fill = p.selection;
-    v.widgets.hovered.weak_bg_fill = p.selection;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.accent);
-    v.widgets.active.bg_fill = p.selection;
-    v.widgets.active.weak_bg_fill = p.selection;
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, p.control_border);
     v.widgets.active.bg_stroke = Stroke::new(2.0_f32, p.accent);
-    v.widgets.open.bg_fill = p.selection;
-    v.widgets.open.weak_bg_fill = p.selection;
-    v.widgets.open.bg_stroke = Stroke::new(1.0_f32, p.accent);
     style
 }
 
@@ -130,8 +121,8 @@ pub(super) fn install(ctx: &egui::Context, mode: super::ui_preferences::ColorMod
 }
 
 pub(super) fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(title).strong().color(muted(ui)));
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).small().strong().color(muted(ui)));
     ui.add_space(2.0);
 }
 
