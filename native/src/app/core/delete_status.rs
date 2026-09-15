@@ -31,11 +31,11 @@ pub(super) fn ui_delete_progress(
     ui.label(
         eframe::egui::RichText::new(detail)
             .small()
-            .color(eframe::theme::muted(ui)),
+            .color(theme::muted(ui)),
     );
     if canceling {
         ui.colored_label(
-            eframe::theme::warning(ui),
+            theme::warning(ui),
             "Abbruch läuft…",
         );
         false

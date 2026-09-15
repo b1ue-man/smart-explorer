@@ -1,5 +1,5 @@
 use crate::app::theme;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

@@ -85,33 +85,33 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
     v.error_fg_color = p.danger;
     v.window_rounding = Rounding::same(10.0);
     v.menu_rounding = Rounding::same(8.0);
-    v.window_stroke = Stroke::new(1.0, p.border);
+    v.window_stroke = Stroke::new(1.0_f32, p.border);
     v.selection.bg_fill = p.selection;
-    v.selection.stroke = Stroke::new(1.5, p.selected_text);
-    v.text_cursor.stroke = Stroke::new(2.0, p.accent);
+    v.selection.stroke = Stroke::new(1.5_f32, p.selected_text);
+    v.text_cursor.stroke = Stroke::new(2.0_f32, p.accent);
     for widget in [&mut v.widgets.noninteractive, &mut v.widgets.inactive,
         &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
         widget.bg_fill = p.subtle;
         widget.weak_bg_fill = p.subtle;
-        widget.bg_stroke = Stroke::new(1.0, p.control_border);
-        widget.fg_stroke = Stroke::new(1.5, p.text);
+        widget.bg_stroke = Stroke::new(1.0_f32, p.control_border);
+        widget.fg_stroke = Stroke::new(1.5_f32, p.text);
         widget.rounding = Rounding::same(6.0);
         widget.expansion = 0.0;
     }
     v.widgets.noninteractive.bg_fill = p.surface;
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
     // egui derives hint/weak text by tinting toward this color. A muted target
     // keeps hints readable in 0.29, which has no separate weak-text override.
     v.widgets.noninteractive.weak_bg_fill = p.muted;
     v.widgets.hovered.bg_fill = p.selection;
     v.widgets.hovered.weak_bg_fill = p.selection;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.accent);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.accent);
     v.widgets.active.bg_fill = p.selection;
     v.widgets.active.weak_bg_fill = p.selection;
-    v.widgets.active.bg_stroke = Stroke::new(2.0, p.accent);
+    v.widgets.active.bg_stroke = Stroke::new(2.0_f32, p.accent);
     v.widgets.open.bg_fill = p.selection;
     v.widgets.open.weak_bg_fill = p.selection;
-    v.widgets.open.bg_stroke = Stroke::new(1.0, p.accent);
+    v.widgets.open.bg_stroke = Stroke::new(1.0_f32, p.accent);
     style
 }
 

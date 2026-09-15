@@ -3,7 +3,6 @@ use std::io;
 use std::time::Duration;
 
 pub(super) const API: &str = "https://www.googleapis.com/drive/v3";
-pub(super) const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
 pub(super) const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 pub(super) const DRIVE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const DRIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);

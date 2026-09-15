@@ -25,7 +25,7 @@ pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, cells: &[TmCell]) {
             else { egui::ecolor::tint_color_towards(cell.color, palette.surface) }
         } else { cell.color };
         painter.rect_filled(cell.rect, 2.0, fill);
-        painter.rect_stroke(cell.rect, 2.0, egui::Stroke::new(1.0, palette.surface));
+        painter.rect_stroke(cell.rect, 2.0, egui::Stroke::new(1.0_f32, palette.surface));
         let (label_rect, background) = if cell.container {
             let header = egui::Rect::from_min_max(cell.rect.min,
                 egui::pos2(cell.rect.max.x, (cell.rect.min.y + TM_HEADER).min(cell.rect.max.y)));
