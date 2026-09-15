@@ -385,9 +385,9 @@
     "semantic_hash": "fbea1e24adec34bf7aa105aa3d5a85d8"
   },
   "app/core/central_tabs.rs": {
-    "mtime": 1789467417.116561,
-    "ast_hash": "401f7943bfe80968d0e211658f50e48d",
-    "semantic_hash": "401f7943bfe80968d0e211658f50e48d"
+    "mtime": 1789497910.3784153,
+    "ast_hash": "f6eae32177629adf2f10e1a9584c0700",
+    "semantic_hash": "f6eae32177629adf2f10e1a9584c0700"
   },
   "app/core/clipboard_state.rs": {
     "mtime": 1789142842.5083017,
@@ -475,9 +475,9 @@
     "semantic_hash": "4afeaa4b25f2ddf782b0d7759bbeec4c"
   },
   "app/core/filterbar.rs": {
-    "mtime": 1789496425.3959482,
-    "ast_hash": "579b8d144cb356d47e947bab3bce6f90",
-    "semantic_hash": "579b8d144cb356d47e947bab3bce6f90"
+    "mtime": 1789497933.524875,
+    "ast_hash": "16fbd2f550220cb2b0a82e96bc338f08",
+    "semantic_hash": "16fbd2f550220cb2b0a82e96bc338f08"
   },
   "app/core/frame_keyboard.rs": {
     "mtime": 1789497089.508076,
@@ -500,14 +500,14 @@
     "semantic_hash": "ecb4155e288d9131aa450404d5009629"
   },
   "app/core/gui_design_task_tests.rs": {
-    "mtime": 1789496750.173368,
-    "ast_hash": "67eefa42253b8982fd6d5c89dd53975f",
-    "semantic_hash": "67eefa42253b8982fd6d5c89dd53975f"
+    "mtime": 1789497910.3784153,
+    "ast_hash": "81e7b0bc7f0ced2a2f49a2dc758d0834",
+    "semantic_hash": "81e7b0bc7f0ced2a2f49a2dc758d0834"
   },
   "app/core/gui_design_task_ui.rs": {
-    "mtime": 1789497089.509076,
-    "ast_hash": "fafb503c7a3658e17d4c6c7c00bd4a6f",
-    "semantic_hash": "fafb503c7a3658e17d4c6c7c00bd4a6f"
+    "mtime": 1789497804.216307,
+    "ast_hash": "386f4bcc2770ea6f64622ffd4e10e893",
+    "semantic_hash": "386f4bcc2770ea6f64622ffd4e10e893"
   },
   "app/core/index_persistence.rs": {
     "mtime": 1783657341.8797367,
@@ -540,9 +540,9 @@
     "semantic_hash": "0de0736855dfcd3df1062b5e26eed9b2"
   },
   "app/core/landing_tiles.rs": {
-    "mtime": 1789496553.223475,
-    "ast_hash": "a66cb4a2546b79c3f0f9ef7c003eeca6",
-    "semantic_hash": "a66cb4a2546b79c3f0f9ef7c003eeca6"
+    "mtime": 1789497910.3784153,
+    "ast_hash": "cd372124ee6e528b3d489a633351a54a",
+    "semantic_hash": "cd372124ee6e528b3d489a633351a54a"
   },
   "app/core/location_labels.rs": {
     "mtime": 1789383552.9926002,
@@ -560,9 +560,9 @@
     "semantic_hash": "645cd8c62bb49ceee7b42bbabd2b7394"
   },
   "app/core/menus_sync_jobs.rs": {
-    "mtime": 1789468411.6588702,
-    "ast_hash": "b3dd775f03daaa004712a5697dcb9dd1",
-    "semantic_hash": "b3dd775f03daaa004712a5697dcb9dd1"
+    "mtime": 1789497933.5258749,
+    "ast_hash": "e92e16d39be216c70e29f82a3d64576f",
+    "semantic_hash": "e92e16d39be216c70e29f82a3d64576f"
   },
   "app/core/merge_ui.rs": {
     "mtime": 1789468411.66087,
@@ -845,9 +845,9 @@
     "semantic_hash": "382681c935a63d298b3e4dbca5aca4ae"
   },
   "app/core/shell_toolbar.rs": {
-    "mtime": 1789496425.3949482,
-    "ast_hash": "150367815a5427b5ca865c1b5aa9b339",
-    "semantic_hash": "150367815a5427b5ca865c1b5aa9b339"
+    "mtime": 1789497804.2153068,
+    "ast_hash": "7ca4db0ab0b270b6fb12713f0d1dd062",
+    "semantic_hash": "7ca4db0ab0b270b6fb12713f0d1dd062"
   },
   "app/core/shutdown.rs": {
     "mtime": 1784666561.508495,
@@ -860,9 +860,9 @@
     "semantic_hash": "9c88578c0ee93fb68905cd5438cf9a33"
   },
   "app/core/sidebar_locations.rs": {
-    "mtime": 1789496618.080757,
-    "ast_hash": "558dd926aeb3066287368eba03bcb7fd",
-    "semantic_hash": "558dd926aeb3066287368eba03bcb7fd"
+    "mtime": 1789497910.3774154,
+    "ast_hash": "32122f71d00508ca8cda8d6792b41940",
+    "semantic_hash": "32122f71d00508ca8cda8d6792b41940"
   },
   "app/core/state.rs": {
     "mtime": 1789464606.228102,
@@ -2395,9 +2395,9 @@
     "semantic_hash": "0360d520cf5c4e927103ff9a0b5f56a0"
   },
   "gdrive/core/gui_task_tests.rs": {
-    "mtime": 1789496878.456904,
-    "ast_hash": "650f64d4421d4201de50ead6c3211850",
-    "semantic_hash": "650f64d4421d4201de50ead6c3211850"
+    "mtime": 1789497804.216307,
+    "ast_hash": "27cfe47248ce10ab7a037ede4415eb71",
+    "semantic_hash": "27cfe47248ce10ab7a037ede4415eb71"
   },
   "gdrive/core/metadata.rs": {
     "mtime": 1789466050.286269,

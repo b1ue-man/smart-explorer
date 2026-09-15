@@ -94,7 +94,7 @@ impl App {
                                         .on_hover_text("Die Verbindung dieses Setups wurde entfernt. Das Setup bleibt erhalten, kann aber erst nach einer neuen Verbindung wieder laufen.");
                                 }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("✕").on_hover_text("Setup löschen").clicked() {
+                                    if ui.small_button("×").on_hover_text("Setup löschen").clicked() {
                                         del_id = Some(j.id.clone());
                                     }
                                     if ui.small_button("✎ Bearbeiten").clicked() {

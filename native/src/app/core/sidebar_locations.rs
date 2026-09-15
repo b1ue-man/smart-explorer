@@ -72,7 +72,7 @@ fn location_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
 
 pub(super) fn sidebar_row(ui: &mut egui::Ui, label: &str, width: f32, selected: bool) -> egui::Response {
     ui.allocate_ui_with_layout(egui::vec2(width, 22.0),
-        egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Min), |ui| {
             ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
             ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
             ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
@@ -80,7 +80,7 @@ pub(super) fn sidebar_row(ui: &mut egui::Ui, label: &str, width: f32, selected: 
                 .min_size(egui::vec2(width, 22.0)).truncate());
             if response.has_focus() {
                 ui.painter().rect_stroke(response.rect.shrink(1.0), 0.0,
-                    egui::Stroke::new(1.0, theme::accent(ui)));
+                    egui::Stroke::new(1.0_f32, theme::accent(ui)));
             }
             response
         }).inner

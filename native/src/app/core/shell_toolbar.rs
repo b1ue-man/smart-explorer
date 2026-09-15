@@ -63,7 +63,7 @@ impl App {
             let path_width = (ui.available_width()
                 - Self::toolbar_commands_width(ui, wide) - trailing_icons - 12.0).max(60.0);
             self.ui_toolbar_path(ui, path_width);
-            if ui.add_sized([22.0, 22.0], egui::Button::new("✎"))
+            if ui.add_sized([22.0, 22.0], egui::Button::new("✏"))
                 .on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
                 self.path_edit_mode = true;
                 self.path_edit_focus = true;
