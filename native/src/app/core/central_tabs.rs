@@ -59,7 +59,7 @@ impl App {
             ui.painter().vline(
                 sep_x,
                 full.min.y..=full.max.y,
-                egui::Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                egui::Stroke::new(1.0_f32, theme::palette(ui).border),
             );
             // Remember each pane's rect (+ its tab) so a drag can drop onto the
             // other pane, not just the tab header.
@@ -201,7 +201,7 @@ impl App {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text("Filtern (Name/Regex/Glob)…")
-                    .desired_width(f32::INFINITY),
+                    .desired_width((ui.available_width() - 100.0).max(60.0)),
             );
             if resp.changed() {
                 self.filter.text = self.text_draft.clone();
@@ -260,7 +260,7 @@ impl App {
         }
         let t = p.trim_end_matches('/');
         let base = t.rsplit('/').next().unwrap_or(t);
-        let base = if base.is_empty() { t } else { base };
+        let base = if base.is_empty() { "/" } else { base };
 
         // Remote/share tabs get a marker + the connection name, so they're
         // identifiable (the bare folder name isn't enough).
@@ -292,6 +292,8 @@ impl App {
         let mut action: Option<TabAction> = None;
         let dragging = self.drag_active;
         let mut header_rects: Vec<(usize, egui::Rect)> = Vec::new();
+        egui::ScrollArea::horizontal().id_salt("tabbar_scroll")
+            .auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal(|ui| {
             for i in 0..self.tabs.len() {
                 let selected = i == self.active_tab;
@@ -338,6 +340,7 @@ impl App {
                 action = Some(TabAction::New);
             }
         });
+            });
         self.tab_header_rects = header_rects;
         match action {
             Some(TabAction::Switch(i)) => self.switch_tab(i),

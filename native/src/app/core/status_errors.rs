@@ -132,31 +132,15 @@ impl App {
                     ui.label("✓ Bereit");
                 }
                 let p = &progress;
-                let rate = if p.elapsed_ms > 0 {
-                    (p.scanned as f64 / p.elapsed_ms as f64) * 1000.0
-                } else {
-                    0.0
-                };
-                let rate_s = if rate >= 1000.0 {
-                    format!("{:.1}k/s", rate / 1000.0)
-                } else {
-                    format!("{:.0}/s", rate)
-                };
-                ui.colored_label(
-                    theme::muted(ui),
-                    format!(
-                        "{} gescannt · {} · {:.1}s · {}{}",
-                        p.scanned,
-                        format_bytes(p.bytes),
-                        p.elapsed_ms as f64 / 1000.0,
-                        rate_s,
-                        if p.errors > 0 {
-                            format!(" · {} Fehler", p.errors)
-                        } else {
-                            String::new()
-                        },
-                    ),
-                );
+                if !self.root_path.is_empty() {
+                    let text = if self.scan_running {
+                        format!("{} gescannt · {}", p.scanned, format_bytes(p.bytes))
+                    } else {
+                        format!("{} Einträge · {}", self.view.len(), format_bytes(p.bytes))
+                    };
+                    ui.colored_label(theme::muted(ui), text).on_hover_text(format!(
+                        "{} gescannt · {:.1} Sekunden · {} Fehler", p.scanned, p.elapsed_ms as f64 / 1000.0, p.errors));
+                }
                 if !p.current_path.is_empty() && self.scan_running {
                     ui.add(
                         egui::Label::new(egui::RichText::new(&p.current_path).monospace().small())
@@ -251,9 +235,7 @@ impl App {
                         self.show_errors_dialog = true;
                     }
                 }
-                if self.selection.is_empty() {
-                    ui.colored_label(theme::muted(ui), "Auswahl: 0");
-                } else {
+                if !self.selection.is_empty() {
                     ui.colored_label(
                         theme::muted(ui),
                         format!(
@@ -263,10 +245,6 @@ impl App {
                         ),
                     );
                 }
-                ui.colored_label(
-                    theme::muted(ui),
-                    format!("v{}", env!("CARGO_PKG_VERSION")),
-                );
             });
         });
     }

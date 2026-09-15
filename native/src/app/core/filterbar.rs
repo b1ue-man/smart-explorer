@@ -55,12 +55,13 @@ impl App {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text(match self.filter.text_mode {
-                        TextMode::Substring => "Filtern · /Ordnersuche · Pfad · ›Befehl · .. hoch",
+                        TextMode::Substring => "Dateien suchen…",
                         TextMode::Regex => "Regex z.B. \\.log$",
                         TextMode::Glob => "Glob z.B. **/build/**",
                     })
-                    .desired_width(300.0),
+                    .desired_width((ui.available_width() - 240.0).clamp(140.0, 560.0)),
             );
+            let resp = resp.on_hover_text("Name filtern · /Ordner suchen · Pfad öffnen · ›Befehl · .. eine Ebene hoch (Ctrl+F)");
             let field_rect = resp.rect;
             if self.name_filter_focus || self.folder_search_focus {
                 resp.request_focus();
@@ -124,10 +125,11 @@ impl App {
                         .fixed_pos(field_rect.left_bottom() + egui::vec2(0.0, 3.0))
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                ui.set_min_width(field_rect.width().max(680.0));
+                                ui.set_max_width((ui.ctx().screen_rect().right() - field_rect.left() - 12.0).max(120.0));
+                                ui.set_min_width(field_rect.width());
                                 egui::ScrollArea::vertical()
                                     .id_salt("omni_results")
-                                    .max_height(520.0)
+                                    .max_height((ui.ctx().screen_rect().bottom() - field_rect.bottom() - 24.0).clamp(80.0, 360.0))
                                     .show(ui, |ui| {
                                         for (i, it) in items.iter().enumerate() {
                                             let r = ui
@@ -149,6 +151,20 @@ impl App {
                 }
             }
 
+            let active = self.filter_is_active();
+            let label = if active { "Filter · aktiv" } else { "Filter" };
+            if ui.selectable_label(self.show_filters, label).on_hover_text("Dateityp, Größe und Zeitraum eingrenzen").clicked() {
+                self.show_filters = !self.show_filters;
+                self.save_ui_state();
+            }
+            if (active || !self.text_draft.is_empty()) && ui.button("Zurücksetzen").clicked() {
+                self.reset_filters();
+            }
+        });
+        if !self.show_filters { return; }
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Dateityp:");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.ext_draft)
                     .hint_text("Endungen z.B. jpg,png")
@@ -206,7 +222,8 @@ impl App {
             }
         });
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            if ui.checkbox(&mut self.recursive, "Unterordner einbeziehen").on_hover_text("Rekursiv durchsuchen (Ctrl+R)").changed() && !self.root_path.is_empty() { self.rescan(); }
             let mut changed = false;
             changed |= ui
                 .checkbox(&mut self.filter.include_files, "Dateien")
@@ -225,19 +242,6 @@ impl App {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Reset").clicked() {
-                    self.filter = FilterDef::new();
-                    self.text_draft.clear();
-                    self.ext_draft.clear();
-                    self.size_min_draft.clear();
-                    self.size_max_draft.clear();
-                    self.mtime_min_date = None;
-                    self.mtime_max_date = None;
-                    self.btime_min_date = None;
-                    self.btime_max_date = None;
-                    self.filter_pending_at = None;
-                    self.recompute_view();
-                }
                 if self.filter_is_active() {
                     ui.colored_label(theme::warning(ui), "● Filter aktiv");
                 }
@@ -251,6 +255,27 @@ impl App {
                 );
             });
         });
+    }
+
+    pub(in crate::app) fn reset_filters(&mut self) {
+        self.filter = FilterDef::new();
+        self.text_draft.clear();
+        self.ext_draft.clear();
+        self.size_min_draft.clear();
+        self.size_max_draft.clear();
+        self.mtime_min_date = None;
+        self.mtime_max_date = None;
+        self.btime_min_date = None;
+        self.btime_max_date = None;
+        self.filter_pending_at = None;
+        self.folder_search_query.clear();
+        self.folder_search_results.clear();
+        self.folder_search_pending_at = None;
+        self.folder_search_rx = None;
+        self.folder_search_seq += 1;
+        self.omni_sel = None;
+        self.omni_activate = None;
+        self.recompute_view();
     }
 
     pub(in crate::app) fn size_input(

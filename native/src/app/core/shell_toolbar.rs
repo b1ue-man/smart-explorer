@@ -1,4 +1,3 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -32,288 +31,87 @@ impl App {
 
     pub(in crate::app) fn ui_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let r = ui
-                .add_enabled(!self.history.is_empty(), egui::Button::new("◀"))
-                .on_hover_text("Zurück (Alt+←)");
-            self.accel_push('B', r.rect, AccelAct::Back);
-            if r.clicked() {
-                self.navigate_back();
+            for (label, enabled, key, action, tip) in [
+                ("←", !self.history.is_empty(), 'B', AccelAct::Back, "Zurück (Alt+←)"),
+                ("→", !self.forward.is_empty(), 'N', AccelAct::Forward, "Vor (Alt+→)"),
+                ("↑", !self.root_path.is_empty(), 'U', AccelAct::Up, "Eine Ebene hoch (Alt+↑)"),
+            ] {
+                let response = ui.add_enabled(enabled, egui::Button::new(label))
+                    .on_hover_text(tip);
+                self.accel_push(key, response.rect, action);
+                if response.clicked() {
+                    match action {
+                        AccelAct::Back => self.navigate_back(),
+                        AccelAct::Forward => self.navigate_forward(),
+                        _ => self.navigate_up(),
+                    }
+                }
             }
-            let r = ui
-                .add_enabled(!self.forward.is_empty(), egui::Button::new("▶"))
-                .on_hover_text("Vor (Alt+→)");
-            self.accel_push('N', r.rect, AccelAct::Forward);
-            if r.clicked() {
-                self.navigate_forward();
-            }
-            let r = ui
-                .add_enabled(!self.root_path.is_empty(), egui::Button::new("↑"))
-                .on_hover_text("Eine Ebene hoch (Alt+↑ / Backspace)");
-            self.accel_push('U', r.rect, AccelAct::Up);
-            if r.clicked() {
-                self.navigate_up();
-            }
-
-            let r = ui.button("📂").on_hover_text("Ordner auswählen");
-            self.accel_push('O', r.rect, AccelAct::PickFolder);
-            if r.clicked() {
-                let init = self.root_path.clone();
-                self.open_picker(PickerPurpose::ScanFolder, &init);
+            let pick = ui.button("Ordner…").on_hover_text("Ordner auswählen");
+            self.accel_push('O', pick.rect, AccelAct::PickFolder);
+            if pick.clicked() {
+                let initial = self.root_path.clone();
+                self.open_picker(PickerPurpose::ScanFolder, &initial);
             }
 
-            // ─── Breadcrumbs / editable path ───────────────────────────
-            let crumb_w = (ui.available_width() - 660.0).max(160.0);
+            let path_width = (ui.available_width() - 124.0).max(80.0);
             if self.path_edit_mode {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.root_path)
-                        .desired_width(crumb_w)
-                        .hint_text("Pfad eingeben…"),
-                );
+                let response = ui.add_sized([path_width, 30.0],
+                    egui::TextEdit::singleline(&mut self.root_path).hint_text("Pfad eingeben…"));
                 if self.path_edit_focus {
-                    resp.request_focus();
+                    response.request_focus();
                     self.path_edit_focus = false;
                 }
-                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if enter && !self.root_path.is_empty() {
+                if response.lost_focus() {
                     self.path_edit_mode = false;
-                    let p =
-                        PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-                    self.start_scan(p);
-                } else if resp.lost_focus() {
-                    self.path_edit_mode = false;
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !self.root_path.is_empty() {
+                        self.start_scan(PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                    }
                 }
             } else {
-                let mut nav_to: Option<String> = None;
-                ui.allocate_ui(egui::vec2(crumb_w, 22.0), |ui| {
-                    egui::ScrollArea::horizontal()
-                        .id_salt("crumbs")
-                        .max_width(crumb_w)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let prefix = self.root_prefix();
-                                if prefix.is_empty() {
-                                    ui.colored_label(
-                                        theme::muted(ui),
-                                        "Ordner wählen oder Pfad eingeben (Ctrl+L)",
-                                    );
-                                } else {
-                                    // Keep the leading separator(s) so absolute
-                                    // remote paths ("/home/…") and UNC ("//srv/…")
-                                    // stay absolute when a crumb is clicked —
-                                    // otherwise the root became relative and
-                                    // failed with "Wurzel kann nicht gelesen werden".
-                                    let lead: String =
-                                        prefix.chars().take_while(|&c| c == '/').collect();
-                                    let mut acc = lead;
-                                    let segs: Vec<&str> =
-                                        prefix.split('/').filter(|s| !s.is_empty()).collect();
-                                    for (i, seg) in segs.iter().enumerate() {
-                                        if i > 0 {
-                                            ui.label(
-                                                RichText::new("›").color(theme::muted(ui)),
-                                            );
-                                        }
-                                        acc.push_str(seg);
-                                        acc.push('/');
-                                        let full = acc.clone();
-                                        if ui.small_button(*seg).clicked() {
-                                            nav_to = Some(full);
+                let mut destination = None;
+                let colors = theme::palette(ui);
+                egui::Frame::none().fill(colors.surface)
+                    .stroke(egui::Stroke::new(1.0, colors.control_border))
+                    .rounding(6.0).inner_margin(egui::Margin::symmetric(8.0, 0.0))
+                    .show(ui, |ui| {
+                        ui.set_width((path_width - 18.0).max(40.0));
+                        egui::ScrollArea::horizontal().id_salt("crumbs")
+                            .max_width((path_width - 18.0).max(40.0)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if self.root_path.is_empty() {
+                                        ui.add_sized([ui.available_width(), 30.0],
+                                            egui::Label::new(RichText::new("Startseite").color(colors.muted)));
+                                    } else {
+                                        for (index, crumb) in navigation_path::breadcrumbs(&self.root_path).iter().enumerate() {
+                                            if index > 0 { ui.label(RichText::new("›").color(colors.muted)); }
+                                            if ui.add(egui::Button::new(&crumb.label).frame(false))
+                                                .on_hover_text(&crumb.path).clicked() {
+                                                destination = Some(crumb.path.clone());
+                                            }
                                         }
                                     }
-                                }
+                                });
                             });
-                        });
-                });
-                if ui
-                    .small_button("✏")
-                    .on_hover_text("Pfad bearbeiten (Ctrl+L)")
-                    .clicked()
-                {
-                    self.path_edit_mode = true;
-                    self.path_edit_focus = true;
-                }
-                if let Some(p) = nav_to {
-                    self.start_scan(PathBuf::from(
-                        p.trim_end_matches('/')
-                            .replace('/', std::path::MAIN_SEPARATOR_STR),
-                    ));
+                    });
+                if let Some(path) = destination {
+                    self.start_scan(PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR)));
                 }
             }
-
+            if ui.button("✎").on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
+                self.path_edit_mode = true;
+                self.path_edit_focus = true;
+            }
             if self.scan_running {
-                if ui.button("⏹ Stop").clicked() {
-                    self.cancel_scan();
-                }
+                if ui.button("■").on_hover_text("Scan abbrechen").clicked() { self.cancel_scan(); }
             } else if ui.button("⟳").on_hover_text("Aktualisieren (F5)").clicked() {
                 self.rescan();
             }
-
-            let was_recursive = self.recursive;
-            ui.toggle_value(&mut self.recursive, "🔁 Rekursiv")
-                .on_hover_text("Inkl. Unterordner durchsuchen (Ctrl+R)");
-            if was_recursive != self.recursive && !self.root_path.is_empty() {
-                self.rescan();
-            }
-
-            ui.separator();
-
-            let has_sel = !self.selection.is_empty();
-            let delete_disposition = self
-                .remote
-                .as_ref()
-                .map(|remote| remote.backend.delete_disposition());
-            let delete_tip = match delete_disposition {
-                Some(crate::vfs::DeleteDisposition::Recycle) | None => {
-                    "Entf — in Papierkorb"
-                }
-                Some(crate::vfs::DeleteDisposition::Permanent) => {
-                    "Entf — Server löscht endgültig (mit Bestätigung)"
-                }
-                Some(crate::vfs::DeleteDisposition::Unsupported) => {
-                    "Diese Quelle ist schreibgeschützt"
-                }
-            };
-            let can_delete = has_sel
-                && delete_disposition != Some(crate::vfs::DeleteDisposition::Unsupported);
-            // Grouped feature menus (moved off the sidebar). Copy/cut/paste stay
-            // on Ctrl+C/X/V and the right-click menu — out of the nav bar.
-            ui.menu_button("🔌 Verbindung", |ui| {
-                ui.set_min_width(330.0);
-                self.ui_menu_connect(ui);
-            });
-            if crate::mount::drive_mount_supported()
-                && ui
-                    .button("💽")
-                    .on_hover_text("Eingebundene Remote-Laufwerke verwalten")
-                    .clicked()
-            {
-                self.open_mount_manager();
-            }
-            ui.menu_button("⇄ Sync", |ui| {
-                ui.set_min_width(330.0);
-                self.ui_menu_sync(ui);
-            });
-            ui.menu_button("⚙ Einstellungen", |ui| {
-                ui.set_min_width(350.0);
-                self.ui_menu_settings(ui);
-            });
-            if ui
-                .selectable_label(self.show_share, "Share-Server")
-                .on_hover_text(
-                    "Andere Smart-Explorer-Geraete via Share-Server als normale Remote-Verbindung oeffnen",
-                )
-                .clicked()
-            {
-                self.show_share = !self.show_share;
-            }
-            ui.separator();
-            if ui
-                .add_enabled(can_delete, egui::Button::new("🗑").small())
-                .on_hover_text(delete_tip)
-                .clicked()
-            {
-                self.trash_selected();
-            }
-            // "Neu" dropdown: folder + various editable file types.
-            enum NewKind {
-                Folder,
-                File(&'static str, &'static str),
-            }
-            let mut new_kind: Option<NewKind> = None;
-            ui.add_enabled_ui(!self.root_path.is_empty(), |ui| {
-                ui.menu_button("➕ Neu", |ui| {
-                    if ui.button("📁 Ordner").clicked() {
-                        new_kind = Some(NewKind::Folder);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    for (label, base, ext) in [
-                        ("📄 Textdatei (.txt)", "Neue Textdatei", "txt"),
-                        ("📝 Markdown (.md)", "Neue Notiz", "md"),
-                        ("📊 CSV (.csv)", "Neue Tabelle", "csv"),
-                        ("🔧 JSON (.json)", "Neue Datei", "json"),
-                        ("🌐 HTML (.html)", "Neue Seite", "html"),
-                        ("</> Code (.rs)", "Neue Datei", "rs"),
-                    ] {
-                        if ui.button(label).clicked() {
-                            new_kind = Some(NewKind::File(base, ext));
-                            ui.close_menu();
-                        }
-                    }
-                })
-                .response
-                .on_hover_text("Neu: Ordner oder Datei (Ctrl+Shift+N = Ordner)");
-            });
-            match new_kind {
-                Some(NewKind::Folder) => self.create_new_folder(),
-                Some(NewKind::File(base, ext)) => self.create_new_file(base, ext),
-                None => {}
-            }
-            // Star the current folder
-            let starred =
-                !self.root_path.is_empty() && self.is_favorite(&self.location_key(&self.root_path));
-            let star_glyph = if starred { "★" } else { "☆" };
-            if ui
-                .add_enabled(
-                    !self.root_path.is_empty(),
-                    egui::Button::new(star_glyph).small(),
-                )
-                .on_hover_text("Aktuellen Ordner zu Favoriten (Ctrl+B)")
-                .clicked()
-            {
+            let starred = !self.root_path.is_empty() && self.is_favorite(&self.location_key(&self.root_path));
+            if ui.add_enabled(!self.root_path.is_empty(), egui::Button::new(if starred { "★" } else { "☆" }))
+                .on_hover_text("Ordner als Favorit speichern (Ctrl+B)").clicked() {
                 self.star_current_folder();
             }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.toggle_value(&mut self.show_summary, "Σ").changed() {
-                    self.save_ui_state();
-                }
-                if ui
-                    .toggle_value(&mut self.dirs_first, "📁↑")
-                    .on_hover_text(
-                        "Ordner zuerst sortieren — gilt nur für DIESEN Ordner und wird dafür \
-                         gemerkt. Aus: Dateien und Ordner gemischt nach der aktiven Spalte \
-                         (z.B. nach Datum).",
-                    )
-                    .changed()
-                {
-                    // Bind the choice to the current location (connection+path).
-                    if !self.root_path.is_empty() {
-                        let key = self.location_key(&self.root_path);
-                        self.dir_sort.insert(key, self.dirs_first);
-                        if let Err(error) = save_dir_sort(&self.dir_sort) {
-                            self.error_msg = Some(format!("Ordnersortierung speichern: {error}"));
-                        }
-                    }
-                    self.recompute_view();
-                }
-                if ui
-                    .toggle_value(&mut self.show_analytics, "📊")
-                    .on_hover_text("Speicher-Analyse (Treemap, größte Ordner/Dateien)")
-                    .changed()
-                    && !self.show_analytics
-                {
-                    self.cancel_analytics_scan();
-                    self.cancel_reclaim_scan();
-                }
-                if ui
-                    .toggle_value(&mut self.show_filters, "🔍 Filter")
-                    .on_hover_text("Filterleiste ein-/ausklappen")
-                    .changed()
-                {
-                    self.save_ui_state();
-                }
-                if ui.button("？").on_hover_text("Tastenkürzel (F1)").clicked() {
-                    self.show_help = !self.show_help;
-                }
-                let r = ui
-                    .selectable_label(self.split, "⊟ Split")
-                    .on_hover_text("Zwei Tabs nebeneinander (F6)");
-                self.accel_push('S', r.rect, AccelAct::Split);
-                if r.clicked() {
-                    self.toggle_split();
-                }
-            });
         });
     }
 }

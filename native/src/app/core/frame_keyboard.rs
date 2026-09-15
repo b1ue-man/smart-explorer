@@ -330,7 +330,6 @@ impl App {
                         self.filter.text.clear();
                         self.recompute_view();
                         self.name_filter_focus = true;
-                        self.show_filters = true;
                     } else {
                         self.search_nav_from_filter = false;
                     }
@@ -347,7 +346,6 @@ impl App {
                     // Ctrl+F = folder search → drop straight into `/`-mode so the
                     // dropdown owns the keyboard. Carry a plain filter over as the
                     // search query; leave an existing `/`-search untouched.
-                    self.show_filters = true;
                     if omni_mode(&self.text_draft) != OmniMode::FolderSearch {
                         let carry = if omni_mode(&self.text_draft) == OmniMode::Filter {
                             self.text_draft.trim().to_string()
@@ -366,7 +364,6 @@ impl App {
                     self.search_nav_from_filter = false;
                 }
                 KbdAct::FocusFilter => {
-                    self.show_filters = true;
                     self.name_filter_focus = true;
                     // Fresh filter session: we're in the filter, not the list.
                     self.search_nav_from_filter = false;

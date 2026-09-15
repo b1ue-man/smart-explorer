@@ -14,7 +14,7 @@ impl App {
     ) {
         let table_rect = ui.min_rect();
         let body_viewport = egui::Rect::from_min_max(
-            egui::pos2(table_rect.left(), table_rect.top() + 24.0),
+            egui::pos2(table_rect.left(), table_rect.top() + theme::TABLE_HEADER_HEIGHT + ui.spacing().item_spacing.y),
             table_rect.max,
         )
         .intersect(ui.clip_rect());

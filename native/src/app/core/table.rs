@@ -12,7 +12,9 @@ impl App {
 
         let prefix = self.root_prefix();
         let total_rows = self.view.len();
-        let row_h = 22.0;
+        let row_h = self.appearance.row_height();
+        let details = self.appearance.detailed_columns;
+        let show_path = self.recursive || details;
 
         let mut row_click: Option<(usize, bool, bool)> = None; // (idx, ctrl, shift)
         let mut row_dblclick: Option<usize> = None;
@@ -28,46 +30,41 @@ impl App {
         // table, since we can't mutably borrow self.icon_cache inside the body).
         let mut needed_icons: Vec<String> = Vec::new();
 
-        let header_def: &[(SortKey, &str)] = &[
-            (SortKey::Name, "Name"),
-            (SortKey::Path, "Pfad"),
-            (SortKey::Size, "Größe"),
-            (SortKey::Mtime, "Geändert"),
-            (SortKey::Btime, "Erstellt"),
-            (SortKey::Ext, "Typ"),
-            (SortKey::Depth, "Tiefe"),
-        ];
+        let mut header_def = vec![(SortKey::Name, "Name")];
+        if show_path { header_def.push((SortKey::Path, "Pfad")); }
+        header_def.extend([(SortKey::Size, "Größe"), (SortKey::Mtime, "Geändert")]);
+        if details { header_def.push((SortKey::Btime, "Erstellt")); }
+        header_def.push((SortKey::Ext, "Typ"));
+        if details { header_def.push((SortKey::Depth, "Tiefe")); }
 
+        let name_width = (ui.available_width() - if show_path { 520.0 } else { 310.0 }).max(180.0);
         let mut builder = TableBuilder::new(ui)
-            .id_salt("file_table_columns")
-            .striped(true)
+            .id_salt(("file_table_columns_v2", show_path, details))
+            .striped(false)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(
-                Column::initial(240.0)
-                    .at_least(120.0)
-                    .resizable(true)
-                    .clip(true),
-            ) // name
-            .column(
-                Column::initial(360.0)
-                    .at_least(120.0)
-                    .resizable(true)
-                    .clip(true),
-            ) // path
-            .column(Column::initial(90.0).at_least(60.0).resizable(true)) // size
-            .column(Column::initial(130.0).at_least(80.0).resizable(true)) // mtime
-            .column(Column::initial(130.0).at_least(80.0).resizable(true)) // btime
-            .column(Column::initial(60.0).at_least(40.0).resizable(true)) // ext
-            .column(Column::remainder().at_least(40.0)); // depth
+            .column(Column::initial(name_width).at_least(140.0).clip(true));
+        if show_path {
+            builder = builder.column(Column::initial(240.0).at_least(140.0).clip(true));
+        }
+        builder = builder
+            .column(Column::initial(90.0).at_least(60.0).clip(true))
+            .column(Column::initial(150.0).at_least(100.0).clip(true));
+        if details {
+            builder = builder.column(Column::initial(150.0).at_least(100.0).clip(true));
+        }
+        builder = builder.column(Column::remainder().at_least(60.0).clip(true));
+        if details {
+            builder = builder.column(Column::initial(60.0).at_least(45.0).clip(true));
+        }
 
         if let Some(r) = self.pending_scroll_row.take() {
             builder = builder.scroll_to_row(r, Some(egui::Align::Center));
         }
 
         builder
-            .header(22.0, |mut header| {
-                for (key, label) in header_def {
+            .header(theme::TABLE_HEADER_HEIGHT, |mut header| {
+                for (key, label) in &header_def {
                     header.col(|ui| {
                         let arrow = if self.sort_key == *key {
                             if self.sort_dir == SortDir::Asc {
@@ -180,6 +177,7 @@ impl App {
                         handle_resp(resp, ui, "Name", e.name.as_ref());
                     });
 
+                    if show_path {
                     // ─── Path (relative) ───────────────────────────────
                     row.col(|ui| {
                         let rel = if e.path.starts_with(&prefix) {
@@ -200,6 +198,7 @@ impl App {
                         handle_resp(resp, ui, "Pfad", &rel);
                     });
 
+                    }
                     // ─── Size ──────────────────────────────────────────
                     row.col(|ui| {
                         let txt = if e.is_dir {
@@ -217,24 +216,28 @@ impl App {
                         let resp = handle_cell(ui, &value, false);
                         handle_resp(resp, ui, "Geändert", &value);
                     });
+                    if details {
                     row.col(|ui| {
                         let value = format_date(e.btime_ms);
                         let resp = handle_cell(ui, &value, false);
                         handle_resp(resp, ui, "Erstellt", &value);
                     });
 
+                    }
                     // ─── Ext ───────────────────────────────────────────
                     row.col(|ui| {
                         let resp = handle_cell(ui, e.ext.as_ref(), false);
                         handle_resp(resp, ui, "Typ", e.ext.as_ref());
                     });
 
+                    if details {
                     // ─── Depth ─────────────────────────────────────────
                     row.col(|ui| {
                         let value = e.depth.to_string();
                         let resp = handle_cell(ui, &value, true);
                         handle_resp(resp, ui, "Tiefe", &value);
                     });
+                    }
                 });
             });
 
