@@ -226,12 +226,13 @@ Share/HTTP fixtures. The job/entrypoint timeouts are 180/170 minutes. The
 entrypoint records source and binary identity in `approval.json`; use that same
 suite for relevant fix retries. See [COPY_PASTE_REPAIR.md](COPY_PASTE_REPAIR.md).
 
-For the GUI clarity / light-mode / Drive path-name batch, dispatch only
+For the compact desktop GUI correction and Drive scan follow-up, dispatch only
 `.github/workflows/gui-design-task.yml` with the completed candidate SHA.
 Its single entrypoint is `bash native/test-gui-design-task.sh` on Ubuntu, with
 120/110-minute job/entrypoint timeouts. It builds only the affected host library
 development fixture incrementally and executes the `gui_design_task_` selector
-once, including the isolated GUI cases. The artifact contains candidate and
+once, including isolated GUI input, window geometry, complete diagnostic clipboard
+output, optional empty Drive pages and safe name/mutation regressions. The artifact contains candidate and
 binary hashes, protocol/layout results, actual egui paint geometry and PNG
 previews for visual review. An existing fixture binary can be supplied through
 `SMART_EXPLORER_TASK_BINARY`, `SMART_EXPLORER_TASK_SOURCE_SHA` and
@@ -239,7 +240,8 @@ previews for visual review. An existing fixture binary can be supplied through
 This entrypoint must not be invoked locally by Codex. After evaluating this
 suite, dispatch the existing `build.yml` complete-release mode for the same
 source candidate; its stable top-level release wrapper owns publication.
-See the [batch plan](superpowers/plans/2026-09-15-gui-redesign.md).
+See the [desktop correction plan](superpowers/plans/2026-09-15-desktop-gui-correction.md)
+and [Drive follow-up evidence](superpowers/plans/2026-09-15-drive-scan-followup.md).
 
 For the connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing
 batch, use only `native/test-lan-cleanup-task.sh` through the exact-SHA

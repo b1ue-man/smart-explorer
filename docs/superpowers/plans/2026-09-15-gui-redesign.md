@@ -1,5 +1,9 @@
 # GUI clarity and light-mode redesign
 
+Historical implementation plan. The user rejected this visual direction after
+publication. The [desktop correction plan](2026-09-15-desktop-gui-correction.md)
+supersedes its presentation choices and retains the functional Drive fixes.
+
 ## Goal and scope
 
 Overhaul the complete first-party GUI's presentation: readable light and dark

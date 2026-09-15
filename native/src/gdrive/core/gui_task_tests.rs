@@ -213,3 +213,67 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
     assert_eq!(serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"], "I/O.stage");
     assert_eq!(serde_json::from_slice::<Value>(&requests[8].body).unwrap()["name"], "I/O.txt");
 }
+
+#[test]
+fn gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundaries() {
+    for page in [json!({}), json!({"files": null}), json!({"files": []}),
+        json!({"files": [], "nextPageToken": null, "incompleteSearch": null})] {
+        let fixture = Fixture::new((0..3).map(|_| step("GET", FILES, Reply::Json(page.clone()))).collect());
+        let backend = fixture.backend();
+        assert!(backend.list_dir("/").unwrap().is_empty());
+        assert_eq!(backend.find_child("root", "I%2FO").unwrap(), None);
+        assert!(backend.named_objects("root", "I/O").unwrap().is_empty());
+        fixture.finish();
+    }
+    for page in [json!(null), json!([]), json!({"files": {}}), json!({"files": ""}),
+        json!({"nextPageToken": 3}), json!({"incompleteSearch": "false"}),
+        json!({"incompleteSearch": true}), json!({"error": {"message": "failed"}})] {
+        let fixture = Fixture::new((0..3).map(|_| step("GET", FILES, Reply::Json(page.clone()))).collect());
+        let backend = fixture.backend();
+        assert_eq!(backend.list_dir("/").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(backend.find_child("root", "I%2FO").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(backend.named_objects("root", "I/O").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        fixture.finish();
+    }
+    // An invalid absence response must not start a create/upload mutation.
+    let fixture = Fixture::new(vec![step("GET", FILES, Reply::Json(json!({"files": false})))]);
+    assert!(fixture.backend().open_write("I%2FO").is_err());
+    assert_eq!(fixture.finish().len(), 1);
+}
+
+#[test]
+fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan() {
+    let fixture = Fixture::new(vec![
+        step("GET", FILES, Reply::Json(json!({"nextPageToken": "second"}))),
+        step("GET", FILES, Reply::Json(json!({"files": [object(TITLE, "empty-id", true)]}))),
+        step("GET", FILES, Reply::Json(json!({"files": null}))),
+    ]);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let handle = crate::rscan::start_scan_backend(std::sync::Arc::new(fixture.backend()), "/".into(), None, tx);
+    let mut found = false;
+    loop {
+        use crate::scanner::ScanMessage;
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+            ScanMessage::Entries(entries) => found |= entries.iter().any(|entry| entry.id.as_deref() == Some("empty-id")),
+            ScanMessage::FailedPaths(paths) => assert!(paths.is_empty(), "{paths:?}"),
+            ScanMessage::Error(error) => panic!("{error}"),
+            ScanMessage::Done(progress) => { assert_eq!(progress.errors, 0); break; }
+            ScanMessage::Progress(_) => {},
+        }
+    }
+    handle.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(found);
+    let requests = fixture.finish();
+    assert!(requests[1].target.contains("pageToken=second"));
+    assert!(requests[2].target.contains(&super::core::cloud_urlenc("'empty-id' in parents")));
+    for resolve in [false, true] {
+        let fixture = Fixture::new(vec![
+            step("GET", FILES, Reply::Json(json!({"files": null, "nextPageToken": "next"}))),
+            step("GET", FILES, Reply::Json(json!({"files": [object("I/O", "item-id", false)]}))),
+        ]);
+        let backend = fixture.backend();
+        if resolve { assert_eq!(backend.find_child("root", "I%2FO").unwrap().as_deref(), Some("item-id")); }
+        else { assert_eq!(backend.named_objects("root", "I/O").unwrap()[0].id, "item-id"); }
+        assert!(fixture.finish()[1].target.contains("pageToken=next"));
+    }
+}

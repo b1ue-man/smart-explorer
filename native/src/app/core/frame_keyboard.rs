@@ -36,6 +36,16 @@ impl App {
             self.accel_mode = false;
             return;
         }
+        // egui's menu Areas handle Escape during layout. Let an open menu
+        // consume it (and own file commands) before the explorer clears a
+        // selection or acts on Delete. Tooltips use a different paint order.
+        let menu_open = ctx.memory(|memory| memory.any_popup_open()
+            || memory.areas().visible_layer_ids().iter()
+                .any(|layer| layer.order == egui::Order::Foreground));
+        if menu_open && !ctx.wants_keyboard_input() {
+            self.accel_mode = false;
+            return;
+        }
         // ─── Alt key-overlay (accelerators) ────────────────────────────
         // While the overlay is up, a bare letter/digit fires its control (using
         // last frame's rects — controls don't move) and closes the overlay; Esc

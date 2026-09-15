@@ -34,7 +34,12 @@ fn gui_design_task_text_control_focus_and_chart_contrast() {
             assert!(contrast(widget.fg_stroke.color, widget.bg_fill) >= 4.5);
         }
         assert!(style.visuals.widgets.active.bg_stroke.width >= 2.0);
-        assert!(style.text_styles[&egui::TextStyle::Small].size >= 12.0);
+        assert!(style.spacing.interact_size.y <= 22.0);
+        assert!(style.spacing.window_margin.left <= 8.0);
+        assert!(style.visuals.window_rounding.nw <= 2.0);
+        assert_eq!(p.panel.r(), p.panel.g());
+        assert_eq!(p.panel.g(), p.panel.b());
+        assert!(style.text_styles[&egui::TextStyle::Small].size >= 11.5);
         for color in super::treemap::TM_PALETTE {
             for background in [color, color.gamma_multiply(0.7),
                 egui::ecolor::tint_color_towards(color, p.surface)] {
@@ -69,7 +74,7 @@ fn gui_design_task_theme_switch_keeps_custom_styles() {
     for system in [egui::Theme::Light, egui::Theme::Dark] {
         let _ = ctx.run(egui::RawInput { system_theme: Some(system), ..Default::default() }, |_| {});
         assert_eq!(ctx.theme(), system);
-        assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 14.0);
+        assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 13.0);
     }
     assert!(ctx.fonts(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), "←→↑⋯")));
     ctx.set_theme(egui::Theme::Light);
