@@ -1,4 +1,4 @@
-use super::landing_tiles::{ui_landing_section, LandingAction, LandingTile};
+use super::landing_tiles::{ui_landing_actions, ui_landing_section, LandingAction, LandingTile};
 use super::prelude::*;
 use super::*;
 
@@ -78,7 +78,7 @@ impl App {
         let sync_results = crate::syncjobs::load_results();
 
         let action_tiles = self.landing_action_tiles();
-        let place_tiles = self.landing_place_tiles(&common[..common.len().min(3)], &recent, &favorites, &[]);
+        let place_tiles = self.landing_place_tiles(&common, &recent, &favorites, &[]);
         let drive_tiles = self.landing_place_tiles(&[], &[], &[], &drives);
         let remote_tiles = self.landing_remote_tiles(&connections, gdrive_connected);
         let sync_tiles = self.landing_sync_tiles(&sync_results);
@@ -86,20 +86,27 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(16.0);
-                ui.heading("Startseite");
-                ui.label(RichText::new("Ordner, Verbindungen und Geräte öffnen.").color(theme::muted(ui)));
-                ui.add_space(16.0);
-                ui_landing_section(ui, "Öffnen", true, &action_tiles, &mut action);
-                ui_landing_section(ui, "Schnellzugriff", true, &place_tiles, &mut action);
-                if !connections.is_empty() || gdrive_connected {
-                    ui_landing_section(ui, "Gespeicherte Verbindungen", false, &remote_tiles, &mut action);
-                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.heading("Startseite");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Ordnerindex…").clicked() {
+                            self.open_settings(settings_ui::SettingsPage::Storage);
+                        }
+                    });
+                });
+                ui.separator();
+                ui_landing_actions(ui, &action_tiles, &mut action);
+                ui.add_space(6.0);
+                ui_landing_section(ui, "Orte", true, &place_tiles, &mut action);
                 if !drives.is_empty() {
-                    ui_landing_section(ui, "Laufwerke", false, &drive_tiles, &mut action);
+                    ui_landing_section(ui, "Laufwerke", true, &drive_tiles, &mut action);
+                }
+                if !connections.is_empty() || gdrive_connected {
+                    ui_landing_section(ui, "Remotes", true, &remote_tiles, &mut action);
                 }
                 if !self.sync_jobs.is_empty() {
-                    ui_landing_section(ui, "Sync-Aufträge", false, &sync_tiles, &mut action);
+                    ui_landing_section(ui, "Sync-Jobs", true, &sync_tiles, &mut action);
                 }
             });
 
@@ -124,9 +131,10 @@ impl App {
 
     fn landing_action_tiles(&self) -> Vec<LandingTile> {
         vec![
-            LandingTile::action("Ordner öffnen", "Auf diesem Computer", "", LandingAction::ChooseFolder),
-            LandingTile::action("Verbindung hinzufügen", "Server oder Netzlaufwerk", "", LandingAction::NewConnection),
-            LandingTile::action("Geräte & Freigaben", "Mit anderen Geräten arbeiten", "", LandingAction::ShowShare),
+            LandingTile::action("Ordner öffnen", "Lokalen Ordner auswählen", "", LandingAction::ChooseFolder),
+            LandingTile::action("Neue Verbindung", "SFTP, FTP oder WebDAV", "", LandingAction::NewConnection),
+            LandingTile::action("Sync-Jobs", "Jobs verwalten, starten und vergleichen", "", LandingAction::ShowSyncJobs),
+            LandingTile::action("Share-Server", "Geräte und Freigaben verwalten", "", LandingAction::ShowShare),
         ]
     }
 

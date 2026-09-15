@@ -4,7 +4,17 @@ use super::*;
 impl App {
     pub(in crate::app) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
         self.ui_sidebar_locations(ui);
-        theme::section(ui, "Verbindungen");
+        ui.scope(|ui| {
+            // Connection maintenance uses flat compact controls, like the
+            // navigation rows. Full actions remain in their existing menus.
+            ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
+            self.ui_sidebar_connections(ui);
+        });
+    }
+
+    fn ui_sidebar_connections(&mut self, ui: &mut egui::Ui) {
+        theme::section(ui, "VERBINDUNGEN");
         let mut disconnect = false;
         let mut activate_agent = false;
         let mut remove_agent = false;
@@ -73,7 +83,7 @@ impl App {
         if conns.len() > SIDEBAR_CONN_CAP {
             ui.small(format!("Weitere Verbindungen im Menü oben ({})", conns.len() - SIDEBAR_CONN_CAP));
         }
-        if ui.add(egui::Button::new("+ Verbindung hinzufügen").frame(false)).clicked() {
+        if ui.add(egui::Button::new("+ Neue Verbindung").frame(false)).clicked() {
             self.connect_form = crate::connect::ConnectForm::default();
             self.show_connect = true;
         }
@@ -188,6 +198,5 @@ impl App {
 }
 
 fn sidebar_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    ui.add_sized([(ui.available_width() - 42.0).max(40.0), 30.0],
-        egui::Button::new(label).frame(false).selected(selected).truncate())
+    sidebar_locations::sidebar_row(ui, label, (ui.available_width() - 24.0).max(1.0), selected)
 }
