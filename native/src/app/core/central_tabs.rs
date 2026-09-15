@@ -7,7 +7,9 @@ impl App {
     /// split mode. Each pane renders via `ui_table`; the non-focused pane's
     /// tab state is swapped into the working fields just for its render.
     pub(in crate::app) fn ui_central(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).fill(theme::Palette::new(ctx.style().visuals.dark_mode).surface))
+            .show(ctx, |ui| {
             if !self.split || self.tabs.len() < 2 {
                 self.split = self.split && self.tabs.len() >= 2;
                 self.pane_rects.clear();
