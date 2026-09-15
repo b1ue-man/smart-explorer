@@ -43,7 +43,8 @@ def render(path):
             wa = ((b[1]-c[1])*(x-c[0]) + (c[0]-b[0])*(y-c[1])) / determinant
             wb = ((c[1]-a[1])*(x-c[0]) + (a[0]-c[0])*(y-c[1])) / determinant
             wc = 1.0 - wa - wb
-            mask = (wa >= 0) & (wb >= 0) & (wc >= 0)
+            # Roundoff at shared mesh edges must not leave unpainted cracks.
+            mask = (wa >= -1e-6) & (wb >= -1e-6) & (wc >= -1e-6)
             if not mask.any():
                 continue
             attributes = wa[..., None]*a[2:] + wb[..., None]*b[2:] + wc[..., None]*c[2:]

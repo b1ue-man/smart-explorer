@@ -80,6 +80,25 @@ fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
     let requests = fixture.finish();
     assert!(requests[1].target.contains(&super::core::cloud_urlenc("'folder-id' in parents")));
     assert_eq!(serde_json::from_slice::<Value>(&requests[4].body).unwrap(), json!({"trashed": true}));
+
+    // Google-native documents have the same title mapping, but use export.
+    let mut document = object(TITLE, "item-id", false);
+    document["mimeType"] = json!("application/vnd.google-apps.document");
+    let fixture = Fixture::new(vec![
+        step("GET", FILES, Reply::Json(json!({"files": [document]}))),
+        step("GET", "/drive/v3/files/item-id/export", Reply::Bytes("office-data".into())),
+    ]);
+    let backend = fixture.backend();
+    let listed = backend.list_dir("/").unwrap();
+    let path = format!("/{}", listed[0].name);
+    assert_eq!(crate::connect::gdrive_endpoint(&path), format!("gdrive://{path}"));
+    assert_eq!(backend.download_name(&path, &listed[0].name), format!("{}.docx", names::encode(TITLE)));
+    let mut bytes = Vec::new();
+    backend.open_read(&path).unwrap().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"office-data");
+    let requests = fixture.finish();
+    assert!(requests[1].target.contains("mimeType=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document"));
+
 }
 
 #[test]

@@ -129,7 +129,7 @@ impl App {
                         "⚠ Scan teilweise abgeschlossen",
                     );
                 } else if !self.entries.is_empty() {
-                    ui.label("✓ Bereit");
+                    ui.label("Bereit");
                 }
                 let p = &progress;
                 if !self.root_path.is_empty() {
@@ -149,6 +149,13 @@ impl App {
                     .on_hover_text(&p.current_path);
                 }
             });
+            let has_details = transfer.is_some() || copy.is_some() || self.sync_running
+                || self.bisync_running || delete_progress.is_some()
+                || notice.as_ref().is_some_and(|(_, time)| time.elapsed().as_secs() < 6)
+                || self.error_msg.is_some() || progress.errors > 0
+                || !self.failed_paths.is_empty() || !self.app_errors.is_empty()
+                || !self.selection.is_empty();
+            if !has_details { return; }
             ui.horizontal_wrapped(|ui| {
                 if let Some(p) = &transfer {
                     ui_transfer_chip(ui, p);

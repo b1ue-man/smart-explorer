@@ -90,7 +90,7 @@ impl App {
                                     sync_panes_req = true;
                                     ui.close_menu();
                                 }
-                                if ui.button("＋ Als Sync-Setup speichern…").clicked() {
+                                if ui.button("+ Als Sync-Setup speichern…").clicked() {
                                     save_setup_req = true;
                                     ui.close_menu();
                                 }
@@ -336,7 +336,7 @@ impl App {
                     action = Some(TabAction::Close(i));
                 }
             }
-            let r = ui.button("＋").on_hover_text("Neuer Tab (Ctrl+T)");
+            let r = ui.button("+").on_hover_text("Neuer Tab (Ctrl+T)");
             self.accel_push('T', r.rect, AccelAct::NewTab);
             if r.clicked() {
                 action = Some(TabAction::New);

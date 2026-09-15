@@ -385,9 +385,9 @@
     "semantic_hash": "49ef48425932b41c3e6cce865c0d7066"
   },
   "app/core/central_tabs.rs": {
-    "mtime": 1789464471.9375284,
-    "ast_hash": "793d293fa3298e6d8b055a4db3c10487",
-    "semantic_hash": "793d293fa3298e6d8b055a4db3c10487"
+    "mtime": 1789467417.116561,
+    "ast_hash": "401f7943bfe80968d0e211658f50e48d",
+    "semantic_hash": "401f7943bfe80968d0e211658f50e48d"
   },
   "app/core/clipboard_state.rs": {
     "mtime": 1789142842.5083017,
@@ -490,14 +490,14 @@
     "semantic_hash": "ecb4155e288d9131aa450404d5009629"
   },
   "app/core/gui_design_task_tests.rs": {
-    "mtime": 1789465313.8788426,
-    "ast_hash": "350ab0453988b0d1e2ed5dda87c5acf3",
-    "semantic_hash": "350ab0453988b0d1e2ed5dda87c5acf3"
+    "mtime": 1789467417.1175609,
+    "ast_hash": "80d740eb4561d778d72215b13a203ecc",
+    "semantic_hash": "80d740eb4561d778d72215b13a203ecc"
   },
   "app/core/gui_design_task_ui.rs": {
-    "mtime": 1789465457.0486422,
-    "ast_hash": "99e7e2b349e3544ce5f78f557ba9bbfa",
-    "semantic_hash": "99e7e2b349e3544ce5f78f557ba9bbfa"
+    "mtime": 1789467506.1472836,
+    "ast_hash": "7f18b0fcdc0a1f6411e181c41191286d",
+    "semantic_hash": "7f18b0fcdc0a1f6411e181c41191286d"
   },
   "app/core/index_persistence.rs": {
     "mtime": 1783657341.8797367,
@@ -525,9 +525,9 @@
     "semantic_hash": "7feffcbf69575a0dce1c6f7fcd06458a"
   },
   "app/core/landing.rs": {
-    "mtime": 1789464471.9345284,
-    "ast_hash": "ef057dc62208b8538f6415aade1624d3",
-    "semantic_hash": "ef057dc62208b8538f6415aade1624d3"
+    "mtime": 1789467473.5426524,
+    "ast_hash": "9f88b19ef824fc8431cb1c973413ef19",
+    "semantic_hash": "9f88b19ef824fc8431cb1c973413ef19"
   },
   "app/core/landing_tiles.rs": {
     "mtime": 1789464471.9345284,
@@ -835,9 +835,9 @@
     "semantic_hash": "0f5dd4e2cfdd4e2b2b9d70d42a7209ee"
   },
   "app/core/shell_toolbar.rs": {
-    "mtime": 1789466735.8294904,
-    "ast_hash": "d32c80e059a2ca6c2a3ef5267b2cdf03",
-    "semantic_hash": "d32c80e059a2ca6c2a3ef5267b2cdf03"
+    "mtime": 1789467417.116561,
+    "ast_hash": "cdf8ab511be1276922fb71d745623afa",
+    "semantic_hash": "cdf8ab511be1276922fb71d745623afa"
   },
   "app/core/shutdown.rs": {
     "mtime": 1784666561.508495,
@@ -850,9 +850,9 @@
     "semantic_hash": "f4e200c8fc504898ddd2129c85384b14"
   },
   "app/core/sidebar_locations.rs": {
-    "mtime": 1789466735.8314903,
-    "ast_hash": "53dbda2b433501b84bf1ef1e8d099278",
-    "semantic_hash": "53dbda2b433501b84bf1ef1e8d099278"
+    "mtime": 1789467473.5426524,
+    "ast_hash": "aa74145635f867fc57e00f902d5e1566",
+    "semantic_hash": "aa74145635f867fc57e00f902d5e1566"
   },
   "app/core/state.rs": {
     "mtime": 1789464606.228102,
@@ -860,9 +860,9 @@
     "semantic_hash": "511cc7f311832a73220e38eae5cc8b21"
   },
   "app/core/status_errors.rs": {
-    "mtime": 1789464264.492473,
-    "ast_hash": "e9ed3006c10bb67c1866f070463ccb6b",
-    "semantic_hash": "e9ed3006c10bb67c1866f070463ccb6b"
+    "mtime": 1789467417.1175609,
+    "ast_hash": "11afa62965ace0f70db9e5c3d472cf57",
+    "semantic_hash": "11afa62965ace0f70db9e5c3d472cf57"
   },
   "app/core/support_paths.rs": {
     "mtime": 1783673140.3122041,
@@ -905,9 +905,9 @@
     "semantic_hash": "3fac29ccc34caf6a37b5a046f8fa6fac"
   },
   "app/core/theme.rs": {
-    "mtime": 1789466735.8304904,
-    "ast_hash": "e87c42b9b61cea1741733e5368378fdd",
-    "semantic_hash": "e87c42b9b61cea1741733e5368378fdd"
+    "mtime": 1789467417.116561,
+    "ast_hash": "c1a7997a36635b16955ec20eca7f80d9",
+    "semantic_hash": "c1a7997a36635b16955ec20eca7f80d9"
   },
   "app/core/transfer_lifecycle.rs": {
     "mtime": 1783661078.9717426,
@@ -2380,9 +2380,9 @@
     "semantic_hash": "11a926683677802ee81a7b94b4402950"
   },
   "gdrive/core/gui_task_tests.rs": {
-    "mtime": 1789466255.8753037,
-    "ast_hash": "9b342ca5b67ed12f4d72732db6fb6ea0",
-    "semantic_hash": "9b342ca5b67ed12f4d72732db6fb6ea0"
+    "mtime": 1789467104.6605353,
+    "ast_hash": "782375a877d2535366b2f33703e26daf",
+    "semantic_hash": "782375a877d2535366b2f33703e26daf"
   },
   "gdrive/core/metadata.rs": {
     "mtime": 1789466050.286269,

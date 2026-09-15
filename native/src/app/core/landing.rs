@@ -149,7 +149,7 @@ impl App {
         }
         for (label, path) in common {
             if seen.insert(path.clone()) {
-                tiles.push(LandingTile::action(label, path, "Persönlicher Ordner",
+                tiles.push(LandingTile::action(label, path, "",
                     LandingAction::OpenLocation(path.clone())));
             }
         }

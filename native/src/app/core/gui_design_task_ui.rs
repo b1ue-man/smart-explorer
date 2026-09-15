@@ -11,6 +11,7 @@ struct Harness {
     capture: Capture,
     size: egui::Vec2,
     time: f64,
+    hover_file: bool,
     fixture: tempfile::TempDir,
 }
 
@@ -38,7 +39,7 @@ impl Harness {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         app.configure_appearance(&ctx);
-        Self { app, ctx, capture: Capture::default(), size: size.into(), time: 0.0, fixture }
+        Self { app, ctx, capture: Capture::default(), size: size.into(), time: 0.0, hover_file: false, fixture }
     }
 
     fn workspace(&mut self) {
@@ -50,8 +51,11 @@ impl Harness {
             path: format!("{}/{name}", self.app.root_path).into(),
             parent: self.app.root_path.clone().into(), name: name.into(), ext: ext.into(),
             size, mtime_ms: 1_700_000_000_000, btime_ms: 1_699_000_000_000,
-            is_dir, is_symlink: false, hidden: false, system: false, depth: 0, id: None,
+            is_dir, is_symlink: false, hidden: false, system: false, depth: 1, id: None,
         }).collect();
+        self.app.progress.scanned = self.app.entries.len() as u64 + 1;
+        self.app.progress.bytes = self.app.entries.iter().map(|entry| entry.size).sum();
+        self.app.recursive = false;
         self.app.sort_key = SortKey::Name;
         self.app.recompute_view();
     }
@@ -60,7 +64,9 @@ impl Harness {
         self.time += 0.2;
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
-            time: Some(self.time), events, focused: true, ..Default::default()
+            time: Some(self.time), events, focused: true,
+            hovered_files: if self.hover_file { vec![egui::HoveredFile::default()] } else { Vec::new() },
+            ..Default::default()
         };
         let app = &mut self.app;
         let output = self.ctx.run(input, |ctx| {
@@ -115,7 +121,7 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
         for (name, size) in [("minimum", [900.0, 600.0]), ("desktop", [1400.0, 900.0])] {
             let mut h = Harness::new(dark, size);
             h.workspace();
-            h.settle();
+            h.save(&format!("workspace-{name}-{mode}"));
             for label in ["Datei", "Verbindungen", "Teilen", "Sync", "Ansicht", "Einstellungen", "Filter", "Bericht.md"] {
                 h.assert_visible(label);
             }
@@ -124,6 +130,10 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             assert_eq!(h.app.selection.len(), 1);
             assert!(h.app.selection.contains(&h.app.entries[1].key()));
             h.save(&format!("workspace-{name}-{mode}"));
+            h.hover_file = true;
+            h.save(&format!("drag-{name}-{mode}"));
+            h.hover_file = false;
+            h.settle();
 
             h.click("Dateien suchen…");
             h.frame(vec![egui::Event::Text("Bericht".into())]);

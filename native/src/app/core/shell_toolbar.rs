@@ -9,7 +9,7 @@ impl App {
             egui::Id::new("drop_overlay"),
         ));
         let rect = ctx.screen_rect();
-        painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 110));
+        painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 200));
         let (text, color) = match self.drop_target() {
             Some(p) => (
                 format!("📥 Hier ablegen → {}\n(Umschalt = verschieben)", p),
@@ -54,7 +54,7 @@ impl App {
                 self.open_picker(PickerPurpose::ScanFolder, &initial);
             }
 
-            let path_width = (ui.available_width() - 124.0).max(80.0);
+            let path_width = (ui.available_width() - 150.0).max(80.0);
             if self.path_edit_mode {
                 let response = ui.add_sized([path_width, 30.0],
                     egui::TextEdit::singleline(&mut self.root_path).hint_text("Pfad eingeben…"));
@@ -98,7 +98,7 @@ impl App {
                     self.start_scan(PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR)));
                 }
             }
-            if ui.button("✎").on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
+            if ui.button("Pfad").on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
                 self.path_edit_mode = true;
                 self.path_edit_focus = true;
             }
