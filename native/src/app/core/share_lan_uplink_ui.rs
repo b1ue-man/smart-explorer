@@ -1,6 +1,6 @@
-use crate::app::theme;
 //! Uplink-sharing section of the LAN tab (Stage 2): the opt-in toggle with the
 //! one-time platform setup, and the live sharing state with its reason.
+use crate::app::theme;
 use super::*;
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, view: &crate::share::UplinkView) {

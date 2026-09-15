@@ -1,6 +1,6 @@
-use crate::app::theme;
 //! "LAN" tab of the Share view: local-network presence of paired devices,
 //! link classification, and (Stage 2) automatic uplink sharing.
+use crate::app::theme;
 use super::*;
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {

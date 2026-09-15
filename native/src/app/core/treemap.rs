@@ -3,7 +3,7 @@ use super::*;
 
 pub(in crate::app) const TM_MIN: f32 = 3.0; // skip cells smaller than this
 pub(in crate::app) const TM_RECURSE: f32 = 38.0; // only recurse into folders at least this big
-pub(in crate::app) const TM_HEADER: f32 = 15.0; // folder header strip height
+pub(in crate::app) const TM_HEADER: f32 = 20.0; // room for readable chart labels
 pub(in crate::app) const TM_MAXDEPTH: usize = 14;
 pub(in crate::app) const TM_MAXCELLS: usize = 80_000;
 

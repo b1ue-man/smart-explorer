@@ -7,6 +7,12 @@ impl App {
     }
 
     #[cfg(test)]
+    pub(super) fn new_for_gui_task() -> Self {
+        assert_eq!(std::env::var("SMART_EXPLORER_GUI_TASK").as_deref(), Ok("1"));
+        Self::new_inner(false, None, false)
+    }
+
+    #[cfg(test)]
     pub(in crate::app) fn new_for_copy_task() -> Self {
         assert_eq!(
             std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(),

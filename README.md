@@ -7,9 +7,16 @@ Explorer), Fuzzy-Ordnersuche mit Live-Index, Tabs + Split-Screen, Shell-Kontextm
 Breite Datei-/Detailspalten bleiben per horizontalem Scroll erreichbar, auch
 wenn ein Detailbereich die verfügbare Tabellenbreite verkleinert.
 
+**Oberfläche:** Die Pfadleiste hat eine eigene Zeile; die Suche bleibt direkt
+sichtbar. **Filter** öffnet die erweiterten Kriterien und zeigt aktive Filter
+an. **Ansicht** enthält Split-Ansicht, Detailspalten und kompakte Zeilen.
+Unter **Einstellungen → Darstellung** stehen **Hell**, **Dunkel** und
+**Wie im System** zur Wahl. Startseite und Seitenleiste zeigen kurze Listen;
+weitere Einträge und Verwaltungsfunktionen sind bei Bedarf aufklappbar.
+
 **Remote/Cloud (ab 0.4.x):** durchsucht **SFTP**, **FTP/FTPS**, **WebDAV**
 (Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
-einheitliche `Backend`-Schnittstelle (Sidebar → **VERBINDEN**); Zugangsdaten im
+einheitliche `Backend`-Schnittstelle (**Verbindungen** in der Befehlsleiste); Zugangsdaten im
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
 den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
 
@@ -25,7 +32,7 @@ Save-back-Pfad zurück.
 **Google Drive (ab 0.5.16):** durchsuchen und **synchronisieren** über denselben
 `Backend`-Mechanismus. Smart Explorer ist **kein Cloud-Dienst** — du hinterlegst
 einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
-[`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)); Einstellungen → **CLOUD (GOOGLE DRIVE)**.
+[`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)); **Einstellungen → Verbindungen → Google Drive**.
 Einseitige Drive-Mirror-Jobs nutzen nach dem ersten Vollabgleich einen lokalen
 Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
 prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
@@ -34,6 +41,14 @@ neueste Kopie behält ihren Namen, jede weitere erscheint als
 `Name [drive-id abcd1234]` und bleibt so eindeutig öffnenbar, synchronisierbar
 und umbenennbar, statt den ganzen Ordner mit „duplicate child name" zu
 blockieren.
+
+Drive-Titel mit Pfadzeichen werden als reversible Namen angezeigt: `I/O`
+erscheint als `I%2FO`, ein wörtliches `I%2FO` als `I%252FO`.
+Die Titel in Google Drive bleiben erhalten; Öffnen und Änderungen adressieren
+die Datei-ID. Auch Punktnamen, Backslashes und für Windows reservierte Zeichen
+werden abgebildet. Alte Pfad-Cacheeinträge werden neu aufgebaut; die neue
+Namensdarstellung verwendet eine eigene Sync-State-Identität. Details und
+Entwicklerquellen stehen in [Google Drive einrichten](docs/CLOUD_SETUP.md).
 
 **Idle-Verbindungen (ab 0.5.131):** SFTP und der SSH-Agent halten ihre
 authentifizierten Sitzungen aktiv; FTP/FTPS prueft unbenutzte Kontrollkanaele
@@ -260,8 +275,7 @@ versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
 der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
-Dateisystemdaten im Klartext. Toolbar → **📡 Teilen**; Server in Einstellungen →
-**TEILEN**. Der frühere Noise/TCP-Entwurf steht historisch in
+Dateisystemdaten im Klartext. **Teilen** in der Befehlsleiste; Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
@@ -413,13 +427,13 @@ Andere Verbindungen und Raeume entfernt `se connections remove` beziehungsweise
 `remove-room`; auch dabei werden Favoriten, Ordner-Einstellungen und Mounts
 des Ziels mit entfernt.
 
-**Lokales Netz ohne Server (Teilen → LAN):** gekoppelte Geraete kuendigen ihre
+**Lokales Netz ohne Server (Teilen → Netzwerk):** gekoppelte Geraete kuendigen ihre
 Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne
 erreichbaren Share-Server — etwa ueber ein direktes Kabel oder ein isoliertes
 LAN. Es wird nur eine gehashte Kennung verbreitet; fremde Geraete werden
 gezaehlt, aber nie verbunden, da Node-Pin, Relation-Secret und Grant weiterhin
 gelten. Ist kein Share-Server konfiguriert, laeuft der Worker rein lokal. Der
-LAN-Tab zeigt jede Netzwerkverbindung als „ohne Router (direkt)",
+Netzwerk-Tab zeigt jede Netzwerkverbindung als „ohne Router (direkt)",
 „Internetzugang" oder „Netzwerk mit Router"; fehlt mDNS oder die
 Schnittstellenabfrage, steht dort „nicht verfuegbar: <Grund>". Optional teilt
 ein Geraet seinen **Internetzugang automatisch** mit gekoppelten Geraeten, die
