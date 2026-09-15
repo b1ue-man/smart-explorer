@@ -36,7 +36,7 @@ pub(super) struct Appearance {
 
 impl Appearance {
     pub(super) fn row_height(self) -> f32 {
-        if self.compact { 24.0 } else { 30.0 }
+        if self.compact { 20.0 } else { 22.0 }
     }
 }
 

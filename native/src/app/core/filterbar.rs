@@ -154,16 +154,10 @@ impl App {
             }
 
             let active = self.filter_is_active();
-            let label = if active { "Filter · aktiv" } else { "Filter" };
-            if ui.selectable_label(self.show_filters, label).on_hover_text("Dateityp, Größe und Zeitraum eingrenzen").clicked() {
-                self.show_filters = !self.show_filters;
-                self.save_ui_state();
-            }
             if (active || !self.text_draft.is_empty()) && ui.button("Zurücksetzen").clicked() {
                 self.reset_filters();
             }
         });
-        if !self.show_filters { return; }
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.label("Dateityp:");
@@ -181,7 +175,7 @@ impl App {
             self.size_input(ui, "size_max", "≤ 1 GB", false);
 
             for (modified, label) in [(true, "Geändert:"), (false, "Erstellt:")] {
-                ui.allocate_ui_with_layout(egui::vec2(220.0, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(220.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(label);
                     self.date_filter_ui(ui, modified);
                 });
@@ -226,7 +220,6 @@ impl App {
         });
 
         ui.horizontal_wrapped(|ui| {
-            if ui.checkbox(&mut self.recursive, "Unterordner einbeziehen").on_hover_text("Rekursiv durchsuchen (Ctrl+R)").changed() && !self.root_path.is_empty() { self.rescan(); }
             let mut changed = false;
             changed |= ui
                 .checkbox(&mut self.filter.include_files, "Dateien")

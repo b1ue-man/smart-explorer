@@ -40,7 +40,7 @@ impl App {
         let name_width = (ui.available_width() - if show_path { 520.0 } else { 310.0 }).max(180.0);
         let mut builder = TableBuilder::new(ui)
             .id_salt(("file_table_columns_v2", show_path, details))
-            .striped(false)
+            .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::initial(name_width).at_least(140.0).clip(true));

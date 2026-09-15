@@ -2,37 +2,56 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    pub(in crate::app) fn ui_commandbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.add_enabled_ui(!self.root_path.is_empty(), |ui| self.ui_new_menu(ui));
-            ui.menu_button("Datei", |ui| self.ui_file_menu(ui));
-            ui.separator();
-            ui.menu_button("Verbindungen", |ui| {
-                ui.set_width(320.0);
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| self.ui_menu_connect(ui));
-                if crate::mount::drive_mount_supported() && ui.button("Remote-Laufwerke…").clicked() {
-                    self.open_mount_manager();
-                    ui.close_menu();
-                }
-            });
-            if ui.selectable_label(self.show_share, "Teilen").clicked() {
-                self.show_share = !self.show_share;
-            }
-            ui.menu_button("Sync", |ui| {
-                ui.set_width(340.0);
-                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| self.ui_menu_sync(ui));
-            });
-            ui.separator();
-            let view = ui.menu_button("Ansicht", |ui| self.ui_view_menu(ui));
-            self.accel_push('S', view.response.rect, AccelAct::Split);
-            if ui.selectable_label(self.settings.open, "Einstellungen").clicked() {
-                self.settings.open = !self.settings.open;
+    pub(super) fn toolbar_commands_width(ui: &egui::Ui, wide: bool) -> f32 {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let labels = ["Rekursiv", "Neu", "Verbindung", "Sync", "Einstellungen", "Ansicht", "»"];
+        let mut width = 16.0; // separator and rounding to physical pixels
+        for label in labels.into_iter().chain(wide.then_some("Share-Server")) {
+            width += ui.fonts(|fonts| fonts.layout_no_wrap(label.into(), font.clone(), Color32::WHITE).size().x)
+                + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
+        }
+        width
+    }
+
+    pub(in crate::app) fn ui_commandbar(&mut self, ui: &mut egui::Ui, wide: bool) {
+        if ui.toggle_value(&mut self.recursive, "Rekursiv")
+            .on_hover_text("Unterordner durchsuchen (Ctrl+R)").changed() && !self.root_path.is_empty() {
+            self.rescan();
+        }
+        ui.separator();
+        ui.add_enabled_ui(!self.root_path.is_empty(), |ui| self.ui_new_menu(ui));
+        ui.menu_button("Verbindung", |ui| {
+            ui.set_width(300.0);
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| self.ui_menu_connect(ui));
+            if crate::mount::drive_mount_supported() && ui.button("Remote-Laufwerke…").clicked() {
+                self.open_mount_manager();
+                ui.close_menu();
             }
         });
+        ui.menu_button("Sync", |ui| {
+            ui.set_width(320.0);
+            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| self.ui_menu_sync(ui));
+        });
+        if ui.button("Einstellungen").clicked() { self.settings.open = !self.settings.open; }
+        if wide && ui.selectable_label(self.show_share, "Share-Server").clicked() {
+            self.show_share = !self.show_share;
+        }
+        let view = ui.menu_button("Ansicht", |ui| self.ui_view_menu(ui));
+        self.accel_push('S', view.response.rect, AccelAct::Split);
+        ui.menu_button("»", |ui| {
+            if !wide {
+                if ui.selectable_label(self.show_share, "Share-Server").clicked() {
+                    self.show_share = !self.show_share;
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
+            self.ui_file_menu(ui);
+        }).response.on_hover_text("Weitere Befehle");
     }
 
     fn ui_new_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("+ Neu", |ui| {
+        ui.menu_button("Neu", |ui| {
             if ui.button("Ordner").clicked() {
                 self.create_new_folder();
                 ui.close_menu();

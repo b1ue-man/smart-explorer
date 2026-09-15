@@ -30,13 +30,15 @@ impl App {
     }
 
     pub(in crate::app) fn ui_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        egui::menu::bar(ui, |ui| {
+            let wide = ui.available_width() >= 1150.0;
             for (label, enabled, key, action, tip) in [
-                ("←", !self.history.is_empty(), 'B', AccelAct::Back, "Zurück (Alt+←)"),
-                ("→", !self.forward.is_empty(), 'N', AccelAct::Forward, "Vor (Alt+→)"),
+                ("◀", !self.history.is_empty(), 'B', AccelAct::Back, "Zurück (Alt+←)"),
+                ("▶", !self.forward.is_empty(), 'N', AccelAct::Forward, "Vor (Alt+→)"),
                 ("↑", !self.root_path.is_empty(), 'U', AccelAct::Up, "Eine Ebene hoch (Alt+↑)"),
             ] {
-                let response = ui.add_enabled(enabled, egui::Button::new(label))
+                let response = ui.add_enabled(enabled,
+                    egui::Button::new(label).min_size(egui::vec2(22.0, 22.0)))
                     .on_hover_text(tip);
                 self.accel_push(key, response.rect, action);
                 if response.clicked() {
@@ -47,71 +49,86 @@ impl App {
                     }
                 }
             }
-            let pick = ui.button("Ordner…").on_hover_text("Ordner auswählen");
+            let pick = ui.add_sized([22.0, 22.0], egui::Button::new("📂"))
+                .on_hover_text("Ordner auswählen");
             self.accel_push('O', pick.rect, AccelAct::PickFolder);
             if pick.clicked() {
                 let initial = self.root_path.clone();
                 self.open_picker(PickerPurpose::ScanFolder, &initial);
             }
 
-            let path_width = (ui.available_width() - 150.0).max(80.0);
-            if self.path_edit_mode {
-                let response = ui.add_sized([path_width, 30.0],
-                    egui::TextEdit::singleline(&mut self.root_path).hint_text("Pfad eingeben…"));
-                if self.path_edit_focus {
-                    response.request_focus();
-                    self.path_edit_focus = false;
-                }
-                if response.lost_focus() {
-                    self.path_edit_mode = false;
-                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !self.root_path.is_empty() {
-                        self.start_scan(PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR)));
-                    }
-                }
-            } else {
-                let mut destination = None;
-                let colors = theme::palette(ui);
-                egui::Frame::none().fill(colors.surface)
-                    .stroke(egui::Stroke::new(1.0_f32, colors.control_border))
-                    .rounding(6.0).inner_margin(egui::Margin::symmetric(8.0, 0.0))
-                    .show(ui, |ui| {
-                        ui.set_width((path_width - 18.0).max(40.0));
-                        egui::ScrollArea::horizontal().id_salt("crumbs")
-                            .max_width((path_width - 18.0).max(40.0)).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    if self.root_path.is_empty() {
-                                        ui.add_sized([ui.available_width(), 30.0],
-                                            egui::Label::new(RichText::new("Startseite").color(colors.muted)));
-                                    } else {
-                                        for (index, crumb) in navigation_path::breadcrumbs(&self.root_path).iter().enumerate() {
-                                            if index > 0 { ui.label(RichText::new("›").color(colors.muted)); }
-                                            if ui.add(egui::Button::new(&crumb.label).frame(false))
-                                                .on_hover_text(&crumb.path).clicked() {
-                                                destination = Some(crumb.path.clone());
-                                            }
-                                        }
-                                    }
-                                });
-                            });
-                    });
-                if let Some(path) = destination {
-                    self.start_scan(PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR)));
-                }
-            }
-            if ui.button("Pfad").on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
+            // Measure command labels at the current font scale. The path uses
+            // the remaining space; secondary commands move to » when narrow.
+            let trailing_icons = 3.0 * (22.0 + ui.spacing().item_spacing.x);
+            let path_width = (ui.available_width()
+                - Self::toolbar_commands_width(ui, wide) - trailing_icons - 12.0).max(60.0);
+            self.ui_toolbar_path(ui, path_width);
+            if ui.add_sized([22.0, 22.0], egui::Button::new("✎"))
+                .on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
                 self.path_edit_mode = true;
                 self.path_edit_focus = true;
             }
             if self.scan_running {
-                if ui.button("■").on_hover_text("Scan abbrechen").clicked() { self.cancel_scan(); }
-            } else if ui.button("⟳").on_hover_text("Aktualisieren (F5)").clicked() {
-                self.rescan();
-            }
-            let starred = !self.root_path.is_empty() && self.is_favorite(&self.location_key(&self.root_path));
-            if ui.add_enabled(!self.root_path.is_empty(), egui::Button::new(if starred { "★" } else { "☆" }))
+                if ui.add_sized([22.0, 22.0], egui::Button::new("■"))
+                    .on_hover_text("Scan abbrechen").clicked() { self.cancel_scan(); }
+            } else if ui.add_sized([22.0, 22.0], egui::Button::new("⟳"))
+                .on_hover_text("Aktualisieren (F5)").clicked() { self.rescan(); }
+            let starred = !self.root_path.is_empty()
+                && self.is_favorite(&self.location_key(&self.root_path));
+            if ui.add_enabled(!self.root_path.is_empty(),
+                egui::Button::new(if starred { "★" } else { "☆" })
+                    .min_size(egui::vec2(22.0, 22.0)))
                 .on_hover_text("Ordner als Favorit speichern (Ctrl+B)").clicked() {
                 self.star_current_folder();
             }
+            self.ui_commandbar(ui, wide);
         });
+    }
+
+    fn ui_toolbar_path(&mut self, ui: &mut egui::Ui, width: f32) {
+        if self.path_edit_mode {
+            let response = ui.add_sized([width, 22.0],
+                egui::TextEdit::singleline(&mut self.root_path).hint_text("Pfad eingeben…"));
+            if self.path_edit_focus {
+                response.request_focus();
+                self.path_edit_focus = false;
+            }
+            if response.lost_focus() {
+                self.path_edit_mode = false;
+                if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !self.root_path.is_empty() {
+                    self.start_scan(PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                }
+            }
+            return;
+        }
+        let mut destination = None;
+        let colors = theme::palette(ui);
+        egui::Frame::none().fill(colors.surface)
+            .stroke(egui::Stroke::new(1.0_f32, colors.control_border))
+            .rounding(1.0).inner_margin(egui::Margin::symmetric(4.0, 0.0))
+            .show(ui, |ui| {
+                let content_width = (width - 10.0).max(1.0);
+                ui.set_width(content_width);
+                egui::ScrollArea::horizontal().id_salt("crumbs")
+                    .max_width(content_width).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if self.root_path.is_empty() {
+                                ui.add_sized([content_width, 22.0],
+                                    egui::Label::new(RichText::new("Startseite").color(colors.muted)));
+                            } else {
+                                for (index, crumb) in navigation_path::breadcrumbs(&self.root_path).iter().enumerate() {
+                                    if index > 0 { ui.label(RichText::new("›").color(colors.muted)); }
+                                    if ui.add(egui::Button::new(&crumb.label).frame(false))
+                                        .on_hover_text(&crumb.path).clicked() {
+                                        destination = Some(crumb.path.clone());
+                                    }
+                                }
+                            }
+                        });
+                    });
+            });
+        if let Some(path) = destination {
+            self.start_scan(PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR)));
+        }
     }
 }

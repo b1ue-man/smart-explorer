@@ -16,25 +16,39 @@ impl App {
         // panel registers (tabbar renders first), repopulate during rendering.
         self.accel_targets.clear();
         egui::TopBottomPanel::top("tabbar")
-            .min_height(34.0)
+            .min_height(26.0)
             .show(ctx, |ui| self.ui_tabbar(ui));
         egui::TopBottomPanel::top("toolbar")
-            .min_height(44.0)
+            .min_height(28.0)
             .show(ctx, |ui| self.ui_toolbar(ui));
-        egui::TopBottomPanel::top("commands")
-            .min_height(38.0)
-            .show(ctx, |ui| self.ui_commandbar(ui));
         egui::TopBottomPanel::top("filterbar")
-            .show(ctx, |ui| self.ui_filterbar(ui));
+            .show(ctx, |ui| {
+                if self.name_filter_focus || self.folder_search_focus {
+                    self.show_filters = true;
+                }
+                let title = if self.filter_is_active() {
+                    "Filter & Suche · aktiv"
+                } else {
+                    "Filter & Suche"
+                };
+                let response = egui::CollapsingHeader::new(title)
+                    .id_salt("filter_panel")
+                    .open(Some(self.show_filters))
+                    .show(ui, |ui| self.ui_filterbar(ui));
+                if response.header_response.clicked() {
+                    self.show_filters = !self.show_filters;
+                    self.save_ui_state();
+                }
+            });
 
         egui::TopBottomPanel::bottom("status")
-            .min_height(28.0)
+            .min_height(22.0)
             .show(ctx, |ui| self.ui_status(ui));
 
         egui::SidePanel::left("sidebar")
             .resizable(true)
-            .default_width(220.0)
-            .width_range(180.0..=320.0)
+            .default_width(190.0)
+            .width_range(150.0..=300.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.ui_sidebar(ui));
             });
