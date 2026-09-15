@@ -201,6 +201,10 @@ mod gui_design_task_ui;
 mod gui_design_task_capture;
 #[path = "core/status_errors.rs"]
 mod status_errors;
+#[path = "core/error_report.rs"]
+mod error_report;
+#[path = "core/error_log_ui.rs"]
+mod error_log_ui;
 #[path = "core/support_paths.rs"]
 mod support_paths;
 #[path = "core/sync_core.rs"]

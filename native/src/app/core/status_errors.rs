@@ -51,38 +51,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn error_log_text(&self) -> String {
-        let mut lines = Vec::new();
-        if !self.app_errors.is_empty() {
-            lines.push("App-Fehler:".to_string());
-            for e in &self.app_errors {
-                lines.push(format!("[{}] {}: {}", e.ts, e.context, e.detail));
-            }
-        }
-        if let Some(current) = &self.error_msg {
-            if !self.app_errors.iter().any(|e| e.detail == *current) {
-                if lines.is_empty() {
-                    lines.push("App-Fehler:".to_string());
-                }
-                lines.push(format!("[aktuell] Fehler: {}", current));
-            }
-        }
-        if !self.failed_paths.is_empty() || self.progress.errors > 0 {
-            if !lines.is_empty() {
-                lines.push(String::new());
-            }
-            lines.push(format!(
-                "Scan-Fehler: {} gesamt, {} Pfade im Protokoll",
-                self.progress.errors,
-                self.failed_paths.len()
-            ));
-            for (path, msg) in &self.failed_paths {
-                lines.push(format!("{}\t{}", path, msg));
-            }
-        }
-        lines.join("\r\n")
-    }
-
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
         let sel_bytes = self.selection_bytes();
         let progress = self.progress.clone();
@@ -256,57 +224,7 @@ impl App {
         });
     }
 
-    pub(in crate::app) fn ui_errors_dialog(&mut self, ctx: &egui::Context) {
-        let mut close = false;
-        let mut clear_app_log = false;
-        let mut log_text = self.error_log_text();
-        let scan_errors = self.progress.errors.max(self.failed_paths.len() as u64) as usize;
-        let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
-            1
-        } else {
-            self.app_errors.len()
-        };
-        egui::Window::new(format!("Fehler-Protokoll ({})", scan_errors + app_errors))
-            .resizable(true)
-            .default_size([700.0, 480.0])
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.label("Fehler aus der App und nicht lesbare Scan-Pfade. Der Text ist markierbar und kopierbar.");
-                ui.add_space(6.0);
-                if log_text.is_empty() {
-                    ui.colored_label(theme::muted(ui), "Keine Fehler protokolliert.");
-                } else {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut log_text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(18),
-                    );
-                }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Alles kopieren").clicked() {
-                        ctx.copy_text(log_text.clone());
-                    }
-                    if !self.app_errors.is_empty() && ui.button("App-Protokoll leeren").clicked()
-                    {
-                        clear_app_log = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Schließen").clicked() {
-                            close = true;
-                        }
-                    });
-                });
-            });
-        if clear_app_log {
-            self.app_errors.clear();
-            self.last_logged_error = None;
-        }
-        if close {
-            self.show_errors_dialog = false;
-        }
-    }
+
 }
 
 fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress) {
