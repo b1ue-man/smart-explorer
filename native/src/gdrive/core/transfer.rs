@@ -1,4 +1,4 @@
-use super::api::{drive_request, open_once, parse_generated_id, API, UPLOAD};
+use super::api::{drive_request, open_once, parse_generated_id};
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::resumable::{self, Completion, REQUEST_TIMEOUT};
 use super::GDriveBackend;
@@ -7,6 +7,12 @@ use std::fs::File;
 use std::io::{self, Write};
 
 impl GDriveBackend {
+    pub(super) fn upload_url(&self) -> String {
+        let base = self.api_base.trim_end_matches('/');
+        let origin = base.strip_suffix("/drive/v3").unwrap_or(base);
+        format!("{origin}/upload/drive/v3/files")
+    }
+
     /// Upload a disk-backed spool through Drive's resumable protocol.
     fn upload_spooled(
         &self,
@@ -65,24 +71,25 @@ impl GDriveBackend {
         let metadata = if creating {
             serde_json::json!({
                 "id": target_id.clone(),
-                "name": name,
+                "name": super::names::decode(name)?,
                 "parents": [parent_id],
             })
         } else {
-            serde_json::json!({ "name": name })
+            serde_json::json!({})
         }
         .to_string();
         let auth = self.bearer()?;
         let bearer = format!("Bearer {auth}");
+        let upload = self.upload_url();
         let (method, init_url) = match existing.as_ref() {
             Some(id) => (
                 "PATCH",
                 format!(
-                    "{UPLOAD}/{}?uploadType=resumable&fields=id",
+                    "{upload}/{}?uploadType=resumable&fields=id",
                     cloud_urlenc(id)
                 ),
             ),
-            None => ("POST", format!("{UPLOAD}?uploadType=resumable&fields=id")),
+            None => ("POST", format!("{upload}?uploadType=resumable&fields=id")),
         };
         let session = match initiate(method, &init_url, &bearer, size, &metadata) {
             Ok(location) => location,
@@ -132,8 +139,9 @@ impl GDriveBackend {
             return Ok(());
         }
 
+        let upload = self.upload_url();
         let url = format!(
-            "{UPLOAD}/{}?uploadType=resumable&fields=id",
+            "{upload}/{}?uploadType=resumable&fields=id",
             cloud_urlenc(target_id)
         );
         let bearer = format!("Bearer {}", self.bearer()?);
@@ -184,10 +192,9 @@ impl GDriveBackend {
         expected_size: u64,
         expected_md5: &str,
     ) -> VfsResult<bool> {
-        let url = format!(
-            "{API}/files/{}?fields=id,size,trashed,md5Checksum",
-            cloud_urlenc(id)
-        );
+        let url = self.api_url(&format!(
+            "files/{}?fields=id,size,trashed,md5Checksum", cloud_urlenc(id)
+        ));
         Ok(uploaded_metadata_matches(
             &self.get_json(&url)?,
             id,

@@ -31,6 +31,10 @@ mod duplicates;
 mod folder_create_journal;
 #[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core/names.rs"]
+mod names;
+#[path = "core/resolution.rs"]
+mod resolution;
 #[path = "core/promotion.rs"]
 mod promotion;
 #[path = "core/promotion_api.rs"]

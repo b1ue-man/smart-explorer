@@ -39,22 +39,16 @@ impl GDriveBackend {
         let (destination_parent, destination_name) = split_parent(&destination);
         let source_parent_id = self.resolve(&source_parent)?;
         let destination_parent_id = self.ensure_dir(&destination_parent)?;
-        // A duplicate marker addresses one exact same-name sibling; Drive
-        // itself knows that object under its plain name, which is also the
-        // name any rollback must restore.
-        let mut source_name = source_segment;
-        let mut source_object = require_one(
-            self.named_objects(&source_parent_id, source_segment)?,
-            "Drive rename source",
-        )?;
-        if source_object.is_none() {
-            if let Some((plain, prefix)) = super::duplicates::parse_marker(source_segment) {
-                source_object = self.marker_object(&source_parent_id, plain, prefix)?;
-                if source_object.is_some() {
-                    source_name = plain;
-                }
-            }
-        }
+        let marker = super::duplicates::parse_marker(source_segment);
+        let source_name = super::names::decode(marker.map(|(plain, _)| plain).unwrap_or(source_segment))?;
+        let destination_name = super::names::decode(destination_name)?;
+        let source_name = source_name.as_str();
+        let destination_name = destination_name.as_str();
+        let source_object = if let Some((_, prefix)) = marker {
+            self.marker_object(&source_parent_id, source_name, prefix)?
+        } else {
+            require_one(self.named_objects(&source_parent_id, source_name)?, "Drive rename source")?
+        };
         let source_object = source_object.ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent")
         })?;
@@ -103,6 +97,10 @@ impl GDriveBackend {
         let _paths = self.upload_path_pair_guard(&staged, &destination)?;
         let (staged_parent, staged_name) = split_parent(&staged);
         let (destination_parent, destination_name) = split_parent(&destination);
+        let staged_name = super::names::decode(staged_name)?;
+        let destination_name = super::names::decode(destination_name)?;
+        let staged_name = staged_name.as_str();
+        let destination_name = destination_name.as_str();
         let staged_parent_id = self.resolve(&staged_parent)?;
         let destination_parent_id = if staged_parent == destination_parent {
             staged_parent_id.clone()

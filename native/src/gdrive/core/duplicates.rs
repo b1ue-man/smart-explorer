@@ -53,7 +53,10 @@ fn canonical_order(left: &VfsMeta, right: &VfsMeta) -> std::cmp::Ordering {
 /// Rewrite duplicate sibling names so every returned name is unique and
 /// re-resolvable. Entries without an id cannot be addressed exactly and keep
 /// their raw name (a later walk guard still rejects them fail-closed).
-pub(super) fn disambiguate(entries: Vec<VfsMeta>) -> Vec<VfsMeta> {
+pub(super) fn disambiguate(mut entries: Vec<VfsMeta>) -> Vec<VfsMeta> {
+    for entry in &mut entries {
+        entry.name = super::names::encode(&entry.name);
+    }
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for entry in &entries {
         *counts.entry(entry.name.as_str()).or_default() += 1;
@@ -83,12 +86,15 @@ pub(super) fn disambiguate(entries: Vec<VfsMeta>) -> Vec<VfsMeta> {
             continue;
         }
         group.sort_by(canonical_order);
+        let ids: Vec<String> = group.iter().filter_map(|entry| entry.id.clone()).collect();
         for (index, mut entry) in group.into_iter().enumerate() {
             if index > 0 {
                 if let Some(id) = entry.id.clone().filter(|id| !id.is_empty()) {
                     let short = marker_name(&name, &id);
                     let long = full_marker_name(&name, &id);
-                    entry.name = if !raw_names.contains(&short) && !used.contains(&short) {
+                    let prefix: String = id.chars().take(ID_PREFIX_LEN).collect();
+                    let unique_prefix = ids.iter().filter(|other| other.starts_with(&prefix)).count() == 1;
+                    entry.name = if unique_prefix && !raw_names.contains(&short) && !used.contains(&short) {
                         short
                     } else {
                         long
@@ -199,7 +205,7 @@ mod tests {
         let names: Vec<&str> = out.iter().map(|entry| entry.name.as_str()).collect();
         assert_eq!(
             names,
-            ["f", "f [drive-id abcdefgh2]", "f [drive-id abcdefgh]"]
+            ["f", "f [drive-id abcdefgh2]", "f %5Bdrive-id abcdefgh]"]
         );
     }
 

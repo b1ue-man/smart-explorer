@@ -81,3 +81,63 @@ one remote task suite and the existing terminal release transaction.
 
 Planning complete. Implementation and remote evaluation pending; this document
 does not claim a shipped version or completed visual verification.
+
+## Added batch scope: Drive names (2026-09-15)
+
+The user added the exact root-scan failure for the title containing `I/O` before
+the combined candidate was pushed. This is part of the same suite and release.
+
+### Stage one: diagnosis and approach
+
+`rscan/os/shared/walk_state.rs::validate_listing` emits the reported error when
+`vfs::validate_child_name` sees `/`, `\\`, NUL, `.` or `..`.
+`gdrive/core/backend.rs::list_dir` only disambiguates duplicate names; unique
+Drive titles pass through unchanged. `metadata.rs::resolve` splits those names
+on `/`. The reported `I/O` therefore fails at this adapter boundary, before a
+download or authentication request could explain this particular error.
+
+Introduce one reversible Drive-title/path-segment codec before disambiguation.
+Keep exact IDs, decode only at the provider boundary, and retain the generic
+walk guard. Include uncached resolution, cache reload, stat, upload, folder
+creation, rename and staged promotion in the affected boundary.
+
+### Research pass one
+
+- [Drive files resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files):
+  `id`, `name` and `parents` are separate fields; names need not be unique.
+- [Drive search](https://developers.google.com/workspace/drive/api/guides/search-files):
+  query names must escape both apostrophes and backslashes, independently of URL encoding.
+- [Drive list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list):
+  follow `nextPageToken`; a partial page is not proof of uniqueness or absence.
+- [Drive update](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update):
+  mutations address `fileId`; supplying a `name` changes the actual title.
+- [rclone's Drive implementation guidance](https://rclone.org/drive/#restricted-filename-characters)
+  confirms the comparable adapter problem: `/`, `.` and `..` are valid Drive names.
+- [Windows filenames](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file):
+  separators, reserved characters/device names and trailing dots/spaces need a
+  portable representation for downloads. This mapping is an app convention,
+  not a Google requirement or a rename of the cloud object.
+
+### Stage two: final added milestone
+
+| Milestone | Files/modules and dependencies | Expected result / acceptance signal |
+| --- | --- | --- |
+| M6: safe Drive namespace | New `gdrive/core/names.rs`, extracted resolution; listing/disambiguation/cache, folder creation, transfer, copy writer and promotion boundaries | The exact reported title lists and opens; recursive scans accept it as one child. Reversible percent escapes distinguish literal escape strings, dot names, separators and duplicate markers. Duplicate IDs sharing a short prefix remain addressable. All metadata queries use original titles, all content-only replacements preserve them, and rename/create decode destination segments exactly once. Cache reload and paginated lookup preserve the same mapping. |
+
+### Research pass two: resolved gaps
+
+- Encode reserved path characters as uppercase percent escapes (for example
+  `I%2FO`); escape literal percent signs and marker-shaped literal titles too.
+  Do not replace `/` with `_`, which would merge different names.
+- Disambiguate encoded titles, checking ID-prefix uniqueness against every
+  sibling. Never decode before splitting the virtual path into segments.
+- Invalidate the older path-cache format and version the provider's sync-state
+  identity so old path spellings cannot act as deletion evidence.
+- Extract path resolution from metadata before changing it. Follow every
+  same-name query page and reject repeated tokens/incomplete results.
+- Existing-file media uploads must send empty metadata instead of renaming a
+  Drive object to its displayed escape/duplicate alias. Other metadata methods
+  receive decoded original names explicitly.
+- M6 joins the existing GUI task selector and remote entrypoint. Protocol
+  fixtures exercise real HTTP requests against a loopback service on CI;
+  no live account files are mutated. Local execution remains prohibited.
