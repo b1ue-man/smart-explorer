@@ -75,6 +75,8 @@ impl CopyWriter {
         spool.flush()?;
         spool.sync_all()?;
         let (parent, name) = split_parent(&self.path);
+        let decoded_name = super::names::decode(name)?;
+        let name = decoded_name.as_str();
         let parent_id = self.backend.ensure_dir(&parent)?;
         if !self.backend.named_objects(&parent_id, name)?.is_empty() {
             return Err(io::Error::new(
@@ -102,13 +104,7 @@ impl CopyWriter {
             "parents": [&stage.parent_id],
             "mimeType": MEDIA_TYPE,
         }).to_string();
-        // Production api_base is Google's /drive/v3 endpoint. Deriving the
-        // upload URI from that configured origin also keeps API fixtures local.
-        let api_base = self.backend.api_base.trim_end_matches('/');
-        let origin = api_base.strip_suffix("/drive/v3").unwrap_or(api_base);
-        let upload_url = format!(
-            "{origin}/upload/drive/v3/files?uploadType=resumable&fields=id"
-        );
+        let upload_url = format!("{}?uploadType=resumable&fields=id", self.backend.upload_url());
         self.state = CopyState::Pending(stage.clone());
         let uploaded = (|| {
             // Even a 409 or lost initiation response is reconciled below by

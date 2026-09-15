@@ -1,4 +1,4 @@
-use super::api::{drive_request, export_ext, export_format, open_stream, API};
+use super::api::{drive_request, export_ext, export_format, open_stream};
 use super::core::{cloud_urlenc, norm};
 use super::transfer::open_writer;
 use super::GDriveBackend;
@@ -32,7 +32,7 @@ impl Backend for GDriveBackend {
                     .collect::<String>()
             })
             .unwrap_or_else(|| "token-cache-unavailable".into());
-        format!("gdrive:{account}:{}", self.root)
+        format!("gdrive:path-v2:{account}:{}", self.root)
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -63,10 +63,17 @@ impl Backend for GDriveBackend {
         // before the exact current mapping is remembered.
         for (name, count) in &name_counts {
             if *count > 1 {
-                self.forget_path_prefix(&child_path(name));
+                self.forget_path_prefix(&child_path(&super::names::encode(name)));
             }
         }
         let listed = super::duplicates::disambiguate(raw);
+        let mut names = std::collections::HashSet::new();
+        for entry in &listed {
+            crate::vfs::validate_child_name(&entry.name)?;
+            if !names.insert(&entry.name) {
+                return Err(std::io::Error::other("Drive returned conflicting path names"));
+            }
+        }
         for entry in &listed {
             let Some(id) = entry.id.as_deref().filter(|id| !id.is_empty()) else {
                 continue;
@@ -102,9 +109,9 @@ impl Backend for GDriveBackend {
         let auth = self.bearer()?;
         let mime = self.mime_of_id(&id).unwrap_or_default();
         let url = if let Some(fmt) = export_format(&mime) {
-            format!("{}/files/{}/export?mimeType={}", API, id, cloud_urlenc(fmt))
+            self.api_url(&format!("files/{}/export?mimeType={}", cloud_urlenc(&id), cloud_urlenc(fmt)))
         } else {
-            format!("{}/files/{}?alt=media", API, id)
+            self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
         let bearer = format!("Bearer {}", auth);
         let resp = open_stream(|| {
@@ -126,9 +133,9 @@ impl Backend for GDriveBackend {
         // EXPORTED to an Office/PDF format instead.
         let mime = self.mime_of(path).unwrap_or_default();
         let url = if let Some(fmt) = export_format(&mime) {
-            format!("{}/files/{}/export?mimeType={}", API, id, cloud_urlenc(fmt))
+            self.api_url(&format!("files/{}/export?mimeType={}", cloud_urlenc(&id), cloud_urlenc(fmt)))
         } else {
-            format!("{}/files/{}?alt=media", API, id)
+            self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
         let bearer = format!("Bearer {}", auth);
         let resp = open_stream(|| {
@@ -264,38 +271,46 @@ impl Backend for GDriveBackend {
 
 impl GDriveBackend {
     /// The listing exactly as Drive returns it: same-name siblings keep their
-    /// raw name. Only the duplicate cleanup planner may consume this form.
-    /// The listing exactly as Drive returns it: same-name siblings keep their
     /// raw name. `list_dir` renders it path-unique before anyone sees it.
     fn list_dir_entries(&self, path: &str) -> VfsResult<Vec<RawEntry>> {
         let id = self.resolve(path)?;
         let mut out = Vec::new();
         let mut page_token: Option<String> = None;
+        let mut seen = std::collections::HashSet::new();
         loop {
             let q = format!("'{}' in parents and trashed = false", id);
-            let mut url = format!(
-                "{}/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
-                API,
+            let mut url = self.api_url(&format!(
+                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
                 cloud_urlenc(&q)
-            );
+            ));
             if let Some(t) = &page_token {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
             }
             let v = self.get_json(&url)?;
+            if v["incompleteSearch"].as_bool() == Some(true) {
+                return Err(std::io::Error::other("Drive returned an incomplete folder listing"));
+            }
             if let Some(files) = v["files"].as_array() {
                 for f in files {
-                    let Some(meta) = Self::meta_from_json(f, None) else {
-                        continue;
-                    };
+                    let meta = Self::meta_from_json(f, None).ok_or_else(|| {
+                        std::io::Error::other("Drive listing contains an object without a name")
+                    })?;
+                    if meta.id.as_deref().is_none_or(|id| id.is_empty()) {
+                        return Err(std::io::Error::other("Drive listing contains an object without an ID"));
+                    }
                     out.push(RawEntry {
                         meta,
                         mime: f["mimeType"].as_str().map(str::to_string),
                     });
                 }
+            } else {
+                return Err(std::io::Error::other("Drive listing has no files array"));
             }
             page_token = v["nextPageToken"].as_str().map(|s| s.to_string());
-            if page_token.is_none() {
-                break;
+            match &page_token {
+                None => break,
+                Some(token) if !token.is_empty() && seen.len() < 1_000 && seen.insert(token.clone()) => {},
+                _ => return Err(std::io::Error::other("Drive folder listing repeated or exceeded its page tokens")),
             }
         }
         Ok(out)
@@ -320,10 +335,9 @@ impl GDriveBackend {
             });
         }
         let id = self.resolve(&key)?;
-        let url = format!(
-            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
-            API, id
-        );
+        let url = self.api_url(&format!(
+            "files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum", cloud_urlenc(&id)
+        ));
         let v = self.get_json(&url)?;
         let segment = key.rsplit('/').next().filter(|s| !s.is_empty());
         let mut meta = Self::meta_from_json(&v, segment).ok_or_else(|| {
@@ -333,11 +347,12 @@ impl GDriveBackend {
             )
         })?;
         if let Some(segment) = segment {
-            if let Some((plain, _)) = super::duplicates::parse_marker(segment) {
-                if meta.name == plain {
-                    meta.name = segment.to_string();
-                }
+            let plain = super::duplicates::parse_marker(segment).map(|(plain, _)| plain).unwrap_or(segment);
+            if super::names::decode(plain)? != meta.name {
+                self.forget_path_prefix(&key);
+                return Err(std::io::Error::other("Drive object title changed; refresh the folder"));
             }
+            meta.name = segment.to_string();
         }
         Ok(meta)
     }
