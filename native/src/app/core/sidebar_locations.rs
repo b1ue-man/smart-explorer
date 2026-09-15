@@ -55,11 +55,8 @@ impl App {
             ui.add_space(8.0);
         }
 
-        ui.label(
-            RichText::new("Schnellzugriff")
-                .small()
-                .color(theme::muted(ui)),
-        );
+        egui::CollapsingHeader::new("Schnellzugriff")
+            .id_salt("sidebar_places_v2").show(ui, |ui| {
         let home = self.home.clone();
         for (label, sub) in [
             ("Persönlicher Ordner", ""),
@@ -87,13 +84,11 @@ impl App {
             }
         }
 
+        });
+
         if !self.drive_info.is_empty() {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Laufwerke")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
+            egui::CollapsingHeader::new("Laufwerke")
+                .id_salt("sidebar_drives_v2").show(ui, |ui| {
             let infos = self.drive_info.clone();
             for (d, free, total) in infos {
                 if ui
@@ -117,6 +112,7 @@ impl App {
                     ));
                 }
             }
+            });
         }
 
         egui::CollapsingHeader::new("Zuletzt geöffnet")

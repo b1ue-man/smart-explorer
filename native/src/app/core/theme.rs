@@ -116,6 +116,13 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
 }
 
 pub(super) fn install(ctx: &egui::Context, mode: super::ui_preferences::ColorMode) {
+    // Ubuntu-Light lacks navigation/math symbols. Hack is already bundled;
+    // add it only as a fallback, preserving proportional text and emoji.
+    let mut fonts = egui::FontDefinitions::default();
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        family.push("Hack".to_string());
+    }
+    ctx.set_fonts(fonts);
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         ctx.set_style_of(theme, style(theme));
     }
