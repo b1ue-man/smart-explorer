@@ -190,6 +190,15 @@ mod state;
 mod theme;
 #[path = "core/ui_preferences.rs"]
 mod ui_preferences;
+#[cfg(test)]
+#[path = "core/gui_design_task_tests.rs"]
+mod gui_design_task_tests;
+#[cfg(test)]
+#[path = "core/gui_design_task_ui.rs"]
+mod gui_design_task_ui;
+#[cfg(test)]
+#[path = "core/gui_design_task_capture.rs"]
+mod gui_design_task_capture;
 #[path = "core/status_errors.rs"]
 mod status_errors;
 #[path = "core/support_paths.rs"]

@@ -79,8 +79,9 @@ one remote task suite and the existing terminal release transaction.
 
 ## Verification status
 
-Planning complete. Implementation and remote evaluation pending; this document
-does not claim a shipped version or completed visual verification.
+M1–M4 and M6 are implemented as coherent source milestones. The combined
+M5 suite and documentation are prepared. Remote behavioral and visual
+evaluation is pending; this document does not claim a shipped version.
 
 ## Added batch scope: Drive names (2026-09-15)
 

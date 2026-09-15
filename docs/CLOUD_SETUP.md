@@ -34,7 +34,7 @@ Manager).
 5. **Client-ID kopieren** (Form `…apps.googleusercontent.com`). Google zeigt
    evtl. auch ein **Client-Secret** an — kopiere es mit (bei Desktop-Apps ist es
    nicht wirklich geheim, der Token-Endpunkt erwartet es aber).
-6. **In Smart Explorer eintragen:** **⚙ Einstellungen → CLOUD (GOOGLE DRIVE)**:
+6. **In Smart Explorer eintragen:** **Einstellungen → Verbindungen → Google Drive**:
    - **Client-ID** (und ggf. **Client-Secret**) einfügen.
    - **„Mit Google verbinden“** klicken → Browser öffnet sich → mit deinem
      (als Testnutzer hinterlegten) Google-Konto anmelden und zustimmen.
@@ -70,3 +70,32 @@ Manager).
 ---
 
 *Technischer Hintergrund (Entwicklung): [`CLOUD_OAUTH_PLAN.md`](CLOUD_OAUTH_PLAN.md).*
+
+## Dateinamen mit Schrägstrichen
+
+Google Drive führt Titel und Datei-ID getrennt. Ein Titel wie `I/O-Diagnose`
+ist daher kein Unterordnerpfad. Smart Explorer zeigt solche Titel als
+`I%2FO-Diagnose` an und übersetzt den Namen bei API-Anfragen zurück. Ein
+wörtliches Prozentzeichen wird als `%25` dargestellt; dadurch bleiben `I/O`
+und `I%2FO` unterschiedliche Dateien. Das gilt auch für Backslashes,
+Punktnamen, reservierte Windows-Zeichen und nachgestellte Punkte/Leerzeichen.
+Wörtliche Titel mit einem `[drive-id …]`-Suffix erhalten ebenfalls eine
+Escape-Darstellung, damit sie nicht mit der Kennzeichnung von Duplikaten
+verwechselt werden. Gemeinsame ID-Präfixe werden bis zur vollständigen ID
+aufgelöst.
+
+Diese Darstellung benennt keine Cloud-Dateien um. Downloads verwenden den
+portablen Namen; reine Inhaltsänderungen behalten den vorhandenen Drive-Titel.
+Der Pfad-Cache wird beim Wechsel neu aufgebaut. Die Sync-State-Identität ist
+versioniert, damit frühere Pfadschreibweisen nicht als Löschbeleg dienen.
+
+Der Fehler `backend returned unsafe child name` mit einem Titel, der `I/O`
+enthält, entstand vor der Anpassung beim Übergang vom Drive-Titel zum
+Scanner-Pfad. Die allgemeine Prüfung auf sichere Pfadbestandteile bleibt aktiv.
+
+Entwicklerquellen, geprüft am **2026-09-15**:
+
+- [Drive files: ID, Name und Elternordner](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
+- [Dateisuche und korrektes Escaping](https://developers.google.com/workspace/drive/api/guides/search-files)
+- [Vollständige Auflistungen mit Seitentokens](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)
+- [Änderungen über fileId](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update)

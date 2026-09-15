@@ -1,0 +1,58 @@
+name: gui-design-task
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full commit SHA of the completed GUI and Drive task batch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-design-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind candidate and preflight visual tools
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_SHA" == "$GITHUB_SHA" && "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          mkdir -p "$RUNNER_TEMP/gui-design-task-logs"
+          echo "SMART_EXPLORER_TASK_LOG_ROOT=$RUNNER_TEMP/gui-design-task-logs" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y python3-numpy python3-pil
+          /usr/bin/python3 -c "import numpy, PIL"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          cache-on-failure: true
+      - name: Evaluate the single combined task suite
+        timeout-minutes: 110
+        run: bash native/test-gui-design-task.sh
+      - name: Preserve logs, candidate binding and GUI visuals
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-design-task-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gui-design-task-logs

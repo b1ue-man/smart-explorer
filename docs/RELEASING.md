@@ -226,6 +226,21 @@ Share/HTTP fixtures. The job/entrypoint timeouts are 180/170 minutes. The
 entrypoint records source and binary identity in `approval.json`; use that same
 suite for relevant fix retries. See [COPY_PASTE_REPAIR.md](COPY_PASTE_REPAIR.md).
 
+For the GUI clarity / light-mode / Drive path-name batch, dispatch only
+`.github/workflows/gui-design-task.yml` with the completed candidate SHA.
+Its single entrypoint is `bash native/test-gui-design-task.sh` on Ubuntu, with
+120/110-minute job/entrypoint timeouts. It builds only the affected host library
+development fixture incrementally and executes the `gui_design_task_` selector
+once, including the isolated GUI cases. The artifact contains candidate and
+binary hashes, protocol/layout results, actual egui paint geometry and PNG
+previews for visual review. An existing fixture binary can be supplied through
+`SMART_EXPLORER_TASK_BINARY`, `SMART_EXPLORER_TASK_SOURCE_SHA` and
+`SMART_EXPLORER_TASK_BINARY_SHA256`; mismatches fail before execution.
+This entrypoint must not be invoked locally by Codex. After evaluating this
+suite, dispatch the existing `build.yml` complete-release mode for the same
+source candidate; its stable top-level release wrapper owns publication.
+See the [batch plan](superpowers/plans/2026-09-15-gui-redesign.md).
+
 For the connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing
 batch, use only `native/test-lan-cleanup-task.sh` through the exact-SHA
 `.github/workflows/lan-cleanup-task.yml` Ubuntu dispatch. It runs the
