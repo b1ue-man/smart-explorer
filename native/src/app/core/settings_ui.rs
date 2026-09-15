@@ -29,7 +29,7 @@ impl App {
         let bounds = ctx.screen_rect().shrink(16.0);
         egui::Window::new("Einstellungen")
             .open(&mut open).collapsible(false)
-            .default_size([760.0, 520.0])
+            .default_size([640.0, 400.0])
             .max_size(theme::window_content_limit(ctx))
             .constrain_to(bounds)
             .show(ctx, |ui| {
@@ -38,7 +38,7 @@ impl App {
                         (SettingsPage::Appearance, "Darstellung"),
                         (SettingsPage::Connections, "Verbindungen"),
                         (SettingsPage::Updates, "Updates"),
-                        (SettingsPage::Storage, "Suche & Wiederherstellung"),
+                        (SettingsPage::Storage, "Suche & Daten"),
                         (SettingsPage::Integration, "Integration"),
                     ] {
                         ui.selectable_value(&mut self.settings.page, page, label);
@@ -74,9 +74,9 @@ impl App {
         theme::section(ui, "Farbschema");
         let previous = self.appearance;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.appearance.mode, ColorMode::Light, "Hell");
-            ui.selectable_value(&mut self.appearance.mode, ColorMode::Dark, "Dunkel");
-            ui.selectable_value(&mut self.appearance.mode, ColorMode::System, "Wie im System");
+            ui.radio_value(&mut self.appearance.mode, ColorMode::Light, "Hell");
+            ui.radio_value(&mut self.appearance.mode, ColorMode::Dark, "Dunkel");
+            ui.radio_value(&mut self.appearance.mode, ColorMode::System, "Wie im System");
         });
         ui.label(RichText::new("Wird sofort auf alle Ansichten angewendet.").color(theme::muted(ui)));
         theme::section(ui, "Dateiliste");

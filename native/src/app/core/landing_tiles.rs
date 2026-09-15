@@ -61,6 +61,18 @@ impl LandingTile {
     }
 }
 
+pub(super) fn ui_landing_actions(
+    ui: &mut egui::Ui, tiles: &[LandingTile], action: &mut Option<LandingAction>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        for tile in tiles {
+            if ui.button(&tile.title).on_hover_text(&tile.detail).clicked() {
+                *action = tile.action.clone();
+            }
+        }
+    });
+}
+
 pub(super) fn ui_landing_section(
     ui: &mut egui::Ui,
     title: &str,
@@ -73,7 +85,7 @@ pub(super) fn ui_landing_section(
             .strong()
             .color(theme::muted(ui)),
     )
-    .id_salt(("landing_section_v2", title))
+    .id_salt(("landing_section_desktop", title))
     .default_open(default_open)
     .show(ui, |ui| {
         ui.add_space(4.0);
@@ -85,7 +97,7 @@ pub(super) fn ui_landing_section(
             ui.ctx().data_mut(|data| data.insert_temp(id, !expanded));
         }
     });
-    ui.add_space(if header.fully_open() { 12.0 } else { 6.0 });
+    ui.add_space(if header.fully_open() { 6.0 } else { 3.0 });
 }
 
 fn landing_tile_grid(ui: &mut egui::Ui, tiles: &[LandingTile], action: &mut Option<LandingAction>) {
@@ -119,11 +131,11 @@ fn landing_tile_grid(ui: &mut egui::Ui, tiles: &[LandingTile], action: &mut Opti
 
 fn landing_tile(ui: &mut egui::Ui, tile: &LandingTile, width: f32) -> egui::Response {
     let height = if tile.meter.is_some() {
-        if tile.meta.is_empty() { 104.0 } else { 126.0 }
+        if tile.meta.is_empty() { 78.0 } else { 94.0 }
     } else if tile.meta.is_empty() {
-        76.0
+        48.0
     } else {
-        96.0
+        64.0
     };
     let sense = if tile.action.is_some() {
         egui::Sense::click()
@@ -188,23 +200,15 @@ fn paint_landing_tile(
     response: &egui::Response,
     tile: &LandingTile,
 ) {
-    let visuals = ui.style().interact(response);
-    let fill = if (response.hovered() || response.has_focus()) && tile.action.is_some() {
-        visuals.bg_fill
-    } else {
-        theme::palette(ui).surface
-    };
-    let stroke_color = if response.has_focus() { theme::accent(ui) } else if tile.warn {
-        theme::warning(ui)
-    } else {
-        ui.visuals().widgets.inactive.bg_stroke.color
-    };
-    ui.painter().rect_filled(rect.shrink(0.5), 6.0, fill);
-    ui.painter().rect_stroke(
-        rect.shrink(0.5),
-        6.0,
-        egui::Stroke::new(if response.has_focus() { 2.0 } else { 1.0 }, stroke_color),
-    );
+    // A location is a desktop list entry, not a framed card. Only hover,
+    // selection/focus and warnings need emphasis.
+    if tile.action.is_some() && (response.hovered() || response.has_focus()) {
+        ui.painter().rect_filled(rect.shrink(0.5), 2.0, ui.visuals().selection.bg_fill);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.shrink(1.0), 2.0,
+            egui::Stroke::new(2.0, theme::accent(ui)));
+    }
 
     let accent = if tile.warn {
         theme::warning(ui)
@@ -213,13 +217,13 @@ fn paint_landing_tile(
     } else {
         theme::muted(ui)
     };
-    let x0 = rect.left() + 14.0;
+    let x0 = rect.left() + 6.0;
     let x1 = rect.right() - 10.0;
     paint_landing_text(
         ui,
         egui::Rect::from_min_max(
-            egui::pos2(x0, rect.top() + 12.0),
-            egui::pos2(x1, rect.top() + 32.0),
+            egui::pos2(x0, rect.top() + 6.0),
+            egui::pos2(x1, rect.top() + 22.0),
         ),
         &tile.title,
         egui::TextStyle::Body.resolve(ui.style()),
@@ -228,8 +232,8 @@ fn paint_landing_tile(
     paint_landing_text(
         ui,
         egui::Rect::from_min_max(
-            egui::pos2(x0, rect.top() + 36.0),
-            egui::pos2(x1, rect.top() + 54.0),
+            egui::pos2(x0, rect.top() + 23.0),
+            egui::pos2(x1, rect.top() + 38.0),
         ),
         &tile.detail,
         egui::TextStyle::Small.resolve(ui.style()),
@@ -244,8 +248,8 @@ fn paint_landing_tile(
         paint_landing_text(
             ui,
             egui::Rect::from_min_max(
-                egui::pos2(x0, rect.top() + 59.0),
-                egui::pos2(x1, rect.top() + 77.0),
+                egui::pos2(x0, rect.top() + 39.0),
+                egui::pos2(x1, rect.top() + 54.0),
             ),
             &tile.meta,
             egui::TextStyle::Small.resolve(ui.style()),
@@ -254,11 +258,11 @@ fn paint_landing_tile(
     }
     if let Some((fraction, label)) = &tile.meter {
         let bar_rect = egui::Rect::from_min_max(
-            egui::pos2(x0, rect.bottom() - 16.0),
-            egui::pos2(x1, rect.bottom() - 10.0),
+            egui::pos2(x0, rect.bottom() - 10.0),
+            egui::pos2(x1, rect.bottom() - 6.0),
         );
         ui.painter()
-            .rect_filled(bar_rect, 3.0, theme::palette(ui).subtle);
+            .rect_filled(bar_rect, 1.0, theme::palette(ui).border);
         let fill_rect = egui::Rect::from_min_max(
             bar_rect.left_top(),
             egui::pos2(
@@ -266,12 +270,12 @@ fn paint_landing_tile(
                 bar_rect.bottom(),
             ),
         );
-        ui.painter().rect_filled(fill_rect, 3.0, accent);
+        ui.painter().rect_filled(fill_rect, 1.0, accent);
         paint_landing_text(
             ui,
             egui::Rect::from_min_max(
-                egui::pos2(x0, rect.bottom() - 32.0),
-                egui::pos2(x1, rect.bottom() - 17.0),
+                egui::pos2(x0, rect.bottom() - 29.0),
+                egui::pos2(x1, rect.bottom() - 14.0),
             ),
             label,
             egui::TextStyle::Small.resolve(ui.style()),
