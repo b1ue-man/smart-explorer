@@ -164,6 +164,10 @@ mod share_exec_ui;
 mod share_remote_task_tests;
 #[path = "core/shell_toolbar.rs"]
 mod shell_toolbar;
+#[path = "core/shell_commands.rs"]
+mod shell_commands;
+#[path = "core/navigation_path.rs"]
+mod navigation_path;
 #[path = "core/shutdown.rs"]
 mod shutdown;
 #[path = "core/sidebar.rs"]

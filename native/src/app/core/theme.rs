@@ -1,6 +1,8 @@
 //! Shared presentation tokens for every window, including custom-painted UI.
 use eframe::egui::{self, Color32, FontId, Margin, Rounding, Stroke, TextStyle};
 
+pub(super) const TABLE_HEADER_HEIGHT: f32 = 34.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct Palette {
     pub(super) surface: Color32,

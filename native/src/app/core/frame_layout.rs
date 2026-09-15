@@ -1,4 +1,3 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -17,41 +16,25 @@ impl App {
         // panel registers (tabbar renders first), repopulate during rendering.
         self.accel_targets.clear();
         egui::TopBottomPanel::top("tabbar")
-            .min_height(26.0)
+            .min_height(34.0)
             .show(ctx, |ui| self.ui_tabbar(ui));
-
         egui::TopBottomPanel::top("toolbar")
-            .min_height(32.0)
+            .min_height(44.0)
             .show(ctx, |ui| self.ui_toolbar(ui));
-
-        // Collapsible filter section: the header is always present (so the
-        // panel can be re-opened from there), the body folds away.
-        egui::TopBottomPanel::top("filterbar").show(ctx, |ui| {
-            let active = self.filter_is_active();
-            let title = if active {
-                RichText::new("🔍 Filter & Suche  ●")
-                    .strong()
-                    .color(theme::warning(ui))
-            } else {
-                RichText::new("🔍 Filter & Suche").strong()
-            };
-            let header = egui::CollapsingHeader::new(title)
-                .id_salt("filter_collapse")
-                .open(Some(self.show_filters))
-                .show(ui, |ui| self.ui_filterbar(ui));
-            if header.header_response.clicked() {
-                self.show_filters = !self.show_filters;
-                self.save_ui_state();
-            }
-        });
+        egui::TopBottomPanel::top("commands")
+            .min_height(38.0)
+            .show(ctx, |ui| self.ui_commandbar(ui));
+        egui::TopBottomPanel::top("filterbar")
+            .show(ctx, |ui| self.ui_filterbar(ui));
 
         egui::TopBottomPanel::bottom("status")
-            .min_height(22.0)
+            .min_height(28.0)
             .show(ctx, |ui| self.ui_status(ui));
 
         egui::SidePanel::left("sidebar")
             .resizable(true)
-            .default_width(190.0)
+            .default_width(220.0)
+            .width_range(180.0..=320.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.ui_sidebar(ui));
             });
@@ -60,6 +43,7 @@ impl App {
             egui::SidePanel::right("summary")
                 .resizable(true)
                 .default_width(280.0)
+                .width_range(220.0..=360.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.ui_summary(ui));
                 });
