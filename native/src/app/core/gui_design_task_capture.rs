@@ -1,7 +1,7 @@
 //! Record real egui geometry and texture data for remote software rendering.
 //! This is a test artifact writer, not a second implementation of the GUI.
 use base64::Engine;
-use eframe::egui::{self, epaint, Color32, ColorImage};
+use eframe::egui::{self, epaint, ColorImage};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;

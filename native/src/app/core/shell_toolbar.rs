@@ -72,7 +72,7 @@ impl App {
                 let mut destination = None;
                 let colors = theme::palette(ui);
                 egui::Frame::none().fill(colors.surface)
-                    .stroke(egui::Stroke::new(1.0, colors.control_border))
+                    .stroke(egui::Stroke::new(1.0_f32, colors.control_border))
                     .rounding(6.0).inner_margin(egui::Margin::symmetric(8.0, 0.0))
                     .show(ui, |ui| {
                         ui.set_width((path_width - 18.0).max(40.0));

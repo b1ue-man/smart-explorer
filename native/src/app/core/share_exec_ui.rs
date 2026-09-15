@@ -1,6 +1,6 @@
 use crate::app::theme;
 use super::App;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExecDeviceView {

@@ -122,12 +122,6 @@ impl App {
         egui::CollapsingHeader::new("Zuletzt geöffnet")
             .id_salt("sidebar_recent_v2").show(ui, |ui| {
         if !self.recent.is_empty() {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Zuletzt geöffnet")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
             let recent = self.recent.clone();
             for r in recent.into_iter().take(5) {
                 let label = r.rsplit('/').next().unwrap_or(&r).to_string();
