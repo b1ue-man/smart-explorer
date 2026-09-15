@@ -287,26 +287,20 @@ impl GDriveBackend {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
             }
             let v = self.get_json(&url)?;
-            if v["incompleteSearch"].as_bool() == Some(true) {
-                return Err(std::io::Error::other("Drive returned an incomplete folder listing"));
-            }
-            if let Some(files) = v["files"].as_array() {
-                for f in files {
-                    let meta = Self::meta_from_json(f, None).ok_or_else(|| {
-                        std::io::Error::other("Drive listing contains an object without a name")
-                    })?;
-                    if meta.id.as_deref().is_none_or(|id| id.is_empty()) {
-                        return Err(std::io::Error::other("Drive listing contains an object without an ID"));
-                    }
-                    out.push(RawEntry {
-                        meta,
-                        mime: f["mimeType"].as_str().map(str::to_string),
-                    });
+            let page = super::file_list::FileListPage::parse(&v)?;
+            for f in page.files {
+                let meta = Self::meta_from_json(f, None).ok_or_else(|| {
+                    std::io::Error::other("Drive listing contains an object without a name")
+                })?;
+                if meta.id.as_deref().is_none_or(|id| id.is_empty()) {
+                    return Err(std::io::Error::other("Drive listing contains an object without an ID"));
                 }
-            } else {
-                return Err(std::io::Error::other("Drive listing has no files array"));
+                out.push(RawEntry {
+                    meta,
+                    mime: f["mimeType"].as_str().map(str::to_string),
+                });
             }
-            page_token = v["nextPageToken"].as_str().map(|s| s.to_string());
+            page_token = page.next_token.map(str::to_owned);
             match &page_token {
                 None => break,
                 Some(token) if !token.is_empty() && seen.len() < 1_000 && seen.insert(token.clone()) => {},

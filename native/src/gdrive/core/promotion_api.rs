@@ -30,32 +30,28 @@ impl GDriveBackend {
         let mut seen_tokens = HashSet::new();
         for _ in 0..MAX_QUERY_PAGES {
             let mut url = self.api_url(&format!(
-                "files?q={}&fields=nextPageToken,files(id,name,mimeType,size,md5Checksum,parents,trashed)&pageSize={QUERY_LIMIT}",
+                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,md5Checksum,parents,trashed)&pageSize={QUERY_LIMIT}",
                 cloud_urlenc(&query)
             ));
             if let Some(token) = page_token.as_deref() {
                 url.push_str(&format!("&pageToken={}", cloud_urlenc(token)));
             }
             let json = self.get_json(&url)?;
-            if let Some(files) = json["files"].as_array() {
-                for file in files {
-                    let object = parse_object(file, parent_id, name)?;
-                    if output
-                        .iter()
-                        .any(|existing: &DriveObject| existing.id == object.id)
-                    {
-                        return Err(invalid("Drive returned the same object ID more than once"));
-                    }
-                    output.push(object);
-                    if output.len() == QUERY_LIMIT {
-                        return Ok(output);
-                    }
+            let page = super::file_list::FileListPage::parse(&json)?;
+            for file in page.files {
+                let object = parse_object(file, parent_id, name)?;
+                if output
+                    .iter()
+                    .any(|existing: &DriveObject| existing.id == object.id)
+                {
+                    return Err(invalid("Drive returned the same object ID more than once"));
+                }
+                output.push(object);
+                if output.len() == QUERY_LIMIT {
+                    return Ok(output);
                 }
             }
-            page_token = json["nextPageToken"]
-                .as_str()
-                .filter(|token| !token.is_empty())
-                .map(str::to_owned);
+            page_token = page.next_token.map(str::to_owned);
             let Some(token) = page_token.as_ref() else {
                 return Ok(output);
             };
