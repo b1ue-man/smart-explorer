@@ -1,330 +1,124 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
 impl App {
     pub(in crate::app) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
         self.ui_sidebar_locations(ui);
-
-        // ─── Remote connections (set-up-once; freshest pinned here) ─────
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("VERBINDUNGEN")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button("＋")
-                    .on_hover_text("Neue Verbindung (SFTP / FTP / FTPS / Netzlaufwerk)")
-                    .clicked()
-                {
-                    self.connect_form = crate::connect::ConnectForm::default();
-                    self.show_connect = true;
-                }
-            });
-        });
-
+        theme::section(ui, "Verbindungen");
         let mut disconnect = false;
         let mut activate_agent = false;
         let mut remove_agent = false;
         let agent_activating = self.agent_activate_rx.is_some();
-        let mut to_connect: Option<crate::creds::SavedConnection> = None;
-        let mut to_remove: Option<String> = None;
+        let mut to_connect = None;
+        let mut to_remove = None;
         let mut open_gdrive = false;
         let mut disc_gdrive = false;
-        let mut open_share_target: Option<crate::share::PeerOpenTarget> = None;
-        let mut mount_saved: Option<crate::creds::SavedConnection> = None;
+        let mut open_share_target = None;
+        let mut mount_saved = None;
         let mut mount_gdrive = false;
-        let mut mount_peer: Option<(crate::share::PeerOpenTarget, String)> = None;
+        let mut mount_peer = None;
         let mount_supported = crate::mount::drive_mount_supported();
 
-        // Active connection indicator + one-click disconnect.
-        if let Some(rs) = &self.remote {
+        if let Some(remote) = &self.remote {
             ui.horizontal(|ui| {
-                ui.colored_label(theme::accent(ui), format!("● {}", rs.label));
-                // SSH remote agent: show it's active, or offer to activate it on
-                // THIS already-connected session (no reconnect, #24).
-                if let Some(ver) = &rs.agent_version {
-                    ui.colored_label(theme::success(ui), "⚡ Agent")
-                        .on_hover_text(format!(
-                            "Remote-Agent aktiv (v{ver}) — Erkundung/Analyse/Transfers laufen serverseitig"
-                        ));
-                    if rs.sftp.is_some()
-                        && ui
-                            .small_button("✖")
-                            .on_hover_text(
-                                "Remote-Agent entfernen — löscht ~/.cache/smart-explorer auf dem \
-                                 Server und schaltet diese Verbindung zurück auf reines SFTP.",
-                            )
-                            .clicked()
-                    {
-                        remove_agent = true;
-                    }
-                } else if rs.sftp.is_some() {
-                    if agent_activating {
-                        ui.add(egui::Spinner::new().size(14.0));
-                        ui.label(RichText::new("Agent…").small().color(theme::muted(ui)));
-                    } else if ui
-                        .small_button("⚡ Agent aktivieren")
-                        .on_hover_text(
-                            "Den Remote-Agent jetzt auf dieser Verbindung ausrollen — \
-                             Listing/Analyse laufen dann serverseitig. Wird für diese \
-                             Verbindung gemerkt. Fällt bei Problemen auf normales SFTP zurück.",
-                        )
-                        .clicked()
-                    {
-                        activate_agent = true;
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() {
-                        disconnect = true;
+                sidebar_button(ui, &remote.label, true)
+                    .on_hover_text(format!("Aktive Verbindung: {}", remote.label));
+                ui.menu_button("⋯", |ui| {
+                    if ui.button("Verbindung trennen").clicked() { disconnect = true; ui.close_menu(); }
+                    if let Some(version) = &remote.agent_version {
+                        ui.label(format!("Remote-Agent {version}"));
+                        if remote.sftp.is_some() && ui.button("Agent entfernen").clicked() {
+                            remove_agent = true; ui.close_menu();
+                        }
+                    } else if remote.sftp.is_some() {
+                        if agent_activating { ui.spinner(); ui.label("Agent wird aktiviert…"); }
+                        else if ui.button("Remote-Agent aktivieren").clicked() {
+                            activate_agent = true; ui.close_menu();
+                        }
                     }
                 });
             });
         } else if self.net_conn.is_some() {
             ui.horizontal(|ui| {
-                ui.colored_label(theme::accent(ui), "● Netzlaufwerk");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("⏏")
-                        .on_hover_text("Verbindung trennen")
-                        .clicked()
-                    {
-                        disconnect = true;
-                    }
-                });
+                sidebar_button(ui, "Netzlaufwerk", true);
+                if ui.small_button("⏏").on_hover_text("Verbindung trennen").clicked() { disconnect = true; }
             });
         }
-
-        // Pinned Google Drive — stays here whenever Drive is connected, even
-        // with no tab open on it (click to browse, × to disconnect).
-        let gdrive_active = self
-            .remote
-            .as_ref()
-            .map(|rs| rs.backend.scheme() == crate::vfs::Scheme::GDrive)
-            .unwrap_or(false);
+        let gdrive_active = self.remote.as_ref().is_some_and(|remote| remote.backend.scheme() == crate::vfs::Scheme::GDrive);
         if crate::cloud::is_connected(crate::cloud::Provider::GDrive) {
             ui.horizontal(|ui| {
-                let txt = RichText::new("☁ Google Drive").small();
-                let txt = if gdrive_active {
-                    txt.color(theme::accent(ui))
-                } else {
-                    txt
-                };
-                if ui
-                    .add(egui::Button::new(txt).frame(false))
-                    .on_hover_text("Google Drive durchsuchen")
-                    .clicked()
-                {
-                    open_gdrive = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("×")
-                        .on_hover_text("Google Drive trennen")
-                        .clicked()
-                    {
-                        disc_gdrive = true;
-                    }
-                    if mount_supported
-                        && ui
-                            .small_button("▣")
-                            .on_hover_text("Google Drive als lokales Laufwerk einbinden")
-                            .clicked()
-                    {
-                        mount_gdrive = true;
-                    }
+                if sidebar_button(ui, "Google Drive", gdrive_active).clicked() { open_gdrive = true; }
+                ui.menu_button("⋯", |ui| {
+                    if mount_supported && ui.button("Als Laufwerk einbinden…").clicked() { mount_gdrive = true; ui.close_menu(); }
+                    if ui.button("Google Drive trennen").clicked() { disc_gdrive = true; ui.close_menu(); }
                 });
             });
         }
-
-        // Saved connections, newest first, capped — click to connect, × forget.
-        let conns: Vec<crate::creds::SavedConnection> =
-            self.saved_connections.iter().rev().cloned().collect();
-        if conns.is_empty() {
-            ui.colored_label(theme::muted(ui), "(noch keine gespeichert)");
-        }
-        for c in conns.iter().take(SIDEBAR_CONN_CAP) {
+        let conns: Vec<_> = self.saved_connections.iter().rev().cloned().collect();
+        for connection in conns.iter().take(SIDEBAR_CONN_CAP) {
             ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small())
-                            .frame(false),
-                    )
-                    .on_hover_text(c.to_target())
-                    .clicked()
-                {
-                    to_connect = Some(c.clone());
+                if sidebar_button(ui, &connection.display(), false).on_hover_text(connection.to_target()).clicked() {
+                    to_connect = Some(connection.clone());
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text("Entfernen").clicked() {
-                        to_remove = Some(c.account());
+                ui.menu_button("⋯", |ui| {
+                    if mount_supported && ui.button("Als Laufwerk einbinden…").clicked() {
+                        mount_saved = Some(connection.clone()); ui.close_menu();
                     }
-                    if mount_supported
-                        && ui
-                            .small_button("▣")
-                            .on_hover_text("Als lokales Laufwerk einbinden")
-                            .clicked()
-                    {
-                        mount_saved = Some(c.clone());
+                    if ui.button("Verbindung entfernen…").clicked() {
+                        to_remove = Some(connection.account()); ui.close_menu();
                     }
                 });
             });
         }
         if conns.len() > SIDEBAR_CONN_CAP {
-            ui.colored_label(
-                theme::muted(ui),
-                format!(
-                    "+{} ältere im Menü „Verbindung“",
-                    conns.len() - SIDEBAR_CONN_CAP
-                ),
-            );
+            ui.small(format!("Weitere Verbindungen im Menü oben ({})", conns.len() - SIDEBAR_CONN_CAP));
+        }
+        if ui.add(egui::Button::new("+ Verbindung hinzufügen").frame(false)).clicked() {
+            self.connect_form = crate::connect::ConnectForm::default();
+            self.show_connect = true;
         }
 
-        if !self.share_profiles.direct_contacts.is_empty() || !self.share_profiles.rooms.is_empty()
-        {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("SHARE DIREKT")
-                        .small()
-                        .color(theme::muted(ui)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("+")
-                        .on_hover_text("Direktgeraet hinzufuegen")
-                        .clicked()
-                    {
-                        self.show_share = true;
-                        self.share_tab = 0;
-                    }
-                    if ui
-                        .small_button("R")
-                        .on_hover_text("Direktkontakte aktualisieren")
-                        .clicked()
-                    {
-                        let _ = self.share_cmd(crate::share::ShareCmd::Refresh);
-                    }
-                    if ui
-                        .small_button("...")
-                        .on_hover_text("Share-Server Verbindungen")
-                        .clicked()
-                    {
-                        self.show_share = true;
-                    }
-                });
-            });
-            for c in self.share_profiles.direct_contacts.clone() {
+        if !self.share_profiles.direct_contacts.is_empty() {
+            theme::section(ui, "Geräte");
+            for contact in self.share_profiles.direct_contacts.clone().into_iter().take(5) {
                 ui.horizontal(|ui| {
-                    let target = crate::share::PeerOpenTarget::Direct {
-                        contact_id: c.id.clone(),
-                    };
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(format!("{} [{}]", c.display_name, c.status.label()))
-                                    .small(),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text(format!(
-                            "{} via Share-Server oeffnen",
-                            c.expected_fingerprint
-                        ))
-                        .clicked()
-                    {
+                    let target = crate::share::PeerOpenTarget::Direct { contact_id: contact.id.clone() };
+                    if sidebar_button(ui, &contact.display_name, false).on_hover_text(format!("{} · {}", contact.status.label(), contact.expected_fingerprint)).clicked() {
                         open_share_target = Some(target.clone());
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if mount_supported
-                            && ui
-                                .small_button("▣")
-                                .on_hover_text("Direktgeraet als lokales Laufwerk einbinden")
-                                .clicked()
-                        {
-                            mount_peer = Some((target, c.display_name.clone()));
+                    ui.menu_button("⋯", |ui| {
+                        ui.label(contact.status.label());
+                        if mount_supported && ui.button("Als Laufwerk einbinden…").clicked() {
+                            mount_peer = Some((target, contact.display_name.clone())); ui.close_menu();
                         }
                     });
                 });
             }
-
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("SHARE RAEUME")
-                        .small()
-                        .color(theme::muted(ui)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("+")
-                        .on_hover_text("Raum erstellen/beitreten")
-                        .clicked()
-                    {
-                        self.show_share = true;
-                        self.share_tab = 1;
-                    }
-                    if ui
-                        .small_button("R")
-                        .on_hover_text("Raeume aktualisieren")
-                        .clicked()
-                    {
-                        let _ = self.share_cmd(crate::share::ShareCmd::Refresh);
-                    }
-                });
-            });
-            for r in self.share_profiles.rooms.clone() {
-                ui.label(
-                    RichText::new(format!(
-                        "{} [{}] ({})",
-                        r.name,
-                        r.status.label(),
-                        r.members.len()
-                    ))
-                    .small()
-                    .color(theme::muted(ui)),
-                );
-                for m in r.members {
-                    ui.horizontal(|ui| {
-                        let target = crate::share::PeerOpenTarget::RoomDevice {
-                            room_id: r.id.clone(),
-                            device_id: m.device_id.clone(),
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(format!(
-                                        "  {} [{}]",
-                                        m.device_name,
-                                        m.status.label()
-                                    ))
-                                    .small(),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text(format!("{} via Raum oeffnen", m.fingerprint))
-                            .clicked()
-                        {
-                            open_share_target = Some(target.clone());
+            if ui.add(egui::Button::new("Alle Geräte verwalten…").frame(false)).clicked() {
+                self.show_share = true; self.share_tab = 0;
+            }
+        }
+        if !self.share_profiles.rooms.is_empty() {
+            egui::CollapsingHeader::new("Räume").id_salt("sidebar_rooms_v2").show(ui, |ui| {
+                for room in self.share_profiles.rooms.clone() {
+                    egui::CollapsingHeader::new(&room.name).id_salt(("sidebar_room", &room.id)).show(ui, |ui| {
+                        for member in &room.members {
+                            ui.horizontal(|ui| {
+                                let target = crate::share::PeerOpenTarget::RoomDevice { room_id: room.id.clone(), device_id: member.device_id.clone() };
+                                if sidebar_button(ui, &member.device_name, false).on_hover_text(member.status.label()).clicked() {
+                                    open_share_target = Some(target.clone());
+                                }
+                                ui.menu_button("⋯", |ui| {
+                                    if mount_supported && ui.button("Als Laufwerk einbinden…").clicked() {
+                                        mount_peer = Some((target, format!("{} – {}", room.name, member.device_name))); ui.close_menu();
+                                    }
+                                });
+                            });
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if mount_supported
-                                && ui
-                                    .small_button("▣")
-                                    .on_hover_text("Raumgeraet als lokales Laufwerk einbinden")
-                                    .clicked()
-                            {
-                                mount_peer =
-                                    Some((target, format!("{} - {}", r.name, m.device_name)));
-                            }
-                        });
                     });
                 }
-            }
+                if ui.button("Räume verwalten…").clicked() { self.show_share = true; self.share_tab = 1; }
+            });
         }
 
         if disconnect {
@@ -391,4 +185,9 @@ impl App {
             self.offer_mount_peer(target, label);
         }
     }
+}
+
+fn sidebar_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    ui.add_sized([(ui.available_width() - 42.0).max(40.0), 30.0],
+        egui::Button::new(label).frame(false).selected(selected).truncate())
 }

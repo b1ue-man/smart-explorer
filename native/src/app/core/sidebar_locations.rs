@@ -4,7 +4,7 @@ use super::*;
 
 impl App {
     pub(super) fn ui_sidebar_locations(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Smart Explorer");
+        ui.label(RichText::new("Smart Explorer").strong().size(16.0));
         ui.add_space(4.0);
         if ui
             .selectable_label(
@@ -17,66 +17,10 @@ impl App {
         }
         ui.add_space(6.0);
 
-        // Folder search now lives in the combo-field at the top (Ctrl+F): type
-        // to filter the list, with global folder jumps offered in its dropdown.
-        ui.label(
-            RichText::new("Ordnersuche → Suchleiste oben (Ctrl+F)")
-                .small()
-                .color(theme::muted(ui)),
-        );
-
-        ui.horizontal(|ui| {
-            if self.index_building {
-                ui.colored_label(
-                    theme::muted(ui),
-                    format!("⟳ Indizieren… {} Ordner", self.index_progress),
-                );
-                if ui.small_button("Stop").clicked() {
-                    self.cancel_index_build();
-                }
-            } else if self.folder_index.is_empty() {
-                ui.colored_label(theme::muted(ui), "Kein Index");
-                if ui
-                    .small_button("Bauen")
-                    .on_hover_text("Scannt alle Laufwerke einmalig nach Ordnern (etwa 30-90s)")
-                    .clicked()
-                {
-                    self.start_index_build();
-                }
-            } else {
-                let count = self.folder_index.len();
-                ui.colored_label(
-                    theme::muted(ui),
-                    format!(
-                        "Index: {} Ordner",
-                        count.to_string().chars().rev().enumerate().fold(
-                            String::new(),
-                            |acc, (i, c)| {
-                                if i > 0 && i % 3 == 0 {
-                                    format!("{}.{}", c, acc)
-                                } else {
-                                    format!("{}{}", c, acc)
-                                }
-                            }
-                        )
-                    ),
-                );
-                if ui
-                    .small_button("⟳")
-                    .on_hover_text("Index aktualisieren")
-                    .clicked()
-                {
-                    self.start_index_build();
-                }
-            }
-        });
-
-        ui.add_space(8.0);
-
         // ─── Favorites (starred folders) ───────────────────────────────
         if !self.favorites.is_empty() {
             ui.label(
-                RichText::new("★ FAVORITEN")
+                RichText::new("Favoriten")
                     .small()
                     .color(theme::muted(ui)),
             );
@@ -87,20 +31,18 @@ impl App {
                 ui.horizontal(|ui| {
                     let label = self.location_label(f);
                     if ui
-                        .selectable_label(self.location_key(&self.root_path) == *f, label)
+                        .add_sized([(ui.available_width() - 42.0).max(40.0), 30.0], egui::Button::new(label).frame(false).selected(self.location_key(&self.root_path) == *f).truncate())
                         .on_hover_text(f)
                         .clicked()
                     {
                         nav = Some(f.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("✕")
-                            .on_hover_text("Aus Favoriten entfernen")
-                            .clicked()
-                        {
-                            unstar = Some(f.clone());
-                        }
+                        ui.menu_button("⋯", |ui| {
+                            if ui.button("Aus Favoriten entfernen").clicked() {
+                                unstar = Some(f.clone()); ui.close_menu();
+                            }
+                        });
                     });
                 });
             }
@@ -114,18 +56,18 @@ impl App {
         }
 
         ui.label(
-            RichText::new("SCHNELLZUGRIFF")
+            RichText::new("Schnellzugriff")
                 .small()
                 .color(theme::muted(ui)),
         );
         let home = self.home.clone();
         for (label, sub) in [
-            ("Home", ""),
+            ("Persönlicher Ordner", ""),
             ("Desktop", "Desktop"),
-            ("Documents", "Documents"),
+            ("Dokumente", "Documents"),
             ("Downloads", "Downloads"),
-            ("Pictures", "Pictures"),
-            ("Music", "Music"),
+            ("Bilder", "Pictures"),
+            ("Musik", "Music"),
             ("Videos", "Videos"),
         ] {
             let p = if sub.is_empty() {
@@ -148,7 +90,7 @@ impl App {
         if !self.drive_info.is_empty() {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("LAUFWERKE")
+                RichText::new("Laufwerke")
                     .small()
                     .color(theme::muted(ui)),
             );
@@ -177,15 +119,17 @@ impl App {
             }
         }
 
+        egui::CollapsingHeader::new("Zuletzt geöffnet")
+            .id_salt("sidebar_recent_v2").show(ui, |ui| {
         if !self.recent.is_empty() {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("ZULETZT")
+                RichText::new("Zuletzt geöffnet")
                     .small()
                     .color(theme::muted(ui)),
             );
             let recent = self.recent.clone();
-            for r in recent {
+            for r in recent.into_iter().take(5) {
                 let label = r.rsplit('/').next().unwrap_or(&r).to_string();
                 let label = if label.is_empty() { r.clone() } else { label };
                 if ui
@@ -196,6 +140,7 @@ impl App {
                     self.start_scan(PathBuf::from(r.replace('/', std::path::MAIN_SEPARATOR_STR)));
                 }
             }
-        }
+        }            });
+
     }
 }

@@ -1,4 +1,3 @@
-use crate::app::theme;
 use super::landing_tiles::{ui_landing_section, LandingAction, LandingTile};
 use super::prelude::*;
 use super::*;
@@ -79,28 +78,29 @@ impl App {
         let sync_results = crate::syncjobs::load_results();
 
         let action_tiles = self.landing_action_tiles();
-        let place_tiles = self.landing_place_tiles(&common, &recent, &favorites, &drives);
+        let place_tiles = self.landing_place_tiles(&common[..common.len().min(3)], &recent, &favorites, &[]);
+        let drive_tiles = self.landing_place_tiles(&[], &[], &[], &drives);
         let remote_tiles = self.landing_remote_tiles(&connections, gdrive_connected);
         let sync_tiles = self.landing_sync_tiles(&sync_results);
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.heading("Startseite");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        self.ui_landing_index_chip(ui, &mut action);
-                    });
-                });
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(8.0);
-
-                ui_landing_section(ui, "Aktionen", true, &action_tiles, &mut action);
-                ui_landing_section(ui, "Orte", true, &place_tiles, &mut action);
-                ui_landing_section(ui, "Remotes", true, &remote_tiles, &mut action);
-                ui_landing_section(ui, "Sync-Jobs", true, &sync_tiles, &mut action);
+                ui.add_space(16.0);
+                ui.heading("Startseite");
+                ui.label(RichText::new("Ordner, Verbindungen und Geräte öffnen.").color(theme::muted(ui)));
+                ui.add_space(16.0);
+                ui_landing_section(ui, "Öffnen", true, &action_tiles, &mut action);
+                ui_landing_section(ui, "Schnellzugriff", true, &place_tiles, &mut action);
+                if !connections.is_empty() || gdrive_connected {
+                    ui_landing_section(ui, "Gespeicherte Verbindungen", false, &remote_tiles, &mut action);
+                }
+                if !drives.is_empty() {
+                    ui_landing_section(ui, "Laufwerke", false, &drive_tiles, &mut action);
+                }
+                if !self.sync_jobs.is_empty() {
+                    ui_landing_section(ui, "Sync-Aufträge", false, &sync_tiles, &mut action);
+                }
             });
 
         if let Some(action) = action {
@@ -116,78 +116,18 @@ impl App {
                     self.connect_form = crate::connect::ConnectForm::default();
                     self.show_connect = true;
                 }
-                LandingAction::BuildIndex | LandingAction::RefreshIndex => self.start_index_build(),
                 LandingAction::ShowSyncJobs => self.show_sync_jobs = true,
                 LandingAction::ShowShare => self.show_share = true,
             }
         }
     }
 
-    fn ui_landing_index_chip(&self, ui: &mut egui::Ui, action: &mut Option<LandingAction>) {
-        if self.index_building {
-            ui.add(egui::Spinner::new().size(14.0));
-            ui.label(
-                RichText::new(format!("Index: {} Ordner", self.index_progress))
-                    .small()
-                    .color(theme::muted(ui)),
-            );
-        } else if self.folder_index.is_empty() {
-            if ui.small_button("Index bauen").clicked() {
-                *action = Some(LandingAction::BuildIndex);
-            }
-        } else if ui.small_button("Index aktualisieren").clicked() {
-            *action = Some(LandingAction::RefreshIndex);
-        }
-    }
-
     fn landing_action_tiles(&self) -> Vec<LandingTile> {
-        let mut tiles = vec![
-            LandingTile::action(
-                "Ordner waehlen",
-                "Lokalen Ordner oeffnen",
-                "Browse",
-                LandingAction::ChooseFolder,
-            ),
-            LandingTile::action(
-                "Neue Verbindung",
-                "SFTP, FTP, WebDAV oder Share",
-                "Remote",
-                LandingAction::NewConnection,
-            ),
-            LandingTile::action(
-                "Sync-Jobs",
-                "Jobs verwalten, starten, vergleichen",
-                "Sync",
-                LandingAction::ShowSyncJobs,
-            ),
-            LandingTile::action(
-                "Teilen",
-                "Peer-Share und Quick Share",
-                "Share",
-                LandingAction::ShowShare,
-            ),
-        ];
-        if self.index_building {
-            tiles.push(LandingTile::status(
-                "Index laeuft",
-                format!("{} Ordner erfasst", self.index_progress),
-            ));
-        } else if self.folder_index.is_empty() {
-            tiles.push(LandingTile::action(
-                "Index bauen",
-                "Schnellere Ordnersuche vorbereiten",
-                "Suche",
-                LandingAction::BuildIndex,
-            ));
-        } else {
-            tiles.push(LandingTile::action(
-                "Index aktualisieren",
-                format!("{} Ordner im Index", self.folder_index.len()),
-                "Suche",
-                LandingAction::RefreshIndex,
-            ));
-        }
-        tiles
+        vec![
+            LandingTile::action("Ordner öffnen", "Auf diesem Computer", "", LandingAction::ChooseFolder),
+            LandingTile::action("Verbindung hinzufügen", "Server oder Netzlaufwerk", "", LandingAction::NewConnection),
+            LandingTile::action("Geräte & Freigaben", "Mit anderen Geräten arbeiten", "", LandingAction::ShowShare),
+        ]
     }
 
     fn landing_place_tiles(
@@ -198,31 +138,20 @@ impl App {
         drives: &[(String, u64, u64)],
     ) -> Vec<LandingTile> {
         let mut tiles = Vec::new();
+        let mut seen = HashSet::new();
+        for (paths, category) in [(favorites, "Favorit"), (recent, "Zuletzt geöffnet")] {
+            for path in paths {
+                if seen.insert(path.clone()) {
+                    tiles.push(LandingTile::action(self.location_label(path), path, category,
+                        LandingAction::OpenLocation(path.clone())));
+                }
+            }
+        }
         for (label, path) in common {
-            tiles.push(LandingTile::action(
-                label,
-                path,
-                "Schnellzugriff",
-                LandingAction::OpenLocation(path.clone()),
-            ));
-        }
-        for path in recent.iter().take(8) {
-            let label = landing_basename(path);
-            tiles.push(LandingTile::action(
-                label,
-                path,
-                "Zuletzt",
-                LandingAction::OpenLocation(path.clone()),
-            ));
-        }
-        for path in favorites.iter().take(8) {
-            let label = self.location_label(path);
-            tiles.push(LandingTile::action(
-                label,
-                path,
-                "Favorit",
-                LandingAction::OpenLocation(path.clone()),
-            ));
+            if seen.insert(path.clone()) {
+                tiles.push(LandingTile::action(label, path, "Persönlicher Ordner",
+                    LandingAction::OpenLocation(path.clone())));
+            }
         }
         for (drive, free, total) in drives {
             let (detail, meter) = if *total > 0 {
@@ -249,7 +178,7 @@ impl App {
             tiles.push(tile);
         }
         if tiles.is_empty() {
-            tiles.push(LandingTile::status("Keine Orte", "Noch nichts geoeffnet"));
+            tiles.push(LandingTile::status("Keine Orte", "Noch keine Ordner geöffnet"));
         }
         tiles
     }
@@ -268,7 +197,7 @@ impl App {
                 LandingAction::OpenGDrive,
             ));
         }
-        for c in connections.iter().take(10) {
+        for c in connections {
             tiles.push(LandingTile::action(
                 c.display(),
                 c.to_target(),
@@ -278,7 +207,7 @@ impl App {
         }
         if tiles.is_empty() {
             tiles.push(LandingTile::status(
-                "Keine Remotes",
+                "Keine Verbindungen",
                 "Neue Verbindung anlegen",
             ));
         }
@@ -290,7 +219,7 @@ impl App {
         results: &std::collections::BTreeMap<String, crate::syncjobs::JobResult>,
     ) -> Vec<LandingTile> {
         let mut tiles = Vec::new();
-        for job in self.sync_jobs.iter().take(12) {
+        for job in &self.sync_jobs {
             let result = results.get(&job.id);
             let detail = format!("{}  <->  {}", job.source, job.target);
             let (meta, warn) = landing_sync_meta(job, result);
@@ -317,15 +246,15 @@ impl App {
     fn landing_common_folders(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         out.push((
-            "Home".to_string(),
+            "Persönlicher Ordner".to_string(),
             self.home.to_string_lossy().replace('\\', "/"),
         ));
         for (label, sub) in [
             ("Desktop", "Desktop"),
-            ("Documents", "Documents"),
+            ("Dokumente", "Documents"),
             ("Downloads", "Downloads"),
-            ("Pictures", "Pictures"),
-            ("Music", "Music"),
+            ("Bilder", "Pictures"),
+            ("Musik", "Music"),
             ("Videos", "Videos"),
         ] {
             let path = self.home.join(sub);
@@ -334,16 +263,6 @@ impl App {
             }
         }
         out
-    }
-}
-
-fn landing_basename(path: &str) -> String {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
-    if base.is_empty() {
-        path.to_string()
-    } else {
-        base.to_string()
     }
 }
 
