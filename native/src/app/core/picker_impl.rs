@@ -132,6 +132,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([760.0, 560.0])
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
             .show(ctx, |ui| {
                 if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
                 {

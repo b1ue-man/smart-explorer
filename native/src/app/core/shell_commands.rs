@@ -25,10 +25,9 @@ impl App {
             ui.separator();
             let view = ui.menu_button("Ansicht", |ui| self.ui_view_menu(ui));
             self.accel_push('S', view.response.rect, AccelAct::Split);
-            ui.menu_button("Einstellungen", |ui| {
-                ui.set_width(360.0);
-                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| self.ui_menu_settings(ui));
-            });
+            if ui.selectable_label(self.settings.open, "Einstellungen").clicked() {
+                self.settings.open = !self.settings.open;
+            }
         });
     }
 

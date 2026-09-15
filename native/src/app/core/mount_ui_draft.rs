@@ -136,7 +136,11 @@ impl App {
         egui::Window::new("Remote als Laufwerk")
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_width(600.0)
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
+            .vscroll(true)
             .show(ctx, |ui| {
                 ui.label(RichText::new(&draft.source_label).strong());
                 render_root_choice(ui, &mut draft, ctx);

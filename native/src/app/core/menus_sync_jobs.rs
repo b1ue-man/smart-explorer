@@ -15,7 +15,7 @@ impl App {
             .resizable(true)
             .default_size([640.0, 380.0])
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new("Letzte Hintergrund-Sync-Läufe (neueste unten).")
                             .small()
@@ -59,8 +59,10 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([640.0, 440.0])
+            .max_width((ctx.screen_rect().width() - 48.0).max(280.0))
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.button("＋ Neues Setup").clicked() {
                         new_blank = true;
                     }
@@ -82,7 +84,7 @@ impl App {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for j in &jobs {
                         ui.group(|ui| {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
                                 if !j.enabled {
                                     ui.colored_label(theme::muted(ui), "⏸ deaktiviert");

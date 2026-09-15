@@ -11,6 +11,8 @@ pub(crate) use analytics_window::run_analysis_window;
 mod analytics_core;
 #[path = "core/analytics_ui.rs"]
 mod analytics_ui;
+#[path = "core/analytics_paint.rs"]
+mod analytics_paint;
 #[path = "core/app_models.rs"]
 mod app_models;
 #[path = "core/bisync_conflict_ui.rs"]
@@ -89,6 +91,14 @@ mod landing_tiles;
 mod location_labels;
 #[path = "core/menus_settings.rs"]
 mod menus_settings;
+#[path = "core/settings_ui.rs"]
+mod settings_ui;
+#[path = "core/settings_cloud.rs"]
+mod settings_cloud;
+#[path = "core/settings_updates.rs"]
+mod settings_updates;
+#[path = "core/settings_background.rs"]
+mod settings_background;
 #[path = "core/menus_sync.rs"]
 mod menus_sync;
 #[path = "core/menus_sync_jobs.rs"]

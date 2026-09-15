@@ -167,7 +167,9 @@ impl App {
         let mut install_runtime = false;
         egui::Window::new("Smart-Explorer-Laufwerke")
             .open(&mut open)
-            .default_width(560.0)
+            .default_width(600.0)
+            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
+            .vscroll(true)
             .show(ctx, |ui| {
                 if let Some(busy) = &self.mount_ui.busy {
                     ui.horizontal(|ui| {
@@ -184,8 +186,11 @@ impl App {
                             ui.label(RichText::new(&mount.config.label).strong());
                             ui.label(status_label(&mount.status));
                         });
-                        ui.label(format!("ID: {}", mount.config.id));
-                        ui.label(recovery_label(mount.recovery));
+                        egui::CollapsingHeader::new("Laufwerkdetails")
+                            .id_salt(("mount_details", &mount.config.id)).show(ui, |ui| {
+                                ui.label(format!("ID: {}", mount.config.id));
+                                ui.label(recovery_label(mount.recovery));
+                            });
                         ui.horizontal(|ui| match &mount.status {
                             crate::mount::MountStatus::Failed { .. }
                             | crate::mount::MountStatus::RuntimeUnavailable { .. } => {

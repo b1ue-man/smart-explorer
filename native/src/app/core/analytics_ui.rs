@@ -284,63 +284,7 @@ impl App {
                         )
                     });
 
-                    let painter = ui.painter_at(tm_rect);
-                    painter.rect_filled(tm_rect, 0.0, Color32::from_gray(22));
-                    for cell in cells {
-                        if cell.container {
-                            // Folder = darkened group hue + a lighter header strip.
-                            let fill = cell.color.gamma_multiply(0.40);
-                            painter.rect_filled(cell.rect, 2.0, fill);
-                            painter.rect_stroke(
-                                cell.rect,
-                                2.0,
-                                egui::Stroke::new(1.0_f32, Color32::from_black_alpha(130)),
-                            );
-                            let hr = egui::Rect::from_min_max(
-                                cell.rect.min,
-                                egui::pos2(cell.rect.max.x, cell.rect.min.y + TM_HEADER),
-                            );
-                            painter.rect_filled(hr, 0.0, cell.color.gamma_multiply(0.7));
-                            painter.with_clip_rect(hr.shrink(2.0)).text(
-                                hr.min + egui::vec2(4.0, 1.0),
-                                egui::Align2::LEFT_TOP,
-                                format!("{}  {}", cell.name, format_bytes(cell.size)),
-                                egui::FontId::proportional(11.0),
-                                Color32::from_gray(235),
-                            );
-                        } else {
-                            painter.rect_filled(cell.rect, 1.0, cell.color);
-                            painter.rect_stroke(
-                                cell.rect,
-                                1.0,
-                                egui::Stroke::new(0.5_f32, Color32::from_black_alpha(70)),
-                            );
-                            if cell.rect.width() > 40.0 && cell.rect.height() > 15.0 {
-                                let col = cell.color;
-                                let lum = 0.299 * col.r() as f32
-                                    + 0.587 * col.g() as f32
-                                    + 0.114 * col.b() as f32;
-                                let tc = if lum < 140.0 {
-                                    Color32::from_gray(245)
-                                } else {
-                                    Color32::from_gray(20)
-                                };
-                                // Clip to the cell so long names don't bleed across.
-                                painter.with_clip_rect(cell.rect.shrink(2.0)).text(
-                                    cell.rect.left_top() + egui::vec2(3.0, 2.0),
-                                    egui::Align2::LEFT_TOP,
-                                    format!(
-                                        "{}{}\n{}",
-                                        if cell.is_dir { "📁 " } else { "" },
-                                        cell.name,
-                                        format_bytes(cell.size)
-                                    ),
-                                    egui::FontId::proportional(11.0),
-                                    tc,
-                                );
-                            }
-                        }
-                    }
+                    analytics_paint::paint(ui, tm_rect, cells);
 
                     // Hover tooltip + click-to-drill: deepest cell under pointer.
                     let tm_resp = tm_resp.on_hover_ui(|ui| {

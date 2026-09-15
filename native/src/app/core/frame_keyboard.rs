@@ -25,6 +25,13 @@ impl App {
             self.accel_mode = false;
             return;
         }
+        if self.settings.open {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.settings.open = false;
+            }
+            self.accel_mode = false;
+            return;
+        }
         if self.blocks_explorer_shortcuts() {
             self.accel_mode = false;
             return;
@@ -419,6 +426,7 @@ impl App {
 
     fn blocks_explorer_shortcuts(&self) -> bool {
         self.show_analytics
+            || self.settings.open
             || self.copy_open
             || self.show_help
             || self.show_disclaimer

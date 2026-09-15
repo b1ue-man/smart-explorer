@@ -56,6 +56,7 @@ pub struct App {
     pub(in crate::app) show_filters: bool,
     pub(in crate::app) show_summary: bool,
     pub(in crate::app) appearance: ui_preferences::Appearance,
+    pub(in crate::app) settings: settings_ui::SettingsState,
     /// Effective "directories first" sort for the CURRENT location (classic when
     /// true; false = files+folders mixed by the active key). Set on navigation
     /// from `dir_sort`; the toggle writes back the per-location override.
