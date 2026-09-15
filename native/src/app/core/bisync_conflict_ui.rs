@@ -36,6 +36,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([700.0, 460.0])
+            .max_size(theme::window_content_limit(ctx))
+            .constrain_to(ctx.screen_rect().shrink(16.0))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label("Beide Seiten wurden geändert. Wähle, welche Version gilt — die andere wird vorher reversibel gesichert.");

@@ -134,3 +134,12 @@ pub(super) fn section(ui: &mut egui::Ui, title: &str) {
     ui.label(egui::RichText::new(title).strong().color(muted(ui)));
     ui.add_space(2.0);
 }
+
+/// egui 0.29's Resize limit covers content; reserve frame and title chrome too.
+pub(super) fn window_content_limit(ctx: &egui::Context) -> egui::Vec2 {
+    let style = ctx.style();
+    let margin = style.spacing.window_margin.sum();
+    let title = ctx.fonts(|fonts| fonts.row_height(&TextStyle::Heading.resolve(&style))) + margin.y;
+    (ctx.screen_rect().size() - egui::vec2(32.0, 32.0) - margin - egui::vec2(0.0, title))
+        .max(egui::vec2(1.0, 1.0))
+}

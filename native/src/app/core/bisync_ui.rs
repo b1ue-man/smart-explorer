@@ -13,6 +13,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([680.0, 460.0])
+            .max_size(theme::window_content_limit(ctx))
+            .constrain_to(ctx.screen_rect().shrink(16.0))
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(&self.preview_title)

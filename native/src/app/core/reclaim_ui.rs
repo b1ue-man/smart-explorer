@@ -67,6 +67,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([920.0, 640.0])
+            .max_size(theme::window_content_limit(ctx))
+            .constrain_to(ctx.screen_rect().shrink(16.0))
             .min_width(500.0)
             .constrain(true)
             .show(ctx, |ui| {

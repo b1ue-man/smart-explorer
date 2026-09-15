@@ -168,7 +168,7 @@ impl App {
         egui::Window::new("Smart-Explorer-Laufwerke")
             .open(&mut open)
             .default_width(600.0)
-            .max_height((ctx.screen_rect().height() - 48.0).max(240.0))
+            .max_size(theme::window_content_limit(ctx))
             .vscroll(true)
             .show(ctx, |ui| {
                 if let Some(busy) = &self.mount_ui.busy {

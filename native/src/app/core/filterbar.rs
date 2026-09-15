@@ -52,6 +52,8 @@ impl App {
                 }
             }
 
+            let controls_width = if self.filter_is_active() || !self.text_draft.is_empty() { 250.0 } else { 120.0 };
+            let search_width = (ui.available_size_before_wrap().x - controls_width).clamp(140.0, 560.0);
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text(match self.filter.text_mode {
@@ -59,7 +61,7 @@ impl App {
                         TextMode::Regex => "Regex z.B. \\.log$",
                         TextMode::Glob => "Glob z.B. **/build/**",
                     })
-                    .desired_width((ui.available_width() - 240.0).clamp(140.0, 560.0)),
+                    .desired_width(search_width),
             );
             let resp = resp.on_hover_text("Name filtern · /Ordner suchen · Pfad öffnen · ›Befehl · .. eine Ebene hoch (Ctrl+F)");
             let field_rect = resp.rect;
@@ -178,11 +180,12 @@ impl App {
             self.size_input(ui, "size_min", "≥ 10 MB", true);
             self.size_input(ui, "size_max", "≤ 1 GB", false);
 
-            ui.label("Geändert:");
-            self.date_filter_ui(ui, true);
-
-            ui.label("Erstellt:");
-            self.date_filter_ui(ui, false);
+            for (modified, label) in [(true, "Geändert:"), (false, "Erstellt:")] {
+                ui.allocate_ui_with_layout(egui::vec2(220.0, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(label);
+                    self.date_filter_ui(ui, modified);
+                });
+            }
 
             // Quick presets for the modified-date range
             let mut preset: Option<(Option<chrono::NaiveDate>, Option<chrono::NaiveDate>)> = None;
@@ -242,9 +245,6 @@ impl App {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.filter_is_active() {
-                    ui.colored_label(theme::warning(ui), "● Filter aktiv");
-                }
                 ui.label(
                     RichText::new(format!(
                         "{} / {} Einträge",

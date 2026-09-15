@@ -4,12 +4,8 @@ impl App {
     pub(in crate::app) fn ui_share(&mut self, ctx: &egui::Context) {
         let mut open = self.show_share;
         let screen = ctx.screen_rect();
-        let max_w = (screen.width() - 16.0)
-            .max(240.0)
-            .min(screen.width().max(1.0));
-        let max_h = (screen.height() - 16.0)
-            .max(240.0)
-            .min(screen.height().max(1.0));
+        let limit = theme::window_content_limit(ctx);
+        let (max_w, max_h) = (limit.x, limit.y);
         egui::Window::new("Geräte & Freigaben")
             .open(&mut open)
             .resizable(true)
