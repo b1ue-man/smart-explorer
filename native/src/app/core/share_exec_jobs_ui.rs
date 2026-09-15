@@ -1,3 +1,4 @@
+use crate::app::theme;
 use eframe::egui::{self, Color32, RichText};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -40,7 +41,7 @@ pub(in crate::app) fn ui_exec_jobs(ui: &mut egui::Ui) {
         ui.label(
             RichText::new("AKTIVE UND LETZTE EXEC-JOBS")
                 .small()
-                .color(Color32::from_gray(140)),
+                .color(theme::muted(ui)),
         );
         if ui
             .add_enabled(!loading, egui::Button::new("Aktualisieren"))
@@ -54,7 +55,7 @@ pub(in crate::app) fn ui_exec_jobs(ui: &mut egui::Ui) {
     });
     if let Some(error) = error {
         ui.colored_label(
-            Color32::from_rgb(230, 100, 100),
+            theme::danger(ui),
             format!("Exec-Status: {error}"),
         );
     }

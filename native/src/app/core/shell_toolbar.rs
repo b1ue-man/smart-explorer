@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -92,7 +93,7 @@ impl App {
                                 let prefix = self.root_prefix();
                                 if prefix.is_empty() {
                                     ui.colored_label(
-                                        Color32::from_gray(120),
+                                        theme::muted(ui),
                                         "Ordner wählen oder Pfad eingeben (Ctrl+L)",
                                     );
                                 } else {
@@ -109,7 +110,7 @@ impl App {
                                     for (i, seg) in segs.iter().enumerate() {
                                         if i > 0 {
                                             ui.label(
-                                                RichText::new("›").color(Color32::from_gray(110)),
+                                                RichText::new("›").color(theme::muted(ui)),
                                             );
                                         }
                                         acc.push_str(seg);

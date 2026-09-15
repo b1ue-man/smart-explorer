@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -72,7 +73,7 @@ impl App {
                 };
                 ui.label(message);
                 ui.colored_label(
-                    Color32::from_gray(150),
+                    theme::muted(ui),
                     "„Später“ behält ein gestagtes Update unverändert; beim nächsten Start wird erneut gefragt.",
                 );
                 ui.add_space(8.0);
@@ -462,7 +463,7 @@ impl App {
                     ];
                     for (title, rows) in groups {
                         ui.add_space(4.0);
-                        ui.label(RichText::new(*title).strong().color(Color32::from_rgb(120, 170, 255)));
+                        ui.label(RichText::new(*title).strong().color(theme::accent(ui)));
                         egui::Grid::new(*title)
                             .num_columns(2)
                             .striped(true)

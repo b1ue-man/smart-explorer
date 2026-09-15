@@ -1,3 +1,4 @@
+use crate::app::theme;
 //! Uplink-sharing section of the LAN tab (Stage 2): the opt-in toggle with the
 //! one-time platform setup, and the live sharing state with its reason.
 use super::*;
@@ -6,7 +7,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, view: &crate::share::UplinkVi
     ui.label(
         RichText::new("INTERNET TEILEN (NUR OHNE ROUTER)")
             .small()
-            .color(Color32::from_gray(140)),
+            .color(theme::muted(ui)),
     );
     ui.label(format!("Plattform: {}", view.facility.label()));
     let mut enabled = view.enabled;
@@ -34,7 +35,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, view: &crate::share::UplinkVi
             ui.label(
                 RichText::new(&view.reason)
                     .small()
-                    .color(Color32::from_gray(150)),
+                    .color(theme::muted(ui)),
             );
         }
     });
@@ -42,7 +43,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, view: &crate::share::UplinkVi
         ui.label(format!("{public_if}  →  {private_if}"));
     }
     if let Some(error) = &view.last_error {
-        ui.colored_label(Color32::from_rgb(255, 120, 120), error);
+        ui.colored_label(theme::danger(ui), error);
     }
     if view.state == crate::share::UplinkSharingState::Sharing
         && ui.button("Jetzt beenden").clicked()

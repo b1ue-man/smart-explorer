@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::share_discovery_state::{
     DiscoveryExchangeState, DiscoveryListEntry, DiscoveryOfferPhase, DiscoveryPublishTarget,
     DiscoveryUiAction, DiscoveryUiKind,
@@ -127,7 +128,7 @@ fn discovery_heading(ui: &mut egui::Ui, text: &str) {
     ui.label(
         egui::RichText::new(text)
             .small()
-            .color(egui::Color32::from_gray(140)),
+            .color(theme::muted(ui)),
     );
 }
 
@@ -256,7 +257,7 @@ fn publisher_ui(
     });
     if duration_secs == 0 {
         ui.colored_label(
-            egui::Color32::from_rgb(220, 100, 90),
+            theme::danger(ui),
             "Die Sichtbarkeitsdauer muss groesser als 0 sein.",
         );
     }
@@ -303,9 +304,9 @@ fn discovery_list_ui(
                 ui.label(expiration_label(entry.expires_at, now));
                 let compatible = entry.compatibility.can_connect();
                 let color = if compatible {
-                    egui::Color32::from_rgb(100, 190, 120)
+                    theme::success(ui)
                 } else {
-                    egui::Color32::from_rgb(240, 160, 100)
+                    theme::warning(ui)
                 };
                 ui.colored_label(color, entry.compatibility.label());
             });
@@ -418,7 +419,7 @@ fn pin_guidance(
 ) {
     if pin.byte_len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
         ui.colored_label(
-            egui::Color32::from_rgb(220, 100, 90),
+            theme::danger(ui),
             format!(
                 "PIN ist {} Bytes lang; maximal {} Bytes sind erlaubt. Es wird nichts gekuerzt.",
                 pin.byte_len(),
@@ -427,7 +428,7 @@ fn pin_guidance(
         );
     } else if pin.trivially_guessable() {
         ui.colored_label(
-            egui::Color32::from_rgb(225, 155, 70),
+            theme::warning(ui),
             "Leere PINs und \"0\" sind erlaubt, aber trivial zu erraten.",
         );
     }

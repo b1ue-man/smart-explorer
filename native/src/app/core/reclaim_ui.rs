@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::reclaim_results_ui::{
@@ -79,7 +80,7 @@ impl App {
                     ui.label(
                         RichText::new("Scannen:")
                             .small()
-                            .color(Color32::from_gray(150)),
+                            .color(theme::muted(ui)),
                     );
                     for (root, _free, _total) in &drives {
                         if ui.button(root.as_str()).clicked() {
@@ -122,7 +123,7 @@ impl App {
                         (large_gb.max(0.01) * 1024.0 * 1024.0 * 1024.0) as u64;
                     if report.large_min_bytes != large_bytes || report.stale_days != stale_days {
                         ui.colored_label(
-                            Color32::from_rgb(255, 190, 90),
+                            theme::warning(ui),
                             "Einstellungen geändert — für passende Ergebnisse neu scannen.",
                         );
                     }
@@ -130,7 +131,7 @@ impl App {
 
                 if is_remote {
                     ui.colored_label(
-                        Color32::from_rgb(255, 190, 90),
+                        theme::warning(ui),
                         "Remote-Reclaim ist schreibgeschützt: Hash-Ergebnisse dienen nur der Prüfung.",
                     );
                 }
@@ -193,13 +194,13 @@ impl App {
                     });
                     if r.has_truncated_results() {
                         ui.colored_label(
-                            Color32::from_rgb(255, 190, 90),
+                            theme::warning(ui),
                             "Ergebnislisten sind begrenzt; Gesamtzahlen stehen in den Überschriften.",
                         );
                     }
                     if r.duplicate_candidates_truncated() {
                         ui.colored_label(
-                            Color32::from_rgb(255, 190, 90),
+                            theme::warning(ui),
                             format!(
                                 "Duplikatprüfung: {} der {} größten geeigneten Kandidaten zurückbehalten.",
                                 r.duplicate_candidates_retained, r.duplicate_candidates
@@ -237,7 +238,7 @@ impl App {
                     });
                     if !r.errors.is_empty() || r.suppressed_errors > 0 {
                         ui.colored_label(
-                            Color32::from_rgb(255, 160, 120),
+                            theme::warning(ui),
                             format!(
                                 "{} Pfade konnten nicht gelesen werden",
                                 r.errors.len() as u64 + r.suppressed_errors
@@ -329,25 +330,25 @@ impl App {
                     match run_state {
                         StorageRunState::Idle => {
                             ui.colored_label(
-                                Color32::from_gray(150),
+                                theme::muted(ui),
                                 "Wählen Sie eine Quelle. Es startet kein Scan automatisch.",
                             );
                         }
                         StorageRunState::Canceled => {
                             ui.colored_label(
-                                Color32::from_rgb(255, 190, 90),
+                                theme::warning(ui),
                                 "Scan abgebrochen. Ein neuer Scan startet nur nach Ihrer Auswahl.",
                             );
                         }
                         StorageRunState::Partial => {
                             ui.colored_label(
-                                Color32::from_rgb(255, 190, 90),
+                                theme::warning(ui),
                                 format!("Teilresultat: {issue_count} Pfad(e) konnten nicht gelesen werden."),
                             );
                         }
                         StorageRunState::Failed => {
                             ui.colored_label(
-                                Color32::from_rgb(255, 120, 100),
+                                theme::danger(ui),
                                 format!(
                                     "Scan fehlgeschlagen: {}",
                                     first_issue

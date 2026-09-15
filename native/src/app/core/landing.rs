@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::landing_tiles::{ui_landing_section, LandingAction, LandingTile};
 use super::prelude::*;
 use super::*;
@@ -128,7 +129,7 @@ impl App {
             ui.label(
                 RichText::new(format!("Index: {} Ordner", self.index_progress))
                     .small()
-                    .color(Color32::from_gray(145)),
+                    .color(theme::muted(ui)),
             );
         } else if self.folder_index.is_empty() {
             if ui.small_button("Index bauen").clicked() {

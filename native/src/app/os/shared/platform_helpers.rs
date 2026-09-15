@@ -138,40 +138,17 @@ pub(in crate::app) fn favorites_path() -> PathBuf {
     appdata_file("favorites.txt")
 }
 
-/// Small persisted UI preference set (panel visibility). One `key=value` per
-/// line, following the project's one-file-per-concern convention.
-pub(in crate::app) struct UiState {
-    pub(in crate::app) show_filters: bool,
-    pub(in crate::app) show_summary: bool,
-}
+pub(in crate::app) use crate::app::ui_preferences::UiState;
 
 impl UiState {
     pub(in crate::app) fn load() -> Self {
-        let mut s = UiState {
-            show_filters: true,
-            show_summary: false,
-        };
-        if let Ok(txt) = std::fs::read_to_string(appdata_file("ui_state.txt")) {
-            for line in txt.lines() {
-                if let Some((k, v)) = line.split_once('=') {
-                    let on = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true");
-                    match k.trim() {
-                        "show_filters" => s.show_filters = on,
-                        "show_summary" => s.show_summary = on,
-                        _ => {}
-                    }
-                }
-            }
-        }
-        s
+        std::fs::read_to_string(appdata_file("ui_state.txt"))
+            .map(|text| Self::parse(&text))
+            .unwrap_or_default()
     }
 
     pub(in crate::app) fn save(&self) -> std::io::Result<()> {
-        let txt = format!(
-            "show_filters={}\nshow_summary={}\n",
-            self.show_filters as u8, self.show_summary as u8
-        );
-        std::fs::write(appdata_file("ui_state.txt"), txt)
+        std::fs::write(appdata_file("ui_state.txt"), self.encode())
     }
 }
 

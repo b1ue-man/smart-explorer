@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -140,7 +141,7 @@ impl App {
                     // ── Left: places ──
                     ui.vertical(|ui| {
                         ui.set_min_width(200.0);
-                        ui.label(RichText::new("ORTE").small().color(Color32::from_gray(140)));
+                        ui.label(RichText::new("ORTE").small().color(theme::muted(ui)));
                         if ui.selectable_label(false, "🏠 Home").clicked() {
                             open_local = Some(home.clone());
                         }
@@ -155,10 +156,10 @@ impl App {
                             ui.label(
                                 RichText::new("VERBINDUNGEN")
                                     .small()
-                                    .color(Color32::from_gray(140)),
+                                    .color(theme::muted(ui)),
                             );
                             if conns.is_empty() && !gdrive_connected {
-                                ui.colored_label(Color32::from_gray(120), "(keine)");
+                                ui.colored_label(theme::muted(ui), "(keine)");
                             }
                             if gdrive_connected
                                 && ui.selectable_label(false, "☁ Google Drive").clicked()
@@ -187,7 +188,7 @@ impl App {
                             }
                             if !conn_label.is_empty() {
                                 ui.colored_label(
-                                    Color32::from_rgb(120, 200, 255),
+                                    theme::accent(ui),
                                     format!("● {}", conn_label),
                                 );
                             }
@@ -199,7 +200,7 @@ impl App {
                                 cwd.clone()
                             })
                             .monospace()
-                            .color(Color32::from_gray(180)),
+                            .color(theme::muted(ui)),
                         );
                         ui.separator();
                         if connecting || listing {
@@ -212,10 +213,10 @@ impl App {
                                 });
                             });
                         } else if let Some(e) = &error {
-                            ui.colored_label(Color32::from_rgb(255, 140, 120), e);
+                            ui.colored_label(theme::danger(ui), e);
                         } else if !has_loc {
                             ui.colored_label(
-                                Color32::from_gray(140),
+                                theme::muted(ui),
                                 "Links einen Ort oder eine Verbindung wählen.",
                             );
                         }
@@ -245,7 +246,7 @@ impl App {
                                 }
                                 if has_loc && entries.is_empty() && error.is_none() && !connecting {
                                     ui.colored_label(
-                                        Color32::from_gray(120),
+                                        theme::muted(ui),
                                         "(keine Unterordner)",
                                     );
                                 }
@@ -266,7 +267,7 @@ impl App {
                         close = true;
                     }
                     if can_choose {
-                        ui.colored_label(Color32::from_gray(140), value_preview.clone());
+                        ui.colored_label(theme::muted(ui), value_preview.clone());
                     }
                 });
             });

@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -16,7 +17,7 @@ impl App {
                 ui.label(
                     RichText::new(&self.preview_title)
                         .small()
-                        .color(Color32::from_gray(170)),
+                        .color(theme::muted(ui)),
                 );
                 ui.separator();
                 if self.preview_running {
@@ -39,7 +40,7 @@ impl App {
                     }
                 };
                 if let Some(e) = &p.error {
-                    ui.colored_label(Color32::from_rgb(230, 120, 120), format!("Fehler: {}", e));
+                    ui.colored_label(theme::danger(ui), format!("Fehler: {}", e));
                     return;
                 }
                 let mut to_b = 0usize;
@@ -74,7 +75,7 @@ impl App {
                 if p.actions.is_empty() && p.conflicts.is_empty() {
                     ui.add_space(6.0);
                     ui.colored_label(
-                        Color32::from_rgb(120, 200, 120),
+                        theme::success(ui),
                         "✓ Beide Seiten sind im Einklang — nichts zu tun.",
                     );
                     return;
@@ -82,7 +83,7 @@ impl App {
                 ui.label(
                     RichText::new("▶ neben einer Zeile synchronisiert nur diese eine Datei.")
                         .small()
-                        .color(Color32::from_gray(130)),
+                        .color(theme::muted(ui)),
                 );
                 ui.separator();
                 let busy = self.apply_one_rx.is_some();
@@ -97,7 +98,7 @@ impl App {
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(format!("⚠ Konflikt: {}", conflict.rel))
-                                            .color(Color32::from_rgb(230, 200, 90)),
+                                            .color(theme::warning(ui)),
                                     )
                                     .truncate(),
                                 )
@@ -107,28 +108,28 @@ impl App {
                             let act = &p.actions[row - conflict_rows];
                             let (sym, color, rel) = match act {
                                 crate::bisync::Action::CopyAtoB(r) => {
-                                    ("→", Color32::from_rgb(120, 200, 120), r)
+                                    ("→", theme::success(ui), r)
                                 }
                                 crate::bisync::Action::CopyBtoA(r) => {
-                                    ("←", Color32::from_rgb(120, 200, 120), r)
+                                    ("←", theme::success(ui), r)
                                 }
                                 crate::bisync::Action::DeleteB(r) => {
-                                    ("🗑→", Color32::from_rgb(230, 150, 120), r)
+                                    ("🗑→", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::DeleteA(r) => {
-                                    ("🗑←", Color32::from_rgb(230, 150, 120), r)
+                                    ("🗑←", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::FinalizeMoveAtoB(r) => {
-                                    ("✓🗑→", Color32::from_rgb(230, 170, 100), r)
+                                    ("✓🗑→", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::FinalizeMoveBtoA(r) => {
-                                    ("✓🗑←", Color32::from_rgb(230, 170, 100), r)
+                                    ("✓🗑←", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::KeepBothAtoB(r) => {
-                                    ("⇄→", Color32::from_rgb(230, 200, 90), r)
+                                    ("⇄→", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::KeepBothBtoA(r) => {
-                                    ("⇄←", Color32::from_rgb(230, 200, 90), r)
+                                    ("⇄←", theme::warning(ui), r)
                                 }
                             };
                             ui.horizontal(|ui| {

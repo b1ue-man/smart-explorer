@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -238,7 +239,7 @@ impl App {
                     self.recompute_view();
                 }
                 if self.filter_is_active() {
-                    ui.colored_label(Color32::from_rgb(255, 190, 90), "● Filter aktiv");
+                    ui.colored_label(theme::warning(ui), "● Filter aktiv");
                 }
                 ui.label(
                     RichText::new(format!(
@@ -246,7 +247,7 @@ impl App {
                         self.view.len(),
                         self.entries.len()
                     ))
-                    .color(Color32::from_gray(140)),
+                    .color(theme::muted(ui)),
                 );
             });
         });

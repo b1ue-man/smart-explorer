@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -30,7 +31,7 @@ impl App {
             let title = if active {
                 RichText::new("🔍 Filter & Suche  ●")
                     .strong()
-                    .color(Color32::from_rgb(255, 190, 90))
+                    .color(theme::warning(ui))
             } else {
                 RichText::new("🔍 Filter & Suche").strong()
             };

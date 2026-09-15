@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::mount_peer_roots::{
     begin_peer_probe, discover_peer_mount, poll_peer_probe, PeerDraft, PeerMountDiscovery,
 };
@@ -356,13 +357,13 @@ fn render_write_status(ui: &mut egui::Ui, draft: &MountDraft) {
         return;
     }
     ui.colored_label(
-        Color32::from_rgb(255, 190, 90),
+        theme::warning(ui),
         "Editor-Saves werden als ganze Datei konfliktgeprueft ueber Smart Explorer hochgeladen.",
     );
     if let Some(Ok(capabilities)) = peer_safety(draft) {
         if !capabilities.staged_write.supports_mounted_writes() {
             ui.colored_label(
-                Color32::from_rgb(255, 120, 100),
+                theme::danger(ui),
                 format!(
                     "Diese Peer-Wurzel ist nicht sicher schreibbar: {}.",
                     missing_writes(capabilities.staged_write)
@@ -377,19 +378,19 @@ fn render_root_security(ui: &mut egui::Ui, draft: &mut MountDraft, ctx: &egui::C
     match safety {
         Some(Ok(capabilities)) if capabilities.root_confinement.is_enforced() => {
             ui.colored_label(
-                Color32::from_rgb(120, 220, 150),
+                theme::success(ui),
                 "Technische Sandbox fuer diese Wurzel bestaetigt.",
             );
         }
         Some(Ok(_)) if !draft.trust_remote_root => {
             ui.colored_label(
-                Color32::from_rgb(255, 120, 100),
+                theme::danger(ui),
                 "Diese Wurzel ist nur im Vertrauensmodus einbindbar. Aktiviere die ausdrueckliche Freigabe oben oder waehle ein technisch eingegrenztes Ziel.",
             );
         }
         Some(Err(error)) => {
             ui.colored_label(
-                Color32::from_rgb(255, 120, 100),
+                theme::danger(ui),
                 format!("Peer-Faehigkeiten konnten nicht bestaetigt werden: {error}"),
             );
             if draft
@@ -411,7 +412,7 @@ fn render_root_security(ui: &mut egui::Ui, draft: &mut MountDraft, ctx: &egui::C
         }
         _ if draft.trust_remote_root => {
             ui.colored_label(
-                Color32::from_rgb(255, 150, 90),
+                theme::warning(ui),
                 "Vertrauensmodus: Ein anderer Writer am Remote kann die Wurzel waehrend eines Pfadzugriffs veraendern.",
             );
         }

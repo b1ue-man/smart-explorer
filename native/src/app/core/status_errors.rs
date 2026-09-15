@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -113,18 +114,18 @@ impl App {
                         ui.label("⟳ Scan läuft…");
                     } else {
                         ui.colored_label(
-                            Color32::from_rgb(230, 190, 90),
+                            theme::warning(ui),
                             "⏹ Scan wird abgebrochen…",
                         );
                     }
                 } else if self.scan_was_canceled {
                     ui.colored_label(
-                        Color32::from_rgb(230, 190, 90),
+                        theme::warning(ui),
                         "⚠ Scan abgebrochen · Teilergebnis",
                     );
                 } else if progress.errors > 0 {
                     ui.colored_label(
-                        Color32::from_rgb(230, 190, 90),
+                        theme::warning(ui),
                         "⚠ Scan teilweise abgeschlossen",
                     );
                 } else if !self.entries.is_empty() {
@@ -142,7 +143,7 @@ impl App {
                     format!("{:.0}/s", rate)
                 };
                 ui.colored_label(
-                    Color32::from_gray(140),
+                    theme::muted(ui),
                     format!(
                         "{} gescannt · {} · {:.1}s · {}{}",
                         p.scanned,
@@ -169,7 +170,7 @@ impl App {
                     ui_transfer_chip(ui, p);
                     if transfer_canceling {
                         ui.colored_label(
-                            Color32::from_rgb(230, 190, 90),
+                            theme::warning(ui),
                             "Übertragung wird abgebrochen…",
                         );
                     } else if ui
@@ -204,7 +205,7 @@ impl App {
                     }
                 }
                 if self.bisync_running {
-                    ui.colored_label(Color32::from_rgb(160, 190, 230), "2-Wege-Sync läuft…");
+                    ui.colored_label(theme::accent(ui), "2-Wege-Sync läuft…");
                     if ui
                         .add(egui::Button::new("2-Wege-Sync abbrechen").small())
                         .clicked()
@@ -222,11 +223,11 @@ impl App {
                 }
                 if let Some((ref msg, ts)) = notice {
                     if ts.elapsed().as_secs() < 6 {
-                        ui.colored_label(notice_color(msg), msg.as_str());
+                        ui.colored_label(notice_color(ui, msg), msg.as_str());
                     }
                 }
                 if let Some(ref e) = self.error_msg {
-                    ui.colored_label(Color32::from_rgb(220, 100, 80), format!("⚠ {}", e));
+                    ui.colored_label(theme::danger(ui), format!("⚠ {}", e));
                 }
                 let scan_errors = progress.errors.max(self.failed_paths.len() as u64) as usize;
                 let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
@@ -240,7 +241,7 @@ impl App {
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new(label).color(Color32::from_rgb(220, 100, 80)),
+                                RichText::new(label).color(theme::danger(ui)),
                             )
                             .small(),
                         )
@@ -251,10 +252,10 @@ impl App {
                     }
                 }
                 if self.selection.is_empty() {
-                    ui.colored_label(Color32::from_gray(140), "Auswahl: 0");
+                    ui.colored_label(theme::muted(ui), "Auswahl: 0");
                 } else {
                     ui.colored_label(
-                        Color32::from_gray(160),
+                        theme::muted(ui),
                         format!(
                             "Auswahl: {} ({})",
                             self.selection.len(),
@@ -263,7 +264,7 @@ impl App {
                     );
                 }
                 ui.colored_label(
-                    Color32::from_gray(140),
+                    theme::muted(ui),
                     format!("v{}", env!("CARGO_PKG_VERSION")),
                 );
             });
@@ -288,7 +289,7 @@ impl App {
                 ui.label("Fehler aus der App und nicht lesbare Scan-Pfade. Der Text ist markierbar und kopierbar.");
                 ui.add_space(6.0);
                 if log_text.is_empty() {
-                    ui.colored_label(Color32::from_gray(140), "Keine Fehler protokolliert.");
+                    ui.colored_label(theme::muted(ui), "Keine Fehler protokolliert.");
                 } else {
                     ui.add(
                         egui::TextEdit::multiline(&mut log_text)
@@ -394,7 +395,7 @@ fn ui_progress_chip(ui: &mut egui::Ui, text: &str, fraction: Option<f32>) {
             };
             ui.add(bar.desired_width(76.0).desired_height(6.0));
             ui.add(
-                egui::Label::new(RichText::new(text).small().color(Color32::from_gray(160)))
+                egui::Label::new(RichText::new(text).small().color(theme::muted(ui)))
                     .truncate(),
             )
             .on_hover_text(text);
@@ -406,18 +407,18 @@ fn short_current(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-fn notice_color(message: &str) -> Color32 {
+fn notice_color(ui: &egui::Ui, message: &str) -> Color32 {
     let lower = message.to_lowercase();
     if message.starts_with('⚠')
         || lower.contains("konflikt")
         || lower.contains("teilweise")
         || lower.contains("abgebrochen")
     {
-        Color32::from_rgb(230, 190, 90)
+        theme::warning(ui)
     } else if lower.contains("fehler") || lower.contains("fehlgeschlagen") {
-        Color32::from_rgb(220, 100, 80)
+        theme::danger(ui)
     } else {
-        Color32::from_rgb(120, 200, 130)
+        theme::success(ui)
     }
 }
 

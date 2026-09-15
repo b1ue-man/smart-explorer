@@ -172,6 +172,10 @@ mod sidebar;
 mod sidebar_locations;
 #[path = "core/state.rs"]
 mod state;
+#[path = "core/theme.rs"]
+mod theme;
+#[path = "core/ui_preferences.rs"]
+mod ui_preferences;
 #[path = "core/status_errors.rs"]
 mod status_errors;
 #[path = "core/support_paths.rs"]

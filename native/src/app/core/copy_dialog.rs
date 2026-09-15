@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -35,7 +36,7 @@ impl App {
                     });
                 });
                 ui.colored_label(
-                    egui::Color32::from_gray(160),
+                    theme::muted(ui),
                     "Ordner werden rekursiv expandiert; nur Dateien die dem aktuellen Filter entsprechen werden kopiert. Ordnerstruktur wird erhalten, leere Ordner weggelassen.",
                 );
                 ui.add_space(6.0);

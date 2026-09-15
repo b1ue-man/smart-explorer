@@ -1,3 +1,4 @@
+use crate::app::theme;
 use super::prelude::*;
 use super::*;
 
@@ -18,7 +19,7 @@ impl App {
                     ui.label(
                         RichText::new("Letzte Hintergrund-Sync-Läufe (neueste unten).")
                             .small()
-                            .color(Color32::from_gray(140)),
+                            .color(theme::muted(ui)),
                     );
                 });
                 ui.separator();
@@ -66,14 +67,14 @@ impl App {
                     ui.label(
                         RichText::new("Quelle ⇄ Ziel, Methode, Zeitplan — bleibt nach Neustart erhalten.")
                             .small()
-                            .color(Color32::from_gray(140)),
+                            .color(theme::muted(ui)),
                     );
                 });
                 ui.separator();
                 if jobs.is_empty() {
                     ui.add_space(8.0);
                     ui.colored_label(
-                        Color32::from_gray(140),
+                        theme::muted(ui),
                         "Noch keine Setups. „＋ Neues Setup“ anlegen oder im Split-View zwei Ordner per Rechtsklick verbinden.",
                     );
                     return;
@@ -84,10 +85,10 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
                                 if !j.enabled {
-                                    ui.colored_label(Color32::from_gray(130), "⏸ deaktiviert");
+                                    ui.colored_label(theme::muted(ui), "⏸ deaktiviert");
                                 }
                                 if orphaned.contains(&j.id) {
-                                    ui.colored_label(Color32::from_rgb(255, 185, 120), "⚠ verwaist")
+                                    ui.colored_label(theme::warning(ui), "⚠ verwaist")
                                         .on_hover_text("Die Verbindung dieses Setups wurde entfernt. Das Setup bleibt erhalten, kann aber erst nach einer neuen Verbindung wieder laufen.");
                                 }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -116,7 +117,7 @@ impl App {
                             ui.label(
                                 RichText::new(format!("{}  →  {}", j.source, j.target))
                                     .small()
-                                    .color(Color32::from_gray(170)),
+                                    .color(theme::muted(ui)),
                             );
                             let sched = match j.trigger {
                                 crate::syncjobs::Trigger::Manual => "manuell".to_string(),
@@ -165,14 +166,14 @@ impl App {
                                     last
                                 ))
                                 .small()
-                                .color(Color32::from_gray(140)),
+                                .color(theme::muted(ui)),
                             );
                             // Live status from the last recorded run.
                             if let Some(r) = results.get(&j.id) {
                                 let color = match r.note.as_str() {
-                                    "ok" => Color32::from_rgb(120, 200, 120),
-                                    "Konflikte" => Color32::from_rgb(230, 200, 90),
-                                    _ => Color32::from_rgb(230, 120, 120),
+                                    "ok" => theme::success(ui),
+                                    "Konflikte" => theme::warning(ui),
+                                    _ => theme::danger(ui),
                                 };
                                 ui.label(
                                     RichText::new(format!(
