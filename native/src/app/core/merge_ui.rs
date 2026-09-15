@@ -19,6 +19,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_size([900.0, 600.0])
+            .max_size(theme::window_content_limit(ctx))
+            .constrain_to(ctx.screen_rect().shrink(16.0))
             .show(ctx, |ui| {
                 if loading {
                     ui.horizontal(|ui| {

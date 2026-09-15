@@ -102,6 +102,16 @@ impl Harness {
 
     fn save(&mut self, name: &str) {
         let output = self.settle();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, self.size).expand(1.0);
+        self.ctx.memory(|memory| {
+            for layer in memory.areas().visible_layer_ids() {
+                if layer.order == egui::Order::Middle {
+                    if let Some(rect) = memory.area_rect(layer.id) {
+                        assert!(screen.contains_rect(rect), "{name}: window {layer:?} outside viewport: {rect:?}");
+                    }
+                }
+            }
+        });
         let directory = PathBuf::from(std::env::var("SMART_EXPLORER_GUI_VISUALS").unwrap());
         std::fs::create_dir_all(&directory).unwrap();
         self.capture.save(&self.ctx, output, &directory.join(format!("{name}.json")), self.size);
@@ -142,6 +152,7 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             assert_eq!(h.app.view.len(), 1);
             h.click("Filter · aktiv");
             assert!(h.app.show_filters);
+            assert!((h.capture.target("Zurücksetzen").y - h.capture.target("Filter · aktiv").y).abs() < 2.0);
             h.save(&format!("filters-{name}-{mode}"));
             h.click("Zurücksetzen");
             assert_eq!(h.app.view.len(), 4);
@@ -149,7 +160,9 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             h.app.show_filters = false;
             h.app.appearance.detailed_columns = true;
             h.settle();
-            h.assert_visible("Pfad");
+            assert!(h.capture.labels.iter().any(|(text, rect, clip)| text == "Pfad"
+                && rect.top() > 150.0 && clip.contains(rect.center())), "Path table header is missing");
+            h.save(&format!("details-{name}-{mode}"));
             h.app.appearance.detailed_columns = false;
             let mut other = super::TabState::default();
             other.root_path = h.app.root_path.clone();

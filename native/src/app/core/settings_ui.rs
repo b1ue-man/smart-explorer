@@ -30,7 +30,7 @@ impl App {
         egui::Window::new("Einstellungen")
             .open(&mut open).collapsible(false)
             .default_size([760.0, 520.0])
-            .max_width(bounds.width()).max_height(bounds.height())
+            .max_size(theme::window_content_limit(ctx))
             .constrain_to(bounds)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {

@@ -79,9 +79,16 @@ one remote task suite and the existing terminal release transaction.
 
 ## Verification status
 
-M1–M4 and M6 are implemented as coherent source milestones. The combined
-M5 suite and documentation are prepared. Remote behavioral and visual
-evaluation is pending; this document does not claim a shipped version.
+Implementation and the combined task entrypoint are complete. Each candidate's
+behavioral results, binary/source binding and real egui paint/PNG artifacts are
+recorded in the [GUI / Drive task workflow](https://github.com/b1ue-man/smart-explorer/actions/workflows/gui-design-task.yml).
+This plan does not declare a released version; publication evidence belongs to
+the matching repository release.
+
+Remote review also corrected missing bundled-font fallbacks, reserved space for
+window title/frame geometry, and kept reset/date controls together at 900×600.
+The same task entrypoint now checks real visible window rectangles and the
+additional table header, and exports the detailed-column and drag-hover views.
 
 ## Added batch scope: Drive names (2026-09-15)
 
