@@ -126,6 +126,9 @@ native_tests=(
     # M9 concurrent transfer lane
     recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest
     recursive_filter_task_transfer_lane_reports_lost_workers_and_shuts_down
+    # M10 typed agent-protocol errors (Room/Direct uploads through the daemon)
+    recursive_filter_task_agent_errors_recover_not_found_and_exists_kinds
+    recursive_filter_task_unrecognized_agent_errors_stay_other_with_their_text
 )
 if [[ "$platform" == windows ]]; then
     # M5 verbatim addressing of real NUL / trailing-dot entries (Windows only)

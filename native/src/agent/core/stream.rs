@@ -43,7 +43,7 @@ impl Read for AgentReadStream {
                     self.done = true;
                     return Ok(0);
                 }
-                Ok(Frame::Err(e)) => return Err(io::Error::other(e)),
+                Ok(Frame::Err(e)) => return Err(super::agent_error::agent_error(e)),
                 Ok(other) => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -104,7 +104,7 @@ impl AgentWriteStream {
         }
         let result = match self.rx.recv() {
             Ok(Frame::Ok) => Ok(()),
-            Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+            Ok(Frame::Err(e)) => Err(super::agent_error::agent_error(e)),
             Ok(other) => {
                 self.connection.invalidate(&self.mux);
                 Err(io::Error::new(
@@ -199,7 +199,7 @@ impl AgentBackend {
                 pos: 0,
                 done: true,
             }) as Box<dyn Read + Send>),
-            Frame::Err(error) => Err(io::Error::other(error)),
+            Frame::Err(error) => Err(super::agent_error::agent_error(error)),
             other => {
                 self.connection.invalidate(&opened.mux);
                 Err(io::Error::new(
@@ -239,7 +239,7 @@ impl AgentBackend {
                 rx,
                 state: WriteState::Open,
             }) as Box<dyn Write + Send>),
-            Ok(Frame::Err(error)) => Err(io::Error::other(error)),
+            Ok(Frame::Err(error)) => Err(super::agent_error::agent_error(error)),
             Ok(other) => {
                 self.connection.invalidate(&mux);
                 Err(io::Error::new(

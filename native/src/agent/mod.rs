@@ -5,6 +5,8 @@
 //! serializes outgoing frames and a reader thread routes incoming frames to the
 //! waiting operation.
 
+#[path = "core/agent_error.rs"]
+mod agent_error;
 #[path = "core/backend.rs"]
 mod backend;
 #[path = "core/deploy.rs"]

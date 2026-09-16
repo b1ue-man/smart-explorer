@@ -13,7 +13,7 @@ impl AgentBackend {
         let (mux, reply) = self.connection.mutation_call(req)?;
         match reply {
             Frame::Ok => Ok(()),
-            Frame::Err(e) => Err(io::Error::other(e)),
+            Frame::Err(e) => Err(super::agent_error::agent_error(e)),
             other => {
                 self.connection.invalidate(&mux);
                 Err(io::Error::new(
@@ -41,7 +41,7 @@ impl AgentBackend {
                         receiver.accept(Frame::End)?;
                         break;
                     }
-                    Ok(Frame::Err(e)) => return Err(io::Error::other(e)),
+                    Ok(Frame::Err(e)) => return Err(super::agent_error::agent_error(e)),
                     Ok(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -81,7 +81,7 @@ impl AgentBackend {
             mux.send(id, Frame::End)?;
             match rx.recv() {
                 Ok(Frame::Ok) => Ok(files),
-                Ok(Frame::Err(e)) => Err(io::Error::other(e)),
+                Ok(Frame::Err(e)) => Err(super::agent_error::agent_error(e)),
                 Ok(other) => {
                     self.connection.invalidate(&mux);
                     Err(io::Error::new(

@@ -1,3 +1,4 @@
+use super::agent_error::agent_error;
 use super::metadata::wire_to_vfs;
 #[cfg(test)]
 use super::transport::HeartbeatPolicy;
@@ -110,7 +111,7 @@ impl Backend for AgentBackend {
             .safe_call_timeout(Frame::ListDir(path.to_string()), METADATA_REQUEST_TIMEOUT)?
         {
             Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
-            Frame::Err(e) => Err(io::Error::other(e)),
+            Frame::Err(e) => Err(agent_error(e)),
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unexpected agent directory reply: {other:?}"),
@@ -124,7 +125,7 @@ impl Backend for AgentBackend {
             .safe_call_timeout(Frame::Stat(path.to_string()), METADATA_REQUEST_TIMEOUT)?
         {
             Frame::Meta(m) => Ok(wire_to_vfs(m)),
-            Frame::Err(e) => Err(io::Error::other(e)),
+            Frame::Err(e) => Err(agent_error(e)),
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unexpected agent metadata reply: {other:?}"),
@@ -138,7 +139,7 @@ impl Backend for AgentBackend {
             .safe_call_timeout(Frame::TryExists(path.to_string()), METADATA_REQUEST_TIMEOUT)?
         {
             Frame::Exists(exists) => Ok(exists),
-            Frame::Err(error) => Err(io::Error::other(error)),
+            Frame::Err(error) => Err(agent_error(error)),
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unexpected agent existence reply: {other:?}"),
@@ -173,7 +174,7 @@ impl Backend for AgentBackend {
                         }
                     }
                     Ok(Frame::Tree(node)) => return Ok(Some(node)),
-                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(Frame::Err(error)) => return Err(agent_error(error)),
                     Ok(other) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -268,7 +269,7 @@ impl Backend for AgentBackend {
                             }
                         })?,
                     Ok(Frame::End) => return Ok(true),
-                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(Frame::Err(error)) => return Err(agent_error(error)),
                     Ok(other) => {
                         let _ = mux.send(id, Frame::Cancel);
                         return Err(io::Error::new(
@@ -345,7 +346,7 @@ impl Backend for AgentBackend {
                             }
                         })?,
                     Ok(Frame::End) => return Ok(true),
-                    Ok(Frame::Err(error)) => return Err(io::Error::other(error)),
+                    Ok(Frame::Err(error)) => return Err(agent_error(error)),
                     Ok(other) => {
                         let _ = mux.send(id, Frame::Cancel);
                         return Err(io::Error::new(
@@ -413,7 +414,7 @@ impl Backend for AgentBackend {
         })?;
         match reply {
             Frame::Ok => Ok(()),
-            Frame::Err(error) => Err(io::Error::other(error)),
+            Frame::Err(error) => Err(agent_error(error)),
             other => {
                 self.connection.invalidate(&mux);
                 Err(io::Error::new(
