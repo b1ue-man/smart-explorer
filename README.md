@@ -329,12 +329,13 @@ hat ihren eigenen Fortschritt und lässt sich einzeln oder gesamt abbrechen. Üb
 Direct- und Raum-Beziehungen nutzt jeder Vorgang eigene QUIC-Streams der
 gecachten Peer-Verbindung; mehrere Geräte werden parallel bedient, die Bandbreite
 teilt sich statt sich zu stauen. Der Share-Server-Endpunkt bleibt ein
-Signalisierungs-/Relay-Pfad. Räume werden im automatischen
-Lifecycle-Test mitgeprüft: Raum erstellen, per Code beitreten, gegenseitige
-Mitgliedschaft, Raum-Exporte, `ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/
-`search`/`rm` über `share://room/<raum>/<gerät>/…`, drei gleichzeitige Downloads
-in beide Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs
-auf Raum-Ziele nutzen denselben Backend-Pfad.
+Signalisierungs-/Relay-Pfad. Räume prüft der eigenständige automatische Test
+`native/test-share-room-e2e.sh` gegen einen lokalen Share-Server: Raum
+erstellen, per Code beitreten, gegenseitige Mitgliedschaft, Raum-Exporte,
+`ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/`search`/`rm` über
+`share://room/<raum>/<gerät>/…`, drei gleichzeitige Downloads in beide
+Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs auf
+Raum-Ziele nutzen denselben Backend-Pfad.
 
 Die Speicheranalyse eines Direct- oder Raum-Ziels lässt den entfernten
 Share-Client den vollständigen, begrenzten logischen Baum aufbauen. Er überträgt

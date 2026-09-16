@@ -2,8 +2,8 @@
 # Single task-level suite for the filter-pruned recursive scan / Win32-hostile
 # names / concurrent Share transfers / Room lifecycle batch. Run this one
 # checked-in entrypoint with an outer timeout of at least 30 minutes; the
-# Linux job additionally runs the Share lifecycle end-to-end script, the
-# Windows job the real-filesystem hostile-name cases.
+# Linux job additionally runs the Share Room end-to-end script, the Windows
+# job the real-filesystem hostile-name cases.
 set -Eeuo pipefail
 
 usage() {
@@ -211,10 +211,10 @@ if [[ "$platform" != linux ]]; then
     exit 0
 fi
 
-echo "filter/transfer task suite: Share lifecycle end-to-end incl. Rooms and concurrent transfers"
-for command_name in jq timeout pwsh python3 systemctl; do
+echo "filter/transfer task suite: Share Room lifecycle and concurrent transfers end to end"
+for command_name in jq timeout cmp head; do
     command -v "$command_name" >/dev/null 2>&1 || {
-        echo "$command_name is required for the Share end-to-end script" >&2
+        echo "$command_name is required for the Share Room end-to-end script" >&2
         exit 1
     }
 done
@@ -230,9 +230,8 @@ done
 )
 SMART_EXPLORER_SE_BINARY="${CARGO_TARGET_DIR:-$repo_root/native/target}/debug/se" \
 SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
-    bash "$repo_root/native/test-share-lifecycle-e2e.sh" 2>&1 | tee "$e2e_log"
+    bash "$repo_root/native/test-share-room-e2e.sh" 2>&1 | tee "$e2e_log"
 grep -Fq 'Room lifecycle passed:' "$e2e_log"
-grep -Fq 'tracked Share lifecycle E2E passed:' "$e2e_log"
 
 echo "filter/transfer task suite: release gates for the batch's files (rustfmt, clippy on both targets)"
 # The crate as a whole carries older formatting and dead-code drift outside
