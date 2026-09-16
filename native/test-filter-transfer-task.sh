@@ -79,7 +79,10 @@ export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_TERM_COLOR=never
-if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+# Cargo runs inside native/ and therefore uses native/target by default; the
+# explicit variable only names the E2E binaries on Linux (a POSIX path would
+# not be a safe Cargo environment value under Git Bash on Windows).
+if [[ "$platform" == linux && -z "${CARGO_TARGET_DIR:-}" ]]; then
     export CARGO_TARGET_DIR="$repo_root/native/target"
 fi
 
@@ -225,7 +228,7 @@ done
     cd "$repo_root/share-server"
     CARGO_TARGET_DIR="$repo_root/share-server/target" run_task cargo build --locked --bin se-share-server
 )
-SMART_EXPLORER_SE_BINARY="$CARGO_TARGET_DIR/debug/se" \
+SMART_EXPLORER_SE_BINARY="${CARGO_TARGET_DIR:-$repo_root/native/target}/debug/se" \
 SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
     bash "$repo_root/native/test-share-lifecycle-e2e.sh" 2>&1 | tee "$e2e_log"
 grep -Fq 'Room lifecycle passed:' "$e2e_log"

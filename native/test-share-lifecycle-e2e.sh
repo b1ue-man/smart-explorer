@@ -961,6 +961,21 @@ wait_room_members() {
   return 1
 }
 
+wait_room_access_denied() {
+  local client="$1"
+  local endpoint="$2"
+  local message="$3"
+  local deadline=$((SECONDS + 90))
+  while [[ $SECONDS -lt $deadline ]]; do
+    if ! run_client "$client" ls "$endpoint" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$message" >&2
+  return 1
+}
+
 verify_release_transaction_scripts
 
 prepare_client "$client_a"
@@ -1471,19 +1486,17 @@ cmp "$export_c/big-2.bin" "$root/big-2.bin"
 cmp "$export_d/big-3.bin" "$root/big-3.bin"
 
 # Leaving the Room removes the local profile and its export; the remaining
-# member must no longer reach the leaver's files.
+# member must no longer reach the leaver's files. Both denials become stable
+# once the leaver's worker dropped the Room and the RoomLeft event reached the
+# remaining member, so they are awaited rather than asserted immediately.
 run_client "$client_d" connections remove-room Team >/dev/null
 after_leave_d="$(run_client "$client_d" share status --json)"
 jq -e --arg room "$room_relation_id" '[.rooms[] | select(.room_id == $room)] | length == 0' \
   >/dev/null <<<"$after_leave_d"
-if run_client "$client_d" ls "$room_endpoint_c" >/dev/null 2>&1; then
-  echo "a device that left the Room still reached the Room files" >&2
-  exit 1
-fi
-if run_client "$client_c" ls "$room_endpoint_d/RoomDocs" >/dev/null 2>&1; then
-  echo "the remaining member still reached the leaver's Room export" >&2
-  exit 1
-fi
+wait_room_access_denied "$client_d" "$room_endpoint_c" \
+  "a device that left the Room still reached the Room files"
+wait_room_access_denied "$client_c" "$room_endpoint_d/RoomDocs" \
+  "the remaining member still reached the leaver's Room export"
 run_client "$client_c" connections remove-room Team >/dev/null
 echo "Room lifecycle passed: $room_relation_id"
 
