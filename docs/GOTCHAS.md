@@ -430,3 +430,29 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `release/vX.Y.Z` branch fallback. The atomic `update_pinned.txt` file pauses
   automatic forward checks after manual rollback; applying a newer staged update
   clears the pin only after the new app has launched successfully.
+
+## Windows file names and verbatim paths
+
+- **`std::fs::symlink_metadata(dir.join(name))` is not safe for every listed
+  name on Windows.** Win32 name resolution maps `C:\dir\NUL`, `nul.txt`,
+  `con.log`, … to the *device*, strips trailing dots and spaces and rejects a
+  few characters, so re-opening a child by its joined path returns device
+  metadata or fails. The scanner, `collect_recursive` and `LocalBackend::list_dir`
+  therefore take `DirEntry::metadata()` (the enumeration record; `lstat` on
+  Unix, no extra system call on Windows).
+- **Rust's std hands short paths to Win32 unchanged.** `maybe_verbatim` only
+  builds a `\\?\` path above 248 UTF-16 units, so `DeleteFileW("C:\dir\nul")`
+  hits the device. `vfs/os/windows/verbatim.rs` builds the verbatim form itself
+  whenever a component is one `types::win32_name_issue` flags, folding `.`/`..`
+  lexically (verbatim paths never do) and keeping every other component
+  literal. Ordinary paths keep their plain spelling so shell-facing callers
+  never see the prefix.
+- **The Recycle Bin parses names like Explorer.** `trash::delete` goes through
+  `IFileOperation`, which cannot address a reserved name; the GUI renames such
+  an entry to a Win32-safe unique sibling first (`_nul.txt`, `report`) and
+  recycles the renamed item. Permanent deletion needs no detour.
+- **`RtlIsDosDeviceName_U` semantics** (mirrored by `types/core/win32_names.rs`):
+  strip trailing dots and spaces, cut from the first period, trim trailing
+  spaces, then compare with `CON`/`PRN`/`AUX`/`NUL` or `COM`/`LPT` plus one
+  digit (Microsoft's current guidance also lists `0` and the superscripts
+  `¹ ² ³`). `COM10` and `nul_x` are ordinary names.

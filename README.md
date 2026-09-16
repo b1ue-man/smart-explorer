@@ -16,6 +16,28 @@ Zeilen. Unter **Einstellungen → Darstellung** stehen **Hell**, **Dunkel** und
 Menüs und Dialoge; Orte in der Seitenleiste sind direkt erreichbar.
 Bei schmalen Fenstern enthält **»** die zusätzlichen Befehle und **Share-Server**.
 
+**Rekursiv mit Filter (ab 0.5.159):** Läuft ein rekursiver Scan mit aktivem
+Filter (Name, Typ, Größe, Datum, versteckt/System, problematische Namen), werden
+nicht passende Einträge schon beim Scannen verworfen: Sie belegen weder Speicher
+noch das Scan-Limit von einer Million Einträgen, nur Treffer und die Ordner, die
+sie im Baum einordnen, bleiben erhalten. Ein Ordner, der selbst passt (z. B. ein
+Ordner namens `nul`), erscheint auch ohne passende Dateien. Der Zähler zeigt dann
+„Treffer · durchsucht“. Wird der Filter enger, filtert die Ansicht sofort; lässt
+er mehr zu oder hatte der Scan das Limit erreicht, startet der Scan automatisch
+neu. **F5** und der **Rekursiv**-Umschalter behalten den eingegebenen Namensfilter;
+nur das Öffnen eines anderen Ordners löscht ihn.
+
+**Problematische Windows-Namen:** Dateien und Ordner, die der Explorer nicht
+anfassen kann — reservierte Gerätenamen wie `NUL`, `CON`, `AUX`, `PRN`, `COM1`
+oder `LPT1` (auch mit Endung wie `nul.txt`), Namen mit Punkt oder Leerzeichen am
+Ende, unter Windows ungültige Zeichen — werden mit echten Metadaten gelistet und
+in der Warnfarbe hervorgehoben. Der Filter **⚠ Nur problematische Namen** zeigt
+ausschließlich solche Einträge, auch rekursiv über ganze Laufwerke. **Entf**
+benennt sie zuerst in einen sicheren Nachbarnamen um (z. B. `_nul.txt`) und
+verschiebt sie dann in den Papierkorb; **Shift+Entf** löscht sie direkt über
+einen `\\?\`-Pfad, ebenso funktioniert **F2** zum Umbenennen. Neue Namen dieser
+Art lehnt der Umbenennen-Dialog ab.
+
 **Remote/Cloud (ab 0.4.x):** durchsucht **SFTP**, **FTP/FTPS**, **WebDAV**
 (Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
 einheitliche `Backend`-Schnittstelle (**Verbindung** in der Werkzeugleiste); Zugangsdaten im
@@ -299,6 +321,20 @@ Clients im Hintergrund nachgezogen, sobald beide Geräte online sind. Exakte
 Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
 widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
 nicht automatisch überschrieben.
+
+**Parallele Übertragungen (ab 0.5.159):** Uploads, Downloads und
+Remote→Remote-Kopien laufen als eigene Vorgänge gleichzeitig — bis zu sechs auf
+einmal, weitere warten in Reihenfolge und starten automatisch. Jede Übertragung
+hat ihren eigenen Fortschritt und lässt sich einzeln oder gesamt abbrechen. Über
+Direct- und Raum-Beziehungen nutzt jeder Vorgang eigene QUIC-Streams der
+gecachten Peer-Verbindung; mehrere Geräte werden parallel bedient, die Bandbreite
+teilt sich statt sich zu stauen. Der Share-Server-Endpunkt bleibt ein
+Signalisierungs-/Relay-Pfad. Räume werden im automatischen
+Lifecycle-Test mitgeprüft: Raum erstellen, per Code beitreten, gegenseitige
+Mitgliedschaft, Raum-Exporte, `ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/
+`search`/`rm` über `share://room/<raum>/<gerät>/…`, drei gleichzeitige Downloads
+in beide Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs
+auf Raum-Ziele nutzen denselben Backend-Pfad.
 
 Die Speicheranalyse eines Direct- oder Raum-Ziels lässt den entfernten
 Share-Client den vollständigen, begrenzten logischen Baum aufbauen. Er überträgt
