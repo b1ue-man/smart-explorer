@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn selection_bytes(&mut self) -> u64 {
@@ -54,15 +54,15 @@ impl App {
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
         let sel_bytes = self.selection_bytes();
         let progress = self.progress.clone();
-        let transfer = self
-            .transfer_progress
-            .as_ref()
-            .filter(|progress| !progress.done)
-            .cloned();
-        let transfer_canceling = self
-            .transfer_cancel
-            .as_ref()
-            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        let transfers: Vec<(usize, TransferProgress, bool)> = self
+            .transfers
+            .active
+            .iter()
+            .enumerate()
+            .filter(|(_, transfer)| !transfer.progress.done)
+            .map(|(index, transfer)| (index, transfer.progress.clone(), transfer.canceling()))
+            .collect();
+        let queued_transfers = self.transfers.queued_len();
         let copy = self
             .copy_progress
             .as_ref()
@@ -117,7 +117,7 @@ impl App {
                     .on_hover_text(&p.current_path);
                 }
             });
-            let has_details = transfer.is_some() || copy.is_some() || self.sync_running
+            let has_details = !transfers.is_empty() || queued_transfers > 0 || copy.is_some() || self.sync_running
                 || self.bisync_running || delete_progress.is_some()
                 || notice.as_ref().is_some_and(|(_, time)| time.elapsed().as_secs() < 6)
                 || self.error_msg.is_some() || progress.errors > 0
@@ -125,22 +125,37 @@ impl App {
                 || !self.selection.is_empty();
             if !has_details { return; }
             ui.horizontal_wrapped(|ui| {
-                if let Some(p) = &transfer {
+                for (index, p, canceling) in &transfers {
                     ui_transfer_chip(ui, p);
-                    if transfer_canceling {
+                    if *canceling {
                         ui.colored_label(
                             theme::warning(ui),
                             "Übertragung wird abgebrochen…",
                         );
                     } else if ui
-                        .add(egui::Button::new("Übertragung abbrechen").small())
-                        .on_hover_text("Nach dem laufenden Backend-Aufruf sicher abbrechen")
+                        .add(egui::Button::new("Abbrechen").small())
+                        .on_hover_text("Diese Übertragung nach dem laufenden Backend-Aufruf sicher abbrechen")
                         .clicked()
                     {
-                        if let Some(cancel) = &self.transfer_cancel {
-                            cancel.store(true, std::sync::atomic::Ordering::Release);
-                        }
+                        self.transfers.cancel(*index);
                     }
+                }
+                if queued_transfers > 0 {
+                    ui.colored_label(
+                        theme::muted(ui),
+                        format!("{queued_transfers} Übertragung(en) wartend"),
+                    )
+                    .on_hover_text(format!(
+                        "Bis zu {} Übertragungen laufen gleichzeitig und teilen sich die Bandbreite; weitere starten automatisch.",
+                        super::transfer_jobs::MAX_ACTIVE_TRANSFERS
+                    ));
+                }
+                if (transfers.len() > 1 || queued_transfers > 0)
+                    && ui
+                        .add(egui::Button::new("Alle Übertragungen abbrechen").small())
+                        .clicked()
+                {
+                    self.transfers.cancel_all();
                 }
                 if let Some(p) = &copy {
                     ui_copy_chip(ui, p);
@@ -223,8 +238,6 @@ impl App {
             });
         });
     }
-
-
 }
 
 fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress) {
@@ -298,8 +311,7 @@ fn ui_progress_chip(ui: &mut egui::Ui, text: &str, fraction: Option<f32>) {
             };
             ui.add(bar.desired_width(76.0).desired_height(6.0));
             ui.add(
-                egui::Label::new(RichText::new(text).small().color(theme::muted(ui)))
-                    .truncate(),
+                egui::Label::new(RichText::new(text).small().color(theme::muted(ui))).truncate(),
             )
             .on_hover_text(text);
         },

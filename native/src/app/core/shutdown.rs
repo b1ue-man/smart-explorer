@@ -13,12 +13,9 @@ impl App {
             return Ok(());
         }
 
-        let transfer_worker_active = self
-            .transfer_worker
-            .as_ref()
-            .is_some_and(|worker| !worker.is_finished());
+        let transfer_worker_active = self.transfers.workers_unfinished();
         let must_keep_session_temp = transfer_worker_active
-            || self.upload_rx.is_some()
+            || !self.transfers.is_idle()
             || !self.file_open_rx.is_empty()
             || !self.edit_save_rx.is_empty()
             || self.clip_download_rx.is_some()
@@ -47,14 +44,7 @@ impl App {
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        if let Some(cancel) = self.transfer_cancel.take() {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
-        if let Some(worker) = self.transfer_worker.take() {
-            if worker.is_finished() {
-                let _ = worker.join();
-            }
-        }
+        self.transfers.shutdown();
 
         let index_worker_active = self.index_building;
         if let Some(cancel) = self.index_cancel.take() {

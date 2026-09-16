@@ -159,11 +159,10 @@ impl App {
         }
     }
 
-    /// Copy remote `files` into another remote folder. When source and target
-    /// are the SAME connection (`Arc::ptr_eq`), copy SERVER-LOCALLY through the
-    /// backend (instant with the agent — no down+up through a temp; falls back to
-    /// SFTP streaming on a plain connection). Cross-connection still streams each
-    /// through a temp file. Off the UI thread; reuses the transfer channel.
+    /// Copy remote `files` into another remote folder. Source and target on
+    /// the SAME connection (`Arc::ptr_eq`) copy server-locally through the
+    /// backend when it can; cross-connection copies stream each file through
+    /// a local bridge. Runs as one of several concurrent transfers.
     pub(in crate::app) fn start_remote_to_remote(
         &mut self,
         src: crate::vfs::BackendHandle,
@@ -172,71 +171,17 @@ impl App {
         dest_root: String,
         filter: Option<(FilterDef, String)>,
     ) {
-        if self.upload_rx.is_some() {
-            self.notice = Some((
-                "Es läuft bereits eine Übertragung…".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let n = files.len();
-        let same_server = std::sync::Arc::ptr_eq(&src, &tgt);
-        let (tx, rx) = unbounded();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
-        let spawn = std::thread::Builder::new()
-            .name("remote-to-remote".into())
-            .spawn(move || {
-                copy_remote_paths_progress(
-                    &*src,
-                    &files,
-                    &*tgt,
-                    &dest_root,
-                    same_server,
-                    filter,
-                    &tx,
-                    &worker_cancel,
-                );
-            });
-        match spawn {
-            Ok(worker) => {
-                self.upload_rx = Some(rx);
-                self.transfer_cancel = Some(cancel);
-                self.transfer_worker = Some(worker);
-                self.transfer_progress = Some(TransferProgress::new(
-                    TransferKind::RemoteCopy,
-                    if same_server {
-                        "Kopiere remote"
-                    } else {
-                        "Uebertrage remote"
-                    },
-                    n as u64,
-                    0,
-                ));
-                let how = if same_server {
-                    "Remote→Remote, serverseitig"
-                } else {
-                    "Remote→Remote"
-                };
-                self.notice = Some((
-                    format!("⇄ Übertrage {} Element(e) ({})…", n, how),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(error) => {
-                self.upload_rx = None;
-                self.transfer_progress = None;
-                self.transfer_cancel = None;
-                self.transfer_worker = None;
-                self.error_msg = Some(format!(
-                    "Remote-Übertragung konnte nicht gestartet werden: {error}"
-                ));
-            }
-        }
+        self.submit_transfer(super::transfer_jobs::TransferRequest::RemoteCopy {
+            src,
+            files,
+            tgt,
+            dest_root,
+            filter,
+        });
     }
 
-    /// Download remote `files` into a local folder, off the UI thread (reuses
-    /// the upload result channel for the completion notice).
+    /// Download remote `files` into a local folder as one of several
+    /// concurrent transfers, off the UI thread.
     pub(in crate::app) fn start_remote_download(
         &mut self,
         backend: crate::vfs::BackendHandle,
@@ -244,55 +189,12 @@ impl App {
         dest_local: String,
         filter: Option<(FilterDef, String)>,
     ) {
-        if self.upload_rx.is_some() {
-            self.notice = Some((
-                "Es läuft bereits eine Übertragung…".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let n = files.len();
-        let (tx, rx) = unbounded();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
-        let spawn = std::thread::Builder::new()
-            .name("remote-download-multi".into())
-            .spawn(move || {
-                download_paths_progress(
-                    &*backend,
-                    &files,
-                    &dest_local,
-                    filter,
-                    &tx,
-                    &worker_cancel,
-                );
-            });
-        match spawn {
-            Ok(worker) => {
-                self.upload_rx = Some(rx);
-                self.transfer_cancel = Some(cancel);
-                self.transfer_worker = Some(worker);
-                self.transfer_progress = Some(TransferProgress::new(
-                    TransferKind::Download,
-                    "Lade herunter",
-                    n as u64,
-                    0,
-                ));
-                self.notice = Some((
-                    format!("⬇ Lade {} Element(e) herunter…", n),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(error) => {
-                self.upload_rx = None;
-                self.transfer_progress = None;
-                self.transfer_cancel = None;
-                self.transfer_worker = None;
-                self.error_msg = Some(format!(
-                    "Remote-Download konnte nicht gestartet werden: {error}"
-                ));
-            }
-        }
+        self.submit_transfer(super::transfer_jobs::TransferRequest::Download {
+            backend,
+            files,
+            dest_local,
+            filter,
+        });
     }
 
     /// Drive an active internal file drag each frame: paint a cursor chip,

@@ -87,7 +87,7 @@ impl App {
         self.drain_file_open();
         self.poll_remote_edits();
         self.drain_edit_saves();
-        self.drain_upload();
+        self.drain_transfers();
         self.drain_remote_op();
         self.drain_agent_activate();
         // Fetch the released-versions list once, early, so a newer release is
@@ -189,7 +189,7 @@ impl App {
             || self.index_save_active()
             || self.band_active
             || !self.file_open_rx.is_empty()
-            || self.upload_rx.is_some()
+            || !self.transfers.is_idle()
             || self.remote_op_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
