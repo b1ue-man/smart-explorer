@@ -663,7 +663,7 @@ publish = jobs["publish-release"]
 assert publish.get("needs") == "release-candidate"
 publish_checkout = next(
     step for step in publish.get("steps", [])
-    if step.get("uses") == "actions/checkout@v4"
+    if str(step.get("uses", "")).startswith("actions/checkout@")
 )
 assert publish_checkout.get("with", {}).get("fetch-depth") == 0
 publish_condition = publish.get("if", "")
@@ -680,7 +680,7 @@ assert "POST" in publish_text and "/git/refs" in publish_text
 candidate_steps = jobs["release-candidate"].get("steps", [])
 checkout = next(
     step for step in candidate_steps
-    if step.get("uses") == "actions/checkout@v4"
+    if str(step.get("uses", "")).startswith("actions/checkout@")
 )
 assert checkout.get("with", {}).get("fetch-depth") == 0
 stage = next(
