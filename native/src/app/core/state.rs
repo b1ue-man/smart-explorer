@@ -406,12 +406,9 @@ pub struct App {
     pub(in crate::app) remote_edits: Vec<RemoteEdit>,
     pub(in crate::app) edit_save_rx: Vec<EditSaveTask>,
     pub(in crate::app) last_edit_poll: Instant,
-    /// One visible remote upload, download, or remote-to-remote transfer.
-    pub(in crate::app) upload_rx: Option<Receiver<TransferMsg>>,
-    pub(in crate::app) transfer_progress: Option<TransferProgress>,
-    pub(in crate::app) transfer_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// Joined after a terminal message; detached on exit if a backend call is still blocked.
-    pub(in crate::app) transfer_worker: Option<std::thread::JoinHandle<()>>,
+    /// Remote uploads, downloads and remote-to-remote copies: several run at
+    /// once (each with its own progress and cancellation), the rest queue.
+    pub(in crate::app) transfers: super::transfer_jobs::TransferLane,
     /// In-flight one-shot remote op (new folder, rename, download-to).
     /// Ok(notice)/Err(msg); the worker includes the op context in both.
     pub(in crate::app) remote_op_rx: Option<Receiver<Result<String, String>>>,

@@ -226,14 +226,16 @@ mod tests;
 mod theme;
 #[path = "os/shared/transfer_helpers.rs"]
 mod transfer_helpers;
+#[path = "core/transfer_jobs.rs"]
+mod transfer_jobs;
 #[path = "core/transfer_lifecycle.rs"]
 mod transfer_lifecycle;
 #[path = "core/treemap.rs"]
 mod treemap;
-#[path = "core/view_selection.rs"]
-mod view_selection;
 #[path = "core/ui_preferences.rs"]
 mod ui_preferences;
+#[path = "core/view_selection.rs"]
+mod view_selection;
 #[path = "os/shared/watchers.rs"]
 mod watchers;
 

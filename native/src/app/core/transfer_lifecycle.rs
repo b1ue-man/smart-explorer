@@ -1,50 +1,31 @@
+use super::transfer_jobs::{launch_transfer, FinishedTransfer};
 use super::*;
 
-type TransferCompletion = Result<(TransferProgress, Vec<String>, bool), ()>;
-
 impl App {
-    pub(in crate::app) fn drain_upload(&mut self) {
-        let Some(rx) = self.upload_rx.as_ref() else {
+    /// Collect finished transfers, report each one, start queued requests
+    /// into the freed slots and refresh the remote view once.
+    pub(in crate::app) fn drain_transfers(&mut self) {
+        let finished = self.transfers.poll();
+        if finished.is_empty() {
             return;
-        };
-        let mut done: Option<TransferCompletion> = None;
-        for _ in 0..16 {
-            match rx.try_recv() {
-                Ok(TransferMsg::Progress(progress)) => self.transfer_progress = Some(progress),
-                Ok(TransferMsg::Done {
-                    progress,
-                    errors,
-                    canceled,
-                }) => {
-                    done = Some(Ok((progress, errors, canceled)));
-                    break;
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    done = Some(Err(()));
-                    break;
-                }
-            }
         }
-        let Some(done) = done else {
-            return;
-        };
-        let cancel_requested = self
-            .transfer_cancel
-            .as_ref()
-            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
-        self.upload_rx = None;
-        self.transfer_progress = None;
-        self.transfer_cancel = None;
-        if let Some(worker) = self.transfer_worker.take() {
-            let _ = worker.join();
+        for done in finished {
+            self.report_transfer(done);
         }
-        let Ok((progress, errors, worker_canceled)) = done else {
-            self.error_msg = Some("Übertragungs-Thread wurde ohne Ergebnis beendet.".to_string());
+        if let Err(error) = self.transfers.fill(&mut launch_transfer) {
+            self.error_msg = Some(error);
+        }
+        if self.remote.is_some() && !self.root_path.is_empty() {
             self.rescan();
+        }
+    }
+
+    fn report_transfer(&mut self, done: FinishedTransfer) {
+        let Some((progress, errors, worker_canceled)) = done.outcome else {
+            self.error_msg = Some("Übertragungs-Thread wurde ohne Ergebnis beendet.".to_string());
             return;
         };
-        let canceled = worker_canceled || cancel_requested;
+        let canceled = worker_canceled || done.cancel_requested;
         let incomplete = progress.errors > 0 || progress.files_done < progress.files_total;
         if canceled {
             self.notice = Some((
@@ -78,9 +59,6 @@ impl App {
                 format!("✓ {} übertragen", progress.files_done),
                 std::time::Instant::now(),
             ));
-        }
-        if self.remote.is_some() && !self.root_path.is_empty() {
-            self.rescan();
         }
     }
 }
