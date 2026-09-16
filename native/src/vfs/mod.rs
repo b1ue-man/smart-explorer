@@ -60,7 +60,6 @@ pub use self::delete::{
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
 pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
-pub use self::local_platform::to_os as local_os_path;
 pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 
 #[cfg(test)]
