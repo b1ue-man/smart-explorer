@@ -250,18 +250,27 @@ jq -e --arg room "$room_relation_id" \
   '[.rooms[] | select(.room_id == $room and .name == "Team")] | length == 1' \
   >/dev/null <<<"$status_c"
 
-# Each side exports one folder to the Room only; Direct exports stay untouched.
+# Each side exports one folder to the Room only. A Room inherits the default
+# Direct exports (a fresh profile exports `Home`) when it is created or joined;
+# those inherited roots are removed from the Room scope here, which also proves
+# that Room and Direct export configurations are independent.
 export_c="$client_c/home/room-export"
 export_d="$client_d/home/room-export"
 mkdir -p "$export_c" "$export_d"
-run_client "$client_c" share export add "$export_c" --label RoomDocs --room Team >/dev/null
-run_client "$client_d" share export add "$export_d" --label RoomDocs --room Team >/dev/null
-run_client "$client_c" share worker refresh >/dev/null
-run_client "$client_d" share worker refresh >/dev/null
-room_exports_c="$(run_client "$client_c" share export list --room Team --json)"
-jq -e '.roots | length == 1 and .[0].label == "RoomDocs"' >/dev/null <<<"$room_exports_c"
-direct_exports_c="$(run_client "$client_c" share export list --json)"
-jq -e '.roots | all(.label != "RoomDocs")' >/dev/null <<<"$direct_exports_c"
+for client in "$client_c" "$client_d"; do
+  run_client "$client" share export add "$client/home/room-export" --label RoomDocs --room Team >/dev/null
+  room_exports="$(run_client "$client" share export list --room Team --json)"
+  jq -e '.roots | any(.label == "RoomDocs")' >/dev/null <<<"$room_exports"
+  while IFS= read -r inherited_label; do
+    [[ -n "$inherited_label" ]] || continue
+    run_client "$client" share export remove "$inherited_label" --room Team >/dev/null
+  done < <(jq -r '.roots[] | select(.label != "RoomDocs") | .label' <<<"$room_exports")
+  run_client "$client" share worker refresh >/dev/null
+  room_exports="$(run_client "$client" share export list --room Team --json)"
+  jq -e '.roots | length == 1 and .[0].label == "RoomDocs"' >/dev/null <<<"$room_exports"
+  direct_exports="$(run_client "$client" share export list --json)"
+  jq -e '.roots | all(.label != "RoomDocs")' >/dev/null <<<"$direct_exports"
+done
 room_endpoint_c="share://room/$room_relation_id/$device_c"
 room_endpoint_d="share://room/$room_relation_id/$device_d"
 
