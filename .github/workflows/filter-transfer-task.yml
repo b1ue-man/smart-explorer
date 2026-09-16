@@ -4,8 +4,9 @@ name: filter-transfer-task
 # names / concurrent Share transfers / Room lifecycle batch. Dispatch it once
 # for the exact pushed candidate SHA after implementation ends; it never
 # publishes anything. The Linux job evaluates every portable milestone, the
-# Share end-to-end script (Rooms, concurrent transfers) and the batch gates; the
-# Windows job evaluates the real-filesystem hostile-name cases.
+# Share Room end-to-end script (invite code, file transactions, concurrent
+# transfers) and the batch gates; the Windows job evaluates the real-filesystem
+# hostile-name cases.
 on:
   workflow_dispatch:
     inputs:
@@ -70,11 +71,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 jq python3-yaml
+          sudo apt-get install -y mingw-w64 jq
           x86_64-w64-mingw32-gcc --version | head -n 1
           jq --version
-          pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
-          python3 -c 'import yaml'
 
       - uses: Swatinem/rust-cache@v2
         with:

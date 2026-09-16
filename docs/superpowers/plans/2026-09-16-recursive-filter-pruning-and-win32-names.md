@@ -64,7 +64,8 @@
   transfer slot (`upload_rx`/`transfer_*` in `app/core/state.rs`, guarded by
   "Es läuft bereits eine Übertragung").
 - `native/test-share-lifecycle-e2e.sh` drives four CLI clients against a local
-  Share server but never touched Rooms; `se share room create`,
+  Share server but never touched Rooms (and its Direct inbox expectations
+  predate automatic request decisions, so it cannot host new coverage); `se share room create`,
   `se connections add-room --code`, `se share export add --room` and
   `share://room/<room>/<device>/…` targets exist in the CLI.
 
@@ -95,7 +96,7 @@
 | M6 | App: pruned scans, restart rule, labels | `app/core/{state,app_models,init,prefs_tabs,landing,scanning,drains_connect,filterbar,omni_accel,shell_commands,view_selection}.rs`, new `app/core/filter_scope.rs` | Recursive scans pass the active filter as retention; refresh keeps the name filter; filter edits call `filter_changed` (restart vs. refilter); truncated flag captured at Done; counter shows "Treffer / durchsucht" while pruned; tree mode shows a directory that itself matches. |
 | M7 | Delete and rename hostile names | new `app/core/delete_hostile_names.rs`, `app/core/{delete_actions,delete_lifecycle,delete_drain}.rs`, `app/os/{windows.rs,linux_os.rs}`, `app/os/shared/file_actions.rs`, `app/core/table.rs` | Papierkorb renames a hostile-named local target to a safe unique sibling first and reports the count; endgültig löschen works through M5; renaming *to* a hostile name is refused on Windows; hostile local names are painted in the warning color. |
 | M9 | Concurrent remote transfers | new `app/core/transfer_jobs.rs`, `app/core/{transfer_lifecycle,state,init,frame_update,shutdown,status_errors}.rs`, `app/os/shared/{clipboard_upload,drag_drop,copy_paste_task_tests}.rs` | Uploads, downloads and remote-to-remote copies are admitted into a lane of up to six concurrent workers with a FIFO queue; each has its own progress and cancel, the status bar lists them and the queue depth; finished transfers refresh the remote view once; the lane's admission, queueing, lost-worker reporting and shutdown are unit-tested. |
-| M10 | Room lifecycle end to end | `native/test-share-lifecycle-e2e.sh` (Room section) | With the local Share server: C creates a Room (`se share room create`), D joins with the printed code, both see one member; Room-only exports; `ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/`search`/`rm` over `share://room/<room>/<device>/…`; three concurrent downloads across both directions complete byte-exact; after `remove-room` neither side reaches the other's Room export. |
+| M10 | Room lifecycle end to end | new `native/test-share-room-e2e.sh` (standalone; the Direct part of `test-share-lifecycle-e2e.sh` is stale against auto-accepted requests, see `docs/TODO.md` H1) | With the local Share server: C creates a Room (`se share room create`), D joins with the printed code, both see one member; Room-only exports; `ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/`search`/`rm` over `share://room/<room>/<device>/…`; three concurrent downloads across both directions complete byte-exact; after `remove-room` neither side reaches the other's Room export. |
 | M8 | Suite, docs, graph | `native/test-filter-transfer-task.sh`, `.github/workflows/filter-transfer-task.yml`, `README.md`, `docs/TODO.md`, `docs/GOTCHAS.md`, `graphify-out/` | One dispatch runs the Linux job (all `recursive_filter_task_` tests, affected integrations, the Share E2E incl. Rooms, per-file rustfmt, clippy on host and Windows target) and the Windows job (the same tests plus the `#[cfg(windows)]` real-file cases). |
 
 ## Second research pass / resolved gaps
