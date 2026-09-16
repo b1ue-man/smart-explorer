@@ -64,7 +64,7 @@ pub enum TextMode {
     Glob,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Range<T> {
     pub min: Option<T>,
     pub max: Option<T>,
@@ -79,7 +79,7 @@ impl<T> Default for Range<T> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FilterDef {
     pub text: String,
     pub text_mode: TextMode,
@@ -92,6 +92,10 @@ pub struct FilterDef {
     pub include_dirs: bool,
     pub include_hidden: bool,
     pub include_system: bool,
+    /// Keep only entries whose name Win32 cannot address through an ordinary
+    /// path (see `win32_name_issue`): reserved device names such as `NUL`,
+    /// trailing dots or spaces, characters Win32 rejects.
+    pub problem_names_only: bool,
 }
 
 impl FilterDef {

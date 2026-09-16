@@ -1,6 +1,10 @@
 //! Behavioral and visual acceptance through real egui frames on the task runner.
-use super::{gui_design_task_capture::Capture, settings_ui::SettingsPage,
-    ui_preferences::{Appearance, ColorMode, UiState}, App};
+use super::{
+    gui_design_task_capture::Capture,
+    settings_ui::SettingsPage,
+    ui_preferences::{Appearance, ColorMode, UiState},
+    App,
+};
 use crate::types::{FileEntry, SortKey};
 use eframe::egui;
 use std::path::PathBuf;
@@ -28,7 +32,14 @@ impl Harness {
         app.share_discovery.initial_refresh_requested = true;
         app.share_profiles.auto_connect = false;
         app.share_status = "Bereit · keine aktive Verbindung".into();
-        app.appearance = Appearance { mode: if dark { ColorMode::Dark } else { ColorMode::Light }, ..Default::default() };
+        app.appearance = Appearance {
+            mode: if dark {
+                ColorMode::Dark
+            } else {
+                ColorMode::Light
+            },
+            ..Default::default()
+        };
         app.home = fixture.path().to_path_buf();
         app.drive_info = vec![("Daten".into(), 300_000_000_000, 1_000_000_000_000)];
         app.favorites = vec!["/Projekte".into(), "/Dokumente".into()];
@@ -39,20 +50,52 @@ impl Harness {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         app.configure_appearance(&ctx);
-        Self { app, ctx, capture: Capture::default(), size: size.into(), time: 0.0, hover_file: false, fixture }
+        Self {
+            app,
+            ctx,
+            capture: Capture::default(),
+            size: size.into(),
+            time: 0.0,
+            hover_file: false,
+            fixture,
+        }
     }
 
     fn workspace(&mut self) {
-        self.app.root_path = self.fixture.path().join("Projekte").to_string_lossy().into_owned();
+        self.app.root_path = self
+            .fixture
+            .path()
+            .join("Projekte")
+            .to_string_lossy()
+            .into_owned();
         self.app.entries = [
-            ("Ablage", "", true, 0), ("Bericht.md", "md", false, 24_576),
-            ("Daten.csv", "csv", false, 128_000), ("Entwurf mit einem längeren Dateinamen.txt", "txt", false, 4096),
-        ].into_iter().map(|(name, ext, is_dir, size)| FileEntry {
+            ("Ablage", "", true, 0),
+            ("Bericht.md", "md", false, 24_576),
+            ("Daten.csv", "csv", false, 128_000),
+            (
+                "Entwurf mit einem längeren Dateinamen.txt",
+                "txt",
+                false,
+                4096,
+            ),
+        ]
+        .into_iter()
+        .map(|(name, ext, is_dir, size)| FileEntry {
             path: format!("{}/{name}", self.app.root_path).into(),
-            parent: self.app.root_path.clone().into(), name: name.into(), ext: ext.into(),
-            size, mtime_ms: 1_700_000_000_000, btime_ms: 1_699_000_000_000,
-            is_dir, is_symlink: false, hidden: false, system: false, depth: 1, id: None,
-        }).collect();
+            parent: self.app.root_path.clone().into(),
+            name: name.into(),
+            ext: ext.into(),
+            size,
+            mtime_ms: 1_700_000_000_000,
+            btime_ms: 1_699_000_000_000,
+            is_dir,
+            is_symlink: false,
+            hidden: false,
+            system: false,
+            depth: 1,
+            id: None,
+        })
+        .collect();
         self.app.progress.scanned = self.app.entries.len() as u64 + 1;
         self.app.progress.bytes = self.app.entries.iter().map(|entry| entry.size).sum();
         self.app.recursive = false;
@@ -62,13 +105,24 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
         self.time += 0.2;
-        let modifiers = events.iter().find_map(|event| match event {
-            egui::Event::Key { modifiers, .. } => Some(*modifiers), _ => None,
-        }).unwrap_or_default();
+        let modifiers = events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
-            time: Some(self.time), events, modifiers, focused: true,
-            hovered_files: if self.hover_file { vec![egui::HoveredFile::default()] } else { Vec::new() },
+            time: Some(self.time),
+            events,
+            modifiers,
+            focused: true,
+            hovered_files: if self.hover_file {
+                vec![egui::HoveredFile::default()]
+            } else {
+                Vec::new()
+            },
             ..Default::default()
         };
         let app = &mut self.app;
@@ -90,9 +144,15 @@ impl Harness {
         let pos = self.capture.target(label);
         let mut copied = String::new();
         for pressed in [true, false] {
-            let output = self.frame(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
-                pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
-            }]);
+            let output = self.frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
             if !output.platform_output.copied_text.is_empty() {
                 copied = output.platform_output.copied_text;
             }
@@ -106,10 +166,20 @@ impl Harness {
     }
 
     fn key_with_modifiers(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
-        self.frame(vec![egui::Event::Key { key, physical_key: None, pressed: true,
-            repeat: false, modifiers }]);
-        self.frame(vec![egui::Event::Key { key, physical_key: None, pressed: false,
-            repeat: false, modifiers }]);
+        self.frame(vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]);
+        self.frame(vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers,
+        }]);
     }
 
     fn save(&mut self, name: &str) {
@@ -119,19 +189,30 @@ impl Harness {
             for layer in memory.areas().visible_layer_ids() {
                 if layer.order == egui::Order::Middle {
                     if let Some(rect) = memory.area_rect(layer.id) {
-                        assert!(screen.contains_rect(rect), "{name}: window {layer:?} outside viewport: {rect:?}");
+                        assert!(
+                            screen.contains_rect(rect),
+                            "{name}: window {layer:?} outside viewport: {rect:?}"
+                        );
                     }
                 }
             }
         });
         let directory = PathBuf::from(std::env::var("SMART_EXPLORER_GUI_VISUALS").unwrap());
         std::fs::create_dir_all(&directory).unwrap();
-        self.capture.save(&self.ctx, output, &directory.join(format!("{name}.json")), self.size);
+        self.capture.save(
+            &self.ctx,
+            output,
+            &directory.join(format!("{name}.json")),
+            self.size,
+        );
     }
 
     fn assert_visible(&self, label: &str) {
         let position = self.capture.target(label);
-        assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size).contains(position), "{label} outside window");
+        assert!(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, self.size).contains(position),
+            "{label} outside window"
+        );
     }
 }
 
@@ -144,30 +225,74 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             let mut h = Harness::new(dark, size);
             h.workspace();
             h.save(&format!("workspace-{name}-{mode}"));
-            for label in ["Neu", "Verbindung", "Sync", "Ansicht", "Einstellungen", "Filter & Suche", "»", "Bericht.md"] {
+            for label in [
+                "Neu",
+                "Verbindung",
+                "Sync",
+                "Ansicht",
+                "Einstellungen",
+                "Filter & Suche",
+                "»",
+                "Bericht.md",
+            ] {
                 h.assert_visible(label);
             }
             assert!(!h.capture.contains("Erstellt") && !h.capture.contains("Tiefe"));
             assert!(!h.capture.contains("Dateien suchen…"));
-            let sidebar_labels: Vec<_> = ["Persönlicher Ordner", "Desktop", "Dokumente", "Downloads", "Bilder", "Musik", "Videos"]
-                .iter().map(|label| h.capture.labels.iter().rev()
-                    .find(|(text, rect, clip)| text == label && rect.left() < 190.0 && clip.contains(rect.center()))
-                    .unwrap().1.left()).collect();
-            assert!(sidebar_labels.iter().all(|left| (left - sidebar_labels[0]).abs() < 1.0),
-                "sidebar labels are not aligned: {sidebar_labels:?}");
-            assert!(h.capture.target("Bericht.md").y < 160.0, "toolbar crowds the file list");
+            let sidebar_labels: Vec<_> = [
+                "Persönlicher Ordner",
+                "Desktop",
+                "Dokumente",
+                "Downloads",
+                "Bilder",
+                "Musik",
+                "Videos",
+            ]
+            .iter()
+            .map(|label| {
+                h.capture
+                    .labels
+                    .iter()
+                    .rev()
+                    .find(|(text, rect, clip)| {
+                        text == label && rect.left() < 190.0 && clip.contains(rect.center())
+                    })
+                    .unwrap()
+                    .1
+                    .left()
+            })
+            .collect();
+            assert!(
+                sidebar_labels
+                    .iter()
+                    .all(|left| (left - sidebar_labels[0]).abs() < 1.0),
+                "sidebar labels are not aligned: {sidebar_labels:?}"
+            );
+            assert!(
+                h.capture.target("Bericht.md").y < 160.0,
+                "toolbar crowds the file list"
+            );
             let command_y = h.capture.target("Verbindung").y;
             for label in ["◀", "↑", "Neu", "Sync", "Einstellungen", "Ansicht", "»"] {
-                assert!((h.capture.target(label).y - command_y).abs() < 3.0, "{label} left the toolbar row");
+                assert!(
+                    (h.capture.target(label).y - command_y).abs() < 3.0,
+                    "{label} left the toolbar row"
+                );
             }
             h.click("Bericht.md");
             h.click("»");
             h.assert_visible("Kopieren   Ctrl+C");
-            if name == "minimum" { h.assert_visible("Share-Server"); }
+            if name == "minimum" {
+                h.assert_visible("Share-Server");
+            }
             h.key(egui::Key::Escape);
             h.settle();
             assert!(!h.capture.contains("Kopieren   Ctrl+C"));
-            assert_eq!(h.app.selection.len(), 1, "closing a menu cleared the selection");
+            assert_eq!(
+                h.app.selection.len(),
+                1,
+                "closing a menu cleared the selection"
+            );
             h.click("Bericht.md");
             assert_eq!(h.app.selection.len(), 1);
             assert!(h.app.selection.contains(&h.app.entries[1].key()));
@@ -185,7 +310,9 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
             h.settle();
             assert_eq!(h.app.view.len(), 1);
             h.assert_visible("Filter & Suche · aktiv");
-            assert!((h.capture.target("Zurücksetzen").y - h.capture.target("enthält").y).abs() < 3.0);
+            assert!(
+                (h.capture.target("Zurücksetzen").y - h.capture.target("enthält").y).abs() < 3.0
+            );
             h.save(&format!("filters-{name}-{mode}"));
             h.click("Filter & Suche · aktiv");
             assert!(!h.app.show_filters);
@@ -228,15 +355,24 @@ fn gui_design_task_settings_persistence_shortcut_guard_and_dialogs() {
         assert!(h.app.settings.open);
         h.assert_visible("Darstellung");
         h.click(if dark { "Hell" } else { "Dunkel" });
-        assert_eq!(UiState::load().appearance.mode, if dark { ColorMode::Light } else { ColorMode::Dark });
+        assert_eq!(
+            UiState::load().appearance.mode,
+            if dark {
+                ColorMode::Light
+            } else {
+                ColorMode::Dark
+            }
+        );
         h.key(egui::Key::Delete);
         assert!(h.app.trash_worker.is_none() && h.app.trash_rx.is_none());
         assert_eq!(h.app.selection.len(), 1);
         h.click(if dark { "Dunkel" } else { "Hell" });
         h.save(&format!("settings-{mode}"));
         for (page, name) in [
-            (SettingsPage::Connections, "connections"), (SettingsPage::Updates, "updates"),
-            (SettingsPage::Storage, "storage"), (SettingsPage::Integration, "integration"),
+            (SettingsPage::Connections, "connections"),
+            (SettingsPage::Updates, "updates"),
+            (SettingsPage::Storage, "storage"),
+            (SettingsPage::Integration, "integration"),
         ] {
             h.app.settings.page = page;
             h.save(&format!("settings-{name}-{mode}"));
@@ -274,16 +410,27 @@ fn gui_design_task_start_page_and_chart_visuals() {
         h.assert_visible("Laufwerke");
         h.save(&format!("start-drives-{mode}"));
         let meta = h.capture.target("Laufwerk");
-        let meter = h.capture.target(&format!("{} belegt", crate::format::format_bytes(700_000_000_000)));
+        let meter = h.capture.target(&format!(
+            "{} belegt",
+            crate::format::format_bytes(700_000_000_000)
+        ));
         assert!(meter.y > meta.y + 15.0, "capacity label overlaps metadata");
         h.workspace();
         h.app.show_analytics = true;
         h.app.analytics_tree = Some(crate::analytics::SizeNode {
-            name: "Projekte".into(), size: 100_000, is_dir: true,
-            children: super::treemap::TM_PALETTE.iter().enumerate().map(|(index, _)| {
-                crate::analytics::SizeNode { name: format!("Datei {index}").into(), size: 10_000,
-                    is_dir: false, children: Vec::new() }
-            }).collect(),
+            name: "Projekte".into(),
+            size: 100_000,
+            is_dir: true,
+            children: super::treemap::TM_PALETTE
+                .iter()
+                .enumerate()
+                .map(|(index, _)| crate::analytics::SizeNode {
+                    name: format!("Datei {index}").into(),
+                    size: 10_000,
+                    is_dir: false,
+                    children: Vec::new(),
+                })
+                .collect(),
         });
         h.save(&format!("analytics-{mode}"));
     }
@@ -297,37 +444,66 @@ fn gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard(
     for dark in [false, true] {
         let mode = if dark { "dark" } else { "light" };
         let mut h = Harness::new(dark, [900.0, 600.0]);
-        let fixture = Fixture::new(vec![step("GET", "/drive/v3/files", Reply::HttpError(403,
-            serde_json::json!({"error": {"message": "Zugriff auf diesen Ordner verweigert",
-                "errors": [{"reason": "insufficientFilePermissions"}]}})))]);
+        let fixture = Fixture::new(vec![step(
+            "GET",
+            "/drive/v3/files",
+            Reply::HttpError(
+                403,
+                serde_json::json!({"error": {"message": "Zugriff auf diesen Ordner verweigert",
+                "errors": [{"reason": "insufficientFilePermissions"}]}}),
+            ),
+        )]);
         let backend: crate::vfs::BackendHandle = std::sync::Arc::new(fixture.backend());
         h.app.root_path = "/".into();
         h.app.remote = Some(crate::connect::RemoteState {
-            backend: backend.clone(), label: "Google Drive".into(), agent_version: None,
-            zip_return: None, sftp: None, account: None, endpoint_prefix: Some("gdrive://".into()),
+            backend: backend.clone(),
+            label: "Google Drive".into(),
+            agent_version: None,
+            zip_return: None,
+            sftp: None,
+            account: None,
+            endpoint_prefix: Some("gdrive://".into()),
         });
         let (tx, rx) = crossbeam_channel::unbounded();
-        let handle = crate::rscan::start_scan_backend(backend, "/".into(), None, tx);
+        let handle = crate::rscan::start_scan_backend(backend, "/".into(), None, None, tx);
         let (tx, collected) = crossbeam_channel::unbounded();
         loop {
             let message = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
             let done = matches!(message, ScanMessage::Done(_));
             tx.send(message).unwrap();
-            if done { break; }
+            if done {
+                break;
+            }
         }
-        handle.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        handle
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         let app = &mut h.app;
-        let (_, done) = super::drain_scan_channel(&collected, &mut app.entries,
-            &mut app.progress, &mut app.failed_paths, &mut app.error_msg);
+        let (_, done) = super::drain_scan_channel(
+            &collected,
+            &mut app.entries,
+            &mut app.progress,
+            &mut app.failed_paths,
+            &mut app.error_msg,
+        );
         assert!(done);
         assert_eq!(app.progress.errors, 1);
         assert_eq!(app.failed_paths.len(), 1);
         assert_eq!(app.failed_paths[0].0, "/");
-        assert!(app.error_msg.is_none(), "ordinary listing errors belong to failed paths");
+        assert!(
+            app.error_msg.is_none(),
+            "ordinary listing errors belong to failed paths"
+        );
         fixture.finish();
         let report = app.error_log_text();
-        for text in [env!("CARGO_PKG_VERSION"), "Scan-Quelle: Google Drive", "Scan-Wurzel: /",
-            "Pfad: /", "Ursache: list_dir: HTTP 403", "insufficientFilePermissions"] {
+        for text in [
+            env!("CARGO_PKG_VERSION"),
+            "Scan-Quelle: Google Drive",
+            "Scan-Wurzel: /",
+            "Pfad: /",
+            "Ursache: list_dir: HTTP 403",
+            "insufficientFilePermissions",
+        ] {
             assert!(report.contains(text), "missing {text}: {report}");
         }
         app.show_errors_dialog = true;
@@ -337,10 +513,17 @@ fn gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard(
         // The viewport shows a bounded read-only slice; copying keeps every
         // path/cause, including the final line and explicitly missing details.
         for index in 1..=80 {
-            h.app.failed_paths.push((format!("/Ordner {index}/Langer Pfad zur I/O-Diagnose"),
-                format!("Fehler {index}: {}", "Ausführliche Ursache mit Umlauten äöü. ".repeat(6))));
+            h.app.failed_paths.push((
+                format!("/Ordner {index}/Langer Pfad zur I/O-Diagnose"),
+                format!(
+                    "Fehler {index}: {}",
+                    "Ausführliche Ursache mit Umlauten äöü. ".repeat(6)
+                ),
+            ));
         }
-        h.app.failed_paths.push(("/ohne Fehlertext".into(), String::new()));
+        h.app
+            .failed_paths
+            .push(("/ohne Fehlertext".into(), String::new()));
         h.app.progress.errors = 100;
         h.app.error_msg = Some("Zusätzlicher App-Fehler".into());
         h.app.capture_current_error();

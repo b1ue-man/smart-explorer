@@ -9,10 +9,10 @@ mod analytics_window;
 pub(crate) use analytics_window::run_analysis_window;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
-#[path = "core/analytics_ui.rs"]
-mod analytics_ui;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
+#[path = "core/analytics_ui.rs"]
+mod analytics_ui;
 #[path = "core/app_models.rs"]
 mod app_models;
 #[path = "core/bisync_conflict_ui.rs"]
@@ -51,6 +51,8 @@ mod copy_job;
 mod delete_actions;
 #[path = "core/delete_drain.rs"]
 mod delete_drain;
+#[path = "core/delete_hostile_names.rs"]
+mod delete_hostile_names;
 #[path = "core/delete_lifecycle.rs"]
 mod delete_lifecycle;
 #[path = "core/delete_status.rs"]
@@ -65,6 +67,8 @@ mod drag_drop;
 mod drains_connect;
 #[path = "os/shared/file_actions.rs"]
 mod file_actions;
+#[path = "core/filter_scope.rs"]
+mod filter_scope;
 #[path = "core/filterbar.rs"]
 mod filterbar;
 #[path = "core/frame_keyboard.rs"]
@@ -91,14 +95,6 @@ mod landing_tiles;
 mod location_labels;
 #[path = "core/menus_settings.rs"]
 mod menus_settings;
-#[path = "core/settings_ui.rs"]
-mod settings_ui;
-#[path = "core/settings_cloud.rs"]
-mod settings_cloud;
-#[path = "core/settings_updates.rs"]
-mod settings_updates;
-#[path = "core/settings_background.rs"]
-mod settings_background;
 #[path = "core/menus_sync.rs"]
 mod menus_sync;
 #[path = "core/menus_sync_jobs.rs"]
@@ -131,10 +127,33 @@ mod platform_helpers;
 #[cfg(not(windows))]
 #[path = "os/linux_os.rs"]
 mod platform_helpers;
+#[path = "core/settings_background.rs"]
+mod settings_background;
+#[path = "core/settings_cloud.rs"]
+mod settings_cloud;
+#[path = "core/settings_ui.rs"]
+mod settings_ui;
+#[path = "core/settings_updates.rs"]
+mod settings_updates;
 #[cfg(windows)]
 const OPEN_WITH_CHOOSER_SUPPORTED: bool = true;
 #[cfg(not(windows))]
 const OPEN_WITH_CHOOSER_SUPPORTED: bool = false;
+#[path = "core/error_log_ui.rs"]
+mod error_log_ui;
+#[path = "core/error_report.rs"]
+mod error_report;
+#[cfg(test)]
+#[path = "core/gui_design_task_capture.rs"]
+mod gui_design_task_capture;
+#[cfg(test)]
+#[path = "core/gui_design_task_tests.rs"]
+mod gui_design_task_tests;
+#[cfg(test)]
+#[path = "core/gui_design_task_ui.rs"]
+mod gui_design_task_ui;
+#[path = "core/navigation_path.rs"]
+mod navigation_path;
 #[path = "core/prefs_tabs.rs"]
 mod prefs_tabs;
 #[path = "core/prelude.rs"]
@@ -172,12 +191,10 @@ mod share_exec_ui;
 #[cfg(test)]
 #[path = "core/share_remote_task_tests.rs"]
 mod share_remote_task_tests;
-#[path = "core/shell_toolbar.rs"]
-mod shell_toolbar;
 #[path = "core/shell_commands.rs"]
 mod shell_commands;
-#[path = "core/navigation_path.rs"]
-mod navigation_path;
+#[path = "core/shell_toolbar.rs"]
+mod shell_toolbar;
 #[path = "core/shutdown.rs"]
 mod shutdown;
 #[path = "core/sidebar.rs"]
@@ -186,25 +203,8 @@ mod sidebar;
 mod sidebar_locations;
 #[path = "core/state.rs"]
 mod state;
-#[path = "core/theme.rs"]
-mod theme;
-#[path = "core/ui_preferences.rs"]
-mod ui_preferences;
-#[cfg(test)]
-#[path = "core/gui_design_task_tests.rs"]
-mod gui_design_task_tests;
-#[cfg(test)]
-#[path = "core/gui_design_task_ui.rs"]
-mod gui_design_task_ui;
-#[cfg(test)]
-#[path = "core/gui_design_task_capture.rs"]
-mod gui_design_task_capture;
 #[path = "core/status_errors.rs"]
 mod status_errors;
-#[path = "core/error_report.rs"]
-mod error_report;
-#[path = "core/error_log_ui.rs"]
-mod error_log_ui;
 #[path = "core/support_paths.rs"]
 mod support_paths;
 #[path = "core/sync_core.rs"]
@@ -222,6 +222,8 @@ mod temp_recovery_ui;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[path = "core/theme.rs"]
+mod theme;
 #[path = "os/shared/transfer_helpers.rs"]
 mod transfer_helpers;
 #[path = "core/transfer_lifecycle.rs"]
@@ -230,6 +232,8 @@ mod transfer_lifecycle;
 mod treemap;
 #[path = "core/view_selection.rs"]
 mod view_selection;
+#[path = "core/ui_preferences.rs"]
+mod ui_preferences;
 #[path = "os/shared/watchers.rs"]
 mod watchers;
 

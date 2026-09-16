@@ -10,6 +10,8 @@ impl App {
         self.scan_rx = None;
         self.scan_running = false;
         self.scan_was_canceled = false;
+        self.scan_retention = None;
+        self.scan_truncated = false;
         self.root_path.clear();
         self.entries = Vec::new();
         self.view = Vec::new();
@@ -131,10 +133,30 @@ impl App {
 
     fn landing_action_tiles(&self) -> Vec<LandingTile> {
         vec![
-            LandingTile::action("Ordner öffnen", "Lokalen Ordner auswählen", "", LandingAction::ChooseFolder),
-            LandingTile::action("Neue Verbindung", "SFTP, FTP oder WebDAV", "", LandingAction::NewConnection),
-            LandingTile::action("Sync-Jobs", "Jobs verwalten, starten und vergleichen", "", LandingAction::ShowSyncJobs),
-            LandingTile::action("Share-Server", "Geräte und Freigaben verwalten", "", LandingAction::ShowShare),
+            LandingTile::action(
+                "Ordner öffnen",
+                "Lokalen Ordner auswählen",
+                "",
+                LandingAction::ChooseFolder,
+            ),
+            LandingTile::action(
+                "Neue Verbindung",
+                "SFTP, FTP oder WebDAV",
+                "",
+                LandingAction::NewConnection,
+            ),
+            LandingTile::action(
+                "Sync-Jobs",
+                "Jobs verwalten, starten und vergleichen",
+                "",
+                LandingAction::ShowSyncJobs,
+            ),
+            LandingTile::action(
+                "Share-Server",
+                "Geräte und Freigaben verwalten",
+                "",
+                LandingAction::ShowShare,
+            ),
         ]
     }
 
@@ -150,15 +172,23 @@ impl App {
         for (paths, category) in [(favorites, "Favorit"), (recent, "Zuletzt geöffnet")] {
             for path in paths {
                 if seen.insert(path.clone()) {
-                    tiles.push(LandingTile::action(self.location_label(path), path, category,
-                        LandingAction::OpenLocation(path.clone())));
+                    tiles.push(LandingTile::action(
+                        self.location_label(path),
+                        path,
+                        category,
+                        LandingAction::OpenLocation(path.clone()),
+                    ));
                 }
             }
         }
         for (label, path) in common {
             if seen.insert(path.clone()) {
-                tiles.push(LandingTile::action(label, path, "",
-                    LandingAction::OpenLocation(path.clone())));
+                tiles.push(LandingTile::action(
+                    label,
+                    path,
+                    "",
+                    LandingAction::OpenLocation(path.clone()),
+                ));
             }
         }
         for (drive, free, total) in drives {
@@ -186,7 +216,10 @@ impl App {
             tiles.push(tile);
         }
         if tiles.is_empty() {
-            tiles.push(LandingTile::status("Keine Orte", "Noch keine Ordner geöffnet"));
+            tiles.push(LandingTile::status(
+                "Keine Orte",
+                "Noch keine Ordner geöffnet",
+            ));
         }
         tiles
     }

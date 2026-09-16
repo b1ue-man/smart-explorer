@@ -107,10 +107,14 @@ impl App {
                 first
             ));
         } else if !outcome.canceled {
-            self.notice = Some((
-                outcome.kind.success_text(outcome.succeeded),
-                std::time::Instant::now(),
-            ));
+            let mut text = outcome.kind.success_text(outcome.succeeded);
+            if outcome.renamed_before_recycle > 0 {
+                text.push_str(&format!(
+                    " · {} vorher umbenannt (Windows-Name)",
+                    outcome.renamed_before_recycle
+                ));
+            }
+            self.notice = Some((text, std::time::Instant::now()));
         }
     }
 

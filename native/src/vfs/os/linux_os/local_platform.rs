@@ -9,6 +9,7 @@ pub(crate) fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// The OS path for a forward-slash VFS path; Unix names need no rewriting.
 pub(crate) fn to_os(path: &str) -> PathBuf {
     PathBuf::from(path)
 }

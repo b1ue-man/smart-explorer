@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::*;
+use crate::app::delete_hostile_names::{recycle_local_target, RecycleRoute};
 use crate::app::delete_worker::DeleteReporter;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -142,6 +143,7 @@ impl App {
             return;
         }
         let attempted = targets.len();
+        let win32_rules = local_names_follow_win32_rules();
         let (tx, rx) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
@@ -163,17 +165,19 @@ impl App {
                         break;
                     }
                     outcome.entries_planned = outcome.entries_planned.saturating_add(1);
-                    let native =
-                        PathBuf::from(target.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-                    match trash::delete(&native) {
-                        Ok(()) => {
+                    match recycle_local_target(&target, win32_rules) {
+                        Ok(route) => {
+                            if matches!(route, RecycleRoute::RenamedFirst) {
+                                outcome.renamed_before_recycle =
+                                    outcome.renamed_before_recycle.saturating_add(1);
+                            }
                             outcome.entries_deleted = outcome.entries_deleted.saturating_add(1);
                             outcome.record_success(target.path);
                             reporter.finish_target(true, true);
                         }
                         Err(error) => {
                             outcome.partial_mutation = true;
-                            outcome.record_error(target.path, error.to_string());
+                            outcome.record_error(target.path, error);
                             reporter.finish_target(false, false);
                         }
                     }

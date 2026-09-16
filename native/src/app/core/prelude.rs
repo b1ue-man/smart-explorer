@@ -4,7 +4,7 @@ pub(in crate::app) use crate::copy::{
 pub(in crate::app) use crate::filter::{parse_size_input, CompiledFilter};
 pub(in crate::app) use crate::folder_index::{FolderIndex, IndexMsg};
 pub(in crate::app) use crate::format::{compare_entries, format_bytes, format_date};
-pub(in crate::app) use crate::scanner::{start_scan, ScanHandle, ScanMessage};
+pub(in crate::app) use crate::scanner::{start_scan, ScanHandle, ScanMessage, ScanOpts};
 pub(in crate::app) use crate::types::*;
 pub(in crate::app) use crossbeam_channel::{unbounded, Receiver};
 pub(in crate::app) use eframe::egui::{self, Color32, RichText};

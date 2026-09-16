@@ -24,6 +24,12 @@ pub(crate) fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
     file_attributes(meta) & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+/// The OS path for a forward-slash VFS path. A bare drive (`C:`) means its
+/// root. When a component is one Win32 name resolution would not address
+/// literally (a reserved device name such as `NUL`, a trailing dot or space,
+/// a rejected character), the result is the verbatim `\\?\` form so every
+/// `std::fs` call reaches the stored entry instead of the device or a
+/// stripped name; ordinary paths keep their plain spelling.
 pub(crate) fn to_os(path: &str) -> PathBuf {
     let b = path.as_bytes();
     let rooted;
@@ -33,7 +39,11 @@ pub(crate) fn to_os(path: &str) -> PathBuf {
     } else {
         path
     };
-    PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+    let native = path.replace('/', std::path::MAIN_SEPARATOR_STR);
+    match super::verbatim::verbatim_if_hostile(&native) {
+        Some(verbatim) => PathBuf::from(verbatim),
+        None => PathBuf::from(native),
+    }
 }
 
 /// Return the name stored by the filesystem rather than the spelling used to

@@ -48,6 +48,11 @@ pub struct App {
     pub(in crate::app) scan_handle: Option<ScanHandle>,
     pub(in crate::app) progress: ScanProgress,
     pub(in crate::app) scan_was_canceled: bool,
+    /// The filter the current recursive listing was pruned with at scan
+    /// time (`None` = every visited entry was retained).
+    pub(in crate::app) scan_retention: Option<FilterDef>,
+    /// The last scan stopped at the bounded budget before visiting everything.
+    pub(in crate::app) scan_truncated: bool,
 
     pub(in crate::app) filter: FilterDef,
     pub(in crate::app) sort_key: SortKey,

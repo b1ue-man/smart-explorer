@@ -17,8 +17,12 @@ impl App {
             &mut self.error_msg,
         );
         if got_done {
-            self.scan_handle = None;
+            let truncated = self
+                .scan_handle
+                .take()
+                .is_some_and(|handle| handle.truncated.load(std::sync::atomic::Ordering::Relaxed));
             self.scan_running = false;
+            self.note_scan_finished(truncated);
             self.recompute_view();
         } else {
             self.scan_rx = Some(rx);
@@ -46,7 +50,9 @@ impl App {
                     &mut err,
                 );
                 if got_done {
-                    t.scan_handle = None;
+                    t.scan_truncated = t.scan_handle.take().is_some_and(|handle| {
+                        handle.truncated.load(std::sync::atomic::Ordering::Relaxed)
+                    });
                     t.scan_running = false;
                     t.view_dirty = true;
                 } else {

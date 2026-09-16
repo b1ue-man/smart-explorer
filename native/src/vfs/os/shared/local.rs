@@ -83,7 +83,10 @@ impl Backend for LocalBackend {
                 Err(error) => return Err(error),
             };
             let name = unicode_name(&entry.file_name())?;
-            let meta = match std::fs::symlink_metadata(entry.path()) {
+            // The enumeration record carries the entry's own (non-following)
+            // metadata. Re-opening the joined path would let Win32 resolve a
+            // reserved name such as `NUL` to the device instead of the file.
+            let meta = match entry.metadata() {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),

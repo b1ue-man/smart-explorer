@@ -7,6 +7,15 @@ impl App {
     }
 
     pub(in crate::app) fn start_scan_navigated(&mut self, root: PathBuf, record_history: bool) {
+        self.start_scan_with(root, record_history, false);
+    }
+
+    /// Start listing `root`. A refresh of the current folder keeps the typed
+    /// name filter (`keep_name_filter`); navigating elsewhere clears it so the
+    /// new folder is fully visible. Type/size/date filters are kept either
+    /// way. In recursive mode an active filter prunes the scan (see
+    /// `scan_scope`).
+    fn start_scan_with(&mut self, root: PathBuf, record_history: bool, keep_name_filter: bool) {
         if let Some(h) = self.scan_handle.take() {
             h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -35,12 +44,14 @@ impl App {
         self.band_active = false;
         // Opening a folder clears the NAME search so the new folder is fully
         // visible; other filters (type/size/date/ext) are kept on purpose.
-        self.filter.text.clear();
-        self.text_draft.clear();
+        if !keep_name_filter {
+            self.filter.text.clear();
+            self.text_draft.clear();
+        }
         self.root_path = root.to_string_lossy().replace('\\', "/");
 
         let (tx, rx) = unbounded();
-        let max_depth = if self.recursive { None } else { Some(1) };
+        let scope = self.scan_scope();
         // Route remote roots through the backend walk; local roots (incl. drive
         // letters and UNC) keep the fast std::fs path. Decided centrally here by
         // path style, so every navigation entry point is handled without edits:
@@ -65,11 +76,22 @@ impl App {
             Some(rs) => crate::rscan::start_scan_backend(
                 rs.backend.clone(),
                 self.root_path.clone(),
-                max_depth,
+                scope.max_depth,
+                scope.retention,
                 tx,
             ),
-            None => start_scan(root, false, max_depth, tx),
+            None => start_scan(
+                root,
+                ScanOpts {
+                    follow_symlinks: false,
+                    max_depth: scope.max_depth,
+                    retention: scope.retention,
+                },
+                tx,
+            ),
         };
+        self.scan_retention = scope.pruned_with;
+        self.scan_truncated = false;
         self.scan_rx = Some(rx);
         self.scan_handle = Some(handle);
         self.scan_running = true;
@@ -121,7 +143,7 @@ impl App {
             rs.backend.invalidate_cache();
         }
         let p = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        self.start_scan_navigated(p, false);
+        self.start_scan_with(p, false, true);
     }
 
     pub(in crate::app) fn cancel_scan(&mut self) {
@@ -179,6 +201,8 @@ impl App {
         self.cursor = None;
         self.progress = empty_progress();
         self.scan_was_canceled = false;
+        self.scan_retention = None;
+        self.scan_truncated = false;
         self.error_msg = None;
         self.failed_paths = Vec::new();
         self.summary_cache = None;

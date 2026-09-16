@@ -12,9 +12,12 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os.rs"]
 mod platform;
+#[path = "core/retention.rs"]
+mod retention;
 #[path = "os/walk.rs"]
 mod walk;
 
 #[allow(unused_imports)]
 pub use collect::*;
 pub use os::*;
+pub use retention::*;

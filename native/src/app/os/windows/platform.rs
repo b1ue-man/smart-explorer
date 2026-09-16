@@ -249,7 +249,9 @@ pub(in crate::app) fn set_virtual_clipboard_if_sequence(
     // OLE owns OpenClipboard internally and has no compare-and-set API. This
     // late guard rejects stale completions, but cannot serialize another app's
     // write between this check and OleSetClipboard. Never nest OpenClipboard.
-    crate::virtual_clipboard::set_clipboard(files).map(Some).map_err(|e| e.to_string())
+    crate::virtual_clipboard::set_clipboard(files)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 pub(in crate::app) fn virtual_clipboard_sequence() -> Option<u32> {
@@ -268,6 +270,12 @@ pub(in crate::app) fn drag_out_files(
 }
 
 pub(in crate::app) fn os_drag_out_supported() -> bool {
+    true
+}
+
+/// Local names are resolved through Win32, whose device-name and
+/// trailing-dot/space rules make some stored names unaddressable by the shell.
+pub(in crate::app) fn local_names_follow_win32_rules() -> bool {
     true
 }
 
