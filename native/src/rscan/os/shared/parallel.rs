@@ -1,4 +1,4 @@
-use super::walk_state::WalkState;
+use super::walk_state::{PendingRemoteDir, WalkState};
 use crate::vfs::BackendHandle;
 use rayon::prelude::*;
 use std::sync::atomic::Ordering;
@@ -18,7 +18,7 @@ pub(super) fn run(backend: BackendHandle, root: String, mut state: WalkState) {
         }
     };
 
-    let mut frontier = vec![(root, 1u32)];
+    let mut frontier = vec![PendingRemoteDir::root(root)];
     while !frontier.is_empty() && !state.stopped() {
         let mut next = Vec::new();
         for chunk in frontier.chunks(parallelism) {
@@ -29,33 +29,32 @@ pub(super) fn run(backend: BackendHandle, root: String, mut state: WalkState) {
             let listed: Vec<_> = pool.install(|| {
                 chunk
                     .par_iter()
-                    .map(|(directory, depth)| {
+                    .map(|directory| {
                         if cancel.load(Ordering::Relaxed) {
-                            return (directory.clone(), *depth, Ok(Vec::new()));
+                            return (directory.clone(), Ok(Vec::new()));
                         }
                         (
                             directory.clone(),
-                            *depth,
                             backend
-                                .list_dir(directory)
+                                .list_dir(&directory.path)
                                 .map_err(|error| error.to_string()),
                         )
                     })
                     .collect()
             });
-            for (directory, depth, result) in listed {
+            for (directory, result) in listed {
                 if state.stopped() {
                     break;
                 }
                 match result {
                     Ok(entries) => {
-                        if !state.process_listing(&directory, depth, entries, true, &mut next) {
+                        if !state.process_listing(&directory, entries, true, &mut next) {
                             break;
                         }
                     }
-                    Err(error) => state.listing_failed(&directory, error),
+                    Err(error) => state.listing_failed(&directory.path, error),
                 }
-                if !state.maybe_progress(&directory) {
+                if !state.maybe_progress(&directory.path) {
                     break;
                 }
             }
@@ -66,20 +65,20 @@ pub(super) fn run(backend: BackendHandle, root: String, mut state: WalkState) {
 }
 
 fn serial_fallback(backend: BackendHandle, root: String, mut state: WalkState) {
-    let mut frontier = vec![(root, 1u32)];
-    while let Some((directory, depth)) = frontier.pop() {
+    let mut frontier = vec![PendingRemoteDir::root(root)];
+    while let Some(directory) = frontier.pop() {
         if state.stopped() {
             break;
         }
-        match backend.list_dir(&directory) {
+        match backend.list_dir(&directory.path) {
             Ok(entries) => {
-                if !state.process_listing(&directory, depth, entries, true, &mut frontier) {
+                if !state.process_listing(&directory, entries, true, &mut frontier) {
                     break;
                 }
             }
-            Err(error) => state.listing_failed(&directory, error),
+            Err(error) => state.listing_failed(&directory.path, error),
         }
-        if !state.maybe_progress(&directory) {
+        if !state.maybe_progress(&directory.path) {
             break;
         }
     }

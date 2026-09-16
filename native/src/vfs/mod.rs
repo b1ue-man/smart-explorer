@@ -20,14 +20,14 @@
 mod cache;
 #[path = "core/capabilities.rs"]
 mod capabilities;
+#[path = "os/shared/copy_transfer.rs"]
+mod copy_transfer;
 #[path = "core/core.rs"]
 mod core;
 #[path = "core/delete.rs"]
 mod delete;
 #[path = "core/dispatch.rs"]
 mod dispatch;
-#[path = "os/shared/copy_transfer.rs"]
-mod copy_transfer;
 #[path = "os/shared/local.rs"]
 mod local;
 #[cfg(windows)]
@@ -40,10 +40,13 @@ mod local_platform;
 mod promotion;
 #[path = "core/scheme.rs"]
 mod scheme;
+#[cfg(windows)]
+#[path = "os/windows/verbatim.rs"]
+mod verbatim;
 
 pub use self::cache::CachingBackend;
-pub(crate) use self::copy_transfer::copy_between;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
+pub(crate) use self::copy_transfer::copy_between;
 pub use self::core::{
     Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
     SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
@@ -57,8 +60,12 @@ pub use self::delete::{
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
 pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
+pub use self::local_platform::to_os as local_os_path;
 pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 
+#[cfg(test)]
+#[path = "os/shared/copy_paste_task_tests.rs"]
+mod copy_paste_task_tests;
 #[cfg(test)]
 #[path = "core/delete_tests.rs"]
 mod delete_tests;
@@ -71,6 +78,3 @@ mod remote_drive_task_cache_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "os/shared/copy_paste_task_tests.rs"]
-mod copy_paste_task_tests;

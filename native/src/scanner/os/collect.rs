@@ -117,7 +117,10 @@ pub fn collect_recursive(
                 }
             };
             let path = entry.path();
-            let link_metadata = match std::fs::symlink_metadata(&path) {
+            // The enumeration record already carries the entry's own (non
+            // following) metadata. Re-opening `path` would let Win32 resolve a
+            // reserved name such as `NUL` to the device instead of the file.
+            let link_metadata = match entry.metadata() {
                 Ok(metadata) => metadata,
                 Err(error) => {
                     push_issue(&mut outcome, &path, error.to_string());

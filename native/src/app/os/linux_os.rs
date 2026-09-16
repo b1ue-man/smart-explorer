@@ -121,6 +121,12 @@ pub(in crate::app) fn drag_out_files(
     Err("OS drag-and-drop is not available on this platform".to_string())
 }
 
+/// Unix names are stored and addressed literally; Win32 name rules only
+/// matter for the optional problem-names filter here.
+pub(in crate::app) fn local_names_follow_win32_rules() -> bool {
+    false
+}
+
 pub(in crate::app) fn os_drag_out_supported() -> bool {
     false
 }

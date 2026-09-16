@@ -1,6 +1,6 @@
 use super::budget::ScanBudget;
 use super::{ext_of, join, BATCH, MAX_ERRORS_TRACKED, PROGRESS_MS};
-use crate::scanner::ScanMessage;
+use crate::scanner::{Lineage, RetentionHandle, ScanMessage};
 use crate::types::{FileEntry, ScanProgress};
 use crate::vfs::VfsMeta;
 use crossbeam_channel::Sender;
@@ -10,9 +10,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// A remote directory to list. `lineage` links the ancestors whose entries
+/// were not emitted yet (only while a retention filter is active).
+#[derive(Clone)]
+pub(super) struct PendingRemoteDir {
+    pub(super) path: String,
+    pub(super) depth: u32,
+    pub(super) lineage: Option<Arc<Lineage>>,
+}
+
+impl PendingRemoteDir {
+    pub(super) fn root(path: String) -> Self {
+        Self {
+            path,
+            depth: 1,
+            lineage: None,
+        }
+    }
+}
+
 pub(super) struct WalkState {
     tx: Sender<ScanMessage>,
     cancel: Arc<AtomicBool>,
+    truncated: Arc<AtomicBool>,
+    retention: Option<RetentionHandle>,
     start: Instant,
     budget: ScanBudget,
     batch: Vec<FileEntry>,
@@ -25,10 +46,18 @@ pub(super) struct WalkState {
 }
 
 impl WalkState {
-    pub(super) fn new(tx: Sender<ScanMessage>, cancel: Arc<AtomicBool>, start: Instant) -> Self {
+    pub(super) fn new(
+        tx: Sender<ScanMessage>,
+        cancel: Arc<AtomicBool>,
+        truncated: Arc<AtomicBool>,
+        retention: Option<RetentionHandle>,
+        start: Instant,
+    ) -> Self {
         Self {
             tx,
             cancel,
+            truncated,
+            retention,
             start,
             budget: ScanBudget::default(),
             batch: Vec::with_capacity(BATCH),
@@ -58,49 +87,41 @@ impl WalkState {
         self.record_failure(directory, format!("list_dir: {}", error.to_string()));
     }
 
+    /// Validate, count, retain and emit one directory listing; push the
+    /// subdirectories to descend into onto `next`.
     pub(super) fn process_listing(
         &mut self,
-        directory: &str,
-        depth: u32,
+        directory: &PendingRemoteDir,
         entries: Vec<VfsMeta>,
         descend: bool,
-        next: &mut Vec<(String, u32)>,
+        next: &mut Vec<PendingRemoteDir>,
     ) -> bool {
-        if let Err(limit) = self.budget.preflight_entries(entries.len()) {
-            self.terminal_error(
-                directory,
-                format!("remote scan stopped because its {limit} was reached"),
-            );
-            return false;
+        // Without retention every entry is emitted, so a listing that cannot
+        // fit is refused up front. With retention only kept entries claim the
+        // budget; each claim is checked individually.
+        if self.retention.is_none() {
+            if let Err(limit) = self.budget.preflight_entries(entries.len()) {
+                self.truncated.store(true, Ordering::Relaxed);
+                self.terminal_error(
+                    &directory.path,
+                    format!("remote scan stopped because its {limit} was reached"),
+                );
+                return false;
+            }
         }
-        if let Err(error) = validate_listing(directory, &entries) {
-            self.terminal_error(directory, error.to_string());
+        if let Err(error) = validate_listing(&directory.path, &entries) {
+            self.terminal_error(&directory.path, error.to_string());
             return false;
         }
 
-        let parent: Arc<str> = Arc::from(directory);
+        let parent: Arc<str> = Arc::from(directory.path.as_str());
+        let depth = directory.depth;
         for metadata in entries {
             if self.stopped() {
                 return false;
             }
             let extension = ext_of(&metadata.name, metadata.is_dir);
-            let retained_text = directory
-                .len()
-                .saturating_add(joined_path_len(directory, &metadata.name))
-                .saturating_add(metadata.name.len())
-                .saturating_add(extension.len());
-            if let Err(limit) = self.budget.claim(retained_text, depth) {
-                self.terminal_error(
-                    directory,
-                    format!(
-                        "remote scan stopped because its {limit} was reached at child {}",
-                        diagnostic_preview(&metadata.name)
-                    ),
-                );
-                return false;
-            }
-
-            let path = join(directory, &metadata.name);
+            let path = join(&directory.path, &metadata.name);
             let recurse = descend && metadata.is_dir && !metadata.is_symlink;
             let size = metadata.size;
             let is_dir = metadata.is_dir;
@@ -123,15 +144,63 @@ impl WalkState {
             if !is_dir {
                 self.bytes = self.bytes.saturating_add(size);
             }
-            if recurse {
-                next.push((path, depth.saturating_add(1)));
-            }
-            self.batch.push(entry);
-            if self.batch.len() >= BATCH && !self.flush_batch() {
-                return false;
+            let child_depth = depth.saturating_add(1);
+            match self.retention.clone() {
+                None => {
+                    if !self.emit(entry) {
+                        return false;
+                    }
+                    if recurse {
+                        next.push(PendingRemoteDir {
+                            path,
+                            depth: child_depth,
+                            lineage: None,
+                        });
+                    }
+                }
+                Some(retention) => {
+                    let keep = retention.retain(&entry);
+                    let descend_here = recurse && retention.descend(&entry);
+                    if keep && (!self.emit_lineage(&directory.lineage) || !self.emit(entry.clone()))
+                    {
+                        return false;
+                    }
+                    if descend_here {
+                        let lineage =
+                            (!keep).then(|| Lineage::pending(entry, directory.lineage.clone()));
+                        next.push(PendingRemoteDir {
+                            path,
+                            depth: child_depth,
+                            lineage,
+                        });
+                    }
+                }
             }
         }
         true
+    }
+
+    fn emit(&mut self, entry: FileEntry) -> bool {
+        let retained_text =
+            retained_text_bytes(&entry.parent, &entry.path, &entry.name, &entry.ext);
+        if let Err(limit) = self.budget.claim(retained_text, entry.depth) {
+            self.truncated.store(true, Ordering::Relaxed);
+            let parent = entry.parent.to_string();
+            self.terminal_error(
+                &parent,
+                format!(
+                    "remote scan stopped because its {limit} was reached at child {}",
+                    diagnostic_preview(&entry.name)
+                ),
+            );
+            return false;
+        }
+        self.batch.push(entry);
+        self.batch.len() < BATCH || self.flush_batch()
+    }
+
+    fn emit_lineage(&mut self, lineage: &Option<Arc<Lineage>>) -> bool {
+        Lineage::emit_pending(lineage, |entry| self.emit(entry.clone()))
     }
 
     pub(super) fn maybe_progress(&mut self, current_path: &str) -> bool {
@@ -238,13 +307,6 @@ pub(super) fn validate_listing(directory: &str, entries: &[VfsMeta]) -> io::Resu
     Ok(())
 }
 
-fn joined_path_len(parent: &str, name: &str) -> usize {
-    parent
-        .len()
-        .saturating_add(usize::from(!parent.ends_with('/')))
-        .saturating_add(name.len())
-}
-
 pub(super) fn diagnostic_preview(text: &str) -> String {
     format!("{:?}", bounded_text(text))
 }
@@ -307,7 +369,8 @@ mod tests {
         let (tx, rx) = unbounded();
         drop(rx);
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut state = WalkState::new(tx, cancel.clone(), Instant::now());
+        let truncated = Arc::new(AtomicBool::new(false));
+        let mut state = WalkState::new(tx, cancel.clone(), truncated, None, Instant::now());
         let root = FileEntry {
             path: Arc::from("/root"),
             parent: Arc::from("/"),

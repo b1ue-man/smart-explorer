@@ -8,6 +8,7 @@ impl App {
     /// text narrows the listing — a typed path or `>command` must leave the
     /// current folder's entries visible.
     pub(in crate::app) fn flush_text_filter(&mut self) {
+        let before = self.filter.clone();
         self.filter.text = if omni_mode(&self.text_draft) == OmniMode::Filter {
             self.text_draft.clone()
         } else {
@@ -20,7 +21,11 @@ impl App {
             .filter(|s| !s.is_empty())
             .collect();
         self.filter_pending_at = None;
-        self.recompute_view();
+        if self.filter != before {
+            self.filter_changed();
+        } else {
+            self.recompute_view();
+        }
     }
 
     /// Enter pressed in the active tab's name filter — the heart of cursorless

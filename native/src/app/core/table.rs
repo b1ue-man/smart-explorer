@@ -15,6 +15,10 @@ impl App {
         let row_h = self.appearance.row_height();
         let details = self.appearance.detailed_columns;
         let show_path = self.recursive || details;
+        // Local names Win32 cannot address normally (NUL, trailing dot, …) are
+        // painted in the warning color; remote listings live under their own
+        // server's rules and stay neutral.
+        let mark_hostile_names = self.remote.is_none() && local_names_follow_win32_rules();
 
         let mut row_click: Option<(usize, bool, bool)> = None; // (idx, ctrl, shift)
         let mut row_dblclick: Option<usize> = None;
@@ -31,11 +35,17 @@ impl App {
         let mut needed_icons: Vec<String> = Vec::new();
 
         let mut header_def = vec![(SortKey::Name, "Name")];
-        if show_path { header_def.push((SortKey::Path, "Pfad")); }
+        if show_path {
+            header_def.push((SortKey::Path, "Pfad"));
+        }
         header_def.extend([(SortKey::Size, "Größe"), (SortKey::Mtime, "Geändert")]);
-        if details { header_def.push((SortKey::Btime, "Erstellt")); }
+        if details {
+            header_def.push((SortKey::Btime, "Erstellt"));
+        }
         header_def.push((SortKey::Ext, "Typ"));
-        if details { header_def.push((SortKey::Depth, "Tiefe")); }
+        if details {
+            header_def.push((SortKey::Depth, "Tiefe"));
+        }
 
         let name_width = (ui.available_width() - if show_path { 520.0 } else { 310.0 }).max(180.0);
         let mut builder = TableBuilder::new(ui)
@@ -145,6 +155,9 @@ impl App {
                         let indent = display_depth.min(32) as f32 * 14.0;
                         let color = if selected {
                             ui.visuals().selection.stroke.color
+                        } else if mark_hostile_names && win32_name_issue(e.name.as_ref()).is_some()
+                        {
+                            theme::warning(ui)
                         } else {
                             ui.visuals().text_color()
                         };
@@ -178,26 +191,25 @@ impl App {
                     });
 
                     if show_path {
-                    // ─── Path (relative) ───────────────────────────────
-                    row.col(|ui| {
-                        let rel = if e.path.starts_with(&prefix) {
-                            let r = e
-                                .path
-                                .as_ref()
-                                .trim_start_matches(prefix.as_str())
-                                .trim_start_matches('/');
-                            if r.is_empty() {
-                                "/".to_string()
+                        // ─── Path (relative) ───────────────────────────────
+                        row.col(|ui| {
+                            let rel = if e.path.starts_with(&prefix) {
+                                let r = e
+                                    .path
+                                    .as_ref()
+                                    .trim_start_matches(prefix.as_str())
+                                    .trim_start_matches('/');
+                                if r.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    r.to_string()
+                                }
                             } else {
-                                r.to_string()
-                            }
-                        } else {
-                            e.path.to_string()
-                        };
-                        let resp = handle_cell(ui, &rel, false);
-                        handle_resp(resp, ui, "Pfad", &rel);
-                    });
-
+                                e.path.to_string()
+                            };
+                            let resp = handle_cell(ui, &rel, false);
+                            handle_resp(resp, ui, "Pfad", &rel);
+                        });
                     }
                     // ─── Size ──────────────────────────────────────────
                     row.col(|ui| {
@@ -217,12 +229,11 @@ impl App {
                         handle_resp(resp, ui, "Geändert", &value);
                     });
                     if details {
-                    row.col(|ui| {
-                        let value = format_date(e.btime_ms);
-                        let resp = handle_cell(ui, &value, false);
-                        handle_resp(resp, ui, "Erstellt", &value);
-                    });
-
+                        row.col(|ui| {
+                            let value = format_date(e.btime_ms);
+                            let resp = handle_cell(ui, &value, false);
+                            handle_resp(resp, ui, "Erstellt", &value);
+                        });
                     }
                     // ─── Ext ───────────────────────────────────────────
                     row.col(|ui| {
@@ -231,12 +242,12 @@ impl App {
                     });
 
                     if details {
-                    // ─── Depth ─────────────────────────────────────────
-                    row.col(|ui| {
-                        let value = e.depth.to_string();
-                        let resp = handle_cell(ui, &value, true);
-                        handle_resp(resp, ui, "Tiefe", &value);
-                    });
+                        // ─── Depth ─────────────────────────────────────────
+                        row.col(|ui| {
+                            let value = e.depth.to_string();
+                            let resp = handle_cell(ui, &value, true);
+                            handle_resp(resp, ui, "Tiefe", &value);
+                        });
                     }
                 });
             });

@@ -366,6 +366,15 @@ impl App {
             }
             return;
         }
+        if local_names_follow_win32_rules() {
+            if let Some(issue) = win32_name_issue(&draft) {
+                self.error_msg = Some(format!(
+                    "Name „{draft}“ ist unter Windows nicht zulässig ({}).",
+                    issue.label_de()
+                ));
+                return;
+            }
+        }
         let old = PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR));
         let new = match old.parent() {
             Some(p) => p.join(&draft),

@@ -30,7 +30,7 @@ fn main() {
 
     let (tx, rx) = unbounded();
     let t0 = Instant::now();
-    let _handle = scanner::start_scan(target.clone(), false, depth, tx);
+    let _handle = scanner::start_scan(target.clone(), scanner::ScanOpts::everything(depth), tx);
 
     let mut entry_count: u64 = 0;
     let mut bytes: u64 = 0;

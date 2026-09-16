@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_filterbar(&mut self, ui: &mut egui::Ui) {
@@ -27,7 +27,7 @@ impl App {
                         .selectable_value(&mut self.filter.text_mode, TextMode::Glob, "Glob")
                         .clicked();
                     if changed {
-                        self.recompute_view();
+                        self.filter_changed();
                     }
                 });
 
@@ -175,10 +175,14 @@ impl App {
             self.size_input(ui, "size_max", "≤ 1 GB", false);
 
             for (modified, label) in [(true, "Geändert:"), (false, "Erstellt:")] {
-                ui.allocate_ui_with_layout(egui::vec2(220.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.label(label);
-                    self.date_filter_ui(ui, modified);
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(220.0, 22.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(label);
+                        self.date_filter_ui(ui, modified);
+                    },
+                );
             }
 
             // Quick presets for the modified-date range
@@ -215,7 +219,7 @@ impl App {
                     self.btime_max_date = None;
                 }
                 self.apply_date_filters();
-                self.recompute_view();
+                self.filter_changed();
             }
         });
 
@@ -233,19 +237,42 @@ impl App {
             changed |= ui
                 .checkbox(&mut self.filter.include_system, "System")
                 .changed();
+            changed |= ui
+                .checkbox(
+                    &mut self.filter.problem_names_only,
+                    "⚠ Nur problematische Namen",
+                )
+                .on_hover_text(
+                    "Nur Einträge, deren Namen Windows nicht normal ansprechen kann: reservierte \
+                     Gerätenamen (NUL, CON, AUX, PRN, COM1…, LPT1…, auch mit Endung), Namen mit \
+                     Punkt oder Leerzeichen am Ende, ungültige Zeichen. Solche Einträge lassen \
+                     sich hier löschen (Entf / Shift+Entf) und umbenennen (F2).",
+                )
+                .changed();
             if changed {
-                self.recompute_view();
+                self.filter_changed();
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{} / {} Einträge",
-                        self.view.len(),
-                        self.entries.len()
-                    ))
-                    .color(theme::muted(ui)),
-                );
+                let (text, hint) = if self.scan_retention.is_some() {
+                    (
+                        format!(
+                            "{} Treffer · {} durchsucht",
+                            self.view.len(),
+                            self.progress.scanned
+                        ),
+                        "Rekursiv mit aktivem Filter: nicht passende Einträge wurden beim Scan \
+                         verworfen und belegen weder Speicher noch das Scan-Limit. Ein Filter, \
+                         der mehr zulässt, startet den Scan automatisch neu.",
+                    )
+                } else {
+                    (
+                        format!("{} / {} Einträge", self.view.len(), self.entries.len()),
+                        "Sichtbare Einträge / geladene Einträge",
+                    )
+                };
+                ui.label(RichText::new(text).color(theme::muted(ui)))
+                    .on_hover_text(hint);
             });
         });
     }
@@ -268,7 +295,7 @@ impl App {
         self.folder_search_seq += 1;
         self.omni_sel = None;
         self.omni_activate = None;
-        self.recompute_view();
+        self.filter_changed();
     }
 
     pub(in crate::app) fn size_input(
@@ -291,12 +318,15 @@ impl App {
         );
         if resp.lost_focus() {
             let parsed = parse_size_input(draft);
-            if is_min {
-                self.filter.size.min = parsed;
+            let slot = if is_min {
+                &mut self.filter.size.min
             } else {
-                self.filter.size.max = parsed;
+                &mut self.filter.size.max
+            };
+            if *slot != parsed {
+                *slot = parsed;
+                self.filter_changed();
             }
-            self.recompute_view();
         }
     }
 
@@ -342,7 +372,7 @@ impl App {
         }
         if changed {
             self.apply_date_filters();
-            self.recompute_view();
+            self.filter_changed();
         }
     }
 

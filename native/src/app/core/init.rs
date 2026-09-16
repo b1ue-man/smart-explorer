@@ -188,6 +188,8 @@ impl App {
             scan_handle: None,
             progress: empty_progress(),
             scan_was_canceled: false,
+            scan_retention: None,
+            scan_truncated: false,
 
             filter: FilterDef::new(),
             sort_key: SortKey::Path,

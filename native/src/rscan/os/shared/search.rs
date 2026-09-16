@@ -24,15 +24,17 @@ pub fn start_search_backend(
     tx: Sender<ScanMessage>,
 ) -> ScanHandle {
     let cancel = Arc::new(AtomicBool::new(false));
+    let truncated = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
+    let worker_truncated = truncated.clone();
     let failure_tx = tx.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("rscan-search".into())
-        .spawn(move || run_search(backend, root, spec, tx, worker_cancel))
+        .spawn(move || run_search(backend, root, spec, tx, worker_cancel, worker_truncated))
     {
         report_spawn_failure(&failure_tx, &cancel, "remote search", error);
     }
-    ScanHandle { cancel }
+    ScanHandle { cancel, truncated }
 }
 
 fn run_search(
@@ -41,8 +43,9 @@ fn run_search(
     spec: SearchSpec,
     tx: Sender<ScanMessage>,
     cancel: Arc<AtomicBool>,
+    truncated: Arc<AtomicBool>,
 ) {
-    let mut relay = SearchRelay::new(root.clone(), tx, cancel.clone());
+    let mut relay = SearchRelay::new(root.clone(), tx, cancel.clone(), truncated);
     let (hit_tx, hit_rx) = search_channel();
     let worker_root = root;
     let worker_cancel = cancel.clone();
@@ -103,6 +106,7 @@ struct SearchRelay {
     root_arc: Arc<str>,
     tx: Sender<ScanMessage>,
     cancel: Arc<AtomicBool>,
+    truncated: Arc<AtomicBool>,
     start: Instant,
     last_progress: Instant,
     budget: ScanBudget,
@@ -116,12 +120,18 @@ struct SearchRelay {
 }
 
 impl SearchRelay {
-    fn new(root: String, tx: Sender<ScanMessage>, cancel: Arc<AtomicBool>) -> Self {
+    fn new(
+        root: String,
+        tx: Sender<ScanMessage>,
+        cancel: Arc<AtomicBool>,
+        truncated: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             root_arc: Arc::from(root.as_str()),
             root,
             tx,
             cancel,
+            truncated,
             start: Instant::now(),
             last_progress: Instant::now(),
             budget: ScanBudget::default(),
@@ -174,6 +184,7 @@ impl SearchRelay {
         let retained_text =
             retained_text_bytes(&self.root, &path, relative.path.as_str(), &extension);
         if let Err(limit) = self.budget.claim(retained_text, relative.depth) {
+            self.truncated.store(true, Ordering::Relaxed);
             self.terminal_error(format!(
                 "server-side search stopped because its {limit} was reached at {}",
                 diagnostic_preview(relative.path.as_str())
@@ -325,7 +336,7 @@ mod tests {
     fn duplicate_search_hits_are_terminal_errors() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut relay = SearchRelay::new("/root".into(), tx, cancel.clone());
+        let mut relay = SearchRelay::new("/root".into(), tx, cancel.clone(), Arc::default());
         assert!(relay.accept_hit(hit("same")));
         assert!(!relay.accept_hit(hit("same")));
         assert!(cancel.load(Ordering::Relaxed));
@@ -339,7 +350,7 @@ mod tests {
     fn search_relay_applies_depth_limit_to_valid_relative_paths() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut relay = SearchRelay::new("/root".into(), tx, cancel);
+        let mut relay = SearchRelay::new("/root".into(), tx, cancel, Arc::default());
         let too_deep = std::iter::repeat_n("d", 513).collect::<Vec<_>>().join("/");
         assert!(validate_search_relative(&too_deep).is_ok());
         assert!(!relay.accept_hit(hit(&too_deep)));
@@ -353,7 +364,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(rx);
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut relay = SearchRelay::new("/root".into(), tx, cancel.clone());
+        let mut relay = SearchRelay::new("/root".into(), tx, cancel.clone(), Arc::default());
         let progress = relay.progress("/root".into());
         assert!(!relay.send(ScanMessage::Progress(progress)));
         assert!(cancel.load(Ordering::Relaxed));

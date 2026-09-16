@@ -1,4 +1,4 @@
-use crate::types::{FileEntry, FilterDef, Range, TextMode};
+use crate::types::{win32_name_issue, FileEntry, FilterDef, Range, TextMode};
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 
@@ -14,18 +14,23 @@ struct TextQuery {
     groups: Vec<Vec<String>>,
 }
 
+/// The OR-groups (`;`) of AND-terms (`,`) of a substring query, each term
+/// lower-cased with collapsed spaces; empty groups and terms are dropped.
+pub(super) fn text_groups(raw: &str) -> Vec<Vec<String>> {
+    raw.split(';')
+        .filter_map(|group| {
+            let terms: Vec<String> = group
+                .split(',')
+                .filter_map(normalize_loose_spaces)
+                .collect();
+            (!terms.is_empty()).then_some(terms)
+        })
+        .collect()
+}
+
 impl TextQuery {
     fn parse(raw: &str) -> Option<Self> {
-        let groups: Vec<Vec<String>> = raw
-            .split(';')
-            .filter_map(|group| {
-                let terms: Vec<String> = group
-                    .split(',')
-                    .filter_map(normalize_loose_spaces)
-                    .collect();
-                (!terms.is_empty()).then_some(terms)
-            })
-            .collect();
+        let groups = text_groups(raw);
         (!groups.is_empty()).then_some(Self { groups })
     }
 
@@ -136,6 +141,9 @@ impl CompiledFilter {
             return false;
         }
         if e.system && !f.include_system {
+            return false;
+        }
+        if f.problem_names_only && win32_name_issue(e.name.as_ref()).is_none() {
             return false;
         }
 
@@ -266,6 +274,24 @@ mod tests {
 
         assert!(filter.matches(&entry("my final invoice 2024.pdf"), ""));
         assert!(filter.matches(&entry("my final   invoice 2024.pdf"), ""));
+    }
+
+    #[test]
+    fn recursive_filter_task_problem_names_filter_keeps_only_win32_hostile_names() {
+        let mut filter = FilterDef::new();
+        filter.problem_names_only = true;
+        let filter = CompiledFilter::compile(&filter);
+
+        assert!(filter.matches(&entry("nul"), ""));
+        assert!(filter.matches(&entry("NUL.txt"), ""));
+        assert!(filter.matches(&entry("report."), ""));
+        assert!(filter.matches(&entry("a<b"), ""));
+        assert!(!filter.matches(&entry("null"), ""));
+        assert!(!filter.matches(&entry("report.txt"), ""));
+
+        let mut directory = entry("aux");
+        directory.is_dir = true;
+        assert!(filter.matches(&directory, ""));
     }
 
     #[test]

@@ -13,7 +13,7 @@ mod walk_state;
 
 pub use search::start_search_backend;
 
-use crate::scanner::{ScanHandle, ScanMessage};
+use crate::scanner::{RetentionHandle, ScanHandle, ScanMessage};
 use crate::types::{FileEntry, ScanProgress};
 use crate::vfs::BackendHandle;
 use crossbeam_channel::Sender;
@@ -22,7 +22,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use walk_state::WalkState;
+use walk_state::{PendingRemoteDir, WalkState};
 
 const BATCH: usize = 256;
 const PROGRESS_MS: u128 = 150;
@@ -48,33 +48,50 @@ fn join(directory: &str, name: &str) -> String {
 
 /// Walk `root` through `backend`, streaming results over `tx`. `Some(1)` is a
 /// flat listing; `None` recursively scans within the global safety limits.
+/// With `retention` only kept entries (and the directories needed to place
+/// them) are emitted and counted against the budget.
 pub fn start_scan_backend(
     backend: BackendHandle,
     root: String,
     max_depth: Option<u32>,
+    retention: Option<RetentionHandle>,
     tx: Sender<ScanMessage>,
 ) -> ScanHandle {
     let cancel = Arc::new(AtomicBool::new(false));
+    let truncated = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
+    let worker_truncated = truncated.clone();
     let failure_tx = tx.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("rscan-driver".into())
-        .spawn(move || run(backend, root, max_depth, tx, worker_cancel))
+        .spawn(move || {
+            run(
+                backend,
+                root,
+                max_depth,
+                retention,
+                tx,
+                worker_cancel,
+                worker_truncated,
+            )
+        })
     {
         report_spawn_failure(&failure_tx, &cancel, "remote scan", error);
     }
-    ScanHandle { cancel }
+    ScanHandle { cancel, truncated }
 }
 
 fn run(
     backend: BackendHandle,
     root: String,
     max_depth: Option<u32>,
+    retention: Option<RetentionHandle>,
     tx: Sender<ScanMessage>,
     cancel: Arc<AtomicBool>,
+    truncated: Arc<AtomicBool>,
 ) {
     let start = Instant::now();
-    let mut state = WalkState::new(tx, cancel, start);
+    let mut state = WalkState::new(tx, cancel, truncated, retention, start);
 
     match backend.stat(&root) {
         Ok(metadata) => {
@@ -121,23 +138,23 @@ fn run(
         return;
     }
 
-    let mut queue = VecDeque::from([(root, 1u32)]);
-    while let Some((directory, depth)) = queue.pop_front() {
+    let mut queue = VecDeque::from([PendingRemoteDir::root(root)]);
+    while let Some(directory) = queue.pop_front() {
         if state.stopped() {
             break;
         }
-        match backend.list_dir(&directory) {
+        match backend.list_dir(&directory.path) {
             Ok(entries) => {
-                let descend = max_depth.is_none_or(|maximum| depth < maximum);
+                let descend = max_depth.is_none_or(|maximum| directory.depth < maximum);
                 let mut next = Vec::new();
-                if !state.process_listing(&directory, depth, entries, descend, &mut next) {
+                if !state.process_listing(&directory, entries, descend, &mut next) {
                     break;
                 }
                 queue.extend(next);
             }
-            Err(error) => state.listing_failed(&directory, error),
+            Err(error) => state.listing_failed(&directory.path, error),
         }
-        if !state.maybe_progress(&directory) {
+        if !state.maybe_progress(&directory.path) {
             break;
         }
     }

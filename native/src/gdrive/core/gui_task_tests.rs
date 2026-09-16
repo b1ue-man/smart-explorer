@@ -1,4 +1,8 @@
-use super::{duplicates, names, gui_task_http::{step, Fixture, Reply, Request}};
+use super::{
+    duplicates,
+    gui_task_http::{step, Fixture, Reply, Request},
+    names,
+};
 use crate::vfs::{Backend, VfsMeta};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -18,14 +22,41 @@ fn object(name: &str, id: &str, folder: bool) -> Value {
 
 fn assert_query(request: &Request, parent: &str, name: &str) {
     let quote = |value: &str| value.replace('\\', "\\\\").replace('\'', "\\'");
-    let query = format!("'{}' in parents and name = '{}' and trashed = false", quote(parent), quote(name));
-    assert!(request.target.contains(&format!("q={}", super::core::cloud_urlenc(&query))), "{:?}", request);
+    let query = format!(
+        "'{}' in parents and name = '{}' and trashed = false",
+        quote(parent),
+        quote(name)
+    );
+    assert!(
+        request
+            .target
+            .contains(&format!("q={}", super::core::cloud_urlenc(&query))),
+        "{:?}",
+        request
+    );
 }
 
 #[test]
 fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
-    let titles = [TITLE, "I%2FO", "I/O", "I\\O", ".", "..", "a\0b", "a\nb", "NUL.txt",
-        "CON", "LPT¹", "f.", " f ", "a:b?c*d|e<f>", "a [drive-id abc]", "100%", "Projekte – älter"];
+    let titles = [
+        TITLE,
+        "I%2FO",
+        "I/O",
+        "I\\O",
+        ".",
+        "..",
+        "a\0b",
+        "a\nb",
+        "NUL.txt",
+        "CON",
+        "LPT¹",
+        "f.",
+        " f ",
+        "a:b?c*d|e<f>",
+        "a [drive-id abc]",
+        "100%",
+        "Projekte – älter",
+    ];
     let mut unique = std::collections::HashSet::new();
     for title in titles {
         let name = names::encode(title);
@@ -36,9 +67,16 @@ fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
     assert_eq!(names::encode(TITLE), TITLE.replace('/', "%2F"));
     assert!(names::decode("../escape").is_err());
     assert!(names::decode("%xx").is_err());
-    let entries = ["abcdefgh1", "abcdefgh2", "abcdefgh3"].into_iter().enumerate().map(|(i, id)| VfsMeta {
-        name: "I/O".into(), id: Some(id.into()), mtime_ms: i as i64, ..Default::default()
-    }).collect();
+    let entries = ["abcdefgh1", "abcdefgh2", "abcdefgh3"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| VfsMeta {
+            name: "I/O".into(),
+            id: Some(id.into()),
+            mtime_ms: i as i64,
+            ..Default::default()
+        })
+        .collect();
     let listed = duplicates::disambiguate(entries);
     assert_eq!(listed[0].name, "I%2FO");
     assert_eq!(listed[1].name, "I%2FO [drive-id abcdefgh2]");
@@ -49,15 +87,29 @@ fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
 fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
     let child = object("Messung\\2026.txt", "item-id", false);
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"files": [object(TITLE, "folder-id", true)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object(TITLE, "folder-id", true)]})),
+        ),
         step("GET", FILES, Reply::Json(json!({"files": [child.clone()]}))),
         step("GET", ITEM, Reply::Json(child)),
         step("GET", ITEM, Reply::Bytes("abc".into())),
-        step("PATCH", ITEM, Reply::Json(json!({"id": "item-id", "trashed": true}))),
+        step(
+            "PATCH",
+            ITEM,
+            Reply::Json(json!({"id": "item-id", "trashed": true})),
+        ),
     ]);
     let backend = fixture.backend();
     let (tx, rx) = crossbeam_channel::unbounded();
-    let handle = crate::rscan::start_scan_backend(std::sync::Arc::new(backend.clone()), "/".into(), None, tx);
+    let handle = crate::rscan::start_scan_backend(
+        std::sync::Arc::new(backend.clone()),
+        "/".into(),
+        None,
+        None,
+        tx,
+    );
     let mut entries = Vec::new();
     loop {
         use crate::scanner::ScanMessage;
@@ -65,40 +117,71 @@ fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
             ScanMessage::Entries(batch) => entries.extend(batch),
             ScanMessage::Error(error) => panic!("{error}"),
             ScanMessage::FailedPaths(paths) => assert!(paths.is_empty(), "{paths:?}"),
-            ScanMessage::Done(progress) => { assert_eq!(progress.errors, 0); break; }
+            ScanMessage::Done(progress) => {
+                assert_eq!(progress.errors, 0);
+                break;
+            }
             ScanMessage::Progress(_) => {}
         }
     }
-    handle.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    handle
+        .cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let path = format!("/{}/Messung%5C2026.txt", names::encode(TITLE));
-    assert!(entries.iter().any(|entry| entry.path.as_ref() == path && entry.id.as_deref() == Some("item-id")));
+    assert!(entries
+        .iter()
+        .any(|entry| entry.path.as_ref() == path && entry.id.as_deref() == Some("item-id")));
     assert_eq!(backend.stat(&path).unwrap().name, "Messung%5C2026.txt");
     let mut bytes = Vec::new();
-    backend.open_read(&path).unwrap().read_to_end(&mut bytes).unwrap();
+    backend
+        .open_read(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     assert_eq!(bytes, b"abc");
     backend.remove_file(&path).unwrap();
     let requests = fixture.finish();
-    assert!(requests[1].target.contains(&super::core::cloud_urlenc("'folder-id' in parents")));
-    assert_eq!(serde_json::from_slice::<Value>(&requests[4].body).unwrap(), json!({"trashed": true}));
+    assert!(requests[1]
+        .target
+        .contains(&super::core::cloud_urlenc("'folder-id' in parents")));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[4].body).unwrap(),
+        json!({"trashed": true})
+    );
 
     // Google-native documents have the same title mapping, but use export.
     let mut document = object(TITLE, "item-id", false);
     document["mimeType"] = json!("application/vnd.google-apps.document");
     let fixture = Fixture::new(vec![
         step("GET", FILES, Reply::Json(json!({"files": [document]}))),
-        step("GET", "/drive/v3/files/item-id/export", Reply::Bytes("office-data".into())),
+        step(
+            "GET",
+            "/drive/v3/files/item-id/export",
+            Reply::Bytes("office-data".into()),
+        ),
     ]);
     let backend = fixture.backend();
     let listed = backend.list_dir("/").unwrap();
     let path = format!("/{}", listed[0].name);
-    assert_eq!(crate::connect::gdrive_endpoint(&path), format!("gdrive://{path}"));
-    assert_eq!(backend.download_name(&path, &listed[0].name), format!("{}.docx", names::encode(TITLE)));
+    assert_eq!(
+        crate::connect::gdrive_endpoint(&path),
+        format!("gdrive://{path}")
+    );
+    assert_eq!(
+        backend.download_name(&path, &listed[0].name),
+        format!("{}.docx", names::encode(TITLE))
+    );
     let mut bytes = Vec::new();
-    backend.open_read(&path).unwrap().read_to_end(&mut bytes).unwrap();
+    backend
+        .open_read(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     assert_eq!(bytes, b"office-data");
     let requests = fixture.finish();
-    assert!(requests[1].target.contains("mimeType=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document"));
-
+    assert!(requests[1].target.contains(
+        "mimeType=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document"
+    ));
 }
 
 #[test]
@@ -107,17 +190,34 @@ fn gui_design_task_drive_uncached_paged_markers_and_reloaded_cache() {
     let first = object(raw, "abcdefgh1", false);
     let second = object(raw, "abcdefgh2", false);
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"files": [first], "nextPageToken": "next"}))),
-        step("GET", FILES, Reply::Json(json!({"files": [second.clone()]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [first], "nextPageToken": "next"})),
+        ),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [second.clone()]})),
+        ),
         step("GET", "/drive/v3/files/abcdefgh2", Reply::Json(second)),
-        step("GET", FILES, Reply::Json(json!({"files": [object("literal [drive-id abc]", "literal-id", false)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object("literal [drive-id abc]", "literal-id", false)]})),
+        ),
     ]);
     let backend = fixture.backend();
     let path = format!("{} [drive-id abcdefgh2]", names::encode(raw));
     assert_eq!(backend.resolve(&path).unwrap(), "abcdefgh2");
     backend.untrusted_guard().unwrap().insert(path.clone());
     assert_eq!(backend.resolve(&path).unwrap(), "abcdefgh2");
-    assert_eq!(backend.resolve(&names::encode("literal [drive-id abc]")).unwrap(), "literal-id");
+    assert_eq!(
+        backend
+            .resolve(&names::encode("literal [drive-id abc]"))
+            .unwrap(),
+        "literal-id"
+    );
     assert!(backend.state_identity().starts_with("gdrive:path-v2:"));
     let requests = fixture.finish();
     assert_query(&requests[0], "root", raw);
@@ -130,7 +230,9 @@ fn gui_design_task_drive_repeated_or_incomplete_pages_fail_closed() {
     for incomplete in [false, true] {
         let body = json!({"files": [], "nextPageToken": "repeat", "incompleteSearch": incomplete});
         let mut steps = vec![step("GET", FILES, Reply::Json(body.clone()))];
-        if !incomplete { steps.push(step("GET", FILES, Reply::Json(body))); }
+        if !incomplete {
+            steps.push(step("GET", FILES, Reply::Json(body)));
+        }
         let fixture = Fixture::new(steps);
         assert!(fixture.backend().find_child("root", "I%2FO").is_err());
         fixture.finish();
@@ -154,7 +256,10 @@ fn gui_design_task_drive_folder_and_file_creation_decode_metadata_once() {
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let requests = fixture.finish();
-    assert_eq!(serde_json::from_slice::<Value>(&requests[1].body).unwrap()["name"], "I/O");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[1].body).unwrap()["name"],
+        "I/O"
+    );
     assert_query(&requests[2], "folder-id", "Daten%2F.csv");
     let metadata: Value = serde_json::from_slice(&requests[4].body).unwrap();
     assert_eq!(metadata["name"], "Daten%2F.csv");
@@ -174,22 +279,36 @@ fn gui_design_task_drive_content_replacement_never_renames_an_alias() {
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let requests = fixture.finish();
-    assert_eq!(serde_json::from_slice::<Value>(&requests[0].body).unwrap(), json!({}));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[0].body).unwrap(),
+        json!({})
+    );
 }
 
 #[test]
 fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"files": [object("I/O", "item-id", false)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object("I/O", "item-id", false)]})),
+        ),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
-        step("GET", FILES, Reply::Json(json!({"files": [object("I/O neu", "item-id", false)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object("I/O neu", "item-id", false)]})),
+        ),
     ]);
     let backend = fixture.backend();
     backend.rename("I%2FO", "I%2FO neu").unwrap();
     let requests = fixture.finish();
     assert_query(&requests[0], "root", "I/O");
-    assert_eq!(serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"], "I/O neu");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"],
+        "I/O neu"
+    );
 
     let stage = object("I/O.stage", "item-id", false);
     let fixture = Fixture::new(vec![
@@ -202,44 +321,91 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         step("GET", FILES, Reply::Json(json!({"files": [stage]}))),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
-        step("GET", FILES, Reply::Json(json!({"files": [object("I/O.txt", "item-id", false)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object("I/O.txt", "item-id", false)]})),
+        ),
     ]);
     let backend = fixture.backend();
     let mut writer = backend.open_write_copy_stage("I%2FO.stage").unwrap();
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
-    backend.promote_copy_stage("I%2FO.stage", "I%2FO.txt").unwrap();
+    backend
+        .promote_copy_stage("I%2FO.stage", "I%2FO.txt")
+        .unwrap();
     let requests = fixture.finish();
-    assert_eq!(serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"], "I/O.stage");
-    assert_eq!(serde_json::from_slice::<Value>(&requests[8].body).unwrap()["name"], "I/O.txt");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"],
+        "I/O.stage"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[8].body).unwrap()["name"],
+        "I/O.txt"
+    );
 }
 
 #[test]
 fn gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundaries() {
-    for page in [json!({}), json!({"files": null}), json!({"files": []}),
-        json!({"files": [], "nextPageToken": null, "incompleteSearch": null})] {
-        let fixture = Fixture::new((0..3).map(|_| step("GET", FILES, Reply::Json(page.clone()))).collect());
+    for page in [
+        json!({}),
+        json!({"files": null}),
+        json!({"files": []}),
+        json!({"files": [], "nextPageToken": null, "incompleteSearch": null}),
+    ] {
+        let fixture = Fixture::new(
+            (0..3)
+                .map(|_| step("GET", FILES, Reply::Json(page.clone())))
+                .collect(),
+        );
         let backend = fixture.backend();
         assert!(backend.list_dir("/").unwrap().is_empty());
         assert_eq!(backend.find_child("root", "I%2FO").unwrap(), None);
         assert!(backend.named_objects("root", "I/O").unwrap().is_empty());
         fixture.finish();
     }
-    for page in [json!(null), json!([]), json!({"files": {}}), json!({"files": ""}),
-        json!({"nextPageToken": 3}), json!({"incompleteSearch": "false"}),
-        json!({"incompleteSearch": true}), json!({"error": {"message": "failed"}})] {
-        let fixture = Fixture::new((0..3).map(|_| step("GET", FILES, Reply::Json(page.clone()))).collect());
+    for page in [
+        json!(null),
+        json!([]),
+        json!({"files": {}}),
+        json!({"files": ""}),
+        json!({"nextPageToken": 3}),
+        json!({"incompleteSearch": "false"}),
+        json!({"incompleteSearch": true}),
+        json!({"error": {"message": "failed"}}),
+    ] {
+        let fixture = Fixture::new(
+            (0..3)
+                .map(|_| step("GET", FILES, Reply::Json(page.clone())))
+                .collect(),
+        );
         let backend = fixture.backend();
-        assert_eq!(backend.list_dir("/").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(backend.find_child("root", "I%2FO").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(backend.named_objects("root", "I/O").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            backend.list_dir("/").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            backend.find_child("root", "I%2FO").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            backend.named_objects("root", "I/O").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
         fixture.finish();
     }
     // An invalid absence response must not start a create/upload mutation.
-    let fixture = Fixture::new(vec![step("GET", FILES, Reply::Json(json!({"files": false})))]);
+    let fixture = Fixture::new(vec![step(
+        "GET",
+        FILES,
+        Reply::Json(json!({"files": false})),
+    )]);
     let mut writer = fixture.backend().open_write("I%2FO").unwrap();
     writer.write_all(b"abc").unwrap();
-    assert_eq!(writer.flush().unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        writer.flush().unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
     drop(writer);
     assert_eq!(fixture.finish().len(), 1);
 }
@@ -247,36 +413,78 @@ fn gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundar
 #[test]
 fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan() {
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"nextPageToken": "second"}))),
-        step("GET", FILES, Reply::Json(json!({"files": [object(TITLE, "empty-id", true)]}))),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"nextPageToken": "second"})),
+        ),
+        step(
+            "GET",
+            FILES,
+            Reply::Json(json!({"files": [object(TITLE, "empty-id", true)]})),
+        ),
         step("GET", FILES, Reply::Json(json!({"files": null}))),
     ]);
     let (tx, rx) = crossbeam_channel::unbounded();
-    let handle = crate::rscan::start_scan_backend(std::sync::Arc::new(fixture.backend()), "/".into(), None, tx);
+    let handle = crate::rscan::start_scan_backend(
+        std::sync::Arc::new(fixture.backend()),
+        "/".into(),
+        None,
+        None,
+        tx,
+    );
     let mut found = false;
     loop {
         use crate::scanner::ScanMessage;
         match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
-            ScanMessage::Entries(entries) => found |= entries.iter().any(|entry| entry.id.as_deref() == Some("empty-id")),
+            ScanMessage::Entries(entries) => {
+                found |= entries
+                    .iter()
+                    .any(|entry| entry.id.as_deref() == Some("empty-id"))
+            }
             ScanMessage::FailedPaths(paths) => assert!(paths.is_empty(), "{paths:?}"),
             ScanMessage::Error(error) => panic!("{error}"),
-            ScanMessage::Done(progress) => { assert_eq!(progress.errors, 0); break; }
-            ScanMessage::Progress(_) => {},
+            ScanMessage::Done(progress) => {
+                assert_eq!(progress.errors, 0);
+                break;
+            }
+            ScanMessage::Progress(_) => {}
         }
     }
-    handle.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    handle
+        .cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(found);
     let requests = fixture.finish();
     assert!(requests[1].target.contains("pageToken=second"));
-    assert!(requests[2].target.contains(&super::core::cloud_urlenc("'empty-id' in parents")));
+    assert!(requests[2]
+        .target
+        .contains(&super::core::cloud_urlenc("'empty-id' in parents")));
     for resolve in [false, true] {
         let fixture = Fixture::new(vec![
-            step("GET", FILES, Reply::Json(json!({"files": null, "nextPageToken": "next"}))),
-            step("GET", FILES, Reply::Json(json!({"files": [object("I/O", "item-id", false)]}))),
+            step(
+                "GET",
+                FILES,
+                Reply::Json(json!({"files": null, "nextPageToken": "next"})),
+            ),
+            step(
+                "GET",
+                FILES,
+                Reply::Json(json!({"files": [object("I/O", "item-id", false)]})),
+            ),
         ]);
         let backend = fixture.backend();
-        if resolve { assert_eq!(backend.find_child("root", "I%2FO").unwrap().as_deref(), Some("item-id")); }
-        else { assert_eq!(backend.named_objects("root", "I/O").unwrap()[0].id, "item-id"); }
+        if resolve {
+            assert_eq!(
+                backend.find_child("root", "I%2FO").unwrap().as_deref(),
+                Some("item-id")
+            );
+        } else {
+            assert_eq!(
+                backend.named_objects("root", "I/O").unwrap()[0].id,
+                "item-id"
+            );
+        }
         assert!(fixture.finish()[1].target.contains("pageToken=next"));
     }
 }

@@ -219,6 +219,7 @@ impl App {
         let selected = paths;
         let journal_plan = plan.clone();
         let attempted = delete_paths.len();
+        let win32_rules = local_names_follow_win32_rules();
         let mut initial =
             DeleteProgress::new(DeleteKind::Recycle, DeleteOrigin::Reclaim, attempted);
         initial.phase = DeletePhase::Applying;
@@ -237,16 +238,31 @@ impl App {
                         break;
                     }
                     outcome.entries_planned = outcome.entries_planned.saturating_add(1);
-                    let native = PathBuf::from(display.replace('/', std::path::MAIN_SEPARATOR_STR));
-                    match trash::delete(native) {
-                        Ok(()) => {
+                    let target = crate::vfs::DeleteTarget {
+                        path: display.clone(),
+                        id: None,
+                        is_dir: false,
+                        is_symlink: false,
+                    };
+                    match crate::app::delete_hostile_names::recycle_local_target(
+                        &target,
+                        win32_rules,
+                    ) {
+                        Ok(route) => {
+                            if matches!(
+                                route,
+                                crate::app::delete_hostile_names::RecycleRoute::RenamedFirst
+                            ) {
+                                outcome.renamed_before_recycle =
+                                    outcome.renamed_before_recycle.saturating_add(1);
+                            }
                             outcome.entries_deleted = outcome.entries_deleted.saturating_add(1);
                             outcome.record_success(display);
                             reporter.finish_target(true, true);
                         }
                         Err(error) => {
                             outcome.partial_mutation = true;
-                            outcome.record_error(display, error.to_string());
+                            outcome.record_error(display, error);
                             reporter.finish_target(false, false);
                         }
                     }

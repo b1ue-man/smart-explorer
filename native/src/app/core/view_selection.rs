@@ -50,11 +50,12 @@ impl App {
             }
         };
 
+        // A file is a result when it matches; a directory is a result when it
+        // matches itself (e.g. a folder named `nul` under the problem-names
+        // filter) or contains a result. Directories are otherwise structure.
         let mut file_matches = vec![false; self.entries.len()];
         for (i, e) in self.entries.iter().enumerate() {
-            if !e.is_dir {
-                file_matches[i] = cf.matches(e, &prefix);
-            }
+            file_matches[i] = cf.matches(e, &prefix);
         }
 
         let mut has_match = vec![false; self.entries.len()];
@@ -71,7 +72,7 @@ impl App {
                     }
                 }
             } else {
-                let mut any = false;
+                let mut any = idx != root_idx && file_matches[idx];
                 if let Some(children) = children_map.get(e.path.as_ref()) {
                     for &c in children {
                         let ce = &self.entries[c];

@@ -140,19 +140,7 @@ impl App {
     }
 
     pub(in crate::app) fn filter_is_active(&self) -> bool {
-        let f = &self.filter;
-        !f.text.trim().is_empty()
-            || !f.extensions.is_empty()
-            || f.size.min.is_some()
-            || f.size.max.is_some()
-            || f.mtime.min.is_some()
-            || f.mtime.max.is_some()
-            || f.btime.min.is_some()
-            || f.btime.max.is_some()
-            || !f.include_files
-            || !f.include_dirs
-            || !f.include_hidden
-            || !f.include_system
+        crate::filter::filter_prunes(&self.filter)
     }
 
     // ─── Tabs ────────────────────────────────────────────────────────────
@@ -171,6 +159,8 @@ impl App {
         std::mem::swap(&mut t.progress, &mut self.progress);
         std::mem::swap(&mut t.scan_running, &mut self.scan_running);
         std::mem::swap(&mut t.scan_was_canceled, &mut self.scan_was_canceled);
+        std::mem::swap(&mut t.scan_retention, &mut self.scan_retention);
+        std::mem::swap(&mut t.scan_truncated, &mut self.scan_truncated);
         std::mem::swap(&mut t.history, &mut self.history);
         std::mem::swap(&mut t.forward, &mut self.forward);
         std::mem::swap(&mut t.failed_paths, &mut self.failed_paths);

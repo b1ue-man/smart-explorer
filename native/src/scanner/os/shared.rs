@@ -1,7 +1,8 @@
 use super::budget::ScanBudget;
 use super::core::ms_since_unix;
 use super::platform::{get_attrs, is_link_like, path_text};
-use super::walk::walk_parallel;
+use super::retention::RetentionHandle;
+use super::walk::{walk_parallel, PendingDir};
 use crate::types::{FileEntry, ScanProgress};
 use crossbeam_channel::Sender;
 use std::collections::HashSet;
@@ -21,6 +22,9 @@ pub enum ScanMessage {
 
 pub struct ScanHandle {
     pub cancel: Arc<AtomicBool>,
+    /// Set when the bounded scan budget (entries, retained text, depth)
+    /// stopped the walk before it visited everything.
+    pub truncated: Arc<AtomicBool>,
 }
 
 const MAX_ERROR_PATHS_TRACKED: usize = 500;
@@ -30,30 +34,34 @@ pub struct ScanOpts {
     /// Maximum depth to descend. `Some(1)` = current dir only (Explorer-style).
     /// `None` = unlimited recursion.
     pub max_depth: Option<u32>,
+    /// Scan-time retention: when set, only retained entries and the
+    /// directories needed to place them are emitted and counted against the
+    /// budget; `None` emits every visited entry.
+    pub retention: Option<RetentionHandle>,
 }
 
-pub fn start_scan(
-    root: PathBuf,
-    follow_symlinks: bool,
-    max_depth: Option<u32>,
-    tx: Sender<ScanMessage>,
-) -> ScanHandle {
+impl ScanOpts {
+    /// Emit everything down to `max_depth` (`None` = unlimited).
+    pub fn everything(max_depth: Option<u32>) -> Self {
+        Self {
+            follow_symlinks: false,
+            max_depth,
+            retention: None,
+        }
+    }
+}
+
+pub fn start_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>) -> ScanHandle {
     let cancel = Arc::new(AtomicBool::new(false));
+    let truncated = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
+    let truncated_clone = truncated.clone();
 
     let failure_tx = tx.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("scan-driver".into())
         .spawn(move || {
-            run_scan(
-                root,
-                ScanOpts {
-                    follow_symlinks,
-                    max_depth,
-                },
-                tx,
-                cancel_clone,
-            );
+            run_scan(root, opts, tx, cancel_clone, truncated_clone);
         })
     {
         cancel.store(true, Ordering::Relaxed);
@@ -68,7 +76,7 @@ pub fn start_scan(
         }));
     }
 
-    ScanHandle { cancel }
+    ScanHandle { cancel, truncated }
 }
 
 pub(super) struct Scanner {
@@ -84,6 +92,7 @@ pub(super) struct Scanner {
     pub(super) failed_paths: Arc<Mutex<Vec<(String, String)>>>,
     pub(super) budget: ScanBudget,
     pub(super) budget_exhausted: AtomicBool,
+    pub(super) truncated: Arc<AtomicBool>,
     pub(super) visited_directories: Mutex<HashSet<String>>,
 }
 
@@ -101,6 +110,7 @@ impl Scanner {
         match self.budget.claim(text_bytes, depth) {
             Ok(()) => true,
             Err(limit) => {
+                self.truncated.store(true, Ordering::Relaxed);
                 if !self.budget_exhausted.swap(true, Ordering::Relaxed) {
                     self.errors.fetch_add(1, Ordering::Relaxed);
                     let detail = format!(
@@ -167,7 +177,13 @@ fn finish_root_failure(
     }));
 }
 
-fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<AtomicBool>) {
+fn run_scan(
+    root: PathBuf,
+    opts: ScanOpts,
+    tx: Sender<ScanMessage>,
+    cancel: Arc<AtomicBool>,
+    truncated: Arc<AtomicBool>,
+) {
     let start = Instant::now();
     let scanned = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
@@ -278,6 +294,7 @@ fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<
         failed_paths: failed_paths.clone(),
         budget: ScanBudget::default(),
         budget_exhausted: AtomicBool::new(false),
+        truncated,
         visited_directories: Mutex::new(HashSet::new()),
     });
 
@@ -302,9 +319,14 @@ fn run_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>, cancel: Arc<
         })
     };
 
-    // Walk
+    // Walk. The root entry is already emitted, so its children start with no
+    // pending ancestors.
     if !root_link_like || scanner.opts.follow_symlinks {
-        walk_parallel(&scanner, vec![root.clone()], 1);
+        let root_dir = PendingDir {
+            path: root.clone(),
+            lineage: None,
+        };
+        walk_parallel(&scanner, vec![root_dir], 1);
     }
 
     // Stop progress thread

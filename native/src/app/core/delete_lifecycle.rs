@@ -81,6 +81,9 @@ pub(in crate::app) struct DeleteOutcome {
     pub(in crate::app) entries_planned: u64,
     pub(in crate::app) entries_deleted: u64,
     pub(in crate::app) partial_mutation: bool,
+    /// Targets the Recycle Bin only accepted after a rename to a Win32-safe
+    /// sibling name (reserved device names, trailing dots/spaces, …).
+    pub(in crate::app) renamed_before_recycle: u64,
 }
 
 impl DeleteOutcome {
@@ -98,6 +101,7 @@ impl DeleteOutcome {
             entries_planned: 0,
             entries_deleted: 0,
             partial_mutation: false,
+            renamed_before_recycle: 0,
         }
     }
 
