@@ -456,3 +456,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   spaces, then compare with `CON`/`PRN`/`AUX`/`NUL` or `COM`/`LPT` plus one
   digit (Microsoft's current guidance also lists `0` and the superscripts
   `¹ ² ³`). `COM10` and `nul_x` are ordinary names.
+- **The agent protocol forwards errors as text only.** `Frame::Err(String)` is
+  shared with the committed `se-agent` bundles, so it cannot grow a kind field.
+  Daemon-proxied Share and SSH backends therefore reached callers as
+  `io::ErrorKind::Other`, and the CLI copy planner (`transfer_plan`, tree
+  guards) that branches on `NotFound` refused every upload to a new remote
+  path. `agent/core/agent_error.rs` rebuilds `NotFound`, `AlreadyExists` and
+  `PermissionDenied` from the forwarded `std::io::Error` text (`(os error 2)`,
+  `(os error 3)`, `(os error 80|183)` and the English messages); anything else
+  stays `Other` with its message. Prefer `try_exists` over stat-and-catch when
+  a new call needs existence only.
