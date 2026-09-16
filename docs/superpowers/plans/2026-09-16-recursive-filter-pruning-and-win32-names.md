@@ -126,6 +126,12 @@
 
 ## Status
 
-M1–M10 are implemented (commits on `main` ending in `[task candidate]`). The
-single suite `native/test-filter-transfer-task.sh` maps every milestone; its
-remote runs and the terminal release are recorded on `docs/TODO.md` (F1).
+M1–M10 are implemented (commits `35d4f24` … `c5abb52` on `main`). The single
+suite `native/test-filter-transfer-task.sh` passed on both jobs in
+[run 35094669481](https://github.com/b1ue-man/smart-explorer/actions/runs/35094669481)
+after four corrected candidates (stale `checkout@v4` lookup in the lifecycle
+E2E, its stale Direct inbox expectation, inherited Room exports, and the
+agent protocol's untyped errors that broke `se cp` into a new Room path). The
+[single terminal release](https://github.com/b1ue-man/smart-explorer/actions/runs/35098135163)
+published [v0.5.159](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.159)
+with all 18 expected assets; `docs/TODO.md` row F1 records the live state.
