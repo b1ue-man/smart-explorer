@@ -72,7 +72,10 @@ pub(super) fn metadata_is_link_like(metadata: &Metadata) -> bool {
 
 pub(super) fn path_text(path: &Path) -> io::Result<String> {
     path.to_str()
-        .map(|path| path.replace('\\', "/"))
+        .map(|_| {
+            crate::local_access::display_path(&crate::local_access::normalize_scan_root(path))
+                .replace('\\', "/")
+        })
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "path is not valid Unicode"))
 }
 

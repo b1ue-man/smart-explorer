@@ -1,6 +1,6 @@
 use crate::types::{CopyMode, CopyOptions, CopyProgress, FileEntry};
 use crossbeam_channel::Sender;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,7 +31,7 @@ mod safe_file;
 use outcome::{send_collection_failure, send_copy_canceled, CopyErrorLog};
 use planning::{dedupe_entries, dedupe_paths, EntryAccumulator};
 use prune::{prune_empty_dirs, selected_directory_roots};
-use relative::{rel_from_root, validate_seed_destinations};
+use relative::{rel_from_root, safe_rel_path, validate_seed_destinations};
 use safe_file::{transfer_file, TransferResult};
 
 pub enum CopyMsg {
