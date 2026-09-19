@@ -26,7 +26,8 @@ impl App {
             return;
         }
         if let Some(rs) = &self.remote {
-            let snapshot = self.recursive.then(|| self.recursive_transfer_files());
+            let snapshot = (self.recursive && self.filter_is_active())
+                .then(|| self.recursive_transfer_files());
             let snapshot_root = self.root_prefix();
             let items: Vec<(String, String, bool)> = self
                 .entries
@@ -88,7 +89,7 @@ impl App {
         // Filter-aware copy: when a filter is active and folders are selected,
         // build a virtual-file data object so pasting (anywhere) recreates
         // only the matching files with their folder structure.
-        if !cut && (self.recursive || (has_dir && self.filter_is_active())) {
+        if !cut && self.filter_is_active() && (self.recursive || has_dir) {
             let recursive = self.recursive;
             let seeds: Vec<FileEntry> = if recursive {
                 self.recursive_transfer_files()
@@ -134,11 +135,8 @@ impl App {
         }
 
         // Plain CF_HDROP path (no filter, or cut, or files only).
-        let paths: Vec<String> = self
-            .selection
-            .iter()
-            .map(|k| sel_key_path(k).replace('/', "\\"))
-            .collect();
+        let paths =
+            super::recursive_clipboard::plain_selection_paths(&self.entries, &self.selection);
         let effect = if cut {
             ClipboardEffect::Move
         } else {

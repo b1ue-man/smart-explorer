@@ -249,6 +249,47 @@ fn search_recursive_access_task_wide_scan_folded_copy_preserves_exact_structure(
 }
 
 #[test]
+fn search_recursive_access_task_unfiltered_folded_folder_copy_keeps_empty_directories() {
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("source");
+    std::fs::create_dir_all(source.join("bundle/empty")).unwrap();
+    std::fs::write(source.join("bundle/asset.dat"), b"payload").unwrap();
+    let mut app = App::new_for_copy_task();
+    app.recursive = true;
+    app.filter = FilterDef::new();
+    app.start_scan_navigated(source, false);
+    finish_scan(&mut app);
+    let folder = app
+        .entries
+        .iter()
+        .position(|entry| entry.name.as_ref() == "bundle")
+        .unwrap();
+    app.selection.insert(app.entries[folder].key());
+    app.toggle_recursive_folder(folder);
+    app.select_all();
+    assert_eq!(
+        recursive_clipboard::plain_selection_paths(&app.entries, &app.selection).len(),
+        1
+    );
+    let destination = fixture.path().join("destination");
+    app.copy_dest = destination.to_string_lossy().into_owned();
+    app.copy_preserve = true;
+    app.confirm_copy();
+    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    while app.copy_rx.is_some() {
+        app.drain_copy();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.copy_errors.is_empty(), "{:?}", app.copy_errors);
+    assert!(destination.join("bundle/empty").is_dir());
+    assert_eq!(
+        std::fs::read(destination.join("bundle/asset.dat")).unwrap(),
+        b"payload"
+    );
+}
+
+#[test]
 fn search_recursive_access_task_mid_scan_filter_restart_and_partial_channel() {
     let fixture = tempfile::tempdir().unwrap();
     std::fs::write(fixture.path().join("match.ZST"), b"x").unwrap();

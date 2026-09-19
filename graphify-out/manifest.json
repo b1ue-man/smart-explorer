@@ -650,9 +650,9 @@
     "semantic_hash": "bd9f87ed5a6da0f4a4f10da91db14219"
   },
   "app/core/search_recursive_access_task.rs": {
-    "mtime": 1789852346.3271923,
-    "ast_hash": "66c277656fc643f3ba5a5acc7c93c9e0",
-    "semantic_hash": "66c277656fc643f3ba5a5acc7c93c9e0"
+    "mtime": 1789852881.9589524,
+    "ast_hash": "d5cbcacee0ec8fd36fc13b90e82add16",
+    "semantic_hash": "d5cbcacee0ec8fd36fc13b90e82add16"
   },
   "app/core/settings_background.rs": {
     "mtime": 1789464606.184101,
@@ -935,9 +935,9 @@
     "semantic_hash": "8d86d00b2172783dab3a8983599d45bb"
   },
   "app/os/shared/clipboard.rs": {
-    "mtime": 1789852346.4531949,
-    "ast_hash": "65b65f182cf7c7da6b68f0060ef00f36",
-    "semantic_hash": "65b65f182cf7c7da6b68f0060ef00f36"
+    "mtime": 1789852881.988953,
+    "ast_hash": "0993a74826a05873e4e3d0b230f28318",
+    "semantic_hash": "0993a74826a05873e4e3d0b230f28318"
   },
   "app/os/shared/clipboard_lifecycle.rs": {
     "mtime": 1789852346.4701953,
@@ -965,9 +965,9 @@
     "semantic_hash": "21e50a200908b4adc15dcc692825d27b"
   },
   "app/os/shared/file_actions.rs": {
-    "mtime": 1789852346.5191963,
-    "ast_hash": "9a71dda6d4905b8d8d39262f7f7c98c5",
-    "semantic_hash": "9a71dda6d4905b8d8d39262f7f7c98c5"
+    "mtime": 1789852882.036954,
+    "ast_hash": "0c2f56ee76fb92c415d15b7562309d77",
+    "semantic_hash": "0c2f56ee76fb92c415d15b7562309d77"
   },
   "app/os/shared/platform_helpers.rs": {
     "mtime": 1789463925.6637743,
@@ -975,9 +975,9 @@
     "semantic_hash": "90c091865ae5e097e7cbe47feb8f712f"
   },
   "app/os/shared/recursive_clipboard.rs": {
-    "mtime": 1789852346.5331964,
-    "ast_hash": "76aa5778f248c584faa73aaaee481f0d",
-    "semantic_hash": "76aa5778f248c584faa73aaaee481f0d"
+    "mtime": 1789852882.0519543,
+    "ast_hash": "f6daa3b1f8844870d4fed1e5d5d4e563",
+    "semantic_hash": "f6daa3b1f8844870d4fed1e5d5d4e563"
   },
   "app/os/shared/remote_helpers.rs": {
     "mtime": 1789852346.5481968,

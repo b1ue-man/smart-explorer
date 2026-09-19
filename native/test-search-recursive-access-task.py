@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,21 @@ WINDOWS = [
 def sha256(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def build_fingerprint():
+    digest = hashlib.sha256()
+    # Include all checked-in native build inputs; omit source-independent
+    # documentation and orchestration so a runner-only fix can reuse the binary.
+    paths = subprocess.check_output(["git", "ls-files", "-z", "--", "native/src",
+        "native/Cargo.toml", "native/Cargo.lock", "native/build.rs", "native/assets",
+        "native/.cargo", ".cargo"], cwd=ROOT).decode().split("\0")
+    for name in sorted(filter(None, paths)):
+        digest.update(name.encode())
+        digest.update(bytes.fromhex(sha256(ROOT / name)))
+    digest.update(subprocess.check_output(["rustc", "-vV"], cwd=NATIVE))
+    digest.update(b"native-lib-test;debug=0;incremental=1")
+    return digest.hexdigest()
 
 
 def run(command, log, seconds, env, stderr=None):
@@ -76,6 +92,7 @@ def main():
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--source-sha")
     parser.add_argument("--binary-sha256")
+    parser.add_argument("--binary-cache", type=Path)
     args = parser.parse_args()
     logs = args.log_root.resolve()
     logs.mkdir(parents=True, exist_ok=True)
@@ -94,9 +111,20 @@ def main():
         if "SeBackupPrivilege" not in privileges:
             raise RuntimeError("Runner backup-read privilege is missing; fix setup before building.")
     binary = args.binary
+    cache = args.binary_cache.resolve() if args.binary_cache else None
+    fingerprint = build_fingerprint() if cache else None
+    cached_binary = cache / ("fixture.exe" if os.name == "nt" else "fixture") if cache else None
+    if binary is None and cache:
+        try:
+            metadata = json.loads((cache / "provenance.json").read_text())
+            if metadata["build_inputs_sha256"] == fingerprint and metadata["binary_sha256"] == sha256(cached_binary):
+                binary = cached_binary
+                print("Reusing the source- and hash-bound development fixture.", flush=True)
+        except (OSError, ValueError, KeyError):
+            pass
     if binary:
         binary = binary.resolve()
-        if args.source_sha != candidate or args.binary_sha256 != sha256(binary):
+        if args.binary and (args.source_sha != candidate or args.binary_sha256 != sha256(binary)):
             raise RuntimeError("Supplied development binary needs this exact source SHA and SHA-256.")
     else:
         # Cargo reuses its validated dependency/incremental cache on this host.
@@ -114,6 +142,11 @@ def main():
                     binary = Path(record["executable"])
         if binary is None:
             raise RuntimeError("Cargo did not report the expected library fixture executable.")
+        if cache:
+            cache.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(binary, cached_binary)
+            metadata = {"build_inputs_sha256": fingerprint, "binary_sha256": sha256(cached_binary)}
+            (cache / "provenance.json").write_text(json.dumps(metadata), encoding="utf-8")
     run([str(binary), "--list", "--format", "terse"], logs / "available-tests.txt", 60, env)
     available = [line.removesuffix(": test") for line in (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]
     selected = [name for name in available if PREFIX in name]

@@ -210,7 +210,10 @@ entrypoint with directly affected host integrations; Windows adds real ACL,
 process-authenticated read-helper and clipboard-stream cases. The script obtains
 the library fixture path from Cargo's artifact records, builds only that affected
 component incrementally if no exact source/hash-bound binary was supplied, and
-reuses it for the entire suite. Job/task timeouts are 190/185 minutes. Diagnostics
+reuses it for the entire suite. Job/task timeouts are 190/185 minutes. A retained,
+hash-verified fixture cache is keyed by native build inputs and compiler
+identity; orchestration-only retries reuse that binary. Workspace crate output
+is also retained in the Cargo cache for incremental source fixes. Diagnostics
 include the selected cases, build output and source/binary hashes. This pipeline
 does not publish. After successful acceptance, dispatch the existing `build.yml`
 complete-release transaction for that exact source SHA; never run another

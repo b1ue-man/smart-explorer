@@ -398,7 +398,7 @@ impl App {
     pub(in crate::app) fn confirm_copy(&mut self) {
         // Selection seeds; the worker thread expands directories recursively
         // and applies the current filter (no UI freeze on big subtrees).
-        let seeds: Vec<FileEntry> = if self.recursive {
+        let seeds: Vec<FileEntry> = if self.recursive && self.filter_is_active() {
             self.recursive_transfer_files()
         } else {
             self.entries
