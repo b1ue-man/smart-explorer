@@ -156,8 +156,7 @@ impl RemoteFilterCtx {
     }
 
     fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
-        self.filter.include_dirs
-            && (!e.hidden || self.filter.include_hidden)
+        (!e.hidden || self.filter.include_hidden)
             && (!e.system || self.filter.include_system)
     }
 }

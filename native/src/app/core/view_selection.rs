@@ -27,6 +27,7 @@ impl App {
             });
             self.tree.rows = rows.clone();
             self.view = rows;
+            self.reconcile_result_selection();
             self.last_view_recompute = Instant::now();
             return;
         }
@@ -38,7 +39,17 @@ impl App {
             |a, b| compare_entries(&self.entries[a], &self.entries[b], key, dir, dirs_first),
         );
         self.view = self.tree.displayed(&self.entries);
+        self.reconcile_result_selection();
         self.last_view_recompute = Instant::now();
+    }
+
+    fn reconcile_result_selection(&mut self) {
+        if !self.selection.is_empty() {
+            self.selection = self.tree.rows.iter()
+                .map(|&(index, _)| self.entries[index].key())
+                .filter(|key| self.selection.contains(key))
+                .collect();
+        }
     }
 
     // ─── Selection / actions ────────────────────────────────────────────

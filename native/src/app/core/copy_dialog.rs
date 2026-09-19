@@ -56,10 +56,14 @@ impl App {
                             self.open_picker(PickerPurpose::CopyDest, &init);
                         }
                     });
-                    ui.checkbox(
+                    let required_structure = self.recursive && self.filter_is_active();
+                    if required_structure {
+                        self.copy_preserve = true;
+                    }
+                    ui.add_enabled(!required_structure, egui::Checkbox::new(
                         &mut self.copy_preserve,
                         "Ordnerstruktur erhalten (leere Ordner werden weggelassen)",
-                    );
+                    ));
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Bei Konflikt:");
                         ui.radio_value(&mut self.copy_conflict, Conflict::Rename, "umbenennen");

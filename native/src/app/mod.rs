@@ -73,6 +73,10 @@ mod filter_scope;
 mod recursive_tree;
 #[path = "core/recursive_navigation.rs"]
 mod recursive_navigation;
+#[path = "core/recursive_transfer.rs"]
+mod recursive_transfer;
+#[path = "os/shared/recursive_clipboard.rs"]
+mod recursive_clipboard;
 #[path = "core/filterbar.rs"]
 mod filterbar;
 #[path = "core/frame_keyboard.rs"]

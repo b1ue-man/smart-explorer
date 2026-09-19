@@ -191,11 +191,36 @@ impl App {
 }
 
 pub(in crate::app) fn prepare_filtered_clipboard(
-    seeds: Vec<FileEntry>,
+    mut seeds: Vec<FileEntry>,
     filter: FilterDef,
     prefix: String,
 ) -> Result<Vec<ClipboardVirtualFile>, String> {
     let cf = CompiledFilter::compile(&filter);
+    if let Some(error) = cf.error() {
+        return Err(error.to_string());
+    }
+    // Parent selections already expand their descendants. Expanding every
+    // selected row would duplicate work and publish duplicate target names.
+    seeds.sort_unstable_by_key(|entry| entry.path.len());
+    let mut selected_dirs = HashSet::new();
+    let mut selected_paths = HashSet::new();
+    seeds.retain(|entry| {
+        let mut parent = entry.parent.as_ref();
+        while !parent.is_empty() {
+            if selected_dirs.contains(parent) {
+                return false;
+            }
+            let Some((ancestor, _)) = parent.rsplit_once('/') else { break };
+            parent = ancestor;
+        }
+        if !selected_paths.insert(entry.path.to_string()) {
+            return false;
+        }
+        if entry.is_dir && !entry.is_symlink {
+            selected_dirs.insert(entry.path.to_string());
+        }
+        true
+    });
     let mut out = Vec::new();
     for e in &seeds {
         if e.is_dir && !e.is_symlink {
@@ -228,7 +253,7 @@ pub(in crate::app) fn prepare_filtered_clipboard(
                     }
                 }
             }
-        } else {
+        } else if !e.is_dir && cf.matches(e, &prefix) {
             out.push(ClipboardVirtualFile {
                 abs: e.path.replace('/', "\\"),
                 rel: e.name.to_string(),
