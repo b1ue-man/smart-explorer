@@ -10,6 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(test)]
+#[path = "search_recursive_access_task.rs"]
+mod task;
+
 /// A remote directory to list. `lineage` links the ancestors whose entries
 /// were not emitted yet (only while a retention filter is active).
 #[derive(Clone)]

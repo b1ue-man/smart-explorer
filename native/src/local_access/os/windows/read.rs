@@ -1,5 +1,6 @@
 use super::{broker, normalize_scan_root, privilege::BackupRead};
 use crate::local_access::protocol::{self, ReadKind};
+use std::os::windows::io::AsRawHandle;
 use std::{
     fs::{File, Metadata, OpenOptions},
     io,
@@ -100,6 +101,7 @@ pub(super) fn open_scoped(root: &str, path: &str, kind: ReadKind) -> io::Result<
         if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
+        verify_root_identity(root, &current, &file)?;
         held.push(file);
     }
     let file = open_direct(&target, kind, FILE_SHARE_READ | FILE_SHARE_WRITE)?;
@@ -110,5 +112,38 @@ pub(super) fn open_scoped(root: &str, path: &str, kind: ReadKind) -> io::Result<
     {
         return Err(io::Error::from(io::ErrorKind::PermissionDenied));
     }
+    verify_root_identity(root, &target, &file)?;
     Ok(file)
+}
+
+fn verify_root_identity(root: &str, current: &Path, file: &File) -> io::Result<()> {
+    let current = super::display_path(current);
+    if !protocol::contains(root, &current) || !protocol::contains(&current, root) {
+        return Ok(());
+    }
+    // NTFS can enable case-sensitive directories. A textual case-folded
+    // containment check alone must not admit a different sibling root.
+    let authorized = open_direct(
+        &normalize_scan_root(Path::new(root)),
+        ReadKind::Metadata,
+        FILE_SHARE_READ,
+    )?;
+    if authorized.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || identity(file)? != identity(&authorized)?
+    {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    Ok(())
+}
+
+fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+    ))
 }

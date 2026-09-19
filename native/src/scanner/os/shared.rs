@@ -29,6 +29,10 @@ pub struct ScanHandle {
 
 const MAX_ERROR_PATHS_TRACKED: usize = 500;
 
+#[cfg(test)]
+#[path = "search_recursive_access_task.rs"]
+mod task;
+
 pub struct ScanOpts {
     pub follow_symlinks: bool,
     /// Maximum depth to descend. `Some(1)` = current dir only (Explorer-style).

@@ -19,7 +19,7 @@ impl Default for ScanBudget {
 }
 
 impl ScanBudget {
-    fn with_limits(max_entries: u64, max_text_bytes: u64, max_depth: u32) -> Self {
+    pub(super) fn with_limits(max_entries: u64, max_text_bytes: u64, max_depth: u32) -> Self {
         Self {
             entries: AtomicU64::new(0),
             text_bytes: AtomicU64::new(0),

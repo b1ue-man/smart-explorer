@@ -26,6 +26,10 @@ struct ReadStream {
     position: Mutex<u64>,
 }
 
+#[cfg(test)]
+#[path = "read_stream_tests.rs"]
+mod tests;
+
 pub(super) fn open(path: &str) -> Result<IStream> {
     let file = crate::local_access::open_read(Path::new(path)).map_err(com_error)?;
     Ok(ReadStream {

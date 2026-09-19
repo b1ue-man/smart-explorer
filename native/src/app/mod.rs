@@ -136,6 +136,9 @@ mod recursive_navigation;
 mod recursive_transfer;
 #[path = "core/recursive_tree.rs"]
 mod recursive_tree;
+#[cfg(test)]
+#[path = "core/search_recursive_access_task.rs"]
+mod search_recursive_access_task;
 #[path = "core/settings_background.rs"]
 mod settings_background;
 #[path = "core/settings_cloud.rs"]

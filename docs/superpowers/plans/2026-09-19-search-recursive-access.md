@@ -1,6 +1,7 @@
 # Search, recursive navigation and access repair
 
-Status: implementation plan; no local builds or test execution.
+Status: implementation complete; focused remote acceptance pending. No local
+builds or test execution.
 
 ## Goal and deliverables
 
@@ -156,3 +157,29 @@ Completed before source edits on 2026-09-19:
 Routine field/module wiring in existing near-limit application files is permitted
 for these extracted responsibilities; new behavior lives in focused modules below
 500 lines. No exception permits adding a new feature body to an oversized file.
+
+## Implementation refinements and acceptance entrypoint
+
+Inspection during integration also found that the recursive-mode flag was shared
+across otherwise independent tabs. It now follows the tab's scan/filter state.
+Wide local listings descend in bounded directory batches, so a pruning filter
+does not accumulate every pending directory before producing its first hit.
+Per-directory panic isolation and a flushing result sink preserve earlier rows.
+The helper compares filesystem identities at the consented root in addition to
+textual containment, covering case-sensitive NTFS sibling roots.
+
+`FILEDESCRIPTORW` has a fixed relative-name buffer. Long snapshots are materialized
+through the same existing download/copy adapter instead of truncating names.
+Normal virtual files stream lazily from shared read handles; COM clones maintain
+separate seek cursors. Cut and external folder drag keep their prior whole-folder
+semantics. The read helper intentionally grants no protected destination writes
+or deletes, and does not change remote-provider authentication.
+
+The one suite is `native/test-search-recursive-access-task.py`, dispatched for an
+exact candidate through `search-recursive-access-task.yml`. Its search/tree/copy
+cases cover M1-M4, including real wide trees and long snapshot paths. M5 includes
+protocol rejection, preserved results on failed consent, Windows deny-ACL/token
+restoration, same-process reuse of handles supplied by an authenticated child,
+helper shutdown and read-only COM streams. Existing directly affected directory,
+scanner and analytics cases are selected into the same binary invocation. M6
+records candidate/hash-bound acceptance on Linux and Windows before release.

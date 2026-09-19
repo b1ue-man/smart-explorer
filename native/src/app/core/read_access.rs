@@ -7,6 +7,24 @@ pub(super) struct ReadAccess {
     message: Option<String>,
 }
 
+#[cfg(test)]
+#[test]
+fn search_recursive_access_task_declined_or_failed_consent_keeps_current_results() {
+    let mut app = App::new_for_copy_task();
+    app.root_path = "C:/task".into();
+    for result in [Ok(false), Err("helper failed".to_string())] {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        app.read_access.pending = Some((app.root_path.clone(), rx));
+        app.selection.insert(Arc::from("retained-selection"));
+        tx.send(result).unwrap();
+        app.poll_read_access();
+        assert!(app.selection.contains("retained-selection"));
+        assert!(!app.scan_running);
+        assert!(app.read_access.pending.is_none());
+        assert!(app.read_access.message.is_some());
+    }
+}
+
 impl App {
     pub(super) fn poll_read_access(&mut self) {
         let Some((root, receiver)) = &self.read_access.pending else {
