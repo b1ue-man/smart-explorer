@@ -151,7 +151,8 @@ impl App {
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::hover());
                         visible_rows.push((row_index, rect));
-                        let mut indent = display_depth.min(32) as f32 * 14.0;
+                        let mut indent =
+                            (display_depth.min(32) as f32 * 14.0).min((cell_w - 110.0).max(0.0));
                         let mut click_rect = rect;
                         if self.recursive {
                             let arrow_rect = egui::Rect::from_min_size(

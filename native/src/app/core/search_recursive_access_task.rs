@@ -254,6 +254,13 @@ fn search_recursive_access_task_unfiltered_folded_folder_copy_keeps_empty_direct
     let source = fixture.path().join("source");
     std::fs::create_dir_all(source.join("bundle/empty")).unwrap();
     std::fs::write(source.join("bundle/asset.dat"), b"payload").unwrap();
+    #[cfg(windows)]
+    let source = {
+        let mut spelling = source.to_string_lossy().into_owned();
+        let drive = spelling[..1].to_ascii_lowercase();
+        spelling.replace_range(..1, &drive);
+        PathBuf::from(spelling)
+    };
     let mut app = App::new_for_copy_task();
     app.recursive = true;
     app.filter = FilterDef::new();

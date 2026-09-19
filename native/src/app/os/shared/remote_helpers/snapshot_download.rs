@@ -13,7 +13,7 @@ pub(in crate::app) fn download_clipboard_snapshot(
         return Ok(Vec::new());
     }
     let root = open_temp_path("Auswahl").map_err(|error| error.to_string())?;
-    let result = (|| {
+    let result: Result<Vec<String>, String> = (|| {
         std::fs::create_dir(&root).map_err(|error| error.to_string())?;
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(rx);
