@@ -133,7 +133,7 @@ impl App {
             let hi_row = ((hi_off / row_h).floor() as isize).min(total_rows as isize - 1);
             if hi_row >= 0 && lo_row < total_rows {
                 for row in lo_row..=(hi_row as usize) {
-                    selection.insert(self.entries[self.view[row].0].path.clone());
+                    selection.insert(self.entries[self.view[row].0].key());
                 }
             }
         }

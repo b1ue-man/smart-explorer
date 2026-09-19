@@ -230,6 +230,14 @@ impl App {
                 if i.consume_key(Modifiers::NONE, Key::Enter) {
                     acts.push(KbdAct::Open);
                 }
+                if self.recursive {
+                    if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+                        acts.push(KbdAct::RecursiveArrow(false));
+                    }
+                    if i.consume_key(Modifiers::NONE, Key::ArrowRight) {
+                        acts.push(KbdAct::RecursiveArrow(true));
+                    }
+                }
                 for shift in [false, true] {
                     let m = if shift {
                         Modifiers::SHIFT
@@ -296,6 +304,7 @@ impl App {
 
         for act in acts {
             match act {
+                KbdAct::RecursiveArrow(expand) => self.recursive_arrow(expand),
                 KbdAct::SelectAll => self.select_all(),
                 KbdAct::CopyPathsText => self.copy_paths_to_clipboard(ctx),
                 KbdAct::TrashSel => self.trash_selected(),
