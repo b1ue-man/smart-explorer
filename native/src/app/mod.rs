@@ -71,6 +71,8 @@ mod file_actions;
 mod filter_scope;
 #[path = "core/recursive_tree.rs"]
 mod recursive_tree;
+#[path = "core/recursive_navigation.rs"]
+mod recursive_navigation;
 #[path = "core/filterbar.rs"]
 mod filterbar;
 #[path = "core/frame_keyboard.rs"]

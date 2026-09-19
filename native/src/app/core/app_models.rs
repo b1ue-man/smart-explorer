@@ -343,6 +343,7 @@ pub(in crate::app) struct ReclaimScanOutcome {
 /// afterwards — calling back into egui (clipboard, repaint) from within
 /// `input_mut` can deadlock the context lock.
 pub(in crate::app) enum KbdAct {
+    RecursiveArrow(bool),
     SelectAll,
     CopyPathsText,
     TrashSel,
