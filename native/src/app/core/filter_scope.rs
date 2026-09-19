@@ -65,17 +65,24 @@ impl App {
         }
     }
 
-    /// Record how the finished scan ended and hint at a pruned rescan when the
-    /// budget cut an unpruned recursive listing short while a filter is set.
+    /// A filter narrowed during a running scan must apply to the unvisited
+    /// part as well. Retry once with that filter when the old scan truncates.
     pub(in crate::app) fn note_scan_finished(&mut self, truncated: bool) {
         self.scan_truncated = truncated;
         if truncated
             && self.recursive
-            && self.scan_retention.is_none()
-            && filter_prunes(&self.filter)
+            && !self.scan_was_canceled
+            && scan_restart_needed(self.scan_retention.as_ref(), true, &self.filter)
         {
+            self.rescan();
             self.notice = Some((
-                "⚠ Scan-Limit erreicht – F5 lädt mit dem aktiven Filter neu und behält nur Treffer."
+                "Scan-Limit erreicht – die Suche wird mit dem inzwischen geänderten Filter fortgesetzt."
+                    .to_string(),
+                Instant::now(),
+            ));
+        } else if truncated {
+            self.notice = Some((
+                "⚠ Teilergebnis: Scan-Limit erreicht. Geladene Treffer bleiben erhalten; ein engerer Filter durchsucht erneut."
                     .to_string(),
                 Instant::now(),
             ));

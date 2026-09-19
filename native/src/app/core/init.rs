@@ -181,6 +181,7 @@ impl App {
             scan_running: false,
             entries: Vec::new(),
             view: Vec::new(),
+            tree: Default::default(),
             selection: HashSet::new(),
             last_anchor: None,
             cursor: None,

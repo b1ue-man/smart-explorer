@@ -24,7 +24,7 @@ impl App {
     /// Invert the selection within the current view.
     pub(in crate::app) fn invert_selection(&mut self) {
         let mut new: HashSet<Arc<str>> = HashSet::new();
-        for &(i, _) in &self.view {
+        for &(i, _) in &self.tree.rows {
             let k = self.entries[i].key();
             if !self.selection.contains(&k) {
                 new.insert(k);

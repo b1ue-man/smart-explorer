@@ -8,8 +8,7 @@
 //! tree view can still place them. Progress counters keep counting every
 //! visited entry; only emitted entries claim the bounded scan budget.
 use crate::types::FileEntry;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Decides what a walker keeps. Implementations must be cheap: they run once
 /// per visited entry on the scan threads.
@@ -27,7 +26,7 @@ pub type RetentionHandle = Arc<dyn ScanRetention>;
 /// own pending ancestors. The first retained descendant emits the chain.
 pub struct Lineage {
     entry: FileEntry,
-    emitted: AtomicBool,
+    emitted: Mutex<bool>,
     parent: Option<Arc<Lineage>>,
 }
 
@@ -36,7 +35,7 @@ impl Lineage {
     pub fn pending(entry: FileEntry, parent: Option<Arc<Lineage>>) -> Arc<Self> {
         Arc::new(Self {
             entry,
-            emitted: AtomicBool::new(false),
+            emitted: Mutex::new(false),
             parent,
         })
     }
@@ -56,12 +55,15 @@ impl Lineage {
     ) -> bool {
         let mut current = this.as_ref();
         while let Some(lineage) = current {
-            if lineage.emitted.swap(true, Ordering::AcqRel) {
+            let mut emitted = lineage.emitted.lock().unwrap_or_else(|error| error.into_inner());
+            if *emitted {
                 break;
             }
             if !emit(&lineage.entry) {
                 return false;
             }
+            *emitted = true;
+            drop(emitted);
             current = lineage.parent.as_ref();
         }
         true
@@ -133,6 +135,6 @@ mod tests {
             false
         }));
         assert_eq!(seen, 1);
-        assert!(!outer.emitted.load(Ordering::Acquire));
+        assert!(!*outer.emitted.lock().unwrap());
     }
 }

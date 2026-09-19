@@ -31,6 +31,7 @@ impl App {
         // Replace (not clear) to actually release the backing allocation.
         self.entries = Vec::new();
         self.view = Vec::new();
+        self.tree.rows.clear();
         self.selection = HashSet::new();
         self.last_anchor = None;
         self.cursor = None;
@@ -47,6 +48,9 @@ impl App {
         if !keep_name_filter {
             self.filter.text.clear();
             self.text_draft.clear();
+        }
+        if self.root_path != root.to_string_lossy().replace('\\', "/") {
+            self.tree.collapsed.clear();
         }
         self.root_path = root.to_string_lossy().replace('\\', "/");
 
@@ -196,6 +200,7 @@ impl App {
         // Reset the listing (mirrors start_scan_navigated).
         self.entries = Vec::new();
         self.view = Vec::new();
+        self.tree.rows.clear();
         self.selection = HashSet::new();
         self.last_anchor = None;
         self.cursor = None;

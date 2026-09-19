@@ -13,7 +13,7 @@ impl App {
         let mut newest = 0i64;
         let mut top: Vec<&FileEntry> = Vec::new();
 
-        for &(i, _) in &self.view {
+        for &(i, _) in &self.tree.rows {
             let e = &self.entries[i];
             if e.is_dir {
                 dirs += 1;

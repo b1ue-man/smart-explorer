@@ -151,6 +151,7 @@ impl App {
         std::mem::swap(&mut t.root_path, &mut self.root_path);
         std::mem::swap(&mut t.entries, &mut self.entries);
         std::mem::swap(&mut t.view, &mut self.view);
+        std::mem::swap(&mut t.tree, &mut self.tree);
         std::mem::swap(&mut t.selection, &mut self.selection);
         std::mem::swap(&mut t.last_anchor, &mut self.last_anchor);
         std::mem::swap(&mut t.cursor, &mut self.cursor);
@@ -209,7 +210,11 @@ impl App {
         self.summary_cache = None;
         self.sel_size_cache = (usize::MAX, usize::MAX, 0);
         if self.view_dirty {
-            self.recompute_view();
+            if self.scan_truncated && !self.scan_was_canceled {
+                self.filter_changed();
+            } else {
+                self.recompute_view();
+            }
         }
     }
 

@@ -261,7 +261,7 @@ impl App {
                     (
                         format!(
                             "{} Treffer · {} durchsucht",
-                            self.view.len(),
+                            self.tree.rows.len(),
                             self.progress.scanned
                         ),
                         "Rekursiv mit aktivem Filter: nicht passende Einträge wurden beim Scan \
@@ -270,7 +270,7 @@ impl App {
                     )
                 } else {
                     (
-                        format!("{} / {} Einträge", self.view.len(), self.entries.len()),
+                        format!("{} / {} Einträge", self.tree.rows.len(), self.entries.len()),
                         "Sichtbare Einträge / geladene Einträge",
                     )
                 };
