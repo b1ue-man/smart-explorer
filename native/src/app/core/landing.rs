@@ -16,6 +16,7 @@ impl App {
         self.entries = Vec::new();
         self.view = Vec::new();
         self.tree = Default::default();
+        self.read_access = Default::default();
         self.selection.clear();
         self.last_anchor = None;
         self.cursor = None;

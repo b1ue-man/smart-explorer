@@ -270,6 +270,7 @@ impl SearchRelay {
             scanned: self.scanned,
             bytes: self.bytes,
             errors: self.errors,
+            permission_denied: 0,
             elapsed_ms: self.start.elapsed().as_millis() as u64,
             current_path,
         }

@@ -39,11 +39,34 @@ pub fn collect_recursive(
     start_depth: u32,
     cancel: &AtomicBool,
 ) -> CollectOutcome {
+    collect(root, follow_symlinks, start_depth, cancel, false)
+}
+
+/// Explicit copy preparation may request one scoped read grant. Background
+/// discovery uses `collect_recursive` and never opens a consent dialog.
+pub fn collect_recursive_with_access(
+    root: &Path,
+    follow_symlinks: bool,
+    start_depth: u32,
+    cancel: &AtomicBool,
+) -> CollectOutcome {
+    collect(root, follow_symlinks, start_depth, cancel, true)
+}
+
+fn collect(
+    root: &Path,
+    follow_symlinks: bool,
+    start_depth: u32,
+    cancel: &AtomicBool,
+    mut may_request: bool,
+) -> CollectOutcome {
+    let normalized = crate::local_access::normalize_scan_root(root);
+    let root = normalized.as_path();
     let mut outcome = CollectOutcome {
         entries: Vec::with_capacity(1024),
         ..CollectOutcome::default()
     };
-    let root_link_metadata = match std::fs::symlink_metadata(root) {
+    let root_link_metadata = match crate::local_access::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) => {
             push_issue(&mut outcome, root, error.to_string());
@@ -86,7 +109,29 @@ pub fn collect_recursive(
             );
             break;
         }
-        let read = match std::fs::read_dir(&directory) {
+        let mut listing = crate::local_access::read_directory(&directory);
+        if may_request
+            && listing
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+        {
+            may_request = false;
+            let requested = crate::local_access::display_path(root);
+            if crate::local_access::can_request_access(&requested) {
+                match crate::local_access::request_access(&requested) {
+                    Ok(true) => listing = crate::local_access::read_directory(&directory),
+                    Ok(false) => {
+                        outcome.canceled = true;
+                        return outcome;
+                    }
+                    Err(error) => {
+                        push_issue(&mut outcome, &directory, error);
+                        return outcome;
+                    }
+                }
+            }
+        }
+        let read = match listing {
             Ok(read) => read,
             Err(error) => {
                 push_issue(&mut outcome, &directory, error.to_string());
@@ -116,37 +161,49 @@ pub fn collect_recursive(
                     continue;
                 }
             };
-            let path = entry.path();
-            // The enumeration record already carries the entry's own (non
-            // following) metadata. Re-opening `path` would let Win32 resolve a
-            // reserved name such as `NUL` to the device instead of the file.
-            let link_metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    push_issue(&mut outcome, &path, error.to_string());
-                    continue;
-                }
-            };
-            let is_symlink = is_link_like(&link_metadata);
-            let metadata = if is_symlink && follow_symlinks {
-                match std::fs::metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        push_issue(&mut outcome, &path, error.to_string());
-                        continue;
-                    }
-                }
-            } else {
-                link_metadata
-            };
-            let name = match entry.file_name().into_string() {
+            let path = directory.join(&entry.name);
+            if entry.unreachable {
+                push_issue(
+                    &mut outcome,
+                    &path,
+                    "Name ist kein darstellbarer Dateipfad".into(),
+                );
+                continue;
+            }
+            let is_symlink =
+                entry.is_link_like || entry.kind == crate::local_access::EntryKind::Link;
+            let (is_dir, hidden, system, size, mtime_ms, btime_ms) =
+                if is_symlink && follow_symlinks {
+                    let metadata = match std::fs::metadata(&path) {
+                        Ok(metadata) => metadata,
+                        Err(error) => {
+                            push_issue(&mut outcome, &path, error.to_string());
+                            continue;
+                        }
+                    };
+                    let (hidden, system) = get_attrs(&metadata);
+                    (
+                        metadata.is_dir(),
+                        hidden,
+                        system,
+                        metadata.len(),
+                        metadata.modified().map(ms_since_unix).unwrap_or(0),
+                        metadata.created().map(ms_since_unix).unwrap_or(0),
+                    )
+                } else {
+                    (
+                        entry.is_dir,
+                        entry.hidden,
+                        entry.system,
+                        entry.size,
+                        entry.mtime_ms,
+                        entry.btime_ms,
+                    )
+                };
+            let name = match entry.name.into_string() {
                 Ok(name) => name,
                 Err(_) => {
-                    push_issue(
-                        &mut outcome,
-                        &path,
-                        "filename is not valid Unicode".to_string(),
-                    );
+                    push_issue(&mut outcome, &path, "filename is not valid Unicode".into());
                     continue;
                 }
             };
@@ -173,17 +230,15 @@ pub fn collect_recursive(
                 );
                 return outcome;
             }
-            let is_dir = metadata.is_dir();
-            let (hidden, system) = get_attrs(&metadata);
             let extension = ext_of(&name, is_dir);
             outcome.entries.push(FileEntry {
                 path: Arc::from(path_text.as_str()),
                 parent: parent.clone(),
                 name: Arc::from(name.as_str()),
                 ext: Arc::from(extension.as_str()),
-                size: if is_dir { 0 } else { metadata.len() },
-                mtime_ms: metadata.modified().map(ms_since_unix).unwrap_or(0),
-                btime_ms: metadata.created().map(ms_since_unix).unwrap_or(0),
+                size: if is_dir { 0 } else { size },
+                mtime_ms,
+                btime_ms,
                 is_dir,
                 is_symlink,
                 hidden,

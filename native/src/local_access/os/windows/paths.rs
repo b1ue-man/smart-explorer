@@ -19,7 +19,7 @@ const DEVICE: &str = r"\\.\";
 /// input. A relative path that cannot be anchored (no current directory) is
 /// returned unchanged so the open reports the real error instead of a
 /// guessed one.
-pub(in crate::analytics::os) fn normalize_scan_root(root: &Path) -> PathBuf {
+pub(crate) fn normalize_scan_root(root: &Path) -> PathBuf {
     let text = root.to_string_lossy().replace('/', "\\");
     if text.starts_with(VERBATIM) {
         return PathBuf::from(text);
@@ -132,7 +132,7 @@ fn fold_relative(tail: &str) -> String {
 }
 
 /// Strip the verbatim prefix for messages and reports.
-pub(in crate::analytics::os) fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(VERBATIM_UNC) {
         format!(r"\\{rest}")

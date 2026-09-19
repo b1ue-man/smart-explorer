@@ -21,7 +21,7 @@ pub(super) struct QuarantinedSource {
 }
 
 pub(super) fn source_snapshot_path(path: &Path) -> io::Result<SourceSnapshot> {
-    let file = File::open(path)?;
+    let file = crate::local_access::open_read(path)?;
     source_snapshot_file(&file)
 }
 

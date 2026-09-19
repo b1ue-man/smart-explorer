@@ -1,5 +1,29 @@
 # Storage-analysis access correction
 
+## Current source: shared reads in the existing window (2026-09-19)
+
+The separate elevated analytics window described in the historical stages below
+has been removed. `local_access/` now owns the Windows directory reader, record
+decoder, backup-read token guard and executable lock. Explorer discovery,
+analytics, local VFS reads, copy source reads and virtual clipboard streams share
+this adapter. New directory-record fields preserve dates/attributes for filters.
+
+Actual local denials offer **Leserechte anfordern …**. Consent launches the same
+SHA-bound executable as a headless helper; both ends authenticate the local pipe
+by process ID, and the helper checks the requesting process image. Requests are
+limited to read-only metadata/directory/file handles below the consented drive
+root. Ancestors are pinned against mutation while opening a leaf; reparse
+traversal is rejected. No administrator token, arbitrary command or write handle
+is transferred. The helper exits with its parent/connection. Existing explicit
+thread impersonation is never replaced by a session grant.
+
+Consent cancellation/failure preserves the existing view. Successful consent
+restarts the operation in that view and the grant remains usable during the
+session. Protected destination writes/deletes and remote provider credentials
+remain separate permissions. The [current batch plan](superpowers/plans/2026-09-19-search-recursive-access.md)
+defines the focused remote acceptance; this source update is not yet publication
+evidence. Everything below records the previous implementation and its evidence.
+
 ## Goal and release boundary
 
 User request on 2026-09-06: make local storage analysis read protected Windows

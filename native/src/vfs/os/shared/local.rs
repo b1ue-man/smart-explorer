@@ -72,33 +72,36 @@ impl Backend for LocalBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = match entry {
-                Ok(entry) => entry,
-                // Directory contents can change after read_dir captured its
-                // cursor. A vanished unrelated child must not make the whole
-                // listing fail; callers still revalidate every expected child.
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
-            };
-            let name = unicode_name(&entry.file_name())?;
-            // The enumeration record carries the entry's own (non-following)
-            // metadata. Re-opening the joined path would let Win32 resolve a
-            // reserved name such as `NUL` to the device instead of the file.
-            let meta = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
-            };
-            out.push(meta_to_vfs(name, &meta));
-        }
-        Ok(out)
+        crate::local_access::read_directory(&dir)?
+            .map(|entry| {
+                let entry = entry?;
+                if entry.unreachable {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Nicht darstellbarer Dateiname",
+                    ));
+                }
+                let name = unicode_name(&entry.name)?;
+                Ok(VfsMeta {
+                    name,
+                    is_dir: entry.is_dir && !entry.is_link_like,
+                    is_symlink: entry.is_link_like,
+                    size: entry.size,
+                    mtime_ms: entry.mtime_ms,
+                    btime_ms: entry.btime_ms,
+                    hidden: entry.hidden,
+                    system: entry.system,
+                    id: None,
+                    content_md5: None,
+                })
+            })
+            .filter(|entry| !matches!(entry, Err(error) if error.kind() == io::ErrorKind::NotFound))
+            .collect()
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let p = local_platform::to_os(path);
-        let meta = std::fs::symlink_metadata(&p)?;
+        let meta = crate::local_access::symlink_metadata(&p)?;
         let name = local_platform::reported_name(&p)
             .as_deref()
             .map(unicode_name)
@@ -108,7 +111,9 @@ impl Backend for LocalBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        Ok(Box::new(std::fs::File::open(local_platform::to_os(path))?))
+        Ok(Box::new(crate::local_access::open_read(
+            &local_platform::to_os(path),
+        )?))
     }
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(std::fs::File::create(local_platform::to_os(
@@ -126,7 +131,13 @@ impl Backend for LocalBackend {
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
-            let copied = std::fs::copy(local_platform::to_os(src), local_platform::to_os(&staged))?;
+            let mut reader = crate::local_access::open_read(&local_platform::to_os(src))?;
+            let permissions = reader.metadata()?.permissions();
+            let mut writer = self.open_write_new(&staged)?;
+            let copied = std::io::copy(&mut reader, &mut writer)?;
+            writer.flush()?;
+            drop(writer);
+            std::fs::set_permissions(local_platform::to_os(&staged), permissions)?;
             super::promotion::promote_staged_replace(self, &staged, dst)?;
             Ok(copied)
         })();

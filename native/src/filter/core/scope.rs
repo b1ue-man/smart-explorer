@@ -5,9 +5,9 @@
 //! narrow; anything else has to restart the scan. The comparison treats a
 //! filter as a conjunction of independent constraints and stays conservative:
 //! whatever it cannot prove counts as broader.
+use super::extensions::{normalize_extensions, suffix_matches};
 use super::imp::text_groups;
 use super::CompiledFilter;
-use super::extensions::{normalize_extensions, suffix_matches};
 use crate::scanner::ScanRetention;
 use crate::types::{FileEntry, FilterDef, Range, TextMode};
 
@@ -94,7 +94,9 @@ fn extensions_at_least_as_narrow(current: &[String], scanned: &[String]) -> bool
     let current = normalize_extensions(current);
     !current.is_empty()
         && current.iter().all(|extension| {
-            scanned.iter().any(|old| old == extension || suffix_matches(extension, old))
+            scanned
+                .iter()
+                .any(|old| old == extension || suffix_matches(extension, old))
         })
 }
 

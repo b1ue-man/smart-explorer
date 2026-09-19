@@ -76,6 +76,7 @@ impl App {
             .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
         let notice = self.notice.clone();
         ui.vertical(|ui| {
+            ui.horizontal_wrapped(|ui| self.ui_read_access(ui));
             ui.horizontal_wrapped(|ui| {
                 if self.scan_running {
                     if self.scan_handle.is_some() {
@@ -104,7 +105,7 @@ impl App {
                     let text = if self.scan_running {
                         format!("{} gescannt · {}", p.scanned, format_bytes(p.bytes))
                     } else {
-                        format!("{} Einträge · {}", self.view.len(), format_bytes(p.bytes))
+                        format!("{} Einträge · {}", self.tree.rows.len(), format_bytes(p.bytes))
                     };
                     ui.colored_label(theme::muted(ui), text).on_hover_text(format!(
                         "{} gescannt · {:.1} Sekunden · {} Fehler", p.scanned, p.elapsed_ms as f64 / 1000.0, p.errors));

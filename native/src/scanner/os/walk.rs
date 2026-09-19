@@ -1,8 +1,9 @@
 use super::budget::MAX_SCAN_DEPTH;
 use super::core::{ext_of, ms_since_unix};
 use super::os::{record_failure, ScanMessage, Scanner};
-use super::platform::{get_attrs, is_link_like, path_text};
+use super::platform::{get_attrs, path_text};
 use super::retention::Lineage;
+use crate::local_access::EntryKind;
 use crate::types::FileEntry;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -36,7 +37,21 @@ pub(super) fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PendingDir>, depth
         if scanner.cancel.load(Ordering::Relaxed) || !scanner.enter_directory(&dir.path) {
             return;
         }
-        let subdirs = list_directory(scanner, dir, depth);
+        let path = dir.path.clone();
+        let subdirs = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            list_directory(scanner, dir, depth)
+        })) {
+            Ok(subdirs) => subdirs,
+            Err(_) => {
+                fail(
+                    scanner,
+                    &path.to_string_lossy(),
+                    "Interner Lesefehler in diesem Ordner; andere Ordner werden weiter gelesen"
+                        .into(),
+                );
+                return;
+            }
+        };
         if !subdirs.is_empty() {
             walk_parallel(scanner, subdirs, depth.saturating_add(1));
         }
@@ -46,9 +61,10 @@ pub(super) fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PendingDir>, depth
 /// List one directory, emit what the retention policy keeps and return the
 /// subdirectories to descend into.
 fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<PendingDir> {
-    let read = match std::fs::read_dir(&dir.path) {
+    let read = match crate::local_access::read_directory(&dir.path) {
         Ok(read) => read,
         Err(error) => {
+            record_denial(scanner, &error);
             fail(
                 scanner,
                 &dir.path.to_string_lossy(),
@@ -69,10 +85,8 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
     if let Ok(mut sample) = scanner.sample_path.try_lock() {
         *sample = parent_text;
     }
-    let within_depth = scanner
-        .opts
-        .max_depth
-        .map_or(depth < MAX_SCAN_DEPTH, |maximum| depth < maximum);
+    let within_depth =
+        scanner.opts.max_depth.is_none_or(|maximum| depth < maximum) && depth < MAX_SCAN_DEPTH;
 
     let mut sink = BatchSink::new(scanner);
     let mut subdirs = Vec::with_capacity(16);
@@ -83,6 +97,7 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
+                record_denial(scanner, &error);
                 fail(
                     scanner,
                     &dir.path.to_string_lossy(),
@@ -91,46 +106,56 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
                 continue;
             }
         };
-        let path = entry.path();
-        // The enumeration record carries the entry's own (non-following)
-        // metadata. Re-opening `path` would let Win32 resolve a reserved name
-        // such as `NUL` to the device instead of the stored file.
-        let link_metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                fail(
-                    scanner,
-                    &path.to_string_lossy(),
-                    format!("metadata: {error}"),
-                );
-                continue;
-            }
-        };
-        let is_symlink = is_link_like(&link_metadata);
-        let metadata = if is_symlink && scanner.opts.follow_symlinks {
-            match std::fs::metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    fail(
-                        scanner,
-                        &path.to_string_lossy(),
-                        format!("follow metadata: {error}"),
-                    );
-                    continue;
-                }
-            }
-        } else {
-            link_metadata
-        };
-        let is_dir = metadata.is_dir();
-        let (hidden, system) = get_attrs(&metadata);
-        let name = match entry.file_name().into_string() {
+        let path = dir.path.join(&entry.name);
+        if entry.unreachable {
+            fail(
+                scanner,
+                &path.to_string_lossy(),
+                "Name ist kein darstellbarer Dateipfad".into(),
+            );
+            continue;
+        }
+        let is_symlink = entry.is_link_like || entry.kind == EntryKind::Link;
+        let (is_dir, hidden, system, size, mtime_ms, btime_ms) =
+            if is_symlink && scanner.opts.follow_symlinks {
+                let metadata = match std::fs::metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        record_denial(scanner, &error);
+                        fail(
+                            scanner,
+                            &path.to_string_lossy(),
+                            format!("follow metadata: {error}"),
+                        );
+                        continue;
+                    }
+                };
+                let (hidden, system) = get_attrs(&metadata);
+                (
+                    metadata.is_dir(),
+                    hidden,
+                    system,
+                    metadata.len(),
+                    metadata.modified().map(ms_since_unix).unwrap_or(0),
+                    metadata.created().map(ms_since_unix).unwrap_or(0),
+                )
+            } else {
+                (
+                    entry.is_dir,
+                    entry.hidden,
+                    entry.system,
+                    entry.size,
+                    entry.mtime_ms,
+                    entry.btime_ms,
+                )
+            };
+        let name = match entry.name.into_string() {
             Ok(name) => name,
             Err(_) => {
                 fail(
                     scanner,
                     &format!("{path:?}"),
-                    "filename is not valid Unicode".to_string(),
+                    "filename is not valid Unicode".into(),
                 );
                 continue;
             }
@@ -145,15 +170,15 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
             continue;
         };
 
-        let size = if is_dir { 0 } else { metadata.len() };
+        let size = if is_dir { 0 } else { size };
         let file_entry = FileEntry {
             path: Arc::from(path_text.as_str()),
             parent: parent.clone(),
             name: Arc::from(name.as_str()),
             ext: Arc::from(extension.as_str()),
             size,
-            mtime_ms: metadata.modified().map(ms_since_unix).unwrap_or(0),
-            btime_ms: metadata.created().map(ms_since_unix).unwrap_or(0),
+            mtime_ms,
+            btime_ms,
             is_dir,
             is_symlink,
             hidden,
@@ -166,9 +191,17 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
             scanner.bytes.fetch_add(size, Ordering::Relaxed);
         }
         let traversable = is_dir && (!is_symlink || scanner.opts.follow_symlinks) && within_depth;
-        if is_dir && !is_symlink && !within_depth && scanner.opts.max_depth.is_none() {
+        if is_dir
+            && !is_symlink
+            && depth == MAX_SCAN_DEPTH
+            && scanner.opts.max_depth.is_none_or(|maximum| maximum > depth)
+        {
             scanner.truncated.store(true, Ordering::Relaxed);
-            fail(scanner, &path_text, "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen".into());
+            fail(
+                scanner,
+                &path_text,
+                "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen".into(),
+            );
         }
 
         match scanner.opts.retention.as_ref() {
@@ -198,12 +231,30 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
                 }
             }
         }
+        // Start subtrees before finishing a very wide listing. This bounds
+        // pending directory/lineage storage even when a filter retains no rows.
+        if subdirs.len() >= 128 {
+            if !sink.flush() {
+                break;
+            }
+            walk_parallel(
+                scanner,
+                std::mem::take(&mut subdirs),
+                depth.saturating_add(1),
+            );
+        }
     }
     sink.flush();
     if scanner.cancel.load(Ordering::Relaxed) {
         return Vec::new();
     }
     subdirs
+}
+
+fn record_denial(scanner: &Scanner, error: &std::io::Error) {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        scanner.permission_denied.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn fail(scanner: &Scanner, path: &str, detail: String) {
@@ -217,6 +268,12 @@ struct BatchSink<'a> {
     scanner: &'a Arc<Scanner>,
     entries: Vec<FileEntry>,
     last_flush: Instant,
+}
+
+impl Drop for BatchSink<'_> {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 impl<'a> BatchSink<'a> {

@@ -41,7 +41,7 @@ pub(super) fn transfer_file(
     mode: CopyMode,
     cancel: &AtomicBool,
 ) -> io::Result<TransferResult> {
-    let source_metadata = std::fs::symlink_metadata(src)?;
+    let source_metadata = crate::local_access::symlink_metadata(src)?;
     if platform::metadata_is_link_like(&source_metadata) || !source_metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -267,14 +267,14 @@ fn copy_to_staged(
     writer: &mut File,
     cancel: &AtomicBool,
 ) -> io::Result<Option<CopiedSource>> {
-    let link_metadata = std::fs::symlink_metadata(src)?;
+    let link_metadata = crate::local_access::symlink_metadata(src)?;
     if platform::metadata_is_link_like(&link_metadata) || !link_metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "source became a link or non-regular file",
         ));
     }
-    let mut reader = File::open(src)?;
+    let mut reader = crate::local_access::open_read(src)?;
     let before = source_snapshot_file(&reader)?;
     if source_snapshot_path(src)? != before {
         return Err(source_changed_error(src));

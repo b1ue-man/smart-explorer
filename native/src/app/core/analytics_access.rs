@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::{App, StorageRunState, StorageScanSource};
 use crate::analytics::ScanIssue;
+use crate::app::theme;
 use eframe::egui;
 
 #[derive(Default)]
@@ -61,11 +61,7 @@ pub(super) fn issues_ui(
     notes: &[String],
 ) {
     for note in notes {
-        ui.label(
-            egui::RichText::new(note)
-                .small()
-                .color(theme::muted(ui)),
-        );
+        ui.label(egui::RichText::new(note).small().color(theme::muted(ui)));
     }
     if issues.is_empty() && suppressed == 0 {
         return;
@@ -100,7 +96,7 @@ impl App {
         self.analytics_access.offer = access_offer(
             denied,
             self.analytics_source.as_ref(),
-            crate::analytics::can_request_elevation,
+            crate::local_access::can_request_access,
         );
     }
 
@@ -116,7 +112,7 @@ impl App {
         match std::thread::Builder::new()
             .name("analytics-consent".into())
             .spawn(move || {
-                let result = crate::analytics::launch_elevated_analysis(&root);
+                let result = crate::local_access::request_access(&root);
                 let _ = tx.send((root, result));
             }) {
             Ok(_) => {
@@ -140,8 +136,18 @@ impl App {
             Some(Ok((root, result))) => {
                 self.analytics_access.pending = None;
                 self.analytics_access.message = Some(match result {
-                    Ok(true) => format!("Administrator-Analyse für {root} in einem eigenen Fenster gestartet. Dieses Ergebnis bleibt erhalten."),
-                    Ok(false) => "Rechteanfrage abgebrochen. Das bisherige Ergebnis bleibt erhalten.".into(),
+                    Ok(true) => {
+                        if matches!(&self.analytics_source, Some(StorageScanSource::Local { root: current }) if current == &root)
+                        {
+                            let previous = self.analytics_tree.take();
+                            self.start_analytics_scan(root.clone());
+                            self.analytics_tree = previous;
+                        }
+                        format!("Leserechte für {root} verfügbar. Die Analyse wird in dieser Ansicht aktualisiert.")
+                    }
+                    Ok(false) => {
+                        "Rechteanfrage abgebrochen. Das bisherige Ergebnis bleibt erhalten.".into()
+                    }
                     Err(error) => error,
                 });
             }
@@ -162,11 +168,11 @@ pub(super) fn access_ui(ui: &mut egui::Ui, state: &AnalyticsAccess) -> bool {
             state.permission_denied
         ));
         if state.offer {
-            ui.label("Mit Ihrer Zustimmung: denselben Pfad in einem separaten Administrator-Analysefenster erneut lesen. Keine Änderung von Besitzrechten oder Berechtigungen.");
+            ui.label("Mit Ihrer Zustimmung: geschützte Dateien in dieser Analyse erneut lesen. Die Ordnerrechte bleiben unverändert.");
             request = ui
                 .add_enabled(
                     state.pending.is_none(),
-                    egui::Button::new("Administratorrechte anfordern …"),
+                    egui::Button::new("Leserechte anfordern …"),
                 )
                 .clicked();
         } else {

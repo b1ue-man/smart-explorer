@@ -137,6 +137,7 @@ pub struct CopyOptions {
 
 #[derive(Clone, Debug)]
 pub struct ScanProgress {
+    pub permission_denied: u64,
     pub scanned: u64,
     pub bytes: u64,
     pub errors: u64,

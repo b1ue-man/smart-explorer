@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_copy_dialog(&mut self, ctx: &egui::Context) {
@@ -31,11 +31,7 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Modus:");
                         ui.radio_value(&mut self.copy_mode_pending, CopyMode::Copy, "kopieren");
-                        ui.radio_value(
-                            &mut self.copy_mode_pending,
-                            CopyMode::Move,
-                            "verschieben",
-                        );
+                        ui.radio_value(&mut self.copy_mode_pending, CopyMode::Move, "verschieben");
                     });
                 });
                 ui.colored_label(
@@ -60,10 +56,13 @@ impl App {
                     if required_structure {
                         self.copy_preserve = true;
                     }
-                    ui.add_enabled(!required_structure, egui::Checkbox::new(
-                        &mut self.copy_preserve,
-                        "Ordnerstruktur erhalten (leere Ordner werden weggelassen)",
-                    ));
+                    ui.add_enabled(
+                        !required_structure,
+                        egui::Checkbox::new(
+                            &mut self.copy_preserve,
+                            "Ordnerstruktur erhalten (leere Ordner werden weggelassen)",
+                        ),
+                    );
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Bei Konflikt:");
                         ui.radio_value(&mut self.copy_conflict, Conflict::Rename, "umbenennen");
@@ -72,11 +71,7 @@ impl App {
                             Conflict::Overwrite,
                             "überschreiben",
                         );
-                        ui.radio_value(
-                            &mut self.copy_conflict,
-                            Conflict::Skip,
-                            "überspringen",
-                        );
+                        ui.radio_value(&mut self.copy_conflict, Conflict::Skip, "überspringen");
                     });
                 });
 
@@ -110,7 +105,14 @@ impl App {
                         if ui
                             .add_enabled(
                                 !self.copy_dest.is_empty() && !running,
-                                egui::Button::new(RichText::new(if displayed_mode == CopyMode::Copy { "Kopieren" } else { "Verschieben" }).strong()),
+                                egui::Button::new(
+                                    RichText::new(if displayed_mode == CopyMode::Copy {
+                                        "Kopieren"
+                                    } else {
+                                        "Verschieben"
+                                    })
+                                    .strong(),
+                                ),
                             )
                             .clicked()
                         {

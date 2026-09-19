@@ -8,17 +8,14 @@
 //! tag that cannot be read leaves the entry an ordinary file or folder, and
 //! names already handed out are never yielded twice after a fallback.
 use super::super::{EntryKind, LocalEntry};
-use super::{
-    directory_records::{self, Layout},
-    privilege::BackupRead,
-};
+use super::directory_records::{self, Layout};
 use std::{
     collections::HashSet,
     ffi::OsString,
-    fs::{File, OpenOptions},
+    fs::File,
     io,
     mem::size_of,
-    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
+    os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
 };
 use windows_sys::Win32::{
@@ -37,7 +34,7 @@ const NAME_SURROGATE: u32 = 0x2000_0000;
 type Query<'a> =
     Box<dyn FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a>;
 
-pub(in crate::analytics::os) struct Directory<'a> {
+pub(crate) struct Directory<'a> {
     path: PathBuf,
     file: File,
     buffer: Vec<u64>,
@@ -54,23 +51,12 @@ pub(in crate::analytics::os) struct Directory<'a> {
 }
 
 fn open(path: &Path, access: u32) -> io::Result<File> {
-    let attempt = || {
-        OpenOptions::new()
-            .access_mode(access)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)
+    let kind = if access & FILE_LIST_DIRECTORY != 0 {
+        crate::local_access::protocol::ReadKind::Directory
+    } else {
+        crate::local_access::protocol::ReadKind::Metadata
     };
-    match attempt() {
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            // Keep the original path/access error if this token lacks backup rights.
-            let Ok(_backup) = BackupRead::enable() else {
-                return Err(error);
-            };
-            attempt()
-        }
-        result => result,
-    }
+    super::read::open(path, kind)
 }
 
 fn attributes(file: &File) -> io::Result<FILE_ATTRIBUTE_TAG_INFO> {
@@ -103,7 +89,7 @@ fn enumeration_ended(error: &io::Error) -> bool {
     )
 }
 
-pub(in crate::analytics::os) fn read_directory(path: &Path) -> io::Result<Directory<'static>> {
+pub(crate) fn read_directory(path: &Path) -> io::Result<Directory<'static>> {
     read_directory_with_layout(path, Layout::Extended)
 }
 
@@ -255,8 +241,20 @@ impl Directory<'_> {
                 return Ok(Some(LocalEntry {
                     name,
                     kind: kind(attrs, tag),
+                    is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
+                    is_link_like: attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0,
                     size: metadata.len(),
                     unreachable: false,
+                    mtime_ms: metadata
+                        .modified()
+                        .map(crate::local_access::system_time_ms)
+                        .unwrap_or(0),
+                    btime_ms: metadata
+                        .created()
+                        .map(crate::local_access::system_time_ms)
+                        .unwrap_or(0),
+                    hidden: attrs & FILE_ATTRIBUTE_HIDDEN != 0,
+                    system: attrs & FILE_ATTRIBUTE_SYSTEM != 0,
                 }));
             }
             if self.cursor.is_none() {
@@ -329,7 +327,13 @@ impl Directory<'_> {
                 name: record.name,
                 size: record.size,
                 kind: kind(record.attributes, tag),
+                is_dir: record.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
+                is_link_like: record.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
                 unreachable: record.unrepresentable,
+                mtime_ms: record.mtime_ms,
+                btime_ms: record.btime_ms,
+                hidden: record.attributes & FILE_ATTRIBUTE_HIDDEN != 0,
+                system: record.attributes & FILE_ATTRIBUTE_SYSTEM != 0,
             }));
         }
     }

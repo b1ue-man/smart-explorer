@@ -148,10 +148,8 @@ impl App {
                     // ─── Name (with indent + native icon) ──────────────
                     row.col(|ui| {
                         let cell_w = ui.available_width();
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(cell_w, row_h),
-                            egui::Sense::hover(),
-                        );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::hover());
                         visible_rows.push((row_index, rect));
                         let mut indent = display_depth.min(32) as f32 * 14.0;
                         let mut click_rect = rect;
@@ -162,11 +160,23 @@ impl App {
                             );
                             if e.is_dir {
                                 let collapsed = self.tree.collapsed.contains(&e.key());
-                                let label = if collapsed { "Ordner aufklappen" } else { "Ordner einklappen" };
-                                let response = ui.put(arrow_rect,
-                                    egui::Button::new(if collapsed { "▶" } else { "▼" }).frame(false));
-                                response.widget_info(|| egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button, true, format!("{label}: {}", e.name)));
+                                let label = if collapsed {
+                                    "Ordner aufklappen"
+                                } else {
+                                    "Ordner einklappen"
+                                };
+                                let response = ui.put(
+                                    arrow_rect,
+                                    egui::Button::new(if collapsed { "▶" } else { "▼" })
+                                        .frame(false),
+                                );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        true,
+                                        format!("{label}: {}", e.name),
+                                    )
+                                });
                                 if response.on_hover_text(label).clicked() {
                                     fold_clicked = Some(entry_idx);
                                 }
@@ -174,8 +184,11 @@ impl App {
                             click_rect.min.x = arrow_rect.right();
                             indent += 20.0;
                         }
-                        let resp = ui.interact(click_rect,
-                            ui.id().with(("name", e.key())), egui::Sense::click_and_drag());
+                        let resp = ui.interact(
+                            click_rect,
+                            ui.id().with(("name", e.key())),
+                            egui::Sense::click_and_drag(),
+                        );
                         let color = if selected {
                             ui.visuals().selection.stroke.color
                         } else if mark_hostile_names && win32_name_issue(e.name.as_ref()).is_some()
@@ -416,7 +429,9 @@ impl App {
             }
         }
 
-        let row_hit = row_click.is_some() || row_dblclick.is_some() || row_rclick.is_some()
+        let row_hit = row_click.is_some()
+            || row_dblclick.is_some()
+            || row_rclick.is_some()
             || fold_clicked.is_some();
         self.update_table_background_interaction(
             ui,

@@ -5,6 +5,7 @@ impl App {
     // ─── Channel drains ─────────────────────────────────────────────────
 
     pub(in crate::app) fn drain_scan(&mut self) {
+        self.poll_read_access();
         let rx = match self.scan_rx.take() {
             Some(r) => r,
             None => return,

@@ -13,17 +13,21 @@ pub(super) struct RecursiveView {
 impl RecursiveView {
     pub(super) fn displayed(&self, entries: &[FileEntry]) -> Vec<(usize, u32)> {
         let mut hidden_below = None;
-        self.rows.iter().copied().filter(|&(index, depth)| {
-            if hidden_below.is_some_and(|parent| depth > parent) {
-                return false;
-            }
-            hidden_below = None;
-            let entry = &entries[index];
-            if entry.is_dir && self.collapsed.contains(&entry.key()) {
-                hidden_below = Some(depth);
-            }
-            true
-        }).collect()
+        self.rows
+            .iter()
+            .copied()
+            .filter(|&(index, depth)| {
+                if hidden_below.is_some_and(|parent| depth > parent) {
+                    return false;
+                }
+                hidden_below = None;
+                let entry = &entries[index];
+                if entry.is_dir && self.collapsed.contains(&entry.key()) {
+                    hidden_below = Some(depth);
+                }
+                true
+            })
+            .collect()
     }
 }
 
@@ -43,7 +47,9 @@ pub(super) fn result_rows(
     mut compare: impl FnMut(usize, usize) -> std::cmp::Ordering,
 ) -> Vec<(usize, u32)> {
     let root = root.trim_end_matches('/');
-    let directories: HashMap<_, _> = entries.iter().enumerate()
+    let directories: HashMap<_, _> = entries
+        .iter()
+        .enumerate()
         .filter(|(_, entry)| entry.is_dir && entry.depth > 0)
         .map(|(index, entry)| (entry.path.trim_end_matches('/'), index))
         .collect();
@@ -68,11 +74,13 @@ pub(super) fn result_rows(
                     break;
                 }
             }
-            let Some((ancestor, _)) = parent.rsplit_once('/') else { break };
+            let Some((ancestor, _)) = parent.rsplit_once('/') else {
+                break;
+            };
             parent = ancestor;
         }
-        let flags_allowed = (!entry.hidden || filter.include_hidden)
-            && (!entry.system || filter.include_system);
+        let flags_allowed =
+            (!entry.hidden || filter.include_hidden) && (!entry.system || filter.include_system);
         allowed[index] = flags_allowed && parents[index].is_none_or(|parent| allowed[parent]);
         matching[index] = allowed[index] && compiled.matches(entry, root);
         children[parents[index].unwrap_or(virtual_root)].push(index);
@@ -90,8 +98,11 @@ pub(super) fn result_rows(
         siblings.retain(|&index| matching[index]);
         siblings.sort_unstable_by(|&left, &right| compare(left, right));
     }
-    let mut stack: Vec<_> = children[virtual_root].iter().rev()
-        .map(|&index| (index, 0)).collect();
+    let mut stack: Vec<_> = children[virtual_root]
+        .iter()
+        .rev()
+        .map(|&index| (index, 0))
+        .collect();
     let mut rows = Vec::new();
     while let Some((index, depth)) = stack.pop() {
         let show = !entries[index].is_dir || filter.include_dirs;
@@ -99,7 +110,12 @@ pub(super) fn result_rows(
             rows.push((index, depth));
         }
         let next_depth = depth + u32::from(show);
-        stack.extend(children[index].iter().rev().map(|&child| (child, next_depth)));
+        stack.extend(
+            children[index]
+                .iter()
+                .rev()
+                .map(|&child| (child, next_depth)),
+        );
     }
     rows
 }

@@ -25,7 +25,9 @@ pub(super) fn normalize_extensions(input: &[String]) -> Vec<String> {
 
 pub(super) fn matches_extension(name: &str, extensions: &[String]) -> bool {
     let name = name.to_lowercase();
-    extensions.iter().any(|extension| suffix_matches(&name, extension))
+    extensions
+        .iter()
+        .any(|extension| suffix_matches(&name, extension))
 }
 
 /// A compound suffix also narrows its final extension (tar.gz implies gz).

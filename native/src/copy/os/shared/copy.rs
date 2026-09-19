@@ -1,4 +1,4 @@
-use crate::types::{Conflict, CopyMode, CopyOptions, CopyProgress, FileEntry};
+use crate::types::{CopyMode, CopyOptions, CopyProgress, FileEntry};
 use crossbeam_channel::Sender;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,12 +13,17 @@ mod durability;
 mod move_guard;
 #[path = "outcome.rs"]
 mod outcome;
+#[path = "pairs.rs"]
+mod pairs;
 #[path = "path_guard.rs"]
 mod path_guard;
 #[path = "planning.rs"]
 mod planning;
+pub use pairs::start_copy_pairs;
 #[path = "prune.rs"]
 mod prune;
+#[path = "read_access.rs"]
+mod read_access;
 #[path = "relative.rs"]
 mod relative;
 #[path = "safe_file.rs"]
@@ -26,7 +31,7 @@ mod safe_file;
 use outcome::{send_collection_failure, send_copy_canceled, CopyErrorLog};
 use planning::{dedupe_entries, dedupe_paths, EntryAccumulator};
 use prune::{prune_empty_dirs, selected_directory_roots};
-use relative::{rel_from_root, safe_rel_path, validate_seed_destinations};
+use relative::{rel_from_root, validate_seed_destinations};
 use safe_file::{transfer_file, TransferResult};
 
 pub enum CopyMsg {
@@ -89,7 +94,7 @@ pub fn start_copy_expanded(
                     break;
                 }
                 if e.is_dir && !e.is_symlink {
-                    let collected = crate::scanner::collect_recursive(
+                    let collected = crate::scanner::collect_recursive_with_access(
                         &PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
                         false,
                         e.depth + 1,
@@ -157,7 +162,7 @@ pub fn start_copy_from_paths(
                     break;
                 }
                 let pb = PathBuf::from(p);
-                let meta = match std::fs::symlink_metadata(&pb) {
+                let meta = match crate::local_access::symlink_metadata(&pb) {
                     Ok(metadata) => metadata,
                     Err(error) => {
                         send_copy_failure(&tx, p.clone(), error.to_string());
@@ -220,7 +225,8 @@ pub fn start_copy_from_paths(
                         send_copy_failure(&tx, p.clone(), error);
                         return;
                     }
-                    let collected = crate::scanner::collect_recursive(&pb, false, 1, &cancel_clone);
+                    let collected =
+                        crate::scanner::collect_recursive_with_access(&pb, false, 1, &cancel_clone);
                     if collected.canceled {
                         send_copy_canceled(&tx);
                         return;
@@ -252,102 +258,6 @@ pub fn start_copy_from_paths(
     CopyHandle { cancel }
 }
 
-/// Copy explicit (absolute source, relative destination) pairs into `dest`.
-/// Used for the in-app paste fast path of the filter-aware clipboard, where
-/// the relative structure was computed at copy time.
-pub fn start_copy_pairs(
-    pairs: Vec<(String, String)>,
-    dest: PathBuf,
-    conflict: Conflict,
-    tx: Sender<CopyMsg>,
-) -> CopyHandle {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_clone = cancel.clone();
-    let failure_tx = tx.clone();
-
-    let spawn = std::thread::Builder::new()
-        .name("copy-driver".into())
-        .spawn(move || {
-            let start = Instant::now();
-            if let Err(error) = planning::validate_pair_budget(&pairs) {
-                send_copy_failure(&tx, dest.display().to_string(), error);
-                return;
-            }
-            let files_total = pairs.len() as u64;
-            let bytes_total: u64 = pairs
-                .iter()
-                .filter_map(|(abs, _)| std::fs::metadata(abs).ok().map(|m| m.len()))
-                .sum();
-            let mut files_done = 0u64;
-            let mut bytes_done = 0u64;
-            let mut errors = CopyErrorLog::default();
-            let mut last_progress = Instant::now();
-
-            for (abs, rel) in &pairs {
-                if cancel_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-                let Some(rel_path) = safe_rel_path(rel) else {
-                    errors.record(abs.clone(), "ungueltiger relativer Zielpfad".to_string());
-                    files_done += 1;
-                    continue;
-                };
-                let target = dest.join(rel_path);
-                match transfer_file(
-                    Path::new(abs),
-                    &target,
-                    &dest,
-                    conflict,
-                    CopyMode::Copy,
-                    &cancel_clone,
-                ) {
-                    Ok(TransferResult::Completed(n)) => {
-                        files_done += 1;
-                        bytes_done = bytes_done.saturating_add(n);
-                    }
-                    Ok(TransferResult::Skipped) => files_done += 1,
-                    Ok(TransferResult::Canceled) => break,
-                    Err(e) => {
-                        errors.record(abs.clone(), e.to_string());
-                        files_done += 1;
-                    }
-                }
-                if last_progress.elapsed().as_millis() > 80 {
-                    let _ = tx.send(CopyMsg::Progress(CopyProgress {
-                        files_done,
-                        files_total,
-                        bytes_done,
-                        bytes_total,
-                        elapsed_ms: start.elapsed().as_millis() as u64,
-                        errors: errors.total(),
-                        canceled: false,
-                        done: false,
-                    }));
-                    last_progress = Instant::now();
-                }
-            }
-
-            let _ = tx.send(CopyMsg::Done {
-                progress: CopyProgress {
-                    files_done,
-                    files_total,
-                    bytes_done,
-                    bytes_total,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                    errors: errors.total(),
-                    canceled: cancel_clone.load(Ordering::Relaxed),
-                    done: true,
-                },
-                errors: errors.into_items(),
-            });
-        });
-    if let Err(error) = spawn {
-        send_copy_failure(&failure_tx, "Kopieren".to_string(), error.to_string());
-    }
-
-    CopyHandle { cancel }
-}
-
 fn run_copy(
     entries: Vec<FileEntry>,
     opts: CopyOptions,
@@ -365,12 +275,24 @@ fn run_copy(
     };
     let root_fwd = root_fwd.trim_end_matches('/').to_string();
 
+    if let Err(error) = read_access::admit(
+        entries
+            .iter()
+            .filter(|entry| !entry.is_dir)
+            .map(|entry| entry.path.as_ref()),
+        Some(&opts.root),
+        &cancel,
+    ) {
+        send_copy_failure(&tx, root_fwd, error.to_string());
+        return;
+    }
+
     for entry in &entries {
         if entry.is_dir && !entry.is_symlink {
             continue;
         }
         let source = PathBuf::from(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let metadata = match std::fs::symlink_metadata(&source) {
+        let metadata = match crate::local_access::symlink_metadata(&source) {
             Ok(metadata) => metadata,
             Err(error) => {
                 send_copy_failure(&tx, entry.path.to_string(), error.to_string());

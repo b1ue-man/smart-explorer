@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(super) fn update_table_background_interaction(
@@ -14,7 +14,10 @@ impl App {
     ) {
         let table_rect = ui.min_rect();
         let body_viewport = egui::Rect::from_min_max(
-            egui::pos2(table_rect.left(), table_rect.top() + theme::TABLE_HEADER_HEIGHT + ui.spacing().item_spacing.y),
+            egui::pos2(
+                table_rect.left(),
+                table_rect.top() + theme::TABLE_HEADER_HEIGHT + ui.spacing().item_spacing.y,
+            ),
             table_rect.max,
         )
         .intersect(ui.clip_rect());
@@ -147,11 +150,7 @@ impl App {
             let rect = egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
             let painter = ui.painter();
             painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(90, 140, 255, 36));
-            painter.rect_stroke(
-                rect,
-                0.0,
-                egui::Stroke::new(1.0_f32, theme::accent(ui)),
-            );
+            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, theme::accent(ui)));
         }
 
         if pointer.y > body_viewport.bottom() - 4.0 {
