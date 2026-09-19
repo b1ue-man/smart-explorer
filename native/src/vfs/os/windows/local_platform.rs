@@ -98,6 +98,10 @@ pub(crate) fn remove_file_like(path: &Path) -> std::io::Result<()> {
 pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
 
+    // Unlike std::fs, direct Win32 calls need an explicit verbatim path for
+    // long names even when the executable has no long-path manifest.
+    let source = crate::local_access::normalize_scan_root(source);
+    let destination = crate::local_access::normalize_scan_root(destination);
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let destination: Vec<u16> = destination
         .as_os_str()

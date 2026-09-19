@@ -142,10 +142,15 @@ fn search_recursive_access_task_fold_selection_keyboard_and_tab_isolation() {
     assert!(app.selection.is_empty());
     app.invert_selection();
     assert_eq!(app.selection, selected);
+    // Inverting deliberately clears the keyboard cursor; establish focus
+    // before exercising the folder's Left/Right navigation.
+    app.cursor = Some(app.entries[1].path.clone());
     app.recursive_arrow(true);
     assert_eq!(app.view.len(), 3);
     app.recursive_arrow(true);
     assert_eq!(app.cursor, Some(app.entries[2].path.clone()));
+    assert_eq!(app.selection, HashSet::from([app.entries[2].key()]));
+    app.select_all();
     app.toggle_recursive_folder(1);
     app.tabs.push(TabState::default());
     app.switch_tab(1);
@@ -359,6 +364,29 @@ fn search_recursive_access_task_long_clipboard_snapshot_and_remote_materializati
     }
     target.push("selected.blend");
     assert_eq!(std::fs::read(target).unwrap(), b"payload");
+    // Exercise the ordinary copy commit too; both Windows transfer adapters
+    // must preserve the same long relative tree.
+    let destination = fixture.path().join("local-copy");
+    let mut app = App::new_for_copy_task();
+    app.recursive = true;
+    app.filter.extensions = vec!["blend".into()];
+    app.start_scan_navigated(fixture.path().to_path_buf(), false);
+    finish_scan(&mut app);
+    app.select_all();
+    app.copy_dest = destination.to_string_lossy().into_owned();
+    app.confirm_copy();
+    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    while app.copy_rx.is_some() {
+        app.drain_copy();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.copy_errors.is_empty(), "{:?}", app.copy_errors);
+    let target = names.iter().fold(destination, |path, part| path.join(part));
+    assert_eq!(
+        std::fs::read(target.join("selected.blend")).unwrap(),
+        b"payload"
+    );
     cleanup_temp_copy(Path::new(&copied[0]));
     assert!(recursive_clipboard::clipboard_snapshot(
         vec![entry("/elsewhere/secret", false, 1)],

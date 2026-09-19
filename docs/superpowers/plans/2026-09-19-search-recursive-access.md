@@ -3,6 +3,21 @@
 Status: implementation complete; focused remote acceptance pending. No local
 builds or test execution.
 
+Remote repair evidence (2026-09-19): the first run found two integration compile
+errors, corrected in `97d636d`. The next run reached behavioral acceptance and
+exposed empty directories omitted by the ordinary structured copy engine and
+long Windows paths rejected at direct Win32 rename/promotion boundaries. The
+repair preserves directory entries only for unfiltered structured copies; filtered
+transfers still create only parents of matching files. Both direct Windows
+transfer adapters now use verbatim paths, as required by
+[`MoveFileExW`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+(checked 2026-09-19). The same suite also checks long paths through ordinary copy.
+Fixture corrections restore keyboard focus after inversion, exhaust the ordinary
+directory iterator under a token without backup privileges, and keep ACL cleanup
+output out of the test harness. The helper fixture separately denies file data
+access before verifying the transferred read-only handle. These changes remain
+in the same task suite and intended release; no release was started.
+
 ## Goal and deliverables
 
 Repair unreliable extension searches and empty/stalled recursive results, add

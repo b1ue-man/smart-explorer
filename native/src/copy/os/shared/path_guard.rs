@@ -24,6 +24,11 @@ pub(super) fn validate_directory_target(src: &Path, target: &Path) -> io::Result
     Ok(())
 }
 
+pub(super) fn prepare_target_directory(root: &Path, target: &Path) -> io::Result<()> {
+    prepare_target_parent(root, target)?;
+    ensure_plain_directory(target)
+}
+
 pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()> {
     let root = absolute_normalized(root)?;
     let target = absolute_normalized(target)?;
