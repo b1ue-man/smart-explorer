@@ -96,22 +96,16 @@ impl WalkState {
         descend: bool,
         next: &mut Vec<PendingRemoteDir>,
     ) -> bool {
-        // Without retention every entry is emitted, so a listing that cannot
-        // fit is refused up front. With retention only kept entries claim the
-        // budget; each claim is checked individually.
-        if self.retention.is_none() {
-            if let Err(limit) = self.budget.preflight_entries(entries.len()) {
-                self.truncated.store(true, Ordering::Relaxed);
-                self.terminal_error(
-                    &directory.path,
-                    format!("remote scan stopped because its {limit} was reached"),
-                );
-                return false;
-            }
+        // Keep every entry that fits, even when this one directory exceeds
+        // the remaining budget. Rejecting the whole listing loses all results.
+        if directory.depth > super::budget::MAX_SCAN_DEPTH {
+            self.truncated.store(true, Ordering::Relaxed);
+            self.listing_failed(&directory.path, "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen");
+            return true;
         }
         if let Err(error) = validate_listing(&directory.path, &entries) {
-            self.terminal_error(&directory.path, error.to_string());
-            return false;
+            self.listing_failed(&directory.path, error);
+            return true;
         }
 
         let parent: Arc<str> = Arc::from(directory.path.as_str());

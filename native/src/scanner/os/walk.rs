@@ -166,6 +166,10 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
             scanner.bytes.fetch_add(size, Ordering::Relaxed);
         }
         let traversable = is_dir && (!is_symlink || scanner.opts.follow_symlinks) && within_depth;
+        if is_dir && !is_symlink && !within_depth && scanner.opts.max_depth.is_none() {
+            scanner.truncated.store(true, Ordering::Relaxed);
+            fail(scanner, &path_text, "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen".into());
+        }
 
         match scanner.opts.retention.as_ref() {
             None => {

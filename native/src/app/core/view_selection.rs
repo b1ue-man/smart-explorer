@@ -25,139 +25,19 @@ impl App {
             rows.sort_unstable_by(|&(a, _), &(b, _)| {
                 compare_entries(&entries[a], &entries[b], key, dir, dirs_first)
             });
+            self.tree.rows = rows.clone();
             self.view = rows;
             self.last_view_recompute = Instant::now();
             return;
         }
 
-        // ─── Tree mode: recursive view preserving folder structure ─────────
-        let mut children_map: std::collections::HashMap<&str, Vec<usize>> =
-            std::collections::HashMap::with_capacity(self.entries.len() / 4 + 16);
-        for (i, e) in self.entries.iter().enumerate() {
-            children_map.entry(e.parent.as_ref()).or_default().push(i);
-        }
-
-        let root_idx = match self
-            .entries
-            .iter()
-            .position(|e| e.path.as_ref() == prefix.as_str())
-        {
-            Some(i) => i,
-            None => {
-                self.view = Vec::new();
-                self.last_view_recompute = Instant::now();
-                return;
-            }
-        };
-
-        // A file is a result when it matches; a directory is a result when it
-        // matches itself (e.g. a folder named `nul` under the problem-names
-        // filter) or contains a result. Directories are otherwise structure.
-        let mut file_matches = vec![false; self.entries.len()];
-        for (i, e) in self.entries.iter().enumerate() {
-            file_matches[i] = cf.matches(e, &prefix);
-        }
-
-        let mut has_match = vec![false; self.entries.len()];
-        let mut stack: Vec<(usize, bool)> = vec![(root_idx, false)];
-        while let Some((idx, expanded)) = stack.pop() {
-            let e = &self.entries[idx];
-            if !expanded {
-                stack.push((idx, true));
-                if let Some(children) = children_map.get(e.path.as_ref()) {
-                    for &c in children {
-                        if self.entries[c].is_dir {
-                            stack.push((c, false));
-                        }
-                    }
-                }
-            } else {
-                let mut any = idx != root_idx && file_matches[idx];
-                if let Some(children) = children_map.get(e.path.as_ref()) {
-                    for &c in children {
-                        let ce = &self.entries[c];
-                        if ce.is_dir {
-                            if has_match[c] {
-                                any = true;
-                                break;
-                            }
-                        } else if file_matches[c] {
-                            any = true;
-                            break;
-                        }
-                    }
-                }
-                has_match[idx] = any;
-            }
-        }
-
-        let dir_passes_view_filter = |idx: usize| -> bool {
-            let e = &self.entries[idx];
-            if !self.filter.include_dirs {
-                return false;
-            }
-            if e.hidden && !self.filter.include_hidden {
-                return false;
-            }
-            if e.system && !self.filter.include_system {
-                return false;
-            }
-            true
-        };
-
-        let entries = &self.entries;
-        let root_depth = entries[root_idx].depth;
-        let mut visible: Vec<(usize, u32)> = Vec::new();
-
-        struct Frame {
-            children_remaining: std::vec::IntoIter<usize>,
-        }
-        let mut frames: Vec<Frame> = Vec::new();
-
-        let make_sorted_children = |parent_idx: usize,
-                                    children_map: &std::collections::HashMap<&str, Vec<usize>>,
-                                    entries: &[FileEntry]|
-         -> Vec<usize> {
-            let parent_e = &entries[parent_idx];
-            let mut out: Vec<usize> = match children_map.get(parent_e.path.as_ref()) {
-                Some(v) => v.clone(),
-                None => return Vec::new(),
-            };
-            out.retain(|&c| {
-                let ce = &entries[c];
-                if ce.is_dir {
-                    has_match[c] && dir_passes_view_filter(c)
-                } else {
-                    file_matches[c]
-                }
-            });
-            out.sort_unstable_by(|&a, &b| {
-                compare_entries(&entries[a], &entries[b], key, dir, dirs_first)
-            });
-            out
-        };
-
-        frames.push(Frame {
-            children_remaining: make_sorted_children(root_idx, &children_map, entries).into_iter(),
-        });
-
-        while let Some(frame) = frames.last_mut() {
-            if let Some(idx) = frame.children_remaining.next() {
-                let e = &entries[idx];
-                let display_d = e.depth.saturating_sub(root_depth + 1);
-                visible.push((idx, display_d));
-                if e.is_dir {
-                    let kids = make_sorted_children(idx, &children_map, entries);
-                    frames.push(Frame {
-                        children_remaining: kids.into_iter(),
-                    });
-                }
-            } else {
-                frames.pop();
-            }
-        }
-
-        self.view = visible;
+        self.tree.rows = super::recursive_tree::result_rows(
+            &self.entries,
+            &prefix,
+            &self.filter,
+            |a, b| compare_entries(&self.entries[a], &self.entries[b], key, dir, dirs_first),
+        );
+        self.view = self.tree.displayed(&self.entries);
         self.last_view_recompute = Instant::now();
     }
 
@@ -165,7 +45,7 @@ impl App {
 
     pub(in crate::app) fn select_all(&mut self) {
         self.selection = self
-            .view
+            .tree.rows
             .iter()
             .map(|&(i, _)| self.entries[i].key())
             .collect();

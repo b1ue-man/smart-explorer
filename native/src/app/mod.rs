@@ -69,6 +69,8 @@ mod drains_connect;
 mod file_actions;
 #[path = "core/filter_scope.rs"]
 mod filter_scope;
+#[path = "core/recursive_tree.rs"]
+mod recursive_tree;
 #[path = "core/filterbar.rs"]
 mod filterbar;
 #[path = "core/frame_keyboard.rs"]

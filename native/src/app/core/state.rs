@@ -40,6 +40,7 @@ pub struct App {
     pub(in crate::app) entries: Vec<FileEntry>,
     /// Visible rows: (entry index, display depth from current root).
     pub(in crate::app) view: Vec<(usize, u32)>,
+    pub(in crate::app) tree: super::recursive_tree::RecursiveView,
     pub(in crate::app) selection: HashSet<Arc<str>>,
     pub(in crate::app) last_anchor: Option<Arc<str>>,
     /// Keyboard cursor (focused row), moved by arrow keys.

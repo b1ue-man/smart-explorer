@@ -15,6 +15,7 @@ impl App {
         self.root_path.clear();
         self.entries = Vec::new();
         self.view = Vec::new();
+        self.tree = Default::default();
         self.selection.clear();
         self.last_anchor = None;
         self.cursor = None;
