@@ -23,14 +23,14 @@ mod remote_copy;
 mod temp;
 #[path = "remote_helpers/temp_delete.rs"]
 mod temp_delete;
-#[path = "remote_helpers/uploads.rs"]
-mod uploads;
-#[path = "remote_helpers/upload_plan.rs"]
-mod upload_plan;
 #[path = "remote_helpers/upload_pairs.rs"]
 mod upload_pairs;
+#[path = "remote_helpers/upload_plan.rs"]
+mod upload_plan;
 #[path = "remote_helpers/upload_stream.rs"]
 mod upload_stream;
+#[path = "remote_helpers/uploads.rs"]
+mod uploads;
 
 #[cfg(test)]
 #[path = "remote_helpers/cancel_tests.rs"]
@@ -59,8 +59,8 @@ pub(in crate::app) use temp::{
     cleanup_session_temp, cleanup_temp_copy, file_mtime_ms, init_temp_session, open_temp_path,
     temp_root, RemoteEdit, SaveResult,
 };
-pub(in crate::app) use uploads::{upload_file, upload_paths_progress};
 pub(in crate::app) use upload_pairs::upload_pairs_progress;
+pub(in crate::app) use uploads::{upload_file, upload_paths_progress};
 
 const MAX_MERGE_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 

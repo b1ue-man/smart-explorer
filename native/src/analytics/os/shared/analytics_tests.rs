@@ -59,6 +59,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
             kind: EntryKind::File,
             size: 7,
             unreachable: false,
+            ..Default::default()
         }),
     ];
     let tree = scan_entries(
@@ -142,6 +143,7 @@ fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_dire
             kind: EntryKind::Directory,
             size: 0,
             unreachable: true,
+            ..Default::default()
         }),
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -152,12 +154,14 @@ fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_dire
             kind: EntryKind::File,
             size: 5,
             unreachable: true,
+            ..Default::default()
         }),
         Ok(LocalEntry {
             name: "after.bin".into(),
             kind: EntryKind::File,
             size: 9,
             unreachable: false,
+            ..Default::default()
         }),
     ];
     let tree = scan_entries(

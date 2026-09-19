@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn build_summary(&self) -> SummaryData {
@@ -229,7 +229,11 @@ impl App {
                 self.update_analytics_access(outcome.permission_denied);
                 self.analytics_scan = None;
                 self.analytics_state = outcome.status.into();
-                self.analytics_tree = outcome.tree;
+                if outcome.tree.is_some()
+                    || outcome.status == crate::analytics::ScanStatus::Complete
+                {
+                    self.analytics_tree = outcome.tree;
+                }
                 self.analytics_issues = outcome.issues;
                 self.analytics_suppressed_issues = outcome.suppressed_issues;
                 self.analytics_notes = outcome.notes;

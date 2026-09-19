@@ -1,13 +1,14 @@
-use super::prelude::*;
-use super::*;
 use super::clipboard_lifecycle::{prepare_filtered_clipboard, PreparedTempClipboard};
 use super::clipboard_state::PreparationResult;
+use super::prelude::*;
+use super::*;
 use crate::app::shared_platform_helpers::ClipboardEffect;
 
 impl App {
     pub(in crate::app) fn clipboard_copy_files(&mut self, cut: bool) {
         if !clipboard_file_ops_supported() {
-            self.error_msg = Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
+            self.error_msg =
+                Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
             return;
         }
         if self.selection.is_empty() {
@@ -43,17 +44,22 @@ impl App {
             let filter = (items.iter().any(|(_, _, is_dir)| *is_dir) && self.filter_is_active())
                 .then(|| (self.filter.clone(), self.root_prefix()));
             let backend = rs.backend.clone();
-            let Some(stamp) = self.begin_clipboard_preparation() else { return };
+            let Some(stamp) = self.begin_clipboard_preparation() else {
+                return;
+            };
             let n = items.len();
             let (tx, rx) = unbounded();
             let spawn = std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
                     let result = match snapshot {
-                        Some(files) => super::recursive_clipboard::clipboard_snapshot(files, &snapshot_root)
-                            .and_then(|files| download_clipboard_snapshot(&*backend, files)),
+                        Some(files) => {
+                            super::recursive_clipboard::clipboard_snapshot(files, &snapshot_root)
+                                .and_then(|files| download_clipboard_snapshot(&*backend, files))
+                        }
                         None => download_remote_clipboard_items(&*backend, &items, filter),
-                    }.map(PreparedTempClipboard::new);
+                    }
+                    .map(PreparedTempClipboard::new);
                     // The owned result also cleans up if this receiver was replaced.
                     let _ = tx.send(PreparationResult { stamp, result });
                 });
@@ -86,15 +92,18 @@ impl App {
             let recursive = self.recursive;
             let seeds: Vec<FileEntry> = if recursive {
                 self.recursive_transfer_files()
-            } else { self
-                .entries
-                .iter()
-                .filter(|e| self.selection.contains(&e.key()))
-                .cloned()
-                .collect() };
+            } else {
+                self.entries
+                    .iter()
+                    .filter(|e| self.selection.contains(&e.key()))
+                    .cloned()
+                    .collect()
+            };
             let filter = self.filter.clone();
             let prefix = self.root_prefix();
-            let Some(stamp) = self.begin_clipboard_preparation() else { return };
+            let Some(stamp) = self.begin_clipboard_preparation() else {
+                return;
+            };
             let (tx, rx) = unbounded();
             let spawn = std::thread::Builder::new()
                 .name("clip-prepare".into())
@@ -162,7 +171,8 @@ impl App {
 
     pub(in crate::app) fn clipboard_paste_files(&mut self) {
         if !clipboard_file_ops_supported() {
-            self.error_msg = Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
+            self.error_msg =
+                Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
             return;
         }
         if self.clipboard_paste_is_pending() {
@@ -180,10 +190,15 @@ impl App {
         if let Some((seq, pairs)) = self.virtual_clip.clone() {
             if virtual_clipboard_sequence() == Some(seq) {
                 if let Some(rs) = &self.remote {
-                    self.start_filtered_remote_upload(pairs, rs.backend.clone(), self.root_path.clone());
+                    self.start_filtered_remote_upload(
+                        pairs,
+                        rs.backend.clone(),
+                        self.root_path.clone(),
+                    );
                     return;
                 }
-                let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let dest =
+                    PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
                 let count = pairs.len();
                 if self.start_copy_job(CopyMode::Copy, true, move |tx| {
                     crate::copy::start_copy_pairs(pairs, dest, Conflict::Rename, tx)
@@ -209,7 +224,9 @@ impl App {
                 return;
             }
             Err(error) => {
-                self.error_msg = Some(format!("Zwischenablage konnte nicht gelesen werden: {error}"));
+                self.error_msg = Some(format!(
+                    "Zwischenablage konnte nicht gelesen werden: {error}"
+                ));
                 return;
             }
         };

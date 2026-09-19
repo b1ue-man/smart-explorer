@@ -182,6 +182,7 @@ impl App {
             entries: Vec::new(),
             view: Vec::new(),
             tree: Default::default(),
+            read_access: Default::default(),
             selection: HashSet::new(),
             last_anchor: None,
             cursor: None,

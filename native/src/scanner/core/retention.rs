@@ -55,9 +55,13 @@ impl Lineage {
     ) -> bool {
         let mut current = this.as_ref();
         while let Some(lineage) = current {
-            let mut emitted = lineage.emitted.lock().unwrap_or_else(|error| error.into_inner());
+            let mut emitted = lineage
+                .emitted
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             if *emitted {
-                break;
+                current = lineage.parent.as_ref();
+                continue;
             }
             if !emit(&lineage.entry) {
                 return false;

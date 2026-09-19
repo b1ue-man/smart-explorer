@@ -32,12 +32,10 @@ impl App {
             return;
         }
 
-        self.tree.rows = super::recursive_tree::result_rows(
-            &self.entries,
-            &prefix,
-            &self.filter,
-            |a, b| compare_entries(&self.entries[a], &self.entries[b], key, dir, dirs_first),
-        );
+        self.tree.rows =
+            super::recursive_tree::result_rows(&self.entries, &prefix, &self.filter, |a, b| {
+                compare_entries(&self.entries[a], &self.entries[b], key, dir, dirs_first)
+            });
         self.view = self.tree.displayed(&self.entries);
         self.reconcile_result_selection();
         self.last_view_recompute = Instant::now();
@@ -45,7 +43,10 @@ impl App {
 
     fn reconcile_result_selection(&mut self) {
         if !self.selection.is_empty() {
-            self.selection = self.tree.rows.iter()
+            self.selection = self
+                .tree
+                .rows
+                .iter()
                 .map(|&(index, _)| self.entries[index].key())
                 .filter(|key| self.selection.contains(key))
                 .collect();
@@ -56,7 +57,8 @@ impl App {
 
     pub(in crate::app) fn select_all(&mut self) {
         self.selection = self
-            .tree.rows
+            .tree
+            .rows
             .iter()
             .map(|&(i, _)| self.entries[i].key())
             .collect();

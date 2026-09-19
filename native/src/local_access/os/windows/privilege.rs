@@ -26,7 +26,7 @@ impl Drop for Token {
     }
 }
 
-pub(in crate::analytics::os) fn parallel_scan_allowed() -> bool {
+pub(crate) fn parallel_scan_allowed() -> bool {
     let mut handle = null_mut();
     if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut handle) } != 0 {
         let _token = Token(handle);

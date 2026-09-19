@@ -17,8 +17,15 @@ pub(in crate::app) fn download_clipboard_snapshot(
         std::fs::create_dir(&root).map_err(|error| error.to_string())?;
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(rx);
-        let bytes = files.iter().fold(0u64, |sum, file| sum.saturating_add(file.size));
-        let mut progress = TransferProgress::new(TransferKind::Download, "Auswahl vorbereiten", files.len() as u64, bytes);
+        let bytes = files
+            .iter()
+            .fold(0u64, |sum, file| sum.saturating_add(file.size));
+        let mut progress = TransferProgress::new(
+            TransferKind::Download,
+            "Auswahl vorbereiten",
+            files.len() as u64,
+            bytes,
+        );
         let mut last = std::time::Instant::now();
         for file in files {
             // Do not traverse again: the snapshot already captures membership.
@@ -27,12 +34,24 @@ pub(in crate::app) fn download_clipboard_snapshot(
                 crate::vfs::validate_child_name(component).map_err(|error| error.to_string())?;
             }
             let dest = root.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-            download_file_progress(backend, &file.abs, &dest, file.size,
-                &tx, &mut progress, &mut last, None)?;
+            download_file_progress(
+                backend,
+                &file.abs,
+                &dest,
+                file.size,
+                &tx,
+                &mut progress,
+                &mut last,
+                None,
+            )?;
         }
-        std::fs::read_dir(&root).map_err(|error| error.to_string())?
-            .map(|entry| entry.map(|entry| entry.path().to_string_lossy().into_owned())
-                .map_err(|error| error.to_string()))
+        std::fs::read_dir(&root)
+            .map_err(|error| error.to_string())?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.path().to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
             .collect()
     })();
     if result.is_err() {

@@ -4,9 +4,6 @@ mod agent_update_remote;
 mod analytics_access;
 #[path = "core/analytics_accessibility.rs"]
 mod analytics_accessibility;
-#[path = "core/analytics_window.rs"]
-mod analytics_window;
-pub(crate) use analytics_window::run_analysis_window;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
 #[path = "core/analytics_paint.rs"]
@@ -29,6 +26,8 @@ mod central_tabs;
 mod clipboard;
 #[path = "os/shared/clipboard_lifecycle.rs"]
 mod clipboard_lifecycle;
+#[path = "os/shared/clipboard_materialize.rs"]
+mod clipboard_materialize;
 #[path = "core/clipboard_state.rs"]
 mod clipboard_state;
 #[path = "os/shared/clipboard_upload.rs"]
@@ -69,14 +68,6 @@ mod drains_connect;
 mod file_actions;
 #[path = "core/filter_scope.rs"]
 mod filter_scope;
-#[path = "core/recursive_tree.rs"]
-mod recursive_tree;
-#[path = "core/recursive_navigation.rs"]
-mod recursive_navigation;
-#[path = "core/recursive_transfer.rs"]
-mod recursive_transfer;
-#[path = "os/shared/recursive_clipboard.rs"]
-mod recursive_clipboard;
 #[path = "core/filterbar.rs"]
 mod filterbar;
 #[path = "core/frame_keyboard.rs"]
@@ -135,6 +126,16 @@ mod platform_helpers;
 #[cfg(not(windows))]
 #[path = "os/linux_os.rs"]
 mod platform_helpers;
+#[path = "core/read_access.rs"]
+mod read_access;
+#[path = "os/shared/recursive_clipboard.rs"]
+mod recursive_clipboard;
+#[path = "core/recursive_navigation.rs"]
+mod recursive_navigation;
+#[path = "core/recursive_transfer.rs"]
+mod recursive_transfer;
+#[path = "core/recursive_tree.rs"]
+mod recursive_tree;
 #[path = "core/settings_background.rs"]
 mod settings_background;
 #[path = "core/settings_cloud.rs"]

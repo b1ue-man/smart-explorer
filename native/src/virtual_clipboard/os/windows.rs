@@ -14,6 +14,9 @@
 
 use std::mem::ManuallyDrop;
 
+#[path = "read_stream.rs"]
+mod read_stream;
+
 use windows::core::{implement, Result, PCWSTR};
 use windows::Win32::Foundation::{
     BOOL, DATA_S_SAMEFORMATETC, DV_E_FORMATETC, DV_E_LINDEX, E_NOTIMPL, FILETIME,
@@ -21,8 +24,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Com::{
     IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET,
-    DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, STGM_READ, STGM_SHARE_DENY_NONE,
-    TYMED_HGLOBAL, TYMED_ISTREAM,
+    DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL, TYMED_ISTREAM,
 };
 use windows::Win32::System::DataExchange::{GetClipboardSequenceNumber, RegisterClipboardFormatW};
 use windows::Win32::System::Memory::{
@@ -30,8 +32,8 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::System::Ole::OleSetClipboard;
 use windows::Win32::UI::Shell::{
-    SHCreateStdEnumFmtEtc, SHCreateStreamOnFileEx, FD_FILESIZE, FD_PROGRESSUI, FD_WRITESTIME,
-    FILEDESCRIPTORW, FILEGROUPDESCRIPTORW,
+    SHCreateStdEnumFmtEtc, FD_FILESIZE, FD_PROGRESSUI, FD_WRITESTIME, FILEDESCRIPTORW,
+    FILEGROUPDESCRIPTORW,
 };
 
 /// One virtual file: absolute source on disk + relative path in the paste.
@@ -86,7 +88,7 @@ impl VirtualFilesDataObject {
                 // descriptor in an aligned local and write it unaligned.
                 let rel = f.rel.replace('/', "\\");
                 let mut name_buf = [0u16; 260];
-                for (j, c) in rel.encode_utf16().take(259).enumerate() {
+                for (j, c) in rel.encode_utf16().enumerate() {
                     name_buf[j] = c;
                 }
                 let fd = FILEDESCRIPTORW {
@@ -128,15 +130,7 @@ impl IDataObject_Impl for VirtualFilesDataObject_Impl {
                     return Err(DV_E_LINDEX.into());
                 }
                 let f = &self.files[i as usize];
-                let path = f.abs.replace('/', "\\");
-                let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
-                let stream = SHCreateStreamOnFileEx(
-                    PCWSTR(wide.as_ptr()),
-                    STGM_READ.0 | STGM_SHARE_DENY_NONE.0,
-                    0x80, // FILE_ATTRIBUTE_NORMAL
-                    false,
-                    None,
-                )?;
+                let stream = read_stream::open(&f.abs)?;
                 return Ok(STGMEDIUM {
                     tymed: TYMED_ISTREAM.0 as u32,
                     u: STGMEDIUM_0 {
@@ -265,6 +259,15 @@ impl IDataObject_Impl for VirtualFilesDataObject_Impl {
 /// app can later detect whether the clipboard still holds OUR data (in-app
 /// paste fast path that skips the stream round-trip).
 pub fn set_clipboard(files: Vec<VirtualFile>) -> Result<u32> {
+    if files
+        .iter()
+        .any(|file| file.rel.encode_utf16().count() >= 260 || file.rel.contains('\0'))
+    {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_INVALIDARG,
+            "Virtueller Zwischenablage-Pfad überschreitet die Windows-Deskriptorgrenze",
+        ));
+    }
     let obj: IDataObject = VirtualFilesDataObject {
         files,
         cf_descriptor: register("FileGroupDescriptorW"),

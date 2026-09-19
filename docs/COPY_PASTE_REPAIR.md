@@ -1,5 +1,14 @@
 # Local and cross-remote copy/paste repair
 
+Current source update, 2026-09-19: recursive copy now takes a deduplicated snapshot
+of matching files and their paths relative to the open root. Folded folders keep
+their selection/membership; files-only filtered views preserve their directories
+on paste. Virtual Windows streams use the shared read-access adapter, and names
+too long for a FILEDESCRIPTOR are materialized without truncation. Ordinary cut
+and external folder drag still transfer whole directories. The historical batch
+and release evidence below predate this update; see the
+[current repair plan](superpowers/plans/2026-09-19-search-recursive-access.md).
+
 Inspection baseline: `4f96ffa`, 2026-09-11. Live status: C1 in [TODO.md](TODO.md).
 
 ## Goal and deliverables

@@ -180,6 +180,7 @@ pub(super) fn report_spawn_failure(
         scanned: 0,
         bytes: 0,
         errors: 1,
+        permission_denied: 0,
         elapsed_ms: 0,
         current_path: String::new(),
     }));

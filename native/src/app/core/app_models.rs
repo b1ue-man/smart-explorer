@@ -27,9 +27,11 @@ pub(in crate::app) mod menu_ids {
 /// tabs park their state here. Switching tabs swaps the field sets.
 pub(in crate::app) struct TabState {
     pub(in crate::app) root_path: String,
+    pub(in crate::app) recursive: bool,
     pub(in crate::app) entries: Vec<FileEntry>,
     pub(in crate::app) view: Vec<(usize, u32)>,
     pub(in crate::app) tree: super::recursive_tree::RecursiveView,
+    pub(in crate::app) read_access: super::read_access::ReadAccess,
     pub(in crate::app) selection: HashSet<Arc<str>>,
     pub(in crate::app) last_anchor: Option<Arc<str>>,
     pub(in crate::app) cursor: Option<Arc<str>>,
@@ -71,6 +73,7 @@ pub(in crate::app) fn empty_progress() -> ScanProgress {
         scanned: 0,
         bytes: 0,
         errors: 0,
+        permission_denied: 0,
         elapsed_ms: 0,
         current_path: String::new(),
     }
@@ -153,9 +156,11 @@ impl Default for TabState {
     fn default() -> Self {
         Self {
             root_path: String::new(),
+            recursive: false,
             entries: Vec::new(),
             view: Vec::new(),
             tree: Default::default(),
+            read_access: Default::default(),
             selection: HashSet::new(),
             last_anchor: None,
             cursor: None,

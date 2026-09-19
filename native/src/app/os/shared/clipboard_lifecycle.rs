@@ -93,7 +93,10 @@ impl App {
         if self.clipboard_preparation.pending() != Some(prepared.stamp) {
             return;
         }
-        if !self.clipboard_preparation.accepts(prepared.stamp, virtual_clipboard_sequence()) {
+        if !self
+            .clipboard_preparation
+            .accepts(prepared.stamp, virtual_clipboard_sequence())
+        {
             self.cancel_clipboard_preparation();
             return;
         }
@@ -113,7 +116,17 @@ impl App {
             ));
             return;
         }
-        let pairs = files.iter().map(|f| (f.abs.clone(), f.rel.clone())).collect();
+        if files
+            .iter()
+            .any(|file| file.rel.encode_utf16().count() >= 260)
+        {
+            self.materialize_long_clipboard(files, prepared.stamp);
+            return;
+        }
+        let pairs = files
+            .iter()
+            .map(|f| (f.abs.clone(), f.rel.clone()))
+            .collect();
         let n = files.len();
         let published = set_virtual_clipboard_if_sequence(files, prepared.stamp.sequence);
         // OLE may dispatch messages. A newer own preparation must keep its
@@ -126,7 +139,9 @@ impl App {
             Ok(Some(seq)) if virtual_clipboard_sequence() == Some(seq) => {
                 self.virtual_clip = Some((seq, pairs));
                 self.notice = Some((
-                    format!("✓ {n} gefilterte Datei(en) kopiert — Einfügen erhält die Ordnerstruktur"),
+                    format!(
+                        "✓ {n} gefilterte Datei(en) kopiert — Einfügen erhält die Ordnerstruktur"
+                    ),
                     Instant::now(),
                 ));
             }
@@ -150,7 +165,10 @@ impl App {
         if self.clipboard_preparation.pending() != Some(prepared.stamp) {
             return;
         }
-        if !self.clipboard_preparation.accepts(prepared.stamp, virtual_clipboard_sequence()) {
+        if !self
+            .clipboard_preparation
+            .accepts(prepared.stamp, virtual_clipboard_sequence())
+        {
             self.cancel_clipboard_preparation();
             return;
         }
@@ -174,7 +192,10 @@ impl App {
             Ok(Some(_)) => {
                 self.virtual_clip = None;
                 self.notice = Some((
-                    format!("✓ {} Element(e) kopiert — in Explorer einfügbar (Ctrl+V)", local.paths.len()),
+                    format!(
+                        "✓ {} Element(e) kopiert — in Explorer einfügbar (Ctrl+V)",
+                        local.paths.len()
+                    ),
                     Instant::now(),
                 ));
                 local.retain_for_session();
@@ -210,7 +231,9 @@ pub(in crate::app) fn prepare_filtered_clipboard(
             if selected_dirs.contains(parent) {
                 return false;
             }
-            let Some((ancestor, _)) = parent.rsplit_once('/') else { break };
+            let Some((ancestor, _)) = parent.rsplit_once('/') else {
+                break;
+            };
             parent = ancestor;
         }
         if !selected_paths.insert(entry.path.to_string()) {
@@ -225,14 +248,16 @@ pub(in crate::app) fn prepare_filtered_clipboard(
     for e in &seeds {
         if e.is_dir && !e.is_symlink {
             let base = format!("{}/", e.parent.trim_end_matches('/'));
-            let collected = crate::scanner::collect_recursive(
+            let collected = crate::scanner::collect_recursive_with_access(
                 &PathBuf::from(e.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
                 false,
                 e.depth + 1,
                 &std::sync::atomic::AtomicBool::new(false),
             );
             if !collected.is_complete() {
-                let first = collected.issues.first()
+                let first = collected
+                    .issues
+                    .first()
                     .map(|issue| format!("{}: {}", issue.path, issue.detail))
                     .unwrap_or_else(|| "unvollständige Ordnererfassung".to_string());
                 let total = collected.issues.len() as u64 + collected.suppressed_issues;
@@ -244,7 +269,11 @@ pub(in crate::app) fn prepare_filtered_clipboard(
                 if !s.is_dir && cf.matches(&s, &prefix) {
                     out.push(ClipboardVirtualFile {
                         abs: s.path.replace('/', "\\"),
-                        rel: s.path.strip_prefix(base.as_str()).unwrap_or(s.name.as_ref()).to_string(),
+                        rel: s
+                            .path
+                            .strip_prefix(base.as_str())
+                            .unwrap_or(s.name.as_ref())
+                            .to_string(),
                         size: s.size,
                         mtime_ms: s.mtime_ms,
                     });

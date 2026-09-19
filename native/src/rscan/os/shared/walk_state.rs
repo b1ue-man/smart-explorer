@@ -100,7 +100,10 @@ impl WalkState {
         // the remaining budget. Rejecting the whole listing loses all results.
         if directory.depth > super::budget::MAX_SCAN_DEPTH {
             self.truncated.store(true, Ordering::Relaxed);
-            self.listing_failed(&directory.path, "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen");
+            self.listing_failed(
+                &directory.path,
+                "Scan-Tiefenlimit erreicht; andere Ordner werden weiter gelesen",
+            );
             return true;
         }
         if let Err(error) = validate_listing(&directory.path, &entries) {
@@ -261,6 +264,7 @@ impl WalkState {
             scanned: self.scanned,
             bytes: self.bytes,
             errors: self.errors,
+            permission_denied: 0,
             elapsed_ms: self.start.elapsed().as_millis() as u64,
             current_path: current_path.to_string(),
         }

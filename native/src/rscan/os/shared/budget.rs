@@ -75,21 +75,6 @@ impl ScanBudget {
             }),
         }
     }
-
-    pub(super) fn preflight_entries(&self, additional: usize) -> Result<(), LimitExceeded> {
-        let additional = u64::try_from(additional).unwrap_or(u64::MAX);
-        if self
-            .entries
-            .checked_add(additional)
-            .is_some_and(|total| total <= self.max_entries)
-        {
-            Ok(())
-        } else {
-            Err(LimitExceeded {
-                limit: "entry count",
-            })
-        }
-    }
 }
 
 #[cfg(test)]
@@ -126,17 +111,5 @@ mod tests {
         let mut budget = ScanBudget::with_limits(1, 1, 1);
         assert!(budget.claim(2, 1).is_err());
         assert!(budget.claim(1, 1).is_ok());
-    }
-
-    #[test]
-    fn listing_preflight_accounts_for_entries_already_claimed() {
-        let mut budget = ScanBudget::with_limits(2, 100, 1);
-        assert!(budget.claim(1, 1).is_ok());
-        assert_eq!(
-            budget.preflight_entries(2),
-            Err(LimitExceeded {
-                limit: "entry count"
-            })
-        );
     }
 }

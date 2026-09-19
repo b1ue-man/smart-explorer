@@ -1,7 +1,7 @@
+use super::extensions::{matches_extension, normalize_extensions};
 use crate::types::{win32_name_issue, FileEntry, FilterDef, Range, TextMode};
 use globset::{GlobBuilder, GlobMatcher};
 use regex::Regex;
-use super::extensions::{matches_extension, normalize_extensions};
 
 pub struct CompiledFilter {
     text_query: Option<TextQuery>,
@@ -165,9 +165,7 @@ impl CompiledFilter {
             return false;
         }
 
-        if !self.ext_set.is_empty()
-            && (e.is_dir || !matches_extension(&e.name, &self.ext_set))
-        {
+        if !self.ext_set.is_empty() && (e.is_dir || !matches_extension(&e.name, &self.ext_set)) {
             return false;
         }
 
@@ -193,7 +191,9 @@ impl CompiledFilter {
                 return false;
             }
         } else if let Some(ref glob) = self.glob {
-            let rel = e.path.strip_prefix(root_prefix.trim_end_matches('/'))
+            let rel = e
+                .path
+                .strip_prefix(root_prefix.trim_end_matches('/'))
                 .filter(|rest| rest.starts_with('/'))
                 .map(|rest| rest.trim_start_matches('/'))
                 .unwrap_or(e.path.as_ref());

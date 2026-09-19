@@ -400,12 +400,13 @@ impl App {
         // and applies the current filter (no UI freeze on big subtrees).
         let seeds: Vec<FileEntry> = if self.recursive {
             self.recursive_transfer_files()
-        } else { self
-            .entries
-            .iter()
-            .filter(|e| self.selection.contains(&e.key()))
-            .cloned()
-            .collect() };
+        } else {
+            self.entries
+                .iter()
+                .filter(|e| self.selection.contains(&e.key()))
+                .cloned()
+                .collect()
+        };
         if seeds.is_empty() || self.copy_dest.is_empty() {
             return;
         }

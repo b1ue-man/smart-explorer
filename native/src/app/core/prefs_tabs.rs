@@ -67,10 +67,22 @@ impl App {
     }
 
     pub(in crate::app) fn root_prefix(&self) -> String {
-        self.root_path
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_string()
+        // The scanner's normalized spelling also owns descendant paths (for
+        // example an uppercase drive letter and stripped verbatim prefix).
+        self.entries
+            .iter()
+            .find(|entry| entry.depth == 0)
+            .map(|entry| entry.path.to_string())
+            .unwrap_or_else(|| {
+                if self.remote.is_none() || is_local_style(&self.root_path) {
+                    crate::local_access::display_path(&crate::local_access::normalize_scan_root(
+                        Path::new(&self.root_path),
+                    ))
+                    .replace('\\', "/")
+                } else {
+                    self.root_path.replace('\\', "/")
+                }
+            })
     }
 
     /// A re-openable, connection-namespaced key for a location: a bare path
@@ -149,9 +161,11 @@ impl App {
     pub(in crate::app) fn swap_with_tab(&mut self, i: usize) {
         let mut t = std::mem::take(&mut self.tabs[i]);
         std::mem::swap(&mut t.root_path, &mut self.root_path);
+        std::mem::swap(&mut t.recursive, &mut self.recursive);
         std::mem::swap(&mut t.entries, &mut self.entries);
         std::mem::swap(&mut t.view, &mut self.view);
         std::mem::swap(&mut t.tree, &mut self.tree);
+        std::mem::swap(&mut t.read_access, &mut self.read_access);
         std::mem::swap(&mut t.selection, &mut self.selection);
         std::mem::swap(&mut t.last_anchor, &mut self.last_anchor);
         std::mem::swap(&mut t.cursor, &mut self.cursor);

@@ -71,6 +71,7 @@ pub fn start_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>) -> Sca
             scanned: 0,
             bytes: 0,
             errors: 1,
+            permission_denied: 0,
             elapsed_ms: 0,
             current_path: String::new(),
         }));
@@ -86,6 +87,7 @@ pub(super) struct Scanner {
     pub(super) scanned: Arc<AtomicU64>,
     pub(super) bytes: Arc<AtomicU64>,
     pub(super) errors: Arc<AtomicU64>,
+    pub(super) permission_denied: AtomicU64,
     pub(super) start: Instant,
     pub(super) sample_path: Arc<Mutex<String>>,
     /// Capped list of (path, error message) for surfacing in the UI.
@@ -172,6 +174,7 @@ fn finish_root_failure(
         scanned: 0,
         bytes: 0,
         errors: 1,
+        permission_denied: 0,
         elapsed_ms: start.elapsed().as_millis() as u64,
         current_path: String::new(),
     }));
@@ -184,6 +187,7 @@ fn run_scan(
     cancel: Arc<AtomicBool>,
     truncated: Arc<AtomicBool>,
 ) {
+    let root = crate::local_access::normalize_scan_root(&root);
     let start = Instant::now();
     let scanned = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
@@ -239,7 +243,7 @@ fn run_scan(
 
     // Emit root entry — always, regardless of hidden/system. The view filter
     // is responsible for hiding entries the user doesn't want to see.
-    let root_link_like = match std::fs::symlink_metadata(&root) {
+    let _root_link_like = match crate::local_access::symlink_metadata(&root) {
         Ok(meta) => {
             let root_link_like = is_link_like(&meta);
             let (hidden, system) = get_attrs(&meta);
@@ -271,10 +275,15 @@ fn run_scan(
                 root.display(),
                 e
             )));
+            let _ = tx.send(ScanMessage::FailedPaths(vec![(
+                root_text.clone(),
+                e.to_string(),
+            )]));
             let _ = tx.send(ScanMessage::Done(ScanProgress {
                 scanned: 0,
                 bytes: 0,
                 errors: 1,
+                permission_denied: u64::from(e.kind() == std::io::ErrorKind::PermissionDenied),
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 current_path: String::new(),
             }));
@@ -289,6 +298,7 @@ fn run_scan(
         scanned,
         bytes,
         errors,
+        permission_denied: AtomicU64::new(0),
         start,
         sample_path: sample_path.clone(),
         failed_paths: failed_paths.clone(),
@@ -302,36 +312,65 @@ fn run_scan(
     let progress_thread = {
         let s = scanner.clone();
         let cancel_p = cancel.clone();
-        std::thread::spawn(move || {
-            while !cancel_p.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                let cur = s.sample_path.lock().map(|x| x.clone()).unwrap_or_default();
-                if !s.send(ScanMessage::Progress(ScanProgress {
-                    scanned: s.scanned.load(Ordering::Relaxed),
-                    bytes: s.bytes.load(Ordering::Relaxed),
-                    errors: s.errors.load(Ordering::Relaxed),
-                    elapsed_ms: s.start.elapsed().as_millis() as u64,
-                    current_path: cur,
-                })) {
-                    break;
+        std::thread::Builder::new()
+            .name("scan-progress".into())
+            .spawn(move || {
+                while !cancel_p.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    let cur = s.sample_path.lock().map(|x| x.clone()).unwrap_or_default();
+                    if !s.send(ScanMessage::Progress(ScanProgress {
+                        scanned: s.scanned.load(Ordering::Relaxed),
+                        bytes: s.bytes.load(Ordering::Relaxed),
+                        errors: s.errors.load(Ordering::Relaxed),
+                        permission_denied: s.permission_denied.load(Ordering::Relaxed),
+                        elapsed_ms: s.start.elapsed().as_millis() as u64,
+                        current_path: cur,
+                    })) {
+                        break;
+                    }
                 }
-            }
-        })
+            })
     };
 
     // Walk. The root entry is already emitted, so its children start with no
     // pending ancestors.
-    if !root_link_like || scanner.opts.follow_symlinks {
+    let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let root_dir = PendingDir {
             path: root.clone(),
             lineage: None,
         };
-        walk_parallel(&scanner, vec![root_dir], 1);
+        // The explicitly chosen root may itself be a junction; child links
+        // remain non-recursive boundaries. Reserve stack space for deep trees.
+        let threads = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(2)
+            .min(4);
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .stack_size(8 * 1024 * 1024)
+            .build()
+        {
+            Ok(pool) => pool.install(|| walk_parallel(&scanner, vec![root_dir], 1)),
+            Err(error) => {
+                scanner.errors.fetch_add(1, Ordering::Relaxed);
+                record_failure(&failed_paths, &root_text, format!("Scan-Threads: {error}"));
+            }
+        }
+    }));
+    if walk.is_err() {
+        scanner.errors.fetch_add(1, Ordering::Relaxed);
+        record_failure(
+            &failed_paths,
+            &root_text,
+            "Interner Lesefehler; geladene Ergebnisse bleiben erhalten".into(),
+        );
     }
 
     // Stop progress thread
     cancel.store(true, Ordering::Relaxed);
-    let _ = progress_thread.join();
+    if let Ok(progress_thread) = progress_thread {
+        let _ = progress_thread.join();
+    }
 
     // Emit collected failed paths (capped)
     if let Ok(g) = failed_paths.lock() {
@@ -344,6 +383,7 @@ fn run_scan(
         scanned: scanner.scanned.load(Ordering::Relaxed),
         bytes: scanner.bytes.load(Ordering::Relaxed),
         errors: scanner.errors.load(Ordering::Relaxed),
+        permission_denied: scanner.permission_denied.load(Ordering::Relaxed),
         elapsed_ms: scanner.start.elapsed().as_millis() as u64,
         current_path: String::new(),
     };

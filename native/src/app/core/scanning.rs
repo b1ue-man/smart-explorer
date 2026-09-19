@@ -51,6 +51,7 @@ impl App {
         }
         if self.root_path != root.to_string_lossy().replace('\\', "/") {
             self.tree.collapsed.clear();
+            self.read_access = Default::default();
         }
         self.root_path = root.to_string_lossy().replace('\\', "/");
 

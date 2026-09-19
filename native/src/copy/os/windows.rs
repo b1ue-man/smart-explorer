@@ -39,8 +39,8 @@ extern "system" {
 }
 
 pub(super) fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
-    let left = File::open(left)?;
-    let right = File::open(right)?;
+    let left = crate::local_access::open_read(left)?;
+    let right = crate::local_access::open_read(right)?;
     Ok(file_identity(&left)? == file_identity(&right)?)
 }
 
@@ -57,7 +57,7 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
 }
 
 pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
-    let file = match File::open(path) {
+    let file = match crate::local_access::open_read(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),

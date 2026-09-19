@@ -27,6 +27,23 @@ er mehr zu oder hatte der Scan das Limit erreicht, startet der Scan automatisch
 neu. **F5** und der **Rekursiv**-Umschalter behalten den eingegebenen Namensfilter;
 nur das Öffnen eines anderen Ordners löscht ihn.
 
+**Suche und Baumansicht im aktuellen Quellstand:** Endungsfilter verstehen etwa
+`blend; *.heic; tar.gz` unabhängig von Groß-/Kleinschreibung oder installierten
+Dateitypen. Dabei erscheinen Ordner nur als Struktur für passende Dateien.
+Auch mit ausgeblendeten Ordnerzeilen werden Unterordner durchsucht. Ungültige
+Glob-/RegExp-Eingaben werden angezeigt. Erreichte Scan-Grenzen und Lesefehler
+lassen bereits gefundene Ergebnisse sichtbar.
+
+Die Pfeile vor rekursiven Ordnern sowie **Links/Rechts** klappen deren Inhalt
+ein und aus. Auswahl, **Strg+A**, Umkehren und Kopieren beziehen sich weiterhin
+auf die vollständige gefilterte Ergebnismenge; Rekursivmodus und Klappzustand
+gehören zum jeweiligen Tab. **Strg+C** und **Kopieren nach** übernehmen in der
+rekursiven Ansicht nur passende ausgewählte Dateien samt Pfaden relativ zum
+geöffneten Ordner. Ein ausgewählter Ordner umfasst dabei seine passenden
+Nachkommen. Sehr lange relative Zwischenablagepfade werden vor dem Einfügen
+als exakte temporäre Dateiauswahl vorbereitet. Ausschneiden und externe
+Drag-and-drop-Ordner übertragen weiterhin ganze Ordner.
+
 **Problematische Windows-Namen:** Dateien und Ordner, die der Explorer nicht
 anfassen kann — reservierte Gerätenamen wie `NUL`, `CON`, `AUX`, `PRN`, `COM1`
 oder `LPT1` (auch mit Endung wie `nul.txt`), Namen mit Punkt oder Leerzeichen am
@@ -348,12 +365,18 @@ einem älteren Peer ohne diese Fähigkeit greift der bisherige Walk-Fallback.
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
 begrenzten Windows-Backup-Lesezugriff ausgewertet — Administratorzugehörigkeit
 allein aktiviert dieses Recht nicht. Fehlt es, bietet die Analyse eine
-Windows-Rechteanfrage für denselben lokalen Pfad an. Nach Zustimmung öffnet sich
-ein separates, rein lesendes Analysefenster; das normale Fenster bleibt erhalten.
+Windows-Rechteanfrage für denselben lokalen Pfad an. Im aktuellen Quellstand
+bleibt die Analyse nach Zustimmung im selben Fenster. Ein unsichtbarer,
+auf diesen Pfad begrenzter Lesehelfer stellt ausschließlich Lesehandles bereit.
+Die Dateiliste und Kopierquellen können diese Freigabe ebenfalls nutzen.
+Bei Zugriffsfehlern bietet die Dateiliste **Leserechte anfordern …** an;
+abgebrochene Anfragen lassen das bisherige Ergebnis bestehen.
 Besitzrechte und ACLs werden nicht verändert. Teilergebnisse zeigen die
 gespeicherten betroffenen Pfade mit kopierbarem Bericht und weisen zusätzliche,
 nicht einzeln gespeicherte Fehler aus. Anbieter-/Dateisystemsperren können auch
 mit Administratorrechten verbleiben; lokale UAC ersetzt keine Remote-Zugangsdaten.
+Die Lesefreigabe verleiht keine Schreib- oder Löschrechte für geschützte Ziele;
+solche Fehler werden weiterhin bei der betroffenen Datei gemeldet.
 Technik und Veröffentlichungsnachweis stehen in
 [docs/ANALYTICS_ACCESS.md](docs/ANALYTICS_ACCESS.md).
 

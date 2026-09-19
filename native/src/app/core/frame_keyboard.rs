@@ -10,9 +10,8 @@ impl App {
         if disconnected {
             self.clip_key_rx = None;
             self.clip_key_cancel = None;
-            self.error_msg = Some(
-                "Zwischenablage-Tastaturüberwachung wurde unerwartet beendet.".to_string(),
-            );
+            self.error_msg =
+                Some("Zwischenablage-Tastaturüberwachung wurde unerwartet beendet.".to_string());
         }
         if self.show_help {
             let close = ctx.input_mut(|input| {
@@ -39,9 +38,14 @@ impl App {
         // egui's menu Areas handle Escape during layout. Let an open menu
         // consume it (and own file commands) before the explorer clears a
         // selection or acts on Delete. Tooltips use a different paint order.
-        let menu_open = ctx.memory(|memory| memory.any_popup_open()
-            || memory.areas().visible_layer_ids().iter()
-                .any(|layer| layer.order == egui::Order::Foreground));
+        let menu_open = ctx.memory(|memory| {
+            memory.any_popup_open()
+                || memory
+                    .areas()
+                    .visible_layer_ids()
+                    .iter()
+                    .any(|layer| layer.order == egui::Order::Foreground)
+        });
         if menu_open && !ctx.wants_keyboard_input() {
             self.accel_mode = false;
             return;
@@ -467,7 +471,9 @@ impl App {
 
 fn take_clipboard_keys(rx: Option<&Receiver<ClipKey>>) -> ([bool; 3], bool) {
     let mut actions = [false; 3];
-    let Some(rx) = rx else { return (actions, false) };
+    let Some(rx) = rx else {
+        return (actions, false);
+    };
     loop {
         match rx.try_recv() {
             Ok(ClipKey::Copy) => actions[0] = true,

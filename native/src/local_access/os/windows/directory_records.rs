@@ -17,6 +17,8 @@ pub(super) enum Layout {
 pub(super) struct Record {
     pub name: OsString,
     pub size: u64,
+    pub mtime_ms: i64,
+    pub btime_ms: i64,
     pub attributes: u32,
     pub tag: Option<u32>,
     pub next: Option<usize>,
@@ -108,6 +110,8 @@ fn decode_inner(bytes: &[u8], offset: usize, layout: Layout) -> io::Result<Recor
     Ok(Record {
         name: OsString::from_wide(&units),
         size,
+        mtime_ms: filetime_ms(bytes, offset_of!(FILE_FULL_DIR_INFO, LastWriteTime))?,
+        btime_ms: filetime_ms(bytes, offset_of!(FILE_FULL_DIR_INFO, CreationTime))?,
         attributes: u32_at(bytes, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?,
         tag: match layout {
             Layout::Extended => Some(u32_at(
@@ -122,6 +126,21 @@ fn decode_inner(bytes: &[u8], offset: usize, layout: Layout) -> io::Result<Recor
             Some(offset.checked_add(next).ok_or_else(invalid)?)
         },
         unrepresentable,
+    })
+}
+
+fn filetime_ms(bytes: &[u8], offset: usize) -> io::Result<i64> {
+    let value = i64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or_else(invalid)?
+            .try_into()
+            .map_err(|_| invalid())?,
+    );
+    Ok(if value == 0 {
+        0
+    } else {
+        value / 10_000 - 11_644_473_600_000
     })
 }
 
