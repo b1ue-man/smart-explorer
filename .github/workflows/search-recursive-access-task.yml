@@ -56,11 +56,27 @@ jobs:
           workspaces: native
           shared-key: search-recursive-access
           cache-on-failure: true
+          cache-workspace-crates: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/search-recursive-access-binary
+          key: search-recursive-access-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: search-recursive-access-binary-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 185
-        run: python native/test-search-recursive-access-task.py --log-root "$RUNNER_TEMP/search-recursive-access-task"
+        run: >-
+          python native/test-search-recursive-access-task.py
+          --log-root "$RUNNER_TEMP/search-recursive-access-task"
+          --binary-cache "$RUNNER_TEMP/search-recursive-access-binary"
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ runner.temp }}/search-recursive-access-binary
+          key: search-recursive-access-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Preserve acceptance and failure evidence
         if: always()

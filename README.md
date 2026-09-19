@@ -38,9 +38,10 @@ Die Pfeile vor rekursiven Ordnern sowie **Links/Rechts** klappen deren Inhalt
 ein und aus. Auswahl, **Strg+A**, Umkehren und Kopieren beziehen sich weiterhin
 auf die vollständige gefilterte Ergebnismenge; Rekursivmodus und Klappzustand
 gehören zum jeweiligen Tab. **Strg+C** und **Kopieren nach** übernehmen in der
-rekursiven Ansicht nur passende ausgewählte Dateien samt Pfaden relativ zum
+gefilterten rekursiven Ansicht nur passende ausgewählte Dateien samt Pfaden relativ zum
 geöffneten Ordner. Ein ausgewählter Ordner umfasst dabei seine passenden
-Nachkommen. Sehr lange relative Zwischenablagepfade werden vor dem Einfügen
+Nachkommen. Ohne Filter bleiben ganze Ordner einschließlich leerer Unterordner
+kopierbar. Sehr lange relative Zwischenablagepfade werden vor dem Einfügen
 als exakte temporäre Dateiauswahl vorbereitet. Ausschneiden und externe
 Drag-and-drop-Ordner übertragen weiterhin ganze Ordner.
 

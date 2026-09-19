@@ -171,7 +171,9 @@ textual containment, covering case-sensitive NTFS sibling roots.
 `FILEDESCRIPTORW` has a fixed relative-name buffer. Long snapshots are materialized
 through the same existing download/copy adapter instead of truncating names.
 Normal virtual files stream lazily from shared read handles; COM clones maintain
-separate seek cursors. Cut and external folder drag keep their prior whole-folder
+separate seek cursors. Unfiltered folder copies also retain empty directories;
+their normal clipboard payload omits descendants already selected through a
+parent. Cut and external folder drag keep their prior whole-folder
 semantics. The read helper intentionally grants no protected destination writes
 or deletes, and does not change remote-provider authentication.
 
