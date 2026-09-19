@@ -195,9 +195,9 @@ fn acl(path: &Path) -> Vec<u8> {
     );
     result
 }
-struct DeniedDirectory(std::path::PathBuf);
+pub(super) struct DeniedDirectory(std::path::PathBuf);
 impl DeniedDirectory {
-    fn new(path: &Path) -> Self {
+    pub(super) fn new(path: &Path) -> Self {
         let guard = Self(path.to_path_buf());
         let output = Command::new("icacls.exe")
             .arg(path)

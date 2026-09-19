@@ -40,6 +40,7 @@ pub(super) fn validate_root(root: &str) -> Result<(), String> {
     if bytes.len() < 3
         || !bytes[0].is_ascii_alphabetic()
         || bytes[1..3] != *b":/"
+        || normalized[2..].contains("//")
         || normalized[3..]
             .chars()
             .any(|c| c < ' ' || "<>:\"|?*".contains(c))
@@ -130,3 +131,7 @@ pub(super) fn quote(value: &str) -> String {
     quoted.push('"');
     quoted
 }
+
+#[cfg(test)]
+#[path = "protocol_tests.rs"]
+mod tests;

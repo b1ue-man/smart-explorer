@@ -32,6 +32,14 @@ fn clients() -> &'static Mutex<Vec<Arc<Client>>> {
     CLIENTS.get_or_init(Mutex::default)
 }
 
+#[cfg(test)]
+pub(super) fn remove_test_grant(root: &str) {
+    clients()
+        .lock()
+        .unwrap()
+        .retain(|client| client.root != root);
+}
+
 impl Client {
     fn alive(&self) -> bool {
         self.healthy.load(Ordering::Acquire)

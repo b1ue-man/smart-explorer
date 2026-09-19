@@ -202,13 +202,27 @@ not the historical workflow or a second validation pipeline.
 See [MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md) for the current task's scope;
 [MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) records the preceding work.
 
-The separate protected-storage-analysis follow-up has one entrypoint,
+The current search/recursive/read-access batch uses only
+`native/test-search-recursive-access-task.py` through
+`.github/workflows/search-recursive-access-task.yml`, with the full pushed
+`candidate_sha` matching the selected `main` ref. Linux and Windows run the same
+entrypoint with directly affected host integrations; Windows adds real ACL,
+process-authenticated read-helper and clipboard-stream cases. The script obtains
+the library fixture path from Cargo's artifact records, builds only that affected
+component incrementally if no exact source/hash-bound binary was supplied, and
+reuses it for the entire suite. Job/task timeouts are 190/185 minutes. Diagnostics
+include the selected cases, build output and source/binary hashes. This pipeline
+does not publish. After successful acceptance, dispatch the existing `build.yml`
+complete-release transaction for that exact source SHA; never run another
+historical task suite or a verification branch for the same candidate.
+
+The historical protected-storage-analysis follow-up had one entrypoint,
 `native/test-analytics-access-task.ps1`, selected by the exact-SHA
 `analytics-access-task.yml` dispatch on Windows 2025. It requires the runner's
 administrator token and `SeBackupPrivilege`, uses owned deny-ACL/junction fixtures,
 and reuses the established source-bound library binary cache. It compiles only
 the affected incremental library fixture when necessary and selects only
-`analytics_access_task`; it does not rerun the mount suite or install Dokany.
+`analytics_access_task`; it did not rerun the mount suite or install Dokany.
 The job/task timeouts are 120/110 minutes. An explicitly supplied development
 binary must include its source SHA and SHA-256. See
 [ANALYTICS_ACCESS.md](ANALYTICS_ACCESS.md) for the scope and remaining acceptance.

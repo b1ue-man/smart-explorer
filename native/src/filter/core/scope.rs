@@ -340,6 +340,6 @@ mod tests {
         let mut files_only = FilterDef::new();
         files_only.include_dirs = false;
         let retention = FilterRetention::new(files_only, "/root".into());
-        assert!(!retention.descend(&entry("sub", true, 1)));
+        assert!(retention.descend(&entry("sub", true, 1)));
     }
 }

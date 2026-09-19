@@ -1,0 +1,72 @@
+name: search-recursive-access-task
+run-name: Search, recursive navigation and read access ${{ inputs.candidate_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: search-recursive-access-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 190
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 185
+        run: python native/test-search-recursive-access-task.py --log-root "$RUNNER_TEMP/search-recursive-access-task"
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-recursive-access-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/search-recursive-access-task
+          if-no-files-found: error
+          retention-days: 14

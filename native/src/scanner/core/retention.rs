@@ -141,4 +141,19 @@ mod tests {
         assert_eq!(seen, 1);
         assert!(!*outer.emitted.lock().unwrap());
     }
+
+    #[test]
+    fn search_recursive_access_task_lineage_retries_an_unemitted_outer_ancestor() {
+        let outer = Lineage::pending(directory("/r/a"), None);
+        let inner = Lineage::pending(directory("/r/a/b"), Some(outer));
+        assert!(!Lineage::emit_pending(&Some(inner.clone()), |entry| entry
+            .path
+            .ends_with("/b")));
+        let mut retried = Vec::new();
+        assert!(Lineage::emit_pending(&Some(inner), |entry| {
+            retried.push(entry.path.to_string());
+            true
+        }));
+        assert_eq!(retried, ["/r/a"]);
+    }
 }

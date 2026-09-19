@@ -16,3 +16,5 @@ pub(crate) use read::{open_read, symlink_metadata};
 
 #[cfg(test)]
 mod access_task;
+#[cfg(test)]
+mod helper_task;
