@@ -14,12 +14,7 @@ impl App {
         } else {
             String::new()
         };
-        self.filter.extensions = self
-            .ext_draft
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .map(|s| s.trim().trim_start_matches('.').to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
+        self.filter.extensions = crate::filter::parse_extensions(&self.ext_draft);
         self.filter_pending_at = None;
         if self.filter != before {
             self.filter_changed();
