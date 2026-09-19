@@ -25,6 +25,8 @@ impl App {
             return;
         }
         if let Some(rs) = &self.remote {
+            let snapshot = self.recursive.then(|| self.recursive_transfer_files());
+            let snapshot_root = self.root_prefix();
             let items: Vec<(String, String, bool)> = self
                 .entries
                 .iter()
@@ -47,8 +49,11 @@ impl App {
             let spawn = std::thread::Builder::new()
                 .name("clip-download".into())
                 .spawn(move || {
-                    let result = download_remote_clipboard_items(&*backend, &items, filter)
-                        .map(PreparedTempClipboard::new);
+                    let result = match snapshot {
+                        Some(files) => super::recursive_clipboard::clipboard_snapshot(files, &snapshot_root)
+                            .and_then(|files| download_clipboard_snapshot(&*backend, files)),
+                        None => download_remote_clipboard_items(&*backend, &items, filter),
+                    }.map(PreparedTempClipboard::new);
                     // The owned result also cleans up if this receiver was replaced.
                     let _ = tx.send(PreparationResult { stamp, result });
                 });
@@ -77,13 +82,16 @@ impl App {
         // Filter-aware copy: when a filter is active and folders are selected,
         // build a virtual-file data object so pasting (anywhere) recreates
         // only the matching files with their folder structure.
-        if !cut && has_dir && self.filter_is_active() {
-            let seeds: Vec<FileEntry> = self
+        if !cut && (self.recursive || (has_dir && self.filter_is_active())) {
+            let recursive = self.recursive;
+            let seeds: Vec<FileEntry> = if recursive {
+                self.recursive_transfer_files()
+            } else { self
                 .entries
                 .iter()
                 .filter(|e| self.selection.contains(&e.key()))
                 .cloned()
-                .collect();
+                .collect() };
             let filter = self.filter.clone();
             let prefix = self.root_prefix();
             let Some(stamp) = self.begin_clipboard_preparation() else { return };
@@ -91,7 +99,11 @@ impl App {
             let spawn = std::thread::Builder::new()
                 .name("clip-prepare".into())
                 .spawn(move || {
-                    let result = prepare_filtered_clipboard(seeds, filter, prefix);
+                    let result = if recursive {
+                        super::recursive_clipboard::clipboard_snapshot(seeds, &prefix)
+                    } else {
+                        prepare_filtered_clipboard(seeds, filter, prefix)
+                    };
                     let _ = tx.send(PreparationResult { stamp, result });
                 });
             match spawn {

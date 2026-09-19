@@ -398,19 +398,21 @@ impl App {
     pub(in crate::app) fn confirm_copy(&mut self) {
         // Selection seeds; the worker thread expands directories recursively
         // and applies the current filter (no UI freeze on big subtrees).
-        let seeds: Vec<FileEntry> = self
+        let seeds: Vec<FileEntry> = if self.recursive {
+            self.recursive_transfer_files()
+        } else { self
             .entries
             .iter()
             .filter(|e| self.selection.contains(&e.key()))
             .cloned()
-            .collect();
+            .collect() };
         if seeds.is_empty() || self.copy_dest.is_empty() {
             return;
         }
         let opts = CopyOptions {
             root: PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR)),
             dest: PathBuf::from(&self.copy_dest),
-            preserve_structure: self.copy_preserve,
+            preserve_structure: self.copy_preserve || (self.recursive && self.filter_is_active()),
             conflict: self.copy_conflict,
             mode: self.copy_mode_pending,
         };

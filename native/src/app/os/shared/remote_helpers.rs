@@ -6,6 +6,9 @@ mod copy_commit;
 mod download_file;
 #[path = "remote_helpers/downloads.rs"]
 mod downloads;
+#[path = "remote_helpers/snapshot_download.rs"]
+mod snapshot_download;
+pub(in crate::app) use snapshot_download::download_clipboard_snapshot;
 #[path = "remote_helpers/entries.rs"]
 mod entries;
 #[path = "remote_helpers/progress.rs"]
