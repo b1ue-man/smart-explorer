@@ -7,6 +7,7 @@
 //! whatever it cannot prove counts as broader.
 use super::imp::text_groups;
 use super::CompiledFilter;
+use super::extensions::{normalize_extensions, suffix_matches};
 use crate::scanner::ScanRetention;
 use crate::types::{FileEntry, FilterDef, Range, TextMode};
 
@@ -34,6 +35,9 @@ pub fn filter_prunes(filter: &FilterDef) -> bool {
 /// so a listing pruned with `scanned_with` already contains everything
 /// `current` could show.
 pub fn filter_is_at_least_as_narrow(current: &FilterDef, scanned_with: &FilterDef) -> bool {
+    if CompiledFilter::compile(scanned_with).error().is_some() {
+        return CompiledFilter::compile(current).error().is_some();
+    }
     text_at_least_as_narrow(current, scanned_with)
         && extensions_at_least_as_narrow(&current.extensions, &scanned_with.extensions)
         && range_within(&current.size, &scanned_with.size)
@@ -82,21 +86,16 @@ fn range_within<T: PartialOrd + Copy>(current: &Range<T>, scanned: &Range<T>) ->
     min_ok && max_ok
 }
 
-fn normalized_extensions(extensions: &[String]) -> Vec<String> {
-    extensions
-        .iter()
-        .map(|extension| extension.trim().trim_start_matches('.').to_lowercase())
-        .filter(|extension| !extension.is_empty())
-        .collect()
-}
-
 fn extensions_at_least_as_narrow(current: &[String], scanned: &[String]) -> bool {
-    let scanned = normalized_extensions(scanned);
+    let scanned = normalize_extensions(scanned);
     if scanned.is_empty() {
         return true;
     }
-    let current = normalized_extensions(current);
-    !current.is_empty() && current.iter().all(|extension| scanned.contains(extension))
+    let current = normalize_extensions(current);
+    !current.is_empty()
+        && current.iter().all(|extension| {
+            scanned.iter().any(|old| old == extension || suffix_matches(extension, old))
+        })
 }
 
 fn text_at_least_as_narrow(current: &FilterDef, scanned: &FilterDef) -> bool {
@@ -163,7 +162,7 @@ impl ScanRetention for FilterRetention {
     }
 
     fn descend(&self, directory: &FileEntry) -> bool {
-        self.filter.include_dirs
+        self.compiled.error().is_none()
             && (!directory.hidden || self.filter.include_hidden)
             && (!directory.system || self.filter.include_system)
             && self

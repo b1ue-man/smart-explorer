@@ -4,6 +4,9 @@ use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_filterbar(&mut self, ui: &mut egui::Ui) {
+        if let Some(error) = CompiledFilter::compile(&self.filter).error() {
+            ui.colored_label(theme::warning(ui), error);
+        }
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("textmode")
                 .selected_text(match self.filter.text_mode {
@@ -163,7 +166,7 @@ impl App {
             ui.label("Dateityp:");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.ext_draft)
-                    .hint_text("Endungen z.B. jpg,png")
+                    .hint_text("z.B. jpg; *.blend; tar.gz")
                     .desired_width(180.0),
             );
             if resp.changed() {

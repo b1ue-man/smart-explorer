@@ -1,6 +1,7 @@
 use crate::types::{win32_name_issue, FileEntry, FilterDef, Range, TextMode};
-use globset::{Glob, GlobMatcher};
+use globset::{GlobBuilder, GlobMatcher};
 use regex::Regex;
+use super::extensions::{matches_extension, normalize_extensions};
 
 pub struct CompiledFilter {
     text_query: Option<TextQuery>,
@@ -8,6 +9,7 @@ pub struct CompiledFilter {
     glob: Option<GlobMatcher>,
     ext_set: Vec<String>,
     filter: FilterDef,
+    error: Option<String>,
 }
 
 struct TextQuery {
@@ -59,29 +61,42 @@ impl CompiledFilter {
         let text_query = (f.text_mode == TextMode::Substring)
             .then(|| TextQuery::parse(text))
             .flatten();
+        let mut error = None;
         let regex = if f.text_mode == TextMode::Regex && !text.is_empty() {
-            Regex::new(&format!("(?i){}", text)).ok()
+            match Regex::new(&format!("(?i){}", text)) {
+                Ok(regex) => Some(regex),
+                Err(detail) => {
+                    error = Some(format!("Ungültiger RegExp-Filter: {detail}"));
+                    None
+                }
+            }
         } else {
             None
         };
         let glob = if f.text_mode == TextMode::Glob && !text.is_empty() {
-            Glob::new(text).ok().map(|g| g.compile_matcher())
+            match GlobBuilder::new(text).case_insensitive(true).build() {
+                Ok(glob) => Some(glob.compile_matcher()),
+                Err(detail) => {
+                    error = Some(format!("Ungültiger Glob-Filter: {detail}"));
+                    None
+                }
+            }
         } else {
             None
         };
-        let ext_set: Vec<String> = f
-            .extensions
-            .iter()
-            .map(|e| e.trim_start_matches('.').to_lowercase())
-            .filter(|e| !e.is_empty())
-            .collect();
+        let ext_set = normalize_extensions(&f.extensions);
         Self {
             text_query,
             regex,
             glob,
             ext_set,
             filter: f.clone(),
+            error,
         }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     #[inline]
@@ -130,6 +145,9 @@ impl CompiledFilter {
     }
 
     pub fn matches(&self, e: &FileEntry, root_prefix: &str) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
         let f = &self.filter;
         if e.is_dir && !f.include_dirs {
             return false;
@@ -148,8 +166,7 @@ impl CompiledFilter {
         }
 
         if !self.ext_set.is_empty()
-            && !e.is_dir
-            && !self.ext_set.iter().any(|x| x == e.ext.as_ref())
+            && (e.is_dir || !matches_extension(&e.name, &self.ext_set))
         {
             return false;
         }
@@ -176,14 +193,10 @@ impl CompiledFilter {
                 return false;
             }
         } else if let Some(ref glob) = self.glob {
-            let rel = if e.path.starts_with(root_prefix) {
-                e.path
-                    .as_ref()
-                    .trim_start_matches(root_prefix)
-                    .trim_start_matches('/')
-            } else {
-                e.path.as_ref()
-            };
+            let rel = e.path.strip_prefix(root_prefix.trim_end_matches('/'))
+                .filter(|rest| rest.starts_with('/'))
+                .map(|rest| rest.trim_start_matches('/'))
+                .unwrap_or(e.path.as_ref());
             if !glob.is_match(rel) {
                 return false;
             }
