@@ -418,10 +418,11 @@ impl App {
             mode: self.copy_mode_pending,
         };
         let mode = opts.mode;
-        let filter = self.filter.clone();
-        let root_prefix = self.root_prefix();
+        let filter = self
+            .filter_is_active()
+            .then(|| (self.filter.clone(), self.root_prefix()));
         self.start_copy_job(mode, false, move |tx| {
-            start_copy_expanded(seeds, Some((filter, root_prefix)), opts, tx)
+            start_copy_expanded(seeds, filter, opts, tx)
         });
     }
 

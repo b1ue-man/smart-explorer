@@ -650,9 +650,9 @@
     "semantic_hash": "bd9f87ed5a6da0f4a4f10da91db14219"
   },
   "app/core/search_recursive_access_task.rs": {
-    "mtime": 1789853818.925402,
-    "ast_hash": "e1f8ef7b37968e8a2cbee19e422b813a",
-    "semantic_hash": "e1f8ef7b37968e8a2cbee19e422b813a"
+    "mtime": 1789855862.4650905,
+    "ast_hash": "f269d400aefa4d24b28ac3189f4c3758",
+    "semantic_hash": "f269d400aefa4d24b28ac3189f4c3758"
   },
   "app/core/settings_background.rs": {
     "mtime": 1789464606.184101,
@@ -965,9 +965,9 @@
     "semantic_hash": "21e50a200908b4adc15dcc692825d27b"
   },
   "app/os/shared/file_actions.rs": {
-    "mtime": 1789852882.036954,
-    "ast_hash": "0c2f56ee76fb92c415d15b7562309d77",
-    "semantic_hash": "0c2f56ee76fb92c415d15b7562309d77"
+    "mtime": 1789855862.506091,
+    "ast_hash": "fbe04b656179723e4e23fa63377955a6",
+    "semantic_hash": "fbe04b656179723e4e23fa63377955a6"
   },
   "app/os/shared/platform_helpers.rs": {
     "mtime": 1789463925.6637743,
@@ -1730,9 +1730,14 @@
     "semantic_hash": "a10bb8d753e8da7fff42eb1fe140b855"
   },
   "copy/os/shared/copy.rs": {
-    "mtime": 1789853818.9234018,
-    "ast_hash": "1498aadd9103386cdf1528464f4e9d56",
-    "semantic_hash": "1498aadd9103386cdf1528464f4e9d56"
+    "mtime": 1789855862.5450919,
+    "ast_hash": "6e708f25dccdc047a7676e8f471a32d3",
+    "semantic_hash": "6e708f25dccdc047a7676e8f471a32d3"
+  },
+  "copy/os/shared/directories.rs": {
+    "mtime": 1789855862.5610921,
+    "ast_hash": "bb503949fb3f5bb4aa4118e4fb285bc4",
+    "semantic_hash": "bb503949fb3f5bb4aa4118e4fb285bc4"
   },
   "copy/os/shared/durability.rs": {
     "mtime": 1783661567.7883964,
@@ -1755,9 +1760,9 @@
     "semantic_hash": "a94d79df765884d7438df734631043c5"
   },
   "copy/os/shared/path_guard.rs": {
-    "mtime": 1783646158.2543712,
-    "ast_hash": "c99f2e37d44e28e8842a5e3ec02ac282",
-    "semantic_hash": "c99f2e37d44e28e8842a5e3ec02ac282"
+    "mtime": 1789855757.4541626,
+    "ast_hash": "6b81189a1b9de9cd23183aba8e0782ea",
+    "semantic_hash": "6b81189a1b9de9cd23183aba8e0782ea"
   },
   "copy/os/shared/planning.rs": {
     "mtime": 1783640350.275761,
@@ -1790,9 +1795,9 @@
     "semantic_hash": "fe07955d70fe028f6d24b45fd7e59d07"
   },
   "copy/os/windows.rs": {
-    "mtime": 1789854287.9354734,
-    "ast_hash": "8c0b2eb0effec5c300bc188781c60116",
-    "semantic_hash": "8c0b2eb0effec5c300bc188781c60116"
+    "mtime": 1789855757.4541626,
+    "ast_hash": "52e54897f65722c21f2f2aef8d1fa9f8",
+    "semantic_hash": "52e54897f65722c21f2f2aef8d1fa9f8"
   },
   "creds/core/transaction.rs": {
     "mtime": 1783654062.6865966,
@@ -2560,9 +2565,9 @@
     "semantic_hash": "fa9b64a55982294f4e8d03fdff9a00fd"
   },
   "local_access/os/windows/access_task.rs": {
-    "mtime": 1789852346.897204,
-    "ast_hash": "87f932158bf5b5be57201f66060f3742",
-    "semantic_hash": "87f932158bf5b5be57201f66060f3742"
+    "mtime": 1789855862.6160932,
+    "ast_hash": "a241d0175c77bbc9f28242b02351fff2",
+    "semantic_hash": "a241d0175c77bbc9f28242b02351fff2"
   },
   "local_access/os/windows/broker.rs": {
     "mtime": 1789852346.9152043,
@@ -2590,9 +2595,9 @@
     "semantic_hash": "2a0351c7b683fc6860f770d4bd12b17b"
   },
   "local_access/os/windows/helper_task.rs": {
-    "mtime": 1789852346.9992058,
-    "ast_hash": "b0284ce3fd738fbb9533c89b609b78e3",
-    "semantic_hash": "b0284ce3fd738fbb9533c89b609b78e3"
+    "mtime": 1789855793.3908195,
+    "ast_hash": "2631daaa4bc915c1b3a670911b026bb1",
+    "semantic_hash": "2631daaa4bc915c1b3a670911b026bb1"
   },
   "local_access/os/windows/image_lock.rs": {
     "mtime": 1789852347.0132062,
@@ -4765,9 +4770,9 @@
     "semantic_hash": "4bcf090f308e3db74f15244310ea5aa6"
   },
   "vfs/os/windows/local_platform.rs": {
-    "mtime": 1789551879.3198903,
-    "ast_hash": "099e02b39e7ea31cebcc899620f2fad0",
-    "semantic_hash": "099e02b39e7ea31cebcc899620f2fad0"
+    "mtime": 1789855757.4551628,
+    "ast_hash": "7346a9ff5d49757dcab24dd26456944b",
+    "semantic_hash": "7346a9ff5d49757dcab24dd26456944b"
   },
   "vfs/os/windows/verbatim.rs": {
     "mtime": 1789552275.6206567,

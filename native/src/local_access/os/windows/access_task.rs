@@ -211,6 +211,33 @@ impl DeniedDirectory {
         );
         guard
     }
+
+    pub(super) fn assert_ordinary_denied(&self) {
+        // CI may start with backup privileges already enabled. Establish a
+        // caller without those privileges and exhaust the lazy iterator so
+        // denial may be reported either at open or on its first query.
+        let _identity = Identity::new(true);
+        let result =
+            std::fs::read_dir(&self.0).and_then(|entries| entries.collect::<io::Result<Vec<_>>>());
+        assert_eq!(
+            result
+                .err()
+                .expect("ordinary listing must be denied")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    pub(super) fn assert_file_read_denied(&self) {
+        let _identity = Identity::new(true);
+        assert_eq!(
+            std::fs::File::open(&self.0)
+                .err()
+                .expect("ordinary data read must be denied")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 }
 impl Drop for DeniedDirectory {
     fn drop(&mut self) {
@@ -218,8 +245,8 @@ impl Drop for DeniedDirectory {
         let restored = Command::new("icacls.exe")
             .arg(&self.0)
             .args(["/remove:d", "*S-1-1-0"])
-            .status()
-            .is_ok_and(|status| status.success());
+            .output()
+            .is_ok_and(|output| output.status.success());
         if !restored {
             eprintln!("Fixture ACL cleanup failed: {}", self.0.display());
             if !std::thread::panicking() {
@@ -258,12 +285,8 @@ fn analytics_access_task_real_denied_directory_locked_files_and_unchanged_acl() 
         .open(protected.join("locked.bin"))
         .unwrap();
     assert!(std::fs::File::open(protected.join("locked.bin")).is_err());
-    let _denied = DeniedDirectory::new(&protected);
-    assert_eq!(
-        std::fs::read_dir(&protected).err().unwrap().kind(),
-        io::ErrorKind::PermissionDenied,
-        "ordinary enumeration must reproduce the reported access failure"
-    );
+    let denied = DeniedDirectory::new(&protected);
+    denied.assert_ordinary_denied();
     let before_acl = acl(&protected);
     let progress = Progress::default();
     let outcome = scan(fixture.path(), &progress);

@@ -117,6 +117,8 @@ fn replace_file_atomic(src: &Path, dest: &Path) -> io::Result<()> {
 
 fn move_file_ex(src: &Path, dest: &Path, flags: u32) -> io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let src = crate::local_access::normalize_scan_root(src);
+    let dest = crate::local_access::normalize_scan_root(dest);
     let src: Vec<u16> = src.as_os_str().encode_wide().chain(Some(0)).collect();
     let dest: Vec<u16> = dest.as_os_str().encode_wide().chain(Some(0)).collect();
     let ok = unsafe { MoveFileExW(src.as_ptr(), dest.as_ptr(), flags) };

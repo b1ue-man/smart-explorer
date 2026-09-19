@@ -49,7 +49,9 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
     std::fs::write(&source, b"protected payload").unwrap();
     std::fs::write(fixture.path().join("outside.txt"), b"outside").unwrap();
     let denied = DeniedDirectory::new(&root);
-    assert!(std::fs::read_dir(&root).is_err());
+    let denied_file = DeniedDirectory::new(&source);
+    denied.assert_ordinary_denied();
+    denied_file.assert_file_read_denied();
     let root_text = root.to_string_lossy().replace('\\', "/");
     let image = LockedImage::current().unwrap();
     let mut nonce = [0u8; 16];
@@ -129,6 +131,7 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    drop(denied_file);
     drop(denied);
     assert_eq!(std::fs::read(&source).unwrap(), b"protected payload");
 }

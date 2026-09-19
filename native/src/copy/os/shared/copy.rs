@@ -7,6 +7,8 @@ use std::time::Instant;
 
 use super::platform;
 
+#[path = "directories.rs"]
+mod directories;
 #[path = "durability.rs"]
 mod durability;
 #[path = "move_guard.rs"]
@@ -28,6 +30,7 @@ mod read_access;
 mod relative;
 #[path = "safe_file.rs"]
 mod safe_file;
+use directories::DirectoryPolicy;
 use outcome::{send_collection_failure, send_copy_canceled, CopyErrorLog};
 use planning::{dedupe_entries, dedupe_paths, EntryAccumulator};
 use prune::{prune_empty_dirs, selected_directory_roots};
@@ -85,6 +88,11 @@ pub fn start_copy_expanded(
                 return;
             }
             let move_roots = selected_directory_roots(&seeds);
+            let directory_policy = if filter.is_none() {
+                DirectoryPolicy::Preserve
+            } else {
+                DirectoryPolicy::MatchingFilesOnly
+            };
             let cf = filter
                 .as_ref()
                 .map(|(f, prefix)| (crate::filter::CompiledFilter::compile(f), prefix.clone()));
@@ -130,7 +138,14 @@ pub fn start_copy_expanded(
                     return;
                 }
             }
-            run_copy(entries.into_entries(), opts, tx, cancel_clone, move_roots);
+            run_copy(
+                entries.into_entries(),
+                opts,
+                tx,
+                cancel_clone,
+                move_roots,
+                directory_policy,
+            );
         });
     if let Err(error) = spawn {
         send_copy_failure(&failure_tx, "Kopieren".to_string(), error.to_string());
@@ -249,7 +264,14 @@ pub fn start_copy_from_paths(
                     return;
                 }
             }
-            run_copy(entries.into_entries(), opts, tx, cancel_clone, move_roots);
+            run_copy(
+                entries.into_entries(),
+                opts,
+                tx,
+                cancel_clone,
+                move_roots,
+                DirectoryPolicy::Preserve,
+            );
         });
     if let Err(error) = spawn {
         send_copy_failure(&failure_tx, "Kopieren".to_string(), error.to_string());
@@ -264,6 +286,7 @@ fn run_copy(
     tx: Sender<CopyMsg>,
     cancel: Arc<AtomicBool>,
     move_roots: Vec<PathBuf>,
+    directory_policy: DirectoryPolicy,
 ) {
     let start = Instant::now();
     let root_fwd = match platform::path_text(&opts.root) {
@@ -313,7 +336,17 @@ fn run_copy(
         }
     }
 
-    // Spec: only files emitted; structure built via parents. Empty selected dirs are skipped.
+    if directory_policy == DirectoryPolicy::Preserve {
+        if let Err(error) = directories::prepare(&entries, &root_fwd, &opts, &cancel) {
+            if cancel.load(Ordering::Relaxed) {
+                send_copy_canceled(&tx);
+            } else {
+                send_copy_failure(&tx, opts.dest.display().to_string(), error.to_string());
+            }
+            return;
+        }
+    }
+    // Filtered transfers create only the parents of their matching files.
     let files: Vec<_> = entries.iter().filter(|e| !e.is_dir).collect();
     let files_total = files.len() as u64;
     let bytes_total: u64 = files.iter().map(|f| f.size).sum();
@@ -382,7 +415,7 @@ fn run_copy(
     }
 
     // After move, prune empty source dirs (best-effort)
-    if opts.mode == CopyMode::Move {
+    if opts.mode == CopyMode::Move && directory_policy == DirectoryPolicy::Preserve {
         for (path, detail) in prune_empty_dirs(&move_roots, &entries) {
             errors.record(path, detail);
         }
