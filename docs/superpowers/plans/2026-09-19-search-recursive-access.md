@@ -1,7 +1,7 @@
 # Search, recursive navigation and access repair
 
-Status: implementation complete; focused remote acceptance pending. No local
-builds or test execution.
+Status: published in [0.5.160](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.160),
+with publication verified on 2026-09-20. No local builds or test execution.
 
 Remote repair evidence (2026-09-19): the first run found two integration compile
 errors, corrected in `97d636d`. The next run reached behavioral acceptance and
@@ -15,8 +15,9 @@ transfer adapters now use verbatim paths, as required by
 Fixture corrections restore keyboard focus after inversion, exhaust the ordinary
 directory iterator under a token without backup privileges, and keep ACL cleanup
 output out of the test harness. The helper fixture separately denies file data
-access before verifying the transferred read-only handle. These changes remain
-in the same task suite and intended release; no release was started.
+access before verifying the transferred read-only handle. These changes stayed
+in the same task suite and intended release; no release had started at that
+repair checkpoint.
 
 ## Goal and deliverables
 
@@ -52,7 +53,7 @@ untracked generated Graphify material. Graphify query preceded source inspection
 - Filtered clipboard preparation re-expands each selected directory, including
   overlapping ancestor/descendant selections, and files-only clipboard copies
   flatten their names. Those paths need one deduplicated result plan.
-- Storage access currently launches a separate elevated analysis window from
+- At that baseline, storage access launched a separate elevated analysis window from
   `analytics/os/windows/elevation.rs`. The Windows enumerator already supports
   backup-read privileges and handles provider failures without abandoning a scan.
   Reuse that machinery through a narrow read capability in the original process.
@@ -200,3 +201,26 @@ restoration, same-process reuse of handles supplied by an authenticated child,
 helper shutdown and read-only COM streams. Existing directly affected directory,
 scanner and analytics cases are selected into the same binary invocation. M6
 records candidate/hash-bound acceptance on Linux and Windows before release.
+
+## Delivery evidence
+
+The final source candidate `6fbe6c05afc317c9878171532abb90456af885d5` passed the
+[single remote suite on Linux and Windows](https://github.com/b1ue-man/smart-explorer/actions/runs/35472680452).
+The Windows evidence includes real denied directory/file reads, unchanged ACLs
+and process privileges, authenticated helper handles, helper shutdown and COM
+stream behavior. Portable cases cover roots, filter transitions, retained partial
+results, folded selection, exact filtered structure, empty unfiltered directories
+and long clipboard/ordinary copy paths.
+
+The [one terminal release transaction](https://github.com/b1ue-man/smart-explorer/actions/runs/35473718426)
+invoked the existing `native/publish-release-local.ps1` remotely, completed its
+environment preflight and produced release commit
+`cc8209675b7462a640fafb02d15c036c3e1b9d9a` with immutable tag `v0.5.160`.
+Its [publication pipeline](https://github.com/b1ue-man/smart-explorer/actions/runs/35476672404)
+published the committed bytes without another build or task-suite run.
+
+Final read-only verification on 2026-09-20 confirmed the Cargo/feed/installer/tag
+version, the Windows manifest's binding to the tested source, all six feed hash
+sidecars and all expected GitHub Release asset sizes and SHA-256 digests. Both
+the `release-candidate` and `publish-release` jobs succeeded. This closes F2;
+unrelated real-drive/provider certification remains on the live TODO board.

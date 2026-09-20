@@ -1,6 +1,7 @@
 # Local and cross-remote copy/paste repair
 
-Current source update, 2026-09-19: filtered recursive copy now takes a deduplicated snapshot
+Released in [0.5.160](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.160),
+verified 2026-09-20: filtered recursive copy takes a deduplicated snapshot
 of matching files and their paths relative to the open root. Folded folders keep
 their selection/membership; files-only filtered views preserve their directories
 on paste. Virtual Windows streams use the shared read-access adapter, and names
@@ -9,9 +10,10 @@ filter, folder copies retain empty directories and clipboard selections suppress
 descendants already included by a selected parent. Ordinary cut
 and external folder drag still transfer whole directories. The historical batch
 and release evidence below predate this update; see the
-[current repair plan](superpowers/plans/2026-09-19-search-recursive-access.md).
+[repair and publication evidence](superpowers/plans/2026-09-19-search-recursive-access.md).
 
-Inspection baseline: `4f96ffa`, 2026-09-11. Live status: C1 in [TODO.md](TODO.md).
+Historical inspection baseline: `4f96ffa`, 2026-09-11. The current search/copy
+delivery is recorded as F2 in [TODO.md](TODO.md).
 
 ## Goal and deliverables
 
