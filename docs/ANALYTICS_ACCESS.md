@@ -1,6 +1,6 @@
 # Storage-analysis access correction
 
-## Current source: shared reads in the existing window (2026-09-19)
+## Shared reads in the existing window (0.5.160; verified 2026-09-20)
 
 The separate elevated analytics window described in the historical stages below
 has been removed. `local_access/` now owns the Windows directory reader, record
@@ -20,9 +20,10 @@ thread impersonation is never replaced by a session grant.
 Consent cancellation/failure preserves the existing view. Successful consent
 restarts the operation in that view and the grant remains usable during the
 session. Protected destination writes/deletes and remote provider credentials
-remain separate permissions. The [current batch plan](superpowers/plans/2026-09-19-search-recursive-access.md)
-defines the focused remote acceptance; this source update is not yet publication
-evidence. Everything below records the previous implementation and its evidence.
+remain separate permissions. The [batch evidence](superpowers/plans/2026-09-19-search-recursive-access.md)
+records successful Linux/Windows acceptance and the single complete release of
+[0.5.160](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.160).
+Everything below records the previous implementation and its evidence.
 
 ## Goal and release boundary
 

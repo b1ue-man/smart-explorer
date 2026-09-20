@@ -27,7 +27,7 @@ er mehr zu oder hatte der Scan das Limit erreicht, startet der Scan automatisch
 neu. **F5** und der **Rekursiv**-Umschalter behalten den eingegebenen Namensfilter;
 nur das Öffnen eines anderen Ordners löscht ihn.
 
-**Suche und Baumansicht im aktuellen Quellstand:** Endungsfilter verstehen etwa
+**Suche und Baumansicht (ab 0.5.160):** Endungsfilter verstehen etwa
 `blend; *.heic; tar.gz` unabhängig von Groß-/Kleinschreibung oder installierten
 Dateitypen. Dabei erscheinen Ordner nur als Struktur für passende Dateien.
 Auch mit ausgeblendeten Ordnerzeilen werden Unterordner durchsucht. Ungültige
@@ -366,7 +366,7 @@ einem älteren Peer ohne diese Fähigkeit greift der bisherige Walk-Fallback.
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
 begrenzten Windows-Backup-Lesezugriff ausgewertet — Administratorzugehörigkeit
 allein aktiviert dieses Recht nicht. Fehlt es, bietet die Analyse eine
-Windows-Rechteanfrage für denselben lokalen Pfad an. Im aktuellen Quellstand
+Windows-Rechteanfrage für denselben lokalen Pfad an. Seit 0.5.160
 bleibt die Analyse nach Zustimmung im selben Fenster. Ein unsichtbarer,
 auf diesen Pfad begrenzter Lesehelfer stellt ausschließlich Lesehandles bereit.
 Die Dateiliste und Kopierquellen können diese Freigabe ebenfalls nutzen.
