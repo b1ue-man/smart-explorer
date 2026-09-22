@@ -109,6 +109,24 @@ These rules apply to first-party documentation (`README.md`, `native/README.md`,
 - After documentation changes, run stale searches for old versions, `Current release`, `WIP`, `needs release`, `prefetch next`, contradictory status words, and old release commands.
 - Documentation-only changes do not require native checks, a native patch bump, release build, release tag, or graphify rebuild. Native source changes require the native and graphify validation rules below, but do not independently trigger versioning or a release; release timing follows the single final release policy above.
 
+## preserve existing behavior
+
+- Every agent must identify and preserve the established behavior directly affected by a change.
+  A fix must not silently remove an existing capability, narrow supported paths/backends, alter
+  persisted endpoint meanings, or weaken cancellation, permissions, backups, conflicts or retries.
+- Folder-picker results and Explorer locations are a shared compatibility contract. Synchronization
+  must retain each path's backend and connection identity for local, UNC/mapped-drive, SFTP/SSH-agent,
+  FTP/FTPS, WebDAV, Google Drive and Direct/Room Share locations, including cross-remote pairs.
+  Equal backend-relative paths on different remotes are different locations. Never route a remote
+  locator through a local path API or drop its prefix when creating/persisting a sync setup.
+- New backends and path representations must work through the shared location/resolution boundary;
+  update affected consumers together. Preserve literal names and existing stored locators. Respect
+  actual provider permissions and read-only sources without misreporting them as path-format errors.
+- Record the affected compatibility expectations in the task plan and cover them in the single
+  final remote task suite alongside the requested behavior. Report unresolved regressions explicitly;
+  do not claim compatibility merely because a new happy path works. This does not authorize extra
+  local builds, per-milestone tests or broad test matrices.
+
 ## native Rust architecture
 
 These rules apply to `native/src` unless a task explicitly says otherwise.
