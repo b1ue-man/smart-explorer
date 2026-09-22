@@ -20,7 +20,7 @@ impl EndpointSpec {
             || (endpoint.as_bytes().get(1) == Some(&b':')
                 && endpoint.as_bytes()[0].is_ascii_alphabetic())
         {
-            return Ok(Self::Local(local_root(endpoint)));
+            return Ok(Self::Local(stored_local_root(endpoint)));
         }
         let Some((scheme, rest)) = endpoint.split_once("://") else {
             if let Some((scheme, _)) = endpoint.split_once(':') {
@@ -28,11 +28,11 @@ impl EndpointSpec {
                     return Err(format!("Ungültige Remote-Adresse: {scheme} benötigt ://"));
                 }
             }
-            return Ok(Self::Local(local_root(endpoint)));
+            return Ok(Self::Local(stored_local_root(endpoint)));
         };
         // A colon within an absolute filesystem path is still a filename.
         if !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
-            return Ok(Self::Local(local_root(endpoint)));
+            return Ok(Self::Local(stored_local_root(endpoint)));
         }
         let scheme = scheme.to_ascii_lowercase();
         match scheme.as_str() {
@@ -48,6 +48,16 @@ impl EndpointSpec {
             }
             _ => Err(format!("Nicht unterstütztes Pfadprotokoll: {scheme}")),
         }
+    }
+}
+
+fn stored_local_root(path: &str) -> String {
+    // Persisted baselines include the exact root string. Preserve old Windows
+    // separators while comparing normalized copies only for overlap checks.
+    if path.len() == 2 && path.as_bytes()[0].is_ascii_alphabetic() && path.ends_with(':') {
+        format!("{path}/")
+    } else {
+        path.to_string()
     }
 }
 
@@ -106,6 +116,7 @@ pub(crate) fn validate_sync_endpoints(source: &str, target: &str) -> Result<(), 
 fn endpoint_key(endpoint: &str) -> (String, String) {
     match EndpointSpec::parse(endpoint) {
         Ok(EndpointSpec::Local(path)) => {
+            let path = local_root(&path);
             let windows = path.starts_with("//") || path.as_bytes().get(1) == Some(&b':');
             let path = if windows { path.to_lowercase() } else { path };
             ("local".into(), path_key(&path))

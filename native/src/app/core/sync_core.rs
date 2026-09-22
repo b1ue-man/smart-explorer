@@ -230,7 +230,7 @@ impl App {
         } else {
             Arc::new(crate::vfs::LocalBackend::new(root))
         };
-        (crate::vfs::sync_backend(backend), crate::connect::local_root(root))
+        (crate::vfs::sync_backend(backend), root.clone())
     }
 
     /// Two-way sync the two split panes' folders (right-click action). Safe

@@ -77,7 +77,9 @@ with leading/trailing whitespace, tabs or line breaks use `source_json=` or
 plain fields with their established trimming semantics. There is no lossy plain
 fallback alongside an encoded field: an older application must reject an
 unrepresentable job instead of syncing a different path. Baseline identities and
-literal `%` names retain their existing meaning.
+literal `%` names retain their existing meaning. Reopening an existing Windows
+setup keeps its stored backslashes; separator normalization is used only for
+path comparisons, so an existing setup continues using its original baseline.
 
 The existing ZIP backend remains read-only. Its live session can supply a direct
 mirror source; it has no persistent connection locator. The setup editor reports
