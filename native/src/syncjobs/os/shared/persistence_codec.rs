@@ -257,6 +257,23 @@ mod tests {
     }
 
     #[test]
+    fn sync_paths_task_saved_paths_roundtrip_without_whitespace_or_url_decoding() {
+        for path in ["/space at end ", "/tab\tand\nnewline", "gdrive:///Ü %20 # ? ",
+            "sftp://user@host:22/Ü %20 # ? ", "share://direct/a/Gate/Ü "] {
+            let mut job = sample();
+            job.source = path.into();
+            job.target = "/distinct-target".into();
+            let saved = serialize_kv(&job);
+            let back = parse_kv_checked(&saved).unwrap();
+            assert_eq!(back.source, path);
+            assert_eq!(back.target, job.target);
+            assert!(!saved.contains("source=/space at end\n"));
+        }
+        let legacy = "id=legacy\nname=legacy\nsource=sftp://u@host:22/old%20name\ntarget=/local\n";
+        assert_eq!(parse_kv_checked(legacy).unwrap().source, "sftp://u@host:22/old%20name");
+    }
+
+    #[test]
     fn unknown_and_missing_keys_remain_forward_compatible() {
         let body = "id=abc\nname=X\nsource=s\ntarget=t\nfuture_option=42\n";
         let job = parse_kv_checked(body).unwrap();

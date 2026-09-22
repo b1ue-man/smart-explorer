@@ -274,6 +274,18 @@ kept on failure so fix reruns rebuild only the crate. Formatting and dead-code
 drift outside the batch stays tracked as [TODO.md](TODO.md) H1 rather than
 failing a feature batch.
 
+For the sync endpoint / cross-remote compatibility batch, dispatch only
+`.github/workflows/sync-paths-task.yml` with the full pushed candidate SHA. Its
+single `python native/test-sync-paths-task.py` entrypoint runs on Linux and Windows,
+reuses a source-bound library fixture or the affected incremental host library
+build, and preserves the Cargo and fixture caches for fix retries. Job/entrypoint
+timeouts are 190/185 minutes. The isolated suite covers picker/setup provenance,
+literal endpoint persistence, all existing backend pairings at the VFS boundary,
+real loopback Share-to-Share/Share-to-local sync, and directly affected backup,
+conflict, retry, WebDAV and Drive integration behavior. It does not contact users'
+remote accounts. Artifacts include candidate/binary identity and acceptance logs.
+Codex must not invoke this entrypoint locally. See [SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md).
+
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.
