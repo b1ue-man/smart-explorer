@@ -42,8 +42,8 @@ fn sync_paths_task_picker_locators_preserve_literal_paths_and_credentials() {
 fn sync_paths_task_local_roots_ipv6_and_malformed_urls_never_cross_namespaces() {
     for (input, root) in [
         ("/", "/"), ("/tmp/a%20 # ? ", "/tmp/a%20 # ? "), ("C:", "C:/"),
-        (r"C:\Users\A", "C:/Users/A"), (r"\\server\share\Ü", "//server/share/Ü"),
-        (r"\\?\C:\data", "//?/C:/data"), ("/tmp/sftp://literal", "/tmp/sftp://literal"),
+        (r"C:\Users\A", r"C:\Users\A"), (r"\\server\share\Ü", r"\\server\share\Ü"),
+        (r"\\?\C:\data", r"\\?\C:\data"), ("/tmp/sftp://literal", "/tmp/sftp://literal"),
     ] {
         let EndpointSpec::Local(actual) = EndpointSpec::parse(input).unwrap() else { panic!("{input}") };
         assert_eq!(actual, root);
@@ -59,6 +59,20 @@ fn sync_paths_task_local_roots_ipv6_and_malformed_urls_never_cross_namespaces() 
     for input in ["sftp://u@host:bad/Docs", "sftp://u@/Docs", "sftp://u@[::1/Docs"] {
         assert!(parse_remote_url(input).is_none(), "{input}");
     }
+}
+
+#[test]
+fn sync_paths_task_reopening_local_roots_keeps_existing_baseline_identity() {
+    let old_source = r"C:\old\source";
+    let old_target = r"D:\old\target";
+    let before = crate::bisync::pair_id_for(
+        &crate::vfs::LocalBackend::new(old_source), old_source,
+        &crate::vfs::LocalBackend::new(old_target), old_target);
+    let (source, source_root) = crate::connect::resolve_endpoint(old_source).unwrap();
+    let (target, target_root) = crate::connect::resolve_endpoint(old_target).unwrap();
+    assert_eq!(source_root, old_source);
+    assert_eq!(target_root, old_target);
+    assert_eq!(crate::bisync::pair_id_for(&*source, &source_root, &*target, &target_root), before);
 }
 
 #[test]
