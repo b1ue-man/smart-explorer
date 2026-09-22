@@ -23,6 +23,11 @@ impl EndpointSpec {
             return Ok(Self::Local(local_root(endpoint)));
         }
         let Some((scheme, rest)) = endpoint.split_once("://") else {
+            if let Some((scheme, _)) = endpoint.split_once(':') {
+                if !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+                    return Err(format!("Ungültige Remote-Adresse: {scheme} benötigt ://"));
+                }
+            }
             return Ok(Self::Local(local_root(endpoint)));
         };
         // A colon within an absolute filesystem path is still a filename.

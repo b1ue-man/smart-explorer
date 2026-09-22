@@ -150,13 +150,7 @@ impl App {
                 .on_hover_text("Neues Sync-Setup mit dem aktuellen Ordner als Quelle anlegen")
                 .clicked()
         {
-            let src = if is_local_style(&self.root_path) {
-                self.root_path.clone()
-            } else {
-                String::new()
-            };
-            self.job_editor = Some(JobEditor::blank(src, String::new()));
-            self.show_sync_jobs = true;
+            self.begin_pane_sync_setup(self.active_tab, None);
         }
 
         if ui.button("Hintergrund-Sync einstellen…").clicked() {

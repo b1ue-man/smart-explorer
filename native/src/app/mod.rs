@@ -118,6 +118,10 @@ mod omni_accel;
 mod picker_async;
 #[path = "core/picker_impl.rs"]
 mod picker_impl;
+#[path = "core/picker_locations.rs"]
+mod picker_locations;
+#[path = "os/shared/picker_connections.rs"]
+mod picker_connections;
 #[path = "core/picker_types.rs"]
 mod picker_types;
 #[cfg(windows)]
@@ -221,6 +225,8 @@ mod status_errors;
 mod support_paths;
 #[path = "core/sync_core.rs"]
 mod sync_core;
+#[path = "os/shared/sync_jobs.rs"]
+mod sync_jobs;
 #[path = "core/table.rs"]
 mod table;
 #[path = "core/table_accessibility.rs"]

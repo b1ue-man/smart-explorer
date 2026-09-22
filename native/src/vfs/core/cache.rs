@@ -175,6 +175,12 @@ impl Backend for CachingBackend {
     fn state_identity(&self) -> String {
         self.inner.state_identity()
     }
+    fn namespace_identity(&self) -> String {
+        self.inner.namespace_identity()
+    }
+    fn uncached_backend(&self) -> Option<BackendHandle> {
+        Some(self.inner.uncached_backend().unwrap_or_else(|| self.inner.clone()))
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         Ok(self.directory_snapshot(path)?.entries.to_vec())

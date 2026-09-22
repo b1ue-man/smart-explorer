@@ -86,7 +86,14 @@ pub trait Backend: Send + Sync {
     fn state_identity(&self) -> String {
         format!("{:?}:{}", self.scheme(), self.root_display())
     }
-
+    /// Filesystem namespace, independent of the connection's starting folder.
+    fn namespace_identity(&self) -> String {
+        self.state_identity()
+    }
+    /// Browsing wrappers expose their live backend for sync revalidation.
+    fn uncached_backend(&self) -> Option<BackendHandle> {
+        None
+    }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>>;
     fn stat(&self, path: &str) -> VfsResult<VfsMeta>;
 

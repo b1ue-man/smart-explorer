@@ -146,10 +146,7 @@ impl App {
                 self.sync_split_panes();
             }
             if save_setup_req {
-                let (_, root_a) = self.pane_backend(panes[0]);
-                let (_, root_b) = self.pane_backend(panes[1]);
-                self.job_editor = Some(JobEditor::blank(root_a, root_b));
-                self.show_sync_jobs = true;
+                self.begin_pane_sync_setup(panes[0], Some(panes[1]));
             }
         });
     }

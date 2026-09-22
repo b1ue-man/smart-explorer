@@ -179,6 +179,10 @@ impl Backend for WebdavBackend {
     fn state_identity(&self) -> String {
         self.identity.clone()
     }
+    fn namespace_identity(&self) -> String {
+        self.identity.strip_suffix(&format!(":root={}", self.root))
+            .unwrap_or(&self.identity).to_string()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let xml = self.propfind(path, "1")?;

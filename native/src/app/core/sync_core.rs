@@ -2,22 +2,20 @@ use super::prelude::*;
 use super::*;
 
 impl App {
-    /// One-way mirror the current location (local or remote) into `dest_local`.
-    pub(in crate::app) fn start_mirror(&mut self, dest_local: String) {
-        if self.root_path.is_empty() || self.sync_running {
+    /// One-way mirror using the selected folder's live backend and root.
+    pub(in crate::app) fn start_mirror(&mut self, dst: crate::vfs::BackendHandle, destination: String) {
+        if self.root_path.is_empty() || self.sync_running || self.bisync_running
+            || self.job_connect_rx.is_some() {
             return;
         }
-        let src: crate::vfs::BackendHandle = match &self.remote {
-            Some(rs) => rs.backend.clone(),
-            None => Arc::new(crate::vfs::LocalBackend::new(&self.root_path)),
-        };
-        let dst: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
+        let (src, root) = self.pane_backend(self.active_tab);
+        let dst = crate::vfs::sync_backend(dst);
         let (tx, rx) = unbounded();
         let h = crate::sync::start_sync(
             src,
-            self.root_path.clone(),
+            root,
             dst,
-            dest_local,
+            destination,
             crate::sync::SyncOptions {
                 delete_extra: false,
                 dry_run: false,
@@ -91,21 +89,16 @@ impl App {
     }
 
     /// Two-way sync the current location with safe, reversible defaults.
-    pub(in crate::app) fn start_bisync(&mut self, dest_local: String) {
+    pub(in crate::app) fn start_bisync(&mut self, b: crate::vfs::BackendHandle, destination: String) {
         if self.root_path.is_empty() {
             return;
         }
-        let a: crate::vfs::BackendHandle = match &self.remote {
-            Some(rs) => rs.backend.clone(),
-            None => Arc::new(crate::vfs::LocalBackend::new(&self.root_path)),
-        };
-        let root_a = self.root_path.clone();
-        let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&dest_local));
+        let (a, root_a) = self.pane_backend(self.active_tab);
         self.launch_bisync(
             a,
             root_a,
             b,
-            dest_local,
+            destination,
             crate::bisync::BisyncOptions::default(),
             true,
             Vec::new(),
@@ -129,6 +122,7 @@ impl App {
         job_id: Option<String>,
     ) {
         if self.bisync_running
+            || self.sync_running
             || self.conflict_resolution.is_some()
             || self.merge.is_some()
             || self.merge_load_rx.is_some()
@@ -164,6 +158,8 @@ impl App {
                 return;
             }
         };
+        let a = crate::vfs::sync_backend(a);
+        let b = crate::vfs::sync_backend(b);
         let pair = crate::bisync::pair_id_for(&*a, &root_a, &*b, &root_b);
         let context = BisyncCtx {
             a: a.clone(),
@@ -214,125 +210,6 @@ impl App {
         }
     }
 
-    /// Resolve any remote endpoints off-thread, then run a saved sync setup.
-    pub(in crate::app) fn run_job(&mut self, id: &str) {
-        if self.bisync_running || self.job_connect_rx.is_some() {
-            self.notice = Some((
-                "Es läuft bereits ein Sync — bitte warten.".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        let job = match self.sync_jobs.iter().find(|j| j.id == id) {
-            Some(j) => j.clone(),
-            None => return,
-        };
-        let (opts, bounds) = match checked_job_settings(&job) {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.error_msg = Some(format!("Ungültiges Sync-Setup: {error}"));
-                return;
-            }
-        };
-        // Pure local: resolve inline (no network) and launch immediately.
-        if !crate::connect::is_remote_url(&job.source)
-            && !crate::connect::is_remote_url(&job.target)
-        {
-            let a: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.source));
-            let b: crate::vfs::BackendHandle = Arc::new(crate::vfs::LocalBackend::new(&job.target));
-            self.launch_bisync(
-                a,
-                job.source.clone(),
-                b,
-                job.target.clone(),
-                opts,
-                job.include_hidden,
-                job.ignore.clone(),
-                bounds,
-                Some(job.id.clone()),
-            );
-            return;
-        }
-        // Remote endpoint(s): re-open the saved connection(s) off-thread.
-        let (src, tgt) = (job.source.clone(), job.target.clone());
-        let (tx, rx) = unbounded();
-        let spawn = std::thread::Builder::new()
-            .name("job-connect".into())
-            .spawn(move || {
-                let res = (|| {
-                    let a = crate::connect::resolve_endpoint(&src)?;
-                    let b = crate::connect::resolve_endpoint(&tgt)?;
-                    Ok::<_, String>((a, b))
-                })();
-                let _ = tx.send(res);
-            });
-        match spawn {
-            Ok(_) => {
-                self.job_connect_rx = Some(rx);
-                self.job_connect_pending = Some(job);
-                self.notice = Some((
-                    "Verbinde mit Remote-Ziel…".to_string(),
-                    std::time::Instant::now(),
-                ));
-            }
-            Err(error) => {
-                self.job_connect_rx = None;
-                self.job_connect_pending = None;
-                self.error_msg = Some(format!(
-                    "Remote-Sync-Verbindung konnte nicht gestartet werden: {error}"
-                ));
-            }
-        }
-    }
-
-    /// Once a remote job's endpoints are open, launch the sync (UI thread).
-    pub(in crate::app) fn drain_job_connect(&mut self) {
-        let res = match self.job_connect_rx.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(result)) => result,
-            Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
-            Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.job_connect_rx = None;
-                self.job_connect_pending = None;
-                self.error_msg =
-                    Some("Remote-Sync-Verbindung wurde ohne Ergebnis beendet.".to_string());
-                return;
-            }
-        };
-        self.job_connect_rx = None;
-        let job = match self.job_connect_pending.take() {
-            Some(j) => j,
-            None => {
-                self.error_msg = Some("Remote-Sync-Auftrag fehlt.".to_string());
-                return;
-            }
-        };
-        match res {
-            Ok(((a, root_a), (b, root_b))) => {
-                let (opts, bounds) = match checked_job_settings(&job) {
-                    Ok(settings) => settings,
-                    Err(error) => {
-                        self.error_msg = Some(format!("Ungültiges Sync-Setup: {error}"));
-                        return;
-                    }
-                };
-                self.launch_bisync(
-                    a,
-                    root_a,
-                    b,
-                    root_b,
-                    opts,
-                    job.include_hidden,
-                    job.ignore.clone(),
-                    bounds,
-                    Some(job.id.clone()),
-                );
-            }
-            Err(e) => {
-                self.error_msg = Some(format!("Remote-Sync: {}", e));
-            }
-        }
-    }
-
     /// Backend + root for a tab index, honouring whether it's the focused tab
     /// (state in the App fields) or a parked split pane (state in `self.tabs`),
     /// and local vs. remote. Used by the split-view "sync these folders" action.
@@ -340,22 +217,20 @@ impl App {
         &self,
         tab_idx: usize,
     ) -> (crate::vfs::BackendHandle, String) {
-        if tab_idx == self.active_tab {
-            let root = self.root_path.clone();
-            let be: crate::vfs::BackendHandle = match &self.remote {
-                Some(rs) => rs.backend.clone(),
-                None => Arc::new(crate::vfs::LocalBackend::new(&root)),
-            };
-            (be, root)
+        let (root, remote, net) = if tab_idx == self.active_tab {
+            (&self.root_path, self.remote.as_ref(), self.net_conn.as_ref())
         } else {
-            let t = &self.tabs[tab_idx];
-            let root = t.root_path.clone();
-            let be: crate::vfs::BackendHandle = match &t.remote {
-                Some(rs) => rs.backend.clone(),
-                None => Arc::new(crate::vfs::LocalBackend::new(&root)),
-            };
-            (be, root)
-        }
+            let tab = &self.tabs[tab_idx];
+            (&tab.root_path, tab.remote.as_ref(), tab.net_conn.as_ref())
+        };
+        let backend: crate::vfs::BackendHandle = if let Some(remote) = remote {
+            remote.backend.clone()
+        } else if let Some(net) = net {
+            Arc::new(crate::net::UncBackend::new(root, net.clone()))
+        } else {
+            Arc::new(crate::vfs::LocalBackend::new(root))
+        };
+        (crate::vfs::sync_backend(backend), crate::connect::local_root(root))
     }
 
     /// Two-way sync the two split panes' folders (right-click action). Safe
@@ -372,10 +247,6 @@ impl App {
             self.error_msg = Some("Beide Fenster müssen einen Ordner geöffnet haben.".to_string());
             return;
         }
-        if root_a == root_b {
-            self.error_msg = Some("Beide Fenster zeigen denselben Ordner.".to_string());
-            return;
-        }
         self.launch_bisync(
             a,
             root_a,
@@ -388,15 +259,4 @@ impl App {
             None,
         );
     }
-}
-
-type SyncFilterBounds = (u64, u64, i64, i64);
-type CheckedJobSettings = (crate::bisync::BisyncOptions, SyncFilterBounds);
-
-fn checked_job_settings(job: &crate::syncjobs::SyncJob) -> Result<CheckedJobSettings, String> {
-    job.validate()?;
-    Ok((
-        job.checked_opts(false)?,
-        job.checked_filter_bounds(now_secs_i64())?,
-    ))
 }

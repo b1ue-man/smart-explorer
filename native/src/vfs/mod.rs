@@ -40,6 +40,9 @@ mod local_platform;
 mod promotion;
 #[path = "core/scheme.rs"]
 mod scheme;
+#[path = "os/shared/sync_roots.rs"]
+mod sync_roots;
+pub(crate) use sync_roots::{sync_backend, validate_sync_roots};
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;

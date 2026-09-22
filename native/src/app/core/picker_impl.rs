@@ -24,10 +24,10 @@ impl App {
         // A local starting folder opens directly; remote/empty starts at roots.
         if !initial.trim().is_empty()
             && !crate::connect::is_remote_url(initial)
-            && is_local_style(initial)
+            && !initial.contains("://")
         {
             st.backend = Some(Arc::new(crate::vfs::LocalBackend::new("/")));
-            st.cwd = initial.replace('\\', "/").trim_end_matches('/').to_string();
+            st.cwd = crate::connect::local_root(initial);
             if st.cwd.is_empty() {
                 st.cwd = "/".into();
             }
@@ -50,12 +50,12 @@ impl App {
             p.is_remote = false;
             p.endpoint_prefix = String::new();
             p.conn_label = String::new();
-            let c = root.replace('\\', "/");
+            let c = crate::connect::local_root(root);
             let c = c.trim_end_matches('/');
             p.cwd = if c.is_empty() {
                 "/".into()
             } else {
-                ensure_dir_root(c)
+                crate::connect::local_root(c)
             };
             p.connecting = false;
             p.connect_rx = None;
@@ -106,6 +106,10 @@ impl App {
         let mut go_up = false;
         let mut open_local: Option<String> = None;
         let mut open_conn: Option<crate::creds::SavedConnection> = None;
+        let mut open_tab = None;
+        let mut open_peer = None;
+        let tab_locations = self.picker_tab_locations();
+        let peer_locations = self.picker_peer_locations();
 
         let Some(st) = self.picker.as_ref() else {
             return;
@@ -152,7 +156,7 @@ impl App {
                                 open_local = Some(d.clone());
                             }
                         }
-                        // Remote connections only for sync source/target.
+                        // Keep the same remote choices for every sync entry point.
                         if !local_only {
                             ui.add_space(6.0);
                             ui.label(
@@ -160,7 +164,7 @@ impl App {
                                     .small()
                                     .color(theme::muted(ui)),
                             );
-                            if conns.is_empty() && !gdrive_connected {
+                            if conns.is_empty() && !gdrive_connected && peer_locations.is_empty() && tab_locations.is_empty() {
                                 ui.colored_label(theme::muted(ui), "(keine)");
                             }
                             if gdrive_connected
@@ -175,6 +179,16 @@ impl App {
                                     .clicked()
                                 {
                                     open_conn = Some(c.clone());
+                                }
+                            }
+                            for (label, target) in &peer_locations {
+                                if ui.selectable_label(false, format!("Share: {label}")).clicked() {
+                                    open_peer = Some((label.clone(), target.clone()));
+                                }
+                            }
+                            for (index, location) in tab_locations.iter().enumerate() {
+                                if ui.selectable_label(false, format!("Tab: {}", location.label)).clicked() {
+                                    open_tab = Some(index);
                                 }
                             }
                         }
@@ -306,6 +320,14 @@ impl App {
         if open_gdrive {
             self.picker_open_gdrive();
         }
+        if let Some((label, target)) = open_peer {
+            self.picker_open_peer(label, target);
+        }
+        if let Some(index) = open_tab {
+            if let Some(location) = tab_locations.into_iter().nth(index) {
+                self.picker_use_location(location);
+            }
+        }
         if choose {
             if let Some(p) = self.picker.take() {
                 let value = Self::picker_value(&p);
@@ -350,8 +372,12 @@ impl App {
                             self.start_reclaim_scan(value);
                         }
                     }
-                    PickerPurpose::MirrorDest => self.start_mirror(value),
-                    PickerPurpose::BisyncDest => self.start_bisync(value),
+                    PickerPurpose::MirrorDest => {
+                        if let Some(backend) = p.backend { self.start_mirror(backend, p.cwd); }
+                    }
+                    PickerPurpose::BisyncDest => {
+                        if let Some(backend) = p.backend { self.start_bisync(backend, p.cwd); }
+                    }
                     PickerPurpose::CopyDest => self.copy_dest = native,
                     PickerPurpose::DownloadTo { src } => {
                         if let Some(backend) = self.remote.as_ref().map(|rs| rs.backend.clone()) {
