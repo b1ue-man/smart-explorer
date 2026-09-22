@@ -68,3 +68,17 @@ No build, compiler or test entrypoint runs on the initiating workstation.
 Only after the suite is evaluated successfully may the existing `build.yml`
 complete-release transaction run for the pushed candidate. No intermediate
 version bump, tag, artifact build or publication is part of these milestones.
+
+## Persistence compatibility
+
+Ordinary endpoints keep the existing `source=` and `target=` format. Endpoints
+with leading/trailing whitespace, tabs or line breaks use `source_json=` or
+`target_json=` to preserve the exact string. The reader continues accepting old
+plain fields with their established trimming semantics. There is no lossy plain
+fallback alongside an encoded field: an older application must reject an
+unrepresentable job instead of syncing a different path. Baseline identities and
+literal `%` names retain their existing meaning.
+
+The existing ZIP backend remains read-only. Its live session can supply a direct
+mirror source; it has no persistent connection locator. The setup editor reports
+that limitation instead of persisting its internal `/` as a local root.

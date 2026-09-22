@@ -12,6 +12,7 @@ later, superseded, or currently regressed.
 
 | # | Item | State | Notes |
 |---|---|---|---|
+| SY1 | **Sync picker / cross-remote path compatibility** | 🚧 | Source fixes retain remote provenance in quick sync, split-view setups and saved-job resolution, preserve literal paths, and keep namespace/backup protections. Remote acceptance and terminal publication remain pending; scope and evidence: [SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md). |
 | 21e | **LAN presence real-device validation** — paired Direct devices announce/find each other over mDNS without the Share server; scoped link-local IPv6 and APIPA candidates | 🚧 | source is current (`docs/SHARE_SERVER.md` → Local-Network Presence); needs a two-machine cable/isolated-LAN smoke test on Windows and Linux, including the "kein Share-Server konfiguriert" offline worker mode |
 | 21f | **Automatic uplink sharing real-device validation** — router-less link + paired peer without internet ⇒ this host shares via ICS (Windows) or NetworkManager `shared` (Linux) after a one-time UAC/polkit setup | 🚧 | policy, helpers and reconcile are implemented; needs live validation of the Scheduled-Task helper, `SharedAccess` service states, NM+dnsmasq profile activation, and stop-on-unplug timing |
 | C1 | **Connection removal cleanup real-device validation** — removing a Direct peer/room/saved connection deletes grants, requests, favourites, folder prefs, mounts and tabs; removed devices stay blocked from automatic re-pairing until paired again | 🚧 | profile transaction and GUI/CLI paths are current; needs a two-machine check that the peer's background repair and a fresh request are refused after removal and admitted again after a PIN pairing |
@@ -166,11 +167,12 @@ A1/A2/A3/A4 (see "Still open" at the top).
 
 ## Notes
 
-- **In-app picker (#17):** `PickerState` in app.rs drives a modal that lists Home
-  + drives + saved connections; local nav is instant `std::fs`, remote connects
-  async then lists via `Backend::list_dir`. "Choose" returns a local path or a
+- **In-app picker (#17):** `PickerState` in `app/core/picker_types.rs` drives a modal
+  with Home, drives, saved connections, Direct/Room Share and open folder tabs.
+  Listings and connections run off-thread through `Backend::list_dir`. All sync
+  purposes accept local and remote choices. "Choose" returns a local path or a
   `proto://user@host:port/path` endpoint. `connect::resolve_endpoint` re-opens
-  the matching saved connection (by protocol+user+host+port) using its platform
+  the matching saved connection (authority plus the most specific saved root) using its platform
   credential-store secret — so remote jobs run both interactively (off-thread)
   and in the daemon.
   **0.5.58:** generalised to a `PickerPurpose` enum used by *all* folder dialogs

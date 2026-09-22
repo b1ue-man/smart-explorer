@@ -227,6 +227,12 @@ mod support_paths;
 mod sync_core;
 #[path = "os/shared/sync_jobs.rs"]
 mod sync_jobs;
+#[cfg(test)]
+#[path = "os/shared/sync_paths_task_fixture.rs"]
+mod sync_paths_task_fixture;
+#[cfg(test)]
+#[path = "os/shared/sync_paths_task_tests.rs"]
+mod sync_paths_task_tests;
 #[path = "core/table.rs"]
 mod table;
 #[path = "core/table_accessibility.rs"]

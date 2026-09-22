@@ -89,7 +89,7 @@ impl App {
     }
 
     pub(in crate::app) fn ui_menu_sync(&mut self, ui: &mut egui::Ui) {
-        // One-way mirror of the current location to a local folder (backup).
+        // One-way mirror of the current location to any selected backend.
         if !self.root_path.is_empty() {
             if self.sync_running {
                 ui.horizontal(|ui| {
@@ -114,7 +114,7 @@ impl App {
             } else {
                 if ui
                     .small_button("⇅ Spiegeln nach…")
-                    .on_hover_text("Aktuellen Ordner (lokal oder remote) EINSEITIG in einen lokalen Zielordner spiegeln (Backup)")
+                    .on_hover_text("Aktuellen Ordner EINSEITIG in einen lokalen oder entfernten Zielordner spiegeln (Backup)")
                     .clicked()
                 {
                     self.open_picker(PickerPurpose::MirrorDest, "");

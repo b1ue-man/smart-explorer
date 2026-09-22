@@ -40,3 +40,6 @@ pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
 #[cfg(test)]
 #[path = "os/shared/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;
+#[cfg(test)]
+#[path = "core/sync_paths_task_tests.rs"]
+mod sync_paths_task_tests;

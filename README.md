@@ -60,7 +60,13 @@ Art lehnt der Umbenennen-Dialog ab.
 (Nextcloud/ownCloud) und authentifizierte **Netzlaufwerke (UNC)** über eine
 einheitliche `Backend`-Schnittstelle (**Verbindung** in der Werkzeugleiste); Zugangsdaten im
 Windows Credential Manager. **Einseitige Spiegelung** ("⇅ Spiegeln nach…") sichert
-den aktuellen (lokalen oder Remote-)Ordner in einen lokalen Zielordner.
+den aktuellen Ordner in einen lokalen oder entfernten Zielordner. Spiegelung,
+2-Wege-Sync und gespeicherte Setups verwenden dieselben Backends: lokal,
+UNC/Netzlaufwerk, SFTP/SSH-Agent, FTP/FTPS, WebDAV, Google Drive und Direct-/Room-Share,
+auch zwischen unterschiedlichen Remotes. Der Picker bietet dafür gespeicherte
+Verbindungen, Share-Geräte und offene Ordner-Tabs an. Gleiche Ordnernamen auf
+verschiedenen Geräten bleiben getrennt; Setups aus Tabs behalten ihre Remote-Adresse.
+Bestehende Schreibrechte und schreibgeschützte Quellen gelten weiterhin.
 
 Das Remote-Rechtsklickmenü unterscheidet Zeile, Mehrfachauswahl und freien
 Ordnerhintergrund. Es bietet je nach Ziel unter anderem Öffnen, Herunterladen,
