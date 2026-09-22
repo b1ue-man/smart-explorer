@@ -1,4 +1,4 @@
-use crate::connect::endpoint::{enc, ep_prefix, is_remote_url, norm_root, parse_remote_url};
+use crate::connect::endpoint::{enc, ep_prefix, norm_root};
 use crate::connect::persistence::{build_saved, persist};
 use crate::connect::{ConnectForm, ConnectResult, Connected, RemoteState};
 use crate::creds::Protocol;
@@ -65,23 +65,6 @@ fn opt(s: &str) -> Option<String> {
     } else {
         Some(t.to_string())
     }
-}
-
-fn unc_is_same_or_below(candidate: &str, root: &str) -> bool {
-    let candidate = candidate
-        .trim()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase();
-    let root = root
-        .trim()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase();
-    candidate == root
-        || candidate
-            .strip_prefix(&root)
-            .is_some_and(|rest| rest.starts_with('\\'))
 }
 
 fn label_for(form: &ConnectForm, port: u16) -> String {
@@ -390,70 +373,5 @@ fn open_saved_at_with_agent_fallback(
             },
             ConnectResult::Err(e) => Err(e),
         }
-    }
-}
-
-/// Resolve a sync endpoint into a live backend + root. Local/UNC paths ->
-/// `LocalBackend`; remote URLs -> re-open the matching saved connection. Blocks
-/// on the network for remote endpoints, so run it off the UI thread.
-pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), String> {
-    let endpoint = endpoint.trim();
-    if endpoint.is_empty() {
-        return Err("Leerer Pfad".into());
-    }
-    if let Some((target, root)) = crate::share::PeerOpenTarget::from_endpoint(endpoint) {
-        let (_label, backend, _status) = crate::daemon::open_share_backend(target)?;
-        return Ok((backend, root));
-    }
-    if crate::net::is_unc(endpoint) {
-        let connections = crate::creds::load_connections_checked()?;
-        if let Some(connection) = connections.iter().find(|connection| {
-            !connection.protocol.is_url() && unc_is_same_or_below(endpoint, &connection.root)
-        }) {
-            return open_saved_at(connection, endpoint);
-        }
-    }
-    if !is_remote_url(endpoint) {
-        return Ok((
-            Arc::new(crate::vfs::LocalBackend::new(endpoint)),
-            endpoint.to_string(),
-        ));
-    }
-    // Google Drive: gdrive:///<path> -> re-open from the stored OAuth token.
-    if let Some(rest) = endpoint.strip_prefix("gdrive://") {
-        let path = format!("/{}", rest.trim_start_matches('/'));
-        return open_gdrive(&path);
-    }
-    let (proto, user, host, port, path) =
-        parse_remote_url(endpoint).ok_or_else(|| "Ungültige Remote-Adresse".to_string())?;
-    let conns = crate::creds::load_connections_checked()?;
-    let c = conns
-        .iter()
-        .find(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port)
-        .ok_or_else(|| {
-            "Keine gespeicherte Verbindung für diese Remote-Adresse gefunden — bitte zuerst verbinden"
-                .to_string()
-        })?;
-    open_saved_at(c, &path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unc_is_same_or_below;
-
-    #[test]
-    fn unc_saved_root_matching_respects_share_boundary() {
-        assert!(unc_is_same_or_below(
-            r"\\server\share\folder",
-            r"\\SERVER\share"
-        ));
-        assert!(unc_is_same_or_below(
-            "//server/share/folder",
-            r"\\server\share\"
-        ));
-        assert!(!unc_is_same_or_below(
-            r"\\server\share-two\folder",
-            r"\\server\share"
-        ));
     }
 }

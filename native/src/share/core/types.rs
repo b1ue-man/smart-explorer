@@ -258,7 +258,7 @@ impl PeerOpenTarget {
     }
 
     pub fn from_endpoint(endpoint: &str) -> Option<(Self, String)> {
-        let rest = endpoint.trim().strip_prefix("share://")?;
+        let rest = endpoint.strip_prefix("share://")?;
         if let Some(rest) = rest.strip_prefix("direct/") {
             let mut parts = rest.splitn(2, '/');
             let contact_id = parts.next()?.trim();
@@ -300,7 +300,7 @@ impl PeerOpenTarget {
 }
 
 fn normalize_endpoint_path(path: &str) -> String {
-    let p = path.trim().replace('\\', "/");
+    let p = path.replace('\\', "/");
     if p.is_empty() {
         "/".to_string()
     } else if p.starts_with('/') {

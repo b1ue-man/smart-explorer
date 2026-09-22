@@ -13,8 +13,8 @@ pub(super) fn serialize_kv(j: &SyncJob) -> String {
     s.push_str("# Smart Explorer sync job\n");
     s.push_str(&format!("id={}\n", san(&j.id)));
     s.push_str(&format!("name={}\n", san(&j.name)));
-    s.push_str(&format!("source={}\n", san(&j.source)));
-    s.push_str(&format!("target={}\n", san(&j.target)));
+    push_endpoint(&mut s, "source", &j.source);
+    push_endpoint(&mut s, "target", &j.target);
     s.push_str(&format!("direction={}\n", j.direction.as_str()));
     s.push_str(&format!("conflict={}\n", j.conflict.as_str()));
     s.push_str(&format!("retain_days={}\n", j.retain_days));
@@ -68,6 +68,16 @@ fn push_bool(output: &mut String, key: &str, value: bool) {
     output.push_str(&format!("{key}={}\n", u8::from(value)));
 }
 
+fn push_endpoint(output: &mut String, key: &str, value: &str) {
+    if value.trim() == value && !value.contains(['\t', '\n', '\r']) {
+        output.push_str(&format!("{key}={value}\n"));
+    } else {
+        // No lossy plain-path fallback: an older reader must reject this job
+        // rather than synchronize a different directory after trimming it.
+        output.push_str(&format!("{key}_json={}\n", serde_json::Value::String(value.into())));
+    }
+}
+
 /// Parse one `key=value` block. Unknown and missing keys remain
 /// forward-compatible, but a malformed known key invalidates the whole job.
 pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
@@ -94,6 +104,10 @@ pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
             "name" => job.name = value.to_string(),
             "source" => job.source = value.to_string(),
             "target" => job.target = value.to_string(),
+            "source_json" => job.source = serde_json::from_str(value)
+                .map_err(|error| format!("invalid source path encoding: {error}"))?,
+            "target_json" => job.target = serde_json::from_str(value)
+                .map_err(|error| format!("invalid target path encoding: {error}"))?,
             "direction" => job.direction = parse_enum(key, value, Direction::parse)?,
             "conflict" => job.conflict = parse_enum(key, value, ConflictMode::parse)?,
             "retain_days" => job.retain_days = parse_num(key, value)?,
