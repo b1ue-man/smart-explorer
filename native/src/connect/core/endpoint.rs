@@ -2,7 +2,7 @@ use crate::creds::{Protocol, SavedConnection};
 
 /// Normalize a remote root path to an absolute path.
 pub(super) fn norm_root(r: &str) -> String {
-    let t = r.trim();
+    let t = r;
     if t.is_empty() {
         "/".to_string()
     } else if t.starts_with('/') {
@@ -45,18 +45,16 @@ pub(super) fn ep_prefix(form: &crate::connect::ConnectForm, port: u16) -> Option
 /// Split a remote endpoint URL into its matching saved connection + the path
 /// part, so a favourite/endpoint can be re-opened.
 pub fn saved_and_path(url: &str) -> Option<(SavedConnection, String)> {
-    let (proto, user, host, port, path) = parse_remote_url(url)?;
-    let c = crate::creds::load_connections()
-        .into_iter()
-        .find(|c| c.protocol == proto && c.user == user && c.host == host && c.port == port)?;
-    Some((c, path))
+    let connections = crate::creds::load_connections();
+    let (connection, path) = super::location::saved_location(&connections, url)?;
+    Some((connection.clone(), path))
 }
 
 /// Is this endpoint a remote URL (`sftp://...`, `ftp://...`, `ftps://...`,
 /// `webdav://...`) rather than a local/UNC path? Used by the sync runner and the
 /// in-app picker to decide whether a saved connection must be re-opened.
 pub fn is_remote_url(s: &str) -> bool {
-    let s = s.trim();
+    let s = s.trim_start().to_ascii_lowercase();
     [
         "sftp://",
         "ftp://",
@@ -78,9 +76,10 @@ pub fn gdrive_endpoint(path: &str) -> String {
 
 /// Parse `proto://user@host:port/path` -> its parts (path keeps its leading `/`).
 pub(crate) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16, String)> {
-    let s = s.trim();
+    let s = s.trim_start();
     let (scheme, rest) = s.split_once("://")?;
-    let proto = Protocol::parse(scheme)?;
+    let proto = Protocol::parse(&scheme.to_ascii_lowercase())?;
+    if !proto.is_url() { return None; }
     // rest = user@host:port/path  (path optional)
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], rest[i..].to_string()),
@@ -90,10 +89,7 @@ pub(crate) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16
         Some((u, hp)) => (u.to_string(), hp),
         None => (String::new(), authority),
     };
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (h.to_string(), p.parse().ok()?),
-        None => (hostport.to_string(), proto.default_port()),
-    };
+    let (host, port) = super::location::parse_host_port(hostport, proto)?;
     Some((
         proto,
         user,
@@ -158,7 +154,7 @@ mod tests {
         assert_eq!(norm_root(""), "/");
         assert_eq!(norm_root("home/u"), "/home/u");
         assert_eq!(norm_root("/srv"), "/srv");
-        assert_eq!(norm_root("  /x  "), "/x");
+        assert_eq!(norm_root("/x  "), "/x  ");
     }
 
     #[test]

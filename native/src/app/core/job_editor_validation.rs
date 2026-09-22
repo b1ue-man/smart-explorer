@@ -6,8 +6,8 @@ impl JobEditor {
         &self,
         existing: Option<&crate::syncjobs::SyncJob>,
     ) -> Result<crate::syncjobs::SyncJob, String> {
-        let source = self.source.trim();
-        let target = self.target.trim();
+        let source = self.source.as_str();
+        let target = self.target.as_str();
         validate_endpoints(source, target)?;
         validate_ignore_patterns(&self.ignore)?;
         if self.direction == crate::bisync::Direction::Both
@@ -149,51 +149,12 @@ fn validate_ignore_patterns(raw: &str) -> Result<(), String> {
 }
 
 fn validate_endpoints(source: &str, target: &str) -> Result<(), String> {
-    if source.is_empty() || target.is_empty() {
-        return Err("Quelle und Ziel dürfen nicht leer sein.".into());
-    }
-    let source_key = endpoint_key(source);
-    let target_key = endpoint_key(target);
-    if source_key == target_key
-        || is_path_prefix(&source_key, &target_key)
-        || is_path_prefix(&target_key, &source_key)
-    {
-        return Err(
-            "Quelle und Ziel dürfen weder gleich noch ineinander verschachtelt sein.".into(),
-        );
-    }
-
-    if !source.contains("://") && !target.contains("://") {
-        if let (Ok(source), Ok(target)) =
-            (std::fs::canonicalize(source), std::fs::canonicalize(target))
-        {
-            if source == target || source.starts_with(&target) || target.starts_with(&source) {
-                return Err(
-                    "Quelle und Ziel verweisen auf denselben oder verschachtelte Ordner.".into(),
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn endpoint_key(endpoint: &str) -> String {
-    endpoint
-        .trim()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn is_path_prefix(parent: &str, child: &str) -> bool {
-    child
-        .strip_prefix(parent)
-        .is_some_and(|rest| rest.starts_with('/'))
+    crate::connect::validate_sync_endpoints(source, target)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_path_prefix, validate_endpoints, validate_ignore_patterns, JobEditor};
+    use super::{validate_endpoints, validate_ignore_patterns, JobEditor};
 
     #[test]
     fn rejects_invalid_glob_instead_of_silently_skipping_it() {
@@ -206,7 +167,7 @@ mod tests {
         assert!(validate_endpoints("/data", "/data").is_err());
         assert!(validate_endpoints("/data", "/data/backup").is_err());
         assert!(validate_endpoints("/data", "/database").is_ok());
-        assert!(is_path_prefix("sftp://host/data", "sftp://host/data/sub"));
+        assert!(validate_endpoints("sftp://host/data", "sftp://host/data/sub").is_err());
     }
 
     #[test]

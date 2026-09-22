@@ -13,6 +13,10 @@
 mod connector;
 #[path = "core/endpoint.rs"]
 mod endpoint;
+#[path = "core/location.rs"]
+mod location;
+#[path = "os/shared/resolution.rs"]
+mod resolution;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
 #[path = "core/types.rs"]
@@ -21,7 +25,10 @@ mod types;
 #[allow(unused_imports)]
 pub use connector::open_saved_at;
 pub(crate) use connector::open_saved_at_for_mount;
-pub use connector::{open_gdrive, resolve_endpoint, spawn_connect};
+pub use connector::{open_gdrive, spawn_connect};
+pub use resolution::resolve_endpoint;
+pub(crate) use location::{local_root, validate_sync_endpoints};
+pub(crate) use location::paths_overlap as location_paths_overlap;
 pub(crate) use endpoint::parse_remote_url;
 #[allow(unused_imports)]
 pub use endpoint::{gdrive_endpoint, remote_endpoint};

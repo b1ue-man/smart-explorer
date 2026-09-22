@@ -43,21 +43,16 @@ fn validate_identity(job: &SyncJob) -> Result<(), String> {
         return Err("id contains characters that are unsafe for persistence".into());
     }
     validate_text("name", &job.name, MAX_NAME_LEN, false)?;
-    validate_text("source", &job.source, MAX_ENDPOINT_LEN, false)?;
-    validate_text("target", &job.target, MAX_ENDPOINT_LEN, false)?;
+    for (field, path) in [("source", &job.source), ("target", &job.target)] {
+        if path.trim().is_empty() || path.len() > MAX_ENDPOINT_LEN || path.contains('\0') {
+            return Err(format!("{field} must contain a nonempty path of at most {MAX_ENDPOINT_LEN} bytes without NUL"));
+        }
+    }
     validate_text("connect_match", &job.connect_match, MAX_ENDPOINT_LEN, true)?;
     validate_text("run_before", &job.run_before, MAX_ENDPOINT_LEN, true)?;
     validate_text("run_after", &job.run_after, MAX_ENDPOINT_LEN, true)?;
 
-    let source = endpoint_key(&job.source);
-    let target = endpoint_key(&job.target);
-    if source == target
-        || is_endpoint_prefix(&source, &target)
-        || is_endpoint_prefix(&target, &source)
-    {
-        return Err("source and target must be distinct, non-nested endpoints".into());
-    }
-    Ok(())
+    crate::connect::validate_sync_endpoints(&job.source, &job.target)
 }
 
 fn validate_text(field: &str, value: &str, max: usize, allow_empty: bool) -> Result<(), String> {
@@ -69,20 +64,6 @@ fn validate_text(field: &str, value: &str, max: usize, allow_empty: bool) -> Res
         return Err(format!("{field} contains a forbidden control character"));
     }
     Ok(())
-}
-
-fn endpoint_key(endpoint: &str) -> String {
-    endpoint
-        .trim()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn is_endpoint_prefix(parent: &str, child: &str) -> bool {
-    child
-        .strip_prefix(parent)
-        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn validate_schedule(job: &SyncJob) -> Result<(), String> {
