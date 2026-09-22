@@ -69,6 +69,9 @@ impl Backend for LocalBackend {
     fn root_display(&self) -> String {
         self.root.clone()
     }
+    fn namespace_identity(&self) -> String {
+        "local".into()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);

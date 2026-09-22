@@ -7,7 +7,7 @@ impl App {
     pub(in crate::app) fn picker_list(&mut self) {
         let (backend, cwd) = match &self.picker {
             Some(picker) => match &picker.backend {
-                Some(backend) => (backend.clone(), ensure_dir_root(&picker.cwd)),
+                Some(backend) => (backend.clone(), picker.cwd.clone()),
                 None => return,
             },
             None => return,
@@ -80,18 +80,13 @@ impl App {
         if let Some(picker) = self.picker.as_mut() {
             picker.error = None;
             picker.conn_label = connection.display();
-            picker.is_remote = connection.protocol.is_url();
-            picker.endpoint_prefix = if connection.protocol.is_url() {
-                format!(
-                    "{}://{}@{}:{}",
-                    connection.protocol.as_str(),
-                    connection.user,
-                    connection.host,
-                    connection.port
-                )
-            } else {
-                String::new()
-            };
+            picker.backend = None;
+            picker.list_rx = None;
+            picker.listing = false;
+            picker.entries.clear();
+            picker.cwd.clear();
+            picker.is_remote = false;
+            picker.endpoint_prefix.clear();
             match result {
                 Ok(rx) => {
                     picker.connect_rx = Some(rx);
@@ -131,11 +126,14 @@ impl App {
             match message {
                 crate::connect::ConnectResult::Ok(connected) => {
                     if let Some(remote) = connected.remote {
+                        picker.endpoint_prefix = remote.endpoint_prefix.unwrap_or_default();
                         picker.backend = Some(cache_remote(remote.backend));
                         picker.is_remote = true;
                     } else {
-                        picker.backend =
-                            Some(Arc::new(crate::vfs::LocalBackend::new(&connected.target)));
+                        picker.backend = Some(match connected.net {
+                            Some(net) => Arc::new(crate::net::UncBackend::new(&connected.target, net)),
+                            None => Arc::new(crate::vfs::LocalBackend::new(&connected.target)),
+                        });
                         picker.is_remote = false;
                         picker.endpoint_prefix.clear();
                     }

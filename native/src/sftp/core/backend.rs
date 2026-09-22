@@ -201,6 +201,9 @@ impl Backend for SftpBackend {
     fn state_identity(&self) -> String {
         self.url.clone()
     }
+    fn namespace_identity(&self) -> String {
+        self.url.strip_suffix(&self.root).unwrap_or(&self.url).to_string()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = self

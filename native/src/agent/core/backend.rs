@@ -104,6 +104,9 @@ impl Backend for AgentBackend {
     fn state_identity(&self) -> String {
         self.inner.state_identity()
     }
+    fn namespace_identity(&self) -> String {
+        self.inner.namespace_identity()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         match self

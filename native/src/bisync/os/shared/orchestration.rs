@@ -38,6 +38,9 @@ pub fn preview(
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Preview {
+    if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
+        return Preview { error: Some(error.to_string()), ..Default::default() };
+    }
     let base = match load_baseline(&baseline_path(&pair_id_for(a, root_a, b, root_b))) {
         Ok(base) => base,
         Err(error) => {
@@ -112,6 +115,9 @@ pub fn run(
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Outcome {
+    if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
+        return Outcome { errors: vec![("Sync-Pfade".into(), error.to_string())], ..Default::default() };
+    }
     let endpoints = SyncEndpoints::new(a, root_a, b, root_b);
     run_inner(endpoints, opts, cancel, filter, None)
 }

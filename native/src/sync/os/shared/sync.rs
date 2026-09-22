@@ -185,6 +185,14 @@ fn run(
     let mut errors: Vec<(String, String)> = Vec::new();
     let mut last_progress = Instant::now();
 
+    if let Err(error) = crate::vfs::validate_sync_roots(&*src, &src_root, &*dst, &dst_root) {
+        record_error(&mut stats, &mut errors, "Sync-Pfade", error.to_string());
+        let _ = tx.send(SyncMsg::Done(SyncResult {
+            stats, errors, elapsed_ms: start.elapsed().as_millis() as u64,
+        }));
+        return;
+    }
+
     if let Err(error) = require_plain_directory(&*src, &src_root, false) {
         record_error(
             &mut stats,

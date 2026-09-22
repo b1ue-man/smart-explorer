@@ -59,6 +59,9 @@ impl Backend for UncBackend {
     fn state_identity(&self) -> String {
         self.local.state_identity()
     }
+    fn namespace_identity(&self) -> String {
+        self.local.namespace_identity()
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         self.local.list_dir(path)

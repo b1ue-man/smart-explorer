@@ -12,9 +12,9 @@ pub(in crate::app) enum PickerPurpose {
     AnalyticsFolder,
     /// Pick a local or remote folder for read-only find-and-reclaim analysis.
     ReclaimFolder,
-    /// One-way mirror the current folder into a local destination.
+    /// One-way mirror the current folder into a local or remote destination.
     MirrorDest,
-    /// Two-way sync the current folder with a local destination.
+    /// Two-way sync the current folder with a local or remote destination.
     BisyncDest,
     /// Copy-dialog destination folder (local).
     CopyDest,
@@ -38,13 +38,14 @@ impl PickerPurpose {
             PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
         }
     }
-    /// Whether to offer remote connections too. Sync source/target and the
-    /// storage-analysis targets can point at a remote; the rest are local-only.
+    /// All sync and storage-analysis targets support remote connections.
     pub(in crate::app) fn local_only(&self) -> bool {
         !matches!(
             self,
             PickerPurpose::SyncSource
                 | PickerPurpose::SyncTarget
+                | PickerPurpose::MirrorDest
+                | PickerPurpose::BisyncDest
                 | PickerPurpose::AnalyticsFolder
                 | PickerPurpose::ReclaimFolder
         )

@@ -75,6 +75,12 @@ impl App {
         match spawn {
             Ok(_) => {
                 if let Some(picker) = self.picker.as_mut() {
+                    picker.backend = None;
+                    picker.list_rx = None;
+                    picker.listing = false;
+                    picker.entries.clear();
+                    picker.cwd.clear();
+                    picker.error = None;
                     picker.connect_rx = Some(rx);
                     picker.connecting = true;
                     picker.is_remote = true;
