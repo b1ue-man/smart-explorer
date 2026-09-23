@@ -127,7 +127,7 @@ impl StagedLocalFile {
             return Err(io::Error::other("tree spool file is incomplete"));
         }
         let metadata = std::fs::symlink_metadata(&self.staged)?;
-        if !metadata.is_file() || super::local_platform::metadata_is_link_like(&metadata) {
+        if !metadata.is_file() || super::local_platform::metadata_is_link_like(&self.staged, &metadata) {
             return Err(invalid("tree spool entry is not a regular file"));
         }
         if metadata.len() != self.expected {
@@ -203,7 +203,7 @@ pub(crate) fn validate_file_destination(path: &Path) -> io::Result<()> {
     validate_destination_root(parent)?;
     match std::fs::symlink_metadata(path) {
         Ok(metadata)
-            if metadata.is_file() && !super::local_platform::metadata_is_link_like(&metadata) =>
+            if metadata.is_file() && !super::local_platform::metadata_is_link_like(path, &metadata) =>
         {
             Ok(())
         }
@@ -255,7 +255,7 @@ pub(crate) fn promote_staged_replace(staged: &Path, destination: &Path) -> io::R
     validate_staged_file(staged)?;
 
     match std::fs::symlink_metadata(destination) {
-        Ok(meta) if meta.is_file() && !super::local_platform::metadata_is_link_like(&meta) => {
+        Ok(meta) if meta.is_file() && !super::local_platform::metadata_is_link_like(destination, &meta) => {
             super::local_platform::replace_file_atomic(staged, destination)
         }
         Ok(_) => Err(io::Error::new(
@@ -277,7 +277,7 @@ pub(crate) fn promote_staged_no_replace(staged: &Path, destination: &Path) -> io
 
 fn validate_staged_file(staged: &Path) -> io::Result<()> {
     let staged_meta = std::fs::symlink_metadata(staged)?;
-    if staged_meta.is_file() && !super::local_platform::metadata_is_link_like(&staged_meta) {
+    if staged_meta.is_file() && !super::local_platform::metadata_is_link_like(staged, &staged_meta) {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -312,7 +312,7 @@ fn push_component(path: &mut PathBuf, component: Component<'_>) -> io::Result<()
 }
 
 fn validate_plain_directory(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if super::local_platform::metadata_is_link_like(metadata) {
+    if super::local_platform::metadata_is_link_like(path, metadata) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(

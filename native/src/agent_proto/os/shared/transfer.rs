@@ -194,7 +194,7 @@ pub(crate) fn collect_local_tree(
 ) -> io::Result<Vec<LocalTreeEntry>> {
     validate_destination_root(root)?;
     let root_metadata = std::fs::symlink_metadata(root)?;
-    if super::local_platform::metadata_is_link_like(&root_metadata) || !root_metadata.is_dir() {
+    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "bulk source root must be a plain directory",
@@ -223,7 +223,7 @@ pub(crate) fn collect_local_tree(
             ValidatedRelativePath::parse(&parent_relative)?.join_local(root)
         };
         let directory_metadata = std::fs::symlink_metadata(&directory)?;
-        if super::local_platform::metadata_is_link_like(&directory_metadata)
+        if super::local_platform::metadata_is_link_like(&directory, &directory_metadata)
             || !directory_metadata.is_dir()
         {
             return Err(io::Error::new(
@@ -261,7 +261,7 @@ pub(crate) fn collect_local_tree(
             let relative = ValidatedRelativePath::parse(&relative_text)?;
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path)?;
-            if super::local_platform::metadata_is_link_like(&metadata) {
+            if super::local_platform::metadata_is_link_like(&path, &metadata) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("bulk source contains a link-like entry: {relative_text}"),
@@ -315,7 +315,7 @@ pub(crate) fn collect_local_tree(
             }
         }
         let after = std::fs::symlink_metadata(&directory)?;
-        if super::local_platform::metadata_is_link_like(&after) || !after.is_dir() {
+        if super::local_platform::metadata_is_link_like(&directory, &after) || !after.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "bulk source directory changed type during preflight",
@@ -335,7 +335,7 @@ pub(crate) fn open_local_tree_file(
         .identity
         .ok_or_else(|| io::Error::other("bulk directory cannot be opened as a file"))?;
     let link_metadata = std::fs::symlink_metadata(&path)?;
-    if super::local_platform::metadata_is_link_like(&link_metadata) || !link_metadata.is_file() {
+    if super::local_platform::metadata_is_link_like(&path, &link_metadata) || !link_metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "bulk source changed into a link or non-file",
@@ -373,7 +373,7 @@ pub(crate) fn finish_local_tree_file(
         || metadata.len() != entry.size
         || metadata.modified().ok() != entry.modified
         || super::local_platform::file_identity(file)? != expected
-        || super::local_platform::metadata_is_link_like(&link_metadata)
+        || super::local_platform::metadata_is_link_like(&path, &link_metadata)
         || !super::local_platform::path_matches_identity(&path, expected)?
     {
         return Err(io::Error::new(
@@ -388,7 +388,7 @@ fn validate_local_source_ancestors(root: &Path, entry: &LocalTreeEntry) -> io::R
     validate_destination_root(root)?;
     let mut current = root.to_path_buf();
     let root_metadata = std::fs::symlink_metadata(&current)?;
-    if super::local_platform::metadata_is_link_like(&root_metadata) || !root_metadata.is_dir() {
+    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "bulk source root changed into a link or non-directory",
@@ -398,7 +398,7 @@ fn validate_local_source_ancestors(root: &Path, entry: &LocalTreeEntry) -> io::R
     for component in components.iter().take(components.len().saturating_sub(1)) {
         current.push(component);
         let metadata = std::fs::symlink_metadata(&current)?;
-        if super::local_platform::metadata_is_link_like(&metadata) || !metadata.is_dir() {
+        if super::local_platform::metadata_is_link_like(&current, &metadata) || !metadata.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "bulk source ancestor changed into a link or non-directory",

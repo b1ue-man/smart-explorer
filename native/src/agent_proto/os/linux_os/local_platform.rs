@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub(crate) type FileIdentity = (u64, u64);
 
-pub(crate) fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 

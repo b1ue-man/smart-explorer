@@ -328,7 +328,27 @@ pub(super) fn try_incremental_mirror(
         conflicts: Vec::<Conflict>::new(),
         errors,
         baseline,
+        ..Default::default()
     })
+}
+
+/// A full pass may preserve omitted paths or fail after partial writes. Retire
+/// the old index first; only a complete successful pass may bootstrap it again.
+pub(super) fn invalidate_incremental_state(
+    endpoints: SyncEndpoints<'_>,
+    opts: BisyncOptions,
+    store_path: Option<&Path>,
+) -> rusqlite::Result<()> {
+    if opts.dry_run || mirror_source(endpoints, opts).is_none() {
+        return Ok(());
+    }
+    let pair = pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
+    let store = open_store(store_path)?;
+    if let Some(mut record) = store.load_pair(&pair)? {
+        record.bootstrapped = false;
+        store.save_pair(&record)?;
+    }
+    Ok(())
 }
 
 fn merge_stats(left: &mut BisyncStats, right: BisyncStats) {

@@ -69,7 +69,9 @@ Snapshots will retain protected relative-path prefixes separately from regular
 file signatures. Union those prefixes across both endpoints before planning;
 exclude their baseline entries from decisions and restore them unchanged after
 updating independent paths. Revalidate the same protection after mutations.
-Path matching must respect component boundaries and Windows case aliases.
+Path matching respects component boundaries. The existing
+`Backend::case_sensitive_paths` capability controls case aliases; unknown remote
+filesystems retain conservative protection rather than assuming Unix semantics.
 
 The existing agent hash stream has no omission field and currently hides links.
 Keep its wire layout and ordinary-file fast path: an explicit, reserved hash-walk
@@ -85,6 +87,12 @@ must not seed a supposedly complete incremental index. Quick mirror must protect
 matching destination subtrees during deletion and report links separately from
 I/O errors. GUI summaries, previews and job notes must retain the distinction.
 Reports show bounded path samples; collection retains the existing walk budgets.
+
+Retire a previous incremental index before a full mirror pass and bootstrap it
+again only after a complete success. Touched incremental target ancestors are
+checked before leaf metadata so an intervening junction selects the full scan.
+Agent filesystem metadata and mutation guards use the same name-surrogate/data
+reparse distinction as local VFS operations.
 
 Absent a different user preference, true links are omitted with a visible
 notice. No `node_modules` name-based exclusion is added. Verified data reparse

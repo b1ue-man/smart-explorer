@@ -130,10 +130,21 @@ fn target_rel_drifted(
     rel: &str,
     opts: BisyncOptions,
 ) -> bool {
+    // Inspect ancestors before the leaf: statting a child alone may follow a
+    // junction and make a redirected target look like an unchanged plain file.
+    for (end, _) in rel.match_indices('/') {
+        match target.stat(&join(root, &rel[..end])) {
+            Ok(metadata) if metadata.is_symlink || !metadata.is_dir => return true,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return true,
+        }
+    }
     let expected = target_items
         .get(rel)
         .and_then(|i| (!i.deleted).then_some(i.sig).flatten());
     let actual = match target.stat(&join(root, rel)) {
+        Ok(metadata) if metadata.is_symlink || metadata.is_dir => return true,
         Ok(metadata) => sig_from_meta(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return true,

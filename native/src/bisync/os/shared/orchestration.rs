@@ -5,93 +5,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::apply::apply_planned_with_results;
 use super::core::{plan, update_baseline};
 use super::incremental::{
-    bootstrap_incremental_state, mirror_source, try_incremental_mirror, SyncEndpoints,
+    bootstrap_incremental_state, invalidate_incremental_state, mirror_source,
+    try_incremental_mirror, SyncEndpoints,
 };
 use super::persistence::{
     baseline_path, load_baseline, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
-use super::snapshot::{
-    hash_mode, prev_side, walk_files, walk_files_with_duplicate_files, WalkFilter,
-};
+use super::snapshot::{hash_mode, prev_side, walk_snapshot, WalkFilter};
+use super::omissions::SyncOmissions;
+use super::snapshot_pair::read_pair;
 use super::types::{
     Action, Baseline, BisyncOptions, BisyncStats, Conflict, DeletePolicy, Direction,
 };
-
-/// A read-only comparison of two sync endpoints (the "ls-diff" view): the
-/// planned actions + conflicts, with no changes applied. Uses the saved baseline
-/// (so it shows what *would* sync, exactly as a real run would decide).
-#[derive(Default)]
-pub struct Preview {
-    pub actions: Vec<Action>,
-    pub conflicts: Vec<Conflict>,
-    pub a_files: usize,
-    pub b_files: usize,
-    pub error: Option<String>,
-}
-
-pub fn preview(
-    a: &dyn Backend,
-    root_a: &str,
-    b: &dyn Backend,
-    root_b: &str,
-    opts: BisyncOptions,
-    cancel: &AtomicBool,
-    filter: &WalkFilter,
-) -> Preview {
-    if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
-        return Preview { error: Some(error.to_string()), ..Default::default() };
-    }
-    let base = match load_baseline(&baseline_path(&pair_id_for(a, root_a, b, root_b))) {
-        Ok(base) => base,
-        Err(error) => {
-            return Preview {
-                error: Some(format!(
-                    "Synchronisierungsstand kann nicht gelesen werden: {error}"
-                )),
-                ..Default::default()
-            }
-        }
-    };
-    let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
-    let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
-    let walk_a = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::BtoA {
-        walk_files_with_duplicate_files
-    } else {
-        walk_files
-    };
-    let at = match walk_a(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
-        Ok(t) => t,
-        Err(e) => {
-            return Preview {
-                error: Some(format!("{}: {}", root_a, e)),
-                ..Default::default()
-            }
-        }
-    };
-    let walk_b = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::AtoB {
-        walk_files_with_duplicate_files
-    } else {
-        walk_files
-    };
-    let bt = match walk_b(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
-        Ok(t) => t,
-        Err(e) => {
-            return Preview {
-                error: Some(format!("{}: {}", root_b, e)),
-                ..Default::default()
-            }
-        }
-    };
-    let (a_files, b_files) = (at.len(), bt.len());
-    let (actions, conflicts, _converged) = plan(&at, &bt, &base, opts);
-    Preview {
-        actions,
-        conflicts,
-        a_files,
-        b_files,
-        error: None,
-    }
-}
 
 // ── high-level orchestration (used by the UI on a worker thread) ─────────────
 
@@ -101,6 +26,7 @@ pub struct Outcome {
     pub conflicts: Vec<Conflict>,
     pub errors: Vec<(String, String)>,
     pub baseline: Baseline,
+    pub omissions: SyncOmissions,
 }
 
 /// One full bisync run: load baseline → walk both → plan → apply → save the
@@ -143,6 +69,12 @@ fn run_inner(
     if let Some(out) = try_incremental_mirror(endpoints, opts, cancel, filter, store_path) {
         return out;
     }
+    if let Err(error) = invalidate_incremental_state(endpoints, opts, store_path) {
+        return Outcome {
+            errors: vec![("Sync-Index".into(), format!("Vollscan kann nicht sicher beginnen: {error}"))],
+            ..Default::default()
+        };
+    }
 
     let SyncEndpoints {
         a,
@@ -156,6 +88,7 @@ fn run_inner(
     if !opts.dry_run
         && out.errors.is_empty()
         && out.conflicts.is_empty()
+        && out.omissions.is_empty()
         && !cancel.load(Ordering::Relaxed)
     {
         let _ = bootstrap_incremental_state(endpoints, opts, &out.baseline, pre_cursor, store_path);
@@ -193,49 +126,28 @@ fn run_full(
     // ever downloading a hash-less remote. `prev_*` reuses last run's hashes.
     let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
     let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
-    let walk_a = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::BtoA {
-        walk_files_with_duplicate_files
-    } else {
-        walk_files
+    let snapshot = match read_pair(SyncEndpoints::new(a, root_a, b, root_b), opts, cancel, filter, &base) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return Outcome { errors: vec![error], baseline: base, ..Default::default() },
     };
-    let at = match walk_a(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
-        Ok(t) => t,
-        Err(e) => {
-            return Outcome {
-                errors: vec![(root_a.into(), e.to_string())],
-                ..Default::default()
-            }
-        }
-    };
-    let walk_b = if opts.delete == DeletePolicy::Mirror && opts.direction == Direction::AtoB {
-        walk_files_with_duplicate_files
-    } else {
-        walk_files
-    };
-    let bt = match walk_b(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
-        Ok(t) => t,
-        Err(e) => {
-            return Outcome {
-                errors: vec![(root_b.into(), e.to_string())],
-                ..Default::default()
-            }
-        }
-    };
+    let (at, bt) = (snapshot.a, snapshot.b);
+    let mut omissions = snapshot.omissions;
+    let planning_base = omissions.planning_baseline(&base);
     if cancel.load(Ordering::Relaxed) {
-        return Outcome::default();
+        return Outcome { baseline: base, omissions, ..Default::default() };
     }
-    let (actions, conflicts, converged) = plan(&at, &bt, &base, opts);
+    let (actions, conflicts, converged) = plan(&at, &bt, &planning_base, opts);
 
     // Duplicate-name providers need an exact, read-only cleanup plan before
     // the first mutation. Its ID-addressed entries participate in the same
     // all-or-nothing deletion guard as explicit and move-source deletions.
-    let (dedupe_backend, dedupe_plan) = if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
+    let (dedupe_backend, mut dedupe_plan) = if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
         let planned = match opts.direction {
             Direction::AtoB => b
-                .plan_dedupe_recursive(root_b, &|rel| at.contains_key(rel))
+                .plan_dedupe_recursive(root_b, &|rel| at.contains_key(rel) || omissions.protects(rel))
                 .map(|plan| (Some(b), plan)),
             Direction::BtoA => a
-                .plan_dedupe_recursive(root_a, &|rel| bt.contains_key(rel))
+                .plan_dedupe_recursive(root_a, &|rel| bt.contains_key(rel) || omissions.protects(rel))
                 .map(|plan| (Some(a), plan)),
             Direction::Both => Ok((None, Vec::new())),
         };
@@ -248,6 +160,7 @@ fn run_full(
                         format!("Duplikate konnten nicht sicher vorgeprüft werden: {error}"),
                     )],
                     baseline: base,
+                    omissions,
                     ..Default::default()
                 }
             }
@@ -255,6 +168,8 @@ fn run_full(
     } else {
         (None, Vec::new())
     };
+    let dedupe_root = if opts.direction == Direction::AtoB { root_b } else { root_a };
+    dedupe_plan.retain(|entry| !omissions.protects(&super::paths::rel_of(&entry.path, dedupe_root)));
 
     // Delete-safety guard: refuse to apply if the plan would remove more files
     // than the configured limit (protects against a vanished/remounted side
@@ -304,6 +219,7 @@ fn run_full(
                 ),
             )],
             baseline: base,
+            omissions,
             ..Default::default()
         };
     }
@@ -320,6 +236,7 @@ fn run_full(
                 return Outcome {
                     errors,
                     baseline: base,
+                    omissions,
                     ..Default::default()
                 };
             }
@@ -335,6 +252,7 @@ fn run_full(
             },
             errors,
             baseline: base,
+            omissions,
             ..Default::default()
         };
     }
@@ -363,6 +281,7 @@ fn run_full(
             conflicts,
             errors,
             baseline: base,
+            omissions,
         };
     }
     // A failed copy/source action can leave a retryable partial transition.
@@ -373,6 +292,7 @@ fn run_full(
             conflicts,
             errors,
             baseline: base,
+            omissions,
         };
     }
     // Re-walk to capture real post-write signatures (e.g. the destination's new
@@ -382,7 +302,8 @@ fn run_full(
     // we already walked are still current. This avoids a second full metadata
     // walk of a remote (hundreds of Drive round-trips) on every no-op sync.
     let changed = st.a_to_b > 0 || st.b_to_a > 0 || st.deleted > 0;
-    let (at2, bt2) = if opts.dry_run || !changed {
+    let fold_case = !a.case_sensitive_paths(root_a) || !b.case_sensitive_paths(root_b);
+    let (mut at2, mut bt2) = if opts.dry_run || !changed {
         (at, bt)
     } else {
         // Only re-walk a side the run could have modified. A one-way sync without
@@ -391,8 +312,8 @@ fn run_full(
         let a_touched = opts.direction != Direction::AtoB || opts.move_files;
         let b_touched = opts.direction != Direction::BtoA || opts.move_files;
         let at2 = if a_touched {
-            match walk_files(a, root_a, cancel, filter, mode_a, Some(&prev_a)) {
-                Ok(tree) => tree,
+            match walk_snapshot(a, root_a, cancel, filter, mode_a, Some(&prev_a), false, fold_case) {
+                Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
                 Err(error) => {
                     errors.push((
                         root_a.into(),
@@ -403,6 +324,7 @@ fn run_full(
                         conflicts,
                         errors,
                         baseline: base,
+                        omissions,
                     };
                 }
             }
@@ -410,8 +332,8 @@ fn run_full(
             at
         };
         let bt2 = if b_touched {
-            match walk_files(b, root_b, cancel, filter, mode_b, Some(&prev_b)) {
-                Ok(tree) => tree,
+            match walk_snapshot(b, root_b, cancel, filter, mode_b, Some(&prev_b), false, fold_case) {
+                Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
                 Err(error) => {
                     errors.push((
                         root_b.into(),
@@ -422,6 +344,7 @@ fn run_full(
                         conflicts,
                         errors,
                         baseline: base,
+                        omissions,
                     };
                 }
             }
@@ -430,7 +353,11 @@ fn run_full(
         };
         (at2, bt2)
     };
-    let nb = update_baseline(&base, &at2, &bt2, &report.completed, &converged, &conflicts);
+    omissions.exclude_tree(&mut at2);
+    omissions.exclude_tree(&mut bt2);
+    let planning_base = omissions.planning_baseline(&base);
+    let mut nb = update_baseline(&planning_base, &at2, &bt2, &report.completed, &converged, &conflicts);
+    omissions.preserve_baseline(&base, &mut nb);
     if !opts.dry_run {
         if let Err(error) = save_baseline(&bpath, &nb) {
             errors.push((
@@ -442,6 +369,7 @@ fn run_full(
                 conflicts,
                 errors,
                 baseline: base,
+                omissions,
             };
         }
         if let Err(error) = prune_versions(&vdir, &opts.versioning) {
@@ -458,5 +386,6 @@ fn run_full(
         conflicts,
         errors,
         baseline: nb,
+        omissions,
     }
 }

@@ -23,13 +23,19 @@ pub(crate) fn handle_walk_hashed(
                 "agent hash walk canceled",
             ));
         }
+        let metadata = std::fs::symlink_metadata(&dir)?;
+        if super::local_platform::metadata_is_link_like(&dir, &metadata) {
+            return Err(io::Error::new(io::ErrorKind::Unsupported,
+                super::HASH_WALK_LINK_BOUNDARY));
+        }
         for ent in std::fs::read_dir(&dir)? {
             let ent = ent?;
-            let ft = ent.file_type()?;
-            if ft.is_symlink() {
-                continue;
-            }
             let p = ent.path();
+            let md = std::fs::symlink_metadata(&p)?;
+            if super::local_platform::metadata_is_link_like(&p, &md) {
+                return Err(io::Error::new(io::ErrorKind::Unsupported,
+                    super::HASH_WALK_LINK_BOUNDARY));
+            }
             let rel = p
                 .strip_prefix(base)
                 .map_err(|_| io::Error::other("hash entry escaped its root"))?
@@ -41,9 +47,8 @@ pub(crate) fn handle_walk_hashed(
                     )
                 })?
                 .replace('\\', "/");
-            let md = ent.metadata()?;
             let mtime = md.modified().ok().map(systemtime_ms).unwrap_or(0);
-            if ft.is_dir() {
+            if md.is_dir() {
                 let path = p.to_str().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidData, "hash path is not valid UTF-8")
                 })?;
@@ -62,7 +67,7 @@ pub(crate) fn handle_walk_hashed(
                     },
                 )?;
                 stack.push(p.clone());
-            } else if ft.is_file() {
+            } else if md.is_file() {
                 let size = md.len();
                 let md5 = if want_hash { Some(md5_file(&p)?) } else { None };
                 emit(

@@ -59,5 +59,6 @@ pub(crate) use transfer::{
     collect_local_tree, finish_local_tree_file, open_local_tree_file, LocalTreeEntry,
 };
 pub use types::{
-    Frame, SearchSpec, WireMeta, WireNode, CHUNK, PROTO_VERSION, TRANSFER_FRAME_BACKLOG,
+    Frame, SearchSpec, WireMeta, WireNode, CHUNK, HASH_WALK_LINK_BOUNDARY, PROTO_VERSION,
+    TRANSFER_FRAME_BACKLOG,
 };
