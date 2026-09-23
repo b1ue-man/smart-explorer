@@ -80,6 +80,13 @@ that marker permits fallback; cancellation and arbitrary partial-stream failures
 remain fatal. Both the deployed SSH agent and daemon-backed hash handler need
 the same behavior. SSH deployment already binds the agent executable to its exact
 bundled hash, including reconnects. No protocol version or frame layout changes.
+Older daemon peers may still silently omit links from hash streams. Advertise
+`sync-links-v1` in the existing Hello version's build metadata and bind that
+capability to each transport generation. Without it, the client chooses the
+metadata walk before sending a hash request, including after a reconnect.
+[SemVer build metadata](https://semver.org/#spec-item-10), checked 2026-09-23,
+keeps the numeric version and wire shape intact; old clients already treat the
+Hello version as display text. Add a legacy-peer acceptance to the same suite.
 
 The legacy strict walk remains strict for incremental collection. A link makes
 that path fall back to the full protected snapshot, and an incomplete full result
@@ -102,3 +109,23 @@ The existing remote suite is the only task verification entrypoint; the complete
 release wrapper is invoked remotely only after the final pushed candidate passes
 that suite. The regression fixture must reproduce the reported nested path and
 real link type, rather than relying only on ordinary backend fixtures.
+
+## Implemented acceptance mapping
+
+All implementation milestones precede the single remote suite. The entrypoint
+`native/test-sync-paths-task.py` selects the existing `sync_paths_task_` contract
+and the new `sync_links_task_` cases, plus the directly affected failure guards.
+
+| Expected result | Remote acceptance boundary |
+| --- | --- |
+| Real nested `node_modules` link does not abort regular files; an ordinary directory still syncs | Native Windows junction / Unix symlink, the reported path shape, forward mirror, two-way run and recovery back to an ordinary directory |
+| Counterparts and old baseline remain intact | Changed counterpart content, destination-only descendants, persisted baseline and disabled incremental index; target-junction fallback and reverse mirror |
+| Ignored links, broken links and cycles remain safe | Explicit glob exclusion, no warning for the excluded entry, real dangling link and root cycle; case aliases and component boundaries |
+| Agent fast path never hides links | Real framed agent-to-daemon endpoints; both hash servers emit the marker, metadata fallback retains protection; regular trees keep server hashing and filters; unrelated partial-stream errors stay fatal |
+| Quick mirror preserves protected paths during cleanup | Dry and actual copy/delete pass, omitted source and target, protected extra parent and removable independent sibling |
+| Partial results remain visible | Real saved-job worker, GUI notice, persisted job result and preview omissions; shared result-note behavior used by daemon |
+| Existing endpoint compatibility survives | Prior picker/persistence/backend-pair and real Share cases plus a linked SFTP/WebDAV namespace fixture; existing overwrite/backup/conflict/retry guards |
+| Windows cloud data tags differ from links | CLOUD..CLOUD_F/WOF tag fixtures and unknown/name-surrogate boundaries; actual junction listing and fresh metadata agreement |
+
+Cloud-tag fixtures validate classification, not live hydration with a particular
+cloud-provider account. Remote CI and terminal publication are pending.

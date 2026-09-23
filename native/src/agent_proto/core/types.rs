@@ -5,6 +5,13 @@ pub const PROTO_VERSION: u32 = 9;
 /// Existing error frames can request a metadata walk without changing wire
 /// layouts. A hash-only stream cannot represent protected link boundaries.
 pub const HASH_WALK_LINK_BOUNDARY: &str = "SE_HASH_WALK_LINK_BOUNDARY_V1";
+/// Optional capability carried by the existing, display-only Hello version.
+pub const HASH_WALK_SERVER_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+sync-links-v1");
+
+pub fn has_link_aware_hash(version: &str) -> bool {
+    version.split_whitespace().next().and_then(|text| text.split_once('+'))
+        .is_some_and(|(_, labels)| labels.split('.').any(|label| label == "sync-links-v1"))
+}
 
 /// Payload chunk size for streamed byte transfers.
 pub const CHUNK: usize = 256 * 1024;

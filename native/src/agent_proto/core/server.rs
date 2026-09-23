@@ -269,7 +269,7 @@ fn dispatch(
             id,
             &Frame::HelloOk {
                 proto: PROTO_VERSION,
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: super::HASH_WALK_SERVER_VERSION.to_string(),
             },
         ),
         Frame::ListDir(p) => match list_local(&p) {
