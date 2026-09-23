@@ -34,8 +34,8 @@ pub(crate) struct LocalEntry {
 }
 
 pub(crate) use platform::{
-    can_request_access, display_path, normalize_scan_root, parallel_scan_allowed, read_directory,
-    request_access, run_helper_if_requested,
+    can_request_access, display_path, metadata_is_link_like, normalize_scan_root,
+    parallel_scan_allowed, read_directory, request_access, run_helper_if_requested,
 };
 
 pub(crate) fn open_read(path: &Path) -> io::Result<File> {

@@ -242,7 +242,7 @@ impl Directory<'_> {
                     name,
                     kind: kind(attrs, tag),
                     is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
-                    is_link_like: attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0,
+                    is_link_like: link_like(attrs, tag),
                     size: metadata.len(),
                     unreachable: false,
                     mtime_ms: metadata
@@ -328,7 +328,7 @@ impl Directory<'_> {
                 size: record.size,
                 kind: kind(record.attributes, tag),
                 is_dir: record.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
-                is_link_like: record.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
+                is_link_like: link_like(record.attributes, tag),
                 unreachable: record.unrepresentable,
                 mtime_ms: record.mtime_ms,
                 btime_ms: record.btime_ms,
@@ -346,6 +346,21 @@ fn reparse_tag(path: &Path) -> u32 {
         .and_then(|file| attributes(&file))
         .map(|info| info.ReparseTag)
         .unwrap_or(0)
+}
+
+fn link_like(attributes: u32, tag: u32) -> bool {
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && (tag == 0 || tag & NAME_SURROGATE != 0)
+}
+
+/// Data reparse points (for example cloud placeholders) are ordinary entries.
+/// A missing tag remains a boundary for VFS operations, even when the Explorer
+/// can still display the entry using its ordinary file/directory attributes.
+pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    let attrs = metadata.file_attributes();
+    metadata.is_symlink()
+        || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, reparse_tag(path)))
 }
 
 fn kind(attributes: u32, tag: u32) -> EntryKind {
