@@ -1,5 +1,5 @@
 name: sync-paths-task
-run-name: Sync path and cross-remote compatibility ${{ inputs.candidate_sha }}
+run-name: Sync paths, links and cross-remote compatibility ${{ inputs.candidate_sha }}
 
 on:
   workflow_dispatch:

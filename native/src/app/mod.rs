@@ -233,6 +233,9 @@ mod sync_paths_task_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_paths_task_tests.rs"]
 mod sync_paths_task_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_links_task_tests.rs"]
+mod sync_links_task_tests;
 #[path = "core/table.rs"]
 mod table;
 #[path = "core/table_accessibility.rs"]

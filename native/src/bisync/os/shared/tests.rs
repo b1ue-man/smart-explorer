@@ -13,6 +13,10 @@ mod extra;
 mod hash_walk;
 #[path = "tests/incremental.rs"]
 mod incremental;
+#[path = "tests/links.rs"]
+mod links;
+#[path = "tests/links_remote.rs"]
+mod links_remote;
 #[path = "tests/move_retry.rs"]
 mod move_retry;
 #[path = "tests/safety.rs"]

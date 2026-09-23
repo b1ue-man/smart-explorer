@@ -6,3 +6,7 @@ mod sync_copy;
 mod sync_delete;
 
 pub use imp::*;
+
+#[cfg(test)]
+#[path = "os/shared/sync_link_tests.rs"]
+mod sync_link_tests;
