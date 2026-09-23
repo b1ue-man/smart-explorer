@@ -163,3 +163,5 @@ pub use state::{
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(crate) use backend_server::serve_backend as serve_sync_link_fixture;

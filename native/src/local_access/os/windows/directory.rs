@@ -29,6 +29,10 @@ const BUFFER_WORDS: usize = 8192;
 const MAX_BUFFER_WORDS: usize = 8192 * 16;
 const NAME_SURROGATE: u32 = 0x2000_0000;
 
+#[cfg(test)]
+#[path = "sync_link_task_tests.rs"]
+mod sync_link_task_tests;
+
 /// The information-class query behind every batch; tests substitute a
 /// provider that fails part-way.
 type Query<'a> =

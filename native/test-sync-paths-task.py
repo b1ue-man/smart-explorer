@@ -13,7 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE = ROOT / "native"
-PREFIX = "sync_paths_task_"
+PREFIXES = ("sync_paths_task_", "sync_links_task_")
 INTEGRATIONS = [
     "failed_apply_paths_stay_out_of_new_baseline_and_retry",
     "backup_failure_blocks_overwrite_and_delete",
@@ -27,6 +27,8 @@ INTEGRATIONS = [
     "copy_paste_task_provider_webdav_conflict_kind_survives_repeat_flush",
     "gui_design_task_drive_names_are_safe_reversible_and_collision_free",
     "gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles",
+    "partial_agent_hash_walk_error_never_falls_back_to_listing",
+    "no_op_run_skips_rewalk",
 ]
 
 
@@ -137,10 +139,23 @@ def main():
             (cache / "provenance.json").write_text(json.dumps(metadata), encoding="utf-8")
     run([str(binary), "--list", "--format", "terse"], logs / "available-tests.txt", 60, env)
     available = [line.removesuffix(": test") for line in (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]
-    selected = [name for name in available if PREFIX in name]
+    selected = [name for name in available if any(prefix in name for prefix in PREFIXES)]
     if not selected or not any("real_share_cross_peer" in name for name in selected):
         raise RuntimeError("This binary lacks the task's required sync endpoint and real Share acceptance.")
-    integrations = INTEGRATIONS
+    required = ["nested_link_preserves_counterparts_baseline_and_incremental_recovery",
+        "agent_and_daemon_streams_fall_back_without_losing_protection",
+        "legacy_peer_uses_metadata_instead_of_silently_incomplete_hashes",
+        "quick_mirror_preserves_links_counterparts_and_parent_directories",
+        "saved_job_and_gui_retain_partial_result_notice",
+        "cross_remote_contract_protects_counterpart_subtree"]
+    if os.name == "nt":
+        required.append("windows_cloud_data_tags_are_not_redirecting_links")
+    for suffix in required:
+        if not any(name.endswith("::sync_links_task_" + suffix) for name in selected):
+            raise RuntimeError(f"Required link/junction acceptance is absent: {suffix}")
+    integrations = INTEGRATIONS + ([] if os.name == "nt" else [
+        "link_like_destination_root_never_reaches_external_victim",
+        "link_like_destination_child_never_receives_copied_content"])
     for suffix in integrations:
         found = [name for name in available if name.endswith("::" + suffix)]
         if len(found) != 1:
@@ -164,7 +179,7 @@ def main():
         "platform": sys.platform, "selected": selected, "result": "passed"}
     (logs / "acceptance.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print(result)
-    print("Focused sync path compatibility acceptance passed; candidate", candidate, flush=True)
+    print("Focused sync path/link compatibility acceptance passed; candidate", candidate, flush=True)
 
 
 if __name__ == "__main__":

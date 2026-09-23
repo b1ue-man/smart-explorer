@@ -83,3 +83,9 @@ pub use types::{
 #[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
+#[cfg(all(test, windows))]
+#[path = "os/windows/link_fixture.rs"]
+pub(crate) mod link_fixture;
+#[cfg(all(test, unix))]
+#[path = "os/linux_os/link_fixture.rs"]
+pub(crate) mod link_fixture;
