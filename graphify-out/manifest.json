@@ -4615,9 +4615,9 @@
     "semantic_hash": "eaf1f0ebf9d766f8542b4afde752fe91"
   },
   "sync/os/shared/sync_tests.rs": {
-    "mtime": 1790159343.3184705,
-    "ast_hash": "a311cc2387bc7ad3b0defc6191ce1882",
-    "semantic_hash": "a311cc2387bc7ad3b0defc6191ce1882"
+    "mtime": 1790160186.5260332,
+    "ast_hash": "66a0e9cf38dd5e1cc47bb92a5b79f9f9",
+    "semantic_hash": "66a0e9cf38dd5e1cc47bb92a5b79f9f9"
   },
   "syncjobs/core/schedule.rs": {
     "mtime": 1783650270.733695,

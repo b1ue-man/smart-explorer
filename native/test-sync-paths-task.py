@@ -29,6 +29,8 @@ INTEGRATIONS = [
     "gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles",
     "partial_agent_hash_walk_error_never_falls_back_to_listing",
     "no_op_run_skips_rewalk",
+    "mirror_cancel_during_preflight_deletes_nothing",
+    "source_appearing_after_preflight_blocks_all_deletes",
 ]
 
 

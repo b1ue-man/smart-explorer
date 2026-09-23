@@ -333,6 +333,7 @@ fn mirror_cancel_during_preflight_deletes_nothing() {
         &cancel,
         &mut stats,
         &mut errors,
+        &mut crate::bisync::SyncOmissions::default(),
     );
     assert_eq!(stats.deleted, 0);
     assert!(!errors.is_empty());
@@ -367,6 +368,7 @@ fn source_appearing_after_preflight_blocks_all_deletes() {
         &cancel,
         &mut stats,
         &mut errors,
+        &mut crate::bisync::SyncOmissions::default(),
     );
     assert_eq!(stats.deleted, 0);
     assert!(destination_dir.join("appears.txt").exists());
