@@ -58,6 +58,7 @@ impl App {
                 self.sync_running = false;
                 self.sync_progress = None;
                 self.sync_cancel = None;
+                let omitted = r.omissions.summary().map(|s| format!("; {s}")).unwrap_or_default();
                 if r.stats.errors > 0 {
                     let example = r
                         .errors
@@ -65,12 +66,17 @@ impl App {
                         .map(|(path, detail)| format!(" ({path}: {detail})"))
                         .unwrap_or_default();
                     self.error_msg = Some(format!(
-                        "Spiegelung unvollständig: {} kopiert, {} Fehler{}",
+                        "Spiegelung unvollständig: {} kopiert, {} Fehler{}{omitted}",
                         r.stats.copied, r.stats.errors, example
                     ));
                 } else if canceled {
                     self.notice = Some((
-                        format!("Spiegelung abgebrochen: {} bereits kopiert", r.stats.copied),
+                        format!("Spiegelung abgebrochen: {} bereits kopiert{omitted}", r.stats.copied),
+                        std::time::Instant::now(),
+                    ));
+                } else if let Some(omitted) = r.omissions.summary() {
+                    self.notice = Some((
+                        format!("⚠ Spiegelung mit Auslassungen: {} kopiert; {omitted}", r.stats.copied),
                         std::time::Instant::now(),
                     ));
                 } else {

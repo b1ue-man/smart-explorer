@@ -122,6 +122,11 @@ These rules apply to first-party documentation (`README.md`, `native/README.md`,
 - New backends and path representations must work through the shared location/resolution boundary;
   update affected consumers together. Preserve literal names and existing stored locators. Respect
   actual provider permissions and read-only sources without misreporting them as path-format errors.
+- Child links/junctions are protected omissions during sync: continue independent files, report
+  omitted paths, and preserve their counterparts and prior baseline entries. Never interpret an
+  omitted subtree as deletion or let a partial scan seed a complete incremental index. Distinguish
+  Windows data reparse points from redirecting links; an ordinary `node_modules` directory is not
+  excluded by name. Apply the same rule to preview, quick mirror, jobs and agent hash walks.
 - Record the affected compatibility expectations in the task plan and cover them in the single
   final remote task suite alongside the requested behavior. Report unresolved regressions explicitly;
   do not claim compatibility merely because a new happy path works. This does not authorize extra

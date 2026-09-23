@@ -74,11 +74,25 @@ impl App {
                     ))
                     .strong(),
                 );
+                if let Some(summary) = p.omissions.summary() {
+                    ui.colored_label(theme::warning(ui), format!("⚠ {summary}"));
+                    ui.collapsing("Ausgelassene Verknüpfungen (bis zu 100 Pfade)", |ui| {
+                        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                            for path in p.omissions.reported_paths().take(100) {
+                                ui.label(path);
+                            }
+                        });
+                    });
+                }
                 if p.actions.is_empty() && p.conflicts.is_empty() {
                     ui.add_space(6.0);
                     ui.colored_label(
                         theme::success(ui),
-                        "✓ Beide Seiten sind im Einklang — nichts zu tun.",
+                        if p.omissions.is_empty() {
+                            "✓ Beide Seiten sind im Einklang — nichts zu tun."
+                        } else {
+                            "Die berücksichtigten Dateien sind im Einklang."
+                        },
                     );
                     return;
                 }
@@ -176,6 +190,8 @@ impl App {
                 return;
             }
         };
+        let was_canceled = self.bisync_cancel.as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed));
         self.bisync_rx = None;
         self.bisync_running = false;
         self.bisync_cancel = None;
@@ -186,7 +202,7 @@ impl App {
             if let Err(error) = crate::syncjobs::mark_run(&id) {
                 persistence_errors.push(format!("Letzten Lauf speichern: {error}"));
             }
-            let note = if out.errors.iter().any(|(k, _)| k == "abgebrochen") {
+            let note = if was_canceled || out.errors.iter().any(|(k, _)| k == "abgebrochen") {
                 "abgebrochen"
             } else if !out.errors.is_empty() {
                 "Fehler"
@@ -204,7 +220,7 @@ impl App {
                     deleted: out.stats.deleted,
                     conflicts: out.conflicts.len() as u64,
                     errors: out.errors.len() as u64,
-                    note: note.into(),
+                    note: out.omissions.result_note(note),
                 },
             ) {
                 persistence_errors.push(format!("Laufergebnis speichern: {error}"));
@@ -223,7 +239,7 @@ impl App {
         self.conflict_baseline_dirty = false;
         self.bisync_conflicts = out.conflicts;
         let s = out.stats;
-        let summary = format!(
+        let mut summary = format!(
             "⇄ Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
             s.a_to_b,
             s.b_to_a,
@@ -231,6 +247,12 @@ impl App {
             self.bisync_conflicts.len(),
             s.bytes / 1_048_576
         );
+        if let Some(omitted) = out.omissions.summary() {
+            summary = format!("⚠ {summary}; {omitted}");
+        }
+        if was_canceled {
+            summary = format!("Abgebrochen; {summary}");
+        }
         if !out.errors.is_empty() {
             let persistence = if persistence_errors.is_empty() {
                 String::new()

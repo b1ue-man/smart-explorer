@@ -96,6 +96,12 @@ pub(crate) fn run_one(job: &SyncJob, cancel: &AtomicBool) {
     } else {
         "ok"
     };
+    if let Some(summary) = out.omissions.summary() {
+        log(&format!("sync '{}' completed with omissions: {summary}", job.name));
+        for path in out.omissions.reported_paths().take(100) {
+            log(&format!("sync '{}' omitted link: {path}", job.name));
+        }
+    }
     let mut result = crate::syncjobs::JobResult {
         when: now_secs(),
         a_to_b: out.stats.a_to_b,
@@ -103,7 +109,7 @@ pub(crate) fn run_one(job: &SyncJob, cancel: &AtomicBool) {
         deleted: out.stats.deleted,
         conflicts: out.conflicts.len() as u64,
         errors: out.errors.len() as u64,
-        note: note.into(),
+        note: out.omissions.result_note(note),
     };
     // A post-command observes every completed sync attempt, including one with
     // conflicts or errors. Cancellation is the sole exception: shutdown must

@@ -68,6 +68,13 @@ Verbindungen, Share-Geräte und offene Ordner-Tabs an. Gleiche Ordnernamen auf
 verschiedenen Geräten bleiben getrennt; Setups aus Tabs behalten ihre Remote-Adresse.
 Bestehende Schreibrechte und schreibgeschützte Quellen gelten weiterhin.
 
+Verknüpfungen und Junctions **innerhalb** eines Sync-Ordners werden mit einem
+sichtbaren Hinweis ausgelassen; die übrigen Dateien werden weiter synchronisiert.
+Der entsprechende Pfad auf der Gegenseite und sein bisheriger Sync-Stand bleiben
+erhalten. Ein normaler Ordner namens `node_modules` wird synchronisiert.
+Windows-Cloud-Platzhalter gelten nicht allein wegen ihres Reparse-Attributs als
+Verknüpfung; lesbare Daten-Reparse-Punkte werden regulär verarbeitet.
+
 Das Remote-Rechtsklickmenü unterscheidet Zeile, Mehrfachauswahl und freien
 Ordnerhintergrund. Es bietet je nach Ziel unter anderem Öffnen, Herunterladen,
 Kopieren/Einfügen, Umbenennen, Löschen, Favoriten, Remote-Pfad kopieren,
