@@ -6,6 +6,10 @@ Google Drive and Direct/Room Share combinations. Preserve existing behavior
 and record the compatibility requirement for future agents. Read-only providers
 remain read-only: using them as a source does not grant write permission.
 
+Published in [v0.5.161](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.161)
+on 2026-09-23. The implementation plan below records the investigated batch;
+delivery evidence is recorded at the end.
+
 ## Stage one: findings and approach
 
 Source inspected on 2026-09-22, starting at `a493d66`, with the root Graphify
@@ -84,3 +88,24 @@ path comparisons, so an existing setup continues using its original baseline.
 The existing ZIP backend remains read-only. Its live session can supply a direct
 mirror source; it has no persistent connection locator. The setup editor reports
 that limitation instead of persisting its internal `/` as a local root.
+
+## Delivery evidence
+
+The final source candidate `f82776164a838e50770142999443eb3c10a5663d` passed the
+single task suite on Windows and Linux in
+[run 35738067140](https://github.com/b1ue-man/smart-explorer/actions/runs/35738067140).
+The acceptance logs cover picker/setup provenance, literal and persisted paths,
+old Windows baseline identity, backend pairings, uncached metadata, actual
+authenticated loopback Share transfers, and the directly affected existing
+backup, conflict, retry, WebDAV and Drive behavior. Provider pairings use the VFS
+contract fixtures; the suite does not access users' remote accounts.
+
+The existing complete-release wrapper ran remotely once in
+[run 35824655263](https://github.com/b1ue-man/smart-explorer/actions/runs/35824655263).
+It advanced the version once, built the complete artifacts, committed and pushed
+`d3a057ec8183f17a319728d21a273bb4558dadd5`, and created immutable tag `v0.5.161`.
+Its artifact-only [publication run](https://github.com/b1ue-man/smart-explorer/actions/runs/35830620475)
+succeeded. On 2026-09-23, Cargo, feed version, installer and tag were checked for
+agreement, all feed SHA-256 sidecars matched their payloads, and every required
+GitHub Release asset matched the committed size and SHA-256. No build, compiler,
+test suite or release entrypoint was invoked on the initiating workstation.
