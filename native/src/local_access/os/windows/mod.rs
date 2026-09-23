@@ -8,7 +8,7 @@ mod pipe;
 mod privilege;
 mod read;
 
-pub(crate) use directory::read_directory;
+pub(crate) use directory::{metadata_is_link_like, read_directory};
 pub(crate) use elevation::{can_request_access, request_access, run_helper_if_requested};
 pub(crate) use paths::{display_path, normalize_scan_root};
 pub(crate) use privilege::parallel_scan_allowed;

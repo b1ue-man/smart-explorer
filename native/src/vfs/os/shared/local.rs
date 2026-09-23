@@ -16,9 +16,9 @@ fn ms_since_unix(t: std::time::SystemTime) -> i64 {
     }
 }
 
-fn meta_to_vfs(name: String, meta: &std::fs::Metadata) -> VfsMeta {
+fn meta_to_vfs(name: String, path: &Path, meta: &std::fs::Metadata) -> VfsMeta {
     let (hidden, system) = local_platform::local_attrs(meta);
-    let is_symlink = meta.is_symlink() || local_platform::is_reparse_point(meta);
+    let is_symlink = crate::local_access::metadata_is_link_like(path, meta);
     let is_dir = meta.is_dir() && !is_symlink;
     VfsMeta {
         name,
@@ -110,7 +110,7 @@ impl Backend for LocalBackend {
             .map(unicode_name)
             .transpose()?
             .unwrap_or_else(|| path.to_string());
-        Ok(meta_to_vfs(name, &meta))
+        Ok(meta_to_vfs(name, &p, &meta))
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
@@ -220,7 +220,7 @@ fn ensure_plain_component(path: &Path) -> io::Result<()> {
 }
 
 fn validate_plain_component(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if metadata.is_symlink() || local_platform::is_reparse_point(metadata) {
+    if crate::local_access::metadata_is_link_like(path, metadata) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(

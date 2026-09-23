@@ -68,3 +68,7 @@ pub(crate) fn open_read(path: &Path) -> io::Result<std::fs::File> {
 pub(crate) fn symlink_metadata(path: &Path) -> io::Result<std::fs::Metadata> {
     std::fs::symlink_metadata(path)
 }
+
+pub(crate) fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool {
+    metadata.is_symlink()
+}
