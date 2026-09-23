@@ -128,4 +128,35 @@ and the new `sync_links_task_` cases, plus the directly affected failure guards.
 | Windows cloud data tags differ from links | CLOUD..CLOUD_F/WOF tag fixtures and unknown/name-surrogate boundaries; actual junction listing and fresh metadata agreement |
 
 Cloud-tag fixtures validate classification, not live hydration with a particular
-cloud-provider account. Remote CI and terminal publication are pending.
+cloud-provider account.
+
+## Verified delivery
+
+Verified on 2026-09-23. Source milestones were committed on `main` as `2f1b27e`,
+`eb149d4`, `916fbb2` and `327f873`; the suite/graph candidate was `93511a2` and
+the final fixture correction was `5cb7fd98a852a02b1ea856ce1ecc9fd5c1e03c19`.
+All were pushed. The first remote invocation stopped during fixture compilation
+at existing deletion-preflight calls that needed the new omission argument.
+After correcting those calls, only the same task entrypoint was repeated.
+
+The [final Windows/Linux suite](https://github.com/b1ue-man/smart-explorer/actions/runs/35850613929)
+passed for that exact source candidate. Its retained fixture SHA-256 values are
+`fe2d1193e92977e012a7ad47dfc67c709521a3f07297f7c9be0fb76219738923` (Windows) and
+`8e0e4c5fb5d4f06631220de1bd311ddafcfadcbb65cd9de59ba89fe55797b266` (Linux).
+The real junction/symlink, counterpart/baseline preservation, GUI/job reporting,
+older-peer fallback and preceding cross-remote compatibility expectations passed.
+
+The [single terminal wrapper](https://github.com/b1ue-man/smart-explorer/actions/runs/35851934638)
+completed successfully and produced release commit
+`801f08587efbfc1a02be0c6a4e588828669bed52`. Its
+[artifact-only publication](https://github.com/b1ue-man/smart-explorer/actions/runs/35857810797)
+succeeded and [v0.5.162](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.162)
+is visible on GitHub Releases. Cargo, update-feed version, installer and tag agree.
+Every expected published asset matches the committed file's size and SHA-256;
+all six feed payloads match their sidecars. Native source is unchanged from the
+accepted candidate. No local build, compiler, test or release workload ran.
+
+True child links remain visible omissions; their target contents are not copied.
+An ordinary directory named `node_modules` still synchronizes. Unknown or
+unreadable reparse classification stays protected, and real I/O failures remain
+errors. These boundaries are recorded in `AGENTS.md` for future changes.
