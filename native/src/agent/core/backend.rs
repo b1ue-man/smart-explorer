@@ -309,6 +309,9 @@ impl Backend for AgentBackend {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
         let mux = self.connection.mux()?;
+        if !mux.link_aware_hash.load(Ordering::Acquire) {
+            return Ok(false);
+        }
         let (id, rx) = mux.register();
         let result = (|| {
             mux.send(

@@ -290,6 +290,7 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
             ));
         }
     };
+    mux.link_aware_hash.store(agent_proto::has_link_aware_hash(&version), Ordering::Release);
     Ok((mux, version))
 }
 

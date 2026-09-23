@@ -216,7 +216,7 @@ fn dispatch_backend(
             id,
             &Frame::HelloOk {
                 proto: PROTO_VERSION,
-                version: format!("{} worker", env!("CARGO_PKG_VERSION")),
+                version: format!("{} worker", agent_proto::HASH_WALK_SERVER_VERSION),
             },
         ),
         Frame::ListDir(p) => match backend.list_dir(&p) {
