@@ -28,6 +28,11 @@ pub struct WalkFilter<'a> {
 }
 
 impl<'a> WalkFilter<'a> {
+    pub(super) fn ignored(&self, relative: &str, directory_like: bool) -> bool {
+        self.ignore.is_match(relative)
+            || (directory_like && self.ignore.is_match(format!("{relative}/")))
+    }
+
     /// A filter with no size/age bounds (the common case).
     pub fn basic(include_hidden: bool, ignore: &'a globset::GlobSet) -> Self {
         WalkFilter {
@@ -87,7 +92,7 @@ pub fn walk_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
-    walk_files_impl(be, root, cancel, filter, hash, prev, false)
+    walk_files_impl(be, root, cancel, filter, hash, prev, false, None)
 }
 
 /// Mirror destinations on ID-addressed providers may contain pre-existing
@@ -102,7 +107,23 @@ pub(super) fn walk_files_with_duplicate_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
-    walk_files_impl(be, root, cancel, filter, hash, prev, true)
+    walk_files_impl(be, root, cancel, filter, hash, prev, true, None)
+}
+
+pub(super) struct Snapshot {
+    pub tree: Tree,
+    pub omissions: super::omissions::SyncOmissions,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn walk_snapshot(
+    be: &dyn Backend, root: &str, cancel: &AtomicBool, filter: &WalkFilter,
+    hash: HashMode, prev: Option<&Tree>, allow_duplicate_files: bool, fold_case: bool,
+) -> io::Result<Snapshot> {
+    let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
+    let tree = walk_files_impl(be, root, cancel, filter, hash, prev,
+        allow_duplicate_files, Some(&omissions))?;
+    Ok(Snapshot { tree, omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()) })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -114,6 +135,7 @@ fn walk_files_impl(
     hash: HashMode,
     prev: Option<&Tree>,
     allow_duplicate_files: bool,
+    omissions: Option<&Mutex<super::omissions::SyncOmissions>>,
 ) -> io::Result<Tree> {
     let canceled = || {
         io::Error::new(
@@ -174,7 +196,7 @@ fn walk_files_impl(
                         break;
                     }
                     let dir = &level[i];
-                    match be.list_dir(dir) {
+                    match list_plain_directory(be, dir) {
                         Ok(entries) => {
                             let mut files: Vec<(String, Sig, String)> = Vec::new();
                             let mut dirs: Vec<String> = Vec::new();
@@ -231,21 +253,6 @@ fn walk_files_impl(
                                     }
                                     return;
                                 }
-                                if m.is_symlink {
-                                    let mut slot = first_err
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                    if slot.is_none() {
-                                        *slot = Some(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            format!("link-like sync source is unsupported: {dir}/{}", m.name),
-                                        ));
-                                    }
-                                    return;
-                                }
-                                if !filter.include_hidden && m.hidden {
-                                    continue;
-                                }
                                 let p = join(dir, &m.name);
                                 if nodes.fetch_add(1, Ordering::Relaxed) >= MAX_WALK_NODES
                                     || text_bytes.fetch_add(p.len() as u64, Ordering::Relaxed)
@@ -263,7 +270,22 @@ fn walk_files_impl(
                                     return;
                                 }
                                 let rel = rel_of(&p, root);
-                                if filter.ignore.is_match(&rel) {
+                                let excluded = (!filter.include_hidden && m.hidden)
+                                    || filter.ignored(&rel, m.is_dir || m.is_symlink);
+                                if m.is_symlink {
+                                    if let Some(omissions) = omissions {
+                                        omissions.lock().unwrap_or_else(|e| e.into_inner())
+                                            .record(&rel, !excluded);
+                                        continue;
+                                    }
+                                    let mut slot = first_err.lock().unwrap_or_else(|e| e.into_inner());
+                                    if slot.is_none() {
+                                        *slot = Some(io::Error::new(io::ErrorKind::InvalidData,
+                                            format!("link-like sync source requires a protected snapshot: {p}")));
+                                    }
+                                    return;
+                                }
+                                if excluded {
                                     continue;
                                 }
                                 if m.is_dir {
@@ -414,4 +436,15 @@ fn walk_files_impl(
     Ok(out
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+fn list_plain_directory(be: &dyn Backend, path: &str) -> io::Result<Vec<crate::vfs::VfsMeta>> {
+    let metadata = be.stat(path)?;
+    if metadata.is_symlink || !metadata.is_dir {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("sync directory changed into a link or non-directory: {path}"),
+        ));
+    }
+    be.list_dir(path)
 }

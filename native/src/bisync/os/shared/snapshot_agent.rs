@@ -47,14 +47,12 @@ pub(super) fn walk_hashed_via_agent(
                 failure = Some(error);
                 continue;
             }
-            if hit.is_dir || filter.ignore.is_match(&hit.rel) {
+            if hit.is_dir || filter.ignored(&hit.rel, false)
+                || hit.rel.match_indices('/').any(|(end, _)| filter.ignored(&hit.rel[..end], true))
+            {
                 continue;
             }
-            let hidden = hit
-                .rel
-                .rsplit('/')
-                .next()
-                .is_some_and(|name| name.starts_with('.'));
+            let hidden = hit.rel.split('/').any(|name| name.starts_with('.'));
             if (!filter.include_hidden && hidden) || !filter.size_age_ok(hit.size, hit.mtime_ms) {
                 continue;
             }
@@ -90,6 +88,12 @@ pub(super) fn walk_hashed_via_agent(
     }
     let ran = match outcome {
         Ok(Ok(ran)) => ran,
+        Ok(Err(error)) if failure.is_none()
+            && error.to_string() == crate::agent_proto::HASH_WALK_LINK_BOUNDARY => {
+            // Discard every streamed signature. Only this explicit server
+            // referral permits a fresh, link-aware metadata walk.
+            return Ok(None);
+        }
         Ok(Err(error)) => return Err(error),
         Err(_) => return Err(io::Error::other("agent sync walk worker panicked")),
     };

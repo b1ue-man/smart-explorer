@@ -1,4 +1,5 @@
 use crate::vfs::{Backend, VfsMeta};
+use crate::bisync::SyncOmissions;
 use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +23,7 @@ pub(super) fn delete_extras(
     cancel: &AtomicBool,
     stats: &mut SyncStats,
     errors: &mut Vec<(String, String)>,
+    omissions: &mut SyncOmissions,
 ) {
     let mut files = Vec::new();
     let mut directories = Vec::new();
@@ -33,6 +35,7 @@ pub(super) fn delete_extras(
         cancel,
         &mut files,
         &mut directories,
+        omissions,
     ) {
         record_error(
             stats,
@@ -42,6 +45,10 @@ pub(super) fn delete_extras(
         );
         return;
     }
+    // A link discovered below an otherwise extra directory protects that
+    // ancestor from deletion, while independent extra siblings stay removable.
+    files.retain(|entry| !omissions.protects(&rel_of(&entry.path, destination_root)));
+    directories.retain(|entry| !omissions.protects(&rel_of(&entry.path, destination_root)));
     if let Err(error) = revalidate_plan(source, destination, &files, &directories, cancel) {
         record_error(
             stats,
@@ -84,6 +91,7 @@ fn collect_candidates(
     cancel: &AtomicBool,
     files: &mut Vec<Candidate>,
     directories: &mut Vec<Candidate>,
+    omissions: &mut SyncOmissions,
 ) -> io::Result<()> {
     require_plain_directory(source, source_root, false)?;
     require_plain_directory(destination, destination_root, false)?;
@@ -109,8 +117,23 @@ fn collect_candidates(
             let path = join(&directory, &metadata.name);
             budget.record(&path, depth + 1).map_err(io::Error::other)?;
             let rel = rel_of(&path, destination_root);
+            if metadata.is_symlink {
+                omissions.record(&rel, true);
+                continue;
+            }
+            if omissions.contains(&rel) || (!metadata.is_dir && omissions.protects(&rel)) {
+                continue;
+            }
             let source_path = join(source_root, &rel);
-            let absent = source_absent(source, &source_path)?;
+            let absent = match source.stat(&source_path) {
+                Ok(source_meta) if source_meta.is_symlink => {
+                    omissions.record(&rel, true);
+                    continue;
+                }
+                Ok(_) => false,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                Err(error) => return Err(error),
+            };
             let candidate = Candidate {
                 path: path.clone(),
                 source_path,

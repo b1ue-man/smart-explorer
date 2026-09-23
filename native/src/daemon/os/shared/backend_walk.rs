@@ -324,7 +324,8 @@ pub(super) fn handle_walk_hashed_backend(
             let path = join_path(&directory, &child.name);
             budget.record(&path, depth + 1)?;
             if child.is_symlink {
-                continue;
+                return Err(io::Error::new(io::ErrorKind::Unsupported,
+                    crate::agent_proto::HASH_WALK_LINK_BOUNDARY));
             }
             let relative = rel_join(&relative_directory, &child.name);
             if child.is_dir {

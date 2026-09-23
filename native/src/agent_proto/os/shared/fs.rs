@@ -91,7 +91,7 @@ pub fn list_local(path: &str) -> std::io::Result<Vec<WireMeta>> {
         out.push(WireMeta {
             name,
             is_dir: md.is_dir(),
-            is_symlink: super::local_platform::metadata_is_link_like(&md),
+            is_symlink: super::local_platform::metadata_is_link_like(&ent.path(), &md),
             size: md.len(),
             mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
             content_md5: None,
@@ -111,7 +111,7 @@ pub fn stat_local(path: &str) -> std::io::Result<WireMeta> {
             .transpose()?
             .unwrap_or_else(|| path.to_string()),
         is_dir: md.is_dir(),
-        is_symlink: super::local_platform::metadata_is_link_like(&md),
+        is_symlink: super::local_platform::metadata_is_link_like(p, &md),
         size: md.len(),
         mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
         content_md5: None,
@@ -147,7 +147,7 @@ fn walk_dir(dir: &Path, name: String, budget: &WalkBudget, depth: usize) -> io::
     for ent in std::fs::read_dir(dir)? {
         let ent = ent?;
         let metadata = std::fs::symlink_metadata(ent.path())?;
-        if super::local_platform::metadata_is_link_like(&metadata) {
+        if super::local_platform::metadata_is_link_like(&ent.path(), &metadata) {
             continue;
         }
         let nm = wire_name(ent.file_name())?;
@@ -252,7 +252,7 @@ fn walk_dir_counted_inner(
         }
         let ent = ent?;
         let metadata = std::fs::symlink_metadata(ent.path())?;
-        if super::local_platform::metadata_is_link_like(&metadata) {
+        if super::local_platform::metadata_is_link_like(&ent.path(), &metadata) {
             continue;
         }
         let nm = wire_name(ent.file_name())?;
@@ -313,7 +313,7 @@ fn walk_dir_counted_inner(
 
 fn require_plain_directory(path: &Path) -> io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
-    if super::local_platform::metadata_is_link_like(&metadata) || !metadata.is_dir() {
+    if super::local_platform::metadata_is_link_like(path, &metadata) || !metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(

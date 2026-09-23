@@ -17,6 +17,7 @@
 #![allow(dead_code)]
 
 use super::sync_copy::copy_stream;
+use crate::bisync::SyncOmissions;
 use crate::vfs::{Backend, BackendHandle};
 use crossbeam_channel::Sender;
 use std::collections::VecDeque;
@@ -72,6 +73,7 @@ pub struct SyncProgress {
 pub struct SyncResult {
     pub stats: SyncStats,
     pub errors: Vec<(String, String)>,
+    pub omissions: SyncOmissions,
     pub elapsed_ms: u64,
 }
 
@@ -166,6 +168,7 @@ pub fn start_sync(
                 format!("worker start failed: {error}"),
             )],
             elapsed_ms: 0,
+            omissions: SyncOmissions::default(),
         }));
     }
     SyncHandle { cancel }
@@ -183,12 +186,15 @@ fn run(
     let start = Instant::now();
     let mut stats = SyncStats::default();
     let mut errors: Vec<(String, String)> = Vec::new();
+    let mut omissions = SyncOmissions::new(
+        !src.case_sensitive_paths(&src_root) || !dst.case_sensitive_paths(&dst_root),
+    );
     let mut last_progress = Instant::now();
 
     if let Err(error) = crate::vfs::validate_sync_roots(&*src, &src_root, &*dst, &dst_root) {
         record_error(&mut stats, &mut errors, "Sync-Pfade", error.to_string());
         let _ = tx.send(SyncMsg::Done(SyncResult {
-            stats, errors, elapsed_ms: start.elapsed().as_millis() as u64,
+            stats, errors, omissions, elapsed_ms: start.elapsed().as_millis() as u64,
         }));
         return;
     }
@@ -203,6 +209,7 @@ fn run(
         let _ = tx.send(SyncMsg::Done(SyncResult {
             stats,
             errors,
+            omissions,
             elapsed_ms: start.elapsed().as_millis() as u64,
         }));
         return;
@@ -219,6 +226,7 @@ fn run(
             let _ = tx.send(SyncMsg::Done(SyncResult {
                 stats,
                 errors,
+                omissions,
                 elapsed_ms: start.elapsed().as_millis() as u64,
             }));
             return;
@@ -271,15 +279,6 @@ fn run(
                 );
                 continue;
             }
-            if m.is_symlink {
-                record_error(
-                    &mut stats,
-                    &mut errors,
-                    dir.clone(),
-                    format!("link-like source entry is not synchronized: {:?}", m.name),
-                );
-                continue;
-            }
             let sp = join(&dir, &m.name);
             if let Err(error) = source_budget.record(&sp, depth + 1) {
                 record_error(&mut stats, &mut errors, sp, error);
@@ -287,7 +286,23 @@ fn run(
             }
             let rel = rel_of(&sp, &src_root);
             let dp = join(&dst_root, &rel);
+            if m.is_symlink {
+                omissions.record(&rel, true);
+                continue;
+            }
             if m.is_dir {
+                match dst.stat(&dp) {
+                    Ok(metadata) if metadata.is_symlink => {
+                        omissions.record(&rel, true);
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        record_error(&mut stats, &mut errors, dp, error.to_string());
+                        continue;
+                    }
+                }
                 if !opts.dry_run {
                     if let Err(error) = require_plain_directory(&*dst, &dp, true) {
                         record_error(
@@ -313,7 +328,11 @@ fn run(
                     );
                     continue;
                 }
-                Ok(dm) if dm.is_dir || dm.is_symlink => {
+                Ok(dm) if dm.is_symlink => {
+                    omissions.record(&rel, true);
+                    continue;
+                }
+                Ok(dm) if dm.is_dir => {
                     record_error(
                         &mut stats,
                         &mut errors,
@@ -378,12 +397,14 @@ fn run(
             &cancel,
             &mut stats,
             &mut errors,
+            &mut omissions,
         );
     }
 
     let _ = tx.send(SyncMsg::Done(SyncResult {
         stats,
         errors,
+        omissions,
         elapsed_ms: start.elapsed().as_millis() as u64,
     }));
 }

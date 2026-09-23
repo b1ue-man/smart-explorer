@@ -38,10 +38,14 @@ mod incremental_collect;
 mod move_finalize;
 #[path = "os/shared/orchestration.rs"]
 mod orchestration;
+#[path = "core/omissions.rs"]
+mod omissions;
 #[path = "core/paths.rs"]
 mod paths;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
+#[path = "os/shared/preview.rs"]
+mod preview;
 #[path = "os/shared/resolve.rs"]
 mod resolve_conflict;
 #[path = "os/shared/snapshot.rs"]
@@ -50,6 +54,8 @@ mod snapshot;
 mod snapshot_agent;
 #[path = "os/shared/snapshot_hash.rs"]
 mod snapshot_hash;
+#[path = "os/shared/snapshot_pair.rs"]
+mod snapshot_pair;
 #[path = "os/shared/state_store.rs"]
 mod state_store;
 #[path = "os/shared/state_types.rs"]
@@ -61,7 +67,9 @@ mod types;
 
 pub use apply::apply;
 pub use core::{plan, update_baseline};
-pub use orchestration::{preview, run, Outcome, Preview};
+pub use orchestration::{run, Outcome};
+pub use preview::{preview, Preview};
+pub use omissions::SyncOmissions;
 pub use persistence::{
     baseline_path, load_baseline, pair_id, pair_id_for, prune_versions, save_baseline, versions_dir,
 };

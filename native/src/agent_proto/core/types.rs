@@ -2,6 +2,10 @@
 /// re-uploads the agent on a mismatch.
 pub const PROTO_VERSION: u32 = 9;
 
+/// Existing error frames can request a metadata walk without changing wire
+/// layouts. A hash-only stream cannot represent protected link boundaries.
+pub const HASH_WALK_LINK_BOUNDARY: &str = "SE_HASH_WALK_LINK_BOUNDARY_V1";
+
 /// Payload chunk size for streamed byte transfers.
 pub const CHUNK: usize = 256 * 1024;
 
