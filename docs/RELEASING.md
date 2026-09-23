@@ -284,7 +284,12 @@ literal endpoint persistence, all existing backend pairings at the VFS boundary,
 real loopback Share-to-Share/Share-to-local sync, and directly affected backup,
 conflict, retry, WebDAV and Drive integration behavior. It does not contact users'
 remote accounts. Artifacts include candidate/binary identity and acceptance logs.
-Codex must not invoke this entrypoint locally. See [SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md).
+The follow-up link/junction batch uses this same entrypoint and workflow. It adds
+real Windows junction and Unix link fixtures, cloud-tag classification, protected
+counterparts/baselines, incremental recovery, quick mirror and agent hash fallback.
+Cloud-provider account access is not simulated as a live provider certification.
+Codex must not invoke this entrypoint locally. See [SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md)
+and [SYNC_LINK_REPAIR.md](SYNC_LINK_REPAIR.md).
 
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
