@@ -59,7 +59,7 @@ Dateien
   nach Rückfrage endgültig (wie Desktop).
 
 Verbindungen
-- F12 Verbindungen verwalten: SFTP (Passwort oder Schlüsseldatei, optional SSH-Agent), FTP/FTPS,
+- F12 Verbindungen verwalten: SFTP (Passwort oder Schlüsseldatei, optional Remote-Agent wie am Desktop), FTP/FTPS,
   WebDAV (HTTPS, wie am Desktop) anlegen, bearbeiten, testen, löschen; Zugangsdaten im geschützten App-Speicher;
   Hostschlüssel nach „Trust on first use“ wie am Desktop; beim Löschen Aufräumen wie am Desktop
   (Favoriten und Tabs werden entfernt, betroffene Sync-Jobs gemeldet).
@@ -283,8 +283,8 @@ Fortschritt + Abbrechen, im Hintergrund mit Benachrichtigung.
 - Einstieg: Seitenleiste „Verbindung hinzufügen“; Mehr → Verbindungen (Liste mit ⋮: Bearbeiten,
   Testen, Löschen).
 - Formular: Typ (SFTP, FTP, FTPS, WebDAV) · Name · Host · Port (Vorgabe je Typ) · Benutzer ·
-  Passwort oder Schlüsseldatei (Datei aus Speicher wählen) + Passphrase (SFTP) · Startordner ·
-  SSH-Agent verwenden (SFTP) · [Testen] [Speichern]; WebDAV immer über HTTPS (Desktop-Format).
+  Passwort oder Schlüsseldatei (Datei aus Speicher wählen) + Passphrase (SFTP) · Startordner · Remote-Agent (SFTP) ·
+  [Testen] [Speichern]; WebDAV immer über HTTPS (Desktop-Format).
 - Warten: Testen/Verbinden 1–10 s → Indikator; Ergebnis „Verbindung OK“ oder Fehlertext.
 - Hostschlüssel: wie am Desktop „Trust on first use“ (erster Schlüssel wird gespeichert). Geänderter
   Schlüssel → Verbindung scheitert mit „Hostschlüssel geändert“; ist die Änderung erwartet, entfernt
