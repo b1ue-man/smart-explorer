@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider "${applicationId}.files": cache copies only. Local originals are served by
+     LocalFileProvider; this provider never exposes shared storage. -->
+<paths>
+    <!-- Remote copies opened in other apps -->
+    <cache-path name="open" path="open/" />
+    <!-- Copies handed to the system share sheet -->
+    <cache-path name="share" path="share/" />
+    <!-- Downloaded update APK for the system installer -->
+    <cache-path name="update" path="update/" />
+</paths>

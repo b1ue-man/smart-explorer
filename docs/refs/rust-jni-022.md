@@ -503,6 +503,17 @@ MANIFEST_PATH=$(cargo metadata --format-version 1 \
 MAVEN_DIR="$(dirname "$MANIFEST_PATH")/maven"
 ```
 
+**Ergänzung K0 (2026-09-25).** Im Versionsordner des gebündelten Repos liegen
+`_remote.repositories`, `rustls-platform-verifier-0.1.1.aar` und `rustls-platform-verifier-0.1.1.pom`
+(`<groupId>rustls</groupId>`, `<packaging>aar</packaging>`; docs.rs-Quellansicht der Crate 0.1.1) –
+Standard-Metadatenquellen (POM) genügen, `metadataSources.artifact()` ist nicht nötig. Die aktuelle
+Upstream-README verweist inzwischen auf ein gehostetes Maven-Archiv und liest die Version per
+`ValueSource` aus `Cargo.lock` (Paket `rustls-platform-verifier-android`). Dieses Projekt: Gradle-
+Property `rustlsVerifierMaven` (Pfad zum `maven/`-Ordner der Crate, per `cargo metadata
+--filter-platform aarch64-linux-android` ermittelt) als `exclusiveContent`-Repository nur für die
+Gruppe `rustls` in `android/settings.gradle.kts`; die Version liest `android/app/build.gradle.kts`
+aus `native/Cargo.lock`.
+
 **Proguard/R8 keep rule** (README, exact text):
 ```text
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
