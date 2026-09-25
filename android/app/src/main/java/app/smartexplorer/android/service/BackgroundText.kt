@@ -21,8 +21,11 @@ internal object BackgroundText {
     fun moment(epochMs: Long, now: Long = System.currentTimeMillis()): String =
         if (Format.date(epochMs, now) == Format.date(now, now)) Format.time(epochMs) else "${Format.date(epochMs, now)} ${Format.time(epochMs)}"
 
-    /** Header line of the Sync page (spec F15), e.g. "Periodisch · nächster Lauf ~14:30". */
-    fun summary(mode: String, status: BgStatus?, nextRunMs: Long?): String {
+    /**
+     * Header line of the Sync page (spec F15), e.g. "Periodisch · nächster Lauf ~14:30". A planned
+     * time already passed means WorkManager holds the due run until its conditions are met.
+     */
+    fun summary(mode: String, status: BgStatus?, nextRunMs: Long?, now: Long = System.currentTimeMillis()): String {
         if (mode == BackgroundController.MODE_OFF) return "Hintergrund aus – keine geplanten Jobs"
         val label = modeLabel(mode)
         if (status == null) return label
@@ -32,6 +35,10 @@ internal object BackgroundText {
         if (mode == BackgroundController.MODE_PERSISTENT) {
             return if (status.daemonRunning) "$label · aktiv" else "$label · startet…"
         }
-        return if (nextRunMs != null) "$label · nächster Lauf ~${moment(nextRunMs)}" else "$label · wartet auf Bedingungen"
+        return when {
+            nextRunMs == null -> "$label · wartet auf Bedingungen"
+            nextRunMs <= now -> "$label · fällig, wartet auf Bedingungen"
+            else -> "$label · nächster Lauf ~${moment(nextRunMs, now)}"
+        }
     }
 }

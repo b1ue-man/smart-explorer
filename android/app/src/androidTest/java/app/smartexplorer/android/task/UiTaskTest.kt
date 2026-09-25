@@ -77,7 +77,8 @@ class UiTaskTest {
         compose.onNode(hasContentDescription("Filter schließen") and hasClickAction()).performClick()
 
         compose.onNode(tab("Sync")).performClick()
-        waitForNode(hasContentDescription("Job anlegen"), "Sync: Job anlegen")
+        // Button of the empty page, or the floating button once jobs exist.
+        waitForNode(hasContentDescription("Job anlegen") or hasText("Job anlegen"), "Sync: Job anlegen")
         waitForNode(hasContentDescription("Aktualisieren"), "Sync: Aktualisieren")
         screenshot("03-sync")
 
