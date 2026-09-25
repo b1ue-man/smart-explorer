@@ -1,4 +1,4 @@
-use crate::app::app_models::{TransferMsg, TransferProgress};
+use super::types::{TransferMsg, TransferProgress};
 
 pub(super) fn send_transfer_progress(
     tx: &crossbeam_channel::Sender<TransferMsg>,

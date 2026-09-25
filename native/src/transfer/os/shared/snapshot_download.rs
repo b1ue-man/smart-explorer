@@ -1,11 +1,11 @@
 use super::download_file::download_file_progress;
-use super::{cleanup_temp_copy, open_temp_path};
-use crate::app::app_models::{TransferKind, TransferProgress};
-use crate::app::shared_platform_helpers::ClipboardVirtualFile;
+use super::temp::{cleanup_temp_copy, open_temp_path};
+use super::types::{TransferKind, TransferProgress};
+use crate::filter::tree::ClipboardVirtualFile;
 
 /// Materialize exactly the selected files, with a shared relative root. The
 /// clipboard receives its children, never the implementation's wrapper folder.
-pub(in crate::app) fn download_clipboard_snapshot(
+pub fn download_clipboard_snapshot(
     backend: &dyn crate::vfs::Backend,
     files: Vec<ClipboardVirtualFile>,
 ) -> Result<Vec<String>, String> {

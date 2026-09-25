@@ -1,4 +1,6 @@
-use super::{DiscoveryExchangeRecord, DiscoveryUiState};
+//! Exchange-record retention for the discovery state: a record lives while it
+//! is pending or its advertisement is still listed.
+use super::discovery_state::{DiscoveryExchangeRecord, DiscoveryUiState};
 
 pub(super) fn replace_exchange_record(
     state: &mut DiscoveryUiState,

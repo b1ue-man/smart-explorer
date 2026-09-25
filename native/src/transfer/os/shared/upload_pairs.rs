@@ -1,21 +1,27 @@
 //! Filtered local clipboard pairs retain their validated relative hierarchy.
 use super::entries::{validate_transfer_name, TransferCollectionBudget};
+use super::types::TransferMsg;
 use super::upload_plan::{DestinationNames, UploadEntry, UploadPlan};
-use crate::app::app_models::TransferMsg;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-pub(in crate::app) fn upload_pairs_progress(
-    backend: &dyn crate::vfs::Backend, pairs: &[(String, String)], destination: &str,
-    tx: &crossbeam_channel::Sender<TransferMsg>, cancel: &AtomicBool,
+pub fn upload_pairs_progress(
+    backend: &dyn crate::vfs::Backend,
+    pairs: &[(String, String)],
+    destination: &str,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    cancel: &AtomicBool,
 ) {
     let plan = collect_pairs(backend, pairs, destination, cancel);
     super::uploads::run_upload_plan(backend, plan, destination, tx, cancel);
 }
 
 fn collect_pairs(
-    backend: &dyn crate::vfs::Backend, pairs: &[(String, String)], destination: &str, cancel: &AtomicBool,
+    backend: &dyn crate::vfs::Backend,
+    pairs: &[(String, String)],
+    destination: &str,
+    cancel: &AtomicBool,
 ) -> Result<UploadPlan, String> {
     super::cancel::check(cancel)?;
     let mut plan = UploadPlan::default();
@@ -40,23 +46,34 @@ fn collect_pairs(
             }
             validate_transfer_name(component, relative)?;
         }
+        if parts
+            .iter()
+            .any(|component| crate::apptrash::excluded_name(component))
+        {
+            plan.omitted = plan.omitted.saturating_add(1);
+            continue;
+        }
         budget.record_node(parts.len() - 1, &[absolute, relative])?;
         if directories.contains(relative) || !files.insert(relative.clone()) {
             return Err(format!("Mehrdeutiges Upload-Dateiziel: {relative}"));
         }
         let mut parent = String::new();
         for component in &parts[..parts.len() - 1] {
-            if !parent.is_empty() { parent.push('/'); }
+            if !parent.is_empty() {
+                parent.push('/');
+            }
             parent.push_str(component);
             if files.contains(&parent) {
-                return Err(format!("Upload-Ziel ist zugleich Datei und Verzeichnis: {parent}"));
+                return Err(format!(
+                    "Upload-Ziel ist zugleich Datei und Verzeichnis: {parent}"
+                ));
             }
             directories.insert(parent.clone());
         }
         let metadata = std::fs::symlink_metadata(&source)
             .map_err(|error| format!("{absolute}: Quelle prüfen: {error}"))?;
         super::cancel::check(cancel)?;
-        if super::super::upload_is_link_like(&metadata) || !metadata.is_file() {
+        if super::platform::upload_is_link_like(&metadata) || !metadata.is_file() {
             return Err(format!("{absolute}: Gefilterte Upload-Quelle ist keine reguläre Datei ohne Link/Reparse-Punkt"));
         }
         let root = parts[0];
@@ -69,7 +86,9 @@ fn collect_pairs(
                 selected
             }
         };
-        let target = if parts.len() == 1 { selected } else {
+        let target = if parts.len() == 1 {
+            selected
+        } else {
             format!("{selected}/{}", parts[1..].join("/"))
         };
         // Explicit directories preserve the selected root name even when only
@@ -80,7 +99,11 @@ fn collect_pairs(
             plan.dirs.push(ancestor.to_string());
             parent = ancestor;
         }
-        plan.files.push(UploadEntry { src: source, rel: target, size: metadata.len() });
+        plan.files.push(UploadEntry {
+            src: source,
+            rel: target,
+            size: metadata.len(),
+        });
     }
     Ok(plan)
 }

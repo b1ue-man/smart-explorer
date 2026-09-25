@@ -131,17 +131,7 @@ pub(in crate::app) fn os_drag_out_supported() -> bool {
     false
 }
 
-pub(in crate::app) fn available_space_for_path(_path: &Path) -> Option<u64> {
-    None
-}
-
-pub(in crate::app) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
-    std::fs::rename(src, dest)
-}
-
-pub(in crate::app) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
+pub(in crate::app) use crate::transfer::{replace_file_atomic, upload_is_link_like};
 
 pub(in crate::app) fn process_running(pid: u32) -> bool {
     if pid == std::process::id() {

@@ -4,8 +4,8 @@ use super::entries::{
     TransferCollectionBudget, TransferErrorLog,
 };
 use super::progress::send_transfer_progress;
-use super::{cleanup_temp_copy, open_temp_path};
-use crate::app::app_models::{TransferKind, TransferMsg, TransferProgress};
+use super::temp::{cleanup_temp_copy, open_temp_path};
+use super::types::{TransferKind, TransferMsg, TransferProgress};
 use crate::types::FilterDef;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -16,6 +16,7 @@ struct RemoteDownloadRoot {
     is_dir: bool,
     files: Vec<super::entries::RemoteFileEntry>,
     dirs: Vec<String>,
+    omitted: u64,
 }
 
 fn download_collected_file(
@@ -71,6 +72,7 @@ fn collect_download_root(
     let is_dir = meta.is_dir;
     let mut files = Vec::new();
     let mut dirs = Vec::new();
+    let mut omitted = 0;
     RemoteEntryCollector {
         be,
         filter,
@@ -78,6 +80,7 @@ fn collect_download_root(
         dirs: &mut dirs,
         budget,
         cancel,
+        omitted: &mut omitted,
     }
     .collect_with_meta(src, rel, true, meta, 0)?;
     Ok(RemoteDownloadRoot {
@@ -86,6 +89,7 @@ fn collect_download_root(
         is_dir,
         files,
         dirs,
+        omitted,
     })
 }
 
@@ -101,11 +105,16 @@ fn download_remote_dir_for_clipboard(
         Err(error) => return Err(error.to_string()),
     }
     std::fs::create_dir_all(local_dir).map_err(|e| e.to_string())?;
-    if unfiltered && be.supports_bulk_tree() {
+    // A bulk tree copy cannot leave out protected omissions.
+    if unfiltered && root.omitted == 0 && be.supports_bulk_tree() {
         let files = be.get_tree(&root.src, local_dir)
             .map_err(|error| format!("Bulk-Download „{}“: {error}; kein Wiederholungsversuch in einem möglicherweise teilweise beschriebenen Ziel", root.src))?;
         if files != root.files.len() as u64 {
-            return Err(format!("Bulk-Download „{}“ lieferte {files} statt {} Dateien", root.src, root.files.len()));
+            return Err(format!(
+                "Bulk-Download „{}“ lieferte {files} statt {} Dateien",
+                root.src,
+                root.files.len()
+            ));
         }
         return Ok(());
     }
@@ -127,7 +136,7 @@ fn download_remote_dir_for_clipboard(
     Ok(())
 }
 
-pub(in crate::app) fn download_remote_clipboard_items(
+pub fn download_remote_clipboard_items(
     be: &dyn crate::vfs::Backend,
     items: &[(String, String, bool)],
     filter: Option<(FilterDef, String)>,
@@ -191,7 +200,7 @@ pub(in crate::app) fn download_remote_clipboard_items(
     Ok(local)
 }
 
-pub(in crate::app) fn download_remote_paths_for_clipboard(
+pub fn download_remote_paths_for_clipboard(
     be: &dyn crate::vfs::Backend,
     paths: &[String],
     filter: Option<(FilterDef, String)>,
@@ -268,7 +277,7 @@ fn cleanup_local_results(paths: &[String]) {
     }
 }
 
-pub(in crate::app) fn download_paths_progress(
+pub fn download_paths_progress(
     be: &dyn crate::vfs::Backend,
     paths: &[String],
     dest_local: &str,
@@ -325,6 +334,10 @@ pub(in crate::app) fn download_paths_progress(
         bytes_total,
     );
     progress.errors = errors.total();
+    progress.omitted = roots
+        .iter()
+        .map(|root| root.omitted)
+        .fold(0u64, u64::saturating_add);
     let mut last = std::time::Instant::now();
     send_transfer_progress(tx, &progress, &mut last, true);
 
@@ -340,7 +353,9 @@ pub(in crate::app) fn download_paths_progress(
             if super::cancel::requested(cancel) {
                 break 'roots;
             }
-            if !seen_dirs.insert(dir.as_str()) { continue; }
+            if !seen_dirs.insert(dir.as_str()) {
+                continue;
+            }
             let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
             if let Err(e) = std::fs::create_dir_all(&local) {
                 errors.push(format!("{}: {}", local.display(), e));

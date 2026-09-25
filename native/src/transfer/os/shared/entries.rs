@@ -213,6 +213,8 @@ pub(super) struct RemoteEntryCollector<'a> {
     pub(super) dirs: &'a mut Vec<String>,
     pub(super) budget: &'a mut TransferCollectionBudget,
     pub(super) cancel: Option<&'a AtomicBool>,
+    /// Protected omissions (the active app trash) left out of the walk.
+    pub(super) omitted: &'a mut u64,
 }
 
 impl RemoteEntryCollector<'_> {
@@ -240,6 +242,10 @@ impl RemoteEntryCollector<'_> {
         depth: usize,
     ) -> Result<(), String> {
         super::cancel::check_optional(self.cancel)?;
+        if crate::apptrash::excluded_name(&meta.name) {
+            *self.omitted = self.omitted.saturating_add(1);
+            return Ok(());
+        }
         self.budget
             .record_node(depth, &[src, &rel, &meta.name])
             .map_err(|error| format!("{src}: {error}"))?;

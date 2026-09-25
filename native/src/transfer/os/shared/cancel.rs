@@ -1,4 +1,4 @@
-use crate::app::app_models::{TransferMsg, TransferProgress};
+use super::types::{TransferMsg, TransferProgress};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) const CANCELED_ERROR: &str = "Übertragung abgebrochen";

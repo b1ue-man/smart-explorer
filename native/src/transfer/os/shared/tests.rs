@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::app_models::TransferMsg;
 use crate::types::FilterDef;
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
@@ -34,7 +33,7 @@ fn txt_filter() -> FilterDef {
 
 fn done_from(
     rx: &crossbeam_channel::Receiver<TransferMsg>,
-) -> (crate::app::app_models::TransferProgress, Vec<String>, bool) {
+) -> (TransferProgress, Vec<String>, bool) {
     let mut done = None;
     while let Ok(msg) = rx.try_recv() {
         if let TransferMsg::Done {
@@ -47,40 +46,6 @@ fn done_from(
         }
     }
     done.expect("transfer should send Done")
-}
-
-fn numbered_name(index: usize) -> String {
-    if index == 1 {
-        "entry.txt".to_string()
-    } else {
-        format!("entry ({index}).txt")
-    }
-}
-
-#[test]
-fn remote_unique_name_checks_the_bound_and_never_reuses_it() {
-    let root = temp_dir("remote_unique_bound");
-    for index in 1..1000 {
-        std::fs::write(root.join(numbered_name(index)), b"occupied").unwrap();
-    }
-    let backend = crate::vfs::LocalBackend::new(&fwd(&root));
-
-    let last = find_remote_unique_name(&backend, &fwd(&root), numbered_name).unwrap();
-    assert_eq!(last, numbered_name(1000));
-    std::fs::write(root.join(&last), b"occupied").unwrap();
-    assert!(find_remote_unique_name(&backend, &fwd(&root), numbered_name).is_err());
-
-    assert!(ensure_remote_destination_free(&backend, &fwd(&root.join(&last))).is_err());
-    assert!(ensure_remote_destination_free(&backend, &fwd(&root.join("free.txt"))).is_ok());
-
-    let probe_error = find_remote_unique_name_with(
-        |_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "blocked")),
-        &fwd(&root),
-        numbered_name,
-    )
-    .expect_err("a failed existence probe must not look like a free name");
-    assert!(probe_error.contains("Ziel prüfen"));
-    let _ = std::fs::remove_dir_all(root);
 }
 
 fn copy_tree_contents(src: &Path, dst: &Path) -> io::Result<u64> {
@@ -378,4 +343,60 @@ fn remote_download_filters_selected_folder() {
 
     let _ = std::fs::remove_dir_all(&remote);
     let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
+fn android_task_upload_reader_reserves_a_free_name_and_never_replaces() {
+    let remote = temp_dir("reader_upload");
+    std::fs::write(remote.join("note.txt"), b"existing").unwrap();
+    let be = crate::vfs::LocalBackend::new(&fwd(&remote));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(false);
+    let mut reader: &[u8] = b"streamed bytes";
+
+    let name = upload_reader_progress(
+        &be,
+        &mut reader,
+        Some(14),
+        &fwd(&remote),
+        "note.txt",
+        &tx,
+        &cancel,
+    )
+    .unwrap();
+
+    assert_eq!(name, "note (2).txt");
+    assert_eq!(std::fs::read(remote.join("note.txt")).unwrap(), b"existing");
+    assert_eq!(
+        std::fs::read(remote.join("note (2).txt")).unwrap(),
+        b"streamed bytes"
+    );
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(!canceled && errors.is_empty(), "{errors:?}");
+    assert_eq!((progress.files_done, progress.bytes_done), (1, 14));
+    assert_eq!(
+        std::fs::read_dir(&remote).unwrap().count(),
+        2,
+        "no stage left"
+    );
+    let _ = std::fs::remove_dir_all(&remote);
+}
+
+#[test]
+fn android_task_upload_reader_cancel_publishes_nothing() {
+    let remote = temp_dir("reader_cancel");
+    let be = crate::vfs::LocalBackend::new(&fwd(&remote));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let cancel = AtomicBool::new(true);
+    let mut reader: &[u8] = b"never sent";
+
+    let result =
+        upload_reader_progress(&be, &mut reader, None, &fwd(&remote), "a.txt", &tx, &cancel);
+
+    assert!(result.is_err());
+    let (progress, errors, canceled) = done_from(&rx);
+    assert!(canceled && errors.is_empty(), "{errors:?}");
+    assert_eq!(progress.files_done, 0);
+    assert!(std::fs::read_dir(&remote).unwrap().next().is_none());
+    let _ = std::fs::remove_dir_all(&remote);
 }
