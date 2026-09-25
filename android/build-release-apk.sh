@@ -305,10 +305,11 @@ verify_apk() {
     printf '%s\n' "$certs" >&2
     die "apksigner rejected $apk"
   }
-  # Signer lines read "Signer #1 certificate …" or, with a v3.1 block, "Signer (minSdkVersion=…,
-  # maxSdkVersion=…) certificate …"; source-stamp and lineage certificates are not signers.
-  digests="$(sed -nE '/^Source Stamp Signer /d; / in lineage certificate /d;
-    s/^Signer [^:]* certificate SHA-256 digest: *([0-9A-Fa-f]{64})[[:space:]]*$/\1/p' <<<"$certs" |
+  # Signer lines read "Signer #1 certificate …", with a v3.1 block "Signer (minSdkVersion=…,
+  # maxSdkVersion=…) certificate …", and in recent build-tools per scheme "V2 Signer: certificate …"
+  # (release run 36200054929); source-stamp and lineage certificates are not signers.
+  digests="$(sed -nE '/^Source Stamp Signer/d; / in lineage certificate /d;
+    s/^(V[0-9.]+ )?Signer[^:]*:? certificate SHA-256 digest: *([0-9A-Fa-f]{64})[[:space:]]*$/\2/p' <<<"$certs" |
     tr 'A-F' 'a-f' | sort -u)"
   if [ -z "$digests" ]; then
     printf 'apksigner --print-certs output:\n%s\n' "$certs" >&2
