@@ -22,6 +22,7 @@ pub(crate) fn remove_file_like(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::remove_file(path)
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn rename_no_replace(
     source: &std::path::Path,
     destination: &std::path::Path,
@@ -55,4 +56,14 @@ pub(crate) fn rename_no_replace(
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+/// Android storage may lack `RENAME_NOREPLACE` and hard links; the fallback
+/// chain lives in `android_fs`.
+#[cfg(target_os = "android")]
+pub(crate) fn rename_no_replace(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    crate::android_fs::rename_no_replace(source, destination)
 }

@@ -194,7 +194,10 @@ fn run(
     if let Err(error) = crate::vfs::validate_sync_roots(&*src, &src_root, &*dst, &dst_root) {
         record_error(&mut stats, &mut errors, "Sync-Pfade", error.to_string());
         let _ = tx.send(SyncMsg::Done(SyncResult {
-            stats, errors, omissions, elapsed_ms: start.elapsed().as_millis() as u64,
+            stats,
+            errors,
+            omissions,
+            elapsed_ms: start.elapsed().as_millis() as u64,
         }));
         return;
     }
@@ -286,7 +289,8 @@ fn run(
             }
             let rel = rel_of(&sp, &src_root);
             let dp = join(&dst_root, &rel);
-            if m.is_symlink {
+            // The app trash (Android) is never mirrored: a protected omission.
+            if m.is_symlink || crate::apptrash::excluded_name(&m.name) {
                 omissions.record(&rel, true);
                 continue;
             }

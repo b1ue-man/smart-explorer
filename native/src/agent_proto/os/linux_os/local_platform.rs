@@ -37,6 +37,7 @@ pub(crate) fn replace_file_atomic(source: &Path, destination: &Path) -> io::Resu
 }
 
 /// Atomically move `source` to a name that must not already exist.
+#[cfg(target_os = "linux")]
 pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     let source = CString::new(source.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
@@ -62,4 +63,12 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Android storage may lack `RENAME_NOREPLACE` and hard links; the fallback
+/// chain lives in `android_fs`. The standalone `se-agent` build never targets
+/// Android, so this arm only builds inside the app crate.
+#[cfg(target_os = "android")]
+pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    crate::android_fs::rename_no_replace(source, destination)
 }

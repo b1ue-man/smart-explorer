@@ -1,9 +1,19 @@
+// Android builds only the core library behind the Kotlin UI (no egui app, no
+// CLI). Helpers that only the desktop GUI/CLI reach are therefore unused there;
+// the desktop builds keep the full dead-code and unused-import lints.
+#![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
+
 pub mod agent;
 pub mod agent_proto;
 pub mod analytics;
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub(crate) mod android_fs;
+#[cfg(not(target_os = "android"))]
 pub mod app;
+pub mod apptrash;
 pub mod autostart;
 pub mod bisync;
+#[cfg(not(target_os = "android"))]
 pub mod cli;
 pub mod cloud;
 pub mod connect;
@@ -16,9 +26,12 @@ pub mod folder_index;
 pub mod format;
 pub mod ftp;
 pub mod gdrive;
+#[cfg(not(target_os = "android"))]
 pub mod icons;
 pub mod linemerge;
 mod local_access;
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub mod mobile;
 pub mod mount;
 pub mod net;
 pub mod quickshare;
@@ -35,6 +48,7 @@ pub mod shell_register;
 pub mod support_dirs;
 pub mod sync;
 pub mod syncjobs;
+pub mod transfer;
 pub mod types;
 pub mod updater;
 pub mod vfs;
@@ -43,6 +57,7 @@ pub mod virtual_clipboard;
 pub mod webdav;
 pub mod zipfs;
 
+#[cfg(not(target_os = "android"))]
 pub fn run_gui() -> eframe::Result<()> {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
     install_panic_logger();
@@ -110,6 +125,7 @@ pub fn run_gui() -> eframe::Result<()> {
     )
 }
 
+#[cfg(not(target_os = "android"))]
 fn window_icon() -> eframe::egui::IconData {
     eframe::egui::IconData {
         rgba: include_bytes!("../assets/smart-explorer-icon-256.rgba").to_vec(),
@@ -118,7 +134,17 @@ fn window_icon() -> eframe::egui::IconData {
     }
 }
 
-fn install_panic_logger() {
+/// Appends every panic (thread name, message, backtrace) to the app data
+/// `crash.log`, then runs the previously installed hook. The desktop GUI installs
+/// it at startup; an embedding host (Android facade) calls it once after its data
+/// directories are known. Repeated calls keep the first installation, so the log
+/// never receives duplicate entries.
+pub fn install_panic_logger() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(install_panic_logger_hook);
+}
+
+fn install_panic_logger_hook() {
     use std::io::Write;
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

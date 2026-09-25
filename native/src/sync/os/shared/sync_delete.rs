@@ -1,5 +1,5 @@
-use crate::vfs::{Backend, VfsMeta};
 use crate::bisync::SyncOmissions;
+use crate::vfs::{Backend, VfsMeta};
 use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -117,7 +117,8 @@ fn collect_candidates(
             let path = join(&directory, &metadata.name);
             budget.record(&path, depth + 1).map_err(io::Error::other)?;
             let rel = rel_of(&path, destination_root);
-            if metadata.is_symlink {
+            // A destination app trash (Android) is never an extra to delete.
+            if metadata.is_symlink || crate::apptrash::excluded_name(&metadata.name) {
                 omissions.record(&rel, true);
                 continue;
             }

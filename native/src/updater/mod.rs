@@ -13,7 +13,7 @@ mod flow;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod os;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os.rs"]
 mod os;
 #[path = "os/shared/staging.rs"]

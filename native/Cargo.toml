@@ -5,9 +5,14 @@ edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
 
+# The Android JNI library shares this crate's Cargo.lock and profiles. The root
+# package stays the default member, so desktop commands run in `native/` are
+# unchanged. `explorer-command` keeps its own lock and release profile.
+[workspace]
+members = ["android-bridge"]
+exclude = ["explorer-command"]
+
 [dependencies]
-eframe = { version = "0.29", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu"] }
-egui_extras = { version = "0.29", features = ["datepicker"] }
 rayon = "1.10"
 crossbeam-channel = "0.5"
 ctrlc = "3.5"
@@ -23,7 +28,6 @@ clap = { version = "4", features = ["derive"] }
 # Dynamic completion lets `se` complete live Share request/grant/peer selectors
 # instead of only static command names. It is pure Rust on every release target.
 clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
-trash = "5"
 # Blocking HTTP client for the git/HTTPS update feed (updater.rs). `tls` pulls
 # rustls backed by **ring** (verified: no aws-lc-sys in the tree) + bundled
 # webpki-roots — so it cross-compiles on windows-gnu without NASM/CMake and
@@ -160,9 +164,22 @@ windows = { version = "0.58", features = [
     "Networking_Connectivity",
 ] }
 
+# Desktop GUI and OS recycle bin. Android builds only the core library behind
+# the Kotlin UI: egui/winit have no place in a Compose app, and `trash` 5 has no
+# Android backend (Android uses the app trash in `apptrash`). Windows and Linux
+# still resolve exactly the same packages as before this split.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { version = "0.29", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu"] }
+egui_extras = { version = "0.29", features = ["datepicker"] }
+trash = "5"
+
 # Host-only (CI / `cargo test`); never part of the Windows build.
 [target.'cfg(not(windows))'.dependencies]
 libc = "0.2" # renameat2(RENAME_NOREPLACE) for race-free local move quarantine
+
+# rfd has no Android backend (and no D-Bus/Wayland there); Android picks files
+# through the Storage Access Framework in Kotlin instead.
+[target.'cfg(all(not(windows), not(target_os = "android")))'.dependencies]
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

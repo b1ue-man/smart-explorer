@@ -10,13 +10,15 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
+#[path = "os/shared/editor.rs"]
+pub mod editor;
 #[path = "os/shared/migration.rs"]
 mod migration;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
 #[path = "os/shared/persistence_codec.rs"]
 mod persistence_codec;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os.rs"]
 mod platform;
 #[cfg(windows)]

@@ -5,6 +5,7 @@ pub(super) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()
     std::fs::rename(source, destination)
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
@@ -32,6 +33,13 @@ pub(super) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Android storage may lack `RENAME_NOREPLACE` and hard links; the fallback
+/// chain lives in `android_fs`.
+#[cfg(target_os = "android")]
+pub(super) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    crate::android_fs::rename_no_replace(source, destination)
 }
 
 pub(super) fn sync_parent(directory: &Path) -> io::Result<()> {

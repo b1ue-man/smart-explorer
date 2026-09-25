@@ -65,6 +65,8 @@ mod direct_transcript;
 mod discovery_bundle;
 #[path = "core/discovery_domain.rs"]
 mod discovery_domain;
+#[path = "os/shared/discovery_events.rs"]
+pub(crate) mod discovery_events;
 #[path = "core/discovery_exchange.rs"]
 mod discovery_exchange;
 #[path = "core/discovery_exchange_port_impl.rs"]
@@ -75,6 +77,8 @@ mod discovery_pake;
 mod discovery_relation_store;
 #[path = "os/shared/discovery_relation_store_adapter.rs"]
 mod discovery_relation_store_adapter;
+#[path = "os/shared/discovery_retention.rs"]
+pub(crate) mod discovery_retention;
 #[path = "core/discovery_signal_cancellation.rs"]
 mod discovery_signal_cancellation;
 #[path = "core/discovery_signal_commands.rs"]
@@ -101,6 +105,8 @@ mod discovery_signal_types;
 mod discovery_signal_validation;
 #[path = "core/discovery_signal_wire.rs"]
 mod discovery_signal_wire;
+#[path = "os/shared/discovery_state.rs"]
+pub(crate) mod discovery_state;
 #[path = "core/discovery_wire.rs"]
 mod discovery_wire;
 #[path = "core/endpoint_routes.rs"]
@@ -195,6 +201,8 @@ mod legacy_direct_request_reconciliation;
 mod legacy_direct_request_tests;
 #[path = "core/legacy_direct_request_validation.rs"]
 mod legacy_direct_request_validation;
+#[path = "os/shared/lifecycle_view.rs"]
+pub(crate) mod lifecycle_view;
 #[path = "core/line.rs"]
 mod line;
 #[path = "core/mount_lease.rs"]
@@ -227,12 +235,19 @@ mod peer_telemetry;
 mod peer_walk;
 #[path = "core/peer_writer.rs"]
 mod peer_writer;
+#[cfg(target_os = "android")]
+#[path = "os/android/exec.rs"]
+mod platform_exec;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/exec.rs"]
 mod platform_exec;
 #[cfg(windows)]
 #[path = "os/windows/exec.rs"]
 mod platform_exec;
+#[path = "os/shared/poll_status.rs"]
+pub(crate) mod poll_status;
+#[path = "os/shared/profile_edits.rs"]
+pub(crate) mod profile_edits;
 #[path = "os/shared/profile_operations.rs"]
 mod profile_operations;
 #[path = "core/profile_persistence.rs"]
@@ -244,6 +259,8 @@ mod profiles;
 #[cfg(test)]
 #[path = "core/remote_drive_task_mount_lease_tests.rs"]
 mod remote_drive_task_mount_lease_tests;
+#[path = "os/shared/removal.rs"]
+pub(crate) mod removal;
 #[path = "core/removed_direct_peers.rs"]
 mod removed_direct_peers;
 #[path = "core/room_relation.rs"]

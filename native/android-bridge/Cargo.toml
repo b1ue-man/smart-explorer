@@ -1,0 +1,11 @@
+[package]
+name = "smart_explorer_android"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+smart_explorer = { path = ".." }

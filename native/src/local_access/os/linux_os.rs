@@ -55,8 +55,13 @@ pub(crate) fn display_path(path: &Path) -> String {
 pub(crate) fn can_request_access(_root: &str) -> bool {
     false
 }
+#[cfg(not(target_os = "android"))]
 pub(crate) fn request_access(_root: &str) -> Result<bool, String> {
     Err("Zusätzliche Leserechte müssen unter Linux am Dateisystem gewährt werden".into())
+}
+#[cfg(target_os = "android")]
+pub(crate) fn request_access(_root: &str) -> Result<bool, String> {
+    Err("Zusätzliche Leserechte müssen unter Android in den Einstellungen als „Zugriff auf alle Dateien“ gewährt werden".into())
 }
 pub(crate) fn run_helper_if_requested(args: &[std::ffi::OsString]) -> Option<Result<(), String>> {
     super::protocol::parse(args)
