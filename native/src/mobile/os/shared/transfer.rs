@@ -94,7 +94,8 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
     {
         return Err(ApiError::invalid("Das Ziel liegt in einer der Quellen"));
     }
-    let filter = match (filter_arg(args, "filter", true)?, opt_str(args, "baseDir")) {
+    // `Filter.hidden` decides (Kotlin sets it when the scan view showed hidden entries).
+    let filter = match (filter_arg(args, "filter", false)?, opt_str(args, "baseDir")) {
         (Some(filter), Some(base)) => {
             let base = Loc::parse(base)?;
             if base.kind != first.kind || base.prefix != first.prefix {

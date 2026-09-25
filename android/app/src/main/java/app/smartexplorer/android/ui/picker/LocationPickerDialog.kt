@@ -244,7 +244,8 @@ private fun PlacesList(roots: Roots?, error: String?, allowAppInternal: Boolean,
                     modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
                 )
             }
-            items(list, key = { "$header:${it.id}" }) { root -> PlaceRow(root, onOpen) }
+            // Like the sidebar: favorites.txt is not deduplicated, equal ids would crash the lazy keys.
+            items(list.distinctBy { it.id }, key = { "$header:${it.id}" }) { root -> PlaceRow(root, onOpen) }
         }
     }
 }
@@ -270,7 +271,8 @@ private fun FolderList(folders: List<Entry>, onOpen: (Entry) -> Unit) {
         return
     }
     LazyColumn(Modifier.fillMaxSize()) {
-        items(folders, key = { it.location }) { folder ->
+        // Equal Google Drive names share one location (B2); duplicate lazy keys would crash.
+        items(folders.distinctBy { it.location }, key = { it.location }) { folder ->
             ListItem(
                 headlineContent = { Text(folder.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingContent = { SeIcon(R.drawable.ic_folder, contentDescription = null) },

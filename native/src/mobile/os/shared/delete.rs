@@ -189,6 +189,8 @@ fn run_properties(rt: &Runtime, ctx: &TaskCtx, locations: Vec<Loc>) -> Result<Va
         }
         if meta.is_dir && !meta.is_symlink {
             let (backend, path) = rt.resolve_loc(loc)?;
+            // Walk uncached so a large tree does not fill the browsing cache.
+            let backend = crate::vfs::sync_backend(backend);
             walk(ctx, &*backend, &path, &mut totals)?;
         } else {
             totals.files += 1;

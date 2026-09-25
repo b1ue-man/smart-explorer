@@ -69,7 +69,7 @@ fn volumes(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 
 fn crash_log(rt: &Runtime) -> Result<Value, ApiError> {
     let path = rt.config().data_dir().join("crash.log");
-    let mut file = match std::fs::File::open(&path) {
+    let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(json!({ "text": "" }))

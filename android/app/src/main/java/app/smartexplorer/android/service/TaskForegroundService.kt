@@ -17,7 +17,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 /**
@@ -41,7 +40,8 @@ class TaskForegroundService : Service() {
         super.onCreate()
         scope.launch {
             // Task events arrive up to 4/s per task; the notification follows at most once a second.
-            Core.tasks.conflate().collect { tasks ->
+            // StateFlow collection is conflated by itself (`StateFlow.conflate()` is a deprecation error).
+            Core.tasks.collect { tasks ->
                 if (foreground) render(tasks)
                 delay(RENDER_INTERVAL_MS)
             }

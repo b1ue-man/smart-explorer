@@ -155,7 +155,8 @@ private fun GroupList(vm: DuplicatesViewModel, groups: List<DuplicateGroup>, mod
                 }
             }
         }
-        items(groups, key = { group -> group.items.first().location }) { group ->
+        // Positional keys: equal Google Drive names share one location (B2), so locations may repeat.
+        items(groups) { group ->
             GroupCard(group, vm.selected, enabled = !vm.trashUnsupported, onToggle = { vm.toggle(group, it) })
         }
     }

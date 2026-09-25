@@ -38,7 +38,7 @@ internal data class ConnectionDraft(
     fun errors(): Map<ConnField, String> = buildMap {
         if (host.isBlank()) put(ConnField.Host, "Host fehlt")
         if (portNumber() == null) put(ConnField.Port, "Port zwischen 1 und 65535")
-        if (usesKey && keyPath.isBlank() && !useAgent) put(ConnField.KeyPath, "Schlüsseldatei wählen oder SSH-Agent verwenden")
+        if (usesKey && keyPath.isBlank()) put(ConnField.KeyPath, "Schlüsseldatei wählen")
     }
 
     /**

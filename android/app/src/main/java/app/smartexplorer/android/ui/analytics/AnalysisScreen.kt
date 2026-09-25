@@ -146,7 +146,8 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: () -> U
                 TreemapBlock(node.children, onOpen = { vm.open(it) })
             }
         }
-        items(node.children, key = { it.name }) { child -> ChildRow(child, node.size, onOpen = { vm.open(child) }) }
+        // Positional keys: a child named "header" or equal names (Google Drive) must not collide.
+        items(node.children) { child -> ChildRow(child, node.size, onOpen = { vm.open(child) }) }
     }
 }
 

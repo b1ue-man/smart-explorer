@@ -123,7 +123,7 @@ internal fun FilesViewModel.copyToClip(tab: BrowserTab, entries: List<Entry>, mo
         sources = entries.map { it.location },
         move = move,
         local = window?.local ?: (tab.listing?.isLocal == true),
-        filter = window?.filter,
+        filter = window?.transferFilter,
         baseDir = if (window != null && window.filter != null) window.root else null,
     )
     tab.selection.clear()
@@ -154,7 +154,7 @@ internal fun FilesViewModel.requestTransferTo(tab: BrowserTab, entries: List<Ent
         action = PickerAction.Transfer(
             sources = entries.map { it.location },
             move = move,
-            filter = window?.filter,
+            filter = window?.transferFilter,
             baseDir = if (window != null && window.filter != null) window.root else null,
         ),
     )

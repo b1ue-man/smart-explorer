@@ -1,16 +1,13 @@
 // Quick perf bench using the same scanner module as the GUI.
 // Usage: cargo run --release --bin bench -- <path>
+//
+// The scanner reaches crate-level modules (`local_access`, `apptrash`), so the
+// bench links the library instead of compiling private copies of its modules.
 use crossbeam_channel::unbounded;
+use smart_explorer::scanner;
 use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
-
-#[path = "../scanner/mod.rs"]
-#[allow(dead_code)]
-mod scanner;
-#[path = "../types/mod.rs"]
-#[allow(dead_code)]
-mod types;
 
 use scanner::ScanMessage;
 

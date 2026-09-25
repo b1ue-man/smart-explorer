@@ -39,6 +39,10 @@ internal class ScanWindow(
 ) {
     private enum class Wake { Missing, Force }
 
+    /** Filter for copying from this view: hidden entries count only when the view showed them. */
+    val transferFilter: FilterSpec?
+        get() = filter?.let { if (showHidden && !it.hidden) it.copy(hidden = true) else it }
+
     var taskId by mutableStateOf<String?>(null)
         private set
 

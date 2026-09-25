@@ -274,7 +274,8 @@ fn run_overwrite(
     force: bool,
 ) -> Result<Value, ApiError> {
     let (backend, path) = rt.resolve_loc(loc)?;
-    let current = backend.stat(&path)?;
+    // Fresh metadata: the pooled backend may answer stat from a cached listing.
+    let current = crate::vfs::sync_backend(backend.clone()).stat(&path)?;
     if !force && record.remote_mtime_ms != 0 && current.mtime_ms > record.remote_mtime_ms {
         ctx.set_failure_result(json!({ "conflict": true }));
         return Err(ApiError::new(
