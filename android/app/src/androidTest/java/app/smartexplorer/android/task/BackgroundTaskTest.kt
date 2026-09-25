@@ -152,6 +152,8 @@ class BackgroundTaskTest {
         driver.setPeriodDelayMet(info.id)
         awaitRuns(1)
         awaitEnqueued()
+        // The TestScheduler starts each period with fresh state: constraints unmet again.
+        driver.setAllConstraintsMet(info.id)
         driver.setPeriodDelayMet(info.id)
         awaitRuns(2)
         val after = workManager.getWorkInfoById(info.id).get(30, TimeUnit.SECONDS)

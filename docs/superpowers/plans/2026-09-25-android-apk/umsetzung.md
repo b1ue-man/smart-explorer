@@ -538,3 +538,11 @@ Ausnahmen im Testbericht.
 - FTP: Container-Startskript merkt sich per `pgrep | tail -n 1` die PID der Banner-Probe → Probe erst nach der PID-Datei.
 - Boot: ein Shell-Broadcast hat keine Vordergrund-Ausnahme → echter Neustart.
 - Testfehler: Scan-Test ohne Ordnerzeilen (`dirs:false`), Worker-Test ohne Warten auf die Neu-Einplanung, Seitenleiste ohne Scrollen, G2 ohne Opt-in-Variablen der verschobenen GUI-Tests.
+
+### Fix-Schleife Läufe 2 und 3 (36188883151, 36190177575)
+- Lauf 2: clippy (Host) `derivable_impls` in der verschobenen `share/os/shared/discovery_state.rs` → `#[derive(Default)]`; FTP-Container endet nach der ersten Sitzung (vsftpd + pidproxy des Images) → vsftpd im Vordergrund unter tini, Optionen nach der Konfigurationsdatei.
+- Lauf 3 (Host, Build, Desktop-Bins grün; Share mit Desktop, echter Neustart, Remote-Agent-Bearbeitung, Seitenleiste grün):
+  - „Beide behalten“/„Zusammenführen“ schrieben Text aus `str::lines`-Zeilen zurück und verloren CRLF und den abschließenden Zeilenumbruch → „Beide behalten“ schreibt die gelesenen Texte unverändert, „Zusammenführen“ stellt die Zeilenenden über `linemerge::TextShape` wieder her. Der Desktop hat denselben Fehler (offen, `docs/TODO.md`).
+  - Share-Status verdeckte bis 10 s Änderungen, die ohne `committed` auf die Platte kamen (Anfragen) → ein abgeschlossenes Worker-Neuladen beendet den Schutz, vor ihm geleerte Snapshots zählen nicht.
+  - SD-Wurzel: MediaProvider sperrt jeden Eintrag direkt in `Android/data|obb` (Muster `Android/(data|media|obb)/<Paket>`, `media` ausgenommen), auch Dateien wie `.nomedia` → alle Einträge dort sind geschützte Auslassungen; ein Fehler verhinderte sonst die erste Sync-Basis.
+  - Tests: FTP-Wurzel ist das Home `/ftp/seftp`; `unchanged` gilt für dasselbe Fenster; TestScheduler braucht je Periode erneut erfüllte Bedingungen; Spiegeln und SD-Wurzel-Job prüfen jetzt 0 Fehler und protokollieren sie.

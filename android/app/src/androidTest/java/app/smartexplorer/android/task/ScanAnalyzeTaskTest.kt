@@ -63,7 +63,8 @@ class ScanAnalyzeTaskTest {
         val folded = view(scan.id, 0, 500, collapsed = listOf(sub1.location))
         assertEquals(full.visibleTotal - 2, folded.visibleTotal)
         assertFalse(folded.entries.first { it.name == "sub1" }.expanded)
-        val unchanged = view(scan.id, 0, 500, since = full.revision)
+        // "unchanged" answers a repeated request for the same window (sort, offset, limit, folds).
+        val unchanged = view(scan.id, 0, 500, collapsed = listOf(sub1.location), since = folded.revision)
         assertTrue(unchanged.unchanged)
         assertTrue(unchanged.entries.isEmpty())
         Api.obj("scan.issues", args("taskId" to scan.id)).text("text")
