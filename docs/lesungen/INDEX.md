@@ -10,3 +10,6 @@ Befunde delegierter Codelesungen (Stand je Datei im Kopf). Vor neuen Leseaufträ
 | [2026-09-25-android-app-feature-map.md](2026-09-25-android-app-feature-map.md) | app/ (Desktop-GUI) | Funktion → Kern-API, Logik in app/ |
 | [2026-09-25-android-background-daemon-model.md](2026-09-25-android-background-daemon-model.md) | daemon/, syncjobs/, autostart/ | Daemon-Modell, Einbettung in einen App-Prozess |
 | [2026-09-25-android-ci-release-integration.md](2026-09-25-android-ci-release-integration.md) | .github/workflows, Release-Skripte, RELEASING.md | Task-Suite-Muster, Release-Einbindung der APK |
+| [2026-09-25-android-share-facade-map.md](2026-09-25-android-share-facade-map.md) | app/core/share*.rs, share/, daemon IPC-Client, cli/share | Share-Aktionen → Kernaufrufe für die Fassade |
+| [2026-09-25-android-sync-facade-map.md](2026-09-25-android-sync-facade-map.md) | Sync-Jobs, bisync, linemerge, Daemon-Steuerung | Sync-/Konflikt-/Hintergrund-Rezepte für die Fassade |
+| [2026-09-25-android-files-facade-map.md](2026-09-25-android-files-facade-map.md) | Browsing, Filter, Transfer-Lane, Löschen, Öffnen, ZIP, Index, Cleanup | Datei-Rezepte für die Fassade |

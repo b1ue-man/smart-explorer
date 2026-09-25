@@ -518,11 +518,11 @@ Ausnahmen im Testbericht.
 ## Status
 | Block | Agent | Status | Notiz |
 |---|---|---|---|
-| B1a | A | offen | |
-| B1b | B | offen | |
-| B4 | C | offen | |
-| K0 | D | offen | |
-| REL | E | offen | |
+| B1a | A | in Arbeit (Welle 1) | |
+| B1b | B | in Arbeit (Welle 1) | |
+| B4 | C | in Arbeit (Welle 1) | |
+| K0 | D | in Arbeit (Welle 1) | |
+| REL | E | in Arbeit (Welle 1) | |
 | B2 | F | offen | |
 | B3 | G | offen | |
 | K1 | H | offen | |
