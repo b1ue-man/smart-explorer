@@ -301,10 +301,19 @@ verify_apk() {
   apk_version="${BASH_REMATCH[1]}"
   [ "$apk_version" = "$version" ] || die "APK versionName '$apk_version' is not '$version'"
   [ "$apk_code" = "$code" ] || die "APK versionCode '$apk_code' is not '$code'"
-  certs="$("$apksigner" verify --print-certs "$apk")" || die "apksigner rejected $apk"
-  digests="$(sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f]{64})$/\1/p' <<<"$certs" |
+  certs="$("$apksigner" verify --print-certs "$apk" 2>&1)" || {
+    printf '%s\n' "$certs" >&2
+    die "apksigner rejected $apk"
+  }
+  # Signer lines read "Signer #1 certificate …" or, with a v3.1 block, "Signer (minSdkVersion=…,
+  # maxSdkVersion=…) certificate …"; source-stamp and lineage certificates are not signers.
+  digests="$(sed -nE '/^Source Stamp Signer /d; / in lineage certificate /d;
+    s/^Signer [^:]* certificate SHA-256 digest: *([0-9A-Fa-f]{64})[[:space:]]*$/\1/p' <<<"$certs" |
     tr 'A-F' 'a-f' | sort -u)"
-  [ -n "$digests" ] || die "apksigner reported no signer certificate for $apk"
+  if [ -z "$digests" ]; then
+    printf 'apksigner --print-certs output:\n%s\n' "$certs" >&2
+    die "apksigner reported no signer certificate for $apk"
+  fi
   [ "$(wc -l <<<"$digests")" -eq 1 ] || die "APK is signed by more than one certificate"
   [ "$digests" = "$cert" ] ||
     die "APK signer $digests does not match android/release-cert.sha256 ($cert)"
