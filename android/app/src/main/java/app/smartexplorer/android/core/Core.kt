@@ -81,7 +81,7 @@ object Core {
         awaitReady()
         val raw = withContext(Dispatchers.IO) {
             try {
-                NativeBridge.call(method, args.toString())
+                NativeBridge.orError(NativeBridge.call(method, args.toString()))
             } catch (e: LinkageError) {
                 throw CoreException("internal", "Kernfunktion nicht verfügbar: ${e.message}")
             }
@@ -137,7 +137,7 @@ object Core {
     private fun initialize(app: Application) {
         val failure = try {
             System.loadLibrary(LIBRARY)
-            unwrap(NativeBridge.init(app, InitConfig.build(app).toString()))
+            unwrap(NativeBridge.orError(NativeBridge.init(app, InitConfig.build(app).toString())))
             null
         } catch (e: CoreException) {
             e.message ?: e.kind
@@ -176,7 +176,7 @@ object Core {
         while (true) {
             val started = SystemClock.elapsedRealtime()
             val raw = try {
-                NativeBridge.pollEvents(POLL_TIMEOUT_MS)
+                NativeBridge.orError(NativeBridge.pollEvents(POLL_TIMEOUT_MS))
             } catch (e: LinkageError) {
                 Log.e(TAG, "event pump stopped: native pollEvents missing", e)
                 return

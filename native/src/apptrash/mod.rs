@@ -14,7 +14,9 @@ use std::sync::RwLock;
 mod record;
 #[path = "os/shared/store.rs"]
 mod store;
-#[cfg(test)]
+// The app trash only runs on Android; its filesystem tests use POSIX paths
+// (a Windows canonical `\\?\` prefix is never a trusted record origin).
+#[cfg(all(test, unix))]
 #[path = "os/shared/store_tests.rs"]
 mod store_tests;
 

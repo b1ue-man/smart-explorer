@@ -71,9 +71,15 @@ val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").o
 val hasReleaseSigning = listOf(keystoreFile, keystorePassword, releaseKeyAlias, releaseKeyPassword)
     .all { !it.isNullOrBlank() }
 
+// NDK pinned for the whole batch (android/ndk-version): AGP uses it for stripping debug symbols.
+val pinnedNdkVersion = providers.fileContents(rootProject.layout.projectDirectory.file("ndk-version"))
+    .asText.orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("android/ndk-version not found or empty")
+
 android {
     namespace = "app.smartexplorer.android"
     compileSdk = 36
+    ndkVersion = pinnedNdkVersion
 
     defaultConfig {
         applicationId = "app.smartexplorer.android"

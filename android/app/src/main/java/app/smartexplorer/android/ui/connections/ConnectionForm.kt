@@ -44,7 +44,7 @@ import app.smartexplorer.android.ui.more.ToggleSetting
 
 /**
  * Connection form (spec F12): Typ · Name · Host · Port · Benutzer · Passwort or Schlüsseldatei +
- * Passphrase (SFTP) · Startordner · SSH-Agent (SFTP) · [Testen] [Speichern]; WebDAV immer über HTTPS.
+ * Passphrase (SFTP) · Startordner · Remote-Agent (SFTP) · [Testen] [Speichern]; WebDAV immer über HTTPS.
  */
 @Composable
 internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, onSave: () -> Unit, onClose: () -> Unit) {
@@ -106,7 +106,9 @@ internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, 
                 }
             }
             if (draft.isSftp) {
-                ToggleSetting("SSH-Agent verwenden", draft.useAgent, { update(draft.copy(useAgent = it)) })
+                // Desktop "Remote-Agent verwenden": deploys Smart Explorer's own agent over SFTP for fast
+                // server-side operations; it is not an ssh-agent login.
+                ToggleSetting("Remote-Agent verwenden", draft.useAgent, { update(draft.copy(useAgent = it)) })
                 HintLine("Den ersten Hostschlüssel speichert die App (wie am Desktop); ein geänderter Schlüssel lässt die Verbindung scheitern.")
             }
             // WebDAV always uses HTTPS (draft default and saved connections), like the desktop format.
