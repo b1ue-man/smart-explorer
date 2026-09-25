@@ -330,6 +330,20 @@ object Servers {
         "password" to password,
     )
 
+    /** The full SSH server with the Remote-Agent (deployed over SFTP plus exec channels). */
+    fun agentSftpInput(): JsonObject = args(
+        "label" to "Task SSH mit Agent",
+        "protocol" to "sftp",
+        "host" to host,
+        "port" to TaskArgs.int("seSshPort"),
+        "user" to TaskArgs.get("seSshUser"),
+        "root" to TaskArgs.get("seSshRoot"),
+        "auth" to "password",
+        "useAgent" to true,
+        "https" to false,
+        "password" to TaskArgs.get("seSshPass"),
+    )
+
     fun ftpInput(): JsonObject = args(
         "label" to "Task FTP",
         "protocol" to "ftp",
@@ -347,6 +361,8 @@ object Servers {
     suspend fun sftp(): JsonObject = ensure(sftpInput())
 
     suspend fun ftp(): JsonObject = ensure(ftpInput())
+
+    suspend fun agentSftp(): JsonObject = ensure(agentSftpInput())
 
     private suspend fun ensure(input: JsonObject): JsonObject {
         val existing = Api.objects("conn.list").firstOrNull { connection ->

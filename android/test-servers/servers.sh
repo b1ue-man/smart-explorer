@@ -16,6 +16,15 @@ SE_SFTP_USER=setester
 SE_SFTP_PASS=se-task-sftp-pass
 SE_SFTP_ROOT=/upload
 
+# A full SSH server (exec allowed) for connections with the Remote-Agent, which deploys itself over
+# SFTP plus exec channels; the user's home /config is writable.
+SE_SSH_IMAGE=lscr.io/linuxserver/openssh-server:latest
+SE_SSH_CONTAINER=se-task-ssh
+SE_SSH_PORT=2223
+SE_SSH_USER=seagent
+SE_SSH_PASS=se-task-ssh-pass
+SE_SSH_ROOT=/config
+
 SE_FTP_IMAGE=delfer/alpine-ftp-server:latest
 SE_FTP_CONTAINER=se-task-ftp
 SE_FTP_PORT=21
@@ -53,10 +62,14 @@ servers_up() {
     echo "docker is required for the SFTP/FTP test servers" >&2
     return 1
   }
-  docker rm -f "$SE_SFTP_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
   # atmoz/sftp: user:password:uid:gid:dir – the user is chrooted to its home, <dir> is writable.
   docker run -d --name "$SE_SFTP_CONTAINER" -p "$SE_SFTP_PORT:22" "$SE_SFTP_IMAGE" \
     "$SE_SFTP_USER:$SE_SFTP_PASS:::${SE_SFTP_ROOT#/}" >/dev/null
+  docker run -d --name "$SE_SSH_CONTAINER" -p "$SE_SSH_PORT:2222" \
+    -e PUID=1000 -e PGID=1000 -e TZ=Etc/UTC -e PASSWORD_ACCESS=true \
+    -e USER_NAME="$SE_SSH_USER" -e USER_PASSWORD="$SE_SSH_PASS" \
+    "$SE_SSH_IMAGE" >/dev/null
   # delfer/alpine-ftp-server: passive ports published 1:1 and advertised as the emulator's
   # address of the runner.
   docker run -d --name "$SE_FTP_CONTAINER" \
@@ -66,7 +79,30 @@ servers_up() {
     -e MIN_PORT="$SE_FTP_PASV_MIN" -e MAX_PORT="$SE_FTP_PASV_MAX" \
     "$SE_FTP_IMAGE" >/dev/null
   servers_wait_banner SFTP "$SE_SFTP_PORT" "SSH-"
+  servers_wait_banner SSH "$SE_SSH_PORT" "SSH-"
+  # The image records the listener PID with `pgrep vsftpd | tail -n 1` right after start; a
+  # probe connection before that makes it record the short-lived session child, and the
+  # container exits when that session ends. So probe only once the PID file exists.
+  servers_wait_ftp_pidfile
   servers_wait_banner FTP "$SE_FTP_PORT" "220"
+  sleep 2
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$SE_FTP_CONTAINER" 2>/dev/null)" != "true" ]]; then
+    echo "test server FTP container stopped after the banner check" >&2
+    docker logs "$SE_FTP_CONTAINER" >&2 || true
+    return 1
+  fi
+}
+
+servers_wait_ftp_pidfile() {
+  local deadline=$((SECONDS + 180))
+  while ((SECONDS < deadline)); do
+    if docker exec "$SE_FTP_CONTAINER" test -s /var/run/vsftpd/vsftpd.pid 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "test server FTP did not write its PID file" >&2
+  return 1
 }
 
 # Instrumentation arguments (-e name value) that tell the tests where the servers are.
@@ -74,6 +110,7 @@ servers_instrumentation_args() {
   printf '%s\n' \
     -e seServerHost "$SE_TASK_EMULATOR_HOST" \
     -e seSftpPort "$SE_SFTP_PORT" -e seSftpUser "$SE_SFTP_USER" -e seSftpPass "$SE_SFTP_PASS" -e seSftpRoot "$SE_SFTP_ROOT" \
+    -e seSshPort "$SE_SSH_PORT" -e seSshUser "$SE_SSH_USER" -e seSshPass "$SE_SSH_PASS" -e seSshRoot "$SE_SSH_ROOT" \
     -e seFtpPort "$SE_FTP_PORT" -e seFtpUser "$SE_FTP_USER" -e seFtpPass "$SE_FTP_PASS" -e seFtpRoot "$SE_FTP_ROOT"
 }
 
@@ -110,12 +147,13 @@ servers_down() {
   local logs=$1
   mkdir -p "$logs"
   local container
-  for container in "$SE_SFTP_CONTAINER" "$SE_FTP_CONTAINER"; do
+  for container in "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER"; do
     docker logs "$container" >"$logs/$container.log" 2>&1 || true
   done
   docker exec "$SE_SFTP_CONTAINER" find /home >"$logs/sftp-tree.txt" 2>&1 || true
   docker exec "$SE_FTP_CONTAINER" find /ftp >"$logs/ftp-tree.txt" 2>&1 || true
-  docker rm -f "$SE_SFTP_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
+  docker exec "$SE_SSH_CONTAINER" find /config -path /config/.cache -prune -o -print >"$logs/ssh-tree.txt" 2>&1 || true
+  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
   if [[ -n "$SE_FEED_PID" ]]; then
     kill "$SE_FEED_PID" 2>/dev/null || true
     wait "$SE_FEED_PID" 2>/dev/null || true

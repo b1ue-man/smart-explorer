@@ -6,11 +6,13 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.MainActivity
 import app.smartexplorer.android.core.Core
@@ -24,8 +26,9 @@ import org.junit.runner.RunWith
 /**
  * G6 layout check of the real MainActivity: the four tabs, the places side panel, the filter row
  * and the Sync, Share and More pages, found by their German labels and content descriptions
- * (the app has no test tags). Screenshots go to `<filesDir>/task-report/screens/` for the
- * artifact; they are a layout record, not a pixel comparison.
+ * (the only test tag is the places list, to scroll it). Screenshots go to
+ * `<filesDir>/task-report/screens/` for the artifact; they are a layout record, not a pixel
+ * comparison.
  */
 @RunWith(AndroidJUnit4::class)
 class UiTaskTest {
@@ -94,8 +97,13 @@ class UiTaskTest {
         waitForNode(hasContentDescription("Orte"), "Dateien nach Tabwechsel")
         compose.onNode(hasContentDescription("Orte") and hasClickAction()).performClick()
         waitForNode(hasText("Ordner suchen"), "Seitenleiste: Ordner suchen")
-        waitForNode(hasText("Verbindungen"), "Seitenleiste: Verbindungen")
-        waitForNode(hasText("Google Drive"), "Seitenleiste: Google Drive")
         screenshot("06-seitenleiste")
+        // Up to ten recent places push the lower sections below the screen: scroll the list.
+        val places = compose.onNode(hasTestTag("places-list"))
+        places.performScrollToNode(hasText("Verbindung hinzufügen"))
+        waitForNode(hasText("Verbindungen"), "Seitenleiste: Verbindungen")
+        places.performScrollToNode(hasText("Google Drive"))
+        waitForNode(hasText("Google Drive"), "Seitenleiste: Google Drive")
+        screenshot("07-seitenleiste-unten")
     }
 }

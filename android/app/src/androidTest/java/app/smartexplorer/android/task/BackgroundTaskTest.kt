@@ -139,9 +139,19 @@ class BackgroundTaskTest {
                 delay(500)
             }
         }
+        // The worker returns only after its catch-up task ended; a period signal while it still
+        // runs is ignored, so the next one waits until the work is enqueued again.
+        suspend fun awaitEnqueued() {
+            val deadline = System.currentTimeMillis() + 60_000
+            while (workManager.getWorkInfoById(info.id).get(30, TimeUnit.SECONDS)?.state != WorkInfo.State.ENQUEUED) {
+                if (System.currentTimeMillis() > deadline) throw AssertionError("Periodische Arbeit nicht wieder eingeplant")
+                delay(200)
+            }
+        }
         driver.setAllConstraintsMet(info.id)
         driver.setPeriodDelayMet(info.id)
         awaitRuns(1)
+        awaitEnqueued()
         driver.setPeriodDelayMet(info.id)
         awaitRuns(2)
         val after = workManager.getWorkInfoById(info.id).get(30, TimeUnit.SECONDS)

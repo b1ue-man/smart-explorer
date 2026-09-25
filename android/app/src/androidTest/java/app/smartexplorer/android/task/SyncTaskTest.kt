@@ -12,28 +12,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * G4 sync: local ↔ SFTP job with validation, run, conflicts (check, resolve, merge, keep both,
- * skip, finish), a job on the SD-card root with deletions in both directions (app trash, the
- * trash folder never uploaded) and mirroring the SD-card root (trash folder omitted).
+ * G4 sync: internal storage ↔ SD-card job with validation, run, conflicts (check, resolve, merge,
+ * keep both, skip, finish; plain SFTP cannot replace files, so conflicts run between two local
+ * volumes), a job from the SD-card root to SFTP with deletions in both directions (app trash, the
+ * trash folder never uploaded, other apps' private folders omitted) and mirroring the SD-card
+ * root (trash folder omitted).
  * Every job-bound call waits for its task: one task per job at a time (busy otherwise).
  */
 @RunWith(AndroidJUnit4::class)
 class SyncTaskTest {
     private val original = "Zeile 1\nZeile 2\nZeile 3\n"
-
-    private suspend fun remoteWrite(location: String, text: String) {
-        val fetched = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        File(fetched.text("localPath")).writeText(text)
-        Api.runTask("fs.uploadEdit", args("editId" to fetched.text("editId"), "mode" to "overwrite", "force" to true))
-        Api.call("fs.discardEdit", args("editId" to fetched.text("editId")))
-    }
-
-    private suspend fun remoteRead(location: String): String {
-        val fetched = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        val text = File(fetched.text("localPath")).readText()
-        Api.call("fs.discardEdit", args("editId" to fetched.text("editId")))
-        return text
-    }
 
     private suspend fun conflicts(jobId: String): List<JsonObject> {
         val answer = Api.obj("sync.conflicts", args("id" to jobId))
@@ -48,9 +36,10 @@ class SyncTaskTest {
     }
 
     @Test
-    fun localToSftpConflictsResolveMergeKeepBothAndSkip() = coreTest(timeoutMs = 25 * 60_000L) {
+    fun localConflictsResolveMergeKeepBothAndSkip() = coreTest(timeoutMs = 25 * 60_000L) {
         val local = Fixture.dir(Volumes.primary(), "sync", "konflikt")
-        val remote = Servers.freshDir(Servers.sftp(), "sync")
+        val other = Fixture.dir(Volumes.sdCard(), "sync", "konflikt-b")
+        val remote = other.absolutePath
         val invalid = Api.obj("sync.validate", args("job" to SyncJobs.job("id" to "", "source" to "", "target" to remote)))
         assertTrue("source-Fehler fehlt: $invalid", "source" in invalid.field("errors").obj())
         val draft = SyncJobs.job(
@@ -83,7 +72,7 @@ class SyncTaskTest {
 
         // The same file changes on both sides → strict conflicts.
         names.forEach { Fixture.write(File(local, it), "Zeile 1\nA\nZeile 3\n") }
-        names.forEach { remoteWrite(Api.child(remote, it).location, "Zeile 1\nB\nZeile 3\n") }
+        names.forEach { Fixture.write(File(other, it), "Zeile 1\nB\nZeile 3\n") }
         val second = Api.runTask("sync.run", args("id" to id)).resultObj()
         assertEquals(4, second.int("conflicts"))
         assertEquals(4, conflicts(id).size)
@@ -93,7 +82,7 @@ class SyncTaskTest {
 
         val resolved = Api.runTask("sync.resolve", args("id" to id, "cid" to cidOf(items, "k1.txt"), "choice" to "a")).resultObj()
         assertEquals(3, resolved.int("remaining"))
-        assertEquals("Zeile 1\nA\nZeile 3\n", remoteRead(Api.child(remote, "k1.txt").location))
+        assertEquals("Zeile 1\nA\nZeile 3\n", File(other, "k1.txt").readText())
 
         items = conflicts(id)
         val k2 = cidOf(items, "k2.txt")
@@ -104,7 +93,7 @@ class SyncTaskTest {
         Api.runTask("sync.mergeApply", args("id" to id, "cid" to k2, "rows" to choices))
         val merged = File(local, "k2.txt").readText()
         assertTrue("Zusammenführung ohne A/B: $merged", "A" in merged && "B" in merged)
-        assertEquals(merged, remoteRead(Api.child(remote, "k2.txt").location))
+        assertEquals(merged, File(other, "k2.txt").readText())
 
         items = conflicts(id)
         Api.runTask("sync.mergeKeepBoth", args("id" to id, "cid" to cidOf(items, "k3.txt")))

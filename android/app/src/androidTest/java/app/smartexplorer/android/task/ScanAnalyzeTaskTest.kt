@@ -37,7 +37,8 @@ class ScanAnalyzeTaskTest {
         val root = Fixture.dir(Volumes.primary(), "scan", "baum")
         listOf("a.txt", "b.log", "sub1/c.txt", "sub1/d.txt", "sub2/e.txt", "sub2/sub3/f.txt", ".versteckt/g.txt")
             .forEach { Fixture.write(File(root, it), it) }
-        val glob = mapOf("text" to "*.txt", "mode" to "glob", "files" to true, "dirs" to false)
+        // With folders shown the result is a tree (desktop result tree); "dirs" false lists only files.
+        val glob = mapOf("text" to "*.txt", "mode" to "glob", "files" to true, "dirs" to true)
         assertNotNull(Api.obj("scan.validate", args("filter" to mapOf("text" to "[", "mode" to "regex"))).textOrNull("error"))
         assertNull(Api.obj("scan.validate", args("filter" to glob)).textOrNull("error"))
 

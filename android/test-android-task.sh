@@ -93,6 +93,7 @@ g1_tests=(
   android_task_apptrash_refuses_outside_volumes_and_the_trash_itself
   android_task_apptrash_ignores_planted_records
   android_task_apptrash_names_ids_and_exclusion_rules
+  android_task_apptrash_hidden_app_folders_only_below_volume_roots
   android_task_rename_fallback_decisions_follow_the_error_numbers
   android_task_rename_no_replace_moves_and_never_replaces
   android_task_hard_link_step_is_create_only_and_drops_the_source
@@ -242,7 +243,10 @@ run_g2_moved_tests() {
   [[ "${#missing[@]}" -eq 0 ]] || die "moved tests not found in the compiled test list: ${missing[*]}"
   local names=()
   for path in "${g2_paths[@]}"; do names+=("${path##*::}"); done
-  (cd "$native_dir" && cargo test --locked --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
+  # The moved app/ GUI-task tests build App through their task constructors, which require the
+  # same opt-in variables as their original suites (test-search-recursive-access-task.py).
+  (cd "$native_dir" && SMART_EXPLORER_ANALYTICS_TASK=1 SMART_EXPLORER_COPY_PASTE_TASK=1 \
+    SMART_EXPLORER_GUI_TASK=1 cargo test --locked --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
   verify_test_log "$log" "${#g2_paths[@]}" "${names[@]}"
 }
 
@@ -570,11 +574,21 @@ run_instrumentation() {
   fi
 }
 
+# A real reboot: only the system's BOOT_COMPLETED carries the exemption that lets a receiver start
+# a foreground service (a shell broadcast has none, so the start is denied).
 boot_check() {
-  step "G4 boot broadcast (root): only the specialUse background service starts"
-  adb_shell am broadcast -a android.intent.action.BOOT_COMPLETED -p "$app_package" --include-stopped-packages |
-    tee "$emulator_out/boot-broadcast.txt"
-  local deadline=$((SECONDS + 120)) services=""
+  step "G4 device reboot: BOOT_COMPLETED starts only the specialUse background service"
+  adb reboot
+  sleep 5
+  wait_boot
+  if [[ -n "$logcat_pid" ]]; then
+    kill "$logcat_pid" 2>/dev/null
+    wait "$logcat_pid" 2>/dev/null
+  fi
+  adb logcat -v threadtime >"$emulator_out/logcat-after-reboot.txt" 2>&1 &
+  logcat_pid=$!
+  adb_shell getprop sys.boot_completed | sed 's/^/sys.boot_completed after reboot: /' | tee "$emulator_out/boot-broadcast.txt"
+  local deadline=$((SECONDS + 180)) services=""
   while ((SECONDS < deadline)); do
     services="$(adb_shell dumpsys activity services "$app_package" || true)"
     if grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services"; then
@@ -585,7 +599,7 @@ boot_check() {
   printf '%s\n' "$services" >"$emulator_out/boot-services.txt"
   adb_shell dumpsys notification --noredact >"$emulator_out/boot-notifications.txt" 2>&1 || true
   if ! { grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services"; }; then
-    fail_stage "BackgroundService did not start in the foreground after BOOT_COMPLETED"
+    fail_stage "BackgroundService did not start in the foreground after the reboot"
     return 1
   fi
   if grep -q 'service.TaskForegroundService' <<<"$services"; then
@@ -593,7 +607,7 @@ boot_check() {
     return 1
   fi
   grep -Eq "pkg=$app_package .*id=1002" "$emulator_out/boot-notifications.txt" ||
-    { fail_stage "no background notification (id 1002) after BOOT_COMPLETED"; return 1; }
+    { fail_stage "no background notification (id 1002) after the reboot"; return 1; }
   echo "boot: BackgroundService in the foreground with its notification; no dataSync service"
 }
 
