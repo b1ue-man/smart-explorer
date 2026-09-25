@@ -385,7 +385,10 @@ Ergänzt 2026-09-25 (Block REL) aus
   the tool prints `Signer #<n> certificate DN: …`, `Signer #<n> certificate SHA-256 digest: <hex>`,
   `… SHA-1 digest: …`, `… MD5 digest: …`; `<hex>` comes from `HexEncoding.encode` with the digit
   table `"0123456789abcdef"` (lowercase, no separators). A failed verification prints
-  `DOES NOT VERIFY` to stderr and exits 1.
+  `DOES NOT VERIFY` to stderr and exits 1. When the APK carries a v3.1 block, the signer name is
+  `Signer (minSdkVersion=<n>, maxSdkVersion=<n>)` instead of `Signer #<n>`; a source stamp
+  prints `Source Stamp Signer …` (checked 2026-09-25 in `ApkSignerTool.java`, apksig main,
+  after the first release run 36197778701 found no `Signer #<n>` digest line).
 - Both tools live in `$ANDROID_HOME/build-tools/<version>/`; `apksigner` needs `java` on `PATH`.
 - 16 KB ELF alignment: `$NDK/toolchains/llvm/prebuilt/<host>/bin/llvm-objdump -p lib.so | grep LOAD`
   must show `align 2**14` or higher on every `LOAD` segment; NDK r28+ aligns to 16 KB by default.
