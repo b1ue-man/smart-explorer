@@ -518,14 +518,14 @@ Ausnahmen im Testbericht.
 ## Status
 | Block | Agent | Status | Notiz |
 |---|---|---|---|
-| B1a | A | in Arbeit (Welle 1) | |
-| B1b | B | in Arbeit (Welle 1) | |
-| B4 | C | in Arbeit (Welle 1) | |
-| K0 | D | in Arbeit (Welle 1) | |
-| REL | E | in Arbeit (Welle 1) | |
-| B2 | F | offen | |
-| B3 | G | offen | |
-| K1 | H | offen | |
-| K2 | I | offen | |
-| K3 | J | offen | |
+| B1a | A | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
+| B1b | B | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
+| B4 | C | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
+| K0 | D | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
+| REL | E | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
+| B2 | F | in Arbeit (Welle 2) | |
+| B3 | G | in Arbeit (Welle 2) | |
+| K1 | H | in Arbeit (Welle 2) | |
+| K2 | I | in Arbeit (Welle 2) | |
+| K3 | J | in Arbeit (Welle 2) | |
 | T | K | offen | |
