@@ -4,3 +4,7 @@ release-native/update-feed/version.txt text eol=lf
 release-native/update-feed/windows-build.manifest text eol=lf
 # Preserve the exact remote-approved dependency bytes, including JSON line endings.
 /native/assets/dokany-private/* -text
+# Android Gradle wrapper: POSIX script must keep LF, Windows script CRLF, the verified jar is binary.
+/android/gradlew text eol=lf
+/android/gradlew.bat text eol=crlf
+*.jar binary
