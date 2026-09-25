@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Smart Explorer</string>
+
+    <!-- Notification channels (ids: transfers, background, updates, share) -->
+    <string name="channel_transfers">Übertragungen</string>
+    <string name="channel_transfers_description">Fortschritt laufender Kopier-, Sync- und Upload-Vorgänge</string>
+    <string name="channel_background">Hintergrund</string>
+    <string name="channel_background_description">Dauerbetrieb und geplante Sync-Läufe</string>
+    <string name="channel_updates">Updates</string>
+    <string name="channel_updates_description">Neue App-Versionen</string>
+    <string name="channel_share">Teilen</string>
+    <string name="channel_share_description">Anfragen anderer Geräte</string>
+</resources>

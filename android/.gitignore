@@ -1,0 +1,24 @@
+# Gradle / Kotlin build state
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE files
+.idea/
+*.iml
+
+# Rust JNI libraries are built by cargo-ndk in CI and copied here before Gradle runs
+app/src/main/jniLibs/
+
+# Signing material never enters the repository
+*.jks
+*.keystore
+*.p12
+
+# The verified wrapper JAR stays tracked even if a parent rule ignores JARs
+!gradle/wrapper/gradle-wrapper.jar

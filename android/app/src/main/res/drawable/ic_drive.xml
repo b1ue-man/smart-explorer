@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Derived from symbol "add_to_drive" (badge removed). Material Symbols (Outlined, 24px), Apache License 2.0,
+     github.com/google/material-design-icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M380-860H580L640-825L900-379L908-344L900-310L800-135L740-100H220L160-135L60-310L52-344L60-379L320-825ZM386-780L132-344L226-180H734L828-344L574-780ZM444-650L261-331L290-280H670L699-331L516-650ZM480-552L590-360H370Z" />
+    </group>
+</vector>
