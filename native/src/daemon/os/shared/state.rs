@@ -99,14 +99,34 @@ pub fn set_autopause_flags(battery: bool, metered: bool) -> io::Result<()> {
     )
 }
 
+/// Why background syncs currently hold off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PauseReason {
+    Manual,
+    BatterySaver,
+    MeteredNetwork,
+}
+
+/// The active pause, if any: a manual pause first, then an enabled
+/// auto-pause condition that currently holds.
+pub(crate) fn pause_reason() -> io::Result<Option<PauseReason>> {
+    if pause_remaining()?.is_some() {
+        return Ok(Some(PauseReason::Manual));
+    }
+    let (battery, metered) = autopause_flags()?;
+    if battery && platform::battery_saver_on() {
+        return Ok(Some(PauseReason::BatterySaver));
+    }
+    if metered && platform::on_metered_network() {
+        return Ok(Some(PauseReason::MeteredNetwork));
+    }
+    Ok(None)
+}
+
 /// Should background syncs hold off right now? (manual pause OR an enabled
 /// auto-pause condition is currently true.)
 pub(crate) fn paused() -> io::Result<bool> {
-    if pause_remaining()?.is_some() {
-        return Ok(true);
-    }
-    let (battery, metered) = autopause_flags()?;
-    Ok((battery && platform::battery_saver_on()) || (metered && platform::on_metered_network()))
+    Ok(pause_reason()?.is_some())
 }
 
 pub(crate) fn write_heartbeat() {

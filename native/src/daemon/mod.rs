@@ -6,6 +6,11 @@
 //! a heartbeat the GUI can read, then sleeps. Because the daemon is the *same
 //! executable*, a self-update swaps it too.
 //!
+//! On Android the same loop runs as one thread of the app process instead
+//! (`ensure_embedded_daemon`): no environment handoff, background sync
+//! enabled by an app-private flag, and host-reported device conditions
+//! (`set_host_state`) for auto-pause.
+//!
 //! Safety mirrors the interactive sync exactly (same `bisync::run`): only files
 //! that actually changed move, both-sides-changed stays a conflict (nothing is
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
@@ -23,12 +28,20 @@ mod backend_transfer;
 mod backend_tree_send;
 #[path = "os/shared/backend_walk.rs"]
 mod backend_walk;
+#[path = "os/shared/boot_marker.rs"]
+mod boot_marker;
+#[path = "os/shared/catch_up.rs"]
+mod catch_up;
+#[path = "os/shared/embedded.rs"]
+mod embedded;
 #[path = "os/shared/exec_ipc.rs"]
 mod exec_ipc;
 #[path = "os/shared/exec_state.rs"]
 mod exec_state;
 #[path = "os/shared/handoff.rs"]
 mod handoff;
+#[path = "os/shared/host_state.rs"]
+mod host_state;
 #[path = "os/shared/ipc.rs"]
 mod ipc;
 #[path = "os/shared/ipc_client.rs"]
@@ -41,7 +54,7 @@ mod ipc_host_events;
 mod ipc_listener;
 #[path = "os/shared/ipc_protocol.rs"]
 mod ipc_protocol;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os/ipc_storage.rs"]
 mod ipc_storage;
 #[cfg(windows)]
@@ -57,6 +70,8 @@ mod lan_runtime;
 mod lan_uplink_runtime;
 #[path = "os/shared/line.rs"]
 mod line;
+#[path = "os/shared/live.rs"]
+mod live;
 #[path = "os/shared/locks.rs"]
 mod locks;
 #[path = "os/shared/mount_client.rs"]
@@ -75,7 +90,7 @@ mod mount_launch;
 mod mount_manager;
 #[path = "os/shared/mount_probe_client.rs"]
 mod mount_probe_client;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os/mount_process.rs"]
 mod mount_process;
 #[cfg(windows)]
@@ -101,6 +116,14 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/platform.rs"]
 mod platform;
+#[cfg(target_os = "android")]
+#[path = "os/android/platform.rs"]
+mod platform;
+// Linux host tests exercise the Android adapter beside the Linux one.
+#[cfg(all(test, target_os = "linux"))]
+#[allow(dead_code, unused_imports)]
+#[path = "os/android/platform.rs"]
+mod android_platform;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
 #[cfg(test)]
@@ -116,6 +139,8 @@ mod rooted_backend_gate;
 mod rooted_backend_io;
 #[path = "os/shared/rooted_backend_paths.rs"]
 mod rooted_backend_paths;
+#[path = "os/shared/run_loop.rs"]
+mod run_loop;
 #[cfg(test)]
 #[path = "os/shared/vault_task_backend.rs"]
 mod vault_task_backend;
@@ -132,6 +157,8 @@ mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
 
+pub use catch_up::{CatchUpSkip, CatchUpStatus};
+pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
     connect as connect_exec, ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession,
 };
@@ -139,11 +166,16 @@ pub use exec_state::{
     cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
     ExecJobsSnapshot,
 };
+pub use host_state::{host_state, set_host_state, HostState};
 pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
     refresh_share_worker_checked, request_daemon_replacement, send_share_command,
     ShareWorkerSnapshot,
+};
+pub use live::{
+    active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up_ms,
+    request_catch_up,
 };
 pub use mount_client::{
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
