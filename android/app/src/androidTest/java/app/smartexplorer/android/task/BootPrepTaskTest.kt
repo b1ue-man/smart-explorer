@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
 /**
  * G4 boot preparation (own `am instrument` run): switch to the persistent background mode and
  * store it synchronously, because the process ends with the instrumentation. The host script then
- * sends BOOT_COMPLETED as root and checks that only the specialUse background service started.
+ * reboots the device and checks that only the specialUse background service started.
  */
 @RunWith(AndroidJUnit4::class)
 class BootPrepTaskTest {

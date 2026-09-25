@@ -12,8 +12,8 @@ import org.junit.runner.RunWith
 
 /**
  * G4 remote flows against the servers on the runner (10.0.2.2): SFTP files, uploads with the
- * protected trash omission, downloads, remote edits with conflict and forced overwrite, host-key
- * reset, FTP basics, WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
+ * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
+ * Remote-Agent, refused overwrite on plain SFTP, host-key reset, FTP basics, WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -64,9 +64,12 @@ class RemoteTaskTest {
         assertTrue(Api.obj("conn.test", args("input" to Servers.sftpInput())).text("message").isNotBlank())
     }
 
+    /** Remote-Agent (desktop option): it replaces files, so a remote edit can conflict and be forced. */
     @Test
     fun remoteEditsConflictForceCopyAndDiscard() = coreTest {
-        val connection = Servers.sftp()
+        assertTrue(Api.obj("conn.test", args("input" to Servers.agentSftpInput())).text("message").isNotBlank())
+        val connection = Servers.agentSftp()
+        assertTrue("Remote-Agent nicht gespeichert: $connection", connection.bool("useAgent"))
         val remote = Servers.freshDir(connection, "edits")
         val local = Fixture.dir(Volumes.primary(), "remote", "edits")
         Api.copy(listOf(Fixture.write(File(local, "text.txt"), "Version 0").absolutePath), remote)
@@ -97,6 +100,29 @@ class RemoteTaskTest {
         val remaining = Api.objects("fs.edits").map { it.text("editId") }
         assertFalse(remaining.any { it in setOf(first.text("editId"), second.text("editId"), check.text("editId")) })
         assertFalse(File(first.text("localPath")).exists())
+    }
+
+    /** Plain SFTP cannot replace a file safely (desktop rule): overwrite is refused up front, a copy works. */
+    @Test
+    fun plainSftpEditsAreRefusedAsOverwriteAndUploadAsACopy() = coreTest {
+        val connection = Servers.sftp()
+        val remote = Servers.freshDir(connection, "edits-sftp")
+        val local = Fixture.dir(Volumes.primary(), "remote", "edits-sftp")
+        Api.copy(listOf(Fixture.write(File(local, "notiz.txt"), "Version 0").absolutePath), remote)
+        val location = Api.child(remote, "notiz.txt").location
+
+        val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+        File(edit.text("localPath")).writeText("Version 1")
+        val refused = Api.await(Api.start("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite", "force" to true)))
+        assertEquals("failed", refused.state)
+        assertTrue("Ersetzen nicht als unmöglich gemeldet: ${refused.result}", refused.resultObj().bool("replaceUnsupported"))
+        assertEquals(setOf("notiz.txt"), Api.names(remote))
+
+        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
+        assertEquals(setOf("notiz.txt", "notiz (2).txt"), Api.names(remote))
+        val original = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+        assertEquals("Version 0", File(original.text("localPath")).readText())
+        for (item in listOf(edit, original)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
     }
 
     @Test
