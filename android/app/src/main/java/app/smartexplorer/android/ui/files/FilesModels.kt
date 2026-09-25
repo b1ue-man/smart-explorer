@@ -71,7 +71,8 @@ internal sealed interface FilesDialog {
 
     data class Extract(val tabId: Long, val entry: Entry) : FilesDialog
 
-    data class EditConflict(val edit: EditInfo) : FilesDialog
+    /** The remote file changed since opening, or ([canOverwrite] = false) the place cannot replace files. */
+    data class EditConflict(val edit: EditInfo, val canOverwrite: Boolean = true) : FilesDialog
 
     data class Text(val title: String, val text: String) : FilesDialog
 }

@@ -276,6 +276,17 @@ fn run_overwrite(
     let (backend, path) = rt.resolve_loc(loc)?;
     // Fresh metadata: the pooled backend may answer stat from a cached listing.
     let current = crate::vfs::sync_backend(backend.clone()).stat(&path)?;
+    // Like the desktop: a backend without a safe replace primitive (plain SFTP,
+    // WebDAV, FTP) never overwrites; the upload can go up as a copy instead.
+    let parent = parent_path(&path).unwrap_or("/");
+    if !backend.staged_write_capabilities(parent).replace {
+        ctx.set_failure_result(json!({ "replaceUnsupported": true }));
+        return Err(ApiError::new(
+            "unsupported",
+            "Dieser Ort kann vorhandene Dateien nicht sicher ersetzen (etwa SFTP ohne \
+             Remote-Agent, WebDAV oder FTP). Die Änderung lässt sich als Kopie hochladen.",
+        ));
+    }
     if !force && record.remote_mtime_ms != 0 && current.mtime_ms > record.remote_mtime_ms {
         ctx.set_failure_result(json!({ "conflict": true }));
         return Err(ApiError::new(

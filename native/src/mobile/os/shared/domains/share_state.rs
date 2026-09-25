@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -18,13 +18,22 @@ use crate::share::discovery_events::{
     apply_share_discovery_event, drain_discovery_command_results,
 };
 use crate::share::discovery_state::DiscoveryUiState;
-use crate::share::{DiscoveryEvent, ShareEvent, ShareIdentity, ShareProfiles};
+use crate::share::{DiscoveryEvent, ProfileRevision, ShareEvent, ShareIdentity, ShareProfiles};
 
 const WATCH_INTERVAL: Duration = Duration::from_millis(300);
 const FOREGROUND_INTERVAL: Duration = Duration::from_secs(5);
 const BACKGROUND_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_NOTICES: usize = 20;
 const SHARE_SERVER_FILE: &str = "share_server.txt";
+/// How long a committed profile change outranks worker snapshots that do not
+/// carry it yet (the worker reloads on `reconfigure`, normally at once).
+const COMMIT_GUARD: Duration = Duration::from_secs(10);
+
+/// A profile revision this process wrote and the worker has not reported yet.
+struct PendingCommit {
+    revision: ProfileRevision,
+    until: Instant,
+}
 
 pub(super) struct ShareState {
     pub worker: Option<WorkerFacts>,
@@ -36,6 +45,7 @@ pub(super) struct ShareState {
     pub offer_aliases: BTreeMap<String, String>,
     pub last_exchange: Option<String>,
     pub notices: VecDeque<String>,
+    pending_commit: Option<PendingCommit>,
     seen_requests: BTreeSet<String>,
     last_status: String,
 }
@@ -52,6 +62,7 @@ impl ShareState {
             offer_aliases: BTreeMap::new(),
             last_exchange: None,
             notices: VecDeque::new(),
+            pending_commit: None,
             seen_requests: BTreeSet::new(),
             last_status: String::new(),
         }
@@ -102,7 +113,18 @@ impl ShareState {
         }
         self.after_discovery_changes();
         self.worker = Some(WorkerFacts::from_snapshot(&snapshot));
-        self.profiles = Some(snapshot.profiles);
+        // A snapshot drained before the worker reloaded a commit still carries
+        // the older profiles; the committed ones stay until the worker has it.
+        let stale = self.pending_commit.as_ref().is_some_and(|pending| {
+            snapshot.profile_revision != pending.revision && Instant::now() < pending.until
+        });
+        if !stale {
+            self.pending_commit = None;
+            // Like the desktop drain: the snapshot's revision travels separately.
+            let mut profiles = snapshot.profiles;
+            profiles.storage_revision = snapshot.profile_revision;
+            self.profiles = Some(profiles);
+        }
         errors
     }
 
@@ -351,7 +373,13 @@ pub(super) fn reconfigure(rt: &Runtime) {
 
 /// Replaces the cached profiles after a committed change.
 pub(super) fn committed(profiles: ShareProfiles) {
-    with_state(|state| state.profiles = Some(profiles));
+    with_state(|state| {
+        state.pending_commit = Some(PendingCommit {
+            revision: profiles.storage_revision.clone(),
+            until: Instant::now() + COMMIT_GUARD,
+        });
+        state.profiles = Some(profiles);
+    });
 }
 
 pub(super) fn set_cached_server(server: String) {

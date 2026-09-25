@@ -93,6 +93,7 @@ private fun Dialogs(vm: FilesViewModel) {
         )
         is FilesDialog.EditConflict -> EditConflictDialog(
             name = dialog.edit.name,
+            canOverwrite = dialog.canOverwrite,
             onOverwrite = {
                 close()
                 vm.uploadEdit(dialog.edit, mode = "overwrite", force = true)

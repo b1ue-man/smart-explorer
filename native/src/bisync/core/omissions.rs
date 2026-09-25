@@ -12,11 +12,18 @@ pub struct SyncOmissions {
 
 impl SyncOmissions {
     pub(crate) fn new(fold_case: bool) -> Self {
-        Self { fold_case, ..Self::default() }
+        Self {
+            fold_case,
+            ..Self::default()
+        }
     }
 
     fn key(&self, path: &str) -> String {
-        if self.fold_case { path.to_lowercase() } else { path.to_string() }
+        if self.fold_case {
+            path.to_lowercase()
+        } else {
+            path.to_string()
+        }
     }
 
     pub(crate) fn record(&mut self, relative: &str, report: bool) {
@@ -41,14 +48,19 @@ impl SyncOmissions {
             return true;
         }
         let prefix = format!("{key}/");
-        self.roots.range(prefix.clone()..).next().is_some_and(|path| path.starts_with(&prefix))
+        self.roots
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|path| path.starts_with(&prefix))
     }
 
     /// Traversal may enter an ancestor to reach independent siblings.
     pub(crate) fn contains(&self, relative: &str) -> bool {
         let key = self.key(relative);
         self.roots.contains(&key)
-            || key.match_indices('/').any(|(index, _)| self.roots.contains(&key[..index]))
+            || key
+                .match_indices('/')
+                .any(|(index, _)| self.roots.contains(&key[..index]))
     }
 
     pub(crate) fn exclude_tree(&self, tree: &mut Tree) {
@@ -56,29 +68,53 @@ impl SyncOmissions {
     }
 
     pub(crate) fn planning_baseline(&self, original: &Baseline) -> Baseline {
-        original.iter().filter(|(relative, _)| !self.protects(relative))
-            .map(|(relative, signatures)| (relative.clone(), *signatures)).collect()
+        original
+            .iter()
+            .filter(|(relative, _)| !self.protects(relative))
+            .map(|(relative, signatures)| (relative.clone(), *signatures))
+            .collect()
     }
 
     pub(crate) fn preserve_baseline(&self, original: &Baseline, updated: &mut Baseline) {
         updated.retain(|relative, _| !self.protects(relative));
-        updated.extend(original.iter().filter(|(relative, _)| self.protects(relative))
-            .map(|(relative, signatures)| (relative.clone(), *signatures)));
+        updated.extend(
+            original
+                .iter()
+                .filter(|(relative, _)| self.protects(relative))
+                .map(|(relative, signatures)| (relative.clone(), *signatures)),
+        );
     }
 
-    pub fn is_empty(&self) -> bool { self.roots.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
 
     pub fn summary(&self) -> Option<String> {
-        if self.reported.is_empty() { return None; }
-        let samples: Vec<_> = self.reported.iter().take(3)
+        if self.reported.is_empty() {
+            return None;
+        }
+        let samples: Vec<_> = self
+            .reported
+            .iter()
+            .take(3)
             .map(|path| {
                 let mut sample: String = path.chars().take(180).collect();
-                if path.chars().count() > 180 { sample.push('…'); }
+                if path.chars().count() > 180 {
+                    sample.push('…');
+                }
                 sample
-            }).collect();
-        Some(format!("{} Verknüpfungen ausgelassen; Gegenstellen unverändert: {}{}",
-            self.reported.len(), samples.join("; "),
-            if self.reported.len() > samples.len() { "; …" } else { "" }))
+            })
+            .collect();
+        Some(format!(
+            "{} Verknüpfungen oder geschützte Ordner ausgelassen; Gegenstellen unverändert: {}{}",
+            self.reported.len(),
+            samples.join("; "),
+            if self.reported.len() > samples.len() {
+                "; …"
+            } else {
+                ""
+            }
+        ))
     }
 
     pub fn reported_paths(&self) -> impl Iterator<Item = &str> {

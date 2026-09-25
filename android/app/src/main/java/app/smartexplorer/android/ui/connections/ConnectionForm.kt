@@ -109,6 +109,7 @@ internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, 
                 // Desktop "Remote-Agent verwenden": deploys Smart Explorer's own agent over SFTP for fast
                 // server-side operations; it is not an ssh-agent login.
                 ToggleSetting("Remote-Agent verwenden", draft.useAgent, { update(draft.copy(useAgent = it)) })
+                HintLine("Ohne Remote-Agent ersetzt SFTP keine vorhandenen Dateien (wie am Desktop): Sync-Aktualisierungen und bearbeitete Dateien brauchen ihn.")
                 HintLine("Den ersten Hostschlüssel speichert die App (wie am Desktop); ein geänderter Schlüssel lässt die Verbindung scheitern.")
             }
             // WebDAV always uses HTTPS (draft default and saved connections), like the desktop format.

@@ -289,8 +289,12 @@ fn run(
             }
             let rel = rel_of(&sp, &src_root);
             let dp = join(&dst_root, &rel);
-            // The app trash (Android) is never mirrored: a protected omission.
-            if m.is_symlink || crate::apptrash::excluded_name(&m.name) {
+            // The app trash and other apps' private folders (Android) are never
+            // mirrored: protected omissions.
+            if m.is_symlink
+                || crate::apptrash::excluded_name(&m.name)
+                || (m.is_dir && crate::apptrash::hidden_app_folders_in(&dir))
+            {
                 omissions.record(&rel, true);
                 continue;
             }

@@ -145,7 +145,9 @@ Ereignisse (`pollEvents`):
 - `fs.uploadEdit {editId, mode:"overwrite|copy", force:Boolean?}` → `{taskId}` (bei `overwrite` und
   geänderter Remote-Datei endet der Task mit `failed`, `message`, `result={conflict:true}`; ein erneuter
   Aufruf mit `force:true` überschreibt nach ausdrücklicher Bestätigung – wie erneutes Speichern nach
-  der Konfliktmeldung am Desktop)
+  der Konfliktmeldung am Desktop; kann das Backend vorhandene Dateien nicht sicher ersetzen – reines
+  SFTP ohne Remote-Agent, WebDAV, FTP, wie am Desktop –, endet `overwrite` vorab mit `failed`,
+  `kind`-Text und `result={replaceUnsupported:true}`; dann bleibt `copy`)
 - `fs.discardEdit {editId}` → `{}`
 - `fs.import {files:[{fd:Int, name, size:Long?}], targetDir}` → `{taskId}` (Kotlin übergibt je geteiltem
   Inhalt einen per `ParcelFileDescriptor.detachFd()` gelösten Deskriptor; Rust übernimmt und schließt
