@@ -71,38 +71,27 @@ servers_up() {
     -e USER_NAME="$SE_SSH_USER" -e USER_PASSWORD="$SE_SSH_PASS" \
     "$SE_SSH_IMAGE" >/dev/null
   # delfer/alpine-ftp-server: passive ports published 1:1 and advertised as the emulator's
-  # address of the runner.
+  # address of the runner. Its start script creates the user and then runs a given command
+  # instead of its own `vsftpd` + pidproxy pair, which ends the container after the first FTP
+  # session (runs 36184060985, 36188883151). So vsftpd runs in the foreground under the
+  # image's tini with the options the script would pass; they follow the config file, because
+  # vsftpd applies files and -o options in command-line order (later wins, vsftpd(8)).
   docker run -d --name "$SE_FTP_CONTAINER" \
     -p "$SE_FTP_PORT:21" -p "$SE_FTP_PASV_MIN-$SE_FTP_PASV_MAX:$SE_FTP_PASV_MIN-$SE_FTP_PASV_MAX" \
     -e USERS="$SE_FTP_USER|$SE_FTP_PASS" \
-    -e ADDRESS="$SE_TASK_EMULATOR_HOST" \
-    -e MIN_PORT="$SE_FTP_PASV_MIN" -e MAX_PORT="$SE_FTP_PASV_MAX" \
-    "$SE_FTP_IMAGE" >/dev/null
+    "$SE_FTP_IMAGE" vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO \
+    -opasv_min_port="$SE_FTP_PASV_MIN" -opasv_max_port="$SE_FTP_PASV_MAX" \
+    -opasv_address="$SE_TASK_EMULATOR_HOST" >/dev/null
   servers_wait_banner SFTP "$SE_SFTP_PORT" "SSH-"
   servers_wait_banner SSH "$SE_SSH_PORT" "SSH-"
-  # The image records the listener PID with `pgrep vsftpd | tail -n 1` right after start; a
-  # probe connection before that makes it record the short-lived session child, and the
-  # container exits when that session ends. So probe only once the PID file exists.
-  servers_wait_ftp_pidfile
   servers_wait_banner FTP "$SE_FTP_PORT" "220"
+  # A banner session must not end the server (see above).
   sleep 2
   if [[ "$(docker inspect -f '{{.State.Running}}' "$SE_FTP_CONTAINER" 2>/dev/null)" != "true" ]]; then
     echo "test server FTP container stopped after the banner check" >&2
     docker logs "$SE_FTP_CONTAINER" >&2 || true
     return 1
   fi
-}
-
-servers_wait_ftp_pidfile() {
-  local deadline=$((SECONDS + 180))
-  while ((SECONDS < deadline)); do
-    if docker exec "$SE_FTP_CONTAINER" test -s /var/run/vsftpd/vsftpd.pid 2>/dev/null; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "test server FTP did not write its PID file" >&2
-  return 1
 }
 
 # Instrumentation arguments (-e name value) that tell the tests where the servers are.
