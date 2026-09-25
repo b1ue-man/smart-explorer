@@ -725,6 +725,17 @@ Storage-Access-Framework-Bäume (`content://`) als Browse-Ort.
   Bildvorschauen.
 - Ab Android 15 beendet das System lange Hintergrund-Übertragungen nach sechs
   Stunden; betroffene Vorgänge werden als „vom System beendet“ gemeldet.
+- Wie am Desktop ersetzen reines SFTP (ohne Remote-Agent) und WebDAV keine
+  vorhandenen Dateien: Sync-Aktualisierungen scheitern dort je Datei, eine
+  bearbeitete Remote-Datei lässt sich nur als Kopie hochladen. Mit
+  Remote-Agent (SFTP-Option) ersetzt SFTP Dateien sicher.
+- FTP/FTPS: Durchsuchen, Herunterladen, Ordner anlegen und Löschen gehen;
+  Hochladen lehnt der Kern wie am Desktop ab, weil FTP kein sicheres
+  exklusives Anlegen der privaten Upload-Stufe bietet (kein unsicherer
+  Schreib-Fallback).
+- Die privaten Bereiche anderer Apps (alles in `Android/data` und `Android/obb`)
+  lassen sich seit Android 11 nicht öffnen; Ordnerindex, Sync-Jobs und Spiegeln
+  lassen sie als geschützte Auslassung weg und melden das.
 
 **Offene Punkte:**
 

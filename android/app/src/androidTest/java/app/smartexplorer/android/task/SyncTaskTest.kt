@@ -72,7 +72,8 @@ class SyncTaskTest {
 
         // The same file changes on both sides → strict conflicts.
         names.forEach { Fixture.write(File(local, it), "Zeile 1\nA\nZeile 3\n") }
-        names.forEach { Fixture.write(File(other, it), "Zeile 1\nB\nZeile 3\n") }
+        // Another size than side A: equal size and mtimes within the FAT tolerance count as equal.
+        names.forEach { Fixture.write(File(other, it), "Zeile 1\nBB\nZeile 3\n") }
         val second = Api.runTask("sync.run", args("id" to id)).resultObj()
         assertEquals(4, second.int("conflicts"))
         assertEquals(4, conflicts(id).size)

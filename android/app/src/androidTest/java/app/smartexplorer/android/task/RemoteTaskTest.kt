@@ -13,7 +13,8 @@ import org.junit.runner.RunWith
 /**
  * G4 remote flows against the servers on the runner (10.0.2.2): SFTP files, uploads with the
  * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
- * Remote-Agent, refused overwrite on plain SFTP, host-key reset, FTP basics, WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
+ * Remote-Agent, refused overwrite on plain SFTP, host-key reset, FTP basics (downloads; uploads
+ * refused like on the desktop), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -134,10 +135,19 @@ class RemoteTaskTest {
         val remote = Servers.freshDir(connection, "ftp")
         val local = Fixture.dir(Volumes.primary(), "remote", "ftp")
         val file = Fixture.bytes(File(local, "ftp.bin"), 150_000, 11)
-        Api.copy(listOf(file.absolutePath), remote)
+        // Like the desktop: uploads go through an exclusively created private stage, which FTP
+        // cannot provide, so nothing is written (no unsafe fallback).
+        val upload = Api.await(
+            Api.start("fs.transfer", args("sources" to listOf(file.absolutePath), "targetDir" to remote, "mode" to "copy", "conflict" to "keepBoth")),
+        )
+        assertEquals("FTP-Upload nicht abgewiesen: ${upload.errors}", "failed", upload.state)
+        assertTrue("Grund fehlt: ${upload.errors}", upload.errors.any { "exclusive-create" in it.message })
+        assertTrue(Api.names(remote).isEmpty())
+        // Downloads work: a file the server side placed in the user's home.
+        val fixture = TaskArgs.get("seFtpFixture")
         val back = Fixture.dir(Volumes.primary(), "remote", "ftp-back")
-        Api.copy(listOf(Api.child(remote, "ftp.bin").location), back.absolutePath)
-        assertEquals(Fixture.sha256(file), Fixture.sha256(File(back, "ftp.bin")))
+        Api.copy(listOf(Api.child(connection.text("location"), fixture).location), back.absolutePath)
+        assertEquals(TaskArgs.get("seFtpFixtureSha256"), Fixture.sha256(File(back, fixture)))
         Api.runTask("fs.delete", args("locations" to listOf(remote), "permanent" to true))
         assertFalse(remote.substringAfterLast('/') in Api.names(connection.text("location")))
     }
