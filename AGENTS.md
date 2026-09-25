@@ -1,5 +1,7 @@
 # Repository Instructions
 
+Architecture overview and entry points: `docs/ARCHITEKTUR.md` (read it before broad exploration).
+
 ## no local builds or test execution
 
 - Codex must not run builds, compilers, linkers, test suites, packaging, release builds, or
