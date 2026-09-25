@@ -142,8 +142,10 @@ Ereignisse (`pollEvents`):
 - `fs.materialize {locations:[location]}` → `{taskId}`; `result = {paths:[String]}` (Remote-Kopien in
   `<cache>/share/`; lokale Orte liefern ihre Pfade unverändert)
 - `fs.edits {}` → `[{editId, name, location, localPath, modified:Boolean}]`
-- `fs.uploadEdit {editId, mode:"overwrite|copy"}` → `{taskId}` (bei `overwrite` und geänderter
-  Remote-Datei endet der Task mit `failed`, `message`, `result={conflict:true}`)
+- `fs.uploadEdit {editId, mode:"overwrite|copy", force:Boolean?}` → `{taskId}` (bei `overwrite` und
+  geänderter Remote-Datei endet der Task mit `failed`, `message`, `result={conflict:true}`; ein erneuter
+  Aufruf mit `force:true` überschreibt nach ausdrücklicher Bestätigung – wie erneutes Speichern nach
+  der Konfliktmeldung am Desktop)
 - `fs.discardEdit {editId}` → `{}`
 - `fs.import {files:[{fd:Int, name, size:Long?}], targetDir}` → `{taskId}` (Kotlin übergibt je geteiltem
   Inhalt einen per `ParcelFileDescriptor.detachFd()` gelösten Deskriptor; Rust übernimmt und schließt

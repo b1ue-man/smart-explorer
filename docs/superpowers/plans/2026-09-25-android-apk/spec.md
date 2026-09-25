@@ -60,7 +60,7 @@ Dateien
 
 Verbindungen
 - F12 Verbindungen verwalten: SFTP (Passwort oder Schlüsseldatei, optional SSH-Agent), FTP/FTPS,
-  WebDAV (http/https) anlegen, bearbeiten, testen, löschen; Zugangsdaten im geschützten App-Speicher;
+  WebDAV (HTTPS, wie am Desktop) anlegen, bearbeiten, testen, löschen; Zugangsdaten im geschützten App-Speicher;
   Hostschlüssel nach „Trust on first use“ wie am Desktop; beim Löschen Aufräumen wie am Desktop
   (Favoriten und Tabs werden entfernt, betroffene Sync-Jobs gemeldet).
 - F13 Google Drive: eigene OAuth-Client-ID (wie Desktop, `docs/CLOUD_SETUP.md`), Anmeldung im
@@ -284,7 +284,7 @@ Fortschritt + Abbrechen, im Hintergrund mit Benachrichtigung.
   Testen, Löschen).
 - Formular: Typ (SFTP, FTP, FTPS, WebDAV) · Name · Host · Port (Vorgabe je Typ) · Benutzer ·
   Passwort oder Schlüsseldatei (Datei aus Speicher wählen) + Passphrase (SFTP) · Startordner ·
-  HTTPS (WebDAV) · SSH-Agent verwenden (SFTP) · [Testen] [Speichern].
+  SSH-Agent verwenden (SFTP) · [Testen] [Speichern]; WebDAV immer über HTTPS (Desktop-Format).
 - Warten: Testen/Verbinden 1–10 s → Indikator; Ergebnis „Verbindung OK“ oder Fehlertext.
 - Hostschlüssel: wie am Desktop „Trust on first use“ (erster Schlüssel wird gespeichert). Geänderter
   Schlüssel → Verbindung scheitert mit „Hostschlüssel geändert“; ist die Änderung erwartet, entfernt
