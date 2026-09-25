@@ -1893,3 +1893,17 @@ class MainActivity : ComponentActivity() {
   add even when no longer required.
 - material3 1.4.0's exact stabilization date is contradictory across sources (§0) and was left
   unresolved as non-load-bearing.
+
+---
+
+## Ergänzungen K3 (2026-09-25, Treemap der Speicheranalyse)
+
+Nachgeschlagen in der androidx-Quelle (`github.com/androidx/androidx`, Zweig `androidx-main`, abgerufen
+2026-09-25); die Signaturen bestehen unverändert seit Compose 1.8 bzw. 1.4 und gelten damit für
+ui/foundation 1.11.4 (BOM 2026.06.01).
+
+| API | Fakt | Quelle |
+|---|---|---|
+| `fun Modifier.pointerInput(key1: Any?, block: PointerInputEventHandler): Modifier` (`androidx.compose.ui.input.pointer`) | `PointerInputEventHandler` ist ein SAM-Interface; ein Lambda `pointerInput(key) { detectTapGestures(…) }` bleibt quellkompatibel. Die alte `suspend PointerInputScope.() -> Unit`-Variante ist `DeprecationLevel.HIDDEN`, die schlüssellose `pointerInput { }` ist `ERROR`. Im Block gilt `size: IntSize` des `PointerInputScope`. | `compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/SuspendingPointerInputFilter.kt` |
+| `suspend fun PointerInputScope.detectTapGestures(onDoubleTap: ((Offset) -> Unit)? = null, onLongPress: ((Offset) -> Unit)? = null, onPress: suspend PressGestureScope.(Offset) -> Unit = NoPressGesture, onTap: ((Offset) -> Unit)? = null)` | Paket `androidx.compose.foundation.gestures` | `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt` |
+| `fun DrawScope.drawText(textMeasurer: TextMeasurer, text: String, topLeft: Offset = Offset.Zero, style: TextStyle = TextStyle.Default, overflow: TextOverflow = TextOverflow.Clip, softWrap: Boolean = true, maxLines: Int = Int.MAX_VALUE, size: Size = Size.Unspecified, blendMode: BlendMode = DrawScope.DefaultBlendMode)` | bestätigt §28 (Parameternamen); `size` begrenzt die Textbox | `compose/ui/ui-text/src/commonMain/kotlin/androidx/compose/ui/text/TextPainter.kt` |

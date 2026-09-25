@@ -1041,3 +1041,102 @@ Nachgeschlagen für `android/app` (Block K0); Quellen je Zeile.
 | kotlinx.serialization-json 1.11.0 `JsonBuilder` | `ignoreUnknownKeys`, `explicitNulls`, `encodeDefaults`, `coerceInputValues` sind öffentliche `var` **ohne** Experimental-Annotation; `explicitNulls = false`: Nullwerte werden nicht geschrieben, fehlende nullable Felder ohne Default lesen sich als `null`. `Json.parseToJsonElement(String)`, `inline fun <reified T> Json.encodeToJsonElement(value: T)`, `inline fun <reified T> Json.decodeFromJsonElement(json: JsonElement)`, `JsonObject(Map)`, `buildJsonObject { put(key, String?/Number?/Boolean?/JsonElement) }`, `JsonPrimitive.contentOrNull/intOrNull`. | github.com/Kotlin/kotlinx.serialization Tag `v1.11.0`: `Json.kt`, `JsonElement.kt`, `JsonElementBuilders.kt` |
 | kotlinx.coroutines 1.11.0 Flows | `MutableSharedFlow(replay = 0, extraBufferCapacity = 0, onBufferOverflow = BufferOverflow.SUSPEND)`, `tryEmit(value): Boolean`, `subscriptionCount: StateFlow<Int>`, `MutableStateFlow(value)`, `MutableStateFlow.update { }`, `compareAndSet(expect, update)`, `asSharedFlow()`, `asStateFlow()`. | github.com/Kotlin/kotlinx.coroutines Tag `1.11.0`: `flow/SharedFlow.kt`, `flow/StateFlow.kt`, `flow/operators/Share.kt` |
 | Material Symbols (Vektor-Symbole) | SVGs `symbols/web/<name>/materialsymbolsoutlined/<name>_24px.svg`, `viewBox="0 -960 960 960"`, ein `<path>` je Symbol; Lizenz Apache-2.0. Als `<vector>` mit `viewportWidth/Height=960` und `<group android:translateY="960">` um den Originalpfad übernommen. | github.com/google/material-design-icons (`LICENSE` = Apache License 2.0) |
+
+---
+
+## 12. ContentProvider für lokale Originale (K1, 2026-09-25)
+
+Nachgeschlagen für `system/LocalFileProvider.kt` (eigener schmaler Provider, `${applicationId}.localfiles`,
+nicht exportiert, `grantUriPermissions`). Quellen: AOSP `frameworks/base` (Branch `main`, GitHub-Spiegel
+`aosp-mirror/platform_frameworks_base`) `core/java/android/content/ContentProvider.java`,
+`core/java/android/os/ParcelFileDescriptor.java`, `core/java/android/os/FileUtils.java`,
+`core/java/android/content/ContentResolver.java`; abgerufen 2026-09-25. Die Referenzseiten auf
+developer.android.com lieferten dem Abrufwerkzeug nur die Navigation (siehe „Contradictions“ Nr. 5).
+
+### 12.1 `android.content.ContentProvider` (API 1, außer vermerkt)
+
+```kotlin
+abstract fun onCreate(): Boolean                        // true = erfolgreich geladen; läuft auf dem Main-Thread beim Prozessstart
+open fun attachInfo(context: Context, info: ProviderInfo)  // ruft onCreate(); ProviderInfo.exported / .grantUriPermissions sind öffentliche Felder
+abstract fun getType(uri: Uri): String?
+abstract fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+                   selectionArgs: Array<out String>?, sortOrder: String?): Cursor?
+abstract fun insert(uri: Uri, values: ContentValues?): Uri?
+abstract fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int
+abstract fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int
+@Throws(FileNotFoundException::class)
+open fun openFile(uri: Uri, mode: String): ParcelFileDescriptor?   // Standard: wirft immer FileNotFoundException
+fun getContext(): Context?                               // Kotlin: `context`
+fun requireContext(): Context                            // wirft IllegalStateException vor onCreate
+```
+- `openFile`-Modus laut Javadoc: `"r"`, `"w"`, `"wt"`, `"wa"`, `"rw"`, `"rwt"`; „w may or may not truncate“ –
+  die Umsetzung entscheidet. Der zurückgegebene Deskriptor geht direkt an den Aufrufer (kein Kopieren).
+  `openFile`/`query`/`getType` laufen auf Binder-Threads (mehrere gleichzeitig möglich → threadsicher).
+- Rechteprüfung: `ContentProvider.Transport.openFile` ruft vor dem eigenen `openFile`
+  `enforceFilePermission(…, uri, mode)` auf – enthält der Modus `w`, wird Schreib-, sonst Leserecht
+  (inkl. URI-Grant) geprüft, Verweigerung → `FileNotFoundException`/`SecurityException`. Ein nicht
+  exportierter Provider mit `grantUriPermissions` ist damit nur über Grants dieser App erreichbar
+  (`Intent.FLAG_GRANT_READ_URI_PERMISSION`/`FLAG_GRANT_WRITE_URI_PERMISSION`).
+- Zusätzliche Pfadprüfung im Provider bleibt Pflicht (Grants beziehen sich auf die URI, nicht auf den
+  Pfad): nur kanonische Pfade (`File.canonicalFile`, löst Symlinks) unterhalb gemeldeter Volumes.
+
+### 12.2 `ParcelFileDescriptor` (`android.os`, API 1)
+
+```kotlin
+companion fun parseMode(mode: String): Int                  // wirft IllegalArgumentException bei unbekanntem Modus
+companion fun open(file: File, mode: Int): ParcelFileDescriptor   // @Throws(FileNotFoundException)
+fun detachFd(): Int        // gibt die native fd zurück; Aufrufer (hier: Rust) ist fürs Schließen zuständig
+fun getStatSize(): Long    // Kotlin `statSize`; -1, wenn die fd keine Datei ist (z. B. Pipe)
+fun close()                // @Throws(IOException)
+```
+`parseMode` → `FileUtils.translateModeStringToPosix`: `"rw…"` = `O_RDWR|O_CREAT`, `"w…"` = `O_WRONLY|O_CREAT`,
+`"r…"` = `O_RDONLY`; `t` ergänzt `O_TRUNC`, `a` ergänzt `O_APPEND`; andere Zeichen → `IllegalArgumentException`.
+**`"w"` kürzt also nicht.** androidx `FileProvider` behandelt `"w"` wie `"wt"`; `LocalFileProvider` tut
+dasselbe (`parseMode(if (mode == "w") "wt" else mode)`), damit ein Editor, der eine kürzere Fassung
+schreibt, kein Ende der alten Datei im Original zurücklässt.
+
+### 12.3 Antworten für Fremd-Apps
+
+- `query`: `MatrixCursor(columnNames: Array<String>, initialCapacity: Int)` + `addRow(Array<Any?>)`
+  (`android.database`, API 1). Spalten `OpenableColumns.DISPLAY_NAME` (`"_display_name"`) und
+  `OpenableColumns.SIZE` (`"_size"`); ohne `projection` beide; unbekannte Spalten werden ausgelassen
+  (wie androidx `FileProvider.query`).
+- `getType`: `MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)` (Endung klein, ohne Punkt, §6.3),
+  Rückfall `application/octet-stream`.
+- `insert`/`update`/`delete`: Fremd-Apps dürfen nur Inhalte lesen/schreiben → `null`/`0`.
+
+### 12.4 Empfangen: Deskriptoren an den Kern übergeben (`fs.import`)
+
+```kotlin
+// android.content.ContentResolver, API 1
+@Throws(FileNotFoundException::class)
+fun openFileDescriptor(uri: Uri, mode: String): ParcelFileDescriptor?   // null, wenn der Provider gerade abgestürzt ist
+```
+Nutzt `ContentProvider.openFile` des Anbieters; Anbieter, die nur Teilbereiche einer Datei liefern
+(`AssetFileDescriptor` mit Offset), scheitern mit `FileNotFoundException`. Der Aufrufer besitzt den
+Deskriptor; nach `detachFd()` besitzt ihn der Kern (api.md §4.3 `fs.import`). Der URI-Grant einer
+empfangenen `SEND`-Absicht gilt, solange die empfangende Aktivität lebt – Deskriptoren daher sofort
+beim Empfang öffnen (Hintergrund-Thread, der Anbieter kann blockieren), nicht erst nach der Zielwahl.
+
+## 13. Ergänzungen K2 (2026-09-25, Sync, Hintergrund, Dienste)
+
+Nachgeschlagen für `service/**`, `work/**`, `system/{BootReceiver,HostMonitor}.kt`, `ui/sync/**`.
+Quellen: AOSP-API-Signaturdateien (`frameworks/base` Branch `android16-release` `core/api/current.txt`;
+`packages/modules/Connectivity` `main` `framework/api/current.txt`; `packages/modules/Wifi` `main`
+`framework/api/current.txt`) und die Klassen der gepinnten AARs von dl.google.com (Klassen- und
+Methodennamen aus `classes.jar`).
+
+| API | Fakt | Quelle |
+|---|---|---|
+| `ConnectivityManager.getActiveNetwork(): Network?` (API 23), `getNetworkCapabilities(Network?): NetworkCapabilities?` (API 21) | beide `@RequiresPermission(ACCESS_NETWORK_STATE)`; synchroner Einzelabruf des aktuellen Netzes. `NetworkCallback.onAvailable/onLost(Network)`, `onCapabilitiesChanged(Network, NetworkCapabilities)` | Connectivity `framework/api/current.txt` |
+| `NetworkCapabilities.NET_CAPABILITY_NOT_METERED = 11`, `TRANSPORT_WIFI = 1` | löst „Unresolved“ §8.1 (Zahlenwerte); weiterhin über den Namen verwenden | Connectivity `framework/api/current.txt` |
+| `BatteryManager.isCharging(): Boolean`, `BatteryManager.ACTION_CHARGING = "android.os.action.CHARGING"`, `ACTION_DISCHARGING = "android.os.action.DISCHARGING"` | Ladezustand ohne Sticky-Broadcast; die beiden Aktionen melden Änderungen von `isCharging()` (API 23) und lassen sich mit `ContextCompat.registerReceiver(…, RECEIVER_NOT_EXPORTED)` empfangen | `core/api/current.txt` |
+| `WifiManager.createMulticastLock(String)`, `MulticastLock.acquire()/release()/isHeld()/setReferenceCounted(Boolean)` | bestätigt §8.2 | Wifi `framework/api/current.txt` |
+| `Service.onTimeout(int)` / `onTimeout(int, int)`, `Service.START_STICKY = 1`, `START_NOT_STICKY = 2`, `stopSelf(int)` | Zweiparameter-Variante für dataSync-Zeitgrenze (§1.1); `stopSelf(startId)` stoppt nur, wenn kein neuerer Start ansteht | `core/api/current.txt` |
+| `ForegroundServiceStartNotAllowedException`, `ForegroundServiceTypeException` → `ServiceStartNotAllowedException` → `java.lang.IllegalStateException` | bei minSdk 30 `IllegalStateException` fangen (die API-31/34-Klassen nicht direkt referenzieren). Achtung: `kotlinx.coroutines.CancellationException` ist ebenfalls eine `IllegalStateException` → in `suspend`-Code zuerst weiterwerfen | `core/api/current.txt` |
+| `androidx.work.WorkInfo.nextScheduleTimeMillis: Long` (work-runtime 2.12.0, `getNextScheduleTimeMillis`) | frühester nächster Lauf einer eingeplanten Arbeit; Aufrufer werten ihn nur bei `State.ENQUEUED` aus und verwerfen `≤ 0` sowie `Long.MAX_VALUE` | `work-runtime-2.12.0.aar` (`WorkInfo.class`) |
+| `androidx.lifecycle.viewModelScope` (Erweiterung auf `ViewModel`, `lifecycle-viewmodel-android` 2.10.0, `ViewModelKt.getViewModelScope`) | in der Basis-Bibliothek, kein `-ktx` nötig | `lifecycle-viewmodel-android-2.10.0.aar` |
+| `androidx.lifecycle.viewmodel.compose.viewModel(viewModelStoreOwner, key, initializer: CreationExtras.() -> VM)` (inline, reified) | `viewModel { MyViewModel() }` ohne Fabrik-Reflexion | `lifecycle-viewmodel-compose-android-2.10.0.aar` (`ViewModelKt__ViewModelKt`) |
+| `Flow<T>.collectAsStateWithLifecycle(initialValue: T, lifecycleOwner, minActiveState, context)` | Overload für kalte `Flow`s (z. B. WorkManager-`Flow<List<WorkInfo>>`) | `lifecycle-runtime-compose-android-2.10.0.aar` (`FlowExtKt`) |
+| `LifecycleOwner.repeatOnLifecycle(Lifecycle.State, suspend CoroutineScope.() -> Unit)` | in `lifecycle-runtime-android` 2.10.0 (`RepeatOnLifecycleKt`) | `lifecycle-runtime-android-2.10.0.aar` |
+| `NotificationCompat.Builder.setAutoCancel(Boolean)`, `ServiceCompat.startForeground/stopForeground/STOP_FOREGROUND_REMOVE`, `ContextCompat.startForegroundService/registerReceiver/RECEIVER_NOT_EXPORTED` | in core 1.18.0 vorhanden | `core-1.18.0.aar` |

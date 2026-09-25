@@ -50,6 +50,7 @@ import app.smartexplorer.android.ui.common.AppSnackbarHost
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.files.FilesScreen
+import app.smartexplorer.android.ui.more.MoreRequests
 import app.smartexplorer.android.ui.more.MoreScreen
 import app.smartexplorer.android.ui.onboarding.OnboardingScreen
 import app.smartexplorer.android.ui.onboarding.StartupErrorScreen
@@ -114,7 +115,7 @@ private fun MainShell(snackbarHostState: SnackbarHostState) {
     LaunchedEffect(Unit) {
         Core.events.collect { event ->
             if (event is CoreEvent.Error) {
-                Snackbars.show(event.message, "Details") { AppNav.send(NavRequest.SelectTab(MainTab.More)) }
+                Snackbars.show(event.message, "Details") { MoreRequests.open(MoreRequests.Request.ErrorLog) }
             } else if (event is CoreEvent.ShareRequest && tab != MainTab.Share) {
                 shareRequests = event.count
             }
