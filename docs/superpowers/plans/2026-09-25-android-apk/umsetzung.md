@@ -528,7 +528,7 @@ Ausnahmen im Testbericht.
 | K1 | H | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
 | K2 | I | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
 | K3 | J | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
-| T | K | in Arbeit (Fix-Schleife) | Lauf 1 (36184060985, Kandidat 0a9e3f6): Build, G1, G2-Bins, G3 grün; Befunde behoben siehe unten |
+| T | K | fertig: Suite grün in Lauf 36196560334 (Kandidat fd7c8be; G1–G6, Abdeckung 107/109 + 1 Fehlerpfad + `gdrive.signIn` ausgenommen) | Fix-Schleife ab Lauf 1 (36184060985) siehe unten |
 
 ### Fix-Schleife Lauf 1 (Befund → Ursache → Behebung)
 - Ordnerindex/SD-Wurzel-Job/Spiegeln: fremde App-Ordner `Android/data|obb/*` werden gelistet, lassen sich aber nicht öffnen (FUSE meldet ENOENT) → Index überspringt auch `NotFound` (nur Android); Sync-Jobs, Vorschau und Spiegeln behandeln sie wie den Papierkorb als geschützte Auslassung (`apptrash::hidden_app_folders_in`, inert ohne Volumes).
@@ -546,3 +546,10 @@ Ausnahmen im Testbericht.
   - Share-Status verdeckte bis 10 s Änderungen, die ohne `committed` auf die Platte kamen (Anfragen) → ein abgeschlossenes Worker-Neuladen beendet den Schutz, vor ihm geleerte Snapshots zählen nicht.
   - SD-Wurzel: MediaProvider sperrt jeden Eintrag direkt in `Android/data|obb` (Muster `Android/(data|media|obb)/<Paket>`, `media` ausgenommen), auch Dateien wie `.nomedia` → alle Einträge dort sind geschützte Auslassungen; ein Fehler verhinderte sonst die erste Sync-Basis.
   - Tests: FTP-Wurzel ist das Home `/ftp/seftp`; `unchanged` gilt für dasselbe Fenster; TestScheduler braucht je Periode erneut erfüllte Bedingungen; Spiegeln und SD-Wurzel-Job prüfen jetzt 0 Fehler und protokollieren sie.
+
+### Fix-Schleife Läufe 4–8 (36192428017 … 36196560334)
+- Lauf 4: FTP-Uploads lehnt der Kern ab (keine exklusiv angelegte Upload-Stufe, seit `47b2a47` auch am Desktop; `docs/TODO.md` FTP1) → Test prüft die Ablehnung und lädt eine serverseitig abgelegte Datei herunter; Konflikttest mit gleich großen Texten fiel unter die FAT-Zeittoleranz → andere Größe; `share.status` zeigt nach jedem Worker-Neuladen die gespeicherten Profile.
+- Lauf 5: leere Sync-Seite hat keinen schwebenden Knopf → Layoutprüfung akzeptiert beide; Kopfzeile zeigt bei vergangener Planzeit „fällig, wartet auf Bedingungen“.
+- Lauf 6 abgebrochen für den Layout-Fix der Teilen-Knöpfe (FlowRow statt seitlich scrollender Reihe).
+- Lauf 7: alles grün, Exit 143 aus dem ERR-Trap beim Aufräumen → Cleanup ohne ERR-Trap.
+- Lauf 8: grün.
