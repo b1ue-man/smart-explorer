@@ -12,3 +12,11 @@ pub(super) fn is_plain_directory(meta: &std::fs::Metadata) -> bool {
 pub(super) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
+
+/// Android denies listing other apps' folders (`Android/data/*`, `obb/*`)
+/// even with all-files access; the index leaves such folders out instead of
+/// failing. Linux keeps failing the build on any unreadable folder.
+#[cfg(not(windows))]
+pub(super) fn skip_unreadable_directory(error: &std::io::Error) -> bool {
+    cfg!(target_os = "android") && error.kind() == std::io::ErrorKind::PermissionDenied
+}

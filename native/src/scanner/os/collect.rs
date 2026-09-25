@@ -22,6 +22,10 @@ pub struct CollectOutcome {
     pub issues: Vec<CollectIssue>,
     pub suppressed_issues: u64,
     pub canceled: bool,
+    /// Entries left out as protected omissions (the active app trash on
+    /// Android); they never make the outcome incomplete. Always 0 on the
+    /// desktop builds.
+    pub omitted: u64,
 }
 
 impl CollectOutcome {
@@ -161,6 +165,14 @@ fn collect(
                     continue;
                 }
             };
+            if entry
+                .name
+                .to_str()
+                .is_some_and(crate::apptrash::excluded_name)
+            {
+                outcome.omitted = outcome.omitted.saturating_add(1);
+                continue;
+            }
             let path = directory.join(&entry.name);
             if entry.unreachable {
                 push_issue(

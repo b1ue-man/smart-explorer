@@ -121,6 +121,10 @@ impl WalkState {
             if self.stopped() {
                 return false;
             }
+            // The active app trash (Android) is a protected omission.
+            if crate::apptrash::excluded_name(&metadata.name) {
+                continue;
+            }
             let extension = ext_of(&metadata.name, metadata.is_dir);
             let path = join(&directory.path, &metadata.name);
             let recurse = descend && metadata.is_dir && !metadata.is_symlink;

@@ -6469,6 +6469,10 @@ dependencies = [
 name = "smart_explorer_android"
 version = "0.0.0"
 dependencies = [
+ "jni 0.22.4",
+ "ndk-context",
+ "rustls-platform-verifier",
+ "serde_json",
  "smart_explorer",
 ]
 
