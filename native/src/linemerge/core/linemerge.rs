@@ -296,6 +296,47 @@ pub fn side_b(rows: &[Row]) -> String {
         .join("\n")
 }
 
+/// Line-ending facts that the rows lose (`str::lines` drops `\r\n`/`\n` and a
+/// final newline): kept per input so a rebuilt text keeps its form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextShape {
+    crlf: bool,
+    final_newline: bool,
+}
+
+impl TextShape {
+    /// CRLF only when every line break of `text` is one.
+    pub fn of(text: &str) -> Self {
+        let breaks = text.matches('\n').count();
+        Self {
+            crlf: breaks > 0 && text.matches("\r\n").count() == breaks,
+            final_newline: text.ends_with('\n'),
+        }
+    }
+
+    /// A merge of two texts: CRLF and the final newline only when both have them.
+    pub fn merged(a: Self, b: Self) -> Self {
+        Self {
+            crlf: a.crlf && b.crlf,
+            final_newline: a.final_newline && b.final_newline,
+        }
+    }
+
+    /// Applies the shape to lines joined with `\n` (as [`assemble_rows`],
+    /// [`side_a`] and [`side_b`] return them).
+    pub fn apply(self, joined: String) -> String {
+        let mut text = if self.crlf {
+            joined.replace('\n', "\r\n")
+        } else {
+            joined
+        };
+        if self.final_newline && !text.is_empty() {
+            text.push_str(if self.crlf { "\r\n" } else { "\n" });
+        }
+        text
+    }
+}
+
 /// Rebuild the merged text from per-row choices (equal rows always contribute).
 pub fn assemble_rows(rows: &[Row]) -> String {
     let mut out: Vec<String> = Vec::new();

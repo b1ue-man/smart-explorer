@@ -105,3 +105,32 @@ fn excessive_line_count_fails_before_diffing() {
         } if actual > MAX_TOTAL_LINES
     ));
 }
+
+#[test]
+fn android_task_linemerge_text_shape_restores_line_endings() {
+    let lf = TextShape::of("a\nb\n");
+    let crlf = TextShape::of("a\r\nb\r\n");
+    let bare = TextShape::of("a\nb");
+    let mixed = TextShape::of("a\r\nb\n");
+    assert_eq!(lf.apply("a\nb".to_string()), "a\nb\n");
+    assert_eq!(crlf.apply("a\nb".to_string()), "a\r\nb\r\n");
+    assert_eq!(bare.apply("a\nb".to_string()), "a\nb");
+    assert_eq!(mixed.apply("a\nb".to_string()), "a\nb\n");
+    assert_eq!(
+        TextShape::merged(lf, crlf).apply("x\ny".to_string()),
+        "x\ny\n"
+    );
+    assert_eq!(
+        TextShape::merged(crlf, crlf).apply("x".to_string()),
+        "x\r\n"
+    );
+    assert_eq!(
+        TextShape::merged(lf, bare).apply("x\ny".to_string()),
+        "x\ny"
+    );
+    assert_eq!(lf.apply(String::new()), "");
+    // Rows drop the endings; the shape of each input rebuilds it exactly.
+    let rows = rows("a\r\nb\r\n", "a\nc").unwrap();
+    assert_eq!(crlf.apply(side_a(&rows)), "a\r\nb\r\n");
+    assert_eq!(bare.apply(side_b(&rows)), "a\nc");
+}

@@ -43,10 +43,11 @@ fn is_excluded(name: &str, trash_active: impl FnOnce() -> bool) -> bool {
     name == TRASH_DIR_NAME && trash_active()
 }
 
-/// Whether the folders inside `dir` are other apps' private folders
-/// (`<volume>/Android/data`, `<volume>/Android/obb`): Android lists them but
-/// refuses to open them even with all-files access. Sync walks omit them like
-/// the trash, as protected omissions. Inert while no volumes are set.
+/// Whether the entries inside `dir` are other apps' private storage
+/// (`<volume>/Android/data`, `<volume>/Android/obb`): Android lists the package
+/// folders and files such as `.nomedia` there but refuses to open them even with
+/// all-files access. Sync walks omit them like the trash, as protected
+/// omissions. Inert while no volumes are set.
 pub fn hidden_app_folders_in(dir: &str) -> bool {
     in_hidden_app_parent(dir, volumes)
 }

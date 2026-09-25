@@ -27,12 +27,15 @@ pub(super) struct PairContext {
     pub pair: String,
 }
 
-/// Loaded line-merge rows of one conflict plus the file states they came from.
+/// Loaded line-merge rows of one conflict plus the file states and texts they
+/// came from (the rows lose line endings; "keep both" writes the texts as read).
 pub(super) struct MergeDraft {
     pub cid: String,
     pub rows: Vec<Row>,
     pub state_a: (u64, i64),
     pub state_b: (u64, i64),
+    pub text_a: String,
+    pub text_b: String,
 }
 
 struct JobConflicts {

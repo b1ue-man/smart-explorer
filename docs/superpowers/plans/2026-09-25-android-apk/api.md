@@ -162,7 +162,8 @@ Ereignisse (`pollEvents`):
 - `scan.view {taskId, sort:Sort, collapsed:[location], offset:Int, limit:Int (≤ 500), sinceRevision:Long?}`
   → `{revision:Long, unchanged:Boolean, entries:[Entry], visibleTotal, matches, scanned,
   truncated:Boolean, issues:Int}` (Baumreihenfolge, `depth`, `hasChildren`, `expanded`; Fenster ab
-  `offset`; `unchanged=true` und leere `entries`, wenn `sinceRevision` aktuell ist; während des Scans
+  `offset`; `unchanged=true` und leere `entries`, wenn `sinceRevision` aktuell ist und dasselbe Fenster
+  – Sortierung, `offset`, `limit`, `collapsed` – wie beim vorigen Aufruf angefragt wird; während des Scans
   fragt Kotlin höchstens 1/s)
 - `scan.issues {taskId}` → `{text}`
 - `index.status {}` → `{state:"none|building|ready", count:Int}` · `index.build {}` → `{taskId}`
