@@ -117,11 +117,11 @@ fn collect_candidates(
             let path = join(&directory, &metadata.name);
             budget.record(&path, depth + 1).map_err(io::Error::other)?;
             let rel = rel_of(&path, destination_root);
-            // A destination app trash or another app's private folder (Android)
+            // A destination app trash or other apps' private storage (Android)
             // is never an extra to delete.
             if metadata.is_symlink
                 || crate::apptrash::excluded_name(&metadata.name)
-                || (metadata.is_dir && crate::apptrash::hidden_app_folders_in(&directory))
+                || crate::apptrash::hidden_app_folders_in(&directory)
             {
                 omissions.record(&rel, true);
                 continue;

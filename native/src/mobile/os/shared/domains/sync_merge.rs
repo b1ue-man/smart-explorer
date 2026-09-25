@@ -9,6 +9,7 @@ use super::sync_conflicts::{
 };
 use super::sync_run::spawn_for_job;
 use crate::bisync::Conflict;
+use crate::linemerge::TextShape;
 use crate::mobile::{ApiError, Runtime};
 use crate::vfs::remote_util::{conflict_rel_name, ep_join, read_text, sig_from, write_bytes};
 use crate::vfs::Backend;
@@ -35,6 +36,8 @@ fn load_draft(pair: &PairContext, conflict: &Conflict, cid: &str) -> Result<Merg
         rows,
         state_a,
         state_b,
+        text_a,
+        text_b,
     })
 }
 
@@ -126,7 +129,9 @@ pub(super) fn apply(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             }
         }
         ensure_unchanged(&pair, &conflict.rel, &draft)?;
-        let merged = crate::linemerge::assemble_rows(&draft.rows);
+        // Line endings and a final newline follow the inputs (the rows drop them).
+        let shape = TextShape::merged(TextShape::of(&draft.text_a), TextShape::of(&draft.text_b));
+        let merged = shape.apply(crate::linemerge::assemble_rows(&draft.rows));
         write_both(&pair, &conflict.rel, &merged)?;
         finish(&job_id, &cid, &pair, &conflict.rel)
     })?;
@@ -145,11 +150,10 @@ pub(super) fn keep_both(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             None => load_draft(&pair, &conflict, &cid)?,
         };
         ensure_unchanged(&pair, &conflict.rel, &draft)?;
-        let full_a = crate::linemerge::side_a(&draft.rows);
-        let full_b = crate::linemerge::side_b(&draft.rows);
+        // Both versions stay as they were read, byte for byte.
         let copy_rel = conflict_rel_name(&conflict.rel);
-        write_both(&pair, &conflict.rel, &full_a)?;
-        write_both(&pair, &copy_rel, &full_b)?;
+        write_both(&pair, &conflict.rel, &draft.text_a)?;
+        write_both(&pair, &copy_rel, &draft.text_b)?;
         finish(&job_id, &cid, &pair, &conflict.rel)
     })?;
     Ok(json!({ "taskId": task }))

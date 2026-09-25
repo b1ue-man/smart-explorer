@@ -4,7 +4,7 @@
 //! pairing runs, every 5 s in the foreground and every 60 s in the
 //! background, keeps the last snapshot and sends `share` / `shareRequest`.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,10 @@ const SHARE_SERVER_FILE: &str = "share_server.txt";
 /// How long a committed profile change outranks worker snapshots that do not
 /// carry it yet (the worker reloads on `reconfigure`, normally at once).
 const COMMIT_GUARD: Duration = Duration::from_secs(10);
+
+/// Counts completed worker reloads (`reconfigure`); a snapshot drained while
+/// one completed may predate it.
+static RELOADS: AtomicU64 = AtomicU64::new(0);
 
 /// A profile revision this process wrote and the worker has not reported yet.
 struct PendingCommit {
@@ -80,7 +84,12 @@ impl ShareState {
     }
 
     /// Folds a snapshot in; returns the worker errors it carried.
-    fn apply(&mut self, mut snapshot: ShareWorkerSnapshot) -> Vec<String> {
+    /// `reloaded_meanwhile`: the worker reloaded while this snapshot was drained.
+    fn apply(
+        &mut self,
+        mut snapshot: ShareWorkerSnapshot,
+        reloaded_meanwhile: bool,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
         if let Some(previous) = self.poll_error.take() {
             let stale = format!("Share-Worker nicht erreichbar: {previous}");
@@ -115,9 +124,10 @@ impl ShareState {
         self.worker = Some(WorkerFacts::from_snapshot(&snapshot));
         // A snapshot drained before the worker reloaded a commit still carries
         // the older profiles; the committed ones stay until the worker has it.
-        let stale = self.pending_commit.as_ref().is_some_and(|pending| {
-            snapshot.profile_revision != pending.revision && Instant::now() < pending.until
-        });
+        let stale = reloaded_meanwhile
+            || self.pending_commit.as_ref().is_some_and(|pending| {
+                snapshot.profile_revision != pending.revision && Instant::now() < pending.until
+            });
         if !stale {
             self.pending_commit = None;
             // Like the desktop drain: the snapshot's revision travels separately.
@@ -284,13 +294,17 @@ pub(super) fn start_poller(rt: &'static Runtime) {
 }
 
 fn poll_once(rt: &Runtime) {
+    let reloads = RELOADS.load(Ordering::SeqCst);
     // `None`: this process does not embed the worker (yet); nothing to drain.
     let Some(drained) = crate::daemon::drain_share_events_in_process() else {
         return;
     };
     let (errors, emit_status, open_requests) = with_state(|state| {
         let errors = match drained {
-            Ok(snapshot) => state.apply(snapshot),
+            Ok(snapshot) => {
+                let reloaded_meanwhile = RELOADS.load(Ordering::SeqCst) != reloads;
+                state.apply(snapshot, reloaded_meanwhile)
+            }
             Err(error) => {
                 state.poll_error = Some(error);
                 state.after_discovery_changes();
@@ -365,8 +379,14 @@ pub(super) fn identity() -> Result<ShareIdentity, ApiError> {
 /// Makes the worker reload profiles, identity and server, then polls soon.
 /// Failures are logged: the change itself is already saved.
 pub(super) fn reconfigure(rt: &Runtime) {
-    if let Err(error) = crate::daemon::refresh_share_worker_checked() {
-        rt.log_error("share", &format!("Share-Konfiguration zustellen: {error}"));
+    match crate::daemon::refresh_share_worker_checked() {
+        // The worker now holds the stored profiles, including changes written
+        // outside `committed` (requests, removals): later snapshots are current.
+        Ok(_) => {
+            RELOADS.fetch_add(1, Ordering::SeqCst);
+            with_state(|state| state.pending_commit = None);
+        }
+        Err(error) => rt.log_error("share", &format!("Share-Konfiguration zustellen: {error}")),
     }
     wake();
 }

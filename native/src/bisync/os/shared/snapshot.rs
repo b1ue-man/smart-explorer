@@ -289,12 +289,12 @@ fn walk_files_impl(
                                 let rel = rel_of(&p, root);
                                 let excluded = (!filter.include_hidden && m.hidden)
                                     || filter.ignored(&rel, m.is_dir || m.is_symlink);
-                                // The app trash and other apps' private folders
+                                // The app trash and other apps' private storage
                                 // (Android) are protected omissions like a link:
                                 // never synced, their counterparts kept.
                                 if m.is_symlink
                                     || crate::apptrash::excluded_name(&m.name)
-                                    || (m.is_dir && crate::apptrash::hidden_app_folders_in(dir))
+                                    || crate::apptrash::hidden_app_folders_in(dir)
                                 {
                                     if let Some(omissions) = omissions {
                                         omissions.lock().unwrap_or_else(|e| e.into_inner())
