@@ -523,9 +523,9 @@ Ausnahmen im Testbericht.
 | B4 | C | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
 | K0 | D | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
 | REL | E | fertig (Welle 1, statisch geprüft) | Bericht: welle1-berichte.md |
-| B2 | F | in Arbeit (Welle 2) | |
-| B3 | G | in Arbeit (Welle 2) | |
-| K1 | H | in Arbeit (Welle 2) | |
-| K2 | I | in Arbeit (Welle 2) | |
-| K3 | J | in Arbeit (Welle 2) | |
-| T | K | offen | |
+| B2 | F | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
+| B3 | G | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
+| K1 | H | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
+| K2 | I | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
+| K3 | J | fertig (Welle 2, statisch geprüft) | Bericht: welle2-berichte.md |
+| T | K | in Arbeit (Welle 3) | |
