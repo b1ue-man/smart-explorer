@@ -583,8 +583,8 @@ boot_check() {
   sleep 5
   wait_boot
   if [[ -n "$logcat_pid" ]]; then
-    kill "$logcat_pid" 2>/dev/null
-    wait "$logcat_pid" 2>/dev/null
+    kill "$logcat_pid" 2>/dev/null || true
+    wait "$logcat_pid" 2>/dev/null || true
   fi
   adb logcat -v threadtime >"$emulator_out/logcat-after-reboot.txt" 2>&1 &
   logcat_pid=$!
@@ -625,6 +625,9 @@ collect_emulator() {
 
 emulator_cleanup() {
   local status=$?
+  # Cleanup steps may fail (a killed logcat reports 143 to wait); the ERR trap fires even
+  # under `set +e` and must not turn a passed run into a failure.
+  trap - ERR
   set +e
   collect_emulator
   bash "$servers_dir/share-desktop.sh" down "$emulator_out/share" "$emulator_out/share-desktop" >/dev/null 2>&1
