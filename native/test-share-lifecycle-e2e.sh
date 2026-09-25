@@ -235,7 +235,8 @@ verify_release_transaction_scripts() {
     }
     $paths = @(
       (Join-Path $root "native/publish-release-local.ps1"),
-      (Join-Path $root "native/release-publication.ps1")
+      (Join-Path $root "native/release-publication.ps1"),
+      (Join-Path $root "native/release-version.ps1")
     )
     foreach ($path in $paths) {
       $tokens = $null
@@ -351,10 +352,16 @@ verify_release_transaction_scripts() {
       Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
     }
     $assets = @(Get-PublicationReleaseAssetMap -RepoRoot $root -Version $currentVersion)
-    if ($assets.Count -ne 18) {
-      throw "Current release candidate does not map exactly 18 assets"
+    if ($assets.Count -ne 20) {
+      throw "Current release candidate does not map exactly 20 assets"
     }
+    # 0.5.162 is the last release published before the Android APK joined the
+    # asset set; only that committed candidate may lack the two Android files.
+    $preAndroidRelease = [version]$currentVersion -le [version]"0.5.162"
     foreach ($asset in $assets) {
+      if ($preAndroidRelease -and $asset.PublishedName -like "smart-explorer-android.apk*") {
+        continue
+      }
       Assert-PublicationNonEmptyFile $asset.LocalPath
     }
     Assert-PublicationInstallerPayloads `
@@ -388,6 +395,8 @@ verify_release_transaction_scripts() {
       throw "Controlled Cargo.lock root-version update is not deterministic"
     }
     $wrapper = Get-Content -LiteralPath (Join-Path $root "native/publish-release-local.ps1") -Raw
+    # Version staging moved to the shared helper that the Android release job dot-sources too.
+    $versionHelpers = Get-Content -LiteralPath (Join-Path $root "native/release-version.ps1") -Raw
     $preflight = $wrapper.IndexOf("`$preflightPlan = Assert-CommonReleasePreflight")
     $lock = $wrapper.IndexOf("`$completeReleaseLock = Enter-CompleteReleaseLock")
     $versionBump = $wrapper.IndexOf("Set-NativeVersion `$plan.Version", $lock)
@@ -436,9 +445,10 @@ verify_release_transaction_scripts() {
         -not $wrapper.Contains("Assert-WindowsManifest `$stageFeed `$version `$buildSourceCommit")) {
       throw "Isolated Windows/WSL release staging is not bound to its captured source HEAD"
     }
-    if (-not $wrapper.Contains(".Cargo.lock.complete-release-version.") -or
-        -not $wrapper.Contains(".Cargo.toml.complete-release-version.") -or
-        $wrapper.Contains(".complete-release-stage.version-")) {
+    if (-not $versionHelpers.Contains(".Cargo.lock.complete-release-version.") -or
+        -not $versionHelpers.Contains(".Cargo.toml.complete-release-version.") -or
+        $wrapper.Contains(".complete-release-stage.version-") -or
+        $versionHelpers.Contains(".complete-release-stage.version-")) {
       throw "Version files are not staged beside their atomic replacement targets"
     }
     $publicationHelpers = Get-Content -LiteralPath (Join-Path $root "native/release-publication.ps1") -Raw

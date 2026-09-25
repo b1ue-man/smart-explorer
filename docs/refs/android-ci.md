@@ -367,3 +367,25 @@ docker run -d \
   third-party instrumented tests was not license-checked in this pass — prefer plain `google_apis`
   (or `default`/`aosp_atd` for a lighter/faster AOSP-only image) unless Play Services APIs are
   actually exercised by the tests.
+
+## 11. Release-APK verification: `aapt2 dump badging`, `apksigner verify --print-certs`, 16 KB check
+
+Ergänzt 2026-09-25 (Block REL) aus
+[developer.android.com — aapt2](https://developer.android.com/tools/aapt2),
+[developer.android.com — apksigner](https://developer.android.com/tools/apksigner),
+[AOSP `tools/aapt2/dump/DumpManifest.cpp`](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/tools/aapt2/dump/DumpManifest.cpp),
+[AOSP apksig `ApkSignerTool.java` / `HexEncoding.java`](https://android.googlesource.com/platform/tools/apksig/+/refs/heads/main/src/apksigner/java/com/android/apksigner/),
+[developer.android.com — 16 KB page sizes](https://developer.android.com/guide/practices/page-sizes).
+
+- `aapt2 dump badging app.apk` ("Prints information extracted from the APK's manifest"). The first
+  line is printed as `package: name='%s' ` + `versionCode='%s' ` (decimal via `std::to_string`) +
+  `versionName='%s'` + ` platformBuildVersionName='%s'` …, e.g.
+  `package: name='app.smartexplorer.android' versionCode='5163' versionName='0.5.163' …`.
+- `apksigner verify [options] app.apk`; `--print-certs` shows the signing certificates. Per signer
+  the tool prints `Signer #<n> certificate DN: …`, `Signer #<n> certificate SHA-256 digest: <hex>`,
+  `… SHA-1 digest: …`, `… MD5 digest: …`; `<hex>` comes from `HexEncoding.encode` with the digit
+  table `"0123456789abcdef"` (lowercase, no separators). A failed verification prints
+  `DOES NOT VERIFY` to stderr and exits 1.
+- Both tools live in `$ANDROID_HOME/build-tools/<version>/`; `apksigner` needs `java` on `PATH`.
+- 16 KB ELF alignment: `$NDK/toolchains/llvm/prebuilt/<host>/bin/llvm-objdump -p lib.so | grep LOAD`
+  must show `align 2**14` or higher on every `LOAD` segment; NDK r28+ aligns to 16 KB by default.

@@ -8,6 +8,7 @@ One version number drives everything: `native/Cargo.toml`.
    ─▶ top-level wrapper bumps Cargo.toml once
    ─▶ one complete release build
        ├─▶ update feed   version + source-bound manifest + Windows/Linux app/updater/se + hashes
+       │                 + signed Android APK + hash
        └─▶ installer     Windows NSIS + Linux install-linux.sh
    ─▶ commit + push main
    ─▶ release trigger ─▶ static exact-byte CI validation/publication
@@ -16,10 +17,11 @@ One version number drives everything: `native/Cargo.toml`.
  installed app on launch ──▶ reads update_source (default: the Git feed on main)
                           ──▶ newer version? ──▶ stage + SHA-check app/updater/se
                                                 ──▶ ask user ──▶ helper transaction + restart
+ Android app ──▶ same feed: version.txt ──▶ download APK + SHA-256 check ──▶ system installer
 ```
 
-The version is consistent across all four outputs because each reads it from
-`Cargo.toml`. Never hand-edit `version.txt` — the top-level release script
+The version is consistent across all outputs because each reads it from
+`Cargo.toml` (the APK's `versionName`/`versionCode` included). Never hand-edit `version.txt` — the top-level release script
 writes it last.
 
 The bulk-access mount source and exact revised private-Dokany dependency were
@@ -305,7 +307,10 @@ and `actions: write`. On the pinned `windows-2025` image it installs the missing
 Windows tools, provisions Ubuntu 24.04 as WSL1 through Canonical's SHA-pinned
 WSL action, preflights the WSL tools, and invokes only
 `native/publish-release-local.ps1`; no YAML step reproduces versioning, build,
-staging, tagging, or publication. This is the authoritative unattended path:
+staging, tagging, or publication. The Android APK is the one input prepared
+before it, by the `android-release-apk` job described in
+[Android APK](#android-apk-build-signing-and-feed) below; the wrapper receives
+it through `-AndroidApkDirectory` and stages it itself. This is the authoritative unattended path:
 the initiating workstation only commits, pushes, dispatches, and monitors;
 compilation, tests, packaging, and publication execute on GitHub-hosted runners.
 
@@ -352,7 +357,9 @@ For a human-operated workstation release, use the same wrapper directly:
    It checks Windows/WSL or Linux cross-build tooling, Rust targets,
    `rustfmt`/Clippy, Zig, NSIS, MinGW, 7-Zip, network access, the active workflow, and
    non-interactive Git write authentication for `main` plus at least one of the
-   exact tag or `release/vX.Y.Z` trigger paths. The candidate additionally
+   exact tag or `release/vX.Y.Z` trigger paths. Without `-AndroidApkDirectory`
+   it also runs `android/build-release-apk.sh --check-env` in the same WSL/Linux
+   environment (see [Android APK](#android-apk-build-signing-and-feed)). The candidate additionally
    requires the committed suite-approved private-DLL/source set described above
    and rejects bootstrap overrides. Resolve every failure before the
    complete build. The HTTPS remote needs a usable Git credential, and the
@@ -372,7 +379,8 @@ For a human-operated workstation release, use the same wrapper directly:
 
    On Windows it builds Windows locally and Linux through WSL. On Linux/WSL it
    calls the checked-in `native/publish-feed.sh` internally for the complete
-   Windows-GNU/Linux cross-build. Both paths inherit the same
+   Windows-GNU/Linux cross-build. Before the desktop builds it builds the
+   signed Android APK with `android/build-release-apk.sh` in WSL/Linux. Both paths inherit the same
    `release-native/.complete-release.lock`; a direct full invocation of
    `publish-feed.sh` is refused.
 
@@ -387,10 +395,11 @@ For a human-operated workstation release, use the same wrapper directly:
    scope print a warning and retain the compiler-level limits.
 3. The wrapper owns every remaining step. It bumps the patch version once,
    reuses that version after a pre-tag failure, builds and promotes the complete
-   artifact set, verifies the six feed hashes, the installer's embedded
+   artifact set, verifies the six desktop feed hashes plus the Android APK
+   hash, the installer's embedded
    app/updater/`se` bytes and pinned Dokany MSI, the manifest's exact
    source-parent binding, and the
-   exact 18 publication assets,
+   exact 20 publication assets,
    rejects any build-time drift in tracked sub-workspace lockfiles,
    creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards
    `main`, and pushes exactly one immutable `vX.Y.Z` tag. If and only if that
@@ -399,7 +408,7 @@ For a human-operated workstation release, use the same wrapper directly:
    follows that mutually exclusive publication run. The marked main-branch
    commit skips its redundant development CI run; the tag run performs the
    static exact committed Linux/Windows candidate gates and publishes the
-   GitHub Release. The wrapper polls that exact run, checks all 18 published asset
+   GitHub Release. The wrapper polls that exact run, checks all 20 published asset
    digests against the expected committed bytes, and only then reports success.
    Binary and script assets remain byte-exact. For `version.txt`, the verifier
    hashes the canonical UTF-8/LF Git representation so a Windows wrapper's
@@ -525,12 +534,12 @@ host its one tag push, or its mutually exclusive `release/v*` fallback, starts
 the publication consumer; on the GitHub-hosted path the wrapper starts that
 same consumer through its one exact internal dispatch after creating the ref.
 Both variants run only the static publication consumer: version consistency,
-all six payload hashes, Windows
+all six desktop payload hashes plus the Android APK hash, Windows
 build-manifest source-parent binding, portable Windows/feed equality, installer payload equality,
-ELF linkage, DLL exports, and the exact 18-file map are checked directly from
+ELF linkage, DLL exports, and the exact 20-file map are checked directly from
 the candidate commit. The publication job downloads that staged set, fails if
 any byte differs from the same commit or any extra/missing asset exists, checks
-the six sidecars again, binds the immutable tag, and uploads those bytes. It
+the seven sidecars again, binds the immutable tag, and uploads those bytes. It
 never invokes Cargo, the task-level suite, a GUI/runtime E2E, or another
 candidate pipeline. Published app/updater/`se` payloads, hashes, and
 `version.txt` are therefore byte-identical to the auto-update feed; the
@@ -565,6 +574,90 @@ diagnostic `cargo build`; the canonical bundle script rejects
 `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` because release payloads must use the
 same compiler flags on every machine.
 
+## Android APK: build, signing, and feed
+
+The Android app (`android/`, Rust bridge `native/android-bridge`) ships in the
+same release transaction as the desktop builds: the update feed and the GitHub
+Release carry `smart-explorer-android.apk` plus its `sha256sum`-format sidecar,
+which raises the publication set from 18 to 20 assets. Distribution is sideload
+only (GitHub Release and in-app update); there is no Google Play listing.
+
+**Version.** `versionName` is the `native/Cargo.toml` version and `versionCode`
+is `major·1 000 000 + minor·1 000 + patch` (minor and patch stay below 1000).
+`android/app/build.gradle.kts` derives both at build time, so the wrapper's
+single version bump also versions the APK. Android never installs an older
+version over a newer one, so the Android app has no rollback.
+
+**Signing key and certificate.** One stable release key signs every APK; an
+APK signed with another key cannot update an installed app. The key is kept
+outside the repository, the release owner keeps a backup, and the repository secrets
+`ANDROID_KEYSTORE_B64` (base64 of the PKCS#12 keystore),
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`
+provide it to CI. `android/release-cert.sha256` pins the SHA-256 fingerprint
+of the signing certificate, and the release checks every APK against it.
+Replacing the key changes that fingerprint; installed apps then accept no
+further update until users reinstall, so it is an exceptional, explicitly
+announced change.
+
+**Remote path.** The `complete_release_source_sha` dispatch first runs the
+`android-release-apk` job on `ubuntu-24.04` (180-minute job, 160 minutes for
+the build step). It binds itself to the same exact `main` source SHA as the
+`complete-release` job, dot-sources `native/release-publication.ps1` and
+`native/release-version.ps1`, and resolves the wrapper's own Tagged/Bump/Resume
+plan:
+
+- when the source is the committed `Release Smart Explorer vX.Y.Z [release
+  candidate]` commit of the target version and its feed holds the APK (an
+  interrupted, untagged or tagged candidate), the job only re-verifies those
+  bytes, because they were built from that same source;
+- a tagged candidate without its APK fails, because an immutable tag cannot
+  gain a rebuilt asset;
+- otherwise it applies the same `Set-NativeVersion` bump or resume to its own
+  checkout (never committed) and runs `android/build-release-apk.sh` with the
+  keystore decoded into a private temporary directory that the step removes.
+
+`android/build-release-apk.sh` installs the NDK pinned in `android/ndk-version`
+when it is missing (r28 and newer produce 16 KB-aligned libraries), builds
+`native/android-bridge` for `arm64-v8a` and `x86_64` with
+`cargo ndk --platform 30`, checks the 16 KB `LOAD` alignment of both libraries,
+locates the `rustls-platform-verifier` Maven repository through
+`cargo metadata --filter-platform aarch64-linux-android`, and runs the Gradle
+wrapper's `:app:assembleRelease`. It then verifies `versionName`/`versionCode`
+with `aapt2 dump badging`, the signer with `apksigner verify --print-certs`
+against `android/release-cert.sha256`, and both native libraries inside the
+APK, and writes `smart-explorer-android.apk` plus `apk-metadata.json`
+(`version`, `versionCode`, `sha256`, `certSha256`) as the `android-release-apk`
+artifact.
+
+`complete-release` runs only after that job succeeded. It downloads the artifact
+to `$RUNNER_TEMP` and passes it to the wrapper with `-AndroidApkDirectory`.
+Without Android tools, the wrapper checks in its preflight and again before
+staging that the directory holds exactly those two files, that the APK's
+SHA-256 equals the metadata, that `version`/`versionCode` match its own plan,
+and that `certSha256` equals `android/release-cert.sha256`. On the Windows host
+the APK and sidecar join the isolated feed that is promoted as one unit. A
+reused or tagged candidate instead requires the handed-over APK to equal the
+committed feed APK byte for byte.
+
+**Human-operated run.** Without `-AndroidApkDirectory` the wrapper builds the
+APK itself through the same script, in WSL on Windows and with `bash` on Linux,
+before the desktop builds. That environment needs JDK 17, the Android SDK
+(`ANDROID_HOME` or `ANDROID_SDK_ROOT`) with command-line tools and build-tools
+(`aapt2`, `apksigner`), `cargo-ndk` 4.1.2, Python 3, and the four signing
+variables `ANDROID_KEYSTORE_FILE` (path to the keystore), `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. On Windows the wrapper forwards
+signing variables set in its own process to WSL through `WSLENV` (the keystore
+path is translated), never on a command line. `--check-env` installs only the
+pinned NDK and the two Android Rust targets. On a Linux host the checked-in
+`native/publish-feed.sh` promotes a feed without the APK; the wrapper then adds
+the verified APK and sidecar under the same release lock, before candidate
+validation or any commit. A failure there leaves an incomplete candidate that
+the next run rebuilds for the same version.
+
+**Update in the app.** The Android app reads `version.txt` from the configured
+feed, downloads `smart-explorer-android.apk`, checks its `.sha256`, and hands it
+to the system installer; Android itself refuses an APK signed by another key.
+
 ## The update feed (what the app reads)
 
 A folder with OS-specific payloads, identical for a local folder or an
@@ -586,6 +679,8 @@ release-native/update-feed/
   smart_explorer_updater.sha256
   se                   Linux terminal companion
   se.sha256
+  smart-explorer-android.apk   signed Android app (arm64-v8a, x86_64; Android 11+)
+  smart-explorer-android.apk.sha256
 ```
 
 The Linux desktop payload relies on the normal X11 or Wayland client libraries
@@ -677,10 +772,11 @@ On every launch (and on "Jetzt prüfen"):
    version and pauses automatic forward checks until "Auf neueste aktualisieren".
 
 So a release is "done" only when, for the new version: `Cargo.toml` = feed
-`version.txt` = Windows build manifest = Release tag = installer version; all
-six update payload hashes verify; the manifest's `source_commit` equals the
-release-candidate commit's sole parent; and the GitHub Release is visible with the
-Windows/Linux app, updater, and `se` payloads and hashes, installer,
+`version.txt` = Windows build manifest = Release tag = installer version = APK
+`versionName`; all six desktop update payload hashes and the APK hash verify;
+the manifest's `source_commit` equals the release-candidate commit's sole
+parent; and the GitHub Release is visible with the Windows/Linux app, updater,
+and `se` payloads and hashes, the Android APK and its hash, installer,
 `install-linux.sh`, context-menu DLL, both share-server payloads, and
 `version.txt`.
 
@@ -698,7 +794,7 @@ outbound HTTPS to `raw.githubusercontent.com`.
 grep '^version' native/Cargo.toml
 cat release-native/update-feed/version.txt
 ls "release-native/Smart Explorer Setup "*.exe
-cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256
+cd release-native/update-feed && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && sha256sum -c smart-explorer-android.apk.sha256
 grep -Fx "version=$(sed -nE 's/^version = \"([^\"]+)\".*/\1/p' ../../native/Cargo.toml | head -1)" windows-build.manifest
 grep -Fx "source_commit=$(git -C ../.. rev-parse HEAD^)" windows-build.manifest  # release candidate's exact source parent
 git show origin/main:release-native/update-feed/version.txt   # must match, on main

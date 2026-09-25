@@ -597,6 +597,11 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    fordert erst für `msiexec` UAC an. Eine erkannte inkompatible gemeinsam
    genutzte Dokany-Version wird nicht automatisch ersetzt.
 
+**Android (ab Android 11):** `smart-explorer-android.apk` aus den
+[Releases](https://github.com/b1ue-man/smart-explorer/releases/latest) auf dem
+Telefon installieren (Sideload). Details, Updates und Grenzen stehen unten unter
+[Android: Installieren und Updates](#-android-installieren-und-updates).
+
 ## 🔄 Updates bekommen — *das hier eintragen*
 
 Die App prüft bei **jedem Start** automatisch auf eine neuere Version. Sie lädt
@@ -623,6 +628,111 @@ aus App, Update-Helfer und `se` samt SHA-256-Dateien aus
 Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 `%APPDATA%\smart_explorer\update_source.txt` bzw.
 `$XDG_DATA_HOME/smart_explorer/update_source.txt`.
+Die Android-App nutzt denselben Feed für ihre eigene APK (siehe unten).
+
+## 🤖 Android: Installieren und Updates
+
+Die Android-App ist eine eigenständige Smart-Explorer-Installation für
+Telefone und Tablets: derselbe Rust-Kern wie am Desktop, bedient über eine
+eigene Touch-Oberfläche (Kotlin, Jetpack Compose, Material 3). Sie läuft ab
+**Android 11** (API 30) auf `arm64-v8a`- und `x86_64`-Geräten und wird nur
+per Sideload verteilt, nicht über Google Play. Die APK erscheint in den
+GitHub-Releases ab dem ersten Release, das die Android-App enthält.
+
+1. `smart-explorer-android.apk` aus dem
+   [neuesten Release](https://github.com/b1ue-man/smart-explorer/releases/latest)
+   auf das Telefon laden und öffnen. Android fragt einmalig nach der Erlaubnis
+   „Unbekannte Apps installieren“ für Browser bzw. Dateimanager.
+2. Beim ersten Start fragt die Einrichtung nach **Zugriff auf alle Dateien**
+   (interner Speicher, SD-Karte, USB) und nach **Benachrichtigungen**
+   (Übertragungen, Hintergrund, Updates).
+3. Optional prüfen: Die SHA-256 der APK steht in
+   `smart-explorer-android.apk.sha256`; der Fingerabdruck des
+   Signaturzertifikats steht in [`android/release-cert.sha256`](android/release-cert.sha256)
+   (vergleichbar mit `apksigner verify --print-certs`).
+
+**Updates:** Die App prüft beim Start (höchstens einmal täglich, abschaltbar)
+und unter **Einstellungen → Updates → Jetzt prüfen** denselben Update-Feed wie
+der Desktop. Eine neue Version wird geladen, per SHA-256 geprüft und dem
+System-Installer übergeben; dafür braucht Smart Explorer selbst die Erlaubnis
+„Unbekannte Apps installieren“. Alle Versionen sind mit demselben Schlüssel
+signiert, sonst lehnt Android das Update ab. Eine ältere Version lässt sich
+nicht über eine neuere installieren (kein Rollback).
+
+**Daten:** Die App ist ein eigenes Gerät mit eigenen Verbindungen, Sync-Jobs,
+Favoriten und Share-Identität im App-Speicher, in denselben Formaten wie am
+Desktop. Desktop-Profile werden nicht automatisch übernommen. Diese Daten sind
+von Android-Sicherung und Geräteumzug ausgeschlossen, damit Zugangsdaten und
+die private Share-Identität das Gerät nicht verlassen.
+
+## 🤖 Android: Umfang und Grenzen
+
+**Funktionen (F1–F23):**
+
+- **Grundlage:** Einrichtung beim ersten Start, Hell/Dunkel/System,
+  randlose Darstellung, Zurück-Geste (F1); Rust-Kern mit Android-Adaptern und
+  JNI-Brücke, Absturzschutz inklusive (F2).
+- **Dateien:** Orte (interner Speicher, SD-Karte/USB, Favoriten, Zuletzt,
+  Verbindungen, Google Drive, Share-Geräte und -Räume, Papierkorb) mit
+  Pfadleiste, Verlauf, Tabs und zwei Bereichen auf breiten Bildschirmen (F3);
+  Dateiliste mit Bildvorschau, Sortierung und markierten problematischen Namen
+  (F4); Filter und Suche wie am Desktop inklusive rekursivem Scan mit Grenze
+  und Abbruch (F5); Fuzzy-Ordnersuche (F6); Mehrfachauswahl, Kopieren,
+  Ausschneiden, Einfügen, Kopieren/Verschieben nach…, Umbenennen, Neu, Löschen,
+  Eigenschaften, Favoriten (F7); bis zu sechs parallele Übertragungen mit
+  Warteschlange und Benachrichtigung, auch nach Verlassen der App (F8);
+  Öffnen in passenden Apps, Teilen und Empfangen, auch für Remote-Orte (F9);
+  ZIP lesen und entpacken (F10); Papierkorb je Speichervolume mit
+  Wiederherstellen und Löschung nach 30 Tagen (F11).
+- **Verbindungen:** SFTP, FTP/FTPS und WebDAV anlegen, testen, bearbeiten und
+  löschen, Hostschlüssel nach „Trust on first use“ (F12); Google Drive mit
+  eigener OAuth-Client-ID (F13).
+- **Sync und Hintergrund:** Ordner einmalig spiegeln (F14); Sync-Jobs im
+  Desktop-Format mit allen Richtungen, Regeln und Auslösern (F15); Konflikte
+  prüfen, lösen und Textdateien zusammenführen (F16); Hintergrund-Worker mit
+  den Modi Aus, Periodisch (WorkManager, mindestens alle 15 Minuten) und
+  Dauerbetrieb (Vordergrunddienst), Pause und automatischer Pause bei
+  Energiesparmodus oder getaktetem Netz (F17).
+- **Share:** eigenes Gerät, Suchbar machen mit PIN, Direkt-Geräte und Räume,
+  Anfragen, Freigaben, Dateien senden und Befehle auf freigegebenen Geräten
+  ausführen, LAN-Präsenz im WLAN (F18).
+- **Analyse und mehr:** Speicheranalyse mit Treemap (F19), Duplikate (F20),
+  Einstellungen (F21), Updates über den Feed (F22), Fehlerprotokoll mit
+  Absturzprotokoll des Kerns (F23).
+
+**Nicht-Ziele:** Remote- oder Share-Orte als Laufwerk einbinden (Android kennt
+ohne Root keine Drittanbieter-Dateisysteme); Explorer-Kontextmenü,
+Windows-Zwischenablage mit virtuellen Dateien und Drag-and-drop nach außen
+(ersetzt durch Öffnen, Teilen und Empfangen); UNC/SMB-Netzlaufwerke (kein
+eigener SMB-Client, wie unter Linux); Internet-Teilen per LAN-Uplink (Android
+bietet den System-Hotspot); Befehle anderer Geräte auf dem Telefon ausführen
+(keine Prozess-Container in der App-Sandbox); Quick-Share-Interop;
+Share-Anfragen im Altformat; Versions-Rollback; Google-Play-Veröffentlichung;
+Storage-Access-Framework-Bäume (`content://`) als Browse-Ort.
+
+**Grenzen:**
+
+- Echtzeit-Jobs laufen nur im Dauerbetrieb oder bei geöffneter App; im Modus
+  „Periodisch“ holt der Worker sie einmal je Lauf nach.
+- Kalender-Jobs sind nur im Dauerbetrieb minutengenau; „Periodisch“ holt
+  Termine im Abstand von mindestens 15 Minuten nach, Android kann Läufe
+  verschieben.
+- Share: Andere Geräte erreichen das Telefon nur bei geöffneter App, während
+  einer Übertragung oder im Dauerbetrieb.
+- Der Auslöser „Bei Geräte-/USB-Anschluss“ und die Live-Beobachtung für den
+  Ordnerindex fehlen wie unter Linux; der Index wird bei Bedarf neu gebaut.
+- Android liefert keine System-Dateisymbole; die App zeigt Typsymbole und
+  Bildvorschauen.
+- Ab Android 15 beendet das System lange Hintergrund-Übertragungen nach sechs
+  Stunden; betroffene Vorgänge werden als „vom System beendet“ gemeldet.
+
+**Offene Punkte:**
+
+- **Google-Drive-Anmeldung ungeprüft:** Die App nutzt wie der Desktop die
+  eigene Desktop-Client-ID mit Loopback-Anmeldung im Systembrowser
+  ([`docs/CLOUD_SETUP.md`](docs/CLOUD_SETUP.md)). Ob Google diesen Ablauf aus
+  dem Android-Browser für jedes Konto annimmt, ist ohne echtes Konto nicht
+  geprüft. Scheitert die Anmeldung, bleibt nur Drive am Telefon unbenutzbar.
 
 ## 📋 Für neue Entwickler — zuerst lesen
 
@@ -647,10 +757,14 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 | `native/publish-feed.sh` | Interner Linux-Cross-Build des Top-Level-Wrappers; ein direkter vollständiger Aufruf ohne geerbtes Release-Lock wird verweigert |
 | `native/publish-update.ps1` | Windows-only-Bundle; verlangt `-AllowPartialFeed` sowie getrennte, explizite `-Feed`- und `-ReleaseOutput`-Pfade |
 | `native/publish-linux-feed-wsl.sh` | Linux-App/Updater in WSL bauen; Versions-Commit nur mit passendem Windows-Build-Manifest |
+| `native/release-version.ps1` | Gemeinsame Versionsplanung (Tagged/Bump/Resume, Patch-Bump) für den Release-Wrapper und den Android-APK-Job |
+| `android/` | Android-App (Kotlin, Jetpack Compose) als Gradle-Projekt mit Modul `:app` |
+| `native/android-bridge/` | Rust-JNI-Brücke (`libsmart_explorer_android.so`) als Workspace-Mitglied |
+| `android/build-release-apk.sh` | Signierte Release-APK bauen und prüfen (NDK aus `android/ndk-version`); nur über den Release-Wrapper bzw. den `build.yml`-Job |
 | `release-native/Smart Explorer Setup X.Y.Z.exe` | Installer (per-User, kein Admin) |
 | `release-native/Smart Explorer.exe` | Portable EXE |
 | `release-native/se.exe` | Portable Terminal-Companion |
-| `release-native/update-feed/` | Update-Feed: `version.txt` + `smart_explorer.exe` / `smart_explorer` + `se.exe` / `se` |
+| `release-native/update-feed/` | Update-Feed: `version.txt` + `smart_explorer.exe` / `smart_explorer` + `se.exe` / `se` + `smart-explorer-android.apk` |
 | `LICENSE` | MIT-Lizenz (frei, AS-IS, ohne Gewähr/Haftung) |
 | `DISCLAIMER.txt` | Kurzhinweis (KI-Bau + Lizenzverweis), im Installer/ersten Start |
 | `archive/electron-v1-quellcode.zip` | Quellcode der alten Electron-Version (v1) |
@@ -694,7 +808,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    Release-Environment ein und ruft ausschließlich den Top-Level-Wrapper auf.
    Das ist der maßgebliche unbeaufsichtigte Pfad: lokal werden nur Commit, Push,
    Dispatch und Monitoring ausgeführt; Build, Tests, Paketierung und
-   Veröffentlichung laufen auf GitHub-Runnern.
+   Veröffentlichung laufen auf GitHub-Runnern. Vorher baut der Job
+   `android-release-apk` auf Ubuntu die signierte APK mit derselben
+   Versionsplanung und übergibt sie dem Wrapper per `-AndroidApkDirectory`.
    Alternativ führt ein menschlicher Release-Operator lokal den nicht bauenden
    Preflight aus:
    `pwsh ./native/publish-release-local.ps1 -CheckEnvOnly`.
@@ -703,8 +819,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    das bereits der eine Dispatch. Dieser
    eine Wrapper erhöht die Patch-Version, hält das gemeinsame Cross-Host-Lock,
    baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die sechs
-   Feed-Hashes, die im Installer eingebetteten App-/Updater-/`se`-Bytes, den
-   gebundenen Quell-Commit und 18 Release-Assets, committet und pusht den
+   Desktop-Feed-Hashes, die im Installer eingebetteten App-/Updater-/`se`-Bytes, den
+   gebundenen Quell-Commit, APK-Version, -Hash und -Signaturzertifikat sowie
+   20 Release-Assets, committet und pusht den
    exakten Kandidaten nach `main` und
    startet genau eine statische Exact-Byte-Publikation. Normalerweise geschieht
    das über einen unveränderlichen Tag; nur wenn dessen Push technisch abgelehnt
@@ -731,6 +848,11 @@ nicht vorgeschaltet. `-SkipLinuxFeed` bleibt ein nicht publizierbares
 Windows-Diagnosebundle. Der Preflight benötigt neben den Build-Werkzeugen und
 7-Zip auch nichtinteraktive Git-Schreibrechte sowie `GH_TOKEN`/`GITHUB_TOKEN`
 oder eine gültige `gh auth login`-Sitzung für die authentifizierte Überwachung.
+Ohne `-AndroidApkDirectory` baut der lokale Wrapper die APK selbst über
+`android/build-release-apk.sh` (in WSL bzw. unter Linux) und braucht dort JDK 17,
+Android-SDK, `cargo-ndk` sowie die Signaturvariablen `ANDROID_KEYSTORE_FILE`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` und `ANDROID_KEY_PASSWORD`
+(Details in `docs/RELEASING.md`).
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
