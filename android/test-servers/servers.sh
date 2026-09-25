@@ -31,6 +31,8 @@ SE_FTP_PORT=21
 SE_FTP_USER=seftp
 SE_FTP_PASS=se-task-ftp-pass
 SE_FTP_ROOT=/ftp/seftp
+SE_FTP_FIXTURE=ftp-fixture.bin
+SE_FTP_FIXTURE_SHA=""
 SE_FTP_PASV_MIN=21000
 SE_FTP_PASV_MAX=21010
 
@@ -92,6 +94,15 @@ servers_up() {
     docker logs "$SE_FTP_CONTAINER" >&2 || true
     return 1
   fi
+  # The app cannot upload to FTP (no exclusive create, like the desktop): the download test file
+  # is placed on the server side.
+  docker exec "$SE_FTP_CONTAINER" sh -c \
+    "head -c 150000 /dev/urandom >'$SE_FTP_ROOT/$SE_FTP_FIXTURE' && chown '$SE_FTP_USER' '$SE_FTP_ROOT/$SE_FTP_FIXTURE'"
+  SE_FTP_FIXTURE_SHA="$(docker exec "$SE_FTP_CONTAINER" sha256sum "$SE_FTP_ROOT/$SE_FTP_FIXTURE" | awk '{ print $1 }')"
+  [[ "$SE_FTP_FIXTURE_SHA" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "test server FTP: download fixture missing" >&2
+    return 1
+  }
 }
 
 # Instrumentation arguments (-e name value) that tell the tests where the servers are.
@@ -100,7 +111,8 @@ servers_instrumentation_args() {
     -e seServerHost "$SE_TASK_EMULATOR_HOST" \
     -e seSftpPort "$SE_SFTP_PORT" -e seSftpUser "$SE_SFTP_USER" -e seSftpPass "$SE_SFTP_PASS" -e seSftpRoot "$SE_SFTP_ROOT" \
     -e seSshPort "$SE_SSH_PORT" -e seSshUser "$SE_SSH_USER" -e seSshPass "$SE_SSH_PASS" -e seSshRoot "$SE_SSH_ROOT" \
-    -e seFtpPort "$SE_FTP_PORT" -e seFtpUser "$SE_FTP_USER" -e seFtpPass "$SE_FTP_PASS" -e seFtpRoot "$SE_FTP_ROOT"
+    -e seFtpPort "$SE_FTP_PORT" -e seFtpUser "$SE_FTP_USER" -e seFtpPass "$SE_FTP_PASS" -e seFtpRoot "$SE_FTP_ROOT" \
+    -e seFtpFixture "$SE_FTP_FIXTURE" -e seFtpFixtureSha256 "$SE_FTP_FIXTURE_SHA"
 }
 
 # Update feed: version.txt (next patch of native/Cargo.toml), the APK and its sha256sum sidecar,
