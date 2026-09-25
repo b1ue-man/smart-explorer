@@ -1,15 +1,13 @@
 package app.smartexplorer.android.ui.share
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -176,9 +174,11 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
         }
         ShareBlock.Devices -> DevicesSection(status?.devices.orEmpty(), peerActions(vm, open))
         ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, open))
-        ShareBlock.Buttons -> Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        // Wraps instead of scrolling sideways, so no button hides behind the screen edge.
+        ShareBlock.Buttons -> FlowRow(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilledTonalButton(onClick = { open(ShareDialog.Connect) }) { Text("Gerät verbinden") }
             FilledTonalButton(onClick = { open(ShareDialog.CreateRoom) }) { Text("Raum erstellen") }
