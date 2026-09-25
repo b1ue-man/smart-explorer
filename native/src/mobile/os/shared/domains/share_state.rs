@@ -381,10 +381,17 @@ pub(super) fn identity() -> Result<ShareIdentity, ApiError> {
 pub(super) fn reconfigure(rt: &Runtime) {
     match crate::daemon::refresh_share_worker_checked() {
         // The worker now holds the stored profiles, including changes written
-        // outside `committed` (requests, removals): later snapshots are current.
+        // outside `committed` (requests, removals): later snapshots are current,
+        // and the stored profiles answer `share.status` until the next poll.
         Ok(_) => {
             RELOADS.fetch_add(1, Ordering::SeqCst);
-            with_state(|state| state.pending_commit = None);
+            let stored = ShareProfiles::load_checked(default_home());
+            with_state(|state| {
+                state.pending_commit = None;
+                if let Ok(profiles) = stored {
+                    state.profiles = Some(profiles);
+                }
+            });
         }
         Err(error) => rt.log_error("share", &format!("Share-Konfiguration zustellen: {error}")),
     }
