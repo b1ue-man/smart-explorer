@@ -1,5 +1,5 @@
-use crate::app::app_models::{TransferMsg, TransferProgress};
-use crate::app::transfer_helpers::{cleanup_partial, create_download_part, ensure_local_space};
+use super::local_stage::{cleanup_partial, create_download_part, ensure_local_space};
+use super::types::{TransferMsg, TransferProgress};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -19,7 +19,9 @@ pub(super) fn download_file_progress(
     use std::io::{Read, Write};
 
     super::cancel::check_optional(cancel)?;
-    let read_size = be.read_size(src, expected).map_err(|error| error.to_string())?;
+    let read_size = be
+        .read_size(src, expected)
+        .map_err(|error| error.to_string())?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         super::cancel::check_optional(cancel)?;
@@ -36,8 +38,14 @@ pub(super) fn download_file_progress(
             cleanup_partial(&part);
             return Err(error);
         }
-        let limit = read_size.map(|length| length.saturating_sub(copied).saturating_add(1)
-            .min(buf.len() as u64) as usize).unwrap_or(buf.len());
+        let limit = read_size
+            .map(|length| {
+                length
+                    .saturating_sub(copied)
+                    .saturating_add(1)
+                    .min(buf.len() as u64) as usize
+            })
+            .unwrap_or(buf.len());
         let n = match reader.read(&mut buf[..limit]) {
             Ok(n) => n,
             Err(error) => {
@@ -93,7 +101,11 @@ pub(super) fn download_file_progress(
     // during the download. Copy publication must never replace that entry.
     if let Err(error) = crate::vfs::promote_local_copy(&part, dest) {
         cleanup_partial(&part);
-        return Err(format!("Download-Ziel „{}“ ohne Ersetzen veröffentlichen ({:?}): {error}", dest.display(), error.kind()));
+        return Err(format!(
+            "Download-Ziel „{}“ ohne Ersetzen veröffentlichen ({:?}): {error}",
+            dest.display(),
+            error.kind()
+        ));
     }
     // Publication was acknowledged. Cancellation may stop the next file, but
     // must not retroactively hide this completed destination from accounting.

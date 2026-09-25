@@ -1,13 +1,6 @@
 use super::super::prelude::*;
 
-#[derive(Clone, Debug)]
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(in crate::app) struct ClipboardVirtualFile {
-    pub(in crate::app) abs: String,
-    pub(in crate::app) rel: String,
-    pub(in crate::app) size: u64,
-    pub(in crate::app) mtime_ms: i64,
-}
+pub(in crate::app) use crate::filter::tree::ClipboardVirtualFile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) enum ClipboardEffect {
@@ -134,10 +127,6 @@ pub(in crate::app) fn appdata_file(name: &str) -> PathBuf {
     crate::support_dirs::app_data_file(name)
 }
 
-pub(in crate::app) fn favorites_path() -> PathBuf {
-    appdata_file("favorites.txt")
-}
-
 pub(in crate::app) use crate::app::ui_preferences::UiState;
 
 impl UiState {
@@ -155,28 +144,5 @@ impl UiState {
 /// Default "directories first" when a location has no saved preference.
 pub(in crate::app) const DEFAULT_DIRS_FIRST: bool = true;
 
-/// Load the per-location `dirs_first` overrides (`path\t0|1` per line).
-pub(in crate::app) fn load_dir_sort() -> std::collections::HashMap<String, bool> {
-    let mut m = std::collections::HashMap::new();
-    if let Ok(txt) = std::fs::read_to_string(appdata_file("dir_sort.tsv")) {
-        for line in txt.lines() {
-            if let Some((path, v)) = line.rsplit_once('\t') {
-                if !path.is_empty() {
-                    m.insert(path.to_string(), v.trim() == "1");
-                }
-            }
-        }
-    }
-    m
-}
-
-pub(in crate::app) fn save_dir_sort(
-    map: &std::collections::HashMap<String, bool>,
-) -> std::io::Result<()> {
-    let mut lines: Vec<String> = map
-        .iter()
-        .map(|(p, v)| format!("{}\t{}", p, *v as u8))
-        .collect();
-    lines.sort();
-    std::fs::write(appdata_file("dir_sort.tsv"), lines.join("\n"))
-}
+/// Per-location `dirs_first` overrides (`dir_sort.tsv`) live in `crate::connect`.
+pub(in crate::app) use crate::connect::{load_dir_sort, save_dir_sort};

@@ -24,10 +24,6 @@ impl App {
     }
 
     // ─── Favorites (starred folders) ────────────────────────────────────
-    fn save_favorites(favorites: &[String]) -> std::io::Result<()> {
-        std::fs::write(favorites_path(), favorites.join("\n"))
-    }
-
     pub(in crate::app) fn is_favorite(&self, p: &str) -> bool {
         self.favorites.iter().any(|x| x == p)
     }
@@ -43,7 +39,7 @@ impl App {
             next.insert(0, p.to_string());
             "★ Zu Favoriten hinzugefügt"
         };
-        match Self::save_favorites(&next) {
+        match crate::connect::save_favorites(&next) {
             Ok(()) => {
                 self.favorites = next;
                 self.notice = Some((notice.to_string(), std::time::Instant::now()));
@@ -89,15 +85,12 @@ impl App {
     /// locally, or `proto://user@host:port/path` on a remote — so favourites and
     /// per-folder prefs bind to the connection (the "link id"), not just a path.
     pub(in crate::app) fn location_key(&self, path: &str) -> String {
-        let p = path.replace('\\', "/").trim_end_matches('/').to_string();
-        match self
-            .remote
-            .as_ref()
-            .and_then(|rs| rs.endpoint_prefix.as_ref())
-        {
-            Some(prefix) => format!("{}{}", prefix, p),
-            None => p,
-        }
+        crate::connect::location_key(
+            self.remote
+                .as_ref()
+                .and_then(|rs| rs.endpoint_prefix.as_deref()),
+            path,
+        )
     }
 
     /// Open a saved connection and navigate straight to `path` on it (used to

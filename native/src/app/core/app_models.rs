@@ -1,8 +1,9 @@
 use super::prelude::*;
 
 pub(in crate::app) const APP_ERROR_LOG_LIMIT: usize = 200;
-pub(in crate::app) const DOWNLOAD_SPACE_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
-pub(in crate::app) const TEMP_SESSION_PID_FILE: &str = "session.pid";
+#[cfg(all(test, windows))]
+pub(in crate::app) use crate::transfer::TransferMsg;
+pub(in crate::app) use crate::transfer::{TransferProgress, TEMP_SESSION_PID_FILE};
 
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────
 #[cfg(windows)]
@@ -77,79 +78,6 @@ pub(in crate::app) fn empty_progress() -> ScanProgress {
         elapsed_ms: 0,
         current_path: String::new(),
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::app) enum TransferKind {
-    Upload,
-    Download,
-    RemoteCopy,
-}
-
-impl TransferKind {
-    pub(in crate::app) fn label(self) -> &'static str {
-        match self {
-            TransferKind::Upload => "Upload",
-            TransferKind::Download => "Download",
-            TransferKind::RemoteCopy => "Remote-Kopie",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(in crate::app) struct TransferProgress {
-    pub(in crate::app) kind: TransferKind,
-    pub(in crate::app) label: String,
-    pub(in crate::app) current: String,
-    pub(in crate::app) files_done: u64,
-    pub(in crate::app) files_total: u64,
-    pub(in crate::app) bytes_done: u64,
-    pub(in crate::app) bytes_total: u64,
-    pub(in crate::app) elapsed_ms: u64,
-    pub(in crate::app) errors: u64,
-    pub(in crate::app) done: bool,
-}
-
-impl TransferProgress {
-    pub(in crate::app) fn new(
-        kind: TransferKind,
-        label: impl Into<String>,
-        files_total: u64,
-        bytes_total: u64,
-    ) -> Self {
-        Self {
-            kind,
-            label: label.into(),
-            current: String::new(),
-            files_done: 0,
-            files_total,
-            bytes_done: 0,
-            bytes_total,
-            elapsed_ms: 0,
-            errors: 0,
-            done: false,
-        }
-    }
-
-    pub(in crate::app) fn fraction(&self) -> f32 {
-        if self.bytes_total > 0 {
-            (self.bytes_done as f32 / self.bytes_total as f32).clamp(0.0, 1.0)
-        } else if self.files_total > 0 {
-            (self.files_done as f32 / self.files_total as f32).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(in crate::app) enum TransferMsg {
-    Progress(TransferProgress),
-    Done {
-        progress: TransferProgress,
-        errors: Vec<String>,
-        canceled: bool,
-    },
 }
 
 impl Default for TabState {

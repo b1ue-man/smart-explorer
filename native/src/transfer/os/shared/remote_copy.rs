@@ -4,19 +4,18 @@ use super::entries::{
     TransferErrorLog,
 };
 use super::progress::send_transfer_progress;
+use super::temp::{cleanup_temp_copy, open_temp_path};
+use super::types::{TransferKind, TransferMsg, TransferProgress};
 use super::upload_plan::DestinationNames;
 use super::uploads::upload_file_progress;
-use super::{
-    cleanup_temp_copy, open_temp_path, rjoin,
-};
-use crate::app::app_models::{TransferKind, TransferMsg, TransferProgress};
 use crate::types::FilterDef;
+use crate::vfs::remote_util::rjoin;
 use std::sync::atomic::AtomicBool;
 
 // This worker entry point keeps source, destination, progress reporting, and
 // cancellation inputs explicit because they cross the background-task boundary.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::app) fn copy_remote_paths_progress(
+pub fn copy_remote_paths_progress(
     src: &dyn crate::vfs::Backend,
     paths: &[String],
     tgt: &dyn crate::vfs::Backend,
@@ -31,10 +30,14 @@ pub(in crate::app) fn copy_remote_paths_progress(
     let mut dirs = Vec::new();
     let mut errors = TransferErrorLog::default();
     let mut budget = TransferCollectionBudget::default();
+    let mut omitted = 0;
     // Even same-backend copies use the owned local bridge: no replacing
     // server-copy primitive or overlapping read/write on a single session.
-    let mut names = if super::cancel::requested(cancel) { None }
-        else { Some(DestinationNames::new(tgt, dest_root)) };
+    let mut names = if super::cancel::requested(cancel) {
+        None
+    } else {
+        Some(DestinationNames::new(tgt, dest_root))
+    };
     for src_path in paths {
         if super::cancel::requested(cancel) {
             break;
@@ -52,7 +55,9 @@ pub(in crate::app) fn copy_remote_paths_progress(
             errors.push(format!("{src_path}: {error}"));
             break;
         }
-        let Some(names) = names.as_mut() else { break; };
+        let Some(names) = names.as_mut() else {
+            break;
+        };
         let target_name = match names.reserve(tgt, dest_root, name, cancel) {
             Ok(name) => name,
             Err(error) => {
@@ -67,6 +72,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
             dirs: &mut dirs,
             budget: &mut budget,
             cancel: Some(cancel),
+            omitted: &mut omitted,
         }
         .collect(src_path, target_name, true);
         if let Err(error) = collected {
@@ -79,24 +85,15 @@ pub(in crate::app) fn copy_remote_paths_progress(
     if super::cancel::requested(cancel) {
         super::cancel::send_done(
             tx,
-            TransferProgress::new(
-                TransferKind::RemoteCopy,
-                "Uebertrage remote",
-                0,
-                0,
-            ),
+            TransferProgress::new(TransferKind::RemoteCopy, "Uebertrage remote", 0, 0),
             Vec::new(),
             cancel,
         );
         return;
     }
     if !errors.is_empty() {
-        let mut progress = TransferProgress::new(
-            TransferKind::RemoteCopy,
-            "Uebertrage remote",
-            0,
-            0,
-        );
+        let mut progress =
+            TransferProgress::new(TransferKind::RemoteCopy, "Uebertrage remote", 0, 0);
         progress.errors = errors.total();
         super::cancel::send_done(tx, progress, errors.into_displayed(), cancel);
         return;
@@ -112,6 +109,7 @@ pub(in crate::app) fn copy_remote_paths_progress(
         bytes_total,
     );
     progress.errors = errors.total();
+    progress.omitted = omitted;
     let mut last = std::time::Instant::now();
     send_transfer_progress(tx, &progress, &mut last, true);
 

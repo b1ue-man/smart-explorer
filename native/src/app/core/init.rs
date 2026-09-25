@@ -100,15 +100,7 @@ impl App {
             .ok()
             .map(|s| s.lines().map(|l| l.to_string()).collect())
             .unwrap_or_default();
-        let favorites: Vec<String> = std::fs::read_to_string(favorites_path())
-            .ok()
-            .map(|s| {
-                s.lines()
-                    .filter(|l| !l.is_empty())
-                    .map(|l| l.to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let favorites = crate::connect::load_favorites();
         let ui_state = UiState::load();
         let recovery_notice = (recoverable_temp_sessions > 0).then(|| {
             format!(

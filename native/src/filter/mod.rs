@@ -4,6 +4,8 @@ mod extensions;
 mod imp;
 #[path = "core/scope.rs"]
 mod scope;
+#[path = "core/tree.rs"]
+pub mod tree;
 
 pub use extensions::parse_extensions;
 pub use imp::*;

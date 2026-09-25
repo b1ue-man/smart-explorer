@@ -279,50 +279,7 @@ pub(in crate::app) fn local_names_follow_win32_rules() -> bool {
     true
 }
 
-pub(in crate::app) fn path_to_wide(path: &Path) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    path.as_os_str().encode_wide().chain(Some(0)).collect()
-}
-
-pub(in crate::app) fn available_space_for_path(path: &Path) -> Option<u64> {
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let dir = if path.is_dir() {
-        path
-    } else {
-        path.parent().unwrap_or_else(|| Path::new("."))
-    };
-    let wide = path_to_wide(dir);
-    let mut free = 0u64;
-    let mut total = 0u64;
-    let mut total_free = 0u64;
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut total_free) };
-    (ok != 0).then_some(free)
-}
-
-pub(in crate::app) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    let src_w = path_to_wide(src);
-    let dest_w = path_to_wide(dest);
-    let ok = unsafe {
-        MoveFileExW(
-            src_w.as_ptr(),
-            dest_w.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if ok == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-pub(in crate::app) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.file_attributes() & 0x400 != 0
-}
+pub(in crate::app) use crate::transfer::{replace_file_atomic, upload_is_link_like};
 
 pub(in crate::app) fn process_running(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};

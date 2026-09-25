@@ -38,6 +38,8 @@ mod local_platform;
 mod local_platform;
 #[path = "core/promotion.rs"]
 mod promotion;
+#[path = "os/shared/remote_util.rs"]
+pub mod remote_util;
 #[path = "core/scheme.rs"]
 mod scheme;
 #[path = "os/shared/sync_roots.rs"]
