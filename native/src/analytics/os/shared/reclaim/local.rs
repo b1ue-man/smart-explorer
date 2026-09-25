@@ -164,7 +164,10 @@ fn scan_dir(
             }
         };
         child_count = child_count.saturating_add(1);
+        // Links and the app trash (Android) are protected omissions: they keep
+        // their parent non-empty but are never offered for cleanup.
         if file_type.is_symlink()
+            || crate::apptrash::excluded_name(&name.to_string_lossy())
             || (file_type.is_dir() && crate::agent_proto::is_pseudo_dir(&path.to_string_lossy()))
         {
             continue;

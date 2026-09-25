@@ -8,6 +8,8 @@ mod config;
 mod core;
 #[path = "os/shared/feed.rs"]
 mod feed;
+#[path = "os/shared/feed_files.rs"]
+mod feed_files;
 #[path = "os/shared/flow.rs"]
 mod flow;
 #[cfg(windows)]
@@ -32,6 +34,7 @@ pub use archive::{
 pub use config::{set_update_source, take_updater_error, update_source_str};
 pub use core::is_newer;
 pub use feed::{download_update, download_version, list_remote_versions};
+pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
 pub use flow::{check_async, update_to_latest_async};
 pub use os::revert_to;
 pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};

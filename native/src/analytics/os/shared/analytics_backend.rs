@@ -81,7 +81,7 @@ fn collect_children(
                 ),
             ));
         }
-        if metadata.is_symlink {
+        if metadata.is_symlink || crate::apptrash::excluded_name(&metadata.name) {
             continue;
         }
         // Retention is bounded, counting is not: the claim only decides

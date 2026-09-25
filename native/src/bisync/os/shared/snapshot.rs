@@ -117,13 +117,30 @@ pub(super) struct Snapshot {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn walk_snapshot(
-    be: &dyn Backend, root: &str, cancel: &AtomicBool, filter: &WalkFilter,
-    hash: HashMode, prev: Option<&Tree>, allow_duplicate_files: bool, fold_case: bool,
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    prev: Option<&Tree>,
+    allow_duplicate_files: bool,
+    fold_case: bool,
 ) -> io::Result<Snapshot> {
     let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
-    let tree = walk_files_impl(be, root, cancel, filter, hash, prev,
-        allow_duplicate_files, Some(&omissions))?;
-    Ok(Snapshot { tree, omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()) })
+    let tree = walk_files_impl(
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev,
+        allow_duplicate_files,
+        Some(&omissions),
+    )?;
+    Ok(Snapshot {
+        tree,
+        omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -272,7 +289,9 @@ fn walk_files_impl(
                                 let rel = rel_of(&p, root);
                                 let excluded = (!filter.include_hidden && m.hidden)
                                     || filter.ignored(&rel, m.is_dir || m.is_symlink);
-                                if m.is_symlink {
+                                // The app trash (Android) is a protected omission
+                                // like a link: never synced, its counterpart kept.
+                                if m.is_symlink || crate::apptrash::excluded_name(&m.name) {
                                     if let Some(omissions) = omissions {
                                         omissions.lock().unwrap_or_else(|e| e.into_inner())
                                             .record(&rel, !excluded);
