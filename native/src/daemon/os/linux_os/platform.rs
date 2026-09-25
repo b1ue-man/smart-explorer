@@ -95,16 +95,26 @@ pub(crate) fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
 pub(crate) fn acquire_daemon_instance_guard(
     timeout: std::time::Duration,
 ) -> Option<DaemonInstanceGuard> {
+    acquire_daemon_instance_guard_in(timeout, daemon_lock_directory)
+}
+
+/// Poll for the single-instance `flock` inside the directory chosen by
+/// `lock_directory` (shared with the Android adapter, which keeps the lock in
+/// app-private storage).
+pub(crate) fn acquire_daemon_instance_guard_in(
+    timeout: std::time::Duration,
+    lock_directory: fn() -> io::Result<PathBuf>,
+) -> Option<DaemonInstanceGuard> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        match daemon_lock_directory().and_then(|directory| try_acquire_in(&directory)) {
+        match lock_directory().and_then(|directory| try_acquire_in(&directory)) {
             Ok(Some(guard)) => return Some(guard),
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Ok(None) => return None,
             Err(error) => {
-                super::state::log(&format!("daemon single-instance lock failed: {error}"));
+                crate::daemon::state::log(&format!("daemon single-instance lock failed: {error}"));
                 return None;
             }
         }

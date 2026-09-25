@@ -464,17 +464,28 @@ fn load_share_server() -> Result<String, String> {
         .map_err(|_| "Share server configuration is not valid UTF-8".into())
 }
 
+/// Host values (set only by an embedding host such as Android) come first.
 fn default_device_name() -> String {
+    if let Some(name) = crate::support_dirs::host()
+        .map(|host| host.device_name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        return name.to_string();
+    }
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "Mein Geraet".to_string())
 }
 
 pub(super) fn default_home() -> String {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+    crate::support_dirs::host()
+        .map(|host| host.home_dir.clone())
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(crate::support_dirs::temp_dir)
         .to_string_lossy()
         .replace('\\', "/")
 }

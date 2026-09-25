@@ -176,6 +176,9 @@ fn drain_share_worker_events_once() -> Result<ShareWorkerSnapshot, String> {
 }
 
 pub fn ensure_worker_ready() -> Result<(), String> {
+    if crate::autostart::DAEMON_IN_PROCESS {
+        return super::embedded::ensure_for_client(WORKER_READY_TIMEOUT);
+    }
     match probe_worker(Duration::from_millis(700)) {
         WorkerProbe::Ready { .. } => Ok(()),
         WorkerProbe::Starting { .. } => {
@@ -199,10 +202,18 @@ pub fn ensure_worker_ready() -> Result<(), String> {
 /// Request a version-bound daemon handoff without waiting for Share readiness.
 /// GUI update paths use this after the updated application is already live.
 pub fn request_daemon_replacement() -> Result<(), String> {
+    if crate::autostart::DAEMON_IN_PROCESS {
+        // The in-process worker always runs this build; only make sure it runs.
+        return super::embedded::ensure_embedded_daemon(Duration::ZERO).map(|_| ());
+    }
     launch_replacement().map(|_| ())
 }
 
 fn restart_worker_for_client() -> Result<(), String> {
+    if crate::autostart::DAEMON_IN_PROCESS {
+        // A worker thread cannot be replaced by a handoff; start or await it.
+        return super::embedded::ensure_for_client(WORKER_READY_TIMEOUT);
+    }
     let _guard = WORKER_RESTART_LOCK
         .lock()
         .map_err(|_| "Background-Worker Neustart ist gesperrt".to_string())?;

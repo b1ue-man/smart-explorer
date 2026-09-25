@@ -24,6 +24,7 @@ pub(super) enum EnqueueStatus {
 
 struct ActiveJob {
     id: String,
+    name: String,
     cancel: Arc<AtomicBool>,
     handle: JoinHandle<()>,
 }
@@ -37,6 +38,9 @@ pub(super) struct JobSupervisor {
     last_admitted: HashMap<String, Instant>,
     runner: JobRunner,
     spawner: ThreadSpawner,
+    /// Ids of admitted jobs that left the supervisor (returned, canceled while
+    /// queued, or failed to start), oldest first; drained by the daemon loop.
+    completed: Vec<String>,
 }
 
 impl JobSupervisor {
@@ -55,6 +59,7 @@ impl JobSupervisor {
             last_admitted: HashMap::new(),
             runner,
             spawner,
+            completed: Vec::new(),
         }
     }
 
@@ -98,6 +103,7 @@ impl JobSupervisor {
                     errors.push(format!("daemon job '{id}' panicked"));
                 }
                 self.scheduled.remove(&id);
+                self.completed.push(id);
             }
         }
         if self.active.is_none() {
@@ -111,7 +117,8 @@ impl JobSupervisor {
     /// Cancel active work, discard queued work, and wait until the worker has
     /// observed cancellation and returned. No job thread outlives this call.
     pub(super) fn cancel_and_join(&mut self) -> Vec<String> {
-        self.pending.clear();
+        self.completed
+            .extend(self.pending.drain(..).map(|job| job.id));
         if let Some(active) = &self.active {
             active.cancel.store(true, Ordering::Release);
         }
@@ -120,10 +127,54 @@ impl JobSupervisor {
             if active.handle.join().is_err() {
                 errors.push(format!("daemon job '{}' panicked during stop", active.id));
             }
+            self.completed.push(active.id);
         }
         self.scheduled.clear();
         self.last_admitted.clear();
         errors
+    }
+
+    /// Cancel only the listed jobs: queued ones leave the queue at once, the
+    /// active one is signaled and reaped by `poll` once it has returned. Other
+    /// work and the retry cooldown of the canceled ids stay untouched.
+    pub(super) fn cancel_jobs(&mut self, ids: &HashSet<String>) {
+        let scheduled = &mut self.scheduled;
+        let completed = &mut self.completed;
+        self.pending.retain(|job| {
+            if !ids.contains(&job.id) {
+                return true;
+            }
+            scheduled.remove(&job.id);
+            completed.push(job.id.clone());
+            false
+        });
+        if let Some(active) = self
+            .active
+            .as_ref()
+            .filter(|active| ids.contains(&active.id))
+        {
+            active.cancel.store(true, Ordering::Release);
+        }
+    }
+
+    /// Ids that left the supervisor since the previous call, oldest first.
+    pub(super) fn take_completed(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.completed)
+    }
+
+    pub(super) fn active_job_id(&self) -> Option<&str> {
+        self.active.as_ref().map(|active| active.id.as_str())
+    }
+
+    /// Display name of the running job (its id when the name is blank).
+    pub(super) fn active_job_name(&self) -> Option<&str> {
+        self.active.as_ref().map(|active| {
+            if active.name.trim().is_empty() {
+                active.id.as_str()
+            } else {
+                active.name.as_str()
+            }
+        })
     }
 
     fn start_next(&mut self) -> Result<bool, String> {
@@ -141,12 +192,18 @@ impl JobSupervisor {
         let task: JobTask = Box::new(move || runner(&job, &worker_cancel));
         match (self.spawner)(format!("daemon-job-{id}"), task) {
             Ok(handle) => {
-                self.active = Some(ActiveJob { id, cancel, handle });
+                self.active = Some(ActiveJob {
+                    id,
+                    name,
+                    cancel,
+                    handle,
+                });
                 Ok(true)
             }
             Err(error) => {
                 self.scheduled.remove(&id);
                 self.last_admitted.remove(&id);
+                self.completed.push(id);
                 Err(format!("job spawn failed for '{name}': {error}"))
             }
         }
@@ -278,6 +335,46 @@ mod tests {
         poll_until_idle(&mut supervisor);
         assert_eq!(
             supervisor.enqueue(&job("cooldown")).unwrap(),
+            EnqueueStatus::RecentlyAttempted
+        );
+    }
+
+    #[test]
+    fn android_task_cancel_jobs_stops_only_the_selected_work() {
+        let started = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let runner: JobRunner = {
+            let started = started.clone();
+            Arc::new(move |job, cancel| {
+                started.lock().unwrap().push(job.id.clone());
+                if job.id == "active" {
+                    while !cancel.load(Ordering::Acquire) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            })
+        };
+        let mut supervisor = JobSupervisor::with_hooks(runner, thread_spawner());
+        supervisor.enqueue(&job("active")).unwrap();
+        supervisor.enqueue(&job("queued")).unwrap();
+        supervisor.enqueue(&job("other")).unwrap();
+        assert_eq!(supervisor.active_job_id(), Some("active"));
+        assert_eq!(supervisor.active_job_name(), Some("active"));
+
+        let selected = ["active", "queued"].map(String::from).into_iter().collect();
+        supervisor.cancel_jobs(&selected);
+        assert_eq!(supervisor.take_completed(), vec!["queued".to_string()]);
+        poll_until_idle(&mut supervisor);
+
+        assert_eq!(
+            supervisor.take_completed(),
+            vec!["active".to_string(), "other".to_string()]
+        );
+        assert_eq!(
+            *started.lock().unwrap(),
+            vec!["active".to_string(), "other".to_string()]
+        );
+        assert_eq!(
+            supervisor.enqueue(&job("queued")).unwrap(),
             EnqueueStatus::RecentlyAttempted
         );
     }
