@@ -437,13 +437,8 @@ impl DiscoveryUiState {
 }
 use zeroize::Zeroize;
 
+#[derive(Default)]
 pub struct DiscoveryPinDraft(String);
-
-impl Default for DiscoveryPinDraft {
-    fn default() -> Self {
-        Self(String::new())
-    }
-}
 
 impl std::fmt::Debug for DiscoveryPinDraft {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
