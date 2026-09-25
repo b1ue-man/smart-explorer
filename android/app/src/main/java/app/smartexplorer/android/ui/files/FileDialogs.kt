@@ -225,20 +225,36 @@ internal fun ExtractDialog(name: String, onHere: () -> Unit, onElsewhere: () -> 
     )
 }
 
-/** Remote file changed since it was opened (spec F9). */
+/**
+ * Remote file changed since it was opened, or ([canOverwrite] = false) the place cannot replace
+ * existing files safely, like on the desktop (spec F9).
+ */
 @Composable
-internal fun EditConflictDialog(name: String, onOverwrite: () -> Unit, onCopy: () -> Unit, onDismiss: () -> Unit) {
+internal fun EditConflictDialog(
+    name: String,
+    canOverwrite: Boolean,
+    onOverwrite: () -> Unit,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Konflikt") },
+        title = { Text(if (canOverwrite) "Konflikt" else "Nicht ersetzbar") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("„$name“ wurde seit dem Öffnen auch auf der Gegenseite geändert.")
-                OutlinedButton(
-                    onClick = onOverwrite,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Remote überschreiben") }
+                if (canOverwrite) {
+                    Text("„$name“ wurde seit dem Öffnen auch auf der Gegenseite geändert.")
+                    OutlinedButton(
+                        onClick = onOverwrite,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Remote überschreiben") }
+                } else {
+                    Text(
+                        "„$name“ kann an diesem Ort nicht sicher ersetzt werden (etwa SFTP ohne Remote-Agent, " +
+                            "WebDAV oder FTP). Die Änderung lässt sich als Kopie daneben hochladen.",
+                    )
+                }
                 ChoiceButton("Als Kopie hochladen", onCopy)
             }
         },

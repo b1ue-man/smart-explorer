@@ -94,9 +94,12 @@ data class PropertiesResult(
     val location: String? = null,
 )
 
-/** Result of a failed `fs.uploadEdit` task when the remote file changed since opening. */
+/**
+ * Result of a failed `fs.uploadEdit` task: the remote file changed since opening ([conflict]), or
+ * the place cannot replace existing files safely ([replaceUnsupported]; plain SFTP, WebDAV, FTP).
+ */
 @Serializable
-data class UploadConflict(val conflict: Boolean = false)
+data class UploadConflict(val conflict: Boolean = false, val replaceUnsupported: Boolean = false)
 
 /** `fs.edits` */
 @Serializable

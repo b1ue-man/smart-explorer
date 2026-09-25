@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
@@ -32,6 +33,9 @@ import app.smartexplorer.android.ui.common.rootIcon
 
 /** At most this many recently visited places (spec F3). */
 private const val MAX_RECENT = 10
+
+/** Test tag of the scrolling list, so the layout check can scroll to lower sections. */
+internal const val PLACES_LIST_TAG = "places-list"
 
 /** Callbacks of the sidebar "Orte". */
 internal class PlacesCallbacks(
@@ -49,7 +53,7 @@ internal class PlacesCallbacks(
  */
 @Composable
 internal fun PlacesPanel(roots: Roots?, error: String?, current: String?, callbacks: PlacesCallbacks) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize().testTag(PLACES_LIST_TAG)) {
         item(key = "search") {
             PlaceItem("Ordner suchen", null, R.drawable.ic_search, selected = false, onClick = callbacks.onFolderSearch)
         }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::record::{numbered_name, plain_name, valid_id};
 use super::store::{delete_in, list_in, move_to_trash_in, purge_older_than_in, restore_in};
-use super::{is_excluded, TRASH_DIR_NAME};
+use super::{in_hidden_app_parent, is_excluded, TRASH_DIR_NAME};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -179,4 +179,39 @@ fn android_task_apptrash_names_ids_and_exclusion_rules() {
     assert!(is_excluded(TRASH_DIR_NAME, || true));
     assert!(!is_excluded(TRASH_DIR_NAME, || false));
     assert!(!is_excluded("Papierkorb", || true));
+}
+
+#[test]
+fn android_task_apptrash_hidden_app_folders_only_below_volume_roots() {
+    let volumes = || {
+        vec![
+            PathBuf::from("/storage/emulated/0"),
+            PathBuf::from("/storage/0000-0000/"),
+        ]
+    };
+    assert!(in_hidden_app_parent(
+        "/storage/emulated/0/Android/data",
+        volumes
+    ));
+    assert!(in_hidden_app_parent(
+        "/storage/emulated/0/Android/obb/",
+        volumes
+    ));
+    assert!(in_hidden_app_parent(
+        "/storage/0000-0000/Android/data",
+        volumes
+    ));
+    for dir in [
+        "/storage/emulated/0/Android",
+        "/storage/emulated/0/Android/media",
+        "/storage/emulated/0/Fotos/Android/data",
+        "/storage/emulated/0/Android/data/app.example",
+        "/other/Android/data",
+    ] {
+        assert!(!in_hidden_app_parent(dir, volumes), "{dir}");
+    }
+    assert!(!in_hidden_app_parent(
+        "/storage/emulated/0/Android/data",
+        Vec::new
+    ));
 }

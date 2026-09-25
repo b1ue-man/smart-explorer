@@ -198,6 +198,11 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             if stop_requested(share_host.generation()) {
                 break;
             }
+            // A toggle during the sleep is applied by the outer loop first, so
+            // a pending catch-up is never judged by the stale state.
+            if crate::autostart::is_enabled() != sync_enabled {
+                break;
+            }
             let live_controls = scheduling_controls();
             if sync_enabled && !live_controls.permit_mutation {
                 for error in job_supervisor.cancel_and_join() {

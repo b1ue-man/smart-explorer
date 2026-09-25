@@ -43,6 +43,29 @@ fn is_excluded(name: &str, trash_active: impl FnOnce() -> bool) -> bool {
     name == TRASH_DIR_NAME && trash_active()
 }
 
+/// Whether the folders inside `dir` are other apps' private folders
+/// (`<volume>/Android/data`, `<volume>/Android/obb`): Android lists them but
+/// refuses to open them even with all-files access. Sync walks omit them like
+/// the trash, as protected omissions. Inert while no volumes are set.
+pub fn hidden_app_folders_in(dir: &str) -> bool {
+    in_hidden_app_parent(dir, volumes)
+}
+
+/// The suffix check runs first, so the hot walk path takes no lock.
+fn in_hidden_app_parent(dir: &str, volumes: impl FnOnce() -> Vec<PathBuf>) -> bool {
+    let dir = dir.trim_end_matches('/');
+    let Some(volume) = dir
+        .strip_suffix("/Android/data")
+        .or_else(|| dir.strip_suffix("/Android/obb"))
+    else {
+        return false;
+    };
+    volumes().iter().any(|root| {
+        root.to_str()
+            .is_some_and(|root| root.trim_end_matches('/') == volume)
+    })
+}
+
 /// Replaces the storage volumes (absolute roots) that carry an app trash.
 pub fn set_volumes(volumes: Vec<PathBuf>) {
     *VOLUMES

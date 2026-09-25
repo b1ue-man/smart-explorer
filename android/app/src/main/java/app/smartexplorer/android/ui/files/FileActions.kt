@@ -351,15 +351,20 @@ internal fun FilesViewModel.onPicked(action: PickerAction, location: String) {
 
 // ---- remote edits, received shares ----
 
-/** Uploads a changed remote copy; a remote change since opening asks how to resolve (spec F9). */
+/**
+ * Uploads a changed remote copy; a remote change since opening, or a place that cannot replace
+ * files, asks how to go on (spec F9).
+ */
 internal fun FilesViewModel.uploadEdit(edit: EditInfo, mode: String, force: Boolean = false) = launchAction("Hochladen fehlgeschlagen") {
     val task = FilesApi.awaitTask(FilesApi.uploadEdit(edit.editId, mode, force))
-    val conflict = task.state == "failed" && FilesApi.resultOf(task, UploadConflict.serializer())?.conflict == true
-    if (conflict) {
-        dialog = FilesDialog.EditConflict(edit)
-    } else {
-        reportTask(task, "Hochgeladen: ${edit.name}", "Hochladen fehlgeschlagen")
-        refreshAfterChange()
+    val failure = if (task.state == "failed") FilesApi.resultOf(task, UploadConflict.serializer()) else null
+    when {
+        failure?.replaceUnsupported == true -> dialog = FilesDialog.EditConflict(edit, canOverwrite = false)
+        failure?.conflict == true -> dialog = FilesDialog.EditConflict(edit)
+        else -> {
+            reportTask(task, "Hochgeladen: ${edit.name}", "Hochladen fehlgeschlagen")
+            refreshAfterChange()
+        }
     }
     reloadEdits()
 }
