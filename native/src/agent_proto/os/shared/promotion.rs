@@ -11,7 +11,7 @@ pub(crate) struct StagingArea {
 
 impl StagingArea {
     pub(crate) fn create(purpose: &str, request_id: u64) -> io::Result<Self> {
-        let base = std::fs::canonicalize(std::env::temp_dir())?;
+        let base = std::fs::canonicalize(spool_root())?;
         validate_destination_root(&base)?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -68,6 +68,21 @@ impl Drop for StagingArea {
         }
         let _ = std::fs::remove_dir(&self.directory);
     }
+}
+
+/// Parent of the private spool directories: the process temp directory.
+#[cfg(not(target_os = "android"))]
+fn spool_root() -> PathBuf {
+    std::env::temp_dir()
+}
+
+/// Android's process temp directory (`/data/local/tmp`) is not writable for
+/// apps; the embedding host provides the temp root inside its cache instead.
+/// This module is also compiled into the standalone `se-agent`, which never
+/// targets Android, so the crate-level path exists wherever this arm builds.
+#[cfg(target_os = "android")]
+fn spool_root() -> PathBuf {
+    crate::support_dirs::temp_dir()
 }
 
 /// One complete incoming file held outside the destination namespace.
@@ -127,7 +142,9 @@ impl StagedLocalFile {
             return Err(io::Error::other("tree spool file is incomplete"));
         }
         let metadata = std::fs::symlink_metadata(&self.staged)?;
-        if !metadata.is_file() || super::local_platform::metadata_is_link_like(&self.staged, &metadata) {
+        if !metadata.is_file()
+            || super::local_platform::metadata_is_link_like(&self.staged, &metadata)
+        {
             return Err(invalid("tree spool entry is not a regular file"));
         }
         if metadata.len() != self.expected {
@@ -203,7 +220,8 @@ pub(crate) fn validate_file_destination(path: &Path) -> io::Result<()> {
     validate_destination_root(parent)?;
     match std::fs::symlink_metadata(path) {
         Ok(metadata)
-            if metadata.is_file() && !super::local_platform::metadata_is_link_like(path, &metadata) =>
+            if metadata.is_file()
+                && !super::local_platform::metadata_is_link_like(path, &metadata) =>
         {
             Ok(())
         }
@@ -255,7 +273,10 @@ pub(crate) fn promote_staged_replace(staged: &Path, destination: &Path) -> io::R
     validate_staged_file(staged)?;
 
     match std::fs::symlink_metadata(destination) {
-        Ok(meta) if meta.is_file() && !super::local_platform::metadata_is_link_like(destination, &meta) => {
+        Ok(meta)
+            if meta.is_file()
+                && !super::local_platform::metadata_is_link_like(destination, &meta) =>
+        {
             super::local_platform::replace_file_atomic(staged, destination)
         }
         Ok(_) => Err(io::Error::new(
@@ -277,7 +298,8 @@ pub(crate) fn promote_staged_no_replace(staged: &Path, destination: &Path) -> io
 
 fn validate_staged_file(staged: &Path) -> io::Result<()> {
     let staged_meta = std::fs::symlink_metadata(staged)?;
-    if staged_meta.is_file() && !super::local_platform::metadata_is_link_like(staged, &staged_meta) {
+    if staged_meta.is_file() && !super::local_platform::metadata_is_link_like(staged, &staged_meta)
+    {
         Ok(())
     } else {
         Err(io::Error::new(

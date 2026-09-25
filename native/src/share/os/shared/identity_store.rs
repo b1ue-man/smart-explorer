@@ -136,6 +136,11 @@ fn default_home() -> String {
 }
 
 fn default_home_path() -> PathBuf {
+    // An embedding host (Android) has no usable HOME; it hands the default
+    // home in. The desktop never sets host values and keeps the environment.
+    if let Some(host) = crate::support_dirs::host() {
+        return host.home_dir.clone();
+    }
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)

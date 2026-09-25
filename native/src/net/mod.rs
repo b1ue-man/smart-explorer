@@ -4,10 +4,13 @@ mod interfaces;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/interfaces.rs"]
 mod interfaces;
+#[cfg(target_os = "android")]
+#[path = "os/android/interfaces.rs"]
+mod interfaces;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod platform;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os.rs"]
 mod platform;
 

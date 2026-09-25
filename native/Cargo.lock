@@ -6466,6 +6466,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "smart_explorer_android"
+version = "0.0.0"
+dependencies = [
+ "smart_explorer",
+]
+
+[[package]]
 name = "smithay-client-toolkit"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

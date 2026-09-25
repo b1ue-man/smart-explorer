@@ -63,6 +63,7 @@ pub(super) fn sync_parent(path: &Path) -> io::Result<()> {
     File::open(parent)?.sync_all()
 }
 
+#[cfg(target_os = "linux")]
 fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     let source = std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(
@@ -94,4 +95,11 @@ fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Android storage may lack `RENAME_NOREPLACE` and hard links; the fallback
+/// chain lives in `android_fs`.
+#[cfg(target_os = "android")]
+fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    crate::android_fs::rename_no_replace(source, destination)
 }

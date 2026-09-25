@@ -181,22 +181,22 @@ fn run_root_exits_first_test() -> io::Result<()> {
     process.confirm_empty(Instant::now() + Duration::from_secs(10))
 }
 
-#[cfg(all(debug_assertions, target_os = "linux"))]
+#[cfg(all(debug_assertions, not(windows)))]
 fn platform_test_command() -> &'static str {
     "printf 'SE-EXEC\\000'; printf 'SE-ERR\\000' >&2; exit 7"
 }
 
-#[cfg(all(debug_assertions, target_os = "linux"))]
+#[cfg(all(debug_assertions, not(windows)))]
 fn output_marker() -> &'static [u8] {
     b"SE-EXEC\0"
 }
 
-#[cfg(all(debug_assertions, target_os = "linux"))]
+#[cfg(all(debug_assertions, not(windows)))]
 fn error_marker() -> &'static [u8] {
     b"SE-ERR\0"
 }
 
-#[cfg(all(debug_assertions, target_os = "linux"))]
+#[cfg(all(debug_assertions, not(windows)))]
 fn root_exits_first_command() -> &'static str {
     "setsid sh -c 'trap \"\" TERM; while :; do sleep 1; done' & exit 9"
 }

@@ -1,4 +1,4 @@
-pub fn open_url(url: &str) {
+pub fn open_url(url: &str) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     let wide: Vec<u16> = std::ffi::OsStr::new(url)
         .encode_wide()
@@ -18,4 +18,5 @@ pub fn open_url(url: &str) {
             windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
         );
     }
+    Ok(())
 }

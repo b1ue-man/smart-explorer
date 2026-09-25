@@ -102,6 +102,20 @@ requirement carries over to the NDK build.
 | `keyring` (Windows block, `native/Cargo.toml:111`) | 3.6.3 | N/A on Android | Already gated `[target.'cfg(windows)'.dependencies]` — not pulled for Android | Project already plans a headless owner-protected file store for Linux per the existing comment at `native/Cargo.toml:109-110`; reuse/extend that store for Android rather than adding a keyring backend | `native/Cargo.toml:108-111` (read directly) |
 | `libc` (non-Windows block, `native/Cargo.toml:165`) | 0.2.186 | Yes, compiles for Android too (stays under the same `not(windows)` block as `rfd`, but this one is fine to keep) | `renameat2`'s `flags` parameter is typed `c_int` on `target_os="linux"` but **`u32` on `target_os="android"`** in the `libc` crate — a bare `libc::RENAME_NOREPLACE` call that compiles on Linux can fail to compile on Android with an `E0308` type mismatch | Cast the flags argument (`RENAME_NOREPLACE as _`) so the call is portable across both signatures; `statx` is also present for Android in recent `libc` (0.2.x) | [libc `renameat2`/Android signature diff](https://docs.rs/libc/latest/aarch64-linux-android/libc/constant.SYS_renameat2.html) |
 
+**`renameat2` on Android (checked 2026-09-25, primary sources):** bionic lists
+`renameat2(int, const char*, int, const char*, unsigned) all` in `libc/SYSCALLS.TXT`
+([source](https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/SYSCALLS.TXT)),
+added as a new libc function in R / API level 30
+([docs/status.md](https://android.googlesource.com/platform/bionic/+/refs/heads/main/docs/status.md)).
+`libc/tools/genseccomp.py` builds the app seccomp allowlist as
+`(SYSCALLS.TXT names − blocklists) | allowlists`
+([source](https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/tools/genseccomp.py)),
+so with minSdk 30 the raw `SYS_renameat2` syscall is permitted (no `SIGSYS`). The locked
+`libc` 0.2.186 exports `SYS_renameat2` (aarch64 276, x86_64 316), `RENAME_NOREPLACE: c_int = 1`
+and `renameat2(.., flags: c_uint)` for `target_os = "android"`
+(`src/unix/linux_like/android/{mod.rs,b64/*/mod.rs}`); the raw `libc::syscall` form used in
+`native/src/android_fs/os/rename.rs` avoids the `c_int`/`c_uint` flag mismatch.
+
 ---
 
 ## 5. Everything else requested

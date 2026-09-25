@@ -275,7 +275,7 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
     let state = random_b64(16);
     let url = build_auth_url(p, &cfg.client_id, &redirect, &challenge, &state);
 
-    super::os::open_url(&url);
+    super::os::open_url(&url)?;
 
     // Wait (with timeout) for the single redirect request.
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
