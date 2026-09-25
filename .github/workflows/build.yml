@@ -41,7 +41,145 @@ permissions:
   contents: read
 
 jobs:
+  android-release-apk:
+    # Builds (or, for an already committed candidate of the target version,
+    # re-verifies) the signed Android APK for the one complete release below.
+    # It applies the same Tagged/Bump/Resume plan as the release wrapper through
+    # native/release-version.ps1 and never commits, tags, or publishes.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.complete_release_source_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Bind Android release APK to exact main source
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.complete_release_source_sha }}
+          REQUESTED_PUBLISH: ${{ inputs.publish_release }}
+          REQUESTED_VERIFY: ${{ inputs.verify_release_candidate }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Complete release dispatch must select the main branch; got '$env:GITHUB_REF'."
+          }
+          if ($env:REQUESTED_PUBLISH -eq "true" -or $env:REQUESTED_VERIFY -eq "true") {
+            throw "complete_release_source_sha is mutually exclusive with publish_release and verify_release_candidate."
+          }
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+            throw "complete_release_source_sha must be one full Git object ID."
+          }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch origin/main." }
+          $expected = $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()
+          $head = (git rev-parse 'HEAD^{commit}').Trim().ToLowerInvariant()
+          $remoteMain = (git rev-parse 'refs/remotes/origin/main^{commit}').Trim().ToLowerInvariant()
+          $eventSha = $env:GITHUB_SHA.ToLowerInvariant()
+          if ($head -ne $expected -or $eventSha -ne $expected -or $remoteMain -ne $expected) {
+            throw "Complete release source drift: input=$expected HEAD=$head event=$eventSha origin/main=$remoteMain."
+          }
+
+      - name: Resolve the release version plan
+        id: plan
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repoRoot = (Resolve-Path -LiteralPath ".").Path
+          $scriptRoot = Join-Path $repoRoot "native"
+          . (Join-Path $scriptRoot "release-publication.ps1")
+          . (Join-Path $scriptRoot "release-version.ps1")
+          $plan = Resolve-ReleasePlan
+          $feed = Join-Path $repoRoot "release-native/update-feed"
+          $versionPath = Join-Path $feed "version.txt"
+          $feedVersion = if (Test-Path -LiteralPath $versionPath -PathType Leaf) {
+            (Get-Content -LiteralPath $versionPath -Raw).Trim()
+          } else { "" }
+          $committedApk = Join-Path $feed "smart-explorer-android.apk"
+          # Only the committed release candidate of this exact version carries
+          # an APK built from the same source; any later source commit rebuilds.
+          $headSubject = Get-GitText @("show", "-s", "--format=%s", "HEAD")
+          if ($headSubject -ceq "Release Smart Explorer v$($plan.Version) [release candidate]" -and
+              $feedVersion -eq $plan.Version -and
+              (Test-Path -LiteralPath $committedApk -PathType Leaf)) {
+            $mode = "passthrough"
+          } elseif ($plan.Action -eq "Tagged") {
+            throw "Immutable $($plan.Tag) has no committed v$($plan.Version) Android APK; a tagged candidate cannot gain a rebuilt asset."
+          } else {
+            Set-NativeVersion $plan.Version
+            $mode = "build"
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "mode=$mode" -Encoding utf8
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "version=$($plan.Version)" -Encoding utf8
+          Write-Host "Android release plan: action=$($plan.Action), version=$($plan.Version), mode=$mode."
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.plan.outputs.mode == 'build'
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        if: steps.plan.outputs.mode == 'build'
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - name: Build and verify signed Android release APK
+        if: steps.plan.outputs.mode == 'build'
+        timeout-minutes: 160
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAN_VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_B64" ]; then
+            echo "::error::The ANDROID_KEYSTORE_B64 repository secret is missing."
+            exit 1
+          fi
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/android-signing.XXXXXX")"
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          chmod 700 "$signing_dir"
+          (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$signing_dir/release.p12")
+          unset ANDROID_KEYSTORE_B64
+          export ANDROID_KEYSTORE_FILE="$signing_dir/release.p12"
+          bash android/build-release-apk.sh \
+            --expect-version "$PLAN_VERSION" \
+            --out "$RUNNER_TEMP/android-release-apk"
+
+      - name: Verify committed Android release APK
+        if: steps.plan.outputs.mode == 'passthrough'
+        env:
+          PLAN_VERSION: ${{ steps.plan.outputs.version }}
+        run: >-
+          bash android/build-release-apk.sh
+          --expect-version "$PLAN_VERSION"
+          --verify release-native/update-feed/smart-explorer-android.apk
+          --out "$RUNNER_TEMP/android-release-apk"
+
+      - name: Upload verified Android release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: ${{ runner.temp }}/android-release-apk
+          if-no-files-found: error
+          retention-days: 1
+
   complete-release:
+    needs: android-release-apk
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.complete_release_source_sha != ''
@@ -93,6 +231,12 @@ jobs:
           }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Download verified Android release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-release-apk
+          path: ${{ runner.temp }}/android-release-apk
 
       - name: Prepare Windows release tools
         shell: pwsh
@@ -183,6 +327,7 @@ jobs:
           pwsh ./native/publish-release-local.ps1
           -SkipLocalCliUpdate
           -PublicationTimeoutMinutes 180
+          -AndroidApkDirectory "$env:RUNNER_TEMP/android-release-apk"
 
   windows-native-tests:
     if: >-
@@ -419,6 +564,8 @@ jobs:
           test -s ../release-native/update-feed/smart_explorer.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.sha256
           test -s ../release-native/update-feed/se.sha256
+          test -s ../release-native/update-feed/smart-explorer-android.apk
+          test -s ../release-native/update-feed/smart-explorer-android.apk.sha256
           test -s ../release-native/update-feed/windows-build.manifest
           test -s "../release-native/Smart Explorer Setup $ver.exe"
           test -s "../release-native/Smart Explorer.exe"
@@ -454,9 +601,11 @@ jobs:
             sha256sum -c smart_explorer.sha256
             sha256sum -c smart_explorer_updater.sha256
             sha256sum -c se.sha256
+            sha256sum -c smart-explorer-android.apk.sha256
             for payload in \
               smart_explorer.exe smart_explorer_updater.exe se.exe \
-              smart_explorer smart_explorer_updater se; do
+              smart_explorer smart_explorer_updater se \
+              smart-explorer-android.apk; do
               expected="$(awk 'NR == 1 { print $1 }' "$payload.sha256")"
               actual="$(sha256sum "$payload" | awk '{ print $1 }')"
               if ! [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || [[ "${expected,,}" != "$actual" ]]; then
@@ -501,6 +650,8 @@ jobs:
             release-native/update-feed/smart_explorer.sha256 \
             release-native/update-feed/smart_explorer_updater.sha256 \
             release-native/update-feed/se.sha256 \
+            release-native/update-feed/smart-explorer-android.apk \
+            release-native/update-feed/smart-explorer-android.apk.sha256 \
             release-native/update-feed/windows-build.manifest \
             release-native/update-feed/version.txt; do
             allowed_release_change["$path"]=1
@@ -570,6 +721,7 @@ jobs:
             smart_explorer.exe.sha256 smart_explorer_updater.exe.sha256 se.exe.sha256 \
             smart_explorer smart_explorer_updater se \
             smart_explorer.sha256 smart_explorer_updater.sha256 se.sha256 \
+            smart-explorer-android.apk smart-explorer-android.apk.sha256 \
             version.txt; do
             cp "../release-native/update-feed/$asset" "out/$asset"
           done
@@ -579,8 +731,8 @@ jobs:
           cp ../release-native/share-server/se-share-server-linux out/se-share-server-linux
           cp ../install-linux.sh out/install-linux.sh
           staged_count="$(find out -maxdepth 1 -type f -printf '.' | wc -c)"
-          if [ "$staged_count" -ne 18 ]; then
-            echo "::error::Staged release candidate contains $staged_count files, expected exactly 18."
+          if [ "$staged_count" -ne 20 ]; then
+            echo "::error::Staged release candidate contains $staged_count files, expected exactly 20."
             exit 1
           fi
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
@@ -662,6 +814,8 @@ jobs:
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.sha256"; Staged = ".\release-candidate\smart_explorer.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.sha256"; Staged = ".\release-candidate\smart_explorer_updater.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\se.sha256"; Staged = ".\release-candidate\se.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk"; Staged = ".\release-candidate\smart-explorer-android.apk" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk.sha256"; Staged = ".\release-candidate\smart-explorer-android.apk.sha256" },
             [pscustomobject]@{ Source = ".\install-linux.sh"; Staged = ".\release-candidate\install-linux.sh" },
             [pscustomobject]@{ Source = ".\release-native\smart_explorer_command.dll"; Staged = ".\release-candidate\smart_explorer_command.dll" },
             [pscustomobject]@{ Source = ".\release-native\share-server\se-share-server.exe"; Staged = ".\release-candidate\se-share-server.exe" },
@@ -673,8 +827,8 @@ jobs:
             "*",
             [System.IO.SearchOption]::AllDirectories
           ))
-          if ($assetMappings.Count -ne 18 -or $stagedFiles.Count -ne 18) {
-            throw "release candidate must contain exactly 18 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
+          if ($assetMappings.Count -ne 20 -or $stagedFiles.Count -ne 20) {
+            throw "release candidate must contain exactly 20 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
           }
           $mappedSources = @{}
           $mappedStaged = @{}
@@ -754,19 +908,21 @@ jobs:
             "release-native/update-feed/smart_explorer.sha256|native/out/smart_explorer.sha256"
             "release-native/update-feed/smart_explorer_updater.sha256|native/out/smart_explorer_updater.sha256"
             "release-native/update-feed/se.sha256|native/out/se.sha256"
+            "release-native/update-feed/smart-explorer-android.apk|native/out/smart-explorer-android.apk"
+            "release-native/update-feed/smart-explorer-android.apk.sha256|native/out/smart-explorer-android.apk.sha256"
             "install-linux.sh|native/out/install-linux.sh"
             "release-native/smart_explorer_command.dll|native/out/smart_explorer_command.dll"
             "release-native/share-server/se-share-server.exe|native/out/se-share-server.exe"
             "release-native/share-server/se-share-server-linux|native/out/se-share-server-linux"
             "release-native/update-feed/version.txt|native/out/version.txt"
           )
-          if [ "${#asset_mappings[@]}" -ne 18 ]; then
-            echo "::error::Internal release mapping does not contain exactly 18 assets."
+          if [ "${#asset_mappings[@]}" -ne 20 ]; then
+            echo "::error::Internal release mapping does not contain exactly 20 assets."
             exit 1
           fi
           downloaded_count="$(find native/out -type f -printf '.' | wc -c)"
-          if [ "$downloaded_count" -ne 18 ]; then
-            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 18."
+          if [ "$downloaded_count" -ne 20 ]; then
+            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 20."
             exit 1
           fi
           declare -A mapped_committed=()
@@ -797,6 +953,7 @@ jobs:
             sha256sum --check --strict smart_explorer.sha256
             sha256sum --check --strict smart_explorer_updater.sha256
             sha256sum --check --strict se.sha256
+            sha256sum --check --strict smart-explorer-android.apk.sha256
           )
 
       - name: Bind publication to exact main commit and immutable tag
@@ -870,7 +1027,7 @@ jobs:
           name: Smart Explorer ${{ needs.release-candidate.outputs.version }}
           fail_on_unmatched_files: true
           body: |
-            **Smart Explorer ${{ needs.release-candidate.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds.
+            **Smart Explorer ${{ needs.release-candidate.outputs.version }}** — Windows x64 and Linux x86_64 desktop builds plus the Android app.
 
             Linux one-line install:
             ```bash
@@ -893,6 +1050,9 @@ jobs:
             - **se-share-server.exe** / **se-share-server-linux** —
               standalone signaling server plus Iroh encrypted-traffic relay for
               direct peer sharing.
+            - **smart-explorer-android.apk** — Android 11+ app (arm64-v8a,
+              x86_64) for sideloading; later versions update in the app from
+              the same feed. The `.sha256` file binds the exact APK bytes.
 
             Built once by the local complete release workflow and published
             from the exact committed candidate. Update + release flow:
@@ -911,6 +1071,8 @@ jobs:
             native/out/smart_explorer.sha256
             native/out/smart_explorer_updater.sha256
             native/out/se.sha256
+            native/out/smart-explorer-android.apk
+            native/out/smart-explorer-android.apk.sha256
             native/out/install-linux.sh
             native/out/smart_explorer_command.dll
             native/out/se-share-server.exe

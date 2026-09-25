@@ -146,14 +146,16 @@ function Get-PublicationReleaseAssetMap {
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer.sha256"; PublishedName = "smart_explorer.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer_updater.sha256"; PublishedName = "smart_explorer_updater.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "se.sha256"; PublishedName = "se.sha256" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk"; PublishedName = "smart-explorer-android.apk" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk.sha256"; PublishedName = "smart-explorer-android.apk.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $RepoRoot "install-linux.sh"; PublishedName = "install-linux.sh" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "smart_explorer_command.dll"; PublishedName = "smart_explorer_command.dll" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "share-server/se-share-server.exe"; PublishedName = "se-share-server.exe" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "share-server/se-share-server-linux"; PublishedName = "se-share-server-linux" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "version.txt"; PublishedName = "version.txt" }
     )
-    if ($items.Count -ne 18) {
-        throw "Internal release publication map must contain exactly 18 assets."
+    if ($items.Count -ne 20) {
+        throw "Internal release publication map must contain exactly 20 assets."
     }
     return $items
 }
@@ -256,6 +258,123 @@ function Assert-PublicationHashSidecar {
         throw "SHA-256 sidecar does not bind the exact '$PayloadName' bytes."
     }
     return $actual
+}
+
+function Get-PublicationAndroidVersionCode {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    # Same mapping as android/app/build.gradle.kts and android/build-release-apk.sh.
+    $parts = $Version.Split('.')
+    $major = [long]$parts[0]
+    $minor = [long]$parts[1]
+    $patch = [long]$parts[2]
+    if ($minor -ge 1000 -or $patch -ge 1000) {
+        throw "Android versionCode requires minor and patch below 1000; got '$Version'."
+    }
+    $code = $major * 1000000 + $minor * 1000 + $patch
+    if ($code -le 0 -or $code -gt 2100000000) {
+        throw "Android versionCode $code for '$Version' is outside 1..2100000000."
+    }
+    return $code
+}
+
+function Get-PublicationAndroidCertSha256 {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $path = Join-Path $RepoRoot "android/release-cert.sha256"
+    Assert-PublicationNonEmptyFile $path
+    $line = [string](Get-Content -LiteralPath $path -TotalCount 1)
+    $value = ($line.Trim() -split '\s+')[0].ToLowerInvariant()
+    if ($value -cnotmatch '^[0-9a-f]{64}$') {
+        throw "android/release-cert.sha256 must start with one SHA-256 certificate fingerprint."
+    }
+    return $value
+}
+
+function Get-PublicationAndroidReleaseApk {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^\d+\.\d+\.\d+$')]
+        [string]$Version
+    )
+
+    # The build.yml Android job verified versionName/versionCode with aapt2 and
+    # the signer with apksigner. Without Android tools, this binds its recorded
+    # results to the exact APK bytes, the release version, and the pinned signer.
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        throw "Android release APK directory is missing: $Directory"
+    }
+    $apkName = "smart-explorer-android.apk"
+    $metadataName = "apk-metadata.json"
+    $unexpected = @(Get-ChildItem -LiteralPath $Directory -Force | Where-Object {
+        $_.Name -cne $apkName -and $_.Name -cne $metadataName
+    } | ForEach-Object { $_.Name })
+    if ($unexpected.Count -gt 0) {
+        throw "Android release APK directory contains unexpected entries: $($unexpected -join ', ')"
+    }
+    $apk = Join-Path $Directory $apkName
+    $metadataPath = Join-Path $Directory $metadataName
+    Assert-PublicationNonEmptyFile $apk
+    Assert-PublicationNonEmptyFile $metadataPath
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Android release metadata is not valid JSON: $metadataPath"
+    }
+    if ($metadata -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "Android release metadata must be one JSON object: $metadataPath"
+    }
+    $expectedFields = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@("version", "versionCode", "sha256", "certSha256"),
+        [System.StringComparer]::Ordinal
+    )
+    $fields = @($metadata.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($fields.Count -ne $expectedFields.Count -or
+        @($fields | Where-Object { -not $expectedFields.Contains($_) }).Count -gt 0) {
+        throw "Android release metadata must contain exactly version, versionCode, sha256, and certSha256."
+    }
+    $apkVersion = $metadata.version
+    if ($apkVersion -isnot [string] -or $apkVersion -cne $Version) {
+        throw "Android release APK version '$apkVersion' does not match release '$Version'."
+    }
+    $versionCode = $metadata.versionCode
+    $expectedCode = Get-PublicationAndroidVersionCode -Version $Version
+    if (($versionCode -isnot [int] -and $versionCode -isnot [long]) -or
+        [long]$versionCode -ne $expectedCode) {
+        throw "Android release APK versionCode '$versionCode' does not match expected $expectedCode."
+    }
+    $recordedSha256 = $metadata.sha256
+    if ($recordedSha256 -isnot [string] -or $recordedSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Android release metadata has no valid lowercase SHA-256."
+    }
+    $actualSha256 = Get-PublicationSha256 $apk
+    if ($actualSha256 -cne $recordedSha256) {
+        throw "Android release APK bytes do not match their recorded SHA-256."
+    }
+    $certSha256 = $metadata.certSha256
+    if ($certSha256 -isnot [string] -or $certSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Android release metadata has no valid lowercase signing-certificate SHA-256."
+    }
+    $expectedCert = Get-PublicationAndroidCertSha256 -RepoRoot $RepoRoot
+    if ($certSha256 -cne $expectedCert) {
+        throw "Android release APK signer '$certSha256' does not match android/release-cert.sha256 '$expectedCert'."
+    }
+    return [pscustomobject]@{
+        ApkPath = (Resolve-Path -LiteralPath $apk).Path
+        Version = $Version
+        VersionCode = [long]$versionCode
+        Sha256 = $actualSha256
+        CertSha256 = $certSha256
+    }
 }
 
 function Get-PublicationExpectedSourceCommit {
@@ -431,7 +550,8 @@ function Assert-ReleasePublicationCandidate {
         "se.exe",
         "smart_explorer",
         "smart_explorer_updater",
-        "se"
+        "se",
+        "smart-explorer-android.apk"
     )) {
         $hashes[$payload] = Assert-PublicationHashSidecar $feed $payload
     }
@@ -581,7 +701,7 @@ function Assert-PublicationNoUntrackedBuildInputs {
         -Arguments @(
             "-c", "core.quotepath=false",
             "ls-files", "--others", "--exclude-standard", "-z", "--",
-            "native", "share-server", "se-agent", "install-linux.sh",
+            "native", "share-server", "se-agent", "android", "install-linux.sh",
             ".github/workflows/build.yml", ".cargo", "vendor",
             "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"
         )).StdOut
@@ -622,6 +742,8 @@ function Get-PublicationReleaseCommitPaths {
         "release-native/update-feed/smart_explorer.sha256",
         "release-native/update-feed/smart_explorer_updater.sha256",
         "release-native/update-feed/se.sha256",
+        "release-native/update-feed/smart-explorer-android.apk",
+        "release-native/update-feed/smart-explorer-android.apk.sha256",
         "release-native/update-feed/windows-build.manifest",
         "release-native/update-feed/version.txt"
     )
@@ -1386,8 +1508,8 @@ function Wait-ReleasePublicationAssets {
             -Asset $asset `
             -Version $Version
     }
-    if ($expected.Count -ne 18) {
-        throw "Expected release publication set must contain exactly 18 assets."
+    if ($expected.Count -ne 20) {
+        throw "Expected release publication set must contain exactly 20 assets."
     }
 
     $tag = "v$Version"
@@ -1414,11 +1536,11 @@ function Wait-ReleasePublicationAssets {
             if ($unknown.Count -gt 0) {
                 throw "GitHub Release '$tag' contains unexpected asset(s): $($unknown -join ', ')"
             }
-            if ($remote.Count -gt 18) {
-                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 18."
+            if ($remote.Count -gt 20) {
+                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 20."
             }
             $missing = @($expected.Keys | Where-Object { -not $remote.ContainsKey($_) })
-            if ($missing.Count -eq 0 -and $remote.Count -eq 18) {
+            if ($missing.Count -eq 0 -and $remote.Count -eq 20) {
                 $digestPending = @()
                 foreach ($name in $expected.Keys) {
                     $want = $expected[$name]
@@ -1440,20 +1562,20 @@ function Wait-ReleasePublicationAssets {
                         Tag = $tag
                         ReleaseId = [long]$release.id
                         Url = [string]$release.html_url
-                        AssetCount = 18
+                        AssetCount = 20
                         Verified = $true
                     }
                 }
                 $lastState = "digest pending for $($digestPending -join ', ')"
             } else {
-                $lastState = "$($remote.Count)/18 assets; missing $($missing -join ', ')"
+                $lastState = "$($remote.Count)/20 assets; missing $($missing -join ', ')"
             }
         }
         if (-not (Wait-ReleasePublicationDelay -Deadline $Deadline)) {
             break
         }
     }
-    throw "Timed out waiting for exact 18-asset GitHub Release '$tag' (last state: $lastState)."
+    throw "Timed out waiting for exact 20-asset GitHub Release '$tag' (last state: $lastState)."
 }
 
 function Invoke-ReleasePublicationLinuxCliUpdate {

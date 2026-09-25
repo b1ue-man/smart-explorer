@@ -2,14 +2,18 @@
 #
 # Windows and Linux outputs are built into one isolated release tree. The live
 # release-native artifacts are changed only after every staged artifact passes
-# validation; version.txt is the final commit marker.
+# validation; version.txt is the final commit marker. The signed Android APK
+# joins the same feed: remote automation passes the build.yml android-release-apk
+# artifact through -AndroidApkDirectory; a human-operated run builds it with
+# android/build-release-apk.sh in WSL/Linux.
 
 param(
     [switch]$SkipLinuxFeed,
     [switch]$NoBootstrapZig,
     [switch]$CheckEnvOnly,
     [switch]$SkipLocalCliUpdate,
-    [ValidateRange(30, 360)][int]$PublicationTimeoutMinutes = 180
+    [ValidateRange(30, 360)][int]$PublicationTimeoutMinutes = 180,
+    [string]$AndroidApkDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,14 +38,167 @@ if (-not (Test-Path -LiteralPath $publicationHelper -PathType Leaf)) {
     throw "Release publication helper missing: $publicationHelper"
 }
 . $publicationHelper
-
-function Get-NativeVersion {
-    $cargoToml = Join-Path $scriptRoot "Cargo.toml"
-    $match = Select-String -Path $cargoToml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
-    if (-not $match) {
-        throw "Could not read version from $cargoToml"
+$releaseVersionHelper = Join-Path $scriptRoot "release-version.ps1"
+if (-not (Test-Path -LiteralPath $releaseVersionHelper -PathType Leaf)) {
+    throw "Release version helper missing: $releaseVersionHelper"
+}
+. $releaseVersionHelper
+$androidApkName = "smart-explorer-android.apk"
+$androidReleaseScript = "android/build-release-apk.sh"
+if ($AndroidApkDirectory) {
+    if ($SkipLinuxFeed) {
+        throw "-AndroidApkDirectory applies only to a complete release, not the -SkipLinuxFeed diagnostic."
     }
-    return $match.Matches[0].Groups[1].Value
+    if (-not (Test-Path -LiteralPath $AndroidApkDirectory -PathType Container)) {
+        throw "Android release APK directory not found: $AndroidApkDirectory"
+    }
+    $AndroidApkDirectory = (Resolve-Path -LiteralPath $AndroidApkDirectory).Path
+}
+
+function Get-ReleaseRepoRootWsl {
+    $repoRootForWsl = ($repoRoot -replace '\\', '/')
+    $translated = (& wsl.exe wslpath -a $repoRootForWsl)
+    if ($LASTEXITCODE -ne 0 -or -not $translated) {
+        throw "Could not translate repo path for WSL."
+    }
+    return ([string]$translated).Trim()
+}
+
+function Invoke-AndroidReleaseScript([string[]]$Arguments) {
+    # The Android build runs in the Linux environment that also builds the
+    # Linux payloads: bash on a Linux host, WSL on a Windows host.
+    if (Test-RunningOnLinux) {
+        & bash (Join-Path $repoRoot $androidReleaseScript) @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Android release script failed: $androidReleaseScript $($Arguments -join ' ')"
+        }
+        return
+    }
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) {
+        throw "wsl.exe not found; the Android release APK is built in WSL on a Windows host."
+    }
+    $repoRootWsl = Get-ReleaseRepoRootWsl
+    $quoted = @($Arguments | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join " "
+    # Forward the signing variables without placing any secret on a command
+    # line; /up translates the keystore path from Win32 to WSL.
+    $forwarded = @(
+        @(
+            @{ Name = "ANDROID_KEYSTORE_FILE"; Flags = "/up" },
+            @{ Name = "ANDROID_KEYSTORE_PASSWORD"; Flags = "/u" },
+            @{ Name = "ANDROID_KEY_ALIAS"; Flags = "/u" },
+            @{ Name = "ANDROID_KEY_PASSWORD"; Flags = "/u" }
+        ) | Where-Object {
+            -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_.Name, "Process"))
+        } | ForEach-Object { "$($_.Name)$($_.Flags)" }
+    )
+    $oldWslEnv = $env:WSLENV
+    try {
+        if ($forwarded.Count -gt 0) {
+            $env:WSLENV = (@(@($oldWslEnv) + $forwarded) | Where-Object { $_ }) -join ":"
+        }
+        & wsl.exe bash -lc "cd '$repoRootWsl' && bash $androidReleaseScript $quoted"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Android release script failed in WSL: $androidReleaseScript $($Arguments -join ' ')"
+        }
+    } finally {
+        $env:WSLENV = $oldWslEnv
+    }
+}
+
+function Assert-AndroidReleaseInputs([string]$Version) {
+    if ($AndroidApkDirectory) {
+        $apk = Get-PublicationAndroidReleaseApk `
+            -RepoRoot $repoRoot `
+            -Directory $AndroidApkDirectory `
+            -Version $Version
+        Write-Host "Android release APK input OK: v$($apk.Version) (versionCode $($apk.VersionCode)), SHA-256 $($apk.Sha256)."
+        return
+    }
+    Invoke-AndroidReleaseScript @("--check-env")
+}
+
+function New-CompleteReleaseAndroidApk([string]$StageRoot, [string]$Version) {
+    # Returns the verified APK inside this release's isolated stage. It is
+    # obtained before the long desktop builds so an Android failure stops early.
+    $stageAndroid = Join-Path $StageRoot "android"
+    if (Test-Path -LiteralPath $stageAndroid) {
+        throw "Android release stage already exists: $stageAndroid"
+    }
+    if ($AndroidApkDirectory) {
+        $source = Get-PublicationAndroidReleaseApk `
+            -RepoRoot $repoRoot `
+            -Directory $AndroidApkDirectory `
+            -Version $Version
+        New-Item -ItemType Directory -Path $stageAndroid | Out-Null
+        Copy-Item -LiteralPath $source.ApkPath -Destination (Join-Path $stageAndroid $androidApkName)
+        Copy-Item `
+            -LiteralPath (Join-Path $AndroidApkDirectory "apk-metadata.json") `
+            -Destination (Join-Path $stageAndroid "apk-metadata.json")
+    } else {
+        $scriptOutput = if (Test-RunningOnLinux) {
+            $stageAndroid
+        } else {
+            "$(Get-ReleaseRepoRootWsl)/release-native/$(Split-Path -Leaf $StageRoot)/android"
+        }
+        Invoke-AndroidReleaseScript @("--expect-version", $Version, "--out", $scriptOutput)
+    }
+    return Get-PublicationAndroidReleaseApk `
+        -RepoRoot $repoRoot `
+        -Directory $stageAndroid `
+        -Version $Version
+}
+
+function Write-AndroidApkSidecar($Apk, [string]$Path) {
+    [System.IO.File]::WriteAllText(
+        $Path,
+        "$($Apk.Sha256)  $androidApkName`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+}
+
+function Add-CompleteReleaseAndroidApkToFeed($Apk, [string]$FeedDirectory) {
+    # The staged feed is promoted as one unit, so the APK and its sidecar join
+    # the same atomic feed swap as the desktop payloads.
+    $destination = Join-Path $FeedDirectory $androidApkName
+    foreach ($path in @($destination, "$destination.sha256")) {
+        if (Test-Path -LiteralPath $path) {
+            throw "The isolated feed unexpectedly already contains: $path"
+        }
+    }
+    Copy-Item -LiteralPath $Apk.ApkPath -Destination $destination
+    Write-AndroidApkSidecar $Apk "$destination.sha256"
+    Assert-FeedHash $FeedDirectory $androidApkName
+}
+
+function Publish-CompleteReleaseAndroidApk($Apk, [string]$StageRoot, [string]$Version) {
+    # The checked-in Linux-host feed transaction swaps in a feed without the
+    # APK. Add the verified APK and sidecar right after it, still under the
+    # release lock and before candidate validation or any commit; a failure
+    # leaves an incomplete candidate that the next run rebuilds.
+    $feedVersion = (Get-Content -LiteralPath (Join-Path $feed "version.txt") -TotalCount 1).Trim()
+    if ($feedVersion -ne $Version) {
+        throw "Feed version '$feedVersion' does not match Android release version '$Version'."
+    }
+    $sidecarStage = Join-Path $StageRoot "$androidApkName.sha256"
+    Write-AndroidApkSidecar $Apk $sidecarStage
+    Publish-FileAtomic $Apk.ApkPath (Join-Path $feed $androidApkName)
+    Publish-FileAtomic $sidecarStage (Join-Path $feed "$androidApkName.sha256")
+    Assert-FeedHash $feed $androidApkName
+}
+
+function Assert-CompleteReleaseAndroidApkCommitted([string]$Version) {
+    # A reused or tagged candidate already contains its APK; the APK handed
+    # over by the build.yml job must be exactly those committed bytes.
+    if (-not $AndroidApkDirectory) { return }
+    $provided = Get-PublicationAndroidReleaseApk `
+        -RepoRoot $repoRoot `
+        -Directory $AndroidApkDirectory `
+        -Version $Version
+    $committed = Get-PublicationSha256 (Join-Path $feed $androidApkName)
+    if ($provided.Sha256 -cne $committed) {
+        throw "The Android APK in -AndroidApkDirectory differs from the committed v$Version feed APK."
+    }
 }
 
 function Invoke-Checked {
@@ -239,7 +396,7 @@ function Publish-CompleteRelease(
 
         Copy-Item -LiteralPath $StageFeed -Destination $feedCandidate -Recurse
         Assert-WindowsManifest $feedCandidate $ExpectedVersion $ExpectedSourceCommit
-        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
+        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", $androidApkName)) {
             Assert-FeedHash $feedCandidate $name
         }
         if ($feedHadDestination) {
@@ -254,7 +411,7 @@ function Publish-CompleteRelease(
             throw "Published feed version '$publishedVersion' does not match '$ExpectedVersion'."
         }
         Assert-WindowsManifest $feed $ExpectedVersion $ExpectedSourceCommit
-        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
+        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", $androidApkName)) {
             Assert-FeedHash $feed $name
         }
         foreach ($record in $records) {
@@ -452,6 +609,10 @@ try {
     $stageFeed = Join-Path $stageRelease "update-feed"
     $versionStage = Join-Path $stageRoot "version.txt"
     New-Item -ItemType Directory -Force $stageRelease | Out-Null
+    $androidApk = $null
+    if (-not $SkipLinuxFeed) {
+        $androidApk = New-CompleteReleaseAndroidApk $stageRoot $version
+    }
 
     Push-Location $scriptRoot
     try {
@@ -522,6 +683,7 @@ try {
     Invoke-Checked -ErrorMessage "Staged Linux/static release verification failed." -Command {
         & wsl.exe bash -lc "cd '$stageReleaseWsl/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && test -x '$repoRootWsl/install-linux.sh' && file smart_explorer | grep -Fq 'dynamically linked' && file '$stageReleaseWsl/share-server/se-share-server-linux' | grep -Eq 'statically linked|static-pie linked'"
     }
+    Add-CompleteReleaseAndroidApkToFeed $androidApk $stageFeed
 
     Set-Content -LiteralPath $versionStage -Value $version -Encoding ascii
     Publish-CompleteRelease `
@@ -536,7 +698,7 @@ try {
         throw "Feed version '$feedVersion' does not match Cargo.toml version '$version'."
     }
     Assert-WindowsManifest $feed $version $buildSourceCommit
-    foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
+    foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", $androidApkName)) {
         Assert-FeedHash $feed $name
     }
     Write-Host "Complete local release artifacts atomically staged and verified: v$version"
@@ -564,18 +726,6 @@ function Test-RunningOnLinux {
         return [bool]$isLinuxVariable.Value
     }
     return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Unix
-}
-
-function Invoke-GitCaptured {
-    param([string[]]$ArgumentList, [switch]$AllowFailure)
-    return Invoke-ReleasePublicationGit `
-        -RepoRoot $repoRoot `
-        -Arguments $ArgumentList `
-        -AllowFailure:$AllowFailure
-}
-
-function Get-GitText([string[]]$ArgumentList) {
-    return (Invoke-GitCaptured -ArgumentList $ArgumentList).StdOut.Trim()
 }
 
 function Get-GitHubRepositorySlug {
@@ -726,85 +876,6 @@ function Wait-GitHubActionsPublicationWorkflow(
     throw "Timed out waiting for exact remote publication run $RunId."
 }
 
-function Get-VersionFromCargoText([string]$Text, [string]$Source) {
-    $match = [regex]::Match($Text, '(?m)^version\s*=\s*"([^"]+)"')
-    if (-not $match.Success) {
-        throw "Could not read native version from $Source."
-    }
-    return $match.Groups[1].Value
-}
-
-function Get-RemoteMainVersion {
-    return Get-VersionFromCargoText (Get-GitText @("show", "origin/main:native/Cargo.toml")) "origin/main:native/Cargo.toml"
-}
-
-function Set-NativeVersion([string]$Version) {
-    $cargoToml = Join-Path $scriptRoot "Cargo.toml"
-    $cargoLock = Join-Path $scriptRoot "Cargo.lock"
-    $cargoText = [System.IO.File]::ReadAllText($cargoToml)
-    $cargoPattern = [regex]::new('(?m)^version\s*=\s*"([^"]+)"')
-    $cargoMatch = $cargoPattern.Match($cargoText)
-    if (-not $cargoMatch.Success) {
-        throw "Could not update version in $cargoToml"
-    }
-    $cargoVersion = $cargoMatch.Groups[1].Value
-    if ($cargoVersion -ne $Version -and (Get-NextPatchVersion $cargoVersion) -ne $Version) {
-        throw "Cargo.toml version '$cargoVersion' cannot advance or resume '$Version'."
-    }
-
-    $lockText = [System.IO.File]::ReadAllText($cargoLock)
-    $lockPattern = [regex]::new(
-        '(?ms)(^\[\[package\]\]\r?\nname = "smart_explorer"\r?\nversion = ")([^"]+)(")'
-    )
-    $lockMatches = $lockPattern.Matches($lockText)
-    if ($lockMatches.Count -ne 1) {
-        throw "Cargo.lock must contain exactly one smart_explorer root package entry."
-    }
-    $lockVersion = $lockMatches[0].Groups[2].Value
-    if ($lockVersion -ne $Version -and (Get-NextPatchVersion $lockVersion) -ne $Version) {
-        throw "Cargo.lock root version '$lockVersion' cannot advance or resume '$Version'."
-    }
-
-    $updatedCargo = $cargoPattern.Replace($cargoText, "version = `"$Version`"", 1)
-    $updatedLock = $lockPattern.Replace(
-        $lockText,
-        { param($match) "$($match.Groups[1].Value)$Version$($match.Groups[3].Value)" },
-        1
-    )
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    $stageId = "{0}-{1}" -f $PID, [guid]::NewGuid().ToString('N')
-    $lockStage = Join-Path $scriptRoot ".Cargo.lock.complete-release-version.$stageId"
-    $cargoStage = Join-Path $scriptRoot ".Cargo.toml.complete-release-version.$stageId"
-    try {
-        [System.IO.File]::WriteAllText($lockStage, $updatedLock, $encoding)
-        [System.IO.File]::WriteAllText($cargoStage, $updatedCargo, $encoding)
-        # Lock first: a crash between the two atomic same-directory renames is
-        # recovered by the next Bump/Resume call, while Cargo.toml still keeps
-        # the remote version decision unambiguous.
-        [System.IO.File]::Move($lockStage, $cargoLock, $true)
-        [System.IO.File]::Move($cargoStage, $cargoToml, $true)
-    } finally {
-        Remove-Item -LiteralPath $lockStage -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $cargoStage -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Get-NextPatchVersion([string]$Version) {
-    $match = [regex]::Match($Version, '^(\d+)\.(\d+)\.(\d+)$')
-    if (-not $match.Success) {
-        throw "Automatic release bump requires a stable major.minor.patch version, got '$Version'."
-    }
-    $patch = [uint64]$match.Groups[3].Value
-    if ($patch -eq [uint64]::MaxValue) {
-        throw "Patch version overflow for $Version."
-    }
-    return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($patch + 1)"
-}
-
-function Get-HeadSha {
-    return Get-GitText @("rev-parse", "HEAD")
-}
-
 function Get-OriginMainSha {
     return Get-GitText @("rev-parse", "origin/main")
 }
@@ -815,17 +886,6 @@ function Get-RemoteMainSha {
         throw "origin/main is missing."
     }
     return ($line -split '\s+')[0]
-}
-
-function Get-RemoteTagCommit([string]$Tag) {
-    return Get-PublicationRemoteTagCommit -RepoRoot $repoRoot -Tag $Tag
-}
-
-function Test-GitAncestor([string]$Ancestor, [string]$Descendant) {
-    $result = Invoke-GitCaptured -ArgumentList @("merge-base", "--is-ancestor", $Ancestor, $Descendant) -AllowFailure
-    if ($result.ExitCode -eq 0) { return $true }
-    if ($result.ExitCode -eq 1) { return $false }
-    throw "Could not compare Git ancestry: $($result.Output)"
 }
 
 function Test-ReleaseMutablePath([string]$Path) {
@@ -974,43 +1034,6 @@ function Assert-NonInteractiveGitWriteAccess {
     }
 }
 
-function Resolve-ReleasePlan {
-    $localVersion = Get-NativeVersion
-    $remoteVersion = Get-RemoteMainVersion
-    try {
-        $localSemver = [version]$localVersion
-        $remoteSemver = [version]$remoteVersion
-    } catch {
-        throw "Release recovery requires numeric stable versions (local '$localVersion', origin/main '$remoteVersion')."
-    }
-    $head = Get-HeadSha
-    $tag = "v$localVersion"
-    $tagCommit = Get-RemoteTagCommit $tag
-    if ($tagCommit) {
-        if ($tagCommit -eq $head) {
-            return [pscustomobject]@{ Action = "Tagged"; Version = $localVersion; Tag = $tag; Candidate = $head }
-        }
-        if (-not (Test-GitAncestor $tagCommit $head)) {
-            throw "$tag points to unrelated commit $tagCommit; tags are immutable."
-        }
-        $next = Get-NextPatchVersion $localVersion
-        if (Get-RemoteTagCommit "v$next") {
-            throw "The next patch tag v$next already exists; refusing to skip or rewrite versions."
-        }
-        return [pscustomobject]@{ Action = "Bump"; Version = $next; Tag = "v$next"; Candidate = $null }
-    }
-    if ($localSemver -lt $remoteSemver) {
-        throw "Local version $localVersion is older than origin/main $remoteVersion."
-    }
-    if ($localSemver -gt $remoteSemver) {
-        $expected = Get-NextPatchVersion $remoteVersion
-        if ($localVersion -ne $expected) {
-            throw "Recovery version $localVersion must be the single next patch after origin/main $remoteVersion."
-        }
-    }
-    return [pscustomobject]@{ Action = "Resume"; Version = $localVersion; Tag = $tag; Candidate = $null }
-}
-
 function Assert-LinuxReleaseEnvironment {
     foreach ($tool in @("bash", "git")) {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -1111,13 +1134,19 @@ function Assert-CommonReleasePreflight {
     } else {
         Assert-WindowsReleaseEnvironment
     }
+    Assert-AndroidReleaseInputs $plan.Version
     Write-Host "Release preflight OK: action=$($plan.Action), candidate=$($plan.Tag)."
     return $plan
 }
 
 function Invoke-LinuxCompleteReleaseBuild($ReleaseLock) {
+    $version = Get-NativeVersion
+    $androidStageRoot = Join-Path $releaseRoot (".complete-release-stage.{0}.{1}" -f $PID, [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $androidStageRoot | Out-Null
+    $androidCompleted = $false
     $oldToken = $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN
     try {
+        $androidApk = New-CompleteReleaseAndroidApk $androidStageRoot $version
         $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN = $ReleaseLock.Token
         $args = @(
             (Join-Path $scriptRoot "run-release-memory-bounded.sh"),
@@ -1128,8 +1157,15 @@ function Invoke-LinuxCompleteReleaseBuild($ReleaseLock) {
         if ($LASTEXITCODE -ne 0) {
             throw "Complete Linux-host release build failed."
         }
+        Publish-CompleteReleaseAndroidApk $androidApk $androidStageRoot $version
+        $androidCompleted = $true
     } finally {
         $env:SMART_EXPLORER_RELEASE_LOCK_TOKEN = $oldToken
+        if ($androidCompleted) {
+            Remove-Item -LiteralPath $androidStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        } elseif (Test-Path -LiteralPath $androidStageRoot) {
+            Write-Warning "Complete release failed; preserved Android stage: $androidStageRoot"
+        }
     }
 }
 
@@ -1181,6 +1217,7 @@ try {
             }
         } else {
             Write-Host "Reusing the already verified v$version release build after a pre-tag interruption."
+            Assert-CompleteReleaseAndroidApkCommitted $version
         }
         if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
             throw "Complete v$version candidate validation failed after the release build."
@@ -1200,6 +1237,7 @@ try {
         if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
             throw "The immutable $($plan.Tag) candidate is incomplete in the local checkout."
         }
+        Assert-CompleteReleaseAndroidApkCommitted $version
         Invoke-ReleasePublicationMainPush -RepoRoot $repoRoot -CandidateSha $candidateSha
         Write-Host "Immutable $($plan.Tag) already targets $candidateSha; no tag is created or moved."
         $fallbackBranch = "release/v$version"
