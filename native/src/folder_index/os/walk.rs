@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::super::model::{FolderIndex, IndexMsg, MAX_INDEX_DEPTH};
-use super::super::platform::{is_plain_directory, should_skip_meta};
+use super::super::platform::{is_plain_directory, should_skip_meta, skip_unreadable_directory};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -41,17 +41,32 @@ pub(super) fn build_index(
         require_plain_directory(&dir, "queued directory")?;
         emit_progress(tx, &index, &dir, &mut last_progress, false)?;
 
-        let entries = std::fs::read_dir(&dir)
-            .map_err(|error| WalkStop::Failed(format!("cannot read {}: {error}", dir.display())))?;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if depth > 0 && skip_unreadable_directory(&error) => continue,
+            Err(error) => {
+                return Err(WalkStop::Failed(format!(
+                    "cannot read {}: {error}",
+                    dir.display()
+                )))
+            }
+        };
         for entry in entries {
             check_canceled(cancel)?;
             let entry = entry.map_err(|error| {
                 WalkStop::Failed(format!("cannot enumerate {}: {error}", dir.display()))
             })?;
             let path = entry.path();
-            let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-                WalkStop::Failed(format!("cannot inspect {}: {error}", path.display()))
-            })?;
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if skip_unreadable_directory(&error) => continue,
+                Err(error) => {
+                    return Err(WalkStop::Failed(format!(
+                        "cannot inspect {}: {error}",
+                        path.display()
+                    )))
+                }
+            };
             if !is_plain_directory(&metadata) {
                 continue;
             }
@@ -61,7 +76,8 @@ pub(super) fn build_index(
                     dir.display()
                 ))
             })?;
-            if should_skip_meta(&name, &metadata) {
+            // The active app trash (Android) is a protected omission.
+            if should_skip_meta(&name, &metadata) || crate::apptrash::excluded_name(&name) {
                 continue;
             }
             let child_depth = depth.checked_add(1).ok_or_else(|| {

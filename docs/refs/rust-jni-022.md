@@ -596,3 +596,23 @@ Pitfalls:
 - The exact byte/length ceiling for a single `__android_log_write` call (§9) was not confirmed
   against a primary source in this pass (developer.android.com's logging reference page did not state
   one); treat the commonly-cited ~4000-byte figure as folklore, not a verified limit.
+
+## Ergänzung B2 (2026-09-25, Quelle: Registry-Checkout `jni-0.22.4/src`, `jni-macros-0.22.4/src`)
+
+Für die Brücke zusätzlich gegen die Quelle geprüft (nicht aus dem Gedächtnis):
+- `jni::Outcome<T, E>` (`env.rs:4586`, `pub use env::*` in `lib.rs:346`) mit `Ok(T)`, `Err(E)`,
+  `Panic(Box<dyn Any + Send>)`; `EnvOutcome::into_outcome(self) -> Outcome<T, E>` (`env.rs:4738`).
+  Damit lässt sich ein Fehlerpfad selbst behandeln (loggen, `JString::default()`), statt eine
+  `ErrorPolicy` zu wählen, die eine Java-Exception wirft.
+- `JString` wird von `bind_java_type!` mit `#[derive(Debug, Default)]` erzeugt
+  (`jni-macros-0.22.4/src/bind_java_type.rs:1566`); `Default` = Java-`null`.
+- `Env::new_local_ref<'any, O>(&mut self, obj: O) -> Result<O::Kind<'local>>` mit
+  `O: Reference + AsRef<JObject<'any>>` (`env.rs:1738`); `Reference` ist auch für `&T`
+  implementiert (`refs/reference.rs:431`), daher gehen `env.new_local_ref(&context)` und
+  `env.new_global_ref(&context)` (liefert `Global<JObject<'static>>`).
+- `Env::exception_check(&self) -> bool` (`env.rs:1139`), `Env::exception_clear(&self)` (`env.rs:1171`).
+- `JavaVM` und `Global<T>` sind `Send + Sync` (`vm/java_vm.rs:189-190`, `refs/global.rs:112-123`),
+  also in einem `static OnceLock` haltbar.
+- `rustls_platform_verifier::android::init_with_env(env: &mut Env, context: JObject)` ist über
+  `GLOBAL.get_or_try_init` idempotent (`rustls-platform-verifier-0.7.0/src/android.rs:97-116`); ein
+  zweiter Aufruf ist harmlos. `ndk_context::initialize_android_context` dagegen nur einmal je Prozess.

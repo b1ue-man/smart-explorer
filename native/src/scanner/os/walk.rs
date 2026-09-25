@@ -106,6 +106,14 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
                 continue;
             }
         };
+        // The active app trash (Android) is a protected omission, not a result.
+        if entry
+            .name
+            .to_str()
+            .is_some_and(crate::apptrash::excluded_name)
+        {
+            continue;
+        }
         let path = dir.path.join(&entry.name);
         if entry.unreachable {
             fail(

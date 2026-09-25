@@ -39,3 +39,9 @@ pub(super) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std:
         Ok(())
     }
 }
+
+/// Unreadable folders keep failing the index build on Windows.
+#[cfg(windows)]
+pub(super) fn skip_unreadable_directory(_error: &std::io::Error) -> bool {
+    false
+}
