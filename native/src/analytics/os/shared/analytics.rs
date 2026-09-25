@@ -207,6 +207,10 @@ fn scan_entries(
                     continue;
                 }
                 let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
+                // The app trash (Android) is left out like in every other walk.
+                if crate::apptrash::excluded_name(&nm) {
+                    continue;
+                }
                 if ent.kind == EntryKind::Directory {
                     if ent.unreachable {
                         diagnostics.record(

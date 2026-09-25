@@ -271,7 +271,7 @@ fn scan_backend_dir(
             break;
         }
         result.children = result.children.saturating_add(1);
-        if entry.is_symlink {
+        if entry.is_symlink || crate::apptrash::excluded_name(&entry.name) {
             continue;
         }
         if entry.is_dir {

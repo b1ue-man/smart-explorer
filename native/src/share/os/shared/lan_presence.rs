@@ -182,7 +182,15 @@ fn valid_id(id: &str) -> bool {
     id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The embedding host's device name first (only an embedding host such as
+/// Android sets it; desktop builds keep reading the environment).
 fn hostname() -> String {
+    if let Some(name) = crate::support_dirs::host()
+        .map(|host| host.device_name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        return name.to_string();
+    }
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "smart-explorer".to_string())
