@@ -153,6 +153,8 @@ g1_tests=(
   android_task_changed_or_unreadable_edit_registers_are_kept
   android_task_exec_errors_name_a_refused_grant_only
   android_task_promote_staged_with_creates_new_names_and_hands_existing_files_to_replace
+  android_task_webdav_promote_replaces_with_one_move_overwrite_true
+  android_task_webdav_promote_creates_a_new_name_without_overwrite
 )
 android_only_tests=()
 

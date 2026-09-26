@@ -389,3 +389,7 @@ impl Backend for WebdavBackend {
 #[cfg(test)]
 #[path = "connection_tests.rs"]
 mod connection_tests;
+
+#[cfg(test)]
+#[path = "promote_tests.rs"]
+mod promote_tests;
