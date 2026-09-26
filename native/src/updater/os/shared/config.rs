@@ -21,9 +21,14 @@ pub(super) fn staged_update_manifest_path() -> PathBuf {
 }
 
 pub fn take_updater_error() -> Option<String> {
-    let p = updater_error_path();
-    let raw = std::fs::read_to_string(&p).ok()?;
-    let _ = std::fs::remove_file(&p);
+    let message = peek_updater_error();
+    let _ = std::fs::remove_file(updater_error_path());
+    message
+}
+
+/// The helper's last failure report, left in place for the app to show.
+pub fn peek_updater_error() -> Option<String> {
+    let raw = std::fs::read_to_string(updater_error_path()).ok()?;
     let msg = raw.trim().to_string();
     if msg.is_empty() {
         None

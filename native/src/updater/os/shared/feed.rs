@@ -108,6 +108,7 @@ impl Feed {
                     )
                 })?;
                 verify_sha256(&dest, &hash)?;
+                os::mark_staged_executable(&dest)?;
                 VerifiedPayload::new(dest, hash)
             }
             Feed::Http(base) => {
@@ -116,6 +117,7 @@ impl Feed {
                     match http_download(&format!("{base}/{name}"), &dest) {
                         Ok(()) => {
                             verify_sha256(&dest, &hash)?;
+                            os::mark_staged_executable(&dest)?;
                             return VerifiedPayload::new(dest, hash);
                         }
                         Err(e) => last_err = e,

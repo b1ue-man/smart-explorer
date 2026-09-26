@@ -22,16 +22,18 @@ mod os;
 mod staging;
 #[path = "os/shared/startup_ack.rs"]
 mod startup_ack;
+#[path = "os/shared/terminal.rs"]
+mod terminal;
 #[path = "core/types.rs"]
 mod types;
 
-pub use apply::apply_staged_update;
+pub use apply::{apply_staged_update, apply_staged_update_for};
 #[allow(unused_imports)]
 pub use archive::{
     archive_current_version, cleanup_old_binaries, is_auto_update_paused, list_archived_versions,
     pinned_version, resume_auto_update,
 };
-pub use config::{set_update_source, take_updater_error, update_source_str};
+pub use config::{peek_updater_error, set_update_source, take_updater_error, update_source_str};
 pub use core::is_newer;
 pub use feed::{download_update, download_version, list_remote_versions};
 pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
@@ -40,6 +42,10 @@ pub use os::revert_to;
 pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};
 pub(crate) use startup_ack::{
     acknowledge_update_startup, capture_update_startup_ack, update_startup_ack_pending,
+};
+pub use terminal::{
+    check_feed, detect_installation, replace_cli, stage_update, FeedCheck, Installation,
+    ReplacedCli,
 };
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 

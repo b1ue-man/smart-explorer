@@ -4,6 +4,7 @@ use super::archive::{archive_binary, archived_sha256, pinned_version, restore_pi
 use super::core::{replace_file_with_staged, staged_sha256_from_path, verify_sha256};
 use super::feed::PayloadSpec;
 
+const INSTALLED_APP: &str = "smart_explorer";
 const INSTALLED_UPDATER: &str = "smart_explorer_updater";
 const INSTALLED_CLI: &str = "se";
 
@@ -96,6 +97,37 @@ pub(super) fn installed_cli_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_CLI))
 }
 
+/// App names that mark a desktop installation beside `se`.
+pub(super) fn installed_app_names() -> &'static [&'static str] {
+    &[INSTALLED_APP]
+}
+
+pub(super) fn installed_updater_name() -> &'static str {
+    INSTALLED_UPDATER
+}
+
+/// The running `se` as the installed file: links such as `~/.local/bin/se`
+/// are resolved, because the link itself must stay in place.
+pub(super) fn running_cli_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
+    std::fs::canonicalize(&exe)
+        .map_err(|error| format!("Programmpfad {} aufloesen: {error}", exe.display()))
+}
+
+/// A download is created without execute bits, but the staged helper is
+/// started directly and staged binaries become installed executables.
+pub(super) fn mark_staged_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| format!("Update-Datei {} ausfuehrbar machen: {error}", path.display()))
+}
+
+/// A running Linux executable is replaced by renaming a new file over its
+/// path; the running process keeps its old image.
+pub(super) fn cli_self_replacement() -> Result<(), String> {
+    Ok(())
+}
+
 pub(super) fn spawn_update_helper(
     helper: &Path,
     helper_sha256: &str,
@@ -138,5 +170,34 @@ fn rollback_sha256(path: &Path) -> Result<String, String> {
         Ok(hash)
     } else {
         archived_sha256(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn cli_task_staged_payload_is_executable_and_install_keeps_the_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        std::fs::write(&staged, b"new se").unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::mark_staged_executable(&staged).unwrap();
+        assert_eq!(mode(&staged), 0o755);
+
+        let target = dir.path().join("se");
+        std::fs::write(&target, b"old se").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sha256 = super::super::core::sha256_file(&staged).unwrap();
+        let install = super::super::terminal::install_cli_in_place;
+        let replaced = install(&staged, &sha256, &target).unwrap();
+        replaced.commit().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new se");
+        assert_eq!(mode(&target), 0o700);
     }
 }

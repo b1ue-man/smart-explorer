@@ -1,29 +1,54 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::archive::{exe_stem, pin_path, versions_dir};
 use super::config::{last_applied_path, updater_error_path};
 use super::core::{sha256_file, verify_sha256};
 use super::os;
 use super::staging::{manifest_matches, manifest_path, verify_staged_update};
+use super::terminal::Installation;
 use super::types::StagedUpdate;
 
 /// Launch the staged, hash-bound helper after explicit user consent. This does
 /// not replace files itself; the helper first waits for this process to exit.
 pub fn apply_staged_update(bundle: &StagedUpdate) -> Result<(), String> {
+    let target =
+        std::env::current_exe().map_err(|error| format!("Eigener Pfad unbekannt: {error}"))?;
+    let helper_target = os::installed_updater_path()?;
+    let cli_target = os::installed_cli_path()?;
+    launch_helper(bundle, &target, &helper_target, &cli_target)
+}
+
+/// `se update` beside the desktop app: the same helper, bound to the app
+/// installed next to `se` instead of the running process.
+pub fn apply_staged_update_for(
+    bundle: &StagedUpdate,
+    installation: &Installation,
+) -> Result<(), String> {
+    let Installation::Desktop { cli, app } = installation else {
+        return Err("Der Updater-Helfer ersetzt nur eine Desktop-Installation".to_string());
+    };
+    let dir = cli
+        .parent()
+        .ok_or_else(|| format!("Installationsordner unbekannt: {}", cli.display()))?;
+    launch_helper(bundle, app, &dir.join(os::installed_updater_name()), cli)
+}
+
+fn launch_helper(
+    bundle: &StagedUpdate,
+    target: &Path,
+    helper_target: &Path,
+    cli_target: &Path,
+) -> Result<(), String> {
     manifest_matches(bundle)?;
     verify_staged_update(bundle)?;
 
-    let target =
-        std::env::current_exe().map_err(|error| format!("Eigener Pfad unbekannt: {error}"))?;
-    let target_sha256 = sha256_file(&target)?;
-    let helper_target = os::installed_updater_path()?;
-    let cli_target = os::installed_cli_path()?;
-    let archive = archive_path(&target)?;
+    let target_sha256 = sha256_file(target)?;
+    let archive = archive_path(target)?;
 
     let args = vec![
         "--apply".to_string(),
         "--target".to_string(),
-        path_arg(&target),
+        path_arg(target),
         "--target-sha256".to_string(),
         target_sha256,
         "--staged".to_string(),
@@ -31,13 +56,13 @@ pub fn apply_staged_update(bundle: &StagedUpdate) -> Result<(), String> {
         "--staged-sha256".to_string(),
         bundle.app().sha256().to_string(),
         "--helper-target".to_string(),
-        path_arg(&helper_target),
+        path_arg(helper_target),
         "--helper-sha256".to_string(),
         bundle.helper().sha256().to_string(),
         "--cli-staged".to_string(),
         path_arg(bundle.cli().path()),
         "--cli-target".to_string(),
-        path_arg(&cli_target),
+        path_arg(cli_target),
         "--cli-sha256".to_string(),
         bundle.cli().sha256().to_string(),
         "--archive".to_string(),
