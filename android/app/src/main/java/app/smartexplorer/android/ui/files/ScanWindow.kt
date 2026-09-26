@@ -16,9 +16,14 @@ import app.smartexplorer.android.core.FilterSpec
 import app.smartexplorer.android.core.SortSpec
 import app.smartexplorer.android.core.TaskInfo
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -70,14 +75,21 @@ internal class ScanWindow(
     private var firstVisible = 0
     private var lastVisible = 0
     private var job: Job? = null
+    private var stopped = false
 
     fun start() {
         job = scope.launch {
             val id = try {
-                FilesApi.scanStart(root, filter, showHidden)
+                // Not cancellable: once the core started the scan, its id is needed to stop it.
+                withContext(NonCancellable) { FilesApi.scanStart(root, filter, showHidden) }
             } catch (e: CoreException) {
                 error = e.message ?: e.kind
                 running = false
+                return@launch
+            }
+            if (stopped || !isActive) {
+                // Stopped while the scan was starting.
+                cancelDetached(id)
                 return@launch
             }
             taskId = id
@@ -87,15 +99,19 @@ internal class ScanWindow(
 
     /** Stops polling and cancels a still running scan. */
     fun stop() {
+        stopped = true
         job?.cancel()
         val id = taskId ?: return
-        if (running) {
-            scope.launch {
-                try {
-                    FilesApi.cancelTask(id)
-                } catch (e: CoreException) {
-                    // The scan ended meanwhile (not_found / already done): nothing left to stop.
-                }
+        if (running) cancelDetached(id)
+    }
+
+    /** `task.cancel` outside [scope], which is already cancelled when the ViewModel is cleared. */
+    private fun cancelDetached(id: String) {
+        detached.launch {
+            try {
+                FilesApi.cancelTask(id)
+            } catch (e: CoreException) {
+                // The scan ended meanwhile (not_found / already done): nothing left to stop.
             }
         }
     }
@@ -122,14 +138,18 @@ internal class ScanWindow(
         wake.trySend(Wake.Force)
     }
 
-    /** Every row of the current tree view, or `null` when there are more than [max]. */
-    suspend fun fetchAll(max: Int): List<Entry>? {
+    /**
+     * Every row of the current tree view ([expanded]: of the whole tree, collapsed folders
+     * included), or `null` when there are more than [max].
+     */
+    suspend fun fetchAll(max: Int, expanded: Boolean = false): List<Entry>? {
         val id = taskId ?: return emptyList()
-        if (total > max) return null
-        val rows = ArrayList<Entry>(total)
+        if (!expanded && total > max) return null
+        val folded = if (expanded) emptySet<String>() else collapsed()
+        val rows = ArrayList<Entry>(minOf(total, max))
         var offset = 0
         while (true) {
-            val view = FilesApi.scanView(id, sort(), collapsed(), offset, FilesApi.MAX_WINDOW, null)
+            val view = FilesApi.scanView(id, sort(), folded, offset, FilesApi.MAX_WINDOW, null)
             rows += view.entries
             offset += view.entries.size
             if (view.entries.isEmpty() || offset >= view.visibleTotal) return rows
@@ -222,5 +242,8 @@ internal class ScanWindow(
     companion object {
         const val PAGE = 300
         private const val POLL_MS = 1_000L
+
+        /** Outlives the ViewModel, so a stop still reaches the core after it was cleared. */
+        private val detached = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }

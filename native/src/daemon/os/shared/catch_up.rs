@@ -5,7 +5,9 @@
 //!
 //! A run admits the due interval jobs, calendar occurrences missed since the
 //! job's last run (regardless of the job's own catch-up setting) and every
-//! enabled real-time job once. It finishes when all admitted jobs have left
+//! enabled real-time job once. A selected job the regular schedule already
+//! holds is awaited but stays the schedule's: cancelling the run leaves it
+//! running. A run finishes when all its admitted and awaited jobs have left
 //! the supervisor; supervisor rejections are listed with their reason.
 
 use std::collections::{HashSet, VecDeque};
@@ -34,7 +36,8 @@ pub struct CatchUpStatus {
     /// This run's admitted jobs still waiting in the supervisor queue.
     pub queued: usize,
     pub message: Option<String>,
-    /// Jobs admitted to this run (done = admitted - queued - running).
+    /// Jobs admitted to or awaited by this run (done = admitted - queued -
+    /// running).
     pub admitted: usize,
     /// Selected jobs the supervisor refused, with the reason.
     pub skipped: Vec<CatchUpSkip>,
@@ -120,6 +123,8 @@ struct Admitted {
     id: String,
     name: String,
     done: bool,
+    /// Enqueued by this run; `false` = awaited, the regular schedule owns it.
+    owned: bool,
 }
 
 struct Run {
@@ -138,10 +143,11 @@ impl Run {
         self.phase != Phase::Finished
     }
 
+    /// This run's own unfinished jobs (awaited ones belong to the schedule).
     fn undone_ids(&self) -> HashSet<String> {
         self.admitted
             .iter()
-            .filter(|job| !job.done)
+            .filter(|job| job.owned && !job.done)
             .map(|job| job.id.clone())
             .collect()
     }
@@ -225,17 +231,25 @@ impl CatchUpBook {
         self.runs.iter().any(|run| run.phase == Phase::Requested)
     }
 
-    /// Mark admitted jobs done; each completion belongs to the oldest open
-    /// admission of that id (the supervisor holds an id at most once).
+    /// Mark admitted jobs done. The supervisor holds an id at most once, so a
+    /// completion ends the oldest open run-owned admission of that id and
+    /// every admission that only awaited it (several runs may wait on it).
     pub(super) fn observe_completed(&mut self, completed: &[String]) {
         for id in completed {
-            let admission = self
+            let mut owner_seen = false;
+            for job in self
                 .runs
                 .iter_mut()
                 .filter(|run| run.phase == Phase::Running)
                 .flat_map(|run| run.admitted.iter_mut())
-                .find(|job| !job.done && &job.id == id);
-            if let Some(job) = admission {
+                .filter(|job| !job.done && &job.id == id)
+            {
+                if job.owned {
+                    if owner_seen {
+                        continue;
+                    }
+                    owner_seen = true;
+                }
                 job.done = true;
             }
         }
@@ -281,6 +295,11 @@ impl CatchUpBook {
                 .filter(|run| run.phase == Phase::Running && run.cancel == Cancel::Requested)
             {
                 queue.cancel_jobs(&run.undone_ids());
+                // Jobs the regular schedule owns keep running; the run only
+                // stops waiting for them.
+                for job in run.admitted.iter_mut().filter(|job| !job.owned) {
+                    job.done = true;
+                }
                 run.cancel = Cancel::Applied;
                 run.message = Some("Abgebrochen".into());
             }
@@ -326,31 +345,33 @@ fn start_run(
             );
             return;
         }
-        None => {
-            run.finish("Sync-Jobs wurden nicht geladen".into(), report);
-            return;
-        }
+        // Requested after the caller decided not to load the list: the run
+        // stays requested, and the next pass loads the list for it.
+        None => return,
     };
     for job in select_catch_up_jobs(jobs, now) {
         let name = display_name(job);
-        let reason = match queue.admit(job) {
-            Ok(EnqueueStatus::Started | EnqueueStatus::Queued) => {
-                run.admitted.push(Admitted {
-                    id: job.id.clone(),
-                    name,
-                    done: false,
-                });
-                continue;
-            }
-            Ok(EnqueueStatus::AlreadyScheduled) => "bereits geplant oder läuft".to_string(),
-            Ok(EnqueueStatus::RecentlyAttempted) => "kürzlich versucht".to_string(),
-            Err(error) => error,
+        let admission = match queue.admit(job) {
+            Ok(EnqueueStatus::Started | EnqueueStatus::Queued) => Ok(true),
+            // The regular schedule already holds it (a cold wake enqueues the
+            // due jobs first): wait for it, never cancel it.
+            Ok(EnqueueStatus::AlreadyScheduled) => Ok(false),
+            Ok(EnqueueStatus::RecentlyAttempted) => Err("kürzlich versucht".to_string()),
+            Err(error) => Err(error),
         };
-        run.skipped.push(CatchUpSkip {
-            job_id: job.id.clone(),
-            job_name: name,
-            reason,
-        });
+        match admission {
+            Ok(owned) => run.admitted.push(Admitted {
+                id: job.id.clone(),
+                name,
+                done: false,
+                owned,
+            }),
+            Err(reason) => run.skipped.push(CatchUpSkip {
+                job_id: job.id.clone(),
+                job_name: name,
+                reason,
+            }),
+        }
     }
     run.phase = Phase::Running;
     report

@@ -94,12 +94,9 @@ data class PropertiesResult(
     val location: String? = null,
 )
 
-/**
- * Result of a failed `fs.uploadEdit` task: the remote file changed since opening ([conflict]), or
- * the place cannot replace existing files safely ([replaceUnsupported]; plain SFTP, WebDAV, FTP).
- */
+/** Result of a failed `fs.uploadEdit` task: the remote file changed since opening ([conflict]). */
 @Serializable
-data class UploadConflict(val conflict: Boolean = false, val replaceUnsupported: Boolean = false)
+data class UploadConflict(val conflict: Boolean = false)
 
 /** `fs.edits` */
 @Serializable
@@ -377,9 +374,12 @@ object FilesApi {
         Core.call("task.cancel", buildJsonObject { put("id", taskId) })
     }
 
-    /** Removes finished tasks (`Core.tasks` reloads itself afterwards). */
-    suspend fun clearFinishedTasks() {
-        Core.call("task.clear")
+    /**
+     * Removes finished tasks – only [ids] when given, since other pages may still show finished
+     * scans or analyses (`Core.tasks` reloads itself afterwards).
+     */
+    suspend fun clearFinishedTasks(ids: Collection<String>? = null) {
+        Core.call("task.clear", buildJsonObject { if (ids != null) put("ids", strings(ids)) })
     }
 
     /**

@@ -134,7 +134,7 @@ fn run_scan(rt: &Runtime, ctx: &TaskCtx, session: &ScanSession) -> Result<Value,
             tx,
         )
     } else {
-        let (backend, path) = rt.resolve_loc(&session.base)?;
+        let (backend, path) = rt.resolve_live(&session.base)?;
         crate::rscan::start_scan_backend(backend, path, max_depth, retention, tx)
     };
     let compiled = CompiledFilter::compile(&session.filter);

@@ -13,6 +13,8 @@ import app.smartexplorer.android.api.SyncJob
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.Snackbars
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
 /**
@@ -39,6 +41,10 @@ internal class ConflictSession(
     var checkTaskId by mutableStateOf<String?>(null)
         private set
 
+    /** `sync.checkConflicts` was called and has not returned its task id yet. */
+    var checkStarting by mutableStateOf(false)
+        private set
+
     /** Keys of entries that are being resolved right now. */
     val busy = mutableStateMapOf<String, Boolean>()
     var bulk by mutableStateOf(false)
@@ -53,7 +59,13 @@ internal class ConflictSession(
     /** Something was resolved, merged or skipped since the page opened. */
     private var changed = false
 
-    val working: Boolean get() = bulk || finishing || checkTaskId != null || busy.isNotEmpty()
+    /** Resolutions, skips and merges still running; [finish] waits for them (main thread only). */
+    private val inFlight = mutableListOf<Job>()
+
+    /** A dry run is starting or running; it rebuilds the context, so no entry may be resolved. */
+    val checking: Boolean get() = checkStarting || checkTaskId != null
+
+    val working: Boolean get() = bulk || finishing || checking || busy.isNotEmpty()
 
     fun load() {
         scope.launch { reload() }
@@ -78,15 +90,19 @@ internal class ConflictSession(
 
     /** Dry run ("Konflikte prüfen"); the list reloads when it ends. */
     fun check() {
-        if (checkTaskId != null) return
+        if (checking) return
+        // Set before the call returns, so a quick second tap cannot start a second dry run.
+        checkStarting = true
         scope.launch {
             val id = try {
                 SyncApi.checkConflicts(job.id)
             } catch (e: CoreException) {
+                checkStarting = false
                 Snackbars.show("Prüfung nicht gestartet: ${e.displayText()}")
                 return@launch
             }
             checkTaskId = id
+            checkStarting = false
             try {
                 val end = SyncApi.awaitTask(id)
                 if (end.state == "failed") {
@@ -114,21 +130,25 @@ internal class ConflictSession(
 
     /** [choice] is `"a"` or `"b"`. */
     fun resolve(item: SyncConflict, choice: String) {
-        scope.launch {
+        launchTracked {
             val failure = resolveOne(item, choice)
             if (failure != null) Snackbars.show("${fileName(item)}: nicht gelöst", "Details") { showDetails(failure) }
             reload()
         }
     }
 
-    /** [Alle A] / [Alle B]: one entry after the other; failures are summed up at the end. */
+    /**
+     * [Alle A] / [Alle B]: one entry after the other; failures are summed up at the end. Leaving
+     * the page ([finish]) stops it after the current entry.
+     */
     fun resolveAll(choice: String) {
         if (bulk) return
         bulk = true
-        scope.launch {
+        launchTracked {
             val failures = mutableListOf<String>()
             try {
                 for (item in items.toList()) {
+                    if (finishing) break
                     resolveOne(item, choice)?.let { failures += "${item.path}: $it" }
                 }
             } finally {
@@ -161,7 +181,7 @@ internal class ConflictSession(
 
     /** Skips the entry for this session only (like the desktop). */
     fun skip(item: SyncConflict) {
-        scope.launch {
+        launchTracked {
             try {
                 SyncApi.skip(job.id, item.cid)
                 markResolved(item)
@@ -177,17 +197,28 @@ internal class ConflictSession(
         items = items.filterNot { it.key == item.key }
     }
 
-    /** Stores pending resolutions (`sync.finishConflicts`), then [onClosed]; keeps the page on failure. */
+    /** Launches work that resolves entries; [finish] waits for it (also used by the merge view). */
+    fun launchTracked(block: suspend CoroutineScope.() -> Unit) {
+        val work = scope.launch(block = block)
+        inFlight += work
+        work.invokeOnCompletion { inFlight.remove(work) }
+    }
+
+    /**
+     * Waits for running resolutions, stores them (`sync.finishConflicts`), then [onClosed]; keeps
+     * the page on failure. A resolution that ends after leaving would otherwise never be stored.
+     */
     fun finish(onClosed: () -> Unit) {
-        if (!changed) {
+        if (finishing) return
+        if (!changed && inFlight.isEmpty()) {
             onClosed()
             return
         }
-        if (finishing) return
         finishing = true
         scope.launch {
             try {
-                SyncApi.finishConflicts(job.id)
+                inFlight.toList().joinAll()
+                if (changed) SyncApi.finishConflicts(job.id)
                 changed = false
                 finishError = null
                 onClosed()

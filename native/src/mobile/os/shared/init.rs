@@ -65,6 +65,10 @@ fn prepare_host(settings: &HostSettings) -> Result<(), ApiError> {
     }
     std::fs::create_dir_all(settings.mobile_dir())
         .map_err(|error| ApiError::from(error).context("Datenordner anlegen"))?;
+    if settings.home_dir.is_none() && settings.volumes.is_empty() {
+        // The empty fallback home of `HostSettings::home` (no storage reported).
+        let _ = std::fs::create_dir_all(settings.home());
+    }
     let temp = crate::support_dirs::temp_dir();
     if let Err(existing) = tempfile::env::override_temp_dir(&temp) {
         if existing != temp {

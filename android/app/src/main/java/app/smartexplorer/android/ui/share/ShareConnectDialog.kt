@@ -50,11 +50,17 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
     var chosen by remember { mutableStateOf<DiscoveryAdvert?>(null) }
     var pin by remember { mutableStateOf("") }
     var connecting by remember { mutableStateOf(false) }
+    // [Abbrechen] came before this attempt's exchange showed up in the status (`share.connect`
+    // returns no id): the exchange is cancelled as soon as it appears.
+    var cancelWanted by remember { mutableStateOf(false) }
     // Exchange visible before [Verbinden]; only a newer one belongs to this attempt.
     var previousExchange by remember { mutableStateOf<String?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     val discovery = vm.status?.discovery
-    val exchange = discovery?.exchange?.takeIf { connecting && it.exchangeId != previousExchange }
+    val attempt = discovery?.exchange?.takeIf { it.exchangeId != previousExchange }
+    val exchange = attempt?.takeIf { connecting }
+
+    fun cancelExchange(exchangeId: String) = vm.act("Nicht abgebrochen") { ShareApi.cancelConnect(exchangeId) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -84,23 +90,50 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
             }
         }
     }
-    LaunchedEffect(connecting) {
-        if (!connecting) return@LaunchedEffect
+    LaunchedEffect(cancelWanted, attempt?.exchangeId, attempt?.state) {
+        val current = attempt ?: return@LaunchedEffect
+        if (!cancelWanted) return@LaunchedEffect
+        cancelWanted = false
+        when (current.state) {
+            "running" -> {
+                cancelExchange(current.exchangeId)
+                failure = "Abgebrochen"
+            }
+            "done" -> {
+                val name = chosen?.alias?.takeIf { it.isNotBlank() }?.let { "Verbunden mit $it" } ?: "Verbunden"
+                Snackbars.show("$name – das Abbrechen kam zu spät")
+                onDismiss()
+            }
+            else -> {
+                failure = "Abgebrochen"
+            }
+        }
+    }
+    LaunchedEffect(connecting, cancelWanted) {
+        if (!connecting && !cancelWanted) return@LaunchedEffect
         delay(CONNECT_TIMEOUT_MS)
+        // Read now, not from the composition that started the wait.
+        val running = vm.status?.discovery?.exchange?.takeIf { it.exchangeId != previousExchange && it.state == "running" }
+        if (running != null) cancelExchange(running.exchangeId)
         connecting = false
+        cancelWanted = false
         failure = "Keine Antwort – bitte erneut versuchen."
     }
 
     val target = chosen
     AlertDialog(
-        // While connecting, only [Abbrechen] ends the dialog.
-        onDismissRequest = { if (!connecting) onDismiss() },
+        // While connecting, only [Abbrechen] ends the dialog; a pending cancel is waited for.
+        onDismissRequest = { if (!connecting && !cancelWanted) onDismiss() },
         title = { Text(if (target == null) "Gerät verbinden" else target.alias.ifBlank { "Gerät verbinden" }) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when {
                     connecting -> {
                         Text("Verbinde …", style = MaterialTheme.typography.bodyMedium)
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    cancelWanted -> {
+                        Text("Breche ab …", style = MaterialTheme.typography.bodyMedium)
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                     target != null -> OutlinedTextField(
@@ -126,20 +159,28 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
         confirmButton = {
             when {
                 connecting -> TextButton(onClick = {
-                    val running = discovery?.exchange?.takeIf { it.exchangeId != previousExchange && it.state == "running" }
+                    val running = attempt?.takeIf { it.state == "running" }
                     connecting = false
-                    if (running != null) vm.act("Nicht abgebrochen") { ShareApi.cancelConnect(running.exchangeId) }
+                    if (running != null) {
+                        cancelExchange(running.exchangeId)
+                    } else {
+                        cancelWanted = true
+                    }
                 }) { Text("Abbrechen") }
+                cancelWanted -> Unit
                 target != null -> TextButton(
                     onClick = {
                         previousExchange = discovery?.exchange?.exchangeId
                         failure = null
+                        cancelWanted = false
                         connecting = true
                         scope.launch {
                             try {
                                 ShareApi.connect(target.discoveryId, pin)
                             } catch (e: CoreException) {
+                                // No exchange was started, so there is nothing left to cancel.
                                 connecting = false
+                                cancelWanted = false
                                 failure = e.message ?: e.kind
                             }
                             vm.reload()
@@ -151,7 +192,7 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
             }
         },
         dismissButton = {
-            if (target != null && !connecting) {
+            if (target != null && !connecting && !cancelWanted) {
                 TextButton(onClick = {
                     chosen = null
                     failure = null

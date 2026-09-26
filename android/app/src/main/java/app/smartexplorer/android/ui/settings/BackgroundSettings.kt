@@ -52,6 +52,8 @@ import app.smartexplorer.android.ui.sync.WorkerLogDialog
 import java.time.Duration
 import java.time.ZonedDateTime
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private val INTERVALS = listOf(15, 30, 60, 180, 360)
 private val MODES = listOf(
@@ -95,6 +97,17 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
             refresh()
         }
     }
+    // bg.setAutopause always writes both flags: one write at a time, each keeping the other flag's
+    // latest core value, so a quick second toggle cannot undo the first (`null` = keep).
+    val autopauseLock = remember { Mutex() }
+    val setAutopause: (Boolean?, Boolean?) -> Unit = { battery, metered ->
+        control("Nicht geändert") {
+            autopauseLock.withLock {
+                val latest = SyncApi.status()
+                SyncApi.setAutopause(battery ?: (latest.autopauseBattery == true), metered ?: (latest.autopauseMetered == true))
+            }
+        }
+    }
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         BackgroundStatusBlock(mode, status, nextRun, statusError)
@@ -125,13 +138,13 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
         SwitchRow(
             "Bei Energiesparmodus",
             current?.autopauseBattery == true,
-            { on -> control("Nicht geändert") { SyncApi.setAutopause(on, current?.autopauseMetered == true) } },
+            { on -> setAutopause(on, null) },
             enabled = current != null,
         )
         SwitchRow(
             "Bei getaktetem Netz",
             current?.autopauseMetered == true,
-            { on -> control("Nicht geändert") { SyncApi.setAutopause(current?.autopauseBattery == true, on) } },
+            { on -> setAutopause(null, on) },
             enabled = current != null,
         )
 

@@ -148,16 +148,37 @@ fn parse_input(args: &Value) -> Result<Input, ApiError> {
     })
 }
 
+/// Password and key passphrase are different secrets; a key file that only
+/// moved keeps its passphrase.
+fn same_secret_kind(left: &AuthKind, right: &AuthKind) -> bool {
+    matches!(
+        (left, right),
+        (AuthKind::Password, AuthKind::Password) | (AuthKind::Key { .. }, AuthKind::Key { .. })
+    )
+}
+
+/// The secret stored for `id`, if it is the kind of secret `auth` needs.
+fn stored_secret(id: &str, auth: &AuthKind) -> Result<Option<String>, ApiError> {
+    let same_kind = load_all()?
+        .iter()
+        .find(|connection| connection.account() == id)
+        .is_some_and(|previous| same_secret_kind(&previous.auth, auth));
+    if !same_kind {
+        // A password must never be used as a key passphrase or vice versa.
+        return Ok(None);
+    }
+    crate::creds::get_secret_checked(id).map_err(|error| ApiError::new("internal", error))
+}
+
 pub(super) fn test(args: &Value) -> Result<Value, ApiError> {
     let input = parse_input(args)?;
-    let secret = if input.secret.is_empty() {
-        match &input.id {
-            Some(id) => crate::creds::get_secret_checked(id)
-                .map_err(|error| ApiError::new("internal", error))?,
-            None => None,
-        }
-    } else {
+    let secret = if !input.secret.is_empty() {
         Some(input.secret.clone())
+    } else if let Some(id) = &input.id {
+        let candidate = crate::connect::build_saved(&input.form, input.port);
+        stored_secret(id, &candidate.auth)?
+    } else {
+        None
     };
     let receiver = crate::connect::spawn_connect(input.form, secret)
         .map_err(|error| ApiError::new("internal", error))?;
@@ -183,13 +204,13 @@ pub(super) fn save(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     };
     let old_account = previous.as_ref().map(SavedConnection::account);
     let moved = old_account.as_ref().is_some_and(|old| *old != account);
-    let auth_changed = previous
+    let kind_changed = previous
         .as_ref()
-        .is_some_and(|previous| previous.auth != saved.auth);
+        .is_some_and(|previous| !same_secret_kind(&previous.auth, &saved.auth));
     // An empty secret keeps the stored one; a moved entry takes it along.
     let secret = if !input.secret.is_empty() {
         Some(input.secret.clone())
-    } else if moved && !auth_changed {
+    } else if moved && !kind_changed {
         match &old_account {
             Some(old) => crate::creds::get_secret_checked(old)
                 .map_err(|error| ApiError::new("internal", error))?,
@@ -200,7 +221,7 @@ pub(super) fn save(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     };
     crate::creds::save_connection_with_secret(&saved, secret.as_deref())
         .map_err(|error| ApiError::new("internal", error))?;
-    if auth_changed && input.secret.is_empty() {
+    if kind_changed && input.secret.is_empty() {
         // A password must never be used as a key passphrase or vice versa.
         if let Err(error) = crate::creds::delete_secret_checked(&account) {
             rt.log_error("conn.save", &error);

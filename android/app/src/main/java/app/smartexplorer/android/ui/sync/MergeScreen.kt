@@ -111,9 +111,12 @@ internal class MergeSession(
     fun keepBoth() = finishWith("Beide Fassungen behalten") { SyncApi.mergeKeepBoth(conflicts.job.id, conflict.cid) }
 
     private fun finishWith(success: String, start: suspend () -> String) {
-        if (working) return
+        if (working || conflicts.finishing) return
         working = true
-        scope.launch {
+        // Tracked and marked busy on the conflict list: leaving it waits for this merge before
+        // storing the baseline, and the entry cannot be resolved twice meanwhile.
+        conflicts.launchTracked {
+            conflicts.busy[conflict.key] = true
             try {
                 val end = SyncApi.awaitTask(start())
                 if (end.state == "done") {
@@ -127,6 +130,7 @@ internal class MergeSession(
             } catch (e: CoreException) {
                 Snackbars.show("Nicht zusammengeführt: ${e.displayText()}")
             } finally {
+                conflicts.busy.remove(conflict.key)
                 working = false
             }
         }

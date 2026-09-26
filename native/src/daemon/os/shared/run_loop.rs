@@ -309,12 +309,26 @@ fn enqueue_connect_jobs(
 }
 
 fn enqueue_startup_jobs(supervisor: &mut JobSupervisor, generation: &str) {
+    // Load and gate before the boot pass is claimed: a pass that cannot run
+    // stays due for a later worker start in the same boot.
+    let jobs = match crate::syncjobs::load() {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            log(&format!(
+                "startup jobs not run: saved jobs could not be loaded: {error}"
+            ));
+            return;
+        }
+    };
+    if stop_requested(generation) || !crate::autostart::is_enabled() {
+        return;
+    }
     // The embedded worker restarts with its app process; its startup pass
     // follows device boots instead.
     if live::is_embedded() && !boot_marker::claim_startup_pass() {
         return;
     }
-    for job in load_configured_jobs()
+    for job in jobs
         .into_iter()
         .filter(|job| job.enabled && job.trigger == Trigger::OnStartup)
     {

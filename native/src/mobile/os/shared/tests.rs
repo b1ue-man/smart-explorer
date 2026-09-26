@@ -265,6 +265,17 @@ fn android_task_app_internal_locations_are_rejected() {
         "unsupported"
     );
     assert!(fx.work.join("weg.txt").exists());
+    // A copy opened from a ZIP cannot be uploaded back into it.
+    let record = EditRecord {
+        edit_id: "z1".into(),
+        location: format!("{zip}t.txt"),
+        ..EditRecord::default()
+    };
+    edits_store::update(&fx.rt, |records| records.push(record)).expect("register");
+    assert_eq!(
+        kind(call(&fx.rt, "fs.uploadEdit", json!({ "editId": "z1" }))),
+        "permission"
+    );
 }
 
 #[test]
@@ -360,8 +371,11 @@ fn android_task_edit_register_round_trip_and_change_event() {
         ..EditRecord::default()
     };
     record.rebase_local();
-    edits_store::update(&fx.rt, |records| records.push(record.clone()));
-    assert_eq!(edits_store::load(&fx.rt), vec![record.clone()]);
+    edits_store::update(&fx.rt, |records| records.push(record.clone())).expect("register");
+    assert_eq!(
+        edits_store::load(&fx.rt).expect("register"),
+        vec![record.clone()]
+    );
     assert_eq!(record.modified(), Some(false));
 
     std::fs::write(&local, b"eins und zwei").expect("write");
@@ -383,8 +397,72 @@ fn android_task_edit_register_round_trip_and_change_event() {
     );
 
     call(&fx.rt, "fs.discardEdit", json!({ "editId": "e1" })).expect("discard");
-    assert!(edits_store::load(&fx.rt).is_empty());
+    assert!(edits_store::load(&fx.rt).expect("register").is_empty());
     assert!(!dir.exists());
+}
+
+/// Registers `count` copies below `open/`; `changed` ones differ from their baseline.
+fn register_copies(fx: &Fixture, count: usize, changed: bool) {
+    let mut records = Vec::new();
+    for index in 0..count {
+        let dir = edits_store::open_root(&fx.rt).join(format!("c{index}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let local = dir.join("f.txt");
+        std::fs::write(&local, b"x").expect("write");
+        let mut record = EditRecord {
+            edit_id: format!("c{index}"),
+            location: "sftp://u@h:22/f.txt".into(),
+            local_path: text(&local),
+            ..EditRecord::default()
+        };
+        if !changed {
+            record.rebase_local();
+        }
+        records.push(record);
+    }
+    edits_store::update(&fx.rt, |all| all.extend(records)).expect("register");
+}
+
+fn fetch_kind(rt: &Runtime, location: &str) -> &'static str {
+    kind(call(rt, "fs.fetch", json!({ "location": location })))
+}
+
+#[test]
+fn android_task_full_edit_register_forgets_the_oldest_unchanged_copy() {
+    let fx = fixture();
+    // The archive is missing, so the fetch task itself fails without a network.
+    let zip = format!("zip://{}!/a.txt", text(&fx.work.join("fehlt.zip")));
+    register_copies(&fx, edits_store::MAX_EDITS, false);
+    let started = call(&fx.rt, "fs.fetch", json!({ "location": zip })).expect("fetch");
+    wait_task(&fx.rt, started["taskId"].as_str().expect("task id"));
+    let records = edits_store::load(&fx.rt).expect("register");
+    assert_eq!(records.len(), edits_store::MAX_EDITS - 1);
+    assert!(records.iter().all(|record| record.edit_id != "c0"));
+    assert!(!edits_store::open_root(&fx.rt).join("c0").exists());
+}
+
+#[test]
+fn android_task_changed_or_unreadable_edit_registers_are_kept() {
+    let fx = fixture();
+    let zip = format!("zip://{}!/a.txt", text(&fx.work.join("fehlt.zip")));
+    register_copies(&fx, edits_store::MAX_EDITS, true);
+    assert_eq!(fetch_kind(&fx.rt, &zip), "busy");
+    let full = edits_store::load(&fx.rt).expect("register");
+    assert_eq!(full.len(), edits_store::MAX_EDITS);
+
+    // An unreadable register is never replaced and its copies are not swept.
+    let register = edits_store::register_path(&fx.rt);
+    std::fs::write(&register, b"{kaputt").expect("write");
+    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let copy = edits_store::open_root(&fx.rt).join("c0");
+    std::fs::File::open(&copy)
+        .and_then(|dir| dir.set_modified(old))
+        .expect("age");
+    super::edits::check_on_start(&fx.rt);
+    assert!(copy.exists());
+    assert_eq!(fetch_kind(&fx.rt, &zip), "invalid");
+    assert_eq!(kind(call(&fx.rt, "fs.edits", json!({}))), "invalid");
+    assert_eq!(std::fs::read(&register).expect("read"), b"{kaputt");
 }
 
 #[test]

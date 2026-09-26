@@ -7,7 +7,7 @@ use super::drive::run_transfer;
 use super::edits_store::{self as store, EditRecord, MAX_EDITS};
 use super::entry::mime_of;
 use super::error::ApiError;
-use super::fs_list::reject_trash;
+use super::fs_list::{reject_trash, require_writable};
 use super::location::{parent_path, Loc};
 use super::runtime::{Runtime, TaskCtx};
 use crate::transfer::TransferRequest;
@@ -23,7 +23,7 @@ pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
         "fs.open" => open(rt, args),
         "fs.fetch" => fetch(rt, args),
         "fs.materialize" => materialize(rt, args),
-        "fs.edits" => Ok(edits(rt)),
+        "fs.edits" => edits(rt),
         "fs.uploadEdit" => upload_edit(rt, args),
         "fs.discardEdit" => discard_edit(rt, args),
         _ => return None,
@@ -52,16 +52,44 @@ fn fetch(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     if loc.is_local() {
         return Err(ApiError::invalid("Lokale Dateien direkt öffnen (fs.open)"));
     }
-    if store::load(rt).len() >= MAX_EDITS {
-        return Err(ApiError::new(
-            "busy",
-            "Zu viele geöffnete Remote-Dateien – bitte erst hochladen oder verwerfen",
-        ));
-    }
+    make_room(rt)?;
     let title = format!("Laden: {}", loc.name());
     let runtime = rt.clone();
     let id = rt.spawn_task("open", title, move |ctx| run_fetch(&runtime, ctx, &loc));
     Ok(json!({ "taskId": id }))
+}
+
+/// Keeps the register below `MAX_EDITS`: the oldest unchanged copies are
+/// forgotten and removed; changed copies are never touched.
+fn make_room(rt: &Runtime) -> Result<(), ApiError> {
+    let (evicted, full) = store::update(rt, |records| {
+        records.retain(|record| record.modified().is_some());
+        let mut evicted = Vec::new();
+        while records.len() >= MAX_EDITS {
+            let unchanged = records
+                .iter()
+                .position(|record| record.modified() == Some(false));
+            match unchanged {
+                Some(index) => evicted.push(records.remove(index).edit_id),
+                None => break,
+            }
+        }
+        (evicted, records.len() >= MAX_EDITS)
+    })?;
+    let root = store::open_root(rt);
+    for edit_id in evicted {
+        let dir = root.join(&edit_id);
+        if let Err(error) = crate::transfer::remove_owned_tree(&root, &dir) {
+            rt.record_error("Alte Kopien aufräumen", &error.to_string());
+        }
+    }
+    if full {
+        return Err(ApiError::new(
+            "busy",
+            "Zu viele geänderte Remote-Dateien – bitte erst hochladen oder verwerfen",
+        ));
+    }
+    Ok(())
 }
 
 /// Downloads one remote file into a fresh folder below `root`.
@@ -71,14 +99,15 @@ fn download_one(
     loc: &Loc,
     root: &Path,
 ) -> Result<(PathBuf, PathBuf, i64), ApiError> {
-    let meta = rt.with_read(loc, |backend, path| backend.stat(path))?;
+    // Fresh metadata: it is the baseline of the conflict check on upload.
+    let (backend, path, meta) = rt.stat_fresh(loc)?;
+    let meta = meta?;
     if meta.is_dir {
         return Err(ApiError::invalid(format!(
             "„{}“ ist ein Ordner",
             loc.name()
         )));
     }
-    let (backend, path) = rt.resolve_loc(loc)?;
     let dir = root.join(store::new_id());
     std::fs::create_dir_all(&dir)
         .map_err(|error| ApiError::from(error).context("Zwischenspeicher anlegen"))?;
@@ -132,7 +161,11 @@ fn run_fetch(rt: &Runtime, ctx: &TaskCtx, loc: &Loc) -> Result<Value, ApiError> 
         ..EditRecord::default()
     };
     record.rebase_local();
-    store::update(rt, |records| records.push(record));
+    if let Err(error) = store::update(rt, |records| records.push(record)) {
+        // An unreadable register is never replaced by one with just this copy.
+        let _ = crate::transfer::remove_owned_tree(&root, &dir);
+        return Err(error);
+    }
     Ok(json!({
         "localPath": file.to_string_lossy(),
         "mime": mime_of(&name),
@@ -171,7 +204,7 @@ fn materialize(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 
 /// The register with a `modified` flag; copies that vanished are dropped and
 /// newly changed ones announced once with an `edits` event.
-fn edits(rt: &Runtime) -> Value {
+fn edits(rt: &Runtime) -> Result<Value, ApiError> {
     let (listing, announce) = store::update(rt, |records| {
         records.retain(|record| record.modified().is_some());
         let mut announce = false;
@@ -193,17 +226,17 @@ fn edits(rt: &Runtime) -> Value {
             })
             .collect();
         (listing, announce)
-    });
+    })?;
     if announce {
         rt.emit(json!({ "type": "edits" }));
     }
-    Value::Array(listing)
+    Ok(Value::Array(listing))
 }
 
 /// At start: forget copies that vanished, remove orphaned copy folders and
 /// announce changed copies.
 pub(crate) fn check_on_start(rt: &Runtime) {
-    let (known, changed) = store::update(rt, |records| {
+    let register = store::update(rt, |records| {
         records.retain(|record| record.modified().is_some());
         let changed = records.iter().any(|record| record.modified() == Some(true));
         let known: Vec<String> = records
@@ -212,6 +245,14 @@ pub(crate) fn check_on_start(rt: &Runtime) {
             .collect();
         (known, changed)
     });
+    let (known, changed) = match register {
+        Ok(state) => state,
+        Err(error) => {
+            // Without a readable register no copy folder counts as orphaned.
+            rt.record_error("Alte Kopien aufräumen", &error.message);
+            return;
+        }
+    };
     let root = store::open_root(rt);
     if let Ok(entries) = std::fs::read_dir(&root) {
         for entry in entries.flatten() {
@@ -237,7 +278,7 @@ pub(crate) fn check_on_start(rt: &Runtime) {
 }
 
 fn find(rt: &Runtime, edit_id: &str) -> Result<EditRecord, ApiError> {
-    store::load(rt)
+    store::load(rt)?
         .into_iter()
         .find(|record| record.edit_id == edit_id)
         .ok_or_else(|| ApiError::not_found("Diese geöffnete Datei ist nicht mehr registriert"))
@@ -254,6 +295,7 @@ fn upload_edit(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     // like saving again after the desktop's conflict notice.
     let force = bool_or(args, "force", false);
     let loc = Loc::parse(&record.location)?;
+    require_writable(&loc)?;
     let title = format!("Hochladen: {}", record.name);
     let runtime = rt.clone();
     let id = rt.spawn_task("upload", title, move |ctx| {
@@ -273,21 +315,13 @@ fn run_overwrite(
     record: EditRecord,
     force: bool,
 ) -> Result<Value, ApiError> {
-    let (backend, path) = rt.resolve_loc(loc)?;
     // Fresh metadata: the pooled backend may answer stat from a cached listing.
-    let current = crate::vfs::sync_backend(backend.clone()).stat(&path)?;
-    // Like the desktop: a backend without a safe replace primitive (plain SFTP,
-    // WebDAV, FTP) never overwrites; the upload can go up as a copy instead.
-    let parent = parent_path(&path).unwrap_or("/");
-    if !backend.staged_write_capabilities(parent).replace {
-        ctx.set_failure_result(json!({ "replaceUnsupported": true }));
-        return Err(ApiError::new(
-            "unsupported",
-            "Dieser Ort kann vorhandene Dateien nicht sicher ersetzen (etwa SFTP ohne \
-             Remote-Agent, WebDAV oder FTP). Die Änderung lässt sich als Kopie hochladen.",
-        ));
-    }
-    if !force && record.remote_mtime_ms != 0 && current.mtime_ms > record.remote_mtime_ms {
+    let (backend, path, current) = rt.stat_fresh(loc)?;
+    let current = current?;
+    // Any other remote mtime than the baseline is a change, also an older one
+    // (a restored or synced version). A backend that cannot replace files
+    // reports that from the upload itself.
+    if !force && record.remote_mtime_ms != 0 && current.mtime_ms != record.remote_mtime_ms {
         ctx.set_failure_result(json!({ "conflict": true }));
         return Err(ApiError::new(
             "conflict",
@@ -295,10 +329,16 @@ fn run_overwrite(
         ));
     }
     ctx.message("Lade hoch…");
+    let snapshot = store::file_state(Path::new(&record.local_path));
     crate::transfer::upload_file(&*backend, Path::new(&record.local_path), &path)
         .map_err(ApiError::internal)?;
-    let remote_mtime = backend.stat(&path).map(|meta| meta.mtime_ms).unwrap_or(0);
-    rebase(rt, &record.edit_id, Some(remote_mtime));
+    // A failed stat must not reset the baseline to 0 ("unknown", which skips
+    // the check); an older value at worst reports a conflict to confirm.
+    let remote_mtime = match crate::vfs::sync_backend(backend.clone()).stat(&path) {
+        Ok(meta) => meta.mtime_ms,
+        Err(_) => current.mtime_ms.max(record.remote_mtime_ms),
+    };
+    rebase(rt, &record.edit_id, snapshot, Some(remote_mtime));
     Ok(json!({ "location": loc.location() }))
 }
 
@@ -308,8 +348,9 @@ fn run_upload_copy(
     loc: &Loc,
     record: EditRecord,
 ) -> Result<Value, ApiError> {
-    let (backend, _) = rt.resolve_loc(loc)?;
+    let (backend, _) = rt.resolve_live(loc)?;
     let parent = parent_path(&loc.path).unwrap_or("/").to_string();
+    let snapshot = store::file_state(Path::new(&record.local_path));
     run_transfer(
         ctx,
         TransferRequest::Upload {
@@ -319,20 +360,25 @@ fn run_upload_copy(
         },
     )?
     .into_result(ctx)?;
-    rebase(rt, &record.edit_id, None);
+    rebase(rt, &record.edit_id, snapshot, None);
     Ok(json!({ "location": loc.at(&parent) }))
 }
 
-/// The local copy's current state becomes the baseline after an upload.
-fn rebase(rt: &Runtime, edit_id: &str, remote_mtime: Option<i64>) {
-    store::update(rt, |records| {
+/// After an upload the local copy as the upload read it (`snapshot`, taken
+/// just before) becomes the baseline, so a change saved meanwhile stays
+/// modified.
+fn rebase(rt: &Runtime, edit_id: &str, snapshot: Option<(i64, u64)>, remote: Option<i64>) {
+    let rebased = store::update(rt, |records| {
         if let Some(record) = records.iter_mut().find(|record| record.edit_id == edit_id) {
-            record.rebase_local();
-            if let Some(mtime) = remote_mtime {
+            record.rebase_to(snapshot);
+            if let Some(mtime) = remote {
                 record.remote_mtime_ms = mtime;
             }
         }
     });
+    if let Err(error) = rebased {
+        rt.record_error("Hochladen", &error.message);
+    }
 }
 
 fn discard_edit(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -341,7 +387,7 @@ fn discard_edit(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         let before = records.len();
         records.retain(|record| record.edit_id != edit_id);
         before != records.len()
-    });
+    })?;
     let root = store::open_root(rt);
     let dir = root.join(&edit_id);
     if removed && dir.exists() {

@@ -29,7 +29,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +48,7 @@ import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.system.Opener
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.common.Snackbars
+import java.util.UUID
 
 // Building blocks shared by the pages of "Mehr", "Teilen", connections, analysis and settings.
 
@@ -159,6 +164,21 @@ internal fun rememberTask(taskId: String?): TaskInfo? {
     val tasks by Core.tasks.collectAsStateWithLifecycle()
     return taskId?.let { id -> tasks.firstOrNull { it.id == id } }
 }
+
+/** New for every app process; core tasks never outlive the process that started them. */
+private val PROCESS_TOKEN = UUID.randomUUID().toString()
+
+private val TASK_ID_SAVER = Saver<MutableState<String?>, String>(
+    save = { state -> state.value?.let { "$PROCESS_TOKEN/$it" } },
+    restore = { saved -> mutableStateOf(saved.substringAfter('/').takeIf { saved.substringBefore('/') == PROCESS_TOKEN }) },
+)
+
+/**
+ * Task id kept like `rememberSaveable` (scrolling, activity recreation), but restored as `null`
+ * after process death, when the saved id names no task of the new process.
+ */
+@Composable
+internal fun rememberSavedTaskId(): MutableState<String?> = rememberSaveable(saver = TASK_ID_SAVER) { mutableStateOf<String?>(null) }
 
 /** Long selectable text (reports, logs) with [Kopieren] and [Teilen]. */
 @Composable

@@ -120,6 +120,37 @@ internal class ShareViewModel : ViewModel() {
         }
     }
 
+    /**
+     * `share.exec` on the view model's scope, so a dialog closed while the call runs cannot lose
+     * the new task: once the id is known, [cancelNow] `true` cancels it right away. [onStarted]
+     * gets the task id or the failure text.
+     */
+    fun startExec(
+        location: String,
+        command: String,
+        shell: Boolean,
+        timeoutSecs: Int,
+        cancelNow: () -> Boolean,
+        onStarted: (taskId: String?, failure: String?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val id = try {
+                ShareApi.exec(location, command, shell, timeoutSecs)
+            } catch (e: CoreException) {
+                onStarted(null, e.message ?: e.kind)
+                return@launch
+            }
+            if (cancelNow()) {
+                try {
+                    FilesApi.cancelTask(id)
+                } catch (e: CoreException) {
+                    Snackbars.show("Nicht abgebrochen: ${e.message ?: e.kind}")
+                }
+            }
+            onStarted(id, null)
+        }
+    }
+
     private fun report(name: String, result: EndpointRemoval) {
         removal = RemovalReport(name, result)
     }

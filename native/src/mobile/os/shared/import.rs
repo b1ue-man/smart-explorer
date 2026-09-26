@@ -85,7 +85,7 @@ fn run_import(
     target: &Loc,
     incoming: Vec<Incoming>,
 ) -> Result<Value, ApiError> {
-    let (backend, dest_dir) = rt.resolve_loc(target)?;
+    let (backend, dest_dir) = rt.resolve_live(target)?;
     let count = incoming.len() as u64;
     let total: u64 = incoming.iter().filter_map(|item| item.size).sum();
     let cancel = ctx.cancel_flag();
@@ -231,7 +231,7 @@ fn run_extract(
             return Err(ApiError::canceled());
         }
         ctx.message("Lade hoch…");
-        let (backend, dest_root) = rt.resolve_loc(target)?;
+        let (backend, dest_root) = rt.resolve_live(target)?;
         let outcome = run_transfer(
             ctx,
             TransferRequest::Upload {

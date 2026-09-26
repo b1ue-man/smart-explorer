@@ -15,6 +15,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -31,6 +32,7 @@ import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.ui.common.Format
 import app.smartexplorer.android.ui.common.Snackbars
+import app.smartexplorer.android.ui.more.rememberSavedTaskId
 import app.smartexplorer.android.ui.picker.LocationPickerDialog
 import kotlinx.coroutines.launch
 
@@ -45,8 +47,11 @@ fun MirrorDialog(source: String?, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     var from by rememberSaveable { mutableStateOf(source) }
     var to by rememberSaveable { mutableStateOf<String?>(null) }
-    var taskId by rememberSaveable { mutableStateOf<String?>(null) }
-    var starting by rememberSaveable { mutableStateOf(false) }
+    // Survives recreation; after process death the mirror is gone and the dialog asks again.
+    var taskId by rememberSavedTaskId()
+    // Not saved: the start call does not survive a recreation, so a restored `true` would block
+    // [Spiegeln] for good.
+    var starting by remember { mutableStateOf(false) }
     val volumes = rememberVolumes()
     val tasks by Core.tasks.collectAsStateWithLifecycle()
     val chosenFrom = from

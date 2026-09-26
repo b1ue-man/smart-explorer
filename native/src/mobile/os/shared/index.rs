@@ -53,9 +53,22 @@ fn current(rt: &Runtime) -> Option<Arc<FolderIndex>> {
     state.index.clone()
 }
 
+/// The task id of a running build. A build whose task already ended without
+/// clearing it (its thread never started or panicked) no longer counts.
+fn running_build(rt: &Runtime, state: &mut IndexState) -> Option<String> {
+    let id = state.building.clone()?;
+    let hub = rt.hub();
+    let task = hub.with(|events| events.tasks.get(&id).map(|task| task.state));
+    if task.is_some_and(|task| !task.is_finished()) {
+        return Some(id);
+    }
+    state.building = None;
+    None
+}
+
 fn status(rt: &Runtime) -> Value {
     let index = current(rt);
-    let building = lock(&rt.inner.index.state).building.is_some();
+    let building = running_build(rt, &mut lock(&rt.inner.index.state)).is_some();
     let state = if building {
         "building"
     } else if index.is_some() {
@@ -68,7 +81,7 @@ fn status(rt: &Runtime) -> Value {
 
 fn build(rt: &Runtime) -> Result<Value, ApiError> {
     let mut state = lock(&rt.inner.index.state);
-    if let Some(id) = &state.building {
+    if let Some(id) = running_build(rt, &mut state) {
         return Ok(json!({ "taskId": id }));
     }
     let roots: Vec<PathBuf> = rt

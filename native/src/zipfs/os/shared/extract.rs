@@ -5,6 +5,7 @@
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use zip::result::ZipError;
 
 const CHUNK: usize = 256 * 1024;
 
@@ -29,6 +30,17 @@ fn zip_error<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
 }
 
+/// Skip reason for an entry that cannot be opened.
+fn open_failure(error: ZipError) -> String {
+    match error {
+        ZipError::UnsupportedArchive(ZipError::PASSWORD_REQUIRED) => {
+            "verschlüsselt (Passwort nötig)".to_string()
+        }
+        ZipError::UnsupportedArchive(reason) => format!("nicht unterstützt ({reason})"),
+        other => format!("nicht lesbar: {other}"),
+    }
+}
+
 fn native(path: &str) -> PathBuf {
     PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
 }
@@ -51,7 +63,11 @@ pub fn extract_all_controlled(
     let mut archive = zip::ZipArchive::new(file).map_err(zip_error)?;
     let mut state = ExtractProgress::default();
     for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(zip_error)?;
+        // Metadata only (no decryption or decompressor): an entry that cannot
+        // be opened is skipped by the extraction pass, not fatal here.
+        let Ok(entry) = archive.by_index_raw(index) else {
+            continue;
+        };
         if entry.is_file() && !entry.is_symlink() && entry.enclosed_name().is_some() {
             state.files_total += 1;
             state.bytes_total = state.bytes_total.saturating_add(entry.size());
@@ -64,8 +80,30 @@ pub fn extract_all_controlled(
             report.canceled = true;
             break;
         }
-        let mut entry = archive.by_index(index).map_err(zip_error)?;
-        let name = entry.name().to_string();
+        let (name, counted) = match archive.by_index_raw(index) {
+            Ok(raw) => (
+                raw.name().to_string(),
+                raw.is_file() && !raw.is_symlink() && raw.enclosed_name().is_some(),
+            ),
+            Err(error) => {
+                let name = format!("Eintrag {}", index + 1);
+                report.skipped.push((name, open_failure(error)));
+                continue;
+            }
+        };
+        // Encrypted entries and unsupported methods fail to open; they are
+        // skipped like any other entry that cannot be written.
+        let mut entry = match archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(error) => {
+                report.skipped.push((name, open_failure(error)));
+                if counted {
+                    state.files_done += 1;
+                    progress(&state);
+                }
+                continue;
+            }
+        };
         let Some(relative) = entry.enclosed_name() else {
             report
                 .skipped

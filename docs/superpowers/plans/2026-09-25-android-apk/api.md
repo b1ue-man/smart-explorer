@@ -41,6 +41,9 @@ JNI-Klasse `app.smartexplorer.android.core.NativeBridge` (Kotlin `object`), Bibl
 `appVersion` = `PackageInfo.versionName`; `bootMarker` = `Settings.Global.BOOT_COUNT` als Text (für
 „Beim Start“-Jobs); `updateFeedUrl` und `startDaemon=false` nur für Tests (Debug-Build liest
 `filesDir/test-overrides.json`; sonst eingebauter Feed aus `native/update_source.txt`).
+`homeDir` muss, wenn gesetzt, ein absoluter Pfad ohne NUL sein (sonst `invalid`); ohne `homeDir`
+und ohne Volumes ist Home und Direct-Standardfreigabe der leere Ordner `<filesDir>/home`, nie das
+private `filesDir` selbst.
 Cache-Unterordner (auch in `file_paths.xml` deklariert): `open/` (Remote-Kopien zum Öffnen),
 `share/` (Kopien zum Teilen), `update/` (APK-Download), `tmp/` (Temp-Wurzel).
 Antwort: `{"ok":{"coreVersion":"0.5.163","dataDir":"…/files/smart_explorer"}}`.
@@ -56,6 +59,9 @@ Share-Poller.
 (`/storage/emulated/0/DCIM`), `sftp://user@host:22/pfad`, `ftp://…`, `ftps://…`, `webdav://…`,
 `gdrive:///pfad`, `share://…`; zusätzlich App-intern `zip://<lokaler zip-pfad>!/<innen>`,
 `trash://` (Papierkorb). Kotlin baut nie selbst Orte zusammen, außer über Felder aus Antworten.
+Namen bleiben wörtlich: nur führende Leerzeichen eines Orts werden ignoriert, `…/Bericht ` und
+`…/Bericht` sind verschiedene Orte. In `zip://<archiv>!/<innen>` endet das Archiv am ersten `!/`
+(oder abschließenden `!`) nach einem Namen auf `.zip`, sodass Ordner mit `!` am Namensende gehen.
 App-interne Orte (`zip://`, `trash://`) werden von `loc.toggleFavorite`, „Zuletzt“, `sync.validate`,
 `sync.save`, `sync.mirror`, `share.addExport` und dem Zielauswahl-Dialog mit `invalid` abgelehnt;
 sie gelangen nie in Desktop-Formate. Favoriten liegen im Desktop-Format `favorites.txt`
@@ -84,7 +90,8 @@ sync, mirror, analyze, reclaim, trash, oauth, share, exec, update`.
 ## 3 Tasks und Ereignisse
 
 - `task.list {}` → `[Task]` (laufende + fertige bis `task.clear`)
-- `task.cancel {id}` → `{}` · `task.cancelAll {kind?}` → `{}` · `task.clear {}` → `{}` (entfernt Fertige)
+- `task.cancel {id}` → `{}` · `task.cancelAll {kind?}` → `{}` · `task.clear {ids:[String]?}` → `{}`
+  (entfernt Fertige; mit `ids` nur diese – „Leeren“ der Übertragungen lässt Scans und Analysen stehen)
 - `task.get {id}` → `Task`
 
 Ereignisse (`pollEvents`):
@@ -138,22 +145,28 @@ Ereignisse (`pollEvents`):
 - `fs.open {location}` → `{localPath, mime}` (nur lokale Orte; sonst `unsupported`; Kotlin öffnet über
   den eigenen `LocalFileProvider`, Schreiben der Fremd-App trifft das Original)
 - `fs.fetch {location}` → `{taskId}`; `result = {localPath, mime, editId}` (Remote in
-  `<cache>/open/<editId>/` laden; Register dauerhaft in `<data>/mobile/edits.json`, beim `init` geladen)
+  `<cache>/open/<editId>/` laden; Register dauerhaft in `<data>/mobile/edits.json`, beim `init` geladen;
+  ist es voll, fallen die ältesten unveränderten Kopien heraus, `busy` nur bei 100 geänderten Kopien;
+  ein unlesbares Register liefert bei `fs.fetch`/`fs.edits`/`fs.discardEdit` einen Fehler und wird nie
+  überschrieben)
 - `fs.materialize {locations:[location]}` → `{taskId}`; `result = {paths:[String]}` (Remote-Kopien in
   `<cache>/share/`; lokale Orte liefern ihre Pfade unverändert)
 - `fs.edits {}` → `[{editId, name, location, localPath, modified:Boolean}]`
 - `fs.uploadEdit {editId, mode:"overwrite|copy", force:Boolean?}` → `{taskId}` (bei `overwrite` und
-  geänderter Remote-Datei endet der Task mit `failed`, `message`, `result={conflict:true}`; ein erneuter
-  Aufruf mit `force:true` überschreibt nach ausdrücklicher Bestätigung – wie erneutes Speichern nach
-  der Konfliktmeldung am Desktop; kann das Backend vorhandene Dateien nicht sicher ersetzen – reines
-  SFTP ohne Remote-Agent, WebDAV, FTP, wie am Desktop –, endet `overwrite` vorab mit `failed`,
-  `kind`-Text und `result={replaceUnsupported:true}`; dann bleibt `copy`)
+  seit dem Laden oder letzten Hochladen geänderter Remote-Zeit – auch einer älteren – endet der Task mit
+  `failed`, `message`, `result={conflict:true}`; ein erneuter Aufruf mit `force:true` überschreibt nach
+  ausdrücklicher Bestätigung – wie erneutes Speichern nach der Konfliktmeldung am Desktop; SFTP ersetzt
+  atomar per `posix-rename@openssh.com`, WebDAV per einem `MOVE` mit `Overwrite: T`, FTP per
+  `RNFR`/`RNTO`; ein Server ohne sicheres Ersetzen lässt den Task mit dessen Fehler enden; eine Kopie
+  aus einer ZIP liefert sofort `permission`)
 - `fs.discardEdit {editId}` → `{}`
 - `fs.import {files:[{fd:Int, name, size:Long?}], targetDir}` → `{taskId}` (Kotlin übergibt je geteiltem
   Inhalt einen per `ParcelFileDescriptor.detachFd()` gelösten Deskriptor; Rust übernimmt und schließt
   ihn, liest ihn als Task mit Fortschritt direkt ins Ziel – lokal oder remote; belegte Namen →
   „Name (2)“)
-- `fs.extract {location, targetDir:String?}` → `{taskId}` (ZIP; `null` = Ordner neben dem Archiv)
+- `fs.extract {location, targetDir:String?}` → `{taskId}` (ZIP; `null` = Ordner neben dem Archiv;
+  verschlüsselte, nicht unterstützte oder unlesbare Einträge werden mit Grund ausgelassen, der Rest
+  wird entpackt)
 
 ### 4.4 Rekursiver Scan und Ordnersuche (`scan.*`, `index.*`)
 - `scan.validate {filter}` → `{error:String?}`
@@ -228,7 +241,9 @@ Konfliktliste) im Speicher; fehlt er (App neu gestartet, Hintergrundlauf), ermit
 - `sync.checkConflicts {id}` → `{taskId}` (Probelauf, füllt den Kontext)
 - `sync.resolve {id, cid, choice:"a|b"}` → `{taskId}` (`resolve_checked`, Baseline wird gespeichert,
   sobald keine Konflikte mehr offen sind oder `sync.finishConflicts` gerufen wird)
-- `sync.skip {id, cid}` → `{}` (nur für diese Sitzung, wie Desktop)
+- `sync.skip {id, cid}` → `{}` (nur für diese Sitzung, wie Desktop; war es der letzte offene Konflikt,
+  wird die Baseline gespeichert – ein Speicherfehler kommt als `internal`, der Konflikt bleibt
+  übersprungen)
 - `sync.finishConflicts {id}` → `{}` (speichert eine geänderte Baseline; Fehler → erneut versuchen)
 - `sync.mergeRows {id, cid}` → `{rows:[{a:String?, b:String?, equal:Boolean, takeA:Boolean,
   takeB:Boolean}]}` (Textdateien ≤ 16 MiB je Seite, `linemerge::rows`)
@@ -247,9 +262,10 @@ gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag 
 - `bg.log {maxBytes:Int}` → `{text}`
 - `bg.catchUp {}` → `{taskId}` (Task-`kind` = `catchup`; Nachhol-Lauf des Daemons: fällige Intervall-Jobs,
   Kalender-Termine seit dem letzten Lauf – im Hintergrund immer nachgeholt –, aktivierte Echtzeit-Jobs
-  einmal; der Task endet, wenn alle für **diesen** Lauf zugelassenen Jobs fertig sind; vom Supervisor
-  abgelehnte (schon geplant, kürzlich versucht) stehen mit Grund in `result.skipped`; `task.cancel`
-  bricht nur die Jobs dieses Laufs ab; pausiert/Sync aus → Task endet sofort mit `message`)
+  einmal; der Task endet, wenn alle für **diesen** Lauf zugelassenen Jobs fertig sind – ein Job, den der
+  reguläre Plan schon hält, wird abgewartet und mitgezählt, bleibt aber dessen Job; kürzlich versuchte
+  und nicht startbare stehen mit Grund in `result.skipped`; `task.cancel` bricht nur die eigenen Jobs
+  dieses Laufs ab; pausiert/Sync aus → Task endet sofort mit `message`)
 
 ### 4.8 Share (`share.*`)
 Siehe §5.
@@ -266,7 +282,8 @@ Siehe §5.
 ### 4.10 Update (`update.*`)
 - `update.check {}` → `{current, latest, available:Boolean, notes:String?}` (`current` =
   `appVersion` aus der Init-Konfiguration, also `PackageInfo.versionName`)
-- `update.download {}` → `{taskId}`; `result = {path, version}` (nach `<cache>/update/`, SHA-256 geprüft)
+- `update.download {}` → `{taskId}`; `result = {path, version}` (nach `<cache>/update/`, SHA-256 geprüft;
+  `busy`, solange ein früherer Download-Task noch lebt)
 
 ## 5 Share (`share.*`)
 Grundlage: `docs/lesungen/2026-09-25-android-share-facade-map.md` (Rezepte 1–9). Der Share-Dienst läuft
@@ -315,5 +332,7 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
 - `share.addExport {scope:"direct"|<profileId>, path, label:String?}` → `{}` ·
   `share.removeExport {scope, path}` → `{}` (Pfad muss existierendes Verzeichnis sein)
 - `share.exec {location, command, shell:Boolean, timeoutSecs:Int}` → `{taskId}`;
-  `result = {stdout, stderr, exitCode:Int?, timedOut, truncated}` (`daemon::exec_share`, Ausgabe ≤ 1 MiB)
+  `result = {stdout, stderr, exitCode:Int?, timedOut, truncated}` (`daemon::exec_share`, Ausgabe ≤ 1 MiB;
+  `shell:false` trennt an Leerraum, Anführungszeichen gruppieren, ein Backslash ist wörtlich außer vor
+  Leerraum oder Anführungszeichen; eine verweigerte Freigabe kommt als `permission`)
 Nicht auf Android: Exec-Freigaben für dieses Gerät (Exec-Host), LAN-Uplink, Anfragen im Altformat.

@@ -36,8 +36,15 @@ pub(crate) fn delete(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let locations = collapse_nested(locations);
     let volumes = rt.volumes();
     let mut jobs = Vec::new();
+    // One check of a lost remote connection per connection is enough.
+    let mut checked: Vec<String> = Vec::new();
     for loc in locations {
-        let (backend, _) = rt.resolve_loc(&loc)?;
+        let (backend, _) = if checked.contains(&loc.prefix) {
+            rt.resolve_loc(&loc)?
+        } else {
+            checked.push(loc.prefix.clone());
+            rt.resolve_live(&loc)?
+        };
         let route = if permanent {
             Route::Permanent
         } else if loc.is_local() {

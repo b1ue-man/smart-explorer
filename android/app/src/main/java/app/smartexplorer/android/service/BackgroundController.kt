@@ -23,6 +23,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Background mode (spec F17, `AppPrefs.bgMode`): "off" = no scheduled jobs (daemon sync flag
@@ -40,6 +42,7 @@ object BackgroundController {
 
     private const val TAG = "SmartExplorerBg"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val syncFlagLock = Mutex()
 
     /** From `SmartExplorerApp.onCreate` (any process start: UI, worker, boot). */
     fun onAppStart(context: Context) {
@@ -70,10 +73,14 @@ object BackgroundController {
         val mode = AppPrefs.bgMode.value
         scheduleWork(app, mode)
         scope.launch {
-            try {
-                SyncApi.setSyncEnabled(mode != MODE_OFF)
-            } catch (e: CoreException) {
-                Log.w(TAG, "bg.setSyncEnabled failed: ${e.kind}: ${e.displayText()}")
+            // One call at a time, each with the mode current at that moment: the last one to run
+            // always sends the newest setting, however overlapping calls are ordered.
+            syncFlagLock.withLock {
+                try {
+                    SyncApi.setSyncEnabled(AppPrefs.bgMode.value != MODE_OFF)
+                } catch (e: CoreException) {
+                    Log.w(TAG, "bg.setSyncEnabled failed: ${e.kind}: ${e.displayText()}")
+                }
             }
         }
         if (mode == MODE_PERSISTENT) startBackgroundService(app) else stopBackgroundService(app)

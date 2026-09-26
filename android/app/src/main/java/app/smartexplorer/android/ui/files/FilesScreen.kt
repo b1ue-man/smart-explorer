@@ -24,6 +24,7 @@ import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -38,7 +39,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.window.core.layout.WindowSizeClass
 import app.smartexplorer.android.core.Core
@@ -95,7 +98,14 @@ fun FilesScreen() {
             else -> Unit
         }
     }
-    LaunchedEffect(vm) { vm.effects.collect { perform(currentContext, it) } }
+    // Opening or sharing needs a visible activity (background starts are blocked): effects stay
+    // buffered in the channel while the screen is stopped and run once it is started again.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(vm, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.effects.collect { perform(currentContext, it) }
+        }
+    }
     LaunchedEffect(access) {
         // Access granted or revoked in the system settings: places and lists change.
         if (access != seenAccess[0]) {
@@ -279,6 +289,8 @@ private fun PaneView(
     val readOnly = listing?.readOnly ?: true
     val internal = listing != null && listing.backend in INTERNAL_BACKENDS
 
+    // The tab outlives this activity: a hidden tab must not keep the old layout tree alive.
+    DisposableEffect(tab) { onDispose { tab.detachList() } }
     BackHandler(enabled = backEnabled && isActive && (selectionMode || tab.canGoBack)) {
         if (selectionMode) tab.selection.clear() else tab.goBack()
     }
@@ -378,7 +390,7 @@ private fun FilesViewModel.onEntryAction(tab: BrowserTab, action: EntryAction, e
         EntryAction.MoveTo -> requestTransferTo(tab, entries, move = true)
         EntryAction.Rename -> entries.singleOrNull()?.let { requestRename(tab, it) }
         EntryAction.Delete -> requestDelete(tab, entries)
-        EntryAction.Properties -> showProperties(entries)
+        EntryAction.Properties -> showProperties(entries, tab.scan)
         EntryAction.Extract -> entries.singleOrNull()?.let { requestExtract(tab, it) }
         EntryAction.CopyPath -> copyPaths(entries.map { it.location })
         EntryAction.Favorite -> addFavorites(tab, entries)

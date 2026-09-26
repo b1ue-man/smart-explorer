@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -156,13 +157,18 @@ private fun ShareServerSettings() {
     var server by rememberSaveable { mutableStateOf("") }
     var loaded by rememberSaveable { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    // Field and [Speichern] stay off until the real value is known: saving the empty field after a
+    // failed load would remove a working server.
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reloadKey) {
+        if (loaded) return@LaunchedEffect
         try {
-            if (!loaded) server = ShareApi.status().server.orEmpty()
-        } catch (e: CoreException) {
-            Snackbars.show("Share-Server nicht geladen: ${e.message ?: e.kind}")
-        } finally {
+            server = ShareApi.status().server.orEmpty()
+            loadError = null
             loaded = true
+        } catch (e: CoreException) {
+            loadError = e.message ?: e.kind
         }
     }
     SectionHeader("Share-Server")
@@ -177,6 +183,23 @@ private fun ShareServerSettings() {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
     )
     HintLine("Leer lassen = kein Server; Geräte finden sich dann nur im selben WLAN.")
+    val error = loadError
+    if (error != null) {
+        Text(
+            "Share-Server nicht geladen: $error",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+        )
+        OutlinedButton(
+            onClick = {
+                loadError = null
+                reloadKey++
+            },
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        ) { Text("Erneut laden") }
+        return
+    }
     OutlinedButton(
         onClick = {
             val value = server.trim()

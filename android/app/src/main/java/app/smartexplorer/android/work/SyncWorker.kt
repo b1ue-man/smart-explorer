@@ -42,7 +42,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         HostMonitor.pushNow(applicationContext)
         val taskId = try {
-            SyncApi.catchUp()
+            // Not cancellable: a stop during the (possibly seconds long) start must still get the
+            // task id, so the catch below can end this run with `task.cancel`.
+            withContext(NonCancellable) { SyncApi.catchUp() }
         } catch (e: CoreException) {
             Log.w(TAG, "bg.catchUp not started: ${e.kind}: ${e.displayText()}")
             return Result.success()

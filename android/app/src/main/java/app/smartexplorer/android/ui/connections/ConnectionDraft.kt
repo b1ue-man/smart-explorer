@@ -87,7 +87,9 @@ internal data class ConnectionDraft(
             auth = connection.auth,
             keyPath = connection.keyPath.orEmpty(),
             useAgent = connection.useAgent,
-            https = connection.https,
+            // Only a saved WebDAV connection keeps its scheme; any other type switched to WebDAV
+            // starts on HTTPS like a new draft (the form has no HTTPS switch).
+            https = connection.protocol != "webdav" || connection.https,
         )
 
         fun protocolLabel(protocol: String): String = when (protocol) {

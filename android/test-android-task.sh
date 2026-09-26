@@ -146,6 +146,13 @@ g1_tests=(
   android_task_forget_host_key_removes_only_that_entry
   android_task_locations_keep_the_endpoint_prefix
   android_task_worker_log_tail_starts_at_a_line
+  # Review and limits batch (2026-09-26): locations, init home, edit register, exec errors, promotion
+  android_task_locations_keep_trailing_blanks_and_bang_folders
+  android_task_home_fallback_is_not_the_private_data_dir
+  android_task_full_edit_register_forgets_the_oldest_unchanged_copy
+  android_task_changed_or_unreadable_edit_registers_are_kept
+  android_task_exec_errors_name_a_refused_grant_only
+  android_task_promote_staged_with_creates_new_names_and_hands_existing_files_to_replace
 )
 android_only_tests=()
 

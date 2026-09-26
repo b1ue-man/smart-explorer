@@ -137,7 +137,7 @@ fn run(rt: &Runtime, ctx: &TaskCtx, plan: &Plan) -> Result<Outcome, ApiError> {
     let request = match (source_local, plan.target.is_local()) {
         (true, true) => return local_copy(ctx, plan, paths),
         (true, false) => {
-            let (backend, _) = rt.resolve_loc(&plan.target)?;
+            let (backend, _) = rt.resolve_live(&plan.target)?;
             match &plan.filter {
                 Some((filter, base)) => TransferRequest::UploadPairs {
                     pairs: local_snapshot(ctx, &plan.sources, filter, base)?,
@@ -152,15 +152,15 @@ fn run(rt: &Runtime, ctx: &TaskCtx, plan: &Plan) -> Result<Outcome, ApiError> {
             }
         }
         (false, true) => TransferRequest::Download {
-            backend: rt.resolve_loc(&plan.sources[0])?.0,
+            backend: rt.resolve_live(&plan.sources[0])?.0,
             files: paths,
             dest_local: dest_root,
             filter: plan.filter.clone(),
         },
         (false, false) => TransferRequest::RemoteCopy {
-            src: rt.resolve_loc(&plan.sources[0])?.0,
+            src: rt.resolve_live(&plan.sources[0])?.0,
             files: paths,
-            tgt: rt.resolve_loc(&plan.target)?.0,
+            tgt: rt.resolve_live(&plan.target)?.0,
             dest_root,
             filter: plan.filter.clone(),
         },

@@ -7,7 +7,7 @@ use super::location::{self, Loc, LocKind};
 use super::pool::BackendPool;
 use super::slots::Slots;
 use super::tasks::TaskState;
-use crate::vfs::{Backend, BackendHandle};
+use crate::vfs::{Backend, BackendHandle, VfsMeta};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io;
@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 
 /// Entries kept for `sys.errors`.
 const MAX_ERROR_LOG: usize = 500;
+
+/// A pooled backend, the backend path and its uncached metadata.
+pub(crate) type Fresh = (BackendHandle, String, io::Result<VfsMeta>);
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -201,6 +204,33 @@ impl Runtime {
             }
             result => result.map_err(ApiError::from),
         }
+    }
+
+    /// The pooled backend of `loc` with its uncached metadata. A lost remote
+    /// connection is evicted and reopened and the stat (a read) retried once.
+    pub(crate) fn stat_fresh(&self, loc: &Loc) -> Result<Fresh, ApiError> {
+        let (backend, path) = self.resolve_loc(loc)?;
+        match crate::vfs::sync_backend(backend.clone()).stat(&path) {
+            Err(error) if !loc.is_local() && super::error::is_connection_loss(&error) => {
+                self.inner.pool.evict(loc);
+                let (backend, path) = self.resolve_loc(loc)?;
+                let meta = crate::vfs::sync_backend(backend.clone()).stat(&path);
+                Ok((backend, path, meta))
+            }
+            meta => Ok((backend, path, meta)),
+        }
+    }
+
+    /// A pooled backend for a write or a task. A remote connection is first
+    /// checked with one uncached stat and reopened when it was lost, so a
+    /// retry after a dropped session does not fail the same way again. The
+    /// write itself is never retried.
+    pub(crate) fn resolve_live(&self, loc: &Loc) -> Result<(BackendHandle, String), ApiError> {
+        if matches!(loc.kind, LocKind::Local | LocKind::Zip) {
+            return self.resolve_loc(loc);
+        }
+        let (backend, path, _) = self.stat_fresh(loc)?;
+        Ok((backend, path))
     }
 
     /// Closes pooled connections whose key (`sftp://user@host:port/root`,

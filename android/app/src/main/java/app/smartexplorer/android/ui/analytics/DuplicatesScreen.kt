@@ -157,25 +157,28 @@ private fun GroupList(vm: DuplicatesViewModel, groups: List<DuplicateGroup>, mod
         }
         // Positional keys: equal Google Drive names share one location (B2), so locations may repeat.
         items(groups) { group ->
-            GroupCard(group, vm.selected, enabled = !vm.trashUnsupported, onToggle = { vm.toggle(group, it) })
+            GroupCard(group, vm.selected, vm.ambiguous, enabled = !vm.trashUnsupported, onToggle = { vm.toggle(group, it) })
         }
     }
 }
 
 @Composable
-private fun GroupCard(group: DuplicateGroup, selected: Set<String>, enabled: Boolean, onToggle: (String) -> Unit) {
+private fun GroupCard(group: DuplicateGroup, selected: Set<String>, ambiguous: Set<String>, enabled: Boolean, onToggle: (String) -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Text(
             "${Format.size(group.size)} · ${group.items.size} Kopien",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp),
         )
-        group.items.forEach { item -> CopyRow(item, item.location in selected, enabled, onToggle) }
+        group.items.forEach { item ->
+            val shared = item.location in ambiguous
+            CopyRow(item, item.location in selected, enabled && !shared, shared, onToggle)
+        }
     }
 }
 
 @Composable
-private fun CopyRow(item: DuplicateItem, checked: Boolean, enabled: Boolean, onToggle: (String) -> Unit) {
+private fun CopyRow(item: DuplicateItem, checked: Boolean, enabled: Boolean, shared: Boolean, onToggle: (String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -187,6 +190,13 @@ private fun CopyRow(item: DuplicateItem, checked: Boolean, enabled: Boolean, onT
         Column(Modifier.weight(1f)) {
             Text(item.location, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Geändert ${Format.dateTime(item.mtimeMs)}", style = MaterialTheme.typography.bodySmall)
+            if (shared) {
+                Text(
+                    "Gleicher Name am selben Ort – nicht einzeln löschbar",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

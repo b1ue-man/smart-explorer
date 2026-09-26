@@ -54,8 +54,9 @@ private val SHEET_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.y
 
 /** Size input: text plus unit index into [UNITS]. */
 private data class SizeInput(val text: String = "", val unit: Int = 1) {
-    /** Bytes, `null` when empty; [valid] is false for text that is not a number. */
-    fun bytes(): Long? = text.trim().replace(',', '.').toDoubleOrNull()?.let { (it * unitBytes(unit)).roundToLong() }
+    /** Bytes, `null` when empty; [valid] is false for text that is not a number ("NaN", "Infinity" included). */
+    fun bytes(): Long? =
+        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }?.let { (it * unitBytes(unit)).roundToLong() }
 
     val valid: Boolean
         get() = text.isBlank() || bytes()?.let { it >= 0 } == true
