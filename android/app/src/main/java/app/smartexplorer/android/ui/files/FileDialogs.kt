@@ -46,7 +46,8 @@ import kotlinx.coroutines.delay
  * Name dialog for rename / new folder / new file (spec F7): the name is preselected without its
  * extension; an invalid name shows an error and locks OK; an existing name reads "Existiert
  * bereits". With a known [parent] the core checks the name while typing (`fs.checkName`); its
- * warning for problematic names is shown but does not block.
+ * warning for problematic names is shown but does not block. [siblings] are the exact names next
+ * to a renamed entry.
  */
 @Composable
 internal fun NameDialog(
@@ -56,15 +57,18 @@ internal fun NameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
     isDir: Boolean = kind == NameDialogKind.NewFolder,
+    siblings: Set<String> = emptySet(),
 ) {
     val baseEnd = initialName.lastIndexOf('.').takeIf { !isDir && kind == NameDialogKind.Rename && it > 0 } ?: initialName.length
     var value by remember { mutableStateOf(TextFieldValue(initialName, TextRange(0, baseEnd))) }
     var check by remember { mutableStateOf<NameCheck?>(null) }
-    val name = value.text
+    // Checked and confirmed alike: blanks around the name (e.g. after a keyboard suggestion) go.
+    val name = value.text.trim()
     val localError = localNameError(name)
     val unchanged = kind == NameDialogKind.Rename && name == initialName
-    // Case-only renames are allowed even where the file system ignores case.
-    val sameAsBefore = kind == NameDialogKind.Rename && name.equals(initialName, ignoreCase = true)
+    // Case-only renames are allowed even where the file system ignores case (the match is the
+    // entry itself), but not onto an exactly named sibling (case-sensitive places).
+    val sameAsBefore = kind == NameDialogKind.Rename && name.equals(initialName, ignoreCase = true) && name !in siblings
     LaunchedEffect(name, parent) {
         check = null
         if (parent == null || localError != null || unchanged) return@LaunchedEffect
@@ -110,12 +114,12 @@ internal fun NameDialog(
                     else -> null
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { if (canConfirm) onConfirm(name.trim()) }),
+                keyboardActions = KeyboardActions(onDone = { if (canConfirm) onConfirm(name) }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(name.trim()) }, enabled = canConfirm) {
+            TextButton(onClick = { onConfirm(name) }, enabled = canConfirm) {
                 Text(if (kind == NameDialogKind.Rename) "OK" else "Anlegen")
             }
         },
@@ -135,35 +139,68 @@ private const val CHECK_DEBOUNCE_MS = 250L
 
 /**
  * "n Elemente in den Papierkorb?" with a checkbox "Endgültig löschen"; places without a trash
- * only offer permanent deletion (spec F7).
+ * only offer permanent deletion (spec F7). [folderCount] folders selected in a filtered recursive
+ * view stand for their whole content: they go only when ticked ([countWithFolders] elements then).
  */
 @Composable
-internal fun DeleteDialog(count: Int, canTrash: Boolean, onConfirm: (permanent: Boolean) -> Unit, onDismiss: () -> Unit) {
+internal fun DeleteDialog(
+    count: Int,
+    canTrash: Boolean,
+    onConfirm: (permanent: Boolean, withFolders: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    folderCount: Int = 0,
+    countWithFolders: Int = count,
+) {
     var permanent by remember { mutableStateOf(!canTrash) }
+    var withFolders by remember { mutableStateOf(false) }
+    val total = if (withFolders) countWithFolders else count
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (canTrash) "${elements(count)} in den Papierkorb?" else "${elements(count)} endgültig löschen?") },
+        title = {
+            Text(
+                when {
+                    total == 0 -> "Nur Ordner ausgewählt"
+                    canTrash -> "${elements(total)} in den Papierkorb?"
+                    else -> "${elements(total)} endgültig löschen?"
+                },
+            )
+        },
         text = {
-            if (canTrash) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().toggleable(value = permanent, onValueChange = { permanent = it }, role = Role.Checkbox),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = permanent, onCheckedChange = null)
-                    Text("Endgültig löschen", modifier = Modifier.padding(start = 8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (folderCount > 0) {
+                    Text("Ausgewählte Ordner stehen für ihren gesamten Inhalt – auch für Dateien, die nicht zum Filter passen.")
+                    CheckLine(
+                        if (folderCount == 1) "Auch den Ordner samt Inhalt löschen" else "Auch die $folderCount Ordner samt Inhalt löschen",
+                        withFolders,
+                    ) { withFolders = it }
                 }
-            } else {
-                Text("Dieser Ort hat keinen Papierkorb. Das Löschen lässt sich nicht rückgängig machen.")
+                if (canTrash) {
+                    CheckLine("Endgültig löschen", permanent) { permanent = it }
+                } else {
+                    Text("Dieser Ort hat keinen Papierkorb. Das Löschen lässt sich nicht rückgängig machen.")
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(permanent) },
+                onClick = { onConfirm(permanent, withFolders) },
+                enabled = total > 0,
                 colors = if (permanent) ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error) else ButtonDefaults.textButtonColors(),
             ) { Text("Löschen") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
     )
+}
+
+@Composable
+private fun CheckLine(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().toggleable(value = checked, onValueChange = onChange, role = Role.Checkbox),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+        Text(label, modifier = Modifier.padding(start = 8.dp))
+    }
 }
 
 /**
@@ -225,36 +262,25 @@ internal fun ExtractDialog(name: String, onHere: () -> Unit, onElsewhere: () -> 
     )
 }
 
-/**
- * Remote file changed since it was opened, or ([canOverwrite] = false) the place cannot replace
- * existing files safely, like on the desktop (spec F9).
- */
+/** Remote file changed since it was opened, like on the desktop (spec F9). */
 @Composable
 internal fun EditConflictDialog(
     name: String,
-    canOverwrite: Boolean,
     onOverwrite: () -> Unit,
     onCopy: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (canOverwrite) "Konflikt" else "Nicht ersetzbar") },
+        title = { Text("Konflikt") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (canOverwrite) {
-                    Text("„$name“ wurde seit dem Öffnen auch auf der Gegenseite geändert.")
-                    OutlinedButton(
-                        onClick = onOverwrite,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Remote überschreiben") }
-                } else {
-                    Text(
-                        "„$name“ kann an diesem Ort nicht sicher ersetzt werden (etwa SFTP ohne Remote-Agent, " +
-                            "WebDAV oder FTP). Die Änderung lässt sich als Kopie daneben hochladen.",
-                    )
-                }
+                Text("„$name“ wurde seit dem Öffnen auch auf der Gegenseite geändert.")
+                OutlinedButton(
+                    onClick = onOverwrite,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Remote überschreiben") }
                 ChoiceButton("Als Kopie hochladen", onCopy)
             }
         },

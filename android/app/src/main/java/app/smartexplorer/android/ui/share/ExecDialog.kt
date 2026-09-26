@@ -27,11 +27,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -41,18 +41,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ExecResult
 import app.smartexplorer.android.api.FilesApi
-import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.ui.common.SeIcon
-import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.SectionHeader
 import app.smartexplorer.android.ui.more.TextActions
 import app.smartexplorer.android.ui.more.ToggleSetting
-import kotlinx.coroutines.launch
 
 /** Timeouts offered for a remote command, in seconds. */
 private val EXEC_TIMEOUTS = listOf(30, 60, 300, 900)
@@ -62,19 +60,26 @@ private data class ExecOutcome(val result: ExecResult?, val failure: String?)
 
 /**
  * "Befehl ausführen" on a shared device (spec F18): command, shell or direct, time limit →
- * `share.exec` task → stdout/stderr and exit code, [Abbrechen] while it runs. Closing the dialog
- * cancels a running command.
+ * `share.exec` task → stdout/stderr and exit code, [Abbrechen] while it runs. The dialog leaving
+ * the screen in any way (close, back, tab switch, recreation) cancels a running or starting command.
  */
 @Composable
-internal fun ExecDialog(targetName: String, location: String, onDismiss: () -> Unit) {
+internal fun ExecDialog(
+    targetName: String,
+    location: String,
+    onDismiss: () -> Unit,
+    vm: ShareViewModel = viewModel { ShareViewModel() },
+) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var command by rememberSaveable { mutableStateOf("") }
     var shell by rememberSaveable { mutableStateOf(true) }
     var timeout by rememberSaveable { mutableStateOf(60) }
     var taskId by remember { mutableStateOf<String?>(null) }
     var outcome by remember { mutableStateOf<ExecOutcome?>(null) }
-    val running = taskId != null && outcome == null
+    // `share.exec` has not returned the task id yet; a cancel meanwhile waits for the id.
+    var starting by remember { mutableStateOf(false) }
+    var cancelWanted by remember { mutableStateOf(false) }
+    val running = starting || (taskId != null && outcome == null)
 
     LaunchedEffect(taskId) {
         val id = taskId ?: return@LaunchedEffect
@@ -86,21 +91,38 @@ internal fun ExecDialog(targetName: String, location: String, onDismiss: () -> U
     }
 
     fun cancelRunning() {
+        if (starting) {
+            cancelWanted = true
+            return
+        }
         val id = taskId ?: return
         if (outcome != null) return
-        scope.launch {
-            try {
-                FilesApi.cancelTask(id)
-            } catch (e: CoreException) {
-                Snackbars.show("Nicht abgebrochen: ${e.message ?: e.kind}")
+        vm.act("Nicht abgebrochen") { FilesApi.cancelTask(id) }
+    }
+
+    fun start() {
+        // Checked on the state itself: a second tap can arrive before the button turns into [Abbrechen].
+        if (starting || (taskId != null && outcome == null)) return
+        starting = true
+        cancelWanted = false
+        taskId = null
+        outcome = null
+        vm.startExec(location, command.trim(), shell, timeout, cancelNow = { cancelWanted }) { id, failure ->
+            starting = false
+            if (id != null) {
+                taskId = id
+            } else {
+                outcome = ExecOutcome(null, failure)
             }
         }
     }
 
-    val close = {
-        cancelRunning()
-        onDismiss()
+    // The only cancel path on leaving, so a running command never outlives the dialog unseen.
+    DisposableEffect(Unit) {
+        onDispose { cancelRunning() }
     }
+
+    val close = onDismiss
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
@@ -136,20 +158,7 @@ internal fun ExecDialog(targetName: String, location: String, onDismiss: () -> U
                         if (running) {
                             OutlinedButton(onClick = { cancelRunning() }) { Text("Abbrechen") }
                         } else {
-                            Button(
-                                onClick = {
-                                    outcome = null
-                                    scope.launch {
-                                        try {
-                                            taskId = ShareApi.exec(location, command.trim(), shell, timeout)
-                                        } catch (e: CoreException) {
-                                            taskId = null
-                                            outcome = ExecOutcome(null, e.message ?: e.kind)
-                                        }
-                                    }
-                                },
-                                enabled = command.isNotBlank(),
-                            ) { Text("Ausführen") }
+                            Button(onClick = { start() }, enabled = command.isNotBlank()) { Text("Ausführen") }
                         }
                     }
                     if (running) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))

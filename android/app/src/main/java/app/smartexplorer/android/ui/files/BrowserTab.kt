@@ -51,7 +51,10 @@ internal class BrowserTab(
 
     /** Selected entries by location (kept across scan windows). */
     val selection = mutableStateMapOf<String, Entry>()
-    val listState = LazyListState()
+
+    /** List position; replaced by [detachList] whenever the tab's pane leaves the screen. */
+    var listState by mutableStateOf(LazyListState())
+        private set
 
     private val back = mutableStateListOf<HistoryItem>()
     private val forward = mutableStateListOf<HistoryItem>()
@@ -148,6 +151,14 @@ internal class BrowserTab(
         if (selection.remove(entry.location) == null) selection[entry.location] = entry
     }
 
+    /**
+     * The pane left composition (tab switch, activity recreated): keep the position, but drop the
+     * state object that still references the old layout tree and its activity.
+     */
+    fun detachList() {
+        listState = LazyListState(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+    }
+
     /** Cancels loading and a running scan (tab closed). */
     fun dispose() {
         loadJob?.cancel()
@@ -189,7 +200,9 @@ internal class BrowserTab(
                 listing = result
                 location = result.location
                 error = null
-                scrollTo?.let { listState.scrollToItem(it.index, it.offset) }
+                // Not suspending: applied at the next layout, even while a finger holds the list or
+                // before it was ever laid out, so neither can skip the scan or keep `loading` set.
+                scrollTo?.let { listState.requestScrollToItem(it.index, it.offset) }
                 if (recursive && filter.error == null) startScan(result, valid, opts)
             } catch (e: CoreException) {
                 listing = null

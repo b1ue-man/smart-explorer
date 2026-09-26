@@ -350,7 +350,29 @@ fn android_task_exec_command_split_respects_quotes() {
         ["ls", "-la", "my dir", "a b", "c d", ""]
     );
     assert!(split_command("echo 'open").is_err());
-    assert!(split_command("echo \\").is_err());
+    assert_eq!(split_command("dir C:\\").expect("dir"), ["dir", "C:\\"]);
+    assert_eq!(
+        split_command(r#"robocopy "D:\Fotos\a b" C:\Users \\nas\share"#).expect("windows"),
+        ["robocopy", r"D:\Fotos\a b", r"C:\Users", r"\\nas\share"]
+    );
+    assert_eq!(
+        split_command(r#"echo "say \"hi\"" \'x\'"#).expect("escaped quotes"),
+        ["echo", r#"say "hi""#, "'x'"]
+    );
+}
+
+#[test]
+fn android_task_exec_errors_name_a_refused_grant_only() {
+    use super::share_requests::exec_error;
+    let refused = exec_error("exec grant missing".to_string());
+    assert_eq!(refused.kind, "permission");
+    assert!(refused.message.starts_with("Gerät erlaubt keine Befehle"));
+    let access = exec_error("Permission denied (os error 13)".to_string());
+    assert_eq!(access.kind, "permission");
+    assert_eq!(access.message, "Permission denied (os error 13)");
+    let export = exec_error("Freigabe nicht gefunden.".to_string());
+    assert_eq!(export.kind, "network");
+    assert_eq!(export.message, "Freigabe nicht gefunden.");
 }
 
 #[test]

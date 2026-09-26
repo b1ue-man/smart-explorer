@@ -59,10 +59,27 @@ internal enum class NameDialogKind { Rename, NewFolder, NewFile }
 
 /** Modal dialogs of the Files tab. */
 internal sealed interface FilesDialog {
-    data class Name(val kind: NameDialogKind, val tabId: Long, val parent: String?, val entry: Entry?, val initial: String) :
-        FilesDialog
+    /** [siblings]: exact names next to a renamed entry (case-only renames onto them clash). */
+    data class Name(
+        val kind: NameDialogKind,
+        val tabId: Long,
+        val parent: String?,
+        val entry: Entry?,
+        val initial: String,
+        val siblings: Set<String> = emptySet(),
+    ) : FilesDialog
 
-    data class Delete(val tabId: Long, val entries: List<Entry>, val canTrash: Boolean) : FilesDialog
+    /**
+     * Deletes [entries]. [folderCount] > 0: folders selected in a filtered recursive view, which
+     * stand for their whole content; ticking them deletes [withFolders] instead.
+     */
+    data class Delete(
+        val tabId: Long,
+        val entries: List<Entry>,
+        val canTrash: Boolean,
+        val folderCount: Int = 0,
+        val withFolders: List<Entry> = entries,
+    ) : FilesDialog
 
     /** The place has no trash (`unsupported`): ask for permanent deletion. */
     data class DeletePermanently(val tabId: Long, val locations: List<String>) : FilesDialog
@@ -71,8 +88,8 @@ internal sealed interface FilesDialog {
 
     data class Extract(val tabId: Long, val entry: Entry) : FilesDialog
 
-    /** The remote file changed since opening, or ([canOverwrite] = false) the place cannot replace files. */
-    data class EditConflict(val edit: EditInfo, val canOverwrite: Boolean = true) : FilesDialog
+    /** The remote file changed since opening. */
+    data class EditConflict(val edit: EditInfo) : FilesDialog
 
     data class Text(val title: String, val text: String) : FilesDialog
 }

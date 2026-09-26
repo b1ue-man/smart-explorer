@@ -44,6 +44,7 @@ private fun Dialogs(vm: FilesViewModel) {
             parent = dialog.parent,
             initialName = dialog.initial,
             isDir = dialog.entry?.isDir ?: (dialog.kind == NameDialogKind.NewFolder),
+            siblings = dialog.siblings,
             onDismiss = close,
             onConfirm = { name ->
                 close()
@@ -53,9 +54,12 @@ private fun Dialogs(vm: FilesViewModel) {
         is FilesDialog.Delete -> DeleteDialog(
             count = dialog.entries.size,
             canTrash = dialog.canTrash,
-            onConfirm = { permanent ->
+            folderCount = dialog.folderCount,
+            countWithFolders = dialog.withFolders.size,
+            onConfirm = { permanent, withFolders ->
                 close()
-                vm.delete(dialog.tabId, dialog.entries.map { it.location }, permanent)
+                val targets = if (withFolders) dialog.withFolders else dialog.entries
+                vm.delete(dialog.tabId, targets.map { it.location }, permanent)
             },
             onDismiss = close,
         )
@@ -93,7 +97,6 @@ private fun Dialogs(vm: FilesViewModel) {
         )
         is FilesDialog.EditConflict -> EditConflictDialog(
             name = dialog.edit.name,
-            canOverwrite = dialog.canOverwrite,
             onOverwrite = {
                 close()
                 vm.uploadEdit(dialog.edit, mode = "overwrite", force = true)

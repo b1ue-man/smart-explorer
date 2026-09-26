@@ -78,7 +78,7 @@ internal fun ConflictsScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            LoadingBar(session.loading || session.bulk || session.finishing)
+            LoadingBar(session.loading || session.bulk || session.finishing || session.checkStarting)
             session.finishError?.let { error ->
                 ErrorCard(
                     message = "$error\nOhne Speichern erkennt der nächste Lauf dieselben Konflikte erneut.",
@@ -99,7 +99,7 @@ internal fun ConflictsScreen(
                     actionLabel = "Erneut laden",
                     onAction = session::load,
                 )
-                !session.available && session.checkTaskId == null && !session.loading -> EmptyState(
+                !session.available && !session.checking && !session.loading -> EmptyState(
                     icon = R.drawable.ic_warning,
                     title = "Konfliktliste nicht geladen",
                     message = "Nach einem Neustart der App oder einem Hintergrundlauf ermittelt ein Probelauf die Konflikte.",
@@ -138,7 +138,8 @@ private fun ConflictList(session: ConflictSession, onMerge: (SyncConflict) -> Un
                 ConflictCard(
                     item = item,
                     busy = session.busy[item.key] == true,
-                    enabled = !session.bulk && !session.finishing,
+                    // A dry run replaces the conflict context, so its entries wait until it ends.
+                    enabled = !session.bulk && !session.finishing && !session.checking,
                     onKeepA = { session.resolve(item, "a") },
                     onKeepB = { session.resolve(item, "b") },
                     onSkip = { session.skip(item) },

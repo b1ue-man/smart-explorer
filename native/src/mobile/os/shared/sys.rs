@@ -1,5 +1,5 @@
 //! `sys.*` (api.md §4.1) and `task.*` (api.md §3).
-use super::args::{bool_or, opt_str, str_arg};
+use super::args::{bool_or, opt_str, str_arg, str_list};
 use super::config::{validate_volume, VolumeInfo};
 use super::error::ApiError;
 use super::runtime::Runtime;
@@ -32,12 +32,20 @@ pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
             rt.hub().with(|state| state.tasks.cancel_all(kind));
             Ok(json!({}))
         }
-        "task.clear" => {
-            rt.hub().with(|state| state.tasks.clear_finished());
-            Ok(json!({}))
-        }
+        "task.clear" => task_clear(rt, args),
         _ => return None,
     })
+}
+
+/// `task.clear {ids?}`: finished tasks, all or only the listed ones.
+fn task_clear(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let ids = match args.get("ids") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(str_list(args, "ids")?),
+    };
+    rt.hub()
+        .with(|state| state.tasks.clear_finished(ids.as_deref()));
+    Ok(json!({}))
 }
 
 /// Energy saving and metered networks feed the daemon's automatic pause;

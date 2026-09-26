@@ -23,7 +23,7 @@ fn target(args: &Value) -> Result<(Loc, String, String), ApiError> {
 
 pub(crate) fn mkdir(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let (parent, name, path) = target(args)?;
-    let (backend, _) = rt.resolve_loc(&parent)?;
+    let (backend, _) = rt.resolve_live(&parent)?;
     if parent.is_local() {
         std::fs::create_dir(&path).map_err(|error| match error.kind() {
             io::ErrorKind::AlreadyExists => exists_error(&name),
@@ -42,7 +42,7 @@ pub(crate) fn mkdir(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 
 pub(crate) fn new_file(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let (parent, name, path) = target(args)?;
-    let (backend, _) = rt.resolve_loc(&parent)?;
+    let (backend, _) = rt.resolve_live(&parent)?;
     if parent.is_local() {
         std::fs::OpenOptions::new()
             .write(true)
@@ -97,7 +97,7 @@ pub(crate) fn rename(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     }
     let parent = parent_path(&loc.path).unwrap_or("/");
     let destination = join(parent, name);
-    let (backend, _) = rt.resolve_loc(&loc)?;
+    let (backend, _) = rt.resolve_live(&loc)?;
     backend
         .rename_no_replace(&loc.path, &destination)
         .map_err(|error| match error.kind() {

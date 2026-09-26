@@ -2,6 +2,7 @@
 //! `smart-explorer-android.apk` + `.sha256`), downloaded into
 //! `<cache>/update/` and verified before the host hands it to the installer.
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
@@ -12,6 +13,18 @@ use crate::mobile::{ApiError, Runtime, TaskCtx};
 const BUILTIN_FEED: &str = include_str!("../../../../../update_source.txt");
 pub(super) const APK_NAME: &str = "smart-explorer-android.apk";
 const DAMAGED: &str = "Download beschädigt – nicht installiert";
+
+/// One download at a time: every task writes the same `.part`/APK paths.
+static DOWNLOADING: AtomicBool = AtomicBool::new(false);
+
+/// Frees the download when its task ends, also by unwinding.
+struct DownloadSlot;
+
+impl Drop for DownloadSlot {
+    fn drop(&mut self) {
+        DOWNLOADING.store(false, Ordering::Release);
+    }
+}
 
 fn feed(rt: &Runtime) -> String {
     match rt.config().update_feed_url.as_deref().map(str::trim) {
@@ -44,9 +57,18 @@ pub(super) fn check(rt: &Runtime) -> Result<Value, ApiError> {
 }
 
 pub(super) fn download(rt: &Runtime) -> Result<Value, ApiError> {
+    if DOWNLOADING.swap(true, Ordering::AcqRel) {
+        return Err(ApiError::new(
+            "busy",
+            "Das Update wird bereits geladen – bitte warten.",
+        ));
+    }
+    let slot = DownloadSlot;
     let feed = feed(rt);
     let current = rt.config().app_version.clone();
     let task = rt.spawn_task("update", "Update laden".to_string(), move |ctx| {
+        // Held until the task, its `.part` cleanup included, has ended.
+        let _slot = slot;
         download_task(ctx, &feed, &current)
     });
     Ok(json!({ "taskId": task }))

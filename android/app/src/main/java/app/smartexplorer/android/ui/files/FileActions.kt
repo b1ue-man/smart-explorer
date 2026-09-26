@@ -43,12 +43,13 @@ private fun reportTask(task: TaskInfo, success: String, failure: String) {
 
 // ---- open, share ----
 
-/** Tap on a row: folders and ZIP archives open inside, files open in another app. */
+/** Tap on a row: folders and local ZIP archives open inside, files open in another app. */
 internal fun FilesViewModel.openEntry(tab: BrowserTab, entry: Entry, local: Boolean) {
     when {
         entry.isDir -> tab.open(entry.location)
-        // ZIP archives browse like folders (read-only); the core lists them as `zip://` places.
-        entry.ext.removePrefix(".").equals("zip", ignoreCase = true) -> tab.open(entry.location)
+        // ZIP archives on local storage browse like folders (read-only); the core lists them as
+        // `zip://<lokaler zip-pfad>!/` places. Remote or nested archives open like other files.
+        isZip(entry) && local && tab.listing?.backend == "local" -> tab.open(entry.location)
         else -> openFile(entry, local, chooser = false)
     }
 }
@@ -119,14 +120,17 @@ internal fun FilesViewModel.copyPaths(locations: List<String>) {
 
 internal fun FilesViewModel.copyToClip(tab: BrowserTab, entries: List<Entry>, move: Boolean) {
     val window = tab.scan
-    clip = Clip(
-        sources = entries.map { it.location },
-        move = move,
-        local = window?.local ?: (tab.listing?.isLocal == true),
-        filter = window?.transferFilter,
-        baseDir = if (window != null && window.filter != null) window.root else null,
-    )
+    val local = window?.local ?: (tab.listing?.isLocal == true)
     tab.selection.clear()
+    viewModelScope.launch {
+        clip = Clip(
+            sources = outermost(window, entries).map { it.location },
+            move = move,
+            local = local,
+            filter = window?.transferFilter,
+            baseDir = if (window != null && window.filter != null) window.root else null,
+        )
+    }
 }
 
 /** "Hier einfügen" into [tab]; cut items move only between local places (desktop rule). */
@@ -147,18 +151,53 @@ internal fun FilesViewModel.paste(tab: BrowserTab) {
 /** "Kopieren nach…" / "Verschieben nach…": target picker, suggesting the other pane. */
 internal fun FilesViewModel.requestTransferTo(tab: BrowserTab, entries: List<Entry>, move: Boolean) {
     val window = tab.scan
-    picker = PickerRequest(
-        title = if (move) "Verschieben nach…" else "Kopieren nach…",
-        confirmLabel = if (move) "Hierhin verschieben" else "Hierhin kopieren",
-        initial = otherPaneLocation(tab) ?: tab.listing?.location,
-        action = PickerAction.Transfer(
-            sources = entries.map { it.location },
-            move = move,
-            filter = window?.transferFilter,
-            baseDir = if (window != null && window.filter != null) window.root else null,
-        ),
-    )
+    val initial = otherPaneLocation(tab) ?: tab.listing?.location
     tab.selection.clear()
+    viewModelScope.launch {
+        picker = PickerRequest(
+            title = if (move) "Verschieben nach…" else "Kopieren nach…",
+            confirmLabel = if (move) "Hierhin verschieben" else "Hierhin kopieren",
+            initial = initial,
+            action = PickerAction.Transfer(
+                sources = outermost(window, entries).map { it.location },
+                move = move,
+                filter = window?.transferFilter,
+                baseDir = if (window != null && window.filter != null) window.root else null,
+            ),
+        )
+    }
+}
+
+/**
+ * Sources for a selection from the recursive view: a selected folder already covers its selected
+ * descendants, so only the outermost selected rows remain (nothing is copied, moved, deleted or
+ * measured twice). Keeps [entries] when the tree cannot be read.
+ */
+private suspend fun outermost(window: ScanWindow?, entries: List<Entry>): List<Entry> {
+    if (window == null || entries.size < 2 || entries.none { it.isDir }) return entries
+    val rows = try {
+        window.fetchAll(MAX_SELECT_ALL, expanded = true)
+    } catch (e: CoreException) {
+        null
+    } ?: return entries
+    val selected = entries.associateBy { it.location }
+    val seen = HashSet<String>()
+    val out = ArrayList<Entry>()
+    // Tree order: the rows below a selected folder follow it with a greater depth.
+    var coverDepth = -1
+    for (row in rows) {
+        if (coverDepth >= 0 && row.depth > coverDepth) {
+            seen += row.location
+            continue
+        }
+        coverDepth = -1
+        val entry = selected[row.location] ?: continue
+        seen += row.location
+        out += entry
+        if (entry.isDir) coverDepth = row.depth
+    }
+    // Selected rows the tree no longer shows (changed meanwhile) stay as they are.
+    return out + entries.filter { it.location !in seen }
 }
 
 /** Checks name conflicts first: local→local asks skip/replace/keep both, remote targets number names. */
@@ -196,9 +235,24 @@ private fun transferFailure(request: TransferRequest) =
 
 // ---- delete, rename, create ----
 
+/**
+ * In a filtered recursive view a selected folder row stands for its whole content, matching or
+ * not (unlike copying, deleting has no filter): only the selected files go by default, the
+ * folders only when ticked in the dialog.
+ */
 internal fun FilesViewModel.requestDelete(tab: BrowserTab, entries: List<Entry>) {
     if (entries.isEmpty()) return
-    dialog = FilesDialog.Delete(tab.id, entries, canTrash = tab.listing?.canTrash == true)
+    val window = tab.scan
+    val canTrash = tab.listing?.canTrash == true
+    viewModelScope.launch {
+        val all = outermost(window, entries)
+        val folders = entries.count { it.isDir }
+        dialog = if (window?.filter != null && folders > 0) {
+            FilesDialog.Delete(tab.id, entries.filterNot { it.isDir }, canTrash, folderCount = folders, withFolders = all)
+        } else {
+            FilesDialog.Delete(tab.id, all, canTrash)
+        }
+    }
 }
 
 /** Trash by default; a place without trash answers `unsupported` and asks for permanent deletion. */
@@ -222,7 +276,13 @@ internal fun FilesViewModel.delete(tabId: Long, locations: List<String>, permane
 internal fun FilesViewModel.requestRename(tab: BrowserTab, entry: Entry) {
     // The folder of an entry is known for direct children only (Kotlin never builds locations).
     val parent = if (entry.depth == 0) tab.listing?.location else null
-    dialog = FilesDialog.Name(NameDialogKind.Rename, tab.id, parent, entry, entry.name)
+    // Exact names next to the entry: a case-only rename onto one of them is a real clash.
+    val siblings: Set<String> = if (parent == null) {
+        emptySet()
+    } else {
+        tab.listing?.entries.orEmpty().filter { it.location != entry.location }.mapTo(HashSet()) { it.name }
+    }
+    dialog = FilesDialog.Name(NameDialogKind.Rename, tab.id, parent, entry, entry.name, siblings)
 }
 
 internal fun FilesViewModel.requestCreate(tab: BrowserTab, folder: Boolean) {
@@ -256,8 +316,11 @@ internal fun FilesViewModel.confirmName(request: FilesDialog.Name, name: String)
 
 // ---- properties, ZIP, favorites ----
 
-/** Properties sheet; folders are measured recursively by a task with progress. */
-internal fun FilesViewModel.showProperties(entries: List<Entry>) {
+/**
+ * Properties sheet; folders are measured recursively by a task with progress. [window]: the
+ * selection came from that recursive view (nested rows are measured once).
+ */
+internal fun FilesViewModel.showProperties(entries: List<Entry>, window: ScanWindow? = null) {
     if (entries.isEmpty()) return
     val locations = entries.map { it.location }
     val title = entries.singleOrNull()?.name ?: elements(entries.size)
@@ -266,7 +329,7 @@ internal fun FilesViewModel.showProperties(entries: List<Entry>) {
         var taskId: String? = null
         var error: String? = null
         try {
-            taskId = FilesApi.properties(locations)
+            taskId = FilesApi.properties(outermost(window, entries).map { it.location })
         } catch (e: CoreException) {
             error = e.message ?: e.kind
         }
@@ -351,20 +414,15 @@ internal fun FilesViewModel.onPicked(action: PickerAction, location: String) {
 
 // ---- remote edits, received shares ----
 
-/**
- * Uploads a changed remote copy; a remote change since opening, or a place that cannot replace
- * files, asks how to go on (spec F9).
- */
+/** Uploads a changed remote copy; a remote change since opening asks how to go on (spec F9). */
 internal fun FilesViewModel.uploadEdit(edit: EditInfo, mode: String, force: Boolean = false) = launchAction("Hochladen fehlgeschlagen") {
     val task = FilesApi.awaitTask(FilesApi.uploadEdit(edit.editId, mode, force))
     val failure = if (task.state == "failed") FilesApi.resultOf(task, UploadConflict.serializer()) else null
-    when {
-        failure?.replaceUnsupported == true -> dialog = FilesDialog.EditConflict(edit, canOverwrite = false)
-        failure?.conflict == true -> dialog = FilesDialog.EditConflict(edit)
-        else -> {
-            reportTask(task, "Hochgeladen: ${edit.name}", "Hochladen fehlgeschlagen")
-            refreshAfterChange()
-        }
+    if (failure?.conflict == true) {
+        dialog = FilesDialog.EditConflict(edit)
+    } else {
+        reportTask(task, "Hochgeladen: ${edit.name}", "Hochladen fehlgeschlagen")
+        refreshAfterChange()
     }
     reloadEdits()
 }

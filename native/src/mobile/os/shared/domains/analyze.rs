@@ -13,7 +13,7 @@ use super::locations::{is_local, join_segments, location_for};
 use crate::analytics::{DuplicateGroup, ScanOutcome, ScanStatus, SizeNode};
 use crate::mobile::{ApiError, Runtime, TaskCtx};
 
-/// Finished results kept for drill-down (oldest dropped first).
+/// Results kept for drill-down (oldest finished one dropped first).
 const MAX_RESULTS: usize = 4;
 const MAX_NODE_CHILDREN: usize = 500;
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
@@ -47,7 +47,12 @@ fn open_slot() -> u64 {
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     with_results(|slots| {
         while slots.len() >= MAX_RESULTS {
-            slots.pop_front();
+            // A running scan keeps its slot while a finished result can go.
+            let oldest = slots
+                .iter()
+                .position(|slot| slot.result.is_some())
+                .unwrap_or(0);
+            slots.remove(oldest);
         }
         slots.push_back(Slot {
             token,
@@ -64,6 +69,14 @@ fn bind_task(token: u64, task: &str) {
             slot.task = Some(task.to_string());
         }
     });
+}
+
+/// A failed or canceled scan has no result: its slot is freed at once.
+fn release_on_error(token: u64, outcome: Result<Value, ApiError>) -> Result<Value, ApiError> {
+    if outcome.is_err() {
+        with_results(|slots| slots.retain(|slot| slot.token != token));
+    }
+    outcome
 }
 
 fn store(token: u64, result: Stored) {
@@ -139,7 +152,7 @@ pub(super) fn start_analysis(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
     let token = open_slot();
     let title = format!("Speicheranalyse: {location}");
     let task = rt.spawn_task("analyze", title, move |ctx| {
-        analysis_task(ctx, token, location)
+        release_on_error(token, analysis_task(ctx, token, location))
     });
     bind_task(token, &task);
     Ok(json!({ "taskId": task }))
@@ -289,7 +302,7 @@ pub(super) fn start_reclaim(rt: &Runtime, args: &Value) -> Result<Value, ApiErro
     let token = open_slot();
     let title = format!("Duplikate: {location}");
     let task = rt.spawn_task("reclaim", title, move |ctx| {
-        reclaim_task(ctx, token, location, min_size)
+        release_on_error(token, reclaim_task(ctx, token, location, min_size))
     });
     bind_task(token, &task);
     Ok(json!({ "taskId": task }))

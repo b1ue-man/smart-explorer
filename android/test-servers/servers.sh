@@ -94,8 +94,7 @@ servers_up() {
     docker logs "$SE_FTP_CONTAINER" >&2 || true
     return 1
   fi
-  # The app cannot upload to FTP (no exclusive create, like the desktop): the download test file
-  # is placed on the server side.
+  # A file written on the server side, so the download check does not depend on the app's upload.
   docker exec "$SE_FTP_CONTAINER" sh -c \
     "head -c 150000 /dev/urandom >'$SE_FTP_ROOT/$SE_FTP_FIXTURE' && chown '$SE_FTP_USER' '$SE_FTP_ROOT/$SE_FTP_FIXTURE'"
   SE_FTP_FIXTURE_SHA="$(docker exec "$SE_FTP_CONTAINER" sha256sum "$SE_FTP_ROOT/$SE_FTP_FIXTURE" | awk '{ print $1 }')"

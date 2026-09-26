@@ -55,7 +55,14 @@ internal class SyncViewModel : ViewModel() {
     /** Text for the [Details] dialog, `null` when closed. */
     var details by mutableStateOf<String?>(null)
 
-    /** Job id → task id of runs started here until `sync.jobs` reports `runningTask`. */
+    /** Page switch from outside that waits for "Änderungen verwerfen?" over a dirty editor. */
+    var pendingLeave by mutableStateOf<(() -> Unit)?>(null)
+        private set
+
+    /**
+     * Job id → task id of runs started here until `sync.jobs` reports `runningTask`; an empty
+     * id while `sync.run` has not returned yet (the card already counts as running).
+     */
     val startedRuns = mutableStateMapOf<String, String>()
 
     private var options: SyncOptions? = null
@@ -111,13 +118,45 @@ internal class SyncViewModel : ViewModel() {
         page = SyncPage.Background
     }
 
+    /**
+     * Page switch not started on the current page (notification, mirror prefill, run snackbar):
+     * an open conflict list stores its resolutions first, a dirty editor asks before discarding.
+     */
+    private fun leaveThen(action: () -> Unit) {
+        when (val current = page) {
+            is SyncPage.Conflicts -> current.session.finish(action)
+            is SyncPage.Merge -> current.merge.conflicts.finish(action)
+            is SyncPage.Editor -> if (current.draft.dirty) {
+                pendingLeave = action
+            } else {
+                action()
+            }
+            else -> action()
+        }
+    }
+
+    /** "Änderungen verwerfen?" confirmed: runs the waiting page switch. */
+    fun confirmLeave() {
+        val action = pendingLeave ?: return
+        pendingLeave = null
+        action()
+    }
+
+    fun cancelLeave() {
+        pendingLeave = null
+    }
+
     // ── Jobs ────────────────────────────────────────────────────────────────
 
     fun runNow(job: SyncJob) {
+        if (job.id in startedRuns) return
+        // Marked before the call returns, so a quick second tap cannot start a second run.
+        startedRuns[job.id] = ""
         viewModelScope.launch {
             val taskId = try {
                 SyncApi.run(job.id)
             } catch (e: CoreException) {
+                startedRuns.remove(job.id)
                 Snackbars.show("„${job.name}“ nicht gestartet: ${e.displayText()}")
                 return@launch
             }
@@ -179,7 +218,7 @@ internal class SyncViewModel : ViewModel() {
                 prefill != null -> prefilled(opts, prefill)
                 else -> opts.defaults.copy(id = "")
             }
-            page = SyncPage.Editor(JobDraft(start, opts))
+            leaveThen { page = SyncPage.Editor(JobDraft(start, opts)) }
         }
     }
 
@@ -209,6 +248,7 @@ internal class SyncViewModel : ViewModel() {
         if (draft.saving) return
         val (job, problems) = draft.build()
         draft.errors = problems
+        draft.revealErrors()
         if (problems.isNotEmpty()) return
         draft.saving = true
         viewModelScope.launch {
@@ -216,6 +256,7 @@ internal class SyncViewModel : ViewModel() {
                 val errors = SyncApi.validate(job)
                 if (errors.isNotEmpty()) {
                     draft.errors = errors
+                    draft.revealErrors()
                     return@launch
                 }
                 val saved = SyncApi.save(job)
@@ -233,9 +274,11 @@ internal class SyncViewModel : ViewModel() {
     // ── Conflicts ───────────────────────────────────────────────────────────
 
     fun openConflicts(job: SyncJob) {
-        val session = ConflictSession(job, viewModelScope) { text -> details = text }
-        page = SyncPage.Conflicts(session)
-        session.load()
+        leaveThen {
+            val session = ConflictSession(job, viewModelScope) { text -> details = text }
+            page = SyncPage.Conflicts(session)
+            session.load()
+        }
     }
 
     fun openConflictsById(jobId: String) {
@@ -261,7 +304,11 @@ internal class SyncViewModel : ViewModel() {
     }
 
     fun openMerge(session: ConflictSession, conflict: SyncConflict) {
-        val merge = MergeSession(session, conflict, viewModelScope) { page = SyncPage.Conflicts(session) }
+        lateinit var merge: MergeSession
+        // Back to the list only while this merge is still shown; the user may have moved on.
+        merge = MergeSession(session, conflict, viewModelScope) {
+            if ((page as? SyncPage.Merge)?.merge === merge) page = SyncPage.Conflicts(session)
+        }
         page = SyncPage.Merge(merge)
         merge.load()
     }

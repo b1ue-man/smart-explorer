@@ -92,6 +92,17 @@ fun SyncScreen() {
         SyncPage.Background -> BackgroundPage(onBack = vm::back)
     }
     vm.details?.let { text -> DetailsDialog(text, onDismiss = { vm.details = null }) }
+    if (vm.pendingLeave != null) {
+        // A notification, the mirror dialog or a snackbar wants another page over an unsaved job.
+        ConfirmDialog(
+            title = "Änderungen verwerfen?",
+            message = "Der Job wurde nicht gespeichert.",
+            confirmLabel = "Verwerfen",
+            onConfirm = vm::confirmLeave,
+            onDismiss = vm::cancelLeave,
+            destructive = true,
+        )
+    }
 }
 
 @Composable

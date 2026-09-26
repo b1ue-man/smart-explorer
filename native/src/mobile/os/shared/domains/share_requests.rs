@@ -105,21 +105,29 @@ pub(super) fn delete_request(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
 }
 
 /// Splits a command line into arguments: whitespace separates, single and
-/// double quotes group, a backslash escapes the next character outside
-/// single quotes.
+/// double quotes group. A backslash escapes whitespace or a quote outside
+/// quotes and a double quote inside double quotes; any other backslash stays
+/// (Windows paths such as `C:\Users` or `\\server\share`).
 pub(super) fn split_command(command: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut started = false;
     let mut quote: Option<char> = None;
-    let mut chars = command.chars();
+    let mut chars = command.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some(open), c) if c == open => quote = None,
             (Some('\''), c) => current.push(c),
-            (_, '\\') => match chars.next() {
-                Some(next) => current.push(next),
-                None => return Err("Befehl endet mit einem Backslash.".to_string()),
+            (_, '\\') => match (quote, chars.peek().copied()) {
+                (Some(_), Some('"')) => {
+                    current.push('"');
+                    chars.next();
+                }
+                (None, Some(next)) if next.is_whitespace() || next == '"' || next == '\'' => {
+                    current.push(next);
+                    chars.next();
+                }
+                _ => current.push('\\'),
             },
             (Some(_), c) => current.push(c),
             (None, '\'' | '"') => {
@@ -216,22 +224,24 @@ fn exec_task(
     }))
 }
 
-/// A refused grant is reported as such; everything else verbatim.
-fn exec_error(error: String) -> ApiError {
+/// A refused grant is reported as such; everything else verbatim. Only grant
+/// wording counts: a folder or file the device cannot access (an OS error,
+/// an export) is no refused grant.
+pub(super) fn exec_error(error: String) -> ApiError {
     let lower = error.to_lowercase();
-    const DENIED: [&str; 6] = [
-        "grant",
-        "freigabe",
-        "not allowed",
-        "nicht erlaubt",
-        "permission",
-        "denied",
+    const REFUSED: [&str; 3] = ["grant", "exec-freigabe", "befehlsfreigabe"];
+    const NO_ACCESS: [&str; 3] = [
+        "permission denied",
+        "access is denied",
+        "zugriff verweigert",
     ];
-    if DENIED.iter().any(|needle| lower.contains(needle)) {
+    if REFUSED.iter().any(|needle| lower.contains(needle)) {
         ApiError::new(
             "permission",
             format!("Gerät erlaubt keine Befehle von diesem Telefon ({error})"),
         )
+    } else if NO_ACCESS.iter().any(|needle| lower.contains(needle)) {
+        ApiError::new("permission", error)
     } else {
         ApiError::new("network", error)
     }

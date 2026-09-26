@@ -9,8 +9,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 import java.io.IOException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -55,10 +59,18 @@ object Thumbnails {
         }
     }
 
-    private suspend fun decode(path: String, sizePx: Int): ImageBitmap? {
+    private suspend fun decode(path: String, sizePx: Int): ImageBitmap? = coroutineScope {
         val signal = CancellationSignal()
-        val handle = coroutineContext[Job]?.invokeOnCompletion { signal.cancel() }
-        return try {
+        // Suspended before the blocking decode starts; a cancelled caller cancels the signal right
+        // away (a completion handler would only run after the decode has finished).
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                signal.cancel()
+            }
+        }
+        try {
             ThumbnailUtils.createImageThumbnail(File(path), Size(sizePx, sizePx), signal).asImageBitmap()
         } catch (e: IOException) {
             null
@@ -69,7 +81,7 @@ object Thumbnails {
         } catch (e: SecurityException) {
             null
         } finally {
-            handle?.dispose()
+            watcher.cancel()
         }
     }
 

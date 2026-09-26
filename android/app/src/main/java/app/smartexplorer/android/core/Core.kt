@@ -79,25 +79,27 @@ object Core {
     /** Calls a core method (api.md §4); waits for [ready]; throws [CoreException] on errors. */
     suspend fun call(method: String, args: JsonObject = JsonObject(emptyMap())): JsonElement {
         awaitReady()
-        val raw = withContext(Dispatchers.IO) {
-            try {
+        // The answer can be several MB (fs.list): parse it off the caller's (often the main) thread.
+        val result = withContext(Dispatchers.IO) {
+            val raw = try {
                 NativeBridge.orError(NativeBridge.call(method, args.toString()))
             } catch (e: LinkageError) {
                 throw CoreException("internal", "Kernfunktion nicht verfügbar: ${e.message}")
             }
+            unwrap(raw)
         }
-        val result = unwrap(raw)
         if (method == "task.clear") refreshTasksLogged()
         return result
     }
 
+    /** [call] plus decoding of the answer, both off the caller's thread. */
     suspend inline fun <reified T> request(method: String, args: JsonObject = JsonObject(emptyMap())): T =
-        decodeResult(method, call(method, args))
+        withContext(Dispatchers.Default) { decodeResult<T>(method, call(method, args)) }
 
     suspend inline fun <reified A, reified T> request(method: String, args: A): T {
         val encoded = json.encodeToJsonElement<A>(args) as? JsonObject
             ?: throw CoreException("invalid", "Argumente für $method sind kein JSON-Objekt")
-        return decodeResult(method, call(method, encoded))
+        return withContext(Dispatchers.Default) { decodeResult<T>(method, call(method, encoded)) }
     }
 
     /** Reloads [tasks] from `task.list` (done automatically after start and `task.clear`). */

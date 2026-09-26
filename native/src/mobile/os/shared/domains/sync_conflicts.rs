@@ -300,17 +300,23 @@ pub(super) fn resolve(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     Ok(json!({ "taskId": task }))
 }
 
+/// Like a resolution, skipping the last open conflict saves the baseline.
 pub(super) fn skip(args: &Value) -> Result<Value, ApiError> {
     let job_id = str_arg(args, "id")?;
     let cid = str_arg(args, "cid")?;
-    with_state(|state| {
+    let none_open = with_state(|state| {
         let context = state.get_mut(job_id).ok_or_else(not_loaded)?;
         context.items.retain(|(id, _)| id != cid);
         if context.merge.as_ref().is_some_and(|draft| draft.cid == cid) {
             context.merge = None;
         }
-        Ok(json!({}))
-    })
+        Ok::<_, ApiError>(context.items.is_empty())
+    })?;
+    // Outside `with_state`: saving takes the state lock itself.
+    if none_open {
+        save_resolved(job_id)?;
+    }
+    Ok(json!({}))
 }
 
 pub(super) fn finish(args: &Value) -> Result<Value, ApiError> {

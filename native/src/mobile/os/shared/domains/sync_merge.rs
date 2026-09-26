@@ -150,10 +150,17 @@ pub(super) fn keep_both(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             None => load_draft(&pair, &conflict, &cid)?,
         };
         ensure_unchanged(&pair, &conflict.rel, &draft)?;
-        // Both versions stay as they were read, byte for byte.
+        // Both versions stay as they were read, byte for byte. B's version is
+        // saved as the copy first: a failed write then has replaced nothing.
         let copy_rel = conflict_rel_name(&conflict.rel);
-        write_both(&pair, &conflict.rel, &draft.text_a)?;
         write_both(&pair, &copy_rel, &draft.text_b)?;
+        // A still holds `text_a` (checked above); only B's original is replaced.
+        write_bytes(
+            &*pair.b,
+            &ep_join(&pair.root_b, &conflict.rel),
+            draft.text_a.as_bytes(),
+        )
+        .map_err(|error| ApiError::new("internal", format!("Seite B schreiben: {error}")))?;
         finish(&job_id, &cid, &pair, &conflict.rel)
     })?;
     Ok(json!({ "taskId": task }))

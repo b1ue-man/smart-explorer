@@ -162,7 +162,7 @@ internal fun ShareDialogHost(
             },
             onDismiss = onDismiss,
         )
-        is ShareDialog.Exec -> ExecDialog(dialog.target.name, dialog.target.location, onDismiss)
+        is ShareDialog.Exec -> ExecDialog(dialog.target.name, dialog.target.location, onDismiss, vm = vm)
         is ShareDialog.SendPick -> LocalFilePickerDialog(
             title = "Dateien für ${dialog.target.name}",
             multiple = true,

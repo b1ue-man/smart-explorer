@@ -1,14 +1,16 @@
 //! Pure parts of the facade: envelopes, error kinds, task snapshots and
 //! their bundling, locations, filter/sort arguments and scan tree windows.
 use super::args::{parse_filter, sort_arg, SortSpec};
+use super::config::HostSettings;
 use super::entry::{kind_of, mime_of, problem_of};
 use super::error::{envelope, ApiError};
 use super::events::HubState;
-use super::location::{is_app_internal, Loc, LocKind};
+use super::location::{is_app_internal, zip_location, Loc, LocKind};
 use super::scanview::{tree_rows, visible_rows, window};
 use super::tasks::{TaskState, EMIT_INTERVAL};
 use crate::types::{FileEntry, FilterDef, SortDir, SortKey, TextMode};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -141,8 +143,13 @@ fn android_task_cancel_and_clear_touch_only_matching_tasks() {
         record.finish(TaskState::Canceled, None, None, 1);
     }
     let _ = hub.take_ready(Instant::now(), 256);
-    hub.tasks.clear_finished();
+    // With ids only the listed finished tasks go; the others stay listed.
+    hub.tasks.clear_finished(Some(&["anderer".to_string()]));
+    assert!(hub.tasks.get(&transfer).is_some());
+    hub.tasks
+        .clear_finished(Some(std::slice::from_ref(&transfer)));
     assert!(hub.tasks.get(&transfer).is_none());
+    hub.tasks.clear_finished(None);
     assert!(hub.tasks.get(&scan).is_some());
     assert!(!hub.tasks.cancel("unbekannt"));
 }
@@ -178,6 +185,44 @@ fn android_task_locations_parse_into_connection_and_path() {
     assert!(Loc::parse("/a/../b").is_err());
     assert!(Loc::parse("relative/path").is_err());
     assert!(Loc::parse("smb://server/share").is_err());
+    assert!(Loc::parse("   ").is_err());
+}
+
+#[test]
+fn android_task_locations_keep_trailing_blanks_and_bang_folders() {
+    // A trailing blank is part of the last name, never trimmed away.
+    let remote = Loc::parse("sftp://u@h:22/docs/Bericht ").expect("sftp");
+    assert_eq!(remote.path, "/docs/Bericht ");
+    assert_eq!(remote.location(), "sftp://u@h:22/docs/Bericht ");
+    let local = Loc::parse("/sdcard/Neu\u{a0}").expect("local");
+    assert_eq!(local.name(), "Neu\u{a0}");
+    assert_eq!(Loc::parse(" /sdcard").expect("blank").path, "/sdcard");
+
+    // An archive below a folder whose name ends in `!` round-trips.
+    let archive = zip_location("/sdcard/W!/a.zip");
+    let root = Loc::parse(&archive).expect("zip");
+    assert_eq!(root.zip_archive(), Some("/sdcard/W!/a.zip"));
+    assert_eq!(root.path, "/");
+    assert_eq!(root.parent().as_deref(), Some("/sdcard/W!"));
+    let inner = Loc::parse(&root.child("i!")).expect("inner");
+    assert_eq!(inner.zip_archive(), Some("/sdcard/W!/a.zip"));
+    assert_eq!(inner.path, "/i!");
+    let deep = Loc::parse("zip:///x/N!/A.ZIP!/i!/b").expect("deep");
+    assert_eq!(deep.zip_archive(), Some("/x/N!/A.ZIP"));
+    assert_eq!(deep.path, "/i!/b");
+    let bare = Loc::parse("zip:///x/N!/a.zip!").expect("bare");
+    assert_eq!(bare.zip_archive(), Some("/x/N!/a.zip"));
+    assert_eq!(bare.path, "/");
+}
+
+#[test]
+fn android_task_home_fallback_is_not_the_private_data_dir() {
+    let bare = r#"{"filesDir":"/a","cacheDir":"/b"}"#;
+    let settings = HostSettings::parse(bare).expect("settings");
+    assert_eq!(settings.home(), PathBuf::from("/a/home"));
+    assert!(!settings.data_dir().starts_with(settings.home()));
+    let relative = r#"{"filesDir":"/a","cacheDir":"/b","homeDir":"sdcard"}"#;
+    assert!(HostSettings::parse(relative).is_err());
 }
 
 #[test]

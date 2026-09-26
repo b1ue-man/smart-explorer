@@ -23,16 +23,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smartexplorer.android.api.ConnApi
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.GdriveStatus
+import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.ErrorCard
 import app.smartexplorer.android.ui.common.LoadingBar
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.ProjectLinks
 import app.smartexplorer.android.ui.more.TextActions
+import app.smartexplorer.android.ui.more.rememberSavedTaskId
 import kotlinx.coroutines.launch
+
+/** `Task.kind` of `gdrive.signIn` (api.md §2). */
+private const val KIND_OAUTH = "oauth"
 
 /**
  * Google Drive (spec F13): own OAuth client ID (+ optional secret) as on the desktop, [Anmelden]
@@ -51,8 +57,12 @@ fun GoogleDriveSection(modifier: Modifier = Modifier) {
     // The secret is never put into saved UI state.
     var clientSecret by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var signInTask by remember { mutableStateOf<String?>(null) }
+    var signInTask by rememberSavedTaskId()
     var signInFailure by remember { mutableStateOf<String?>(null) }
+    val tasks by Core.tasks.collectAsStateWithLifecycle()
+    // Also a sign-in started before this section was recreated or from its other page (settings
+    // vs. connections): it keeps [Abbrechen] instead of offering a second [Anmelden].
+    val running = signInTask ?: tasks.lastOrNull { it.kind == KIND_OAUTH && it.isActive }?.id
 
     LaunchedEffect(reloadKey) {
         try {
@@ -64,8 +74,8 @@ fun GoogleDriveSection(modifier: Modifier = Modifier) {
             loadError = e.message ?: e.kind
         }
     }
-    LaunchedEffect(signInTask) {
-        val id = signInTask ?: return@LaunchedEffect
+    LaunchedEffect(running) {
+        val id = running ?: return@LaunchedEffect
         val finished = try {
             FilesApi.awaitTask(id)
         } catch (e: CoreException) {
@@ -98,7 +108,6 @@ fun GoogleDriveSection(modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val current = status
         val error = loadError
-        val running = signInTask
         LoadingBar(busy || (current == null && error == null))
         when {
             error != null -> ErrorCard(

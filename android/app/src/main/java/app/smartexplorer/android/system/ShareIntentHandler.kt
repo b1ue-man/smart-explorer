@@ -22,11 +22,13 @@ import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Receives files shared from other apps (SEND/SEND_MULTIPLE, spec F9 "Empfangen"). The
@@ -67,11 +69,13 @@ object ShareIntentHandler {
             return true
         }
         discard()
-        val resolver = activity.applicationContext.contentResolver
+        val app = activity.applicationContext
+        val resolver = app.contentResolver
+        val ownPackage = app.packageName
         val opening = Incoming.Opening(uris.size)
         state.value = opening
         openJob = scope.launch {
-            val opened = uris.mapNotNull { open(resolver, it) }
+            val opened = uris.mapNotNull { open(resolver, ownPackage, it) }
             // A newer share (or discard) replaced this one meanwhile: release what was opened here.
             if (!state.compareAndSet(opening, Incoming.Ready(opened, uris.size - opened.size))) {
                 opened.forEach { closeQuietly(it) }
@@ -83,8 +87,9 @@ object ShareIntentHandler {
 
     /**
      * Starts `fs.import` of the pending files into [targetDir] and returns the task id. The core
-     * owns the detached descriptors from here on (api.md §4.3); when the core is not ready yet the
-     * share stays pending for another attempt.
+     * gets detached duplicates of the descriptors and owns them (api.md §4.3). While the call runs
+     * the share is no longer pending; when the core is not ready or rejects the call, it stays (or
+     * comes back) pending for another attempt.
      */
     suspend fun importInto(targetDir: String): String {
         val ready = state.value as? Incoming.Ready ?: throw CoreException("invalid", "Keine geteilten Dateien vorhanden")
@@ -93,9 +98,19 @@ object ShareIntentHandler {
             throw CoreException("not_found", "Die geteilten Dateien konnten nicht gelesen werden")
         }
         if (Core.ready.value != CoreState.Ready) throw CoreException("not_initialized", "Der Kern ist noch nicht bereit")
-        state.value = null
-        val files = ready.files.map { ImportFile(fd = it.descriptor.detachFd(), name = it.name, size = it.size) }
-        return FilesApi.importFiles(files, targetDir)
+        // Taken atomically: a second tap, a discard or a newer share finds nothing of this one.
+        if (!state.compareAndSet(ready, null)) throw CoreException("invalid", "Keine geteilten Dateien vorhanden")
+        // Not cancellable: once descriptors are detached, the call that hands them to the core must run.
+        return withContext(NonCancellable) {
+            val taskId = try {
+                FilesApi.importFiles(detachedCopies(ready.files), targetDir)
+            } catch (e: CoreException) {
+                restore(ready)
+                throw e
+            }
+            ready.files.forEach { closeQuietly(it) }
+            taskId
+        }
     }
 
     /** Drops the pending share and closes its descriptors. */
@@ -119,7 +134,30 @@ object ShareIntentHandler {
         return uris.filter { it.scheme == ContentResolver.SCHEME_CONTENT }
     }
 
-    private fun open(resolver: ContentResolver, uri: Uri): SharedFile? {
+    /** Duplicates of the shared descriptors, detached for the core; the originals stay open. */
+    private fun detachedCopies(files: List<SharedFile>): List<ImportFile> {
+        val copies = ArrayList<ParcelFileDescriptor>(files.size)
+        try {
+            files.forEach { copies += it.descriptor.dup() }
+        } catch (e: IOException) {
+            copies.forEach { closeQuietly(it) }
+            throw CoreException("internal", "Die geteilten Dateien konnten nicht übergeben werden: ${e.message}")
+        }
+        return files.zip(copies) { file, copy -> ImportFile(fd = copy.detachFd(), name = file.name, size = file.size) }
+    }
+
+    /** Puts a share back after a failed import; closes it when a newer share arrived meanwhile. */
+    private fun restore(ready: Incoming.Ready) {
+        if (!state.compareAndSet(null, ready)) ready.files.forEach { closeQuietly(it) }
+    }
+
+    private fun open(resolver: ContentResolver, ownPackage: String, uri: Uri): SharedFile? {
+        // This app's own providers would serve the URI with this app's rights (all-files access),
+        // not the sender's: a file the sender cannot read must not leave through a share.
+        if (isOwn(uri, ownPackage)) {
+            Log.w(TAG, "shared content of this app refused: $uri")
+            return null
+        }
         val descriptor = try {
             resolver.openFileDescriptor(uri, "r")
         } catch (e: FileNotFoundException) {
@@ -127,6 +165,11 @@ object ShareIntentHandler {
             null
         } catch (e: SecurityException) {
             Log.w(TAG, "shared content not permitted: $uri", e)
+            null
+        } catch (e: RuntimeException) {
+            // Any app may share: errors of its provider cross Binder unchanged (IllegalArgument-,
+            // IllegalState-, UnsupportedOperationException, ...) and must not end this process.
+            Log.w(TAG, "shared content failed: $uri", e)
             null
         } ?: return null
         val (name, size) = describe(resolver, uri)
@@ -144,16 +187,25 @@ object ShareIntentHandler {
             val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else null
             name?.substringAfterLast('/')?.takeIf { it.isNotBlank() } to size
         } ?: (null to null)
-    } catch (e: SecurityException) {
-        null to null
-    } catch (e: IllegalArgumentException) {
-        // Provider without these columns.
+    } catch (e: RuntimeException) {
+        // Provider without these columns (IllegalArgumentException), refused (SecurityException) or
+        // failing otherwise (any exception of the sending app's provider, SQLiteException).
         null to null
     }
 
+    /** URIs of this app's providers (`<package>.*` authorities, with or without a user prefix). */
+    private fun isOwn(uri: Uri, ownPackage: String): Boolean {
+        val authority = uri.authority?.substringAfterLast('@') ?: return false
+        return authority.equals(ownPackage, ignoreCase = true) || authority.startsWith("$ownPackage.", ignoreCase = true)
+    }
+
     private fun closeQuietly(file: SharedFile) {
+        closeQuietly(file.descriptor)
+    }
+
+    private fun closeQuietly(descriptor: ParcelFileDescriptor) {
         try {
-            file.descriptor.close()
+            descriptor.close()
         } catch (e: IOException) {
             Log.w(TAG, "closing a shared descriptor failed", e)
         }

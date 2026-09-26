@@ -182,11 +182,12 @@ fn android_task_catch_up_lists_supervisor_rejections_with_reason() {
         job("recent", Trigger::RealTime),
         job("broken", Trigger::RealTime),
     ];
-    service(&mut book, &mut queue, jobs);
+    service(&mut book, &mut queue, jobs.clone());
 
+    // The job the regular schedule already runs is awaited, not skipped.
     let status = book.status(id).unwrap();
-    assert!(status.finished);
-    assert_eq!(status.admitted, 0);
+    assert!(!status.finished);
+    assert_eq!(status.admitted, 1);
     let reasons: Vec<(&str, &str)> = status
         .skipped
         .iter()
@@ -195,14 +196,18 @@ fn android_task_catch_up_lists_supervisor_rejections_with_reason() {
     assert_eq!(
         reasons,
         [
-            ("scheduled", "bereits geplant oder läuft"),
             ("recent", "kürzlich versucht"),
             ("broken", "job spawn failed for 'broken'"),
         ]
     );
+
+    queue.finish_active();
+    service(&mut book, &mut queue, jobs);
+    let status = book.status(id).unwrap();
+    assert!(status.finished);
     assert_eq!(
         status.message.as_deref(),
-        Some("Kein Job gestartet, 3 übersprungen")
+        Some("1 Job ausgeführt, 2 übersprungen")
     );
 }
 

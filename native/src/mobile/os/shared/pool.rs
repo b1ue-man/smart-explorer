@@ -7,12 +7,16 @@ use super::runtime::lock;
 use crate::vfs::{BackendHandle, CachingBackend, LocalBackend};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
+
+/// Browsed archives kept open; the least recently used one goes first.
+const MAX_POOLED_ZIPS: usize = 4;
 
 struct Pooled {
     backend: BackendHandle,
     /// Archive size and modification time a `ZipBackend` was opened with.
     zip_stamp: Option<(u64, Option<SystemTime>)>,
+    last_used: Instant,
 }
 
 pub(crate) struct BackendPool {
@@ -41,17 +45,28 @@ impl BackendPool {
             None => return Ok((self.local.clone(), loc.path.clone())),
         };
         let zip_stamp = match &plan {
-            Plan::Zip(archive, _) => Some(archive_stamp(archive)?),
+            Plan::Zip(archive, _) => match archive_stamp(archive) {
+                Ok(stamp) => Some(stamp),
+                Err(error) => {
+                    // A deleted or replaced archive releases its backend.
+                    lock(&self.entries).remove(&key);
+                    return Err(error);
+                }
+            },
             _ => None,
         };
-        if let Some(pooled) = lock(&self.entries).get(&key) {
+        if let Some(pooled) = lock(&self.entries).get_mut(&key) {
             if pooled.zip_stamp == zip_stamp {
+                pooled.last_used = Instant::now();
                 return Ok((pooled.backend.clone(), plan.path().to_string()));
             }
         }
         // Connect without holding the pool lock; a concurrent winner is kept.
         let (backend, path) = open(plan)?;
         let mut entries = lock(&self.entries);
+        if zip_stamp.is_some() && !entries.contains_key(&key) {
+            make_room_for_zip(&mut entries);
+        }
         let pooled = entries
             .entry(key)
             .and_modify(|pooled| {
@@ -59,10 +74,12 @@ impl BackendPool {
                     pooled.backend = backend.clone();
                     pooled.zip_stamp = zip_stamp;
                 }
+                pooled.last_used = Instant::now();
             })
             .or_insert_with(|| Pooled {
                 backend: backend.clone(),
                 zip_stamp,
+                last_used: Instant::now(),
             });
         Ok((pooled.backend.clone(), path))
     }
@@ -155,6 +172,22 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
         Arc::new(CachingBackend::new(backend))
     };
     Ok((backend, path))
+}
+
+/// Closes the least recently used archives until a new one fits below
+/// `MAX_POOLED_ZIPS`. Remote connections are never touched; running tasks
+/// keep their own handle.
+fn make_room_for_zip(entries: &mut HashMap<String, Pooled>) {
+    let mut zips: Vec<(Instant, String)> = entries
+        .iter()
+        .filter(|(_, pooled)| pooled.zip_stamp.is_some())
+        .map(|(key, pooled)| (pooled.last_used, key.clone()))
+        .collect();
+    zips.sort();
+    let excess = (zips.len() + 1).saturating_sub(MAX_POOLED_ZIPS);
+    for (_, key) in zips.into_iter().take(excess) {
+        entries.remove(&key);
+    }
 }
 
 fn archive_stamp(archive: &str) -> Result<(u64, Option<SystemTime>), ApiError> {

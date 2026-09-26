@@ -1,6 +1,7 @@
 //! The register of remote files opened for editing
 //! (`<data>/mobile/edits.json`): where the local copy lives and the remote
 //! and local state it was downloaded or last uploaded with.
+use super::error::ApiError;
 use super::runtime::{lock, Runtime};
 use super::store::{read_json, write_json};
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,10 @@ use std::path::{Path, PathBuf};
 /// Open remote copies kept at most.
 pub(crate) const MAX_EDITS: usize = 100;
 
+/// Missing fields load with their defaults, so a register written by another
+/// app version stays readable.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub(crate) struct EditRecord {
     pub edit_id: String,
     pub name: String,
@@ -22,7 +25,6 @@ pub(crate) struct EditRecord {
     pub local_mtime_ms: i64,
     pub local_size: u64,
     /// A change was already announced with an `edits` event.
-    #[serde(default)]
     pub notified: bool,
 }
 
@@ -49,7 +51,12 @@ impl EditRecord {
 
     /// Adopts the current local state as the new baseline.
     pub(crate) fn rebase_local(&mut self) {
-        if let Some((mtime, size)) = file_state(Path::new(&self.local_path)) {
+        self.rebase_to(file_state(Path::new(&self.local_path)));
+    }
+
+    /// Adopts `state` (see `file_state`) as the new local baseline.
+    pub(crate) fn rebase_to(&mut self, state: Option<(i64, u64)>) {
+        if let Some((mtime, size)) = state {
             self.local_mtime_ms = mtime;
             self.local_size = size;
         }
@@ -66,14 +73,11 @@ pub(crate) fn open_root(rt: &Runtime) -> PathBuf {
     rt.config().cache_subdir("open")
 }
 
-pub(crate) fn load(rt: &Runtime) -> Vec<EditRecord> {
-    match read_json::<Vec<EditRecord>>(&register_path(rt)) {
-        Ok(records) => records,
-        Err(error) => {
-            rt.record_error("Geöffnete Dateien lesen", &error.to_string());
-            Vec::new()
-        }
-    }
+/// The register; a missing file is empty. An unreadable one is an error, so
+/// it is never replaced and none of its copies is taken for an orphan.
+pub(crate) fn load(rt: &Runtime) -> Result<Vec<EditRecord>, ApiError> {
+    read_json::<Vec<EditRecord>>(&register_path(rt))
+        .map_err(|error| ApiError::from(error).context("Geöffnete Dateien lesen"))
 }
 
 pub(crate) fn save(rt: &Runtime, records: &[EditRecord]) {
@@ -82,16 +86,20 @@ pub(crate) fn save(rt: &Runtime, records: &[EditRecord]) {
     }
 }
 
-/// Applies `change` to the register under its lock and saves it.
-pub(crate) fn update<R>(rt: &Runtime, change: impl FnOnce(&mut Vec<EditRecord>) -> R) -> R {
+/// Applies `change` to the register under its lock and saves it; an
+/// unreadable register is left untouched and reported.
+pub(crate) fn update<R>(
+    rt: &Runtime,
+    change: impl FnOnce(&mut Vec<EditRecord>) -> R,
+) -> Result<R, ApiError> {
     let _serialized = lock(&rt.inner.edits_lock);
-    let mut records = load(rt);
+    let mut records = load(rt)?;
     let before = records.clone();
     let result = change(&mut records);
     if records != before {
         save(rt, &records);
     }
-    result
+    Ok(result)
 }
 
 /// A random 16-hex-digit id for a new copy.

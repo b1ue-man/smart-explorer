@@ -91,7 +91,7 @@ fun TransfersSheet(onDismiss: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text("Fertig", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { scope.clearFinished() }) { Text("Leeren") }
+                        TextButton(onClick = { scope.clearFinished(finished.map { it.id }) }) { Text("Leeren") }
                     }
                 }
                 items(finished, key = { it.id }) { task ->
@@ -214,10 +214,11 @@ private fun CoroutineScope.cancelAll(tasks: List<TaskInfo>) {
     }
 }
 
-private fun CoroutineScope.clearFinished() {
+/** Removes only the listed finished transfers; scans and analyses on other pages stay. */
+private fun CoroutineScope.clearFinished(ids: List<String>) {
     launch {
         try {
-            FilesApi.clearFinishedTasks()
+            FilesApi.clearFinishedTasks(ids)
         } catch (e: CoreException) {
             Snackbars.show("Leeren fehlgeschlagen: ${e.message}")
         }

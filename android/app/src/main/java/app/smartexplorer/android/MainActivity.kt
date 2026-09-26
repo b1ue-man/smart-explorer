@@ -23,6 +23,7 @@ import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.theme.SmartExplorerTheme
 import app.smartexplorer.android.ui.theme.isAppInDarkTheme
 import app.smartexplorer.android.update.UpdateChecker
+import java.lang.ref.WeakReference
 
 /**
  * The single activity: tabs, setup, sub-pages (Compose). Receives navigation intents from
@@ -37,7 +38,10 @@ class MainActivity : ComponentActivity() {
             // System bar icons follow the in-app theme, which may differ from the system setting.
             LaunchedEffect(dark) { applySystemBars(dark) }
             LaunchedEffect(Unit) {
-                Core.events.collect { event -> if (event is CoreEvent.OpenUrl) openUrl(event.url) }
+                // A share can create a second instance; only the latest started one opens the URL.
+                Core.events.collect { event ->
+                    if (event is CoreEvent.OpenUrl && front.get() === this@MainActivity) openUrl(event.url)
+                }
             }
             SmartExplorerTheme(darkTheme = dark) {
                 Surface(Modifier.fillMaxSize()) { AppRoot() }
@@ -52,12 +56,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        startedCount++
+        front = WeakReference(this)
         BackgroundController.onUiVisible(applicationContext, true)
     }
 
     override fun onStop() {
-        // A rotation recreates the activity; it is not "leaving the UI".
-        if (!isChangingConfigurations) BackgroundController.onUiVisible(applicationContext, false)
+        // Another instance (a share opened in the sending app's task) may still be visible: its
+        // onStart runs before this onStop. A rotation recreates the activity; it is not "leaving
+        // the UI".
+        startedCount--
+        if (startedCount == 0 && !isChangingConfigurations) BackgroundController.onUiVisible(applicationContext, false)
         super.onStop()
     }
 
@@ -87,6 +96,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        /** Started instances (lifecycle callbacks run on the main thread only). */
+        var startedCount = 0
+
+        /** The latest started instance. */
+        var front = WeakReference<MainActivity>(null)
+
         // Same scrims as androidx.activity's enableEdgeToEdge() defaults.
         val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
         val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)

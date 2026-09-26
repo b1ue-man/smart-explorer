@@ -42,7 +42,9 @@ import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextActions
 import app.smartexplorer.android.ui.transfers.TransfersSheet
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 /** Blocks of the page in spec order (C: device card → devices → rooms → requests → exports). */
 private enum class ShareBlock { Problems, Device, Devices, Rooms, Buttons, Requests, Exports, Removed, DirectCode }
@@ -93,7 +95,13 @@ fun ShareScreen() {
         val request = pending
         if (request != NavRequest.ShowShareRequests || status == null) return@LaunchedEffect
         val index = blocks.indexOf(ShareBlock.Requests)
-        if (index >= 0) listState.animateScrollToItem(index)
+        try {
+            if (index >= 0) listState.animateScrollToItem(index)
+        } catch (e: CancellationException) {
+            // A touch interrupts the scroll but not this effect: the request still counts as handled.
+            // A cancelled effect (new request, screen left) keeps it pending for the next run.
+            if (!isActive) throw e
+        }
         AppNav.consume(request)
     }
 

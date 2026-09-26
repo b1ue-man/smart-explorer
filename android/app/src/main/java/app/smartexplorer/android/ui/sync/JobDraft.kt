@@ -49,24 +49,45 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
     var runBefore by mutableStateOf(original.runBefore)
     var runAfter by mutableStateOf(original.runAfter)
 
+    /** [build] of the unedited draft (after every field it reads): defaults and normalisation are no edits. */
+    private val initial = build()
+
     var showAdvanced by mutableStateOf(false)
     var saving by mutableStateOf(false)
 
     /** Field errors (local parsing and `sync.validate`), keyed by api.md field name. */
     var errors by mutableStateOf<Map<String, String>>(emptyMap())
 
-    /** Errors whose key names no field shown in the editor (e.g. a save failure). */
+    /**
+     * Errors whose field the editor does not show right now (e.g. a save failure, a collapsed
+     * "Erweitert" section, another trigger or direction), so [Speichern] never fails silently.
+     */
     val generalErrors: List<String>
-        get() = errors.filterKeys { key -> FIELDS.none { same(it, key) } }.values.toList()
+        get() = errors.filterKeys { key -> !drawn(key) }.values.toList()
 
     fun errorFor(field: String): String? = errors.entries.firstOrNull { same(it.key, field) }?.value
 
-    /** `true` when the draft differs from the job it was opened with. */
+    /** Opens "Erweitert" when one of its fields has an error. */
+    fun revealErrors() {
+        if (errors.keys.any { key -> ADVANCED_FIELDS.any { same(it, key) } }) showAdvanced = true
+    }
+
+    /** `true` while the editor draws the field of error [key] (see JobEditorScreen). */
+    private fun drawn(key: String): Boolean = when {
+        same(key, "intervalMin") -> trigger == SyncJob.TRIGGER_INTERVAL
+        same(key, "calendar") -> trigger == SyncJob.TRIGGER_CALENDAR
+        same(key, "rtDebounceSecs") -> trigger == SyncJob.TRIGGER_REALTIME
+        same(key, "conflict") -> showAdvanced && direction == SyncJob.DIRECTION_BOTH
+        ADVANCED_FIELDS.any { same(it, key) } -> showAdvanced
+        else -> FIELDS.any { same(it, key) }
+    }
+
+    /**
+     * `true` when the draft differs from the job it was opened with. A half-typed number adds a
+     * problem the unedited draft did not have, so it counts as a change too.
+     */
     val dirty: Boolean
-        get() {
-            val (job, problems) = build()
-            return problems.isNotEmpty() || job != original
-        }
+        get() = build() != initial
 
     /** The job as the editor shows it, plus local errors (empty = ready for `sync.validate`). */
     fun build(): Pair<SyncJob, Map<String, String>> {
@@ -160,12 +181,16 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
         private const val MAX_DEBOUNCE_SECS = 24 * 60 * 60
         private const val MAX_RETAIN_DAYS = 36_500
 
-        /** Every field the editor shows an error under (api.md names). */
-        private val FIELDS = listOf(
-            "name", "source", "target", "direction", "trigger", "intervalMin", "calendar", "rtDebounceSecs",
+        /** Fields inside the "Erweitert" section (api.md names). */
+        private val ADVANCED_FIELDS = listOf(
             "conflict", "deletePolicy", "compare", "versioning", "retainDays", "ignore", "activeFromMin",
             "activeToMin", "maxDelete", "maxDeletePct", "runBefore", "runAfter",
         )
+
+        /** Every field the editor shows an error under (api.md names). */
+        private val FIELDS = listOf(
+            "name", "source", "target", "direction", "trigger", "intervalMin", "calendar", "rtDebounceSecs",
+        ) + ADVANCED_FIELDS
 
         fun isWeekly(kind: String): Boolean = kind.contains("week", ignoreCase = true)
 

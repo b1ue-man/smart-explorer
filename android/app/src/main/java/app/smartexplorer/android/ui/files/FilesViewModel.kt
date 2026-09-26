@@ -103,7 +103,8 @@ internal class FilesViewModel : ViewModel() {
             val home = startLocation ?: loaded.storage.firstOrNull()?.location
             startLocation = null
             if (home == null) {
-                rootsError = "Kein Speicherort gefunden. Ist der Speicher eingebunden?"
+                // A concurrent start (roots reload) may have opened a tab meanwhile.
+                if (tabs.isEmpty()) rootsError = "Kein Speicherort gefunden. Ist der Speicher eingebunden?"
                 return@launch
             }
             if (tabs.isNotEmpty()) return@launch
@@ -208,8 +209,11 @@ internal class FilesViewModel : ViewModel() {
         optionsChanged(hiddenChanged = false)
     }
 
+    /** Also finishes a failed start once places are readable again (e.g. storage mounted). */
     fun reloadRoots() {
-        viewModelScope.launch { loadRoots() }
+        viewModelScope.launch {
+            if (loadRoots() != null && tabs.isEmpty()) start()
+        }
     }
 
     fun reloadEdits() {
@@ -240,6 +244,7 @@ internal class FilesViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        // viewModelScope is already cancelled here; ScanWindow sends its task.cancel on its own scope.
         tabs.forEach { it.dispose() }
         super.onCleared()
     }

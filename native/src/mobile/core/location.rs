@@ -49,7 +49,9 @@ pub(crate) struct Loc {
 
 impl Loc {
     pub(crate) fn parse(location: &str) -> Result<Self, ApiError> {
-        let location = location.trim();
+        // Only leading blanks go: trailing ones belong to the last name
+        // ("Bericht " is not "Bericht").
+        let location = location.trim_start();
         if location.is_empty() || location.contains('\0') {
             return Err(ApiError::invalid("Leerer oder ungültiger Ort"));
         }
@@ -66,10 +68,7 @@ impl Loc {
                 path: "/".to_string(),
             }),
             "zip" => {
-                let (archive, inner) = match rest.find("!/") {
-                    Some(index) => (&rest[..index], &rest[index + 1..]),
-                    None => (rest.strip_suffix('!').unwrap_or(rest), "/"),
-                };
+                let (archive, inner) = split_zip(rest);
                 if !archive.starts_with('/') {
                     return Err(ApiError::invalid(
                         "ZIP-Orte brauchen einen lokalen Archivpfad",
@@ -192,6 +191,31 @@ pub(crate) fn is_app_internal(location: &str) -> bool {
 /// A `zip://` location for the root of a local archive.
 pub(crate) fn zip_location(archive: &str) -> String {
     format!("{ZIP_SCHEME}{archive}!/")
+}
+
+/// Splits `<archive>!/<inner>` after the archive: at the first `!/` (or the
+/// final `!`) that follows a `.zip` name, so a folder like `Wichtig!` stays
+/// part of the archive path; other archive names split at the first `!/`.
+fn split_zip(rest: &str) -> (&str, &str) {
+    let after_zip = rest
+        .match_indices("!/")
+        .map(|(index, _)| index)
+        .find(|&index| is_zip_name(&rest[..index]));
+    if let Some(index) = after_zip {
+        return (&rest[..index], &rest[index + 1..]);
+    }
+    let bare = rest.strip_suffix('!');
+    if let Some(archive) = bare.filter(|archive| is_zip_name(archive)) {
+        return (archive, "/");
+    }
+    match rest.find("!/") {
+        Some(index) => (&rest[..index], &rest[index + 1..]),
+        None => (bare.unwrap_or(rest), "/"),
+    }
+}
+
+fn is_zip_name(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".zip")
 }
 
 pub(crate) fn join(parent: &str, name: &str) -> String {

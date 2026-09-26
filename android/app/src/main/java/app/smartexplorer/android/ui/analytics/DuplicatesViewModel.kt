@@ -28,6 +28,13 @@ internal class DuplicatesViewModel : ViewModel() {
         private set
     var selected by mutableStateOf<Set<String>>(emptySet())
         private set
+
+    /**
+     * Locations that name more than one listed copy (equal Google Drive names in one folder): a
+     * delete by location cannot pick one of them, so they are never selectable.
+     */
+    var ambiguous by mutableStateOf<Set<String>>(emptySet())
+        private set
     var error by mutableStateOf<String?>(null)
         private set
 
@@ -51,6 +58,7 @@ internal class DuplicatesViewModel : ViewModel() {
         error = null
         groups = emptyList()
         selected = emptySet()
+        ambiguous = emptySet()
         trashUnsupported = false
         taskId = null
         val threshold = minSize
@@ -61,7 +69,10 @@ internal class DuplicatesViewModel : ViewModel() {
                 val task = FilesApi.awaitTask(id)
                 when (task.state) {
                     "done" -> {
-                        groups = AnalyzeApi.reclaimGroups(id).filter { it.items.size > 1 }.sortedByDescending { it.size * (it.items.size - 1) }
+                        val found = AnalyzeApi.reclaimGroups(id).filter { it.items.size > 1 }.sortedByDescending { it.size * (it.items.size - 1) }
+                        ambiguous = found.flatMap { group -> group.items.map { it.location } }
+                            .groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+                        groups = found
                         phase = ScanPhase.Result
                     }
                     "canceled" -> {
@@ -97,10 +108,15 @@ internal class DuplicatesViewModel : ViewModel() {
         phase = ScanPhase.Setup
         groups = emptyList()
         selected = emptySet()
+        ambiguous = emptySet()
     }
 
     /** Selects or deselects one copy; the last unselected copy of a group stays. */
     fun toggle(group: DuplicateGroup, location: String) {
+        if (location in ambiguous) {
+            Snackbars.show("Gleichnamige Dateien am selben Ort lassen sich nicht einzeln löschen.")
+            return
+        }
         if (location in selected) {
             selected = selected - location
             return
@@ -112,11 +128,11 @@ internal class DuplicatesViewModel : ViewModel() {
         selected = selected + location
     }
 
-    /** [Kopien automatisch auswählen]: all but the oldest copy of every group. */
+    /** [Kopien automatisch auswählen]: all but the oldest copy of every group (never an [ambiguous] one). */
     fun autoSelect() {
         selected = groups.flatMap { group ->
             val keep = group.items.minByOrNull { it.mtimeMs } ?: return@flatMap emptyList()
-            group.items.filter { it !== keep }.map { it.location }
+            group.items.filter { it !== keep && it.location != keep.location && it.location !in ambiguous }.map { it.location }
         }.toSet()
     }
 

@@ -48,11 +48,13 @@ impl HostSettings {
     pub(crate) fn parse(text: &str) -> Result<Self, ApiError> {
         let settings: HostSettings = serde_json::from_str(text)
             .map_err(|error| ApiError::invalid(format!("Init-Konfiguration: {error}")))?;
-        for (name, path) in [
+        let home = settings.home_dir.as_ref().map(|home| ("homeDir", home));
+        let paths = [
             ("filesDir", &settings.files_dir),
             ("cacheDir", &settings.cache_dir),
-        ] {
-            if !path.is_absolute() {
+        ];
+        for (name, path) in paths.iter().copied().chain(home) {
+            if !path.is_absolute() || path.to_string_lossy().contains('\0') {
                 return Err(ApiError::invalid(format!(
                     "Init-Konfiguration: {name} muss ein absoluter Pfad sein"
                 )));
@@ -79,7 +81,9 @@ impl HostSettings {
         self.cache_dir.join(name)
     }
 
-    /// The default home location: `homeDir`, else the primary volume.
+    /// The default home location: `homeDir`, else the primary volume. It is
+    /// the default Share export, so without either it is an empty folder of
+    /// its own, never `filesDir` (credentials, tokens and keys live there).
     pub(crate) fn home(&self) -> PathBuf {
         self.home_dir
             .clone()
@@ -90,7 +94,7 @@ impl HostSettings {
                     .or(self.volumes.first())
                     .map(|volume| PathBuf::from(&volume.path))
             })
-            .unwrap_or_else(|| self.files_dir.clone())
+            .unwrap_or_else(|| self.files_dir.join("home"))
     }
 }
 

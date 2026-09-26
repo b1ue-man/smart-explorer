@@ -13,8 +13,8 @@ import org.junit.runner.RunWith
 /**
  * G4 remote flows against the servers on the runner (10.0.2.2): SFTP files, uploads with the
  * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
- * Remote-Agent, refused overwrite on plain SFTP, host-key reset, FTP basics (downloads; uploads
- * refused like on the desktop), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
+ * Remote-Agent, atomic replace on plain SFTP (posix-rename), host-key reset, FTP basics (upload,
+ * download, replace), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -103,9 +103,9 @@ class RemoteTaskTest {
         assertFalse(File(first.text("localPath")).exists())
     }
 
-    /** Plain SFTP cannot replace a file safely (desktop rule): overwrite is refused up front, a copy works. */
+    /** Plain SFTP replaces an existing file atomically (posix-rename@openssh.com); a copy still works. */
     @Test
-    fun plainSftpEditsAreRefusedAsOverwriteAndUploadAsACopy() = coreTest {
+    fun plainSftpEditsReplaceAtomicallyAndUploadACopy() = coreTest {
         val connection = Servers.sftp()
         val remote = Servers.freshDir(connection, "edits-sftp")
         val local = Fixture.dir(Volumes.primary(), "remote", "edits-sftp")
@@ -114,16 +114,15 @@ class RemoteTaskTest {
 
         val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
         File(edit.text("localPath")).writeText("Version 1")
-        val refused = Api.await(Api.start("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite", "force" to true)))
-        assertEquals("failed", refused.state)
-        assertTrue("Ersetzen nicht als unmöglich gemeldet: ${refused.result}", refused.resultObj().bool("replaceUnsupported"))
+        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
         assertEquals(setOf("notiz.txt"), Api.names(remote))
+        val replaced = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+        assertEquals("Version 1", File(replaced.text("localPath")).readText())
 
+        File(edit.text("localPath")).writeText("Version 2")
         Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
         assertEquals(setOf("notiz.txt", "notiz (2).txt"), Api.names(remote))
-        val original = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        assertEquals("Version 0", File(original.text("localPath")).readText())
-        for (item in listOf(edit, original)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
+        for (item in listOf(edit, replaced)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
     }
 
     @Test
@@ -135,14 +134,21 @@ class RemoteTaskTest {
         val remote = Servers.freshDir(connection, "ftp")
         val local = Fixture.dir(Volumes.primary(), "remote", "ftp")
         val file = Fixture.bytes(File(local, "ftp.bin"), 150_000, 11)
-        // Like the desktop: uploads go through an exclusively created private stage, which FTP
-        // cannot provide, so nothing is written (no unsafe fallback).
-        val upload = Api.await(
-            Api.start("fs.transfer", args("sources" to listOf(file.absolutePath), "targetDir" to remote, "mode" to "copy", "conflict" to "keepBoth")),
-        )
-        assertEquals("FTP-Upload nicht abgewiesen: ${upload.errors}", "failed", upload.state)
-        assertTrue("Grund fehlt: ${upload.errors}", upload.errors.any { "exclusive-create" in it.message })
-        assertTrue(Api.names(remote).isEmpty())
+        // FTP has no exclusive create: the private stage is checked absent right before its STOR.
+        Api.copy(listOf(file.absolutePath), remote)
+        assertEquals(setOf("ftp.bin"), Api.names(remote))
+        val downloaded = Fixture.dir(Volumes.primary(), "remote", "ftp-down")
+        Api.copy(listOf(Api.child(remote, "ftp.bin").location), downloaded.absolutePath)
+        assertEquals(Fixture.sha256(file), Fixture.sha256(File(downloaded, "ftp.bin")))
+        // Replacing an existing file is one RNFR/RNTO on the server.
+        Api.copy(listOf(Fixture.write(File(local, "text.txt"), "Version 0").absolutePath), remote)
+        val edit = Api.runTask("fs.fetch", args("location" to Api.child(remote, "text.txt").location)).resultObj()
+        File(edit.text("localPath")).writeText("Version 1")
+        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
+        assertEquals(setOf("ftp.bin", "text.txt"), Api.names(remote))
+        val check = Api.runTask("fs.fetch", args("location" to Api.child(remote, "text.txt").location)).resultObj()
+        assertEquals("Version 1", File(check.text("localPath")).readText())
+        for (item in listOf(edit, check)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
         // Downloads work: a file the server side placed in the user's home.
         val fixture = TaskArgs.get("seFtpFixture")
         val back = Fixture.dir(Volumes.primary(), "remote", "ftp-back")

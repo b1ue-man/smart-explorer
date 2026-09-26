@@ -227,10 +227,14 @@ impl TaskTable {
         self.records.iter().map(TaskRecord::snapshot).collect()
     }
 
-    /// Removes finished tasks whose terminal snapshot was already delivered.
-    pub(crate) fn clear_finished(&mut self) {
-        self.records
-            .retain(|record| !record.state.is_finished() || record.dirty);
+    /// Removes finished tasks whose terminal snapshot was already delivered;
+    /// with `ids`, only those of them (other pages may still show the rest).
+    pub(crate) fn clear_finished(&mut self, ids: Option<&[String]>) {
+        self.records.retain(|record| {
+            !record.state.is_finished()
+                || record.dirty
+                || ids.is_some_and(|ids| !ids.contains(&record.id))
+        });
     }
 
     /// Requests cancellation; false when the id is unknown.
