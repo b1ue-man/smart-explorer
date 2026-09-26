@@ -364,6 +364,7 @@ pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
 pub use self::discovery_offer_book::{DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer};
 pub use self::discovery_relation_store::DiscoveryRelationOutcome;
+pub(crate) use self::discovery_signal_state::MAX_DISCOVERY_ALIAS_BYTES;
 pub use self::discovery_signal_types::{
     DiscoveryAdvertisement, DiscoveryCommand, DiscoveryEvent, DiscoveryExchangeHandle,
     DiscoveryKind, DiscoveryOfferHandle, DiscoveryOfferStopReason, DiscoveryPin,

@@ -1,7 +1,11 @@
 use std::ffi::c_void;
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::os::windows::io::AsRawHandle;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::System::Console::{
+    GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE, ENABLE_ECHO_INPUT, STD_INPUT_HANDLE,
+};
 
 pub(super) fn local_path(path: &str) -> std::path::PathBuf {
     let rooted;
@@ -74,4 +78,42 @@ pub(super) fn validate_connection_protocol(
     _protocol: crate::creds::Protocol,
 ) -> Result<(), String> {
     Ok(())
+}
+
+pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {
+    // SAFETY: GetStdHandle only reads this process's standard handle table.
+    let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if input.is_null() || input == INVALID_HANDLE_VALUE {
+        return Err("no console input is attached".to_string());
+    }
+    let mut saved: CONSOLE_MODE = 0;
+    // SAFETY: `input` is the standard input handle and `saved` a writable mode.
+    if unsafe { GetConsoleMode(input, &mut saved) } == 0 {
+        return Err(format!("console mode: {}", io::Error::last_os_error()));
+    }
+    ctrlc::set_handler(move || {
+        // SAFETY: restores the mode read above on the standard input console.
+        unsafe { SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), saved) };
+        std::process::exit(130);
+    })
+    .map_err(|error| format!("Ctrl+C handler: {error}"))?;
+    let mut stderr = io::stderr();
+    write!(stderr, "{prompt}")
+        .and_then(|()| stderr.flush())
+        .map_err(|error| error.to_string())?;
+    // SAFETY: same console handle; only the echo flag is cleared.
+    if unsafe { SetConsoleMode(input, saved & !ENABLE_ECHO_INPUT) } == 0 {
+        return Err(format!("hide console input: {}", io::Error::last_os_error()));
+    }
+    let mut line = String::new();
+    let read = io::stdin().read_line(&mut line);
+    // SAFETY: restores the mode read above on the same handle.
+    let restored = unsafe { SetConsoleMode(input, saved) };
+    // Without echo the console does not move past the entered line either.
+    let _ = writeln!(stderr);
+    read.map_err(|error| format!("read hidden input: {error}"))?;
+    if restored == 0 {
+        return Err(format!("restore console input: {}", io::Error::last_os_error()));
+    }
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }

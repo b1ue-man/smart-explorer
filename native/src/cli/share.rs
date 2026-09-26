@@ -2,6 +2,12 @@ use clap::{Args, Subcommand};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[path = "share/discoverable.rs"]
+mod discoverable;
+#[path = "share/discoverable_input.rs"]
+mod discoverable_input;
+#[path = "share/discoverable_output.rs"]
+mod discoverable_output;
 #[path = "share/exec_status.rs"]
 mod exec_status;
 mod exports;
@@ -52,6 +58,8 @@ enum Command {
     Export(exports::ExportArgs),
     #[command(about = "Create a Share room and print its invite code")]
     Room(RoomArgs),
+    #[command(about = "Make this device or a room discoverable by name and PIN for a few minutes")]
+    Discoverable(discoverable::DiscoverableArgs),
     #[command(about = "Refresh or stop the headless Share worker")]
     Worker(WorkerArgs),
     #[command(about = "Local-network presence of paired devices and automatic internet sharing")]
@@ -105,6 +113,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
         Some(Command::Room(args)) => match args.command {
             RoomCommand::Create { name } => create_room(&name)?,
         },
+        Some(Command::Discoverable(args)) => discoverable::run(args)?,
         Some(Command::Worker(args)) => worker(args.command)?,
         Some(Command::Lan(args)) => lan::run(args)?,
     }

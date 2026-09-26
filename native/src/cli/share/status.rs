@@ -1,6 +1,6 @@
 use clap::Args;
 
-use super::{grants, lifecycle_output};
+use super::{discoverable_output, grants, lifecycle_output};
 
 #[derive(Args, Default)]
 pub(super) struct StatusArgs {
@@ -95,6 +95,7 @@ fn print_json(
             .map(|entry| super::requests_legacy::value(entry, profiles))
             .collect::<Vec<_>>(),
         "events": snapshot.events.iter().filter_map(public_event).collect::<Vec<_>>(),
+        "discoverable": discoverable_values(snapshot, profiles),
     });
     println!(
         "{}",
@@ -169,6 +170,22 @@ fn print_text(
     for event in snapshot.events.iter().filter_map(public_event) {
         println!("event\t{event}");
     }
+    let now = crate::share::core_now_secs();
+    for offer in &snapshot.discovery_offers {
+        println!("{}", discoverable_output::offer_text(offer, profiles, now));
+    }
+}
+
+fn discoverable_values(
+    snapshot: &crate::daemon::ShareWorkerSnapshot,
+    profiles: &crate::share::ShareProfiles,
+) -> Vec<serde_json::Value> {
+    let now = crate::share::core_now_secs();
+    snapshot
+        .discovery_offers
+        .iter()
+        .map(|offer| discoverable_output::offer_value(offer, profiles, now))
+        .collect()
 }
 
 fn public_event(event: &crate::share::ShareEvent) -> Option<String> {
