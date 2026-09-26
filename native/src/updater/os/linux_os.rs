@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use super::archive::{archive_binary, archived_sha256, pinned_version, restore_pin, set_pin};
@@ -109,9 +110,36 @@ pub(super) fn installed_updater_name() -> &'static str {
 /// The running `se` as the installed file: links such as `~/.local/bin/se`
 /// are resolved, because the link itself must stay in place.
 pub(super) fn running_cli_path() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
-    std::fs::canonicalize(&exe)
-        .map_err(|error| format!("Programmpfad {} aufloesen: {error}", exe.display()))
+    let exe = std::env::current_exe().map_err(|e| format!("own path unknown: {e}"))?;
+    std::fs::canonicalize(&exe).map_err(|error| format!("resolve {}: {error}", exe.display()))
+}
+
+/// The helper restarts the app with `--updated` and waits for its first frame.
+pub(super) fn desktop_session() -> Result<(), String> {
+    let display = std::env::var_os("DISPLAY");
+    let wayland = std::env::var_os("WAYLAND_DISPLAY");
+    if graphical_session(display.as_deref(), wayland.as_deref()) {
+        Ok(())
+    } else {
+        Err(NO_GRAPHICAL_SESSION.to_string())
+    }
+}
+
+const NO_GRAPHICAL_SESSION: &str = concat!(
+    "no graphical session (DISPLAY and WAYLAND_DISPLAY are unset): the desktop updater ",
+    "restarts Smart Explorer after replacing it, so run se update inside the desktop ",
+    "session or use the terminal-only installation (install-linux.sh --cli-only)"
+);
+
+fn graphical_session(display: Option<&OsStr>, wayland: Option<&OsStr>) -> bool {
+    [display, wayland]
+        .into_iter()
+        .any(|value| value.is_some_and(|value| !value.is_empty()))
+}
+
+/// Whether an update process that left a lock or leftovers still runs.
+pub(super) fn process_alive(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
 }
 
 /// A download is created without execute bits, but the staged helper is
@@ -132,13 +160,41 @@ pub(super) fn spawn_update_helper(
     helper: &Path,
     helper_sha256: &str,
     args: &[String],
+    from_terminal: bool,
 ) -> Result<(), String> {
     verify_sha256(helper, helper_sha256)?;
-    std::process::Command::new(helper)
-        .args(args)
+    let mut command = std::process::Command::new(helper);
+    command.args(args);
+    if from_terminal {
+        detach_from_terminal(&mut command);
+    }
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("Updater-Helfer starten: {error}"))
+}
+
+/// The helper and the app it restarts outlive `se update`: they must not
+/// hold its pipes (`se update --json | jq` would wait for the app) or its
+/// terminal, and a closed terminal must not hang them up.
+fn detach_from_terminal(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid(2) is async-signal-safe, as a pre_exec hook requires.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
 }
 
 /// Revert to an archived binary.
@@ -194,10 +250,53 @@ mod tests {
         std::fs::write(&target, b"old se").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
         let sha256 = super::super::core::sha256_file(&staged).unwrap();
-        let install = super::super::terminal::install_cli_in_place;
-        let replaced = install(&staged, &sha256, &target).unwrap();
+        let lock = super::super::cli_swap::UpdateLock::acquire(&target).unwrap();
+        let install = super::super::cli_swap::install_cli_in_place;
+        let replaced = install(&staged, &sha256, &target, lock).unwrap();
         replaced.commit().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new se");
         assert_eq!(mode(&target), 0o700);
+    }
+
+    #[test]
+    fn cli_task_orphans_of_ended_updates_are_removed_and_stale_locks_taken_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("se");
+        std::fs::write(&target, b"se").unwrap();
+        // PID 4294967294 cannot run on Linux (pid_max is at most 2^22).
+        let dead = "4294967294";
+        let own = std::process::id().to_string();
+        for name in [
+            format!("se.update-old.{dead}.1"),
+            format!("se.update-pending.{dead}.2"),
+            format!("se.update-old.{own}.3"),
+            "se.notes".to_string(),
+        ] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        super::super::cli_swap::remove_orphans(&target);
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let own_backup = format!("se.update-old.{own}.3");
+        assert_eq!(names, ["se", "se.notes", own_backup.as_str()]);
+
+        std::fs::write(dir.path().join("se.update-lock"), dead).unwrap();
+        let lock = super::super::cli_swap::UpdateLock::acquire(&target).unwrap();
+        let owner = std::fs::read_to_string(dir.path().join("se.update-lock")).unwrap();
+        assert_eq!(owner, own);
+        drop(lock);
+        assert!(!dir.path().join("se.update-lock").exists());
+    }
+
+    #[test]
+    fn cli_task_desktop_update_needs_a_graphical_session() {
+        use std::ffi::OsStr;
+        assert!(super::graphical_session(Some(OsStr::new(":0")), None));
+        assert!(super::graphical_session(None, Some(OsStr::new("wayland-0"))));
+        assert!(!super::graphical_session(None, None));
+        assert!(!super::graphical_session(Some(OsStr::new("")), None));
     }
 }

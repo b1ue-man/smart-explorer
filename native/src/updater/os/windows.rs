@@ -116,10 +116,16 @@ pub(super) fn installed_updater_name() -> &'static str {
 
 /// Kept as started: canonical `\\?\` paths must not reach the helper.
 pub(super) fn running_cli_path() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))
+    std::env::current_exe().map_err(|e| format!("own path unknown: {e}"))
 }
 
 pub(super) fn mark_staged_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Windows needs no display variable; the helper starts the app in the
+/// signed-in session.
+pub(super) fn desktop_session() -> Result<(), String> {
     Ok(())
 }
 
@@ -130,15 +136,21 @@ pub(super) fn cli_self_replacement() -> Result<(), String> {
 }
 
 const NO_CLI_SELF_REPLACEMENT: &str = concat!(
-    "se.exe kann sich unter Windows nicht selbst ersetzen; ohne Smart Explorer.exe ",
-    "daneben gibt es keinen Updater-Helfer. Bitte mit dem Smart-Explorer-Installer ",
-    "aktualisieren"
+    "se.exe cannot replace itself on Windows, and without Smart Explorer.exe next to it ",
+    "there is no updater helper; update with the Smart Explorer installer"
 );
+
+/// Never consulted: the terminal-only swap stops at `cli_self_replacement`
+/// before it takes a lock or looks for leftovers.
+pub(super) fn process_alive(_pid: u32) -> bool {
+    true
+}
 
 pub(super) fn spawn_update_helper(
     helper: &Path,
     helper_sha256: &str,
     args: &[String],
+    from_terminal: bool,
 ) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
@@ -150,6 +162,9 @@ pub(super) fn spawn_update_helper(
     command
         .args(args)
         .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+    if from_terminal {
+        detach_standard_handles(&mut command);
+    }
     match command.spawn() {
         Ok(_) => Ok(()),
         Err(_) => {
@@ -158,6 +173,9 @@ pub(super) fn spawn_update_helper(
             retry
                 .args(args)
                 .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+            if from_terminal {
+                detach_standard_handles(&mut retry);
+            }
             match retry.spawn() {
                 Ok(_) => Ok(()),
                 Err(error)
@@ -172,6 +190,16 @@ pub(super) fn spawn_update_helper(
             }
         }
     }
+}
+
+/// A terminal caller's standard handles (a console, a pipe to `jq`) must not
+/// stay open in the helper and the app it restarts.
+fn detach_standard_handles(command: &mut std::process::Command) {
+    use std::process::Stdio;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 }
 
 fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {

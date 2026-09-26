@@ -2,6 +2,8 @@
 mod apply;
 #[path = "os/shared/archive.rs"]
 mod archive;
+#[path = "os/shared/cli_swap.rs"]
+mod cli_swap;
 #[path = "os/shared/config.rs"]
 mod config;
 #[path = "core/core.rs"]
@@ -33,6 +35,7 @@ pub use archive::{
     archive_current_version, cleanup_old_binaries, is_auto_update_paused, list_archived_versions,
     pinned_version, resume_auto_update,
 };
+pub use cli_swap::ReplacedCli;
 pub use config::{peek_updater_error, set_update_source, take_updater_error, update_source_str};
 pub use core::is_newer;
 pub use feed::{download_update, download_version, list_remote_versions};
@@ -44,8 +47,8 @@ pub(crate) use startup_ack::{
     acknowledge_update_startup, capture_update_startup_ack, update_startup_ack_pending,
 };
 pub use terminal::{
-    check_feed, detect_installation, replace_cli, stage_update, FeedCheck, Installation,
-    ReplacedCli,
+    check_feed, desktop_update_possible, detect_installation, replace_cli, stage_update, FeedCheck,
+    Installation,
 };
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 
