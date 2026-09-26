@@ -192,9 +192,13 @@ impl Backend for FtpBackend {
         self.open_write(path)
     }
 
-    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        super::staging::require_absent(self, dst)?;
-        self.rename(src, dst)
+    // `rename_no_replace` stays unsupported (trait contract); only publishing a
+    // stage uses the absence check (FTP exception on `vfs::promote_staged_create`).
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        crate::vfs::promote_staged_no_replace_with(self, staged, destination, |from, to| {
+            super::staging::require_absent(self, to)?;
+            self.rename(from, to)
+        })
     }
 
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
