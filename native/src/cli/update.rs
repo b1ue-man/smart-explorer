@@ -33,9 +33,11 @@ and installs a newer version.
 Terminal-only installation (install-linux.sh --cli-only): se downloads the
 feed's se, verifies its SHA-256 and replaces the installed file itself; a link
 such as ~/.local/bin/se stays and keeps pointing to it. The copy is verified
-again right before the swap. If the new se does not start or reports another
-version than the feed, the previous file is restored. A running background
-worker is then handed over to the new version.
+again right before the swap and before it is started, and a hash-verified
+backup is kept until then. If the new se does not start or reports another
+version than the feed, or Ctrl+C interrupts the update, the previous file is
+restored. A running background worker of the old version is then handed over to
+the new version; one se update at a time may replace a file.
 
 Next to the desktop app, se update stages app, updater and se exactly like the
 app's update check and starts the hash-bound updater. It replaces all three
@@ -65,10 +67,15 @@ pub(super) struct UpdateArgs {
     source: Option<String>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
-    // Run by the previous `se` right after it replaced this file; every later
-    // `se` keeps this contract.
-    #[arg(long, hide = true, conflicts_with_all = ["check", "reinstall", "source"])]
-    complete_install: bool,
+    // Run by the previous `se` right after it replaced this file, with the
+    // version the feed promised; every later `se` keeps this contract.
+    #[arg(
+        long,
+        hide = true,
+        value_name = "VERSION",
+        conflicts_with_all = ["check", "reinstall", "source"]
+    )]
+    complete_install: Option<String>,
 }
 
 /// What the freshly installed `se` reports back to the one it replaced.
@@ -92,11 +99,14 @@ struct Report<'a> {
 }
 
 pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
-    if args.complete_install {
-        return complete_install();
+    if let Some(expected) = &args.complete_install {
+        return complete_install(expected);
     }
     if let Some(source) = &args.source {
+        // Only a feed that answers replaces the source the app uses too.
         let source = validate_source(source)?;
+        crate::updater::read_feed_version(source)
+            .map_err(|error| format!("the update source {source} is not usable: {error}"))?;
         crate::updater::set_update_source(source)
             .map_err(|error| format!("save update source: {error}"))?;
     }
@@ -140,6 +150,7 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
             if args.reinstall {
                 return Err(REINSTALL_DESKTOP.to_string());
             }
+            crate::updater::desktop_update_possible()?;
             let bundle = crate::updater::stage_update(&check.feed_version)?;
             crate::updater::apply_staged_update_for(&bundle, &installation)?;
             print(&report, "handed_to_updater", None, args.json)?;
@@ -161,7 +172,11 @@ fn validate_source(source: &str) -> Result<&str, String> {
 /// hands the worker over, and restores the previous file if it does not.
 fn install_terminal_only(cli: &Path, version: &str) -> Result<Installed, String> {
     let replaced = crate::updater::replace_cli(cli, version)?;
-    let completed = match run_completion(replaced.target()) {
+    // The exact verified bytes, checked again right before they are started.
+    if let Err(error) = replaced.verify_installed() {
+        return Err(restore(replaced, error));
+    }
+    let completed = match run_completion(replaced.target(), version) {
         Ok(completed) if completed.version == version => completed,
         Ok(completed) => {
             let found = completed.version;
@@ -186,15 +201,18 @@ fn install_terminal_only(cli: &Path, version: &str) -> Result<Installed, String>
 }
 
 fn restore(replaced: ReplacedCli, failure: String) -> String {
+    let backup = replaced.backup().display().to_string();
     match replaced.rollback() {
         Ok(()) => format!("{failure}; the previous se was restored"),
-        Err(error) => format!("{failure}; restoring the previous se failed: {error}"),
+        Err(error) => format!(
+            "{failure}; restoring the previous se failed: {error}; the previous se is {backup}"
+        ),
     }
 }
 
-fn run_completion(target: &Path) -> Result<CompletedInstall, String> {
+fn run_completion(target: &Path, version: &str) -> Result<CompletedInstall, String> {
     let mut child = Command::new(target)
-        .args(["update", "--complete-install"])
+        .args(["update", "--complete-install", version])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -226,15 +244,21 @@ fn run_completion(target: &Path) -> Result<CompletedInstall, String> {
         .map_err(|error| format!("unreadable answer {output:?}: {error}"))
 }
 
-/// Runs in the new `se`: hand a worker of the previous version over to this
-/// one and report the installed version.
-fn complete_install() -> Result<i32, String> {
-    let (worker, worker_error) = match crate::daemon::hand_off_running_worker() {
-        Ok(handoff) => (Some(handoff), None),
-        Err(error) => (None, Some(error)),
+/// Runs in the new `se`: reports the installed version and, only when it is
+/// the promised one, hands a worker of the previous version over to it. A
+/// mismatching file is rolled back by the caller and must not keep a worker.
+fn complete_install(expected: &str) -> Result<i32, String> {
+    let version = env!("CARGO_PKG_VERSION");
+    let (worker, worker_error) = if version != expected {
+        (None, Some(format!("not {expected}; the worker was left alone")))
+    } else {
+        match crate::daemon::hand_off_running_worker() {
+            Ok(handoff) => (Some(handoff), None),
+            Err(error) => (None, Some(error)),
+        }
     };
     let completed = CompletedInstall {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: version.to_string(),
         worker,
         worker_error,
     };
@@ -340,14 +364,15 @@ mod tests {
             "update --check --json",
             "update --reinstall --json",
             "update --source /srv/feed --check",
-            "update --complete-install",
+            "update --complete-install 1.2.3",
         ] {
             assert!(parses(accepted), "failed to parse {accepted:?}");
         }
         for rejected in [
             "update --check --reinstall",
-            "update --complete-install --check",
-            "update --complete-install --source /srv/feed",
+            "update --complete-install",
+            "update --complete-install 1.2.3 --check",
+            "update --complete-install 1.2.3 --source /srv/feed",
         ] {
             assert!(!parses(rejected), "unexpectedly parsed {rejected:?}");
         }

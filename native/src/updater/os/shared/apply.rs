@@ -15,22 +15,24 @@ pub fn apply_staged_update(bundle: &StagedUpdate) -> Result<(), String> {
         std::env::current_exe().map_err(|error| format!("Eigener Pfad unbekannt: {error}"))?;
     let helper_target = os::installed_updater_path()?;
     let cli_target = os::installed_cli_path()?;
-    launch_helper(bundle, &target, &helper_target, &cli_target)
+    launch_helper(bundle, &target, &helper_target, &cli_target, false)
 }
 
 /// `se update` beside the desktop app: the same helper, bound to the app
-/// installed next to `se` instead of the running process.
+/// installed next to `se` instead of the running process, and detached from
+/// the terminal that started `se update`.
 pub fn apply_staged_update_for(
     bundle: &StagedUpdate,
     installation: &Installation,
 ) -> Result<(), String> {
     let Installation::Desktop { cli, app } = installation else {
-        return Err("Der Updater-Helfer ersetzt nur eine Desktop-Installation".to_string());
+        return Err("the updater helper only replaces a desktop installation".to_string());
     };
     let dir = cli
         .parent()
-        .ok_or_else(|| format!("Installationsordner unbekannt: {}", cli.display()))?;
-    launch_helper(bundle, app, &dir.join(os::installed_updater_name()), cli)
+        .ok_or_else(|| format!("{} has no installation folder", cli.display()))?;
+    let helper_target = dir.join(os::installed_updater_name());
+    launch_helper(bundle, app, &helper_target, cli, true)
 }
 
 fn launch_helper(
@@ -38,6 +40,7 @@ fn launch_helper(
     target: &Path,
     helper_target: &Path,
     cli_target: &Path,
+    from_terminal: bool,
 ) -> Result<(), String> {
     manifest_matches(bundle)?;
     verify_staged_update(bundle)?;
@@ -83,8 +86,9 @@ fn launch_helper(
 
     // Keep this immediately adjacent to the process boundary. The helper also
     // validates itself on entry and fails closed if elevation would be needed.
-    verify_sha256(bundle.helper().path(), bundle.helper().sha256())?;
-    os::spawn_update_helper(bundle.helper().path(), bundle.helper().sha256(), &args)
+    let (helper, helper_sha256) = (bundle.helper().path(), bundle.helper().sha256());
+    verify_sha256(helper, helper_sha256)?;
+    os::spawn_update_helper(helper, helper_sha256, &args, from_terminal)
 }
 
 fn archive_path(target: &std::path::Path) -> Result<PathBuf, String> {
