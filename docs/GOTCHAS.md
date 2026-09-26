@@ -18,6 +18,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **`russh` crypto backend.** Its default is `aws-lc-rs` (needs NASM/CMake, breaks
   on GNU). Use `default-features = false` + `ring`. Still verify it compiles
   before building on top of it — see REMOTE_LAYER_PLAN §5.
+- **`smb2` pin and its lock side effect.** The SMB backend pins `smb2 = "=0.26.0"`
+  (pure Rust, RustCrypto; the crate ships breaking minors quickly). Its
+  `aes-gcm ^0.11.0` requirement lifted the shared `aes-gcm` from `0.11.0-rc.4` to
+  `0.11.1`, which russh's `ssh-cipher` also uses (2026-09-26); the SFTP device tests
+  cover that path. Resolve new lock entries with `cargo metadata` (no compile) and
+  check them per target with `cargo tree --offline --locked --target …`.
 - **PowerShell 5.1 + cargo.** cargo writes progress to stderr, which PS 5.1 turns
   into error records → trips `throw` in scripts even on success, and the tool may
   report failure on exit 0. Run cargo via the Bash tool (`2>/dev/null`); do
