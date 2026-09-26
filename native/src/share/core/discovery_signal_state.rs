@@ -298,13 +298,15 @@ impl ActiveDiscoveryOffer {
             && self
                 .discovery_id
                 .as_ref()
-                .map_or(true, |known| known == &advertisement.discovery_id)
+                .is_none_or(|known| known == &advertisement.discovery_id)
     }
 
     pub(super) fn allow_pairing_start(&mut self, now: Instant) -> bool {
-        while self.pairing_starts.front().map_or(false, |started| {
-            now.saturating_duration_since(*started) >= PAIRING_START_WINDOW
-        }) {
+        while self
+            .pairing_starts
+            .front()
+            .is_some_and(|started| now.saturating_duration_since(*started) >= PAIRING_START_WINDOW)
+        {
             self.pairing_starts.pop_front();
         }
         if self.pairing_starts.len() >= MAX_PAIRING_STARTS_PER_OFFER_WINDOW {

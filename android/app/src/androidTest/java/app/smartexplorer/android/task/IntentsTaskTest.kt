@@ -2,10 +2,12 @@ package app.smartexplorer.android.task
 
 import android.app.Activity
 import android.app.Instrumentation
+import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.provider.DocumentsContract
-import androidx.core.content.FileProvider
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.intent.Intents
@@ -30,7 +32,8 @@ import org.junit.runner.RunWith
 /**
  * G4 hand-over to other apps (Espresso-Intents, the target activities are stubbed) and receiving a
  * SEND share: `fs.open` + LocalFileProvider (read, and "w" truncates the original),
- * `fs.materialize` + share sheet, SEND with a content URI → descriptor → `fs.import`, and VIEW of a
+ * `fs.materialize` + share sheet, SEND with another provider's content URI → descriptor → `fs.import`
+ * (the app's own providers are refused as a share source), and VIEW of a
  * folder from another app ("In Smart Explorer öffnen").
  */
 @RunWith(AndroidJUnit4::class)
@@ -106,27 +109,39 @@ class IntentsTaskTest {
     @Test
     fun receiveASharedFileIntoAFolderOnTheSdCard() = coreTest {
         AppPrefs.setOnboardingDone(true)
-        val source = Fixture.write(File(appContext.cacheDir, "share/empfang-quelle.txt"), "geteilt von einer anderen App")
-        val uri = FileProvider.getUriForFile(appContext, appContext.packageName + ".files", source)
-        val intent = Intent(appContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // Content of another provider (MediaStore Downloads): this app's own providers are refused,
+        // they would serve files with the receiver's rights instead of the sender's.
+        val name = Fixture.unique("empfang") + ".txt"
+        val resolver = appContext.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + Fixture.FOLDER)
         }
-        val target = Fixture.dir(Volumes.sdCard(), "intents", "empfang")
-        ShareIntentHandler.discard()
-        val scenario = ActivityScenario.launch<MainActivity>(intent)
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw AssertionError("MediaStore-Eintrag für $name nicht angelegt")
+        var scenario: ActivityScenario<MainActivity>? = null
         try {
+            resolver.openOutputStream(uri, "w")?.use { it.write("geteilt von einer anderen App".toByteArray()) }
+                ?: throw AssertionError("MediaStore-Eintrag nicht beschreibbar: $uri")
+            val intent = Intent(appContext, MainActivity::class.java).apply {
+                action = Intent.ACTION_SEND
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val target = Fixture.dir(Volumes.sdCard(), "intents", "empfang")
+            ShareIntentHandler.discard()
+            scenario = ActivityScenario.launch<MainActivity>(intent)
             waitFor("geteilte Datei geöffnet", 20_000) { ShareIntentHandler.pending.value is ShareIntentHandler.Incoming.Ready }
             val taskId = ShareIntentHandler.importInto(target.absolutePath)
             TaskReport.called("fs.import", "ok")
             val done = Api.await(taskId)
             assertEquals("fs.import: ${done.message} ${done.errors}", "done", done.state)
-            assertEquals("geteilt von einer anderen App", File(target, "empfang-quelle.txt").readText())
+            assertEquals("geteilt von einer anderen App", File(target, name).readText())
         } finally {
-            scenario.close()
-            source.delete()
+            scenario?.close()
+            resolver.delete(uri, null, null)
         }
     }
 
