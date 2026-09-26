@@ -553,3 +553,7 @@ Ausnahmen im Testbericht.
 - Lauf 6 abgebrochen für den Layout-Fix der Teilen-Knöpfe (FlowRow statt seitlich scrollender Reihe).
 - Lauf 7: alles grün, Exit 143 aus dem ERR-Trap beim Aufräumen → Cleanup ohne ERR-Trap.
 - Lauf 8: grün.
+
+### Release v0.5.163
+- Release-Lauf 36197778701 und 36200054929: APK gebaut und signiert, die Signerprüfung in `android/build-release-apk.sh` erkannte das `apksigner`-Format nicht (neue Build-Tools: `V2 Signer: certificate …`); vor jedem Tag gestoppt, keine Versionsanhebung.
+- Release-Lauf 36202097772 (Quelle `6c90f85`): erfolgreich; Release-Commit `af7f971`, Tag `v0.5.163`, GitHub-Release mit 20 Assets inklusive `smart-explorer-android.apk` (SHA-256 `2678901b…089cb`, Zertifikat laut `android/release-cert.sha256`).
