@@ -105,6 +105,36 @@ pub(super) fn installed_cli_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_CLI_EXE))
 }
 
+/// App names that mark a desktop installation beside `se.exe`.
+pub(super) fn installed_app_names() -> &'static [&'static str] {
+    &["Smart Explorer.exe", "smart_explorer.exe"]
+}
+
+pub(super) fn installed_updater_name() -> &'static str {
+    INSTALLED_UPDATER_EXE
+}
+
+/// Kept as started: canonical `\\?\` paths must not reach the helper.
+pub(super) fn running_cli_path() -> Result<PathBuf, String> {
+    std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))
+}
+
+pub(super) fn mark_staged_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Windows keeps a running image's file in use, so `se.exe` is replaced only
+/// by the helper after it exits, and that helper needs the app beside it.
+pub(super) fn cli_self_replacement() -> Result<(), String> {
+    Err(NO_CLI_SELF_REPLACEMENT.to_string())
+}
+
+const NO_CLI_SELF_REPLACEMENT: &str = concat!(
+    "se.exe kann sich unter Windows nicht selbst ersetzen; ohne Smart Explorer.exe ",
+    "daneben gibt es keinen Updater-Helfer. Bitte mit dem Smart-Explorer-Installer ",
+    "aktualisieren"
+);
+
 pub(super) fn spawn_update_helper(
     helper: &Path,
     helper_sha256: &str,

@@ -178,7 +178,7 @@ pub(super) fn replace_file_with_staged(
     Ok(())
 }
 
-fn unique_sibling(target: &Path, role: &str) -> PathBuf {
+pub(super) fn unique_sibling(target: &Path, role: &str) -> PathBuf {
     let name = target
         .file_name()
         .map(|s| s.to_string_lossy().to_string())

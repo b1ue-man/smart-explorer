@@ -220,7 +220,7 @@ fn validate_payload_path(payload: &VerifiedPayload) -> Result<(), String> {
     }
 }
 
-fn remove_staged_path(path: &Path) {
+pub(super) fn remove_staged_path(path: &Path) {
     if path.parent() == Some(appdata_dir().as_path()) {
         let _ = std::fs::remove_file(path);
     }
