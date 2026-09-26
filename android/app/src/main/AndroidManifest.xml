@@ -94,6 +94,11 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!-- "Stopp" in the notification of a command another device runs on this phone -->
+        <receiver
+            android:name=".service.ExecHostStopReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".system.BootReceiver"
             android:exported="false">

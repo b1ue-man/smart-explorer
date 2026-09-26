@@ -30,6 +30,16 @@ use crate::share::exec_supervisor_protocol::{
 use crate::share::exec_types::{ExecProviderStatus, ExecStart};
 
 const INTERNAL_MODE: &str = "--share-exec-supervisor";
+/// The values the Linux supervisor always used: an absolute `$SHELL` or
+/// `/bin/sh` as a login shell, no own process group and no intermediate
+/// (the transient unit's cgroup contains the whole job).
+const LINUX_SPAWN: exec_supervisor::SpawnPolicy<'static> = exec_supervisor::SpawnPolicy {
+    default_shell: "/bin/sh",
+    shell_from_environment: true,
+    shell_option: "-lc",
+    own_process_group: false,
+    intermediate: None,
+};
 
 pub(crate) struct ContainedExec {
     control: Arc<Control>,
@@ -298,7 +308,7 @@ pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::
         // it in the independently supervised process so a SIGKILL of the
         // worker cannot leave a stale path behind.
         std::fs::remove_file(&socket)?;
-        exec_supervisor::run(stream)
+        exec_supervisor::run(stream, &LINUX_SPAWN)
     })();
     Some(result)
 }

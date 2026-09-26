@@ -22,6 +22,11 @@ mod host_keys;
 mod job_json;
 #[path = "locations.rs"]
 mod locations;
+#[path = "share_exec.rs"]
+mod share_exec;
+#[cfg(test)]
+#[path = "share_exec_tests.rs"]
+mod share_exec_tests;
 #[path = "share_peers.rs"]
 mod share_peers;
 #[path = "share_requests.rs"]
@@ -153,6 +158,9 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.retry" => share_requests::retry(rt, args),
         "share.deleteRequest" => share_requests::delete_request(rt, args),
         "share.exec" => share_requests::exec(rt, args),
+        "share.setExec" => share_exec::set_exec(args),
+        "share.execJobs" => share_exec::exec_jobs(),
+        "share.cancelExecJob" => share_exec::cancel_exec_job(args),
         _ => return None,
     })
 }

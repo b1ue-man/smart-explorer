@@ -275,6 +275,13 @@ fn android_task_share_status_maps_a_worker_snapshot() {
     };
     let worker = WorkerFacts::from_snapshot(&snapshot);
     let discovery = crate::share::discovery_state::DiscoveryUiState::default();
+    let exec_provider = crate::share::ExecProviderStatus {
+        available: true,
+        provider: "android-subreaper".into(),
+        detail: "Zwischenprozess je Befehl".into(),
+        elevated: false,
+        user_label: "Android-App".into(),
+    };
     let notices = VecDeque::from(vec!["Share-Server verbunden".to_string()]);
     let status = status_json(&StatusInput {
         worker: Some(&worker),
@@ -287,6 +294,7 @@ fn android_task_share_status_maps_a_worker_snapshot() {
         last_exchange: None,
         notices: &notices,
         now_secs: 1_700_000_000,
+        exec_provider: &exec_provider,
     });
     assert_eq!(status["running"], true);
     assert_eq!(status["connected"], true);
@@ -310,6 +318,13 @@ fn android_task_share_status_maps_a_worker_snapshot() {
     assert_eq!(status["incoming"], json!([]));
     assert_eq!(status["discovery"]["offer"], Value::Null);
     assert_eq!(status["notices"][0], "Share-Server verbunden");
+    assert_eq!(status["execProvider"]["provider"], "android-subreaper");
+    assert_eq!(status["execProvider"]["available"], true);
+    let member = &status["execTargets"][0];
+    assert_eq!(member["targetKey"], "room/wire-room/d1/fp2");
+    assert_eq!(member["relation"], "room");
+    assert_eq!(member["roomName"], "Team");
+    assert_eq!(member["enabled"], false);
 
     let offline = status_json(&StatusInput {
         worker: None,
@@ -322,6 +337,7 @@ fn android_task_share_status_maps_a_worker_snapshot() {
         last_exchange: None,
         notices: &VecDeque::new(),
         now_secs: 1_700_000_000,
+        exec_provider: &exec_provider,
     });
     assert_eq!(offline["running"], false);
     assert_eq!(offline["server"], Value::Null);

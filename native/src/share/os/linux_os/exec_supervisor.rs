@@ -1,6 +1,6 @@
 use std::io::{self, Read};
-use std::os::unix::process::ExitStatusExt;
-use std::process::{ChildStdin, Command, Stdio};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -10,31 +10,122 @@ use crate::share::exec_supervisor_protocol::{
 };
 use crate::share::exec_types::ExecCommand;
 
-pub(super) fn run(mut stream: std::os::unix::net::UnixStream) -> io::Result<()> {
+/// How the supervisor starts a job's root process. Linux passes the values
+/// it always used (its systemd unit's cgroup contains the job); Android runs
+/// the supervisor in the app process and adds a per-job intermediate.
+pub(crate) struct SpawnPolicy<'a> {
+    /// Shell of `ExecCommand::Shell` unless an absolute `SHELL` is honoured.
+    pub(crate) default_shell: &'static str,
+    /// An absolute `SHELL` in the job environment replaces `default_shell`.
+    pub(crate) shell_from_environment: bool,
+    /// Option placed before the shell command string (`-lc`, `-c`).
+    pub(crate) shell_option: &'static str,
+    /// The root process leads its own process group.
+    pub(crate) own_process_group: bool,
+    /// Process spawned in place of the root; it forks the root itself.
+    pub(crate) intermediate: Option<&'a dyn Intermediate>,
+}
+
+/// A process the supervisor spawns in place of the job's root where no OS
+/// boundary contains the job (Android: a per-job subreaper). It forks the
+/// root, reports the root's wait status and exits only once the job's whole
+/// process tree is gone; the supervisor never signals the root directly.
+pub(crate) trait Intermediate {
+    /// Prepares `command` to start as the intermediate (pre-exec hook,
+    /// status channel); `own_process_group` applies to the root.
+    fn arm(
+        &self,
+        command: &mut Command,
+        own_process_group: bool,
+    ) -> io::Result<Box<dyn ArmedIntermediate>>;
+}
+
+/// One armed start of an [`Intermediate`].
+pub(crate) trait ArmedIntermediate {
+    /// The intermediate now runs with this pid.
+    fn spawned(&mut self, pid: u32);
+    /// The root's wait status once the intermediate reported it; never blocks.
+    fn root_status(&mut self) -> io::Result<Option<ExitStatus>>;
+    /// Ends every remaining process of the job and reaps the intermediate
+    /// (`child`); returns only when it is gone.
+    fn finish(&mut self, child: &mut Child);
+}
+
+/// The spawned process: the root itself, or the intermediate that forked it.
+struct Root {
+    child: Child,
+    intermediate: Option<Box<dyn ArmedIntermediate>>,
+}
+
+impl Root {
+    fn exit_status(&mut self) -> io::Result<Option<ExitStatus>> {
+        match self.intermediate.as_mut() {
+            Some(intermediate) => intermediate.root_status(),
+            None => self.child.try_wait(),
+        }
+    }
+
+    /// Cancel or a lost controller: a plain root is killed and reaped (the
+    /// OS boundary ends the rest); an intermediate tree ends in `drop`.
+    fn cancel(&mut self) {
+        if self.intermediate.is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn abort(&mut self) {
+        if self.intermediate.is_none() {
+            let _ = self.child.kill();
+        }
+    }
+}
+
+impl Drop for Root {
+    fn drop(&mut self) {
+        // Every way out of `run` after the spawn passes here: nothing of an
+        // intermediate job outlives its supervisor.
+        if let Some(intermediate) = self.intermediate.as_mut() {
+            intermediate.finish(&mut self.child);
+        }
+    }
+}
+
+pub(super) fn run(
+    mut stream: std::os::unix::net::UnixStream,
+    policy: &SpawnPolicy<'_>,
+) -> io::Result<()> {
     let start = match recv_command(&mut stream)? {
         SupervisorCommand::Start(start) => start,
         _ => return Err(invalid("supervisor expected a start frame")),
     };
     start.request.validate()?;
-    let mut child = match spawn(&start) {
-        Ok(child) => child,
+    let mut root = match spawn(&start, policy) {
+        Ok(root) => root,
         Err(error) => {
             let _ = send_event(&mut stream, &SupervisorEvent::Error(error.to_string()));
             return Ok(());
         }
     };
-    send_event(&mut stream, &SupervisorEvent::Started { pid: child.id() })?;
+    send_event(
+        &mut stream,
+        &SupervisorEvent::Started {
+            pid: root.child.id(),
+        },
+    )?;
 
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let event_writer = writer.clone();
     let output = Arc::new(AtomicU64::new(0));
     let truncated = Arc::new(AtomicBool::new(false));
     let limit = start.request.effective_max_output_bytes();
-    let stdout = child
+    let stdout = root
+        .child
         .stdout
         .take()
         .ok_or_else(|| invalid("stdout pipe missing"))?;
-    let stderr = child
+    let stderr = root
+        .child
         .stderr
         .take()
         .ok_or_else(|| invalid("stderr pipe missing"))?;
@@ -59,9 +150,9 @@ pub(super) fn run(mut stream: std::os::unix::net::UnixStream) -> io::Result<()> 
             }
         })?;
 
-    let mut stdin = child.stdin.take();
+    let mut stdin = root.child.stdin.take();
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = root.exit_status()? {
             let mut exit = SupervisorExit {
                 code: status.code(),
                 signal: status.signal(),
@@ -80,12 +171,11 @@ pub(super) fn run(mut stream: std::os::unix::net::UnixStream) -> io::Result<()> 
             Ok(Ok(SupervisorCommand::Cancel))
             | Ok(Err(_))
             | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                root.cancel();
                 return Ok(());
             }
             Ok(Ok(SupervisorCommand::Start(_))) => {
-                let _ = child.kill();
+                root.abort();
                 return Err(invalid("duplicate supervisor start frame"));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -93,7 +183,7 @@ pub(super) fn run(mut stream: std::os::unix::net::UnixStream) -> io::Result<()> 
     }
 }
 
-fn spawn(start: &SupervisorStart) -> io::Result<std::process::Child> {
+fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<Root> {
     let mut command = match &start.request.command {
         ExecCommand::Argv { program, args } => {
             let mut command = Command::new(program);
@@ -104,11 +194,11 @@ fn spawn(start: &SupervisorStart) -> io::Result<std::process::Child> {
             let shell = start
                 .environment
                 .get("SHELL")
-                .filter(|value| value.starts_with('/'))
+                .filter(|value| policy.shell_from_environment && value.starts_with('/'))
                 .map(String::as_str)
-                .unwrap_or("/bin/sh");
+                .unwrap_or(policy.default_shell);
             let mut shell_command = Command::new(shell);
-            shell_command.args(["-lc", command]);
+            shell_command.args([policy.shell_option, command]);
             shell_command
         }
     };
@@ -127,7 +217,24 @@ fn spawn(start: &SupervisorStart) -> io::Result<std::process::Child> {
     }) {
         command.current_dir(cwd);
     }
-    command.spawn()
+    let intermediate = match policy.intermediate {
+        Some(intermediate) => Some(intermediate.arm(&mut command, policy.own_process_group)?),
+        None => {
+            if policy.own_process_group {
+                command.process_group(0);
+            }
+            None
+        }
+    };
+    let mut root = Root {
+        child: command.spawn()?,
+        intermediate,
+    };
+    let pid = root.child.id();
+    if let Some(intermediate) = root.intermediate.as_mut() {
+        intermediate.spawned(pid);
+    }
+    Ok(root)
 }
 
 fn spawn_output<R: Read + Send + 'static>(
