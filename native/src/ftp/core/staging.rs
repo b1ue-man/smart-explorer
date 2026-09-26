@@ -1,8 +1,10 @@
 //! Staged writes on FTP. The protocol has no exclusive create and no
-//! no-replace rename, so both are an absence check right before the one
-//! mutating command; the stage itself is a fresh random sibling name
-//! (`vfs::unique_staging_path`). Replacing an existing file is a single
-//! RNFR/RNTO pair, which POSIX servers carry out as one `rename(2)`.
+//! no-replace rename, so opening the stage and publishing it are each an
+//! absence check right before the one mutating command; the stage itself is a
+//! fresh random sibling name (`vfs::unique_staging_path`). The general
+//! `rename_no_replace` stays unsupported, so user renames and conflict copies
+//! keep refusing. Replacing an existing file is a single RNFR/RNTO pair, which
+//! POSIX servers carry out as one `rename(2)`.
 use std::io;
 
 use crate::vfs::Backend;

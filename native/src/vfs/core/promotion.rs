@@ -40,7 +40,10 @@ pub fn promote_staged_replace<B: Backend + ?Sized>(
 
 /// Promote a fully flushed staged file only if the destination remains absent.
 /// The backend contract forbids implementing this as a probe followed by a
-/// replacing rename.
+/// replacing rename. The one documented exception is a protocol without any
+/// no-replace primitive (FTP): it publishes after an absence check directly
+/// before its rename and keeps `rename_no_replace` unsupported, so renames and
+/// conflict copies elsewhere still refuse instead of silently weakening.
 pub fn promote_staged_create<B: Backend + ?Sized>(
     backend: &B,
     staged: &str,
@@ -54,8 +57,21 @@ pub(crate) fn default_promote_staged_no_replace<B: Backend + ?Sized>(
     staged: &str,
     destination: &str,
 ) -> io::Result<()> {
+    promote_staged_no_replace_with(backend, staged, destination, |staged, destination| {
+        backend.rename_no_replace(staged, destination)
+    })
+}
+
+/// `promote_staged_no_replace` with a backend-specific publishing step (see the
+/// FTP exception on `promote_staged_create`).
+pub(crate) fn promote_staged_no_replace_with<B: Backend + ?Sized>(
+    backend: &B,
+    staged: &str,
+    destination: &str,
+    create: impl FnOnce(&str, &str) -> io::Result<()>,
+) -> io::Result<()> {
     validate_staged_file(backend, staged)?;
-    backend.rename_no_replace(staged, destination)
+    create(staged, destination)
 }
 
 pub(crate) fn default_promote_staged<B: Backend + ?Sized>(
@@ -75,20 +91,20 @@ pub(crate) fn default_promote_staged<B: Backend + ?Sized>(
 }
 
 /// The promotion steps shared by every backend: a missing destination is
-/// created through the no-replace rename, an existing regular file is handed to
-/// `replace`, which must be one server-side replacing operation (never a
-/// client-side remove-then-rename that a lost connection could leave half done).
+/// created through the backend's `promote_staged_no_replace`, an existing
+/// regular file is handed to `replace`, which must be one server-side replacing
+/// operation (never a client-side remove-then-rename that a lost connection
+/// could leave half done).
 pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
     backend: &B,
     staged: &str,
     destination: &str,
     replace: impl FnOnce(&str, &str) -> io::Result<()>,
 ) -> io::Result<()> {
-    validate_staged_file(backend, staged)?;
-
     if !backend.try_exists(destination)? {
-        return backend.rename_no_replace(staged, destination);
+        return backend.promote_staged_no_replace(staged, destination);
     }
+    validate_staged_file(backend, staged)?;
 
     let destination_meta = backend.stat(destination)?;
     if destination_meta.is_dir || destination_meta.is_symlink {
