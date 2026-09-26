@@ -345,6 +345,22 @@ Kompatibilität. **Connect** plus PIN startet den authentifizierten,
 verschlüsselten Schlüsselaustausch vollständig im Hintergrund; die
 Freigabeseite des veröffentlichenden Geräts muss nicht noch einmal zustimmen.
 
+Im Terminal geht dasselbe mit **`se share discoverable`**: `se share
+discoverable --minutes 5 --pin 1454` macht dieses Gerät fünf Minuten suchbar,
+`--room NAME` stattdessen einen Raum, `--name` ändert den angezeigten Namen.
+Damit die PIN nicht in der Prozessliste steht, liest `--pin-stdin` sie aus der
+Standardeingabe, und ohne PIN-Angabe fragt `se` im Terminal verdeckt danach
+(nur der abschließende Zeilenumbruch wird entfernt). Die Ausgabe nennt
+Angebots-ID, Ziel, Namen, Endzeit, Restzeit und ob der Share-Server das Angebot
+schon bestätigt hat (`published`) oder noch nicht (`prepared`).
+`se share discoverable list` zeigt die laufenden eigenen Angebote,
+`se share discoverable stop [ID|Präfix] [--all]` beendet eines oder alle; alle
+drei kennen `--json`, und `se share status` listet die Angebote ebenfalls. Der
+Hintergrund-Worker führt die eigenen Angebote dauerhaft, deshalb sieht das
+Terminal sie auch dann, wenn die Desktop-App gleichzeitig läuft. Ein Ziel kann
+nur einmal gleichzeitig suchbar sein; wird der Share-Worker gestoppt oder neu
+gestartet, enden seine Angebote und App und Terminal zeigen sie nicht mehr an.
+
 Eine erfolgreiche Direct-Kopplung installiert die vollständige Relation auf
 beiden Geräten, sodass beide Seiten sofort als Remote-Gerät nutzbar sind.
 Bestehende einseitige Direct-Beziehungen werden bei kompatiblen aktuellen
@@ -419,7 +435,8 @@ Unix-Rechte vor anderen normalen Benutzern, verschlüsselt aber nicht gegen
 Datenträger. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
-`se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`. Remote
+`se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`,
+`se share discoverable --minutes 5 --pin-stdin`, `se update --check`. Remote
 Execution ist ab 0.5.134 als separate, standardmaessig deaktivierte
 Geraeteberechtigung verfuegbar. `se share grants exec` zeigt die exakten
 Identitaeten, `enable --yes` erlaubt einem Geraet die vollstaendige Shell-Autoritaet
@@ -524,7 +541,8 @@ dnsmasq meldet die App „Internet-Teilen nicht verfuegbar: <Grund>", die
 LAN-Erkennung arbeitet trotzdem. CLI: `se share lan [status|presence on|off|
 uplink enable|disable|stop|status]`.
 Headless Share laesst sich ueber `se share configure`, `identity`, `status`,
-`request`, `grants`, `export`, `room`, `lan` und `worker` vollstaendig verwalten;
+`request`, `grants`, `export`, `room`, `discoverable`, `lan` und `worker`
+vollstaendig verwalten;
 `status` unterscheidet dabei einen laufenden Worker von einer tatsaechlich
 verbundenen Signaling-Sitzung. Das vollstaendige Protokoll und die
 Statusbedeutungen stehen in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md).
@@ -569,6 +587,11 @@ startet genau diese Payload vor der Veröffentlichung unter Xvfb.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
 ```
+
+Danach aktualisiert sich `se` selbst mit `se update` (siehe
+[Updates bekommen](#-updates-bekommen--das-hier-eintragen)). Die Installation
+legt dafür `update_source.txt` neben `se` an, falls dort noch keine liegt; eine
+vorhandene Update-Quelle einer Desktop-Installation bleibt unverändert.
 
 **Windows-Grundinstallation:** Die Smart-Explorer-Basis bleibt ohne Admin und
 ohne Setup-Zwang nutzbar. Die optionale systemweite Dokany-Laufzeit für echte
@@ -629,6 +652,29 @@ Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
 `%APPDATA%\smart_explorer\update_source.txt` bzw.
 `$XDG_DATA_HOME/smart_explorer/update_source.txt`.
 Die Android-App nutzt denselben Feed für ihre eigene APK (siehe unten).
+
+**Im Terminal: `se update`.** `se update --check` zeigt installierte und
+verfügbare Version (mit `--json` maschinenlesbar) und ändert nichts;
+`se update` installiert eine neuere Version. Fehlt eine Update-Quelle, sagt `se`
+das und nennt `se update --source <Feed-URL oder Ordner>` — das ist dieselbe
+Einstellung wie das UPDATE-Feld der App.
+
+- **Nur-Terminal-Installation** (`--cli-only`): `se` lädt das `se` des Feeds,
+  prüft dessen SHA-256 und ersetzt die tatsächlich installierte Datei
+  (`~/.local/opt/smart-explorer/se`; der Link `~/.local/bin/se` bleibt und zeigt
+  weiter darauf). Die Kopie wird direkt vor dem atomaren Austausch noch einmal
+  geprüft, die Dateirechte bleiben. Startet das neue `se` nicht oder meldet es
+  eine andere Version als der Feed, stellt `se update` die vorherige Datei
+  wieder her. Ein laufender Hintergrund-Worker der alten Version wird danach
+  an die neue Version übergeben; läuft keiner, startet auch keiner.
+  `se update --reinstall` installiert die Feed-Version erneut, auch wenn sie
+  nicht neuer ist (nie eine ältere).
+- **Neben der Desktop-App** (Linux-Desktop-Installation, Windows): `se update`
+  lädt und prüft App, Update-Helfer und `se` genau wie die Update-Prüfung der
+  App und startet den hash-gebundenen Update-Helfer. Er ersetzt alle drei nach
+  dem Ende von `se update`, stoppt vorher den Hintergrund-Worker, wartet auf
+  offene App-Fenster und startet danach Smart Explorer (wie **Jetzt neu
+  starten**; braucht eine grafische Sitzung). Smart Explorer vorher schließen.
 
 ## 🤖 Android: Installieren und Updates
 
@@ -869,13 +915,15 @@ Android-SDK, `cargo-ndk` sowie die Signaturvariablen `ANDROID_KEYSTORE_FILE`,
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
 > RELEASING.md.
 
-**Update-Quelle (Feed)** — einstellbar in der App (Sidebar → UPDATE) oder in
+**Update-Quelle (Feed)** — einstellbar in der App (Sidebar → UPDATE), im
+Terminal mit `se update --source …` oder in
 `%APPDATA%\smart_explorer\update_source.txt`. Erlaubt: ein **Ordner**
 (lokal/`\\server\share`), eine **https-URL** oder ein **GitHub-Repo-Link**
 (`https://github.com/b1ue-man/smart-explorer` → wird auf den `main`-Feed
 übersetzt). Installierte Instanzen prüfen den Feed bei jedem Start und stagen
 ein neues, hash-verifiziertes App/Updater/`se`-Bundle. Die transaktionale
-Installation und der Neustart erfolgen erst nach ausdrücklicher Bestätigung.
+Installation und der Neustart erfolgen erst nach ausdrücklicher Bestätigung
+(in der App oder durch `se update`).
 
 ## Daten der App
 

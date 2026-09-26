@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-09-25. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-09-26. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -22,8 +22,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Sync | Jobs `native/src/syncjobs/`, Zwei-Wege `native/src/bisync/`, Einweg-Spiegeln `native/src/sync/` |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`), `native/src/autostart/` |
 | Share/P2P | `native/src/share/` (Iroh/QUIC, Profile, Discovery, Räume), Share-Server `share-server/` |
+| Eigene Discovery-Angebote (suchbar machen) | Daemon-Buch `share/core/discovery_offer_book.rs` (aus Worker-Ereignissen, in `ShareWorkerSnapshot.discovery_offers`), IPC `daemon/os/shared/ipc_host_commands.rs` (`send_command` → `ShareCommandReply`), CLI `cli/share/discoverable.rs` |
 | Speicheranalyse/Duplikate | `native/src/analytics/` |
-| Updates | Desktop `native/src/updater/`, Android `update.*` in `native/src/mobile/os/shared/domains/` |
+| Updates | Desktop `native/src/updater/`, Terminal `se update` `cli/update.rs` → `updater/os/shared/terminal.rs` (Feed-Prüfung, Installationsart, Ersatz an Ort und Stelle), Android `update.*` in `native/src/mobile/os/shared/domains/` |
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
 
 ## Module und Ordner

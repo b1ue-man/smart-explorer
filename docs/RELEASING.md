@@ -276,6 +276,24 @@ kept on failure so fix reruns rebuild only the crate. Formatting and dead-code
 drift outside the batch stays tracked as [TODO.md](TODO.md) H1 rather than
 failing a feature batch.
 
+For the terminal discoverability / `se update` batch, use only
+`native/test-cli-discoverable-update-task.sh` through the exact-SHA
+`.github/workflows/cli-discoverable-update-task.yml` Ubuntu dispatch
+(job/step timeouts 120/110 minutes, Cargo cache kept on failure). It runs the
+`cli_task_` library cases and 17 directly affected integrations (Share stop
+barrier, IPC wire and bounds, GUI and Android discovery/status consumers,
+updater feed/staging, worker version handshake, CLI surface), builds the
+development `se` and `se-share-server`, and runs
+`native/test-cli-discoverable-update-e2e.sh`: discoverable offers against a
+local Share server (Direct and Room, PIN from argument and stdin, list after
+other readers drained the UI events, conflict, stop by prefix and all, worker
+stop) and `se update` on a terminal-only installation from a local feed
+(missing source, up to date, reinstall through a link, hash mismatch, version
+mismatch rollback, desktop detection). It then checks the installer's
+update-source rules and gates rustfmt and host/`x86_64-pc-windows-gnu` clippy on
+the lines the batch changed. See the
+[batch plan](superpowers/plans/2026-09-26-cli-discoverable-update.md).
+
 For the sync endpoint / cross-remote compatibility batch, dispatch only
 `.github/workflows/sync-paths-task.yml` with the full pushed candidate SHA. Its
 single `python native/test-sync-paths-task.py` entrypoint runs on Linux and Windows,
@@ -417,7 +435,9 @@ For a human-operated workstation release, use the same wrapper directly:
    assets required, verifies its version and SHA-256, and requests the existing
    daemon's version-bound handoff. CLI-only installation leaves an existing
    desktop `update_source.txt` unchanged, so this exact one-time handoff cannot
-   pin future app updates to the candidate SHA.
+   pin future app updates to the candidate SHA. Where none exists it writes the
+   repository feed (`https://github.com/<repo>` for the default `main` ref, never
+   the release tag), which `se update` then reads.
 
 `verify_release_candidate=true` and `verify/v*` remain available only when a
 user explicitly requests exact-candidate verification without a release. They
@@ -552,6 +572,11 @@ terminal-only installation needs no Rust or desktop toolchain:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/install-linux.sh | sh -s -- --cli-only
 ```
+
+A terminal-only installation writes `update_source.txt` beside `se` only when
+no such file exists (an existing desktop source stays untouched), so
+`se update` finds its feed; older terminal-only installations set one with
+`se update --source <feed>`.
 
 If release assets are unavailable it normally falls back to a one-job local
 Cargo build. The complete release wrapper pins
@@ -695,6 +720,34 @@ data, verifies their required SHA-256 files, and durably records one staging
 manifest. No installed file or process changes during this check. The dialog's
 **Later** action keeps that exact verified staging for the next launch;
 **Discard** removes it. Only explicit **Restart now** consent starts the helper.
+On Linux every staged payload gets mode 0755 after its SHA-256 check: a
+download is created without execute bits, and the staged helper is started
+directly.
+
+**Terminal update (`se update`).** `--check` reports the running and the feed
+version (`--json` for scripts) and changes nothing; without a configured source
+it fails with the `se update --source` hint. `se update` resolves the running
+`se` to its installed file (Linux follows links such as `~/.local/bin/se`) and
+decides by what lies beside it:
+
+- **Terminal-only** (no app beside `se`, e.g. `install-linux.sh --cli-only`):
+  download `se` plus its required `.sha256` into app data, copy it next to the
+  installed file with the installed file's permissions, verify that copy again
+  and rename it over the installed name (one atomic `rename(2)`; the name never
+  disappears). A verified backup of the previous file stays until the new file
+  answers `se update --complete-install` with exactly the feed's `version.txt`;
+  otherwise the backup is renamed back. That hidden completion step runs in the
+  new binary and performs the version-bound worker handoff: a running worker of
+  another version is replaced, a missing worker is not started. Every later
+  `se` must keep accepting `se update --complete-install`. `--reinstall`
+  reinstalls the same version; `se update` never downgrades. Windows has no
+  terminal-only self-replacement (a running `se.exe` cannot replace itself) and
+  says so.
+- **Beside the desktop app** (Linux desktop installation, every Windows
+  installation): stage app, helper and `se` exactly like the app's check and
+  start the same hash-bound helper, bound to the app next to `se` with `se` as
+  the parent process. After `se` exits the helper follows the steps below and
+  starts Smart Explorer, so this needs a graphical session.
 
 The helper's launch protocol is a release compatibility boundary because an
 older app downloads the **new** helper before asking it to apply the update.
@@ -739,10 +792,11 @@ Windows distribution is still: sign every release, keep one stable publisher
 identity, publish every version as a GitHub Release, and let Windows/AV
 reputation build on that identity.
 
-The update **source** the app points at (Sidebar → UPDATE, or the app data
-`update_source.txt`; `%APPDATA%\smart_explorer\` on Windows,
-`$XDG_DATA_HOME/smart_explorer/` or `~/.local/share/smart_explorer/` on Linux)
-may be:
+The update **source** the app points at (Sidebar → UPDATE or
+`se update --source`, stored as the app data `update_source.txt` in
+`%APPDATA%\smart_explorer\` on Windows and `$XDG_DATA_HOME/smart_explorer/` or
+`~/.local/share/smart_explorer/` on Linux; without it the installer's
+`update_source.txt` beside the executable applies) may be:
 
 - a **GitHub repo link** — `https://github.com/b1ue-man/smart-explorer`
   (translated to the `main` raw feed automatically), **or**
