@@ -180,8 +180,10 @@ impl Backend for WebdavBackend {
         self.identity.clone()
     }
     fn namespace_identity(&self) -> String {
-        self.identity.strip_suffix(&format!(":root={}", self.root))
-            .unwrap_or(&self.identity).to_string()
+        self.identity
+            .strip_suffix(&format!(":root={}", self.root))
+            .unwrap_or(&self.identity)
+            .to_string()
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -293,6 +295,16 @@ impl Backend for WebdavBackend {
             "MOVE",
         )?;
         Ok(())
+    }
+
+    /// Replaces an existing file with one `MOVE` and `Overwrite: T` (RFC 4918):
+    /// the server swaps the files in a single request, so no client-side
+    /// remove-then-rename can be left half done. Not an old-or-new atomic
+    /// guarantee, which is why mounts keep requiring `rename_overwrites`.
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        crate::vfs::promote_staged_with(self, staged, destination, |staged, destination| {
+            self.rename(staged, destination)
+        })
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {

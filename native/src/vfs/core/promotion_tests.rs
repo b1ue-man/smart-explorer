@@ -1,4 +1,6 @@
-use super::{promote_staged_create, promote_staged_replace, Backend, LocalBackend};
+use super::{
+    promote_staged_create, promote_staged_replace, promote_staged_with, Backend, LocalBackend,
+};
 
 fn root(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("se_promote_{name}_{}", std::process::id()))
@@ -161,4 +163,43 @@ fn default_no_replace_never_calls_a_replacing_rename() {
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
     assert_eq!(backend.0.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn android_task_promote_staged_with_creates_new_names_and_hands_existing_files_to_replace() {
+    let root = root("with");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("folder")).unwrap();
+    let backend = LocalBackend::new("/");
+    let path = |name: &str| root.join(name).to_str().unwrap().to_string();
+
+    // A missing destination is created by the no-replace rename, never by `replace`.
+    std::fs::write(root.join("new.stage"), b"new").unwrap();
+    promote_staged_with(&backend, &path("new.stage"), &path("new"), |_, _| {
+        panic!("replace called for a missing destination")
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(root.join("new")).unwrap(), b"new");
+
+    // An existing regular file goes to `replace` with the staged file untouched.
+    std::fs::write(root.join("old"), b"old").unwrap();
+    std::fs::write(root.join("old.stage"), b"newer").unwrap();
+    let mut handed = None;
+    promote_staged_with(&backend, &path("old.stage"), &path("old"), |from, to| {
+        handed = Some((from.to_string(), to.to_string()));
+        std::fs::rename(from, to)
+    })
+    .unwrap();
+    assert_eq!(handed, Some((path("old.stage"), path("old"))));
+    assert_eq!(std::fs::read(root.join("old")).unwrap(), b"newer");
+
+    // A directory is never replaced by a file.
+    std::fs::write(root.join("dir.stage"), b"x").unwrap();
+    let error = promote_staged_with(&backend, &path("dir.stage"), &path("folder"), |_, _| {
+        panic!("replace called for a directory")
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(root.join("dir.stage").exists());
+    let _ = std::fs::remove_dir_all(&root);
 }

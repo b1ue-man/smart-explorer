@@ -25,6 +25,8 @@ mod io_adapters;
 mod known_hosts;
 #[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core/posix_rename.rs"]
+mod posix_rename;
 #[path = "core/session.rs"]
 mod session;
 #[path = "core/url.rs"]
