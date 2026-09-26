@@ -190,10 +190,14 @@ Ereignisse (`pollEvents`):
 
 ### 4.6 Verbindungen (`conn.*`) und Google Drive (`gdrive.*`)
 ```text
-Connection {id, label, protocol:"sftp|ftp|ftps|webdav", host, port:Int, user, root,
+Connection {id, label, protocol:"sftp|ftp|ftps|webdav|smb", host, port:Int, user, root,
             auth:"password|key", keyPath:String?, useAgent:Boolean, https:Boolean, location}
 ConnectionInput = Connection ohne id/location, plus password:String?, passphrase:String?, id:String?
 ```
+- SMB (SMB2/3, Standardport 445): `root` beginnt mit der Freigabe (`/<freigabe>/<pfad>`), eine
+  Domäne steht als `DOMÄNE\benutzer` im Feld `user`; nur `auth:"password"`; `location` =
+  `smb://user@host:port/<freigabe>/<pfad>`; Listing-`backend` = `"smb"`. Ersetzen ist ein Umbenennen
+  mit `ReplaceIfExists` auf dem Server, neue Dateien werden exklusiv angelegt.
 - `conn.list {}` → `[Connection]`
 - `conn.test {input:ConnectionInput}` → `{message}` (Fehler mit `kind` auth/network/…)
 - `conn.save {input:ConnectionInput}` → `Connection` (leeres `password` bei Bearbeitung = unverändert)
@@ -301,6 +305,9 @@ Pairing läuft (`share.watch`), sonst alle 5 s bei sichtbarer App und alle 60 s 
 ShareStatus {running, connected, relayUrl:String?, lastError:String?, server:String?,
   lanPresence:String, identity:{deviceId, deviceName, fingerprint, directCode},
   devices:[{contactId, name, status, statusText, online:Boolean, location, lan:Boolean}],
+  execProvider:{available:Boolean, provider, detail},
+  execTargets:[{targetKey, relation:"direct|room", roomId:String?, roomName:String?, deviceId, name,
+                fingerprint, enabled:Boolean, baseAuthorized:Boolean, policyRevision:Long}],
   rooms:[{profileId, roomId, name, status, autoJoin, location:String?,
           members:[{deviceId, name, status, location, blocked:Boolean}]}],
   incoming:[Request], outgoing:[Request],
@@ -335,4 +342,18 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   `result = {stdout, stderr, exitCode:Int?, timedOut, truncated}` (`daemon::exec_share`, Ausgabe ≤ 1 MiB;
   `shell:false` trennt an Leerraum, Anführungszeichen gruppieren, ein Backslash ist wörtlich außer vor
   Leerraum oder Anführungszeichen; eine verweigerte Freigabe kommt als `permission`)
-Nicht auf Android: Exec-Freigaben für dieses Gerät (Exec-Host), LAN-Uplink, Anfragen im Altformat.
+- Exec-Host (dieses Gerät führt Befehle anderer Geräte aus; Anbieter `android-subreaper`: jeder Befehl
+  läuft unter einem eigenen Subreaper-Zwischenprozess mit `/system/bin/sh`, Abbruch, Zeitlimit und
+  Entzug beenden den ganzen Prozessbaum; Arbeitsordner ohne `cwd` = `homeDir`). Freigaben gelten wie am
+  Desktop je exakter Identität; `execTargets` entsteht wie `exec_device_views` (Direkt-Freigaben und
+  Raummitglieder), Schlüssel `direct/<deviceId>/<fingerprint>` bzw. `room/<roomId>/<deviceId>/<fingerprint>`:
+  - `share.setExec {targetKey, enabled:Boolean}` → `{revision:Long}` (`daemon::mutate_exec_grant`,
+    Journal wie am Desktop; Schlüssel gegen den aktuellen Profilstand aufgelöst, sonst `not_found`;
+    nur vollständig gespeichert **und** angewendet gilt als Erfolg, sonst Fehler mit Detail;
+    `enabled:true` bei nicht verfügbarem Anbieter → `unsupported` mit Grund)
+  - `share.execJobs {}` → `{active:[ExecJob], history:[ExecJob]}` mit `ExecJob {direction:"incoming|outgoing",
+    execId, peerDeviceId, peerName, program, state, startedAt:Long?, finishedAt:Long?, exitCode:Int?,
+    message:String?}`; `state` = Lebenszyklus in snake_case (`running`, `exited`, `cancelled`,
+    `timed_out`, `revoked`, …), Zeiten in Sekunden seit 1970
+  - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `not_found`)
+Nicht auf Android: LAN-Uplink, Anfragen im Altformat.

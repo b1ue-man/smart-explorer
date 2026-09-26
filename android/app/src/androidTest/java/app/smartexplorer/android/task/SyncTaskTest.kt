@@ -2,6 +2,7 @@ package app.smartexplorer.android.task
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -13,10 +14,10 @@ import org.junit.runner.RunWith
 
 /**
  * G4 sync: internal storage ↔ SD-card job with validation, run, conflicts (check, resolve, merge,
- * keep both, skip, finish; plain SFTP cannot replace files, so conflicts run between two local
- * volumes), a job from the SD-card root to SFTP with deletions in both directions (app trash, the
- * trash folder never uploaded, other apps' private folders omitted) and mirroring the SD-card
- * root (trash folder omitted).
+ * keep both, skip, finish; conflicts run between two local volumes), a job from the SD-card root to
+ * SFTP with deletions in both directions (app trash, the trash folder never uploaded, other apps'
+ * private folders omitted), sync updates that replace existing files on plain SFTP, FTP and SMB,
+ * and mirroring the SD-card root (trash folder omitted).
  * Every job-bound call waits for its task: one task per job at a time (busy otherwise).
  */
 @RunWith(AndroidJUnit4::class)
@@ -157,6 +158,41 @@ class SyncTaskTest {
         assertTrue(trash.any { it.text("originalLocation") == drop.absolutePath })
         Api.call("sync.delete", args("id" to id))
         keep.delete()
+    }
+
+    /** A changed local file replaces its synced copy (posix-rename, RNFR/RNTO, SMB rename with replace). */
+    @Test
+    fun syncUpdatesReplaceFilesOnPlainSftpFtpAndSmb() = coreTest(timeoutMs = 25 * 60_000L) {
+        for ((label, connection) in listOf("sftp" to Servers.sftp(), "ftp" to Servers.ftp(), "smb" to Servers.smb())) {
+            val local = Fixture.dir(Volumes.primary(), "sync", "update-$label")
+            Fixture.write(File(local, "notiz.txt"), "Version 0")
+            Fixture.write(File(local, "bleibt.txt"), "unverändert")
+            val remote = Servers.freshDir(connection, "update")
+            val job = SyncJobs.save(
+                "name" to Fixture.unique("Task Update $label"),
+                "source" to local.absolutePath,
+                "target" to remote,
+                "direction" to "both",
+                "conflict" to "newer",
+                "trigger" to "manual",
+                "enabled" to true,
+            )
+            val id = job.text("id")
+            val first = Api.runTask("sync.run", args("id" to id), timeoutMs = 600_000)
+            assertEquals("$label, erster Lauf: ${first.errors}", 0, first.resultObj().int("errors"))
+            assertEquals(setOf("notiz.txt", "bleibt.txt"), Api.names(remote))
+
+            delay(2_500) // remote mtimes have one-second resolution
+            Fixture.write(File(local, "notiz.txt"), "Version 1 – lokal geändert, länger")
+            val second = Api.runTask("sync.run", args("id" to id), timeoutMs = 600_000)
+            assertEquals("$label, zweiter Lauf: ${second.errors}", 0, second.resultObj().int("errors"))
+            assertEquals("$label: Stufen oder Kopien liegen geblieben", setOf("notiz.txt", "bleibt.txt"), Api.names(remote))
+            val check = Fixture.dir(Volumes.primary(), "sync", "update-$label-check")
+            Api.copy(listOf(Api.child(remote, "notiz.txt").location), check.absolutePath)
+            assertEquals(label, "Version 1 – lokal geändert, länger", File(check, "notiz.txt").readText())
+            Api.call("sync.delete", args("id" to id))
+            Api.runTask("fs.delete", args("locations" to listOf(remote), "permanent" to true))
+        }
     }
 
     @Test

@@ -162,6 +162,9 @@ class RemoteTaskTest {
     fun smbUploadDownloadReplaceAndDelete() = coreTest {
         assertTrue(Api.obj("conn.test", args("input" to Servers.smbInput())).text("message").isNotBlank())
         Api.failure("conn.test", args("input" to Servers.smbInput(password = "falsches-passwort")), "auth")
+        // A wrong share name is named as such, not reported as a missing folder deeper down.
+        val wrongShare = Api.failure("conn.test", args("input" to Servers.smbInput().withFields("root" to "/gibt-es-nicht")), "not_found")
+        assertTrue("Freigabe nicht benannt: ${wrongShare.message}", wrongShare.message.orEmpty().contains("gibt-es-nicht"))
         val connection = Servers.smb()
         val listing: Listing = Api.listing(connection.text("location"))
         assertEquals("smb", listing.backend)
