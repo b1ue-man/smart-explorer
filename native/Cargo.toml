@@ -44,6 +44,10 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # FTP/FTPS backend (ftp.rs). Blocking FtpStream (no runtime). rustls (NOT
 # native-tls) to avoid schannel/OpenSSL FFI on GNU. See docs/GOTCHAS.md.
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
+# SMB2/3 backend (smb/). Pure Rust (RustCrypto, no C FFI); the default `tokio`
+# feature shares the runtime crate above. Exact pin: the crate ships breaking
+# minor releases quickly (docs/refs/smb2.md).
+smb2 = "=0.26.0"
 # Remote writers stage data in an anonymous disk-backed file until the caller
 # explicitly flushes. This keeps aborted/large uploads off the heap and avoids
 # exposing partially written remote files before the commit boundary.
