@@ -38,8 +38,12 @@ Stand 2026-09-26. Refs: `docs/refs/smb2.md`, `docs/refs/samba-container.md`,
   `share/` verschoben), Schlüssel `direct/<deviceId>/<fingerprint>` bzw.
   `room/<roomId>/<deviceId>/<fingerprint>`, aufgelöst gegen den aktuellen Profilstand; Erfolg nur bei
   `persisted && applied && error == None` (`ExecGrantPersistResult`).
-- Android-Grenzen (Ref `android-child-processes.md`): Beenden des App-Prozesses, Phantom-Prozess-Limit
-  ab Android 12, Einfrieren gecachter Apps; erreichbar nur bei laufendem Share-Dienst.
+- Android-Grenzen (Ref `android-child-processes.md`): stirbt der App-Prozess, tötet das System über
+  `killProcessGroup` die ganze App-cgroup `uid_<uid>/pid_<pid>` – auch `setsid`-/Doppel-Fork-Nachfahren
+  (die Job-Wurzel-Datei ist nur die zweite Sicherung); Phantom-Prozess-Limit ab Android 12 (32
+  systemweit, Kinder mit hoher Hintergrund-CPU werden beendet); gecachte Apps werden samt Kindern
+  eingefroren (nicht mit Vordergrunddienst); `prctl`/`clone` sind für Apps erlaubt, `/proc` der eigenen
+  UID sichtbar. Erreichbar nur bei laufendem Share-Dienst (App offen oder Dauerbetrieb).
 - Verworfen: Kind-Prozess-cgroups (App darf keine anlegen); nur Prozessgruppe (`setsid` entkommt).
 
 ## E3 SMB
@@ -71,3 +75,15 @@ Stand 2026-09-26. Refs: `docs/refs/smb2.md`, `docs/refs/samba-container.md`,
   Speicher, sonst FS-UUID) → Pfad unter den gemeldeten Volumes; app-private und unbekannte Pfade
   abweisen. Nur Ordner-MIME-Typen im Filter (ohne Schema gilt er für `content:` und `file:`); Filter
   für `*/*` verworfen, weil die App sonst bei jedem Datei-Öffnen als Betrachter angeboten würde.
+
+## E5 `Android/data` und `Android/obb` (Kritik 18)
+- Ref `android-data-obb-access.md`: `MANAGE_EXTERNAL_STORAGE` nimmt die Ordner anderer Apps ausdrücklich
+  aus, SAF (`ACTION_OPEN_DOCUMENT_TREE`) kann sie seit Android 11 nicht wählen; die alte
+  DocumentsUI-Lücke ist seit Android 13 geschlossen (kein Weg).
+- Einziger Weg ohne Root: Shizuku (Apache-2.0, `dev.rikka.shizuku:api`/`provider`), Dateizugriff über einen
+  UserService als `shell` (UID 2000). Voraussetzungen: Shizuku-App installieren, per Wireless-Debugging
+  koppeln und nach **jedem** Neustart erneut starten. Unter Android 16 meldet ein offenes Shizuku-Issue
+  (#1574) fehlschlagenden Zugriff in mehreren Dateimanagern.
+- Entscheidung: nicht in diesem Batch. Eigene Integration (Binder-Dienst, zweiter Dateizugriffsweg für
+  alle Operationen, eigene Bedienung zum Koppeln) mit unsicherem Ergebnis auf aktuellen Android-Versionen;
+  als Option `AND3` in `docs/TODO.md` festgehalten.

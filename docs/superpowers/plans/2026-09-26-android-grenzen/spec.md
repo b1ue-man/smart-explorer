@@ -42,7 +42,10 @@ Android-Batch: selbstständig, ohne Zwischenstopp; Annahmen stehen hier.
   wenn eine andere App einen Ordner zum Öffnen übergibt, und öffnet ihn. Dateien werden bewusst nicht
   beansprucht (sonst stünde die App bei jedem Datei-Öffnen als Betrachter zur Wahl); für Dateien bleibt
   „Teilen → Smart Explorer“.
-- Nicht: Einbinden als Laufwerk; `Android/data`/`Android/obb` bleiben gesperrt (Betriebssystem).
+- Nicht: Einbinden als Laufwerk; `Android/data`/`Android/obb` anderer Apps (Android 11+ sperrt sie für
+  „Alle Dateien“ und SAF; der einzige Weg ohne Root ist Shizuku mit Zusatz-App, Wireless-Debugging-Kopplung
+  und Neustart nach jedem Reboot, unter Android 16 laut offenem Shizuku-Issue unzuverlässig – als Option
+  in `docs/TODO.md` festgehalten, recherche.md E5).
 
 ## B Bedienung
 
