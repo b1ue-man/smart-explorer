@@ -637,7 +637,7 @@ Telefone und Tablets: derselbe Rust-Kern wie am Desktop, bedient über eine
 eigene Touch-Oberfläche (Kotlin, Jetpack Compose, Material 3). Sie läuft ab
 **Android 11** (API 30) auf `arm64-v8a`- und `x86_64`-Geräten und wird nur
 per Sideload verteilt, nicht über Google Play. Die APK erscheint in den
-GitHub-Releases ab dem ersten Release, das die Android-App enthält.
+GitHub-Releases ab v0.5.163.
 
 1. `smart-explorer-android.apk` aus dem
    [neuesten Release](https://github.com/b1ue-man/smart-explorer/releases/latest)
