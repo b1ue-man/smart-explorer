@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
 import app.smartexplorer.android.service.BackgroundController
+import app.smartexplorer.android.system.OpenWithIntent
 import app.smartexplorer.android.system.ShareIntentHandler
 import app.smartexplorer.android.ui.AppNav
 import app.smartexplorer.android.ui.AppRoot
@@ -27,7 +28,8 @@ import java.lang.ref.WeakReference
 
 /**
  * The single activity: tabs, setup, sub-pages (Compose). Receives navigation intents from
- * notifications ([AppNav.intentFor]) and SEND/SEND_MULTIPLE shares.
+ * notifications ([AppNav.intentFor]), SEND/SEND_MULTIPLE shares and "open with" for local folders
+ * and files ([OpenWithIntent]).
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,7 +79,11 @@ class MainActivity : ComponentActivity() {
             AppNav.send(request)
             return
         }
-        ShareIntentHandler.handle(this, intent)
+        when (val opened = OpenWithIntent.outcome(this, intent)) {
+            is OpenWithIntent.Outcome.Open -> AppNav.send(opened.request)
+            OpenWithIntent.Outcome.Refused -> Snackbars.show("Dieser Ort lässt sich in Smart Explorer nicht öffnen.")
+            null -> ShareIntentHandler.handle(this, intent)
+        }
     }
 
     private fun applySystemBars(dark: Boolean) {

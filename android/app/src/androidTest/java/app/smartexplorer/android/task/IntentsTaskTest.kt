@@ -3,7 +3,10 @@ package app.smartexplorer.android.task
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.intent.Intents
 import androidx.test.espresso.intent.matcher.IntentMatchers
@@ -11,19 +14,24 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.MainActivity
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.LocalFileProvider
+import app.smartexplorer.android.system.OpenWithIntent
 import app.smartexplorer.android.system.Opener
 import app.smartexplorer.android.system.ShareIntentHandler
+import app.smartexplorer.android.ui.NavRequest
+import app.smartexplorer.android.ui.files.FilesViewModel
 import java.io.File
 import org.hamcrest.CoreMatchers.allOf
 import org.hamcrest.CoreMatchers.equalTo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
  * G4 hand-over to other apps (Espresso-Intents, the target activities are stubbed) and receiving a
  * SEND share: `fs.open` + LocalFileProvider (read, and "w" truncates the original),
- * `fs.materialize` + share sheet, SEND with a content URI → descriptor → `fs.import`.
+ * `fs.materialize` + share sheet, SEND with a content URI → descriptor → `fs.import`, and VIEW of a
+ * folder from another app ("In Smart Explorer öffnen").
  */
 @RunWith(AndroidJUnit4::class)
 class IntentsTaskTest {
@@ -120,5 +128,48 @@ class IntentsTaskTest {
             scenario.close()
             source.delete()
         }
+    }
+
+    @Test
+    fun openAFolderHandedOverByAnotherApp() = coreTest {
+        AppPrefs.setOnboardingDone(true)
+        val primary = Volumes.primary()
+        val dir = Fixture.dir(primary, "intents", "oeffnen-mit")
+        val file = Fixture.write(File(dir, "markierung.txt"), "x")
+        val relative = dir.absolutePath.removePrefix(primary.path.trimEnd('/')).trimStart('/')
+        val folderUri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE, "primary:$relative")
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(folderUri, DocumentsContract.Document.MIME_TYPE_DIR)
+
+        // The manifest offers the app for folders handed over by the system Files app.
+        val handlers = appContext.packageManager.queryIntentActivities(view, 0).map { it.activityInfo.packageName }
+        assertTrue("Smart Explorer fehlt in $handlers", appContext.packageName in handlers)
+
+        fun outcome(intent: Intent) = OpenWithIntent.outcome(appContext, intent)
+        val openDir = OpenWithIntent.Outcome.Open(NavRequest.OpenLocation(dir.absolutePath))
+        assertEquals(openDir, outcome(view))
+        val fileUri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE, "primary:$relative/${file.name}")
+        assertEquals("Eine Datei öffnet ihren Ordner", openDir, outcome(Intent(Intent.ACTION_VIEW).setDataAndType(fileUri, "text/plain")))
+        assertEquals(openDir, outcome(Intent(Intent.ACTION_VIEW, Uri.fromFile(dir))))
+        val privateUri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE, "primary:Android/data/com.example.fremd")
+        assertEquals(OpenWithIntent.Outcome.Refused, outcome(Intent(Intent.ACTION_VIEW).setDataAndType(privateUri, DocumentsContract.Document.MIME_TYPE_DIR)))
+        val foreign = Uri.parse("content://com.example.fremd.provider/tree/x")
+        assertEquals(OpenWithIntent.Outcome.Refused, outcome(Intent(Intent.ACTION_VIEW).setDataAndType(foreign, DocumentsContract.Document.MIME_TYPE_DIR)))
+
+        // Delivered to the running app, the Files page lands in the folder.
+        val scenario = ActivityScenario.launch<MainActivity>(Intent(view).setClass(appContext, MainActivity::class.java))
+        try {
+            waitFor("Ordner aus fremder App geöffnet", 30_000) {
+                var location: String? = null
+                scenario.onActivity { activity -> location = ViewModelProvider(activity)[FilesViewModel::class.java].activeTab?.location }
+                location == dir.absolutePath
+            }
+            TaskReport.note("open-with", "VIEW ${dir.absolutePath} → Dateien-Seite im Ordner")
+        } finally {
+            scenario.close()
+        }
+    }
+
+    private companion object {
+        const val EXTERNAL_STORAGE = "com.android.externalstorage.documents"
     }
 }
