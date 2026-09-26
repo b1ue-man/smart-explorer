@@ -142,9 +142,8 @@ mod tests {
             published: true,
         };
         let text = offer_text(&direct, &profiles, 1_000);
-        assert!(text.starts_with(
-            "discoverable\to1\tstate=published\ttarget=direct\tname=Lap top\tuntil="
-        ));
+        assert!(text
+            .starts_with("discoverable\to1\tstate=published\ttarget=direct\tname=Lap top\tuntil="));
         assert!(text.ends_with("\tremaining=4m59s"));
 
         let room = OwnDiscoveryOffer {

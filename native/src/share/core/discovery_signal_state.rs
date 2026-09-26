@@ -100,7 +100,11 @@ impl DiscoverySignalState {
             offer.last_publish_sent_at = None;
             offer.published_until = None;
         }
-        let exchanges = self.exchanges.drain().map(|(_, exchange)| exchange).collect();
+        let exchanges = self
+            .exchanges
+            .drain()
+            .map(|(_, exchange)| exchange)
+            .collect();
         (exchanges, pending)
     }
 
@@ -217,13 +221,11 @@ impl DiscoverySignalState {
             let Some(starts) = self.pending_publisher_starts.remove(&discovery_id) else {
                 continue;
             };
-            let (mut timed_out, current): (Vec<_>, Vec<_>) = starts
-                .into_iter()
-                .partition(|start| now >= start.deadline);
+            let (mut timed_out, current): (Vec<_>, Vec<_>) =
+                starts.into_iter().partition(|start| now >= start.deadline);
             expired.append(&mut timed_out);
             if !current.is_empty() {
-                self.pending_publisher_starts
-                    .insert(discovery_id, current);
+                self.pending_publisher_starts.insert(discovery_id, current);
             }
         }
         expired
@@ -253,9 +255,7 @@ impl ActiveDiscoveryOffer {
     }
 
     pub(super) fn publish_due(&self, now: Instant) -> bool {
-        !self.is_expired(now)
-            && self.last_publish_sent_at.is_none()
-            && now >= self.next_publish_at
+        !self.is_expired(now) && self.last_publish_sent_at.is_none() && now >= self.next_publish_at
     }
 
     pub(super) fn request(&self, now: Instant) -> Option<DiscoveryOfferRequest> {
@@ -282,14 +282,14 @@ impl ActiveDiscoveryOffer {
     pub(super) fn mark_publish_sent(&mut self, now: Instant, lease_secs: u32) {
         self.last_publish_lease_secs = lease_secs;
         self.last_publish_sent_at = Some(now);
-        let renew_after = u64::from(lease_secs).saturating_mul(2).saturating_div(3).max(1);
+        let renew_after = u64::from(lease_secs)
+            .saturating_mul(2)
+            .saturating_div(3)
+            .max(1);
         self.next_publish_at = now + Duration::from_secs(renew_after);
     }
 
-    pub(super) fn accepts_advertisement(
-        &self,
-        advertisement: &DiscoveryAdvertisement,
-    ) -> bool {
+    pub(super) fn accepts_advertisement(&self, advertisement: &DiscoveryAdvertisement) -> bool {
         advertisement.offer_id == self.offer_id
             && advertisement.kind == self.kind
             && advertisement.display_alias == self.display_alias
@@ -302,13 +302,9 @@ impl ActiveDiscoveryOffer {
     }
 
     pub(super) fn allow_pairing_start(&mut self, now: Instant) -> bool {
-        while self
-            .pairing_starts
-            .front()
-            .map_or(false, |started| {
-                now.saturating_duration_since(*started) >= PAIRING_START_WINDOW
-            })
-        {
+        while self.pairing_starts.front().map_or(false, |started| {
+            now.saturating_duration_since(*started) >= PAIRING_START_WINDOW
+        }) {
             self.pairing_starts.pop_front();
         }
         if self.pairing_starts.len() >= MAX_PAIRING_STARTS_PER_OFFER_WINDOW {
@@ -416,10 +412,7 @@ impl ActiveDiscoveryExchange {
         Ok(())
     }
 
-    pub(super) fn accept_port_packet(
-        &mut self,
-        kind: PairingPacketKind,
-    ) -> Result<(), String> {
+    pub(super) fn accept_port_packet(&mut self, kind: PairingPacketKind) -> Result<(), String> {
         let next = match (self.stage, kind) {
             (
                 DiscoveryExchangeStage::ConnectorAwaitOpaqueKe2,
@@ -437,7 +430,9 @@ impl ActiveDiscoveryExchange {
                 DiscoveryExchangeStage::PublisherAwaitConnectorCommit,
                 PairingPacketKind::PublisherCommit,
             ) => DiscoveryExchangeStage::PublisherAwaitFinish,
-            _ => return Err("Crypto-Port lieferte ein Paket fuer die falsche Pairing-Phase".into()),
+            _ => {
+                return Err("Crypto-Port lieferte ein Paket fuer die falsche Pairing-Phase".into())
+            }
         };
         self.stage = next;
         Ok(())

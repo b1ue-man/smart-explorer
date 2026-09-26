@@ -51,7 +51,10 @@ this needs a graphical session.
 #[derive(Args)]
 #[command(long_about = UPDATE_HELP)]
 pub(super) struct UpdateArgs {
-    #[arg(long, help = "Only report current and available versions; change nothing")]
+    #[arg(
+        long,
+        help = "Only report current and available versions; change nothing"
+    )]
     check: bool,
     #[arg(
         long,
@@ -250,7 +253,10 @@ fn run_completion(target: &Path, version: &str) -> Result<CompletedInstall, Stri
 fn complete_install(expected: &str) -> Result<i32, String> {
     let version = env!("CARGO_PKG_VERSION");
     let (worker, worker_error) = if version != expected {
-        (None, Some(format!("not {expected}; the worker was left alone")))
+        (
+            None,
+            Some(format!("not {expected}; the worker was left alone")),
+        )
     } else {
         match crate::daemon::hand_off_running_worker() {
             Ok(handoff) => (Some(handoff), None),
@@ -317,7 +323,10 @@ fn print(
     if let Some(installed) = installed {
         let (path, sha256) = (installed.target.display(), &installed.sha256);
         println!("installed\t{path}\tsha256={sha256}");
-        match (&installed.completed.worker, &installed.completed.worker_error) {
+        match (
+            &installed.completed.worker,
+            &installed.completed.worker_error,
+        ) {
             (Some(handoff), _) => println!("worker\t{}", handoff_code(*handoff)),
             (None, Some(error)) => println!("worker\terror\t{}", clean(error)),
             (None, None) => println!("worker\tunknown"),
