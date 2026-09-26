@@ -794,14 +794,21 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
   mit einem einzigen `MOVE` und auf FTP mit `RNFR`/`RNTO`. FTP kennt kein
   exklusives Anlegen: vor dem Schreiben prüft die App, dass der Name frei ist.
 - Die privaten Bereiche anderer Apps (alles in `Android/data` und `Android/obb`)
-  lassen sich seit Android 11 nicht öffnen; Ordnerindex, Sync-Jobs und Spiegeln
-  lassen sie als geschützte Auslassung weg und melden das.
+  lassen sich seit Android 11 nicht öffnen (auch nicht mit „Alle Dateien“ oder
+  über die Ordnerauswahl des Systems); Ordnerindex, Sync-Jobs und Spiegeln
+  lassen sie als geschützte Auslassung weg und melden das. Der einzige Weg ohne
+  Root wäre Shizuku (Zusatz-App, Kopplung per Wireless-Debugging nach jedem
+  Neustart) und ist nicht eingebaut.
 - Befehle anderer Geräte laufen in der App-Sandbox mit den Rechten der App
-  (`/system/bin/sh`, kein Root, kein Zugriff auf andere Apps), höchstens einer
-  gleichzeitig und nur, solange der Share-Dienst läuft (App offen oder
-  Dauerbetrieb). Android kennt keine Prozess-Container für Apps: die App hält
-  verwaiste Kindprozesse als Subreaper fest und beendet beim Abbruch den
-  ganzen Prozessbaum.
+  (`/system/bin/sh`, kein Root, kein Zugriff auf andere Apps) und nur, solange
+  der Share-Dienst läuft (App offen oder Dauerbetrieb). Sie können alles lesen,
+  was die App lesen darf, auch ihre gespeicherten Zugangsdaten, die
+  Share-Identität und Drive-Anmeldungen – deshalb nur Geräten erlauben, denen
+  man wie sich selbst vertraut. Jeder Befehl läuft unter einem eigenen Zwischenprozess, der
+  verwaiste Kinder festhält, so dass Abbruch, Zeitlimit und Entzug den ganzen
+  Prozessbaum beenden. Android beendet solche Kindprozesse mit der App und kann
+  sie im Hintergrund begrenzen (ab Android 12 höchstens 32 Kindprozesse aller
+  Apps zusammen) oder mit der App einfrieren.
 - „In Smart Explorer öffnen“ nimmt nur Ordner auf dem internen Speicher und
   auf SD-Karten/USB an, die eine andere App zum Öffnen übergibt (Ordner-Typ
   `vnd.android.document/directory`); die App bietet sich nicht als Betrachter
