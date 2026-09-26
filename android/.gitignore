@@ -22,3 +22,6 @@ app/src/main/jniLibs/
 
 # The verified wrapper JAR stays tracked even if a parent rule ignores JARs
 !gradle/wrapper/gradle-wrapper.jar
+
+# Python bytecode of the suite evaluator
+__pycache__/

@@ -60,6 +60,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+            <!-- "In Smart Explorer öffnen": folders only (DocumentsContract.Document.MIME_TYPE_DIR; the two
+                 other types are sent by some file managers). A MIME-only filter covers content: and
+                 file: URIs; files are deliberately not claimed, so the app is not offered as a viewer. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.document/directory" />
+                <data android:mimeType="resource/folder" />
+                <data android:mimeType="inode/directory" />
+            </intent-filter>
         </activity>
 
         <!-- Transfers, "run now" sync runs and the Google sign-in while the UI was left -->
