@@ -265,7 +265,7 @@ impl ShareHost {
                         }
                     }
                 }
-                Event::Discovery(_) => {}
+                Event::Discovery(event) => state.discovery_offers.observe(&event),
                 Event::LanPeerSeen {
                     contact_id,
                     candidates,

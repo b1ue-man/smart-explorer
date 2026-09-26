@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::ipc_protocol::ShareWorkerSnapshot;
 use super::state::log;
 
 #[path = "ipc_host_direct_event_persistence.rs"]
@@ -25,7 +24,7 @@ pub(super) mod profile_merge;
 #[path = "ipc_host_service.rs"]
 mod service_lifecycle;
 #[path = "ipc_host_stop.rs"]
-mod stop;
+pub(super) mod stop;
 #[path = "ipc_host_ui_events.rs"]
 pub(super) mod ui_events;
 
@@ -46,6 +45,8 @@ pub(crate) struct ShareHost {
     initialized: Arc<AtomicBool>,
     pub(super) exec_state: Arc<super::exec_state::ExecState>,
     exec_grant_lock: Arc<Mutex<()>>,
+    /// Serializes "is this target already discoverable?" with the publish.
+    pub(super) discovery_publish_lock: Arc<Mutex<()>>,
     pub(super) mounts: super::mount_manager::MountManager,
     /// Local-network presence and uplink sharing, ticked with the host.
     pub(super) lan: Arc<Mutex<super::lan_runtime::LanRuntime>>,
@@ -75,6 +76,8 @@ pub(super) struct ShareHostState {
     /// LAN sightings/losses waiting to be applied like service events.
     pub(super) pending_lan_events: Vec<crate::share::ShareEvent>,
     pub(super) lan_status: crate::share::LanStatus,
+    /// This device's own discovery offers, folded from worker events.
+    pub(super) discovery_offers: crate::share::DiscoveryOfferBook,
 }
 
 impl ShareHost {
@@ -102,6 +105,7 @@ impl ShareHost {
             exec_retry: None,
             pending_lan_events: Vec::new(),
             lan_status: crate::share::LanStatus::default(),
+            discovery_offers: crate::share::DiscoveryOfferBook::default(),
         };
         ShareHost {
             state: Arc::new(Mutex::new(state)),
@@ -109,6 +113,7 @@ impl ShareHost {
             initialized: Arc::new(AtomicBool::new(false)),
             exec_state: Arc::new(super::exec_state::ExecState::new()),
             exec_grant_lock: Arc::new(Mutex::new(())),
+            discovery_publish_lock: Arc::new(Mutex::new(())),
             mounts: super::mount_manager::MountManager::default(),
             lan: Arc::new(Mutex::new(super::lan_runtime::LanRuntime::new())),
         }
@@ -312,76 +317,6 @@ impl ShareHost {
         self.reload_now()
     }
 
-    pub(super) fn send_command(&self, cmd: crate::share::ShareCmd) -> Result<(), String> {
-        if matches!(
-            &cmd,
-            crate::share::ShareCmd::EnableExec { .. }
-                | crate::share::ShareCmd::DisableExec { .. }
-                | crate::share::ShareCmd::ApplyExecGrant { .. }
-                | crate::share::ShareCmd::ConfigureProfiles { .. }
-        ) {
-            return Err("Dieser Share-Befehl erfordert eine dauerhafte Daemon-Mutation".into());
-        }
-        {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
-            if let crate::share::ShareCmd::Stop = &cmd {
-                return stop::stop_locked(&mut state);
-            }
-        }
-        self.reload_now()?;
-        let service = {
-            let state = self
-                .state
-                .lock()
-                .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
-            state.service.clone()
-        }
-        .ok_or_else(|| "Share-Worker ist nicht aktiv".to_string())?;
-        service.cmd(cmd).map(|_| ())
-    }
-
-    pub(super) fn drain_for_ui(&self) -> ShareWorkerSnapshot {
-        let should_reload = self
-            .state
-            .lock()
-            .map(|state| state.last_reload.elapsed() >= Duration::from_secs(5))
-            .unwrap_or(false);
-        if should_reload {
-            if let Err(error) = self.reload_now() {
-                if let Ok(mut state) = self.state.lock() {
-                    ui_events::push(&mut state.ui_events, crate::share::ShareEvent::Error(error));
-                }
-            }
-        }
-        self.drain_events();
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => return ShareWorkerSnapshot::default(),
-        };
-        let running = state.service.is_some();
-        let (relay_url, candidates) = state
-            .service
-            .as_ref()
-            .map(|service| (service.relay_url(), service.peer_candidates()))
-            .unwrap_or_default();
-        ShareWorkerSnapshot {
-            events: std::mem::take(&mut state.ui_events),
-            profiles: state.profiles.clone(),
-            profile_revision: state.profiles.storage_revision.clone(),
-            exec_grant_retry: state.exec_retry.clone(),
-            pending_direct_requests: Vec::new(),
-            running,
-            connected: state.signal_connected,
-            last_error: state.signal_error.clone(),
-            relay_url,
-            candidates,
-            lan: state.lan_status.clone(),
-        }
-    }
-
     pub(crate) fn open_share(
         &self,
         target: crate::share::PeerOpenTarget,
@@ -434,6 +369,19 @@ impl ShareHost {
         // Exec is intentionally at-most-once. Once handed to the Share service,
         // a transport error is ambiguous: the peer may already have started it.
         service.exec_for_target(&target, req)
+    }
+}
+
+/// The worker that held the discovery offers is gone: end them in the book and
+/// tell every client, so no surface keeps showing an offer nobody publishes.
+pub(super) fn end_tracked_offers(state: &mut ShareHostState) {
+    let reason = crate::share::DiscoveryOfferStopReason::WorkerStopped;
+    for offer_id in state.discovery_offers.end_all(reason) {
+        let event = crate::share::DiscoveryEvent::OfferStopped { offer_id, reason };
+        ui_events::push(
+            &mut state.ui_events,
+            crate::share::ShareEvent::Discovery(event),
+        );
     }
 }
 

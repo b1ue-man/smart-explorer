@@ -26,6 +26,7 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         lan_presence && has_direct_peers,
     ) {
         if let Some(service) = state.service.take() {
+            super::end_tracked_offers(state);
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
         state.running_server.clear();
@@ -54,6 +55,7 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         .unwrap_or(true);
     if needs_restart {
         if let Some(service) = state.service.take() {
+            super::end_tracked_offers(state);
             service.cmd(crate::share::ShareCmd::Stop)?;
         }
         state.running_server.clear();
@@ -92,6 +94,7 @@ fn share_service_requested(
 
 pub(in crate::daemon) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
     if let Some(service) = state.service.take() {
+        super::end_tracked_offers(state);
         service.cmd(crate::share::ShareCmd::Stop)?;
     }
     state.running_server.clear();

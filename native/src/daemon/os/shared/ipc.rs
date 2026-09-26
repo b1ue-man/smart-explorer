@@ -8,13 +8,14 @@ use super::backend_server::serve_backend;
 #[allow(unused_imports)]
 pub(crate) use super::ipc_client::mutate_exec_grant;
 pub use super::ipc_client::{
-    drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker_checked, request_daemon_replacement, send_share_command,
+    drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
+    open_share_backend, refresh_share_worker_checked, request_daemon_replacement,
+    send_share_command, share_command, share_worker_snapshot, WorkerHandoff,
 };
 pub(crate) use super::ipc_host::ShareHost;
 pub(crate) use super::ipc_listener::start_listener;
 use super::ipc_listener::{clear_pre_auth_deadline, read_pre_auth_line, PreAuthPermit};
-pub use super::ipc_protocol::ShareWorkerSnapshot;
+pub use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
 use super::ipc_protocol::{bound_snapshot_for_ipc, write_response, IpcRequest, IpcResponse};
 
 pub(super) fn handle_client(
@@ -44,7 +45,8 @@ pub(super) fn handle_client(
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
         IpcRequest::ShareCommand { cmd, .. } => match host.send_command(cmd) {
-            Ok(()) => write_response(&mut stream, &IpcResponse::Ok),
+            Ok(ShareCommandReply::Applied) => write_response(&mut stream, &IpcResponse::Ok),
+            Ok(reply) => write_response(&mut stream, &IpcResponse::ShareCommand { reply }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
         IpcRequest::MutateExecGrant {
@@ -55,6 +57,15 @@ pub(super) fn handle_client(
         },
         IpcRequest::DrainShareEvents { .. } => {
             let snapshot = bound_snapshot_for_ipc(host.drain_for_ui());
+            write_response(
+                &mut stream,
+                &IpcResponse::ShareEvents {
+                    snapshot: Box::new(snapshot),
+                },
+            )
+        }
+        IpcRequest::ShareSnapshot { .. } => {
+            let snapshot = bound_snapshot_for_ipc(host.snapshot_for_client());
             write_response(
                 &mut stream,
                 &IpcResponse::ShareEvents {

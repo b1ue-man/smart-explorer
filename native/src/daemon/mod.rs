@@ -48,6 +48,8 @@ mod ipc;
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]
 mod ipc_host;
+#[path = "os/shared/ipc_host_commands.rs"]
+mod ipc_host_commands;
 #[path = "os/shared/ipc_host_events.rs"]
 mod ipc_host_events;
 #[path = "os/shared/ipc_listener.rs"]
@@ -169,9 +171,10 @@ pub use exec_state::{
 pub use host_state::{host_state, set_host_state, HostState};
 pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
-    drain_share_worker_events, ensure_worker_ready, exec_share, open_share_backend,
-    refresh_share_worker_checked, request_daemon_replacement, send_share_command,
-    ShareWorkerSnapshot,
+    drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
+    open_share_backend, refresh_share_worker_checked, request_daemon_replacement,
+    send_share_command, share_command, share_worker_snapshot, ShareCommandReply,
+    ShareWorkerSnapshot, WorkerHandoff,
 };
 pub use live::{
     active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up_ms,

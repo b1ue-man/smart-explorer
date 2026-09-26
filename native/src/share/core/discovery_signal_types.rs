@@ -213,6 +213,8 @@ pub enum DiscoveryOfferStopReason {
     TargetUnavailable,
     CapabilityUnavailable,
     TransportError,
+    /// The daemon stopped or replaced the Share worker that held the offer.
+    WorkerStopped,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
