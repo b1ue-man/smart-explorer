@@ -45,8 +45,7 @@ mod tests {
 
     #[test]
     fn cli_task_worker_stop_ends_tracked_offers() {
-        let host = super::super::ShareHost::new("0".repeat(32));
-        let mut state = host.state.lock().unwrap();
+        let mut state = super::ShareHostState::new();
         let published = crate::share::DiscoveryEvent::OfferPublished {
             offer_id: "offer".into(),
             target: crate::share::DiscoveryPublishTarget::Direct,

@@ -1,5 +1,10 @@
 //! Discovery (PIN pairing) client state: own offers, advertised entries,
 //! pending commands and key exchanges, without any UI.
+
+/// Status after the Share worker that held an offer stopped or was replaced.
+pub const WORKER_STOPPED_STATUS: &str =
+    "Sichtbarkeit beendet: Share-Worker wurde gestoppt oder neu gestartet";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiscoveryUiKind {
     Direct,
@@ -297,6 +302,17 @@ impl DiscoveryUiState {
         self.active_offers
             .retain(|offer| offer.offer_id != offer_id);
         self.status = Some("Sichtbarkeit beendet".to_string());
+    }
+
+    /// Drops offers the Share worker no longer runs, for example after the
+    /// daemon was handed over to a new version that cannot know them.
+    pub fn retain_live_offers(&mut self, live: &[crate::share::OwnDiscoveryOffer]) {
+        let before = self.active_offers.len();
+        self.active_offers
+            .retain(|offer| live.iter().any(|live| live.offer_id == offer.offer_id));
+        if self.active_offers.len() < before {
+            self.status = Some(WORKER_STOPPED_STATUS.to_string());
+        }
     }
 
     pub fn connect_started(&mut self, discovery_id: &str) -> bool {

@@ -1,5 +1,9 @@
 //! Input rules of `se share discoverable`: PIN source, display name, room and
 //! offer selectors. Kept free of I/O except `read_pin` so they stay testable.
+use std::io::{BufRead, Read};
+
+use zeroize::Zeroize;
+
 use crate::share::{OwnDiscoveryOffer, RoomProfile};
 
 const PIN_PROMPT: &str = "PIN (input hidden): ";
@@ -27,22 +31,45 @@ pub(super) fn pin_source(
     }
 }
 
-/// The exact PIN bytes the other device has to enter. Only a trailing line
-/// break from stdin or the prompt is removed.
+/// The exact PIN bytes the other device has to enter. Only the line break
+/// that ends the stdin line or the typed line is removed.
 pub(super) fn read_pin(source: PinSource) -> Result<String, String> {
     let pin = match source {
         PinSource::Argument(pin) => pin,
-        PinSource::Stdin => crate::cli::setup::read_stdin_secret()?,
-        PinSource::Prompt => crate::cli::os::read_hidden_line(PIN_PROMPT)?,
+        PinSource::Stdin => read_pin_line(std::io::stdin().lock())?,
+        PinSource::Prompt => crate::cli::os::read_hidden_line(PIN_PROMPT)
+            .map_err(|error| format!("{error}; pass the PIN with --pin-stdin instead"))?,
     };
     if pin.len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
+        let (length, limit) = (pin.len(), crate::share::DISCOVERY_PIN_MAX_BYTES);
         return Err(format!(
-            "the PIN is {} bytes long; at most {} bytes are allowed",
-            pin.len(),
-            crate::share::DISCOVERY_PIN_MAX_BYTES
+            "the PIN is {length} bytes long; at most {limit} bytes are allowed"
         ));
     }
     Ok(pin)
+}
+
+/// Exactly one line: the PIN may be followed by more input, which stays
+/// unread. Input that ends before any byte is not an (empty) PIN.
+pub(super) fn read_pin_line(reader: impl BufRead) -> Result<String, String> {
+    // The longest PIN plus a CR LF line end.
+    let limit = crate::share::DISCOVERY_PIN_MAX_BYTES as u64 + 2;
+    let mut line = String::new();
+    let read = reader
+        .take(limit)
+        .read_line(&mut line)
+        .map_err(|error| format!("read the PIN from stdin: {error}"))?;
+    if read == 0 {
+        return Err("stdin ended before a PIN line".to_string());
+    }
+    if read as u64 == limit && !line.ends_with('\n') {
+        line.zeroize();
+        return Err("the PIN line on stdin is too long".to_string());
+    }
+    while line.ends_with(['\r', '\n']) {
+        line.pop();
+    }
+    Ok(line)
 }
 
 /// Same notice as the desktop UI: allowed, but anyone can guess it.
@@ -176,10 +203,27 @@ fn offer_ids(offers: &[OwnDiscoveryOffer]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        duration_secs, pin_source, resolve_room, select_offers, trivial_pin, validate_name,
-        PinSource,
+        duration_secs, pin_source, read_pin_line, resolve_room, select_offers, trivial_pin,
+        validate_name, PinSource,
     };
     use crate::share::{DiscoveryPublishTarget, OwnDiscoveryOffer, RoomProfile};
+
+    #[test]
+    fn cli_task_discoverable_pin_stdin_reads_one_line() {
+        assert_eq!(read_pin_line(&b"1454\nrest\n"[..]).unwrap(), "1454");
+        assert_eq!(read_pin_line(&b"1454\r\n"[..]).unwrap(), "1454");
+        assert_eq!(read_pin_line(&b"1454"[..]).unwrap(), "1454");
+        assert_eq!(read_pin_line(&b" 1 4 \n"[..]).unwrap(), " 1 4 ");
+        // An empty line is the empty PIN; no input at all is no PIN.
+        assert_eq!(read_pin_line(&b"\n"[..]).unwrap(), "");
+        assert!(read_pin_line(&b""[..]).unwrap_err().contains("ended"));
+        let limit = crate::share::DISCOVERY_PIN_MAX_BYTES;
+        let mut exact = vec![b'7'; limit];
+        exact.extend_from_slice(b"\r\n");
+        assert_eq!(read_pin_line(&exact[..]).unwrap().len(), limit);
+        let long = vec![b'7'; limit + 3];
+        assert!(read_pin_line(&long[..]).unwrap_err().contains("too long"));
+    }
 
     fn room(id: &str, room_id: &str, name: &str) -> RoomProfile {
         RoomProfile {

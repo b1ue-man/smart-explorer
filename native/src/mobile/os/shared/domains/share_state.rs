@@ -120,6 +120,9 @@ impl ShareState {
                 _ => {}
             }
         }
+        // Offers of a stopped or handed-over worker end here too.
+        self.discovery
+            .retain_live_offers(&snapshot.discovery_offers);
         self.after_discovery_changes();
         self.worker = Some(WorkerFacts::from_snapshot(&snapshot));
         // A snapshot drained before the worker reloaded a commit still carries

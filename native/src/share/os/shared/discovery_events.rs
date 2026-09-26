@@ -4,7 +4,7 @@
 //! passes a repaint callback that runs after each finished command.
 use super::discovery_state::{
     DiscoveryCompatibility, DiscoveryListEntry, DiscoveryOfferPhase, DiscoveryPublishTarget,
-    DiscoveryUiAction, DiscoveryUiKind, DiscoveryUiState,
+    DiscoveryUiAction, DiscoveryUiKind, DiscoveryUiState, WORKER_STOPPED_STATUS,
 };
 
 const DISCOVERY_COMMAND_CAPACITY: usize = 8;
@@ -282,9 +282,7 @@ pub fn apply_share_discovery_event(
                 crate::share::DiscoveryOfferStopReason::TargetUnavailable => {
                     "Sichtbarkeit beendet: Ziel ist nicht mehr verfuegbar"
                 }
-                crate::share::DiscoveryOfferStopReason::WorkerStopped => {
-                    "Sichtbarkeit beendet: Share-Worker wurde gestoppt oder neu gestartet"
-                }
+                crate::share::DiscoveryOfferStopReason::WorkerStopped => WORKER_STOPPED_STATUS,
             };
             state.stopped(&offer_id);
             state.status = Some(status.to_string());
@@ -377,5 +375,60 @@ fn map_publish_target(
                 room_name: display_alias,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_share_discovery_event, DiscoveryUiState, WORKER_STOPPED_STATUS};
+    use crate::share::{DiscoveryEvent, DiscoveryOfferStopReason, OwnDiscoveryOffer};
+
+    fn published(offer_id: &str) -> DiscoveryEvent {
+        DiscoveryEvent::OfferPublished {
+            offer_id: offer_id.into(),
+            target: crate::share::DiscoveryPublishTarget::Room {
+                room_profile_id: format!("room-{offer_id}"),
+            },
+            display_alias: "Team".into(),
+            discoverable_until: i64::MAX,
+        }
+    }
+
+    #[test]
+    fn cli_task_gui_state_drops_stopped_and_vanished_offers() {
+        let mut state = DiscoveryUiState::default();
+        apply_share_discovery_event(&mut state, published("stopped"));
+        apply_share_discovery_event(&mut state, published("vanished"));
+        apply_share_discovery_event(&mut state, published("kept"));
+        assert_eq!(state.active_offers.len(), 3);
+
+        let stop = DiscoveryEvent::OfferStopped {
+            offer_id: "stopped".into(),
+            reason: DiscoveryOfferStopReason::WorkerStopped,
+        };
+        apply_share_discovery_event(&mut state, stop);
+        assert_eq!(state.active_offers.len(), 2);
+        assert_eq!(state.status.take().as_deref(), Some(WORKER_STOPPED_STATUS));
+
+        // After a handoff the new worker lists only what it runs.
+        let kept = OwnDiscoveryOffer {
+            offer_id: "kept".into(),
+            target: crate::share::DiscoveryPublishTarget::Room {
+                room_profile_id: "room-kept".into(),
+            },
+            display_alias: "Team".into(),
+            discoverable_until: i64::MAX,
+            published: true,
+        };
+        state.retain_live_offers(std::slice::from_ref(&kept));
+        let ids: Vec<_> = state
+            .active_offers
+            .iter()
+            .map(|offer| offer.offer_id.as_str())
+            .collect();
+        assert_eq!(ids, ["kept"]);
+        assert_eq!(state.status.take().as_deref(), Some(WORKER_STOPPED_STATUS));
+        state.retain_live_offers(std::slice::from_ref(&kept));
+        assert!(state.status.is_none());
     }
 }

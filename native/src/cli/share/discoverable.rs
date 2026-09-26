@@ -163,21 +163,23 @@ fn publish(args: PublishArgs) -> Result<(), String> {
             "se: warning: an empty PIN or \"0\" is trivial to guess"
         );
     }
+    let requested = target.clone();
     let command = ShareCmd::Discovery(DiscoveryCommand::Publish {
         target,
         display_alias,
         pin: DiscoveryPin::new(pin),
         duration_secs,
     });
-    let offer = match crate::daemon::share_command(command)? {
-        ShareCommandReply::DiscoveryOffer { offer } => offer,
-        ShareCommandReply::DiscoveryOfferEnded { offer_id, reason } => {
+    let offer = match crate::daemon::share_command(command) {
+        Ok(ShareCommandReply::DiscoveryOffer { offer }) => offer,
+        Ok(ShareCommandReply::DiscoveryOfferEnded { offer_id, reason }) => {
             return Err(format!(
                 "offer {offer_id} ended right away: {}",
                 stop_reason_text(reason)
             ));
         }
-        other => return Err(format!("unexpected Share worker reply: {other:?}")),
+        Ok(other) => return Err(format!("unexpected Share worker reply: {other:?}")),
+        Err(error) => return Err(withdraw_unconfirmed(&requested, error)),
     };
     let (offer, connected) = if snapshot.connected {
         await_publication(offer)?
@@ -185,6 +187,42 @@ fn publish(args: PublishArgs) -> Result<(), String> {
         (offer, false)
     };
     print_offer(&offer, &profiles, connected, args.json)
+}
+
+/// A publish can fail after the worker already holds the offer (the server
+/// connection broke, or the reply timed out); the worker would publish it
+/// later and make this device findable with the PIN. Before the publish no
+/// offer ran for this target, so any offer for it now is that one.
+fn withdraw_unconfirmed(target: &DiscoveryPublishTarget, error: String) -> String {
+    let snapshot = match crate::daemon::share_worker_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(read_error) => {
+            return format!(
+                "{error}; whether the worker kept an offer is unknown ({read_error}); check with `se share discoverable list`"
+            );
+        }
+    };
+    let mut notes = Vec::new();
+    for offer in snapshot.discovery_offers {
+        if offer.target != *target {
+            continue;
+        }
+        let offer_id = offer.offer_id;
+        let stop = ShareCmd::Discovery(DiscoveryCommand::StopPublishing {
+            offer_id: offer_id.clone(),
+        });
+        notes.push(match crate::daemon::share_command(stop) {
+            Ok(_) => format!("the offer {offer_id} the worker kept was stopped"),
+            Err(stop_error) => format!(
+                "the worker kept offer {offer_id}, and stopping it failed ({stop_error}); stop it with `se share discoverable stop {offer_id}`"
+            ),
+        });
+    }
+    if notes.is_empty() {
+        error
+    } else {
+        format!("{error}; {}", notes.join("; "))
+    }
 }
 
 /// Polls the daemon's persistent offer list until the Share server confirms

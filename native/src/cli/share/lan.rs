@@ -109,7 +109,7 @@ pub(super) fn run(args: LanArgs) -> Result<(), String> {
 
 fn status(json: bool, uplink_only: bool) -> Result<(), String> {
     let settings = crate::share::LanSettings::load()?;
-    let (lan, worker_error) = match crate::daemon::drain_share_worker_events() {
+    let (lan, worker_error) = match crate::daemon::share_worker_snapshot() {
         Ok(snapshot) => (Some(snapshot.lan), None),
         Err(error) => (None, Some(error)),
     };
