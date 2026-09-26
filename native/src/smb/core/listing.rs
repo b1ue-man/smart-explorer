@@ -159,8 +159,10 @@ pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> 
             .filter(|end| *end <= entry.len() && name_len.is_multiple_of(2))
             .ok_or_else(|| "SMB-Verzeichniseintrag hat eine ungültige Namenslänge".to_string())?;
         let units: Vec<u16> = entry[FIXED_LEN..name_end]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         let wire = String::from_utf16(&units)
             .map_err(|_| "SMB-Verzeichniseintrag hat einen ungültigen UTF-16-Namen".to_string())?;

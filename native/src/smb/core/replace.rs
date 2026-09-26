@@ -1,5 +1,5 @@
-//! Renames as one compound CREATE(DELETE) + SET_INFO(FileRenameInformation)
-//! + CLOSE. smb2's `Tree::rename` hard-codes `ReplaceIfExists = 0`; the
+//! Renames as one compound of CREATE(DELETE), SET_INFO(FileRenameInformation)
+//! and CLOSE. smb2's `Tree::rename` hard-codes `ReplaceIfExists = 0`; the
 //! same request with 1 replaces an existing file in one server-side step
 //! (the new file becomes visible without the name ever missing), which is
 //! what staged promotion needs. The source is opened with

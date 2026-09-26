@@ -37,8 +37,10 @@ share_runner_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
 }
 
+# --preserve-status: a client killed by this limit ends with 143/137, so the CLI's own exit codes
+# (e.g. `se exec`: 124 remote time limit, 125 refused/revoked, 130 cancelled) stay unambiguous.
 share_client() {
-  timeout --foreground --signal=TERM --kill-after=5s "${SHARE_CLIENT_TIMEOUT:-90s}" env \
+  timeout --foreground --preserve-status --signal=TERM --kill-after=5s "${SHARE_CLIENT_TIMEOUT:-90s}" env \
     HOME="$SHARE_CLIENT/home" \
     USERPROFILE="$SHARE_CLIENT/home" \
     XDG_DATA_HOME="$SHARE_CLIENT/data" \
@@ -201,16 +203,16 @@ share_marker_wait() {
   return 1
 }
 
-# A command the phone ends (cancel, time limit, revocation): the client must return with an
-# error well before its own timeout (exit 124).
+# A command the phone ends (cancel, time limit, revocation): the CLI must return the matching
+# exit code (cli/exec.rs exit_code) well before this script's own limit.
 share_exec_expect_end() {
-  local step=$1 what=$2 limit=$3 code=0
-  shift 3
+  local step=$1 what=$2 limit=$3 expected=$4 code=0
+  shift 4
   SHARE_CLIENT_TIMEOUT=$limit share_client exec "$SHARE_EXEC_TARGET" "$@" \
     >"$SHARE_ROOT/exec-$step.out" 2>"$SHARE_ROOT/exec-$step.err" || code=$?
   echo "exec $step ($what): exit $code"
-  [[ "$code" -ne 0 && "$code" -ne 124 ]] || {
-    echo "exec $step was not ended on the phone (exit $code)" >&2
+  [[ "$code" -eq "$expected" ]] || {
+    echo "exec $step was not ended on the phone as expected (exit $code, expected $expected)" >&2
     cat "$SHARE_ROOT/exec-$step.out" "$SHARE_ROOT/exec-$step.err" >&2
     return 1
   }
@@ -245,13 +247,13 @@ share_exec_check() {
 
   # 2. A shell that leaves a setsid child and a double-forked orphan; the phone cancels it and
   #    must end the whole tree (ShareExecTaskTest checks /proc).
-  share_exec_expect_end 2 "cancelled on the phone" 300s --shell 'setsid sleep 302 & (sleep 303 &); sleep 301'
+  share_exec_expect_end 2 "cancelled on the phone" 300s 130 --shell 'setsid sleep 302 & (sleep 303 &); sleep 301'
 
   # 3. The same kind of tree with a remote time limit.
-  share_exec_expect_end 3 "timed out on the phone" 120s --timeout 5 --shell 'setsid sleep 304 & (sleep 305 &); sleep 306'
+  share_exec_expect_end 3 "timed out on the phone" 120s 124 --timeout 5 --shell 'setsid sleep 304 & (sleep 305 &); sleep 306'
 
   # 4. A running command while the phone revokes the grant.
-  share_exec_expect_end 4 "revoked on the phone" 300s --shell 'setsid sleep 307 & sleep 308'
+  share_exec_expect_end 4 "revoked on the phone" 300s 125 --shell 'setsid sleep 307 & sleep 308'
 
   # 5. Revoked: the phone refuses the next attempt (not a transport failure).
   share_marker_wait revoked 300 >/dev/null
