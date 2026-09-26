@@ -1,6 +1,6 @@
 //! Input rules of `se share discoverable`: PIN source, display name, room and
 //! offer selectors. Kept free of I/O except `read_pin` so they stay testable.
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 
 use zeroize::Zeroize;
 
