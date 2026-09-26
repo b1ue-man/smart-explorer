@@ -126,13 +126,13 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
 | Block | Status | Notiz |
 |---|---|---|
 | R | fertig | `80fe206` |
-| G1–G3 | fertig (Code) | `77d6e0e`; Gerätetests offen |
-| G4a | offen | nach Kritik neu entschieden: Subreaper je Job |
-| G4b | offen | |
-| G5a | fertig (Code) | `7251ab3`; statisches Review läuft |
-| G5b | fertig (Code) | `7251ab3` |
-| G6 | fertig (Code) | `ef24f9b`; Gerätetest in der Suite offen |
-| T | in Arbeit | Tests geschrieben (`2c7bd6f`, `6dde607`, `106c101`); G1-Liste um SMB ergänzt, Exec-Tests folgen |
+| G1–G3 | fertig | `77d6e0e`, `5811f0d`; Gerätetests grün |
+| G4a | fertig | `737ac80`, Review-Fix `bf63051` |
+| G4b | fertig | `737ac80` |
+| G5a | fertig | `7251ab3`, Reparse-Tags `cabf03d` |
+| G5b | fertig | `7251ab3` |
+| G6 | fertig | `ef24f9b`; Gerätetest grün |
+| T | grün | Lauf 36236479428 rot (Testseite: CLI-Exit 124, eigener Provider; 6 Clippy-Hinweise) → `78c7722`, Lauf 36237856599 grün |
 
 ## Release-Hinweis
 - Auf `main` liegt zusätzlich die Terminal-Arbeit CLI2 (`se update`, `se share discoverable`, TODO CLI2) einer
