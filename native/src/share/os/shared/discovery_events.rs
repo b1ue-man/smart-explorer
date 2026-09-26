@@ -282,6 +282,9 @@ pub fn apply_share_discovery_event(
                 crate::share::DiscoveryOfferStopReason::TargetUnavailable => {
                     "Sichtbarkeit beendet: Ziel ist nicht mehr verfuegbar"
                 }
+                crate::share::DiscoveryOfferStopReason::WorkerStopped => {
+                    "Sichtbarkeit beendet: Share-Worker wurde gestoppt oder neu gestartet"
+                }
             };
             state.stopped(&offer_id);
             state.status = Some(status.to_string());

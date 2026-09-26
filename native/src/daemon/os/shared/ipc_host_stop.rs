@@ -1,12 +1,13 @@
 use super::ShareHostState;
 
-pub(super) fn stop_locked(state: &mut ShareHostState) -> Result<(), String> {
+pub(in crate::daemon) fn stop_locked(state: &mut ShareHostState) -> Result<(), String> {
     ensure_can_stop(state.pending_profiles_base.is_some())?;
 
     // Establish the barrier before asking the service to stop. If delivery is
     // ambiguous, only an explicit RefreshShare request may release it.
     state.suspended = true;
     let service = state.service.take();
+    super::end_tracked_offers(state);
     state.running_server.clear();
     state.signal_connected = false;
     state.signal_error = None;
@@ -40,5 +41,28 @@ mod tests {
         assert!(error.contains("Profil-Commit"));
         assert!(error.contains("Stop danach wiederholen"));
         ensure_can_stop(false).unwrap();
+    }
+
+    #[test]
+    fn cli_task_worker_stop_ends_tracked_offers() {
+        let host = super::super::ShareHost::new("0".repeat(32));
+        let mut state = host.state.lock().unwrap();
+        let published = crate::share::DiscoveryEvent::OfferPublished {
+            offer_id: "offer".into(),
+            target: crate::share::DiscoveryPublishTarget::Direct,
+            display_alias: "Laptop".into(),
+            discoverable_until: i64::MAX,
+        };
+        state.discovery_offers.observe(&published);
+        super::stop_locked(&mut state).unwrap();
+        assert!(state.suspended);
+        assert!(state.discovery_offers.offers(0).is_empty());
+        assert!(state.ui_events.iter().any(|event| matches!(
+            event,
+            crate::share::ShareEvent::Discovery(crate::share::DiscoveryEvent::OfferStopped {
+                offer_id,
+                reason: crate::share::DiscoveryOfferStopReason::WorkerStopped,
+            }) if offer_id == "offer"
+        )));
     }
 }

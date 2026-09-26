@@ -234,3 +234,42 @@ fn remote_drive_task_peer_mount_capability_ipc_roundtrips_one_snapshot() {
         other => panic!("unexpected response: {other:?}"),
     }
 }
+
+#[test]
+fn cli_task_snapshot_offers_default_and_share_command_reply_roundtrips() {
+    let older = serde_json::json!({
+        "events": [],
+        "running": true,
+        "relay_url": "",
+        "candidates": [],
+    });
+    let decoded: ShareWorkerSnapshot = serde_json::from_value(older).unwrap();
+    assert!(decoded.discovery_offers.is_empty());
+
+    let offer = crate::share::OwnDiscoveryOffer {
+        offer_id: "offer".into(),
+        target: crate::share::DiscoveryPublishTarget::Room {
+            room_profile_id: "room".into(),
+        },
+        display_alias: "Team".into(),
+        discoverable_until: 42,
+        published: true,
+    };
+    let response = IpcResponse::ShareCommand {
+        reply: super::ShareCommandReply::DiscoveryOffer {
+            offer: offer.clone(),
+        },
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    match serde_json::from_str::<IpcResponse>(&json).unwrap() {
+        IpcResponse::ShareCommand {
+            reply: super::ShareCommandReply::DiscoveryOffer { offer: decoded },
+        } => assert_eq!(decoded, offer),
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let request = IpcRequest::ShareSnapshot {
+        token: "token".into(),
+    };
+    assert_eq!(request.daemon_token(), Some("token"));
+}

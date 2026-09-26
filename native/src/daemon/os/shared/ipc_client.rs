@@ -12,6 +12,9 @@ use super::ipc_storage::{read_ipc_addr, read_ipc_generation, read_token};
 #[path = "ipc_exec_grant_client.rs"]
 mod exec_grant_client;
 pub(crate) use exec_grant_client::mutate_exec_grant;
+#[path = "ipc_share_client.rs"]
+mod share_client;
+pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};
 
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(25);
@@ -127,25 +130,23 @@ pub fn refresh_share_worker_checked() -> Result<bool, String> {
 }
 
 pub fn send_share_command(cmd: crate::share::ShareCmd) -> Result<(), String> {
-    ensure_worker_ready()?;
-    let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
-    let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
-        .map_err(|error| format!("Background-Worker IPC: {error}"))?;
-    set_stream_timeout(&stream, Some(Duration::from_secs(8)));
-    write_request(&mut stream, &IpcRequest::ShareCommand { token, cmd })
-        .map_err(|error| error.to_string())?;
-    match read_response(&mut stream).map_err(|error| error.to_string())? {
-        IpcResponse::Ok => Ok(()),
-        IpcResponse::Err { msg } => Err(msg),
-        _ => Err("Unerwartete Worker-Antwort".into()),
-    }
+    share_command(cmd).map(|_| ())
 }
 
+/// Status snapshot that hands the UI events to this caller (the GUI poll).
 pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
+    share_snapshot_with_retries(true)
+}
+
+/// Status snapshot that leaves the UI events for the GUI (terminal readers).
+pub fn share_worker_snapshot() -> Result<ShareWorkerSnapshot, String> {
+    share_snapshot_with_retries(false)
+}
+
+fn share_snapshot_with_retries(drain: bool) -> Result<ShareWorkerSnapshot, String> {
     let mut last_error = "Background-Worker nicht erreichbar".to_string();
     for attempt in 0..3 {
-        match drain_share_worker_events_once() {
+        match share_snapshot_once(drain) {
             Ok(snapshot) => return Ok(snapshot),
             Err(error) => last_error = error,
         }
@@ -156,7 +157,7 @@ pub fn drain_share_worker_events() -> Result<ShareWorkerSnapshot, String> {
     Err(last_error)
 }
 
-fn drain_share_worker_events_once() -> Result<ShareWorkerSnapshot, String> {
+fn share_snapshot_once(drain: bool) -> Result<ShareWorkerSnapshot, String> {
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
@@ -166,8 +167,12 @@ fn drain_share_worker_events_once() -> Result<ShareWorkerSnapshot, String> {
     // Polling runs off the UI thread, so allow the same bounded response window
     // as other control-plane commands instead of surfacing a transient EAGAIN.
     set_stream_timeout(&stream, Some(Duration::from_secs(8)));
-    write_request(&mut stream, &IpcRequest::DrainShareEvents { token })
-        .map_err(|error| error.to_string())?;
+    let request = if drain {
+        IpcRequest::DrainShareEvents { token }
+    } else {
+        IpcRequest::ShareSnapshot { token }
+    };
+    write_request(&mut stream, &request).map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::ShareEvents { snapshot } => Ok(*snapshot),
         IpcResponse::Err { msg } => Err(msg),

@@ -71,6 +71,8 @@ pub(crate) mod discovery_events;
 mod discovery_exchange;
 #[path = "core/discovery_exchange_port_impl.rs"]
 mod discovery_exchange_port_impl;
+#[path = "core/discovery_offer_book.rs"]
+mod discovery_offer_book;
 #[path = "core/discovery_pake.rs"]
 mod discovery_pake;
 #[path = "core/discovery_relation_store.rs"]
@@ -360,6 +362,7 @@ pub use self::direct_reciprocal_persistence::{
 };
 pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
+pub use self::discovery_offer_book::{DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer};
 pub use self::discovery_relation_store::DiscoveryRelationOutcome;
 pub use self::discovery_signal_types::{
     DiscoveryAdvertisement, DiscoveryCommand, DiscoveryEvent, DiscoveryExchangeHandle,
@@ -403,8 +406,8 @@ pub use self::removed_direct_peers::{
 pub use self::service::ShareService;
 pub use self::types::{
     DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecGrantTarget, ExecRequest,
-    ExecResult, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareEvent,
-    ShareStatus,
+    ExecResult, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareCmdResult,
+    ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {
