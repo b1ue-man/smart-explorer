@@ -63,6 +63,27 @@ pub(crate) fn default_promote_staged<B: Backend + ?Sized>(
     staged: &str,
     destination: &str,
 ) -> io::Result<()> {
+    promote_staged_with(backend, staged, destination, |staged, destination| {
+        if !backend.rename_overwrites() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "backend cannot atomically replace an existing file",
+            ));
+        }
+        backend.rename(staged, destination)
+    })
+}
+
+/// The promotion steps shared by every backend: a missing destination is
+/// created through the no-replace rename, an existing regular file is handed to
+/// `replace`, which must be one server-side replacing operation (never a
+/// client-side remove-then-rename that a lost connection could leave half done).
+pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
+    backend: &B,
+    staged: &str,
+    destination: &str,
+    replace: impl FnOnce(&str, &str) -> io::Result<()>,
+) -> io::Result<()> {
     validate_staged_file(backend, staged)?;
 
     if !backend.try_exists(destination)? {
@@ -76,13 +97,7 @@ pub(crate) fn default_promote_staged<B: Backend + ?Sized>(
             "refusing to replace a directory or link-like destination with a file",
         ));
     }
-    if !backend.rename_overwrites() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "backend cannot atomically replace an existing file",
-        ));
-    }
-    backend.rename(staged, destination)
+    replace(staged, destination)
 }
 
 fn validate_staged_file<B: Backend + ?Sized>(backend: &B, staged: &str) -> io::Result<()> {

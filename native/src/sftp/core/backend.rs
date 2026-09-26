@@ -177,6 +177,18 @@ impl SftpBackend {
         unreachable!("bounded SFTP read attempts")
     }
 
+    /// Atomic replace through `posix-rename@openssh.com` (see posix_rename.rs).
+    fn posix_rename(&self, from: &str, to: &str) -> io::Result<()> {
+        let (generation, channel) = self.open_session_channel()?;
+        let renamed = self
+            .rt
+            .block_on(super::posix_rename::posix_rename(channel, from, to));
+        if let Err(error) = &renamed {
+            self.connection.note_io_error(&generation, error);
+        }
+        renamed
+    }
+
     fn mutate_sftp<T>(
         &self,
         operation: impl FnOnce(&SftpGeneration) -> Result<T, SftpError>,
@@ -202,7 +214,10 @@ impl Backend for SftpBackend {
         self.url.clone()
     }
     fn namespace_identity(&self) -> String {
-        self.url.strip_suffix(&self.root).unwrap_or(&self.url).to_string()
+        self.url
+            .strip_suffix(&self.root)
+            .unwrap_or(&self.url)
+            .to_string()
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -294,6 +309,14 @@ impl Backend for SftpBackend {
         self.mutate_sftp(|generation| {
             self.rt
                 .block_on(generation.sftp().rename(src.to_string(), dst.to_string()))
+        })
+    }
+
+    /// An existing file is replaced atomically by `posix-rename@openssh.com`;
+    /// `rename_overwrites` stays false because the extension is per server.
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        crate::vfs::promote_staged_with(self, staged, destination, |from, to| {
+            self.posix_rename(from, to)
         })
     }
 

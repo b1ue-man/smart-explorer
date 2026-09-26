@@ -6,6 +6,8 @@ mod core_impl;
 mod io_adapters;
 #[path = "core/resolver.rs"]
 mod resolver;
+#[path = "core/staging.rs"]
+mod staging;
 #[path = "core/writer.rs"]
 mod writer;
 

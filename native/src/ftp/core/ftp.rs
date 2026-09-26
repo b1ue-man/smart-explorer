@@ -135,7 +135,10 @@ impl Backend for FtpBackend {
         self.url.clone()
     }
     fn namespace_identity(&self) -> String {
-        self.url.strip_suffix(&self.root).unwrap_or(&self.url).to_string()
+        self.url
+            .strip_suffix(&self.root)
+            .unwrap_or(&self.url)
+            .to_string()
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -181,6 +184,21 @@ impl Backend for FtpBackend {
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.conn
             .with_stream_mutation(|stream| stream.rename(src, dst).map_err(io_err))
+    }
+
+    // Staged writes: see staging.rs (no exclusive create or no-replace rename in FTP).
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        super::staging::require_absent(self, path)?;
+        self.open_write(path)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        super::staging::require_absent(self, dst)?;
+        self.rename(src, dst)
+    }
+
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        crate::vfs::promote_staged_with(self, staged, destination, |from, to| self.rename(from, to))
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
