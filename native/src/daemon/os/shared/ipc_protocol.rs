@@ -18,6 +18,9 @@ pub(super) enum MountBackendScheme {
     Sftp,
     Ftp,
     Webdav,
+    /// Never mounted (`mount_source` refuses SMB); present so the mapping
+    /// stays total.
+    Smb,
     GoogleDrive,
     Peer,
 }
@@ -29,6 +32,7 @@ impl From<crate::vfs::Scheme> for MountBackendScheme {
             crate::vfs::Scheme::Sftp => Self::Sftp,
             crate::vfs::Scheme::Ftp => Self::Ftp,
             crate::vfs::Scheme::Webdav => Self::Webdav,
+            crate::vfs::Scheme::Smb => Self::Smb,
             crate::vfs::Scheme::GDrive => Self::GoogleDrive,
             crate::vfs::Scheme::Peer => Self::Peer,
         }
@@ -42,6 +46,7 @@ impl From<MountBackendScheme> for crate::vfs::Scheme {
             MountBackendScheme::Sftp => Self::Sftp,
             MountBackendScheme::Ftp => Self::Ftp,
             MountBackendScheme::Webdav => Self::Webdav,
+            MountBackendScheme::Smb => Self::Smb,
             MountBackendScheme::GoogleDrive => Self::GDrive,
             MountBackendScheme::Peer => Self::Peer,
         }

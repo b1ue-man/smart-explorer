@@ -1,6 +1,8 @@
-//! `conn.*`: saved SFTP/FTP/FTPS/WebDAV connections in the desktop store
+//! `conn.*`: saved SFTP/FTP/FTPS/WebDAV/SMB connections in the desktop store
 //! (`creds`), tested and removed through the desktop helpers. The connection
-//! id is the desktop account key (`SavedConnection::account`).
+//! id is the desktop account key (`SavedConnection::account`). An SMB root
+//! starts with the share (`/<share>/<path>`), a domain rides in the user
+//! field (`DOMAIN\user`).
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -107,6 +109,11 @@ fn parse_input(args: &Value) -> Result<Input, ApiError> {
         ));
     }
     let root = clean(opt_str(input, "root").unwrap_or("/"), "Startordner")?;
+    if protocol == Protocol::Smb && !crate::smb::root_has_share(&root) {
+        return Err(invalid(
+            "Bei SMB beginnt der Startordner mit der Freigabe („/freigabe/ordner“).",
+        ));
+    }
     let secret = if use_key {
         opt_str(input, "passphrase")
     } else {
@@ -186,7 +193,7 @@ pub(super) fn test(args: &Value) -> Result<Value, ApiError> {
         Ok(ConnectResult::Ok(connected)) => Ok(json!({
             "message": format!("Verbindung OK ({})", connected.label),
         })),
-        Ok(ConnectResult::Err(error)) => Err(ApiError::connection(error)),
+        Ok(ConnectResult::Err(error)) => Err(crate::mobile::pool::connect_error(error)),
         Err(_) => Err(ApiError::new(
             "network",
             "Zeitüberschreitung beim Verbindungstest.",

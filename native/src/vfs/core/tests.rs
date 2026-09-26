@@ -455,3 +455,13 @@ fn dispatch_and_remote_detection() {
     assert!(is_remote_root("sftp://h/p"));
     assert!(is_remote_root("FTP://H/P"));
 }
+
+#[test]
+fn android_task_smb_roots_dispatch_to_the_smb_backend() {
+    assert!(is_remote_root("smb://nas/daten"));
+    assert!(is_remote_root(" SMB://NAS/daten"));
+    // Without a password in the URL nothing connects; saved connections
+    // open through `connect` with their stored secret.
+    let error = backend_for("smb://anna@nas.invalid/daten").err().unwrap();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}

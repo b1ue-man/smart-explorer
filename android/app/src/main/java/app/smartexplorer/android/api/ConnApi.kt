@@ -14,7 +14,7 @@ import kotlinx.serialization.json.put
 data class Connection(
     val id: String,
     val label: String = "",
-    /** `sftp|ftp|ftps|webdav` */
+    /** `sftp|ftp|ftps|webdav|smb` */
     val protocol: String = "sftp",
     val host: String = "",
     val port: Int = 0,
@@ -69,7 +69,7 @@ data class GdriveStatus(
 
 /** Suspending wrappers for api.md §4.6; every call throws [CoreException] on errors. */
 object ConnApi {
-    val PROTOCOLS = listOf("sftp", "ftp", "ftps", "webdav")
+    val PROTOCOLS = listOf("sftp", "ftp", "ftps", "webdav", "smb")
 
     suspend fun list(): List<Connection> = Core.request<List<Connection>>("conn.list")
 

@@ -30,7 +30,7 @@ pub(crate) fn root_label(loc: &Loc) -> String {
             .and_then(|archive| archive.rsplit('/').next())
             .unwrap_or("ZIP")
             .to_string(),
-        LocKind::Sftp | LocKind::Ftp | LocKind::Ftps | LocKind::Webdav => loc
+        LocKind::Sftp | LocKind::Ftp | LocKind::Ftps | LocKind::Webdav | LocKind::Smb => loc
             .prefix
             .split_once("://")
             .map(|(_, authority)| authority.to_string())

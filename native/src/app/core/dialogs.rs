@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_rename_dialog(&mut self, ctx: &egui::Context) {
@@ -174,6 +174,8 @@ impl App {
                         Protocol::Ftp => "FTP",
                         Protocol::Ftps => "FTPS",
                         Protocol::Webdav => "WebDAV (HTTPS)",
+                        // Not offered on the desktop (Windows keeps UNC).
+                        Protocol::Smb => "SMB",
                         Protocol::Share => "Netzlaufwerk (UNC)",
                     })
                     .show_ui(ui, |ui| {

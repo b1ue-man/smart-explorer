@@ -14,6 +14,7 @@ pub(crate) enum LocKind {
     Ftp,
     Ftps,
     Webdav,
+    Smb,
     GDrive,
     Share,
     Zip,
@@ -29,6 +30,7 @@ impl LocKind {
             LocKind::Ftp => "ftp",
             LocKind::Ftps => "ftps",
             LocKind::Webdav => "webdav",
+            LocKind::Smb => "smb",
             LocKind::GDrive => "gdrive",
             LocKind::Share => "share",
             LocKind::Zip => "zip",
@@ -87,11 +89,12 @@ impl Loc {
                     .ok_or_else(|| ApiError::invalid("Ungültige Share-Adresse"))?;
                 Self::with(LocKind::Share, target.endpoint_prefix(), &path)
             }
-            scheme @ ("sftp" | "ftp" | "ftps" | "webdav") => {
+            scheme @ ("sftp" | "ftp" | "ftps" | "webdav" | "smb") => {
                 let kind = match scheme {
                     "sftp" => LocKind::Sftp,
                     "ftp" => LocKind::Ftp,
                     "ftps" => LocKind::Ftps,
+                    "smb" => LocKind::Smb,
                     _ => LocKind::Webdav,
                 };
                 let (authority, path) = match rest.find('/') {

@@ -17,6 +17,11 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
                     "Die fuer das Laufwerk gespeicherte Verbindung ist nicht mehr vorhanden"
                         .to_string()
                 })?;
+            if connection.protocol == crate::creds::Protocol::Smb {
+                // SMB is browsed, copied and synced, but never mounted as a
+                // drive, whatever its staged-write guarantees report.
+                return Err("SMB lässt sich nicht als Laufwerk einbinden".into());
+            }
             crate::connect::open_saved_at_for_mount(connection, root.as_str(), config.root_security)
                 .map(|(backend, _)| backend)
         }
