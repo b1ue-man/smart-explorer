@@ -35,7 +35,11 @@ wss://share.example.com/se-share, share.example.com:51820
 
 The current Share UI can publish the owner's Direct identity or one existing
 Room as a temporary discovery offer. Five minutes is the UI default, while any
-positive duration can be selected. The server grants at most a five-minute
+positive duration can be selected. The terminal does the same with
+`se share discoverable` (`list` and `stop` for running offers); the daemon keeps
+this device's own offers in its worker snapshot, so every client sees them
+regardless of who reads the shared event stream, and it allows one running
+offer per target. The server grants at most a five-minute
 lease at a time; the client renews shorter leases only until the original local
 deadline, so reconnects and renewals cannot silently extend the user's chosen
 visibility window.

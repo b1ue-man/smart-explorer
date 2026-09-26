@@ -4,7 +4,13 @@ Status: implemented on branch `cli-discoverable-update` (base `f7a4802`,
 v0.5.163). No local builds or test execution. The single task suite
 (`native/test-cli-discoverable-update-task.sh`, workflow
 `.github/workflows/cli-discoverable-update-task.yml`) and the terminal release
-are owned by the manager and have not run yet.
+are owned by the manager and have not run yet; the root graphify refresh is
+still due (AGENTS.md → graphify).
+
+Implementation record: M1 `5d100e5`, M2 `a96432e`, M3 `578cb57`, M4 `99999b2`,
+M5 `5f1c368`, M6 in the documentation commit that follows it. Formatting was
+written by hand (no rustfmt on the workstation); the suite's rustfmt gate on
+changed lines is the first real check.
 
 ## Goal and deliverables
 
