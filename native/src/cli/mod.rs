@@ -25,6 +25,7 @@ mod tree_plan;
 mod tree_preflight_tests;
 mod tree_remove;
 mod tree_spool;
+mod update;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Write};
@@ -48,6 +49,8 @@ Examples:
   se cp -r @prod:/exports share://direct/peer-id/Drop
   se doctor --json
   se share status --json
+  se share discoverable --minutes 5 --pin-stdin
+  se update --check
   se drive runtime
   se drive install-runtime
   se drive mount @prod:/srv --letter M
@@ -78,6 +81,8 @@ enum Command {
     Connections(connections::ConnectionsArgs),
     #[command(about = "Generate live shell completion setup")]
     Completions(completions::CompletionsArgs),
+    #[command(about = "Check the update feed and install a newer se (and app)")]
+    Update(update::UpdateArgs),
     #[command(about = "List a directory")]
     Ls(PathArg),
     #[command(about = "Show file or directory metadata")]
@@ -188,6 +193,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Drive(args) => drive::run(args),
         Command::Connections(args) => connections::run(args),
         Command::Completions(args) => completions::run(args),
+        Command::Update(args) => update::run(args),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
             ops::list(&t)?;
