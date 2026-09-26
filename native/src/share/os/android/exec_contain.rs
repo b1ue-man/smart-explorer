@@ -274,13 +274,9 @@ fn intermediate_hook(status_fd: RawFd, own_process_group: bool) -> io::Result<()
     // SAFETY: signal-mask and disposition changes, prctl, clone and setpgid
     // are async-signal-safe system calls on memory owned by this frame.
     unsafe {
-        // What the root inherits: SIGCHLD reported (not auto-reaped) and
-        // SIGPIPE deliverable (the supervisor threads block it).
+        // Both inherit SIGCHLD reported (not auto-reaped); the intermediate
+        // reaps with `waitpid`.
         libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-        let mut pipe_signal: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&mut pipe_signal);
-        libc::sigaddset(&mut pipe_signal, libc::SIGPIPE);
-        libc::sigprocmask(libc::SIG_UNBLOCK, &pipe_signal, std::ptr::null_mut());
         let (on, off): (libc::c_ulong, libc::c_ulong) = (1, 0);
         if libc::prctl(libc::PR_SET_CHILD_SUBREAPER, on, off, off, off) != 0 {
             return Err(io::Error::last_os_error());
@@ -302,6 +298,13 @@ fn intermediate_hook(status_fd: RawFd, own_process_group: bool) -> io::Result<()
             if own_process_group && libc::setpgid(0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
+            // A signal mask survives exec and std keeps the spawner's: the
+            // root starts with an empty one like any new process, not with
+            // SIGPIPE (supervisor threads) or SIGQUIT and SIGUSR1 (ART
+            // threads) blocked.
+            let mut empty: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut empty);
+            libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
             return Ok(());
         }
         supervise_root(pid as libc::pid_t, status_fd)
@@ -440,7 +443,9 @@ pub(super) fn recover_once() {
 }
 
 fn end_leftover(pid: libc::pid_t, start_time: u64) {
-    if !is_recorded_root(stat_of(pid).as_ref(), pid, start_time) {
+    // A record from before a reboot can name this very process.
+    let own = libc::pid_t::try_from(std::process::id()).unwrap_or(libc::pid_t::MAX);
+    if pid == own || !is_recorded_root(stat_of(pid).as_ref(), pid, start_time) {
         return;
     }
     // The tree first: the intermediate keeps it chained below itself.
