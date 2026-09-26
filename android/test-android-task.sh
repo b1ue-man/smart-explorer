@@ -565,21 +565,56 @@ app_write() {
 }
 
 # am instrument with strict evaluation; a failed run is recorded and the suite continues.
-run_instrumentation() {
-  local name=$1 classes=$2
-  shift 2
-  local output="$emulator_out/instrumentation-$name.txt" spec="" class
-  for class in ${classes//,/ }; do
+instrumentation_spec() {
+  local spec="" class
+  for class in ${1//,/ }; do
     spec+="${spec:+,}$task_package.$class"
   done
-  step "instrumentation $name: $classes"
-  timeout 5400 adb shell am instrument -w -r -e class "$spec" "$@" "$test_runner" >"$output" 2>&1 || true
-  if ! python3 "$eval_py" instrumentation --name "$name" --output "$output" --sources "$android_test_sources" \
-    --classes "$spec" --summary "$emulator_out/instrumentation-$name.tsv"; then
+  printf '%s\n' "$spec"
+}
+
+# `am instrument` only (may run in the background); instrumentation_check evaluates the output.
+instrumentation_start() {
+  local name=$1 classes=$2
+  shift 2
+  timeout 5400 adb shell am instrument -w -r -e class "$(instrumentation_spec "$classes")" "$@" "$test_runner" \
+    >"$emulator_out/instrumentation-$name.txt" 2>&1 || true
+}
+
+instrumentation_check() {
+  local name=$1 classes=$2
+  if ! python3 "$eval_py" instrumentation --name "$name" --output "$emulator_out/instrumentation-$name.txt" \
+    --sources "$android_test_sources" --classes "$(instrumentation_spec "$classes")" \
+    --summary "$emulator_out/instrumentation-$name.tsv"; then
     fail_stage "instrumentation $name failed (see instrumentation-$name.txt)"
     adb exec-out screencap -p >"$emulator_out/screen-after-$name.png" 2>/dev/null || true
     return 1
   fi
+}
+
+run_instrumentation() {
+  step "instrumentation $1: $2"
+  instrumentation_start "$@"
+  instrumentation_check "$1" "$2"
+}
+
+# Exec host (phase A2): the phone's test and the desktop's `se exec` run at the same time and
+# coordinate through marker files on the phone (share-desktop.sh `exec`).
+share_exec_host() {
+  local tool=$1 root=$2
+  shift 2
+  step "instrumentation share-exec: ShareExecTaskTest while the desktop CLI runs commands on the phone"
+  adb_shell rm -rf /sdcard/SmartExplorerTask/exec-host || true
+  instrumentation_start share-exec ShareExecTaskTest "$@" &
+  local instrument_pid=$!
+  if bash "$tool" exec "$root" "$emulator_out/instrumentation-share-exec.txt" >"$emulator_out/share-desktop-exec.log" 2>&1; then
+    cat "$emulator_out/share-desktop-exec.log"
+  else
+    cat "$emulator_out/share-desktop-exec.log" >&2
+    fail_stage "the desktop CLI could not run, cancel or be refused commands on the phone (share-desktop-exec.log)"
+  fi
+  wait "$instrument_pid" || true
+  instrumentation_check share-exec ShareExecTaskTest || true
 }
 
 # A real reboot: only the system's BOOT_COMPLETED carries the exemption that lets a receiver start
@@ -705,7 +740,7 @@ XML
   server_args+=(-e seFeedVersion "$next_version" -e seFeedSha256 "$feed_sha")
   local main_classes=SystemTaskTest,LocalFilesTaskTest,ScanAnalyzeTaskTest,RemoteTaskTest,SyncTaskTest,BackgroundTaskTest,ServicesTaskTest,IntentsTaskTest,UpdateTaskTest,UiTaskTest
   IFS=, read -r -a covered <<<"$main_classes"
-  covered+=(RenameProbeTaskTest ShareRoomTaskTest ShareCleanupTaskTest BootPrepTaskTest)
+  covered+=(RenameProbeTaskTest ShareRoomTaskTest ShareExecTaskTest ShareCleanupTaskTest BootPrepTaskTest)
   mapfile -t all_classes < <(python3 "$eval_py" classes --sources "$android_test_sources")
   for class in "${all_classes[@]}"; do
     [[ " ${covered[*]} " == *" ${class##*.} "* ]] || die "instrumented test class $class is not part of any run"
@@ -725,6 +760,7 @@ XML
     if run_instrumentation share-join ShareRoomTaskTest "${server_args[@]}" "${share_args[@]}"; then
       if bash "$share_tool" members "$share_root" 1 >"$emulator_out/share-desktop-members.log" 2>&1; then
         cat "$emulator_out/share-desktop-members.log"
+        share_exec_host "$share_tool" "$share_root" "${server_args[@]}" "${share_args[@]}"
       else
         cat "$emulator_out/share-desktop-members.log" >&2
         fail_stage "the desktop CLI does not see the phone as a Room member"
