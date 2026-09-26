@@ -243,13 +243,17 @@ mod tests {
     #[test]
     fn cli_task_client_snapshot_leaves_the_gui_events() {
         let mut state = ShareHostState::new();
-        state.ui_events.push(ShareEvent::Status("for the GUI".into()));
-        state.discovery_offers.observe(&DiscoveryEvent::OfferPrepared {
-            offer_id: "offer".into(),
-            target: DiscoveryPublishTarget::Direct,
-            display_alias: "Laptop".into(),
-            discoverable_until: 2_000,
-        });
+        state
+            .ui_events
+            .push(ShareEvent::Status("for the GUI".into()));
+        state
+            .discovery_offers
+            .observe(&DiscoveryEvent::OfferPrepared {
+                offer_id: "offer".into(),
+                target: DiscoveryPublishTarget::Direct,
+                display_alias: "Laptop".into(),
+                discoverable_until: 2_000,
+            });
 
         let terminal = state_snapshot(&mut state, false, 1_000);
         assert_eq!(terminal.events.len(), 1);

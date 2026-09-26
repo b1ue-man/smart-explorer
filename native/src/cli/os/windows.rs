@@ -103,7 +103,10 @@ pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
     // SAFETY: same console handle; only the echo flag is cleared.
     if unsafe { SetConsoleMode(input, saved & !ENABLE_ECHO_INPUT) } == 0 {
-        return Err(format!("hide console input: {}", io::Error::last_os_error()));
+        return Err(format!(
+            "hide console input: {}",
+            io::Error::last_os_error()
+        ));
     }
     let mut line = String::new();
     let read = io::stdin().read_line(&mut line);
@@ -115,7 +118,10 @@ pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {
         return Err("the input ended before a line was entered".to_string());
     }
     if restored == 0 {
-        return Err(format!("restore console input: {}", io::Error::last_os_error()));
+        return Err(format!(
+            "restore console input: {}",
+            io::Error::last_os_error()
+        ));
     }
     while line.ends_with(['\r', '\n']) {
         line.pop();

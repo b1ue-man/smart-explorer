@@ -124,7 +124,10 @@ pub(super) fn resolve_room<'a>(
     };
     match matches.as_slice() {
         [room] => Ok(*room),
-        [] => Err(format!("no room matches {selector:?}; rooms: {}", room_list(rooms))),
+        [] => Err(format!(
+            "no room matches {selector:?}; rooms: {}",
+            room_list(rooms)
+        )),
         several => Err(format!(
             "{selector:?} names {} rooms; use the room id: {}",
             several.len(),

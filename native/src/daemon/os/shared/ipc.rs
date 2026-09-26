@@ -15,8 +15,8 @@ pub use super::ipc_client::{
 pub(crate) use super::ipc_host::ShareHost;
 pub(crate) use super::ipc_listener::start_listener;
 use super::ipc_listener::{clear_pre_auth_deadline, read_pre_auth_line, PreAuthPermit};
-pub use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
 use super::ipc_protocol::{bound_snapshot_for_ipc, write_response, IpcRequest, IpcResponse};
+pub use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
 
 pub(super) fn handle_client(
     mut stream: TcpStream,

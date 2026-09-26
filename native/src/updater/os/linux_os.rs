@@ -146,8 +146,12 @@ pub(super) fn process_alive(pid: u32) -> bool {
 /// started directly and staged binaries become installed executables.
 pub(super) fn mark_staged_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-        .map_err(|error| format!("Update-Datei {} ausfuehrbar machen: {error}", path.display()))
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).map_err(|error| {
+        format!(
+            "Update-Datei {} ausfuehrbar machen: {error}",
+            path.display()
+        )
+    })
 }
 
 /// A running Linux executable is replaced by renaming a new file over its
@@ -295,7 +299,10 @@ mod tests {
     fn cli_task_desktop_update_needs_a_graphical_session() {
         use std::ffi::OsStr;
         assert!(super::graphical_session(Some(OsStr::new(":0")), None));
-        assert!(super::graphical_session(None, Some(OsStr::new("wayland-0"))));
+        assert!(super::graphical_session(
+            None,
+            Some(OsStr::new("wayland-0"))
+        ));
         assert!(!super::graphical_session(None, None));
         assert!(!super::graphical_session(Some(OsStr::new("")), None));
     }
