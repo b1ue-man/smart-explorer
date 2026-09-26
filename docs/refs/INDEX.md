@@ -13,3 +13,4 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 | [android-apis.md](android-apis.md) | API 30–36, core 1.19.1, work 2.12.0 | 2026-09-25 | Vordergrunddienste, Benachrichtigungen, WorkManager, Boot, Speicher, FileProvider, Installation, Netz/Energie, Sammelmanifest |
 | [rust-jni-022.md](rust-jni-022.md) | jni 0.22.4, ndk-context 0.1.1, rustls-platform-verifier 0.7.0 | 2026-09-25 | exportierte JNI-Funktionen, String-Konvertierung, Init-Reihenfolge, liblog |
 | [android-ci.md](android-ci.md) | GitHub Actions (ubuntu-24.04) | 2026-09-25 | setup-java/gradle/rust, cargo-ndk, Emulator-Runner, adb, Testserver-Container |
+| [cli-terminal-update.md](cli-terminal-update.md) | clap 4.6.1, ctrlc 3.5.2, libc 0.2.186, windows-sys 0.59.0, chrono 0.4.44, std | 2026-09-26 | `se share discoverable` (Unterbefehle neben Elternargumenten, verdeckte PIN-Eingabe Unix/Windows) und `se update` (Symlink-Auflösung, atomares Ersetzen, Zeitformat) |
