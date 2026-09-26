@@ -127,6 +127,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    # `se share discoverable` reads a typed PIN with console echo switched off.
+    "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
     # The focused remote mount suite verifies real overlapped change watches.
