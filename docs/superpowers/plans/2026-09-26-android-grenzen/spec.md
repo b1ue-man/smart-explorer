@@ -23,15 +23,25 @@ Android-Batch: selbstständig, ohne Zwischenstopp; Annahmen stehen hier.
 - Unverändert: Laufwerks-Mounts verlangen weiter die vollständigen atomaren Garantien (reines SFTP,
   WebDAV und FTP bleiben dort schreibgeschützt).
 - **G4 Befehle anderer Geräte auf dem Telefon:** Das Telefon kann Ziel von „Befehl ausführen“ sein –
-  nur nach denselben ausdrücklichen Freigaben wie am Desktop. Ausführung in der App-Sandbox über
-  `/system/bin/sh`, eigene Prozessgruppe, Zeitlimit, Ausgabegrenzen, Stopp. Grenzen: läuft als App-Nutzer
-  (Dateizugriff der App, Toybox-Befehle), endet mit dem App-Prozess.
+  nur nach denselben ausdrücklichen Freigaben wie am Desktop (je exakter Geräte-Identität, Direkt-Gerät
+  oder Raummitglied). Ausführung in der App-Sandbox über `/system/bin/sh`; jeder Befehl läuft unter
+  einem eigenen Zwischenprozess, der Subreaper ist, sodass Abbruch, Zeitlimit und Entzug den ganzen
+  Prozessbaum beenden (auch `setsid`-Kinder und verwaiste Enkel) und Sync-Hooks der App unberührt
+  bleiben. Grenzen: läuft als App-Nutzer und liest damit auch App-Daten (gespeicherte
+  Verbindungszugänge, Share-Identität, Drive-Tokens); Android kann Kindprozesse im Hintergrund
+  beenden oder einfrieren (Ref `android-child-processes.md`); nach einem App-Absturz räumt der nächste
+  Start verbliebene Befehle auf.
 - **G5 SMB:** neues Backend „SMB“ (SMB 2/3, Benutzer/Passwort, optional Domäne) über einen reinen
-  Rust-Client; Durchsuchen, Kopieren, Sync, Bearbeiten wie bei den anderen Remotes, auf Android und
-  Linux-Desktop (Windows behält UNC).
-- **G6 „In Smart Explorer öffnen“:** Gegenstück zum Explorer-Kontextmenü: Smart Explorer erscheint bei
-  „Öffnen mit“ für Ordner und Dateien anderer Apps und öffnet den Ordner (bei Dateien den Ordner der
-  Datei).
+  Rust-Client; Durchsuchen, Kopieren, Sync, Bearbeiten wie bei den anderen Remotes – in diesem Batch
+  nur in der Android-App (der Desktop behält UNC/Netzlaufwerke; Backend und Schema existieren
+  plattformübergreifend, das Einbinden als Laufwerk wird für SMB ausdrücklich abgewiesen).
+  Links/Junctions auf dem Server werden als Link erkannt (Reparse-Attribut) und nie rekursiv betreten;
+  serverseitig verfolgte Samba-Symlinks sind nicht erkennbar (Grenze). DFS aus, ohne Verschlüsselung,
+  sofern der Server sie nicht verlangt (Hinweis im Formular).
+- **G6 „In Smart Explorer öffnen“:** Gegenstück zum Explorer-Kontextmenü: Smart Explorer erscheint,
+  wenn eine andere App einen Ordner zum Öffnen übergibt, und öffnet ihn. Dateien werden bewusst nicht
+  beansprucht (sonst stünde die App bei jedem Datei-Öffnen als Betrachter zur Wahl); für Dateien bleibt
+  „Teilen → Smart Explorer“.
 - Nicht: Einbinden als Laufwerk; `Android/data`/`Android/obb` bleiben gesperrt (Betriebssystem).
 
 ## B Bedienung
@@ -39,11 +49,16 @@ Android-Batch: selbstständig, ohne Zwischenstopp; Annahmen stehen hier.
 - G1–G3: keine neue Bedienung; was bisher mit Fehlermeldung abbrach, läuft durch. Der Dialog
   „Nicht ersetzbar“ bleibt nur für Server ohne sicheres Ersetzen; der Hinweis am Remote-Agent-Schalter
   entfällt.
-- G4: Share-Seite → eigenes Gerät: Schalter „Befehle von freigegebenen Geräten erlauben“ mit
-  Warnhinweis; je Gerät/Raum die Freigabe wie am Desktop. Laufende Befehle erscheinen als Aufgabe mit
-  Stopp.
-- G5: Verbindung hinzufügen → Protokoll „SMB“: Host, Freigabe, Benutzer, Passwort, Domäne (optional),
-  Startordner; Test/Speichern wie bei SFTP.
+- G4: Share-Seite → Abschnitt „Befehle auf diesem Telefon“: je Gerät/Raummitglied (wie am Desktop,
+  kein globaler Schalter) „Erlauben…“ → Warnung mit den Android-Risiken + Häkchen „Verstanden“ →
+  „Aktivieren“; „Entziehen“ ohne Rückfrage. Liste laufender und letzter Host-Befehle mit Stopp. Solange
+  ein fremder Befehl läuft, zeigt eine laufende Benachrichtigung „<Gerät> führt einen Befehl aus“ mit
+  „Stopp“. Nicht verfügbarer Anbieter: Hinweis mit Grund, Erlauben gesperrt.
+- G5: Verbindung hinzufügen → Protokoll „SMB“: Host, Port (445), Freigabe, Domäne (optional),
+  Benutzer, Passwort, Startordner; Test/Speichern wie bei SFTP. Freigabe und Domäne sind nur
+  Formularfelder (gespeichert als `root=/<freigabe>/<startordner>`, `user=DOMÄNE\benutzer`); ein
+  eingefügtes `\\host\freigabe\pfad` oder `smb://host/freigabe/pfad` im Host-Feld wird zerlegt.
+  Eigene Meldungen für „nur SMB1“, „Freigabe nicht gefunden“, Anmeldung.
 - G6: In anderen Apps „Öffnen mit“ → Smart Explorer → Tab „Dateien“ mit dem Ordner.
 
 ## C Layout und Bedienkosten

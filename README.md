@@ -742,12 +742,14 @@ die private Share-Identität das Gerät nicht verlassen.
   Ausschneiden, Einfügen, Kopieren/Verschieben nach…, Umbenennen, Neu, Löschen,
   Eigenschaften, Favoriten (F7); bis zu sechs parallele Übertragungen mit
   Warteschlange und Benachrichtigung, auch nach Verlassen der App (F8);
-  Öffnen in passenden Apps, Teilen und Empfangen, auch für Remote-Orte (F9);
+  Öffnen in passenden Apps, Teilen und Empfangen, auch für Remote-Orte, und
+  „In Smart Explorer öffnen“ für Ordner, die eine andere App übergibt (F9);
   ZIP lesen und entpacken (F10); Papierkorb je Speichervolume mit
   Wiederherstellen und Löschung nach 30 Tagen (F11).
-- **Verbindungen:** SFTP, FTP/FTPS und WebDAV anlegen, testen, bearbeiten und
-  löschen, Hostschlüssel nach „Trust on first use“ (F12); Google Drive mit
-  eigener OAuth-Client-ID (F13).
+- **Verbindungen:** SFTP, FTP/FTPS, WebDAV und SMB (SMB2/3, Freigabe als erste
+  Stufe des Startordners) anlegen, testen, bearbeiten und löschen,
+  Hostschlüssel nach „Trust on first use“ (F12); Google Drive mit eigener
+  OAuth-Client-ID (F13).
 - **Sync und Hintergrund:** Ordner einmalig spiegeln (F14); Sync-Jobs im
   Desktop-Format mit allen Richtungen, Regeln und Auslösern (F15); Konflikte
   prüfen, lösen und Textdateien zusammenführen (F16); Hintergrund-Worker mit
@@ -756,20 +758,20 @@ die private Share-Identität das Gerät nicht verlassen.
   Energiesparmodus oder getaktetem Netz (F17).
 - **Share:** eigenes Gerät, Suchbar machen mit PIN, Direkt-Geräte und Räume,
   Anfragen, Freigaben, Dateien senden und Befehle auf freigegebenen Geräten
-  ausführen, LAN-Präsenz im WLAN (F18).
+  ausführen, LAN-Präsenz im WLAN (F18); anderen Geräten erlauben, Befehle auf
+  dem Telefon auszuführen (je Gerät scharfschalten und bestätigen, laufende
+  Befehle sehen und abbrechen).
 - **Analyse und mehr:** Speicheranalyse mit Treemap (F19), Duplikate (F20),
   Einstellungen (F21), Updates über den Feed (F22), Fehlerprotokoll mit
   Absturzprotokoll des Kerns (F23).
 
 **Nicht-Ziele:** Remote- oder Share-Orte als Laufwerk einbinden (Android kennt
-ohne Root keine Drittanbieter-Dateisysteme); Explorer-Kontextmenü,
-Windows-Zwischenablage mit virtuellen Dateien und Drag-and-drop nach außen
-(ersetzt durch Öffnen, Teilen und Empfangen); UNC/SMB-Netzlaufwerke (kein
-eigener SMB-Client, wie unter Linux); Internet-Teilen per LAN-Uplink (Android
-bietet den System-Hotspot); Befehle anderer Geräte auf dem Telefon ausführen
-(keine Prozess-Container in der App-Sandbox); Quick-Share-Interop;
-Share-Anfragen im Altformat; Versions-Rollback; Google-Play-Veröffentlichung;
-Storage-Access-Framework-Bäume (`content://`) als Browse-Ort.
+ohne Root keine Drittanbieter-Dateisysteme); Windows-Zwischenablage mit
+virtuellen Dateien und Drag-and-drop nach außen (ersetzt durch Öffnen, Teilen
+und Empfangen); Internet-Teilen per LAN-Uplink (Android bietet den
+System-Hotspot); Quick-Share-Interop; Share-Anfragen im Altformat;
+Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäume
+(`content://`) als Browse-Ort.
 
 **Grenzen:**
 
@@ -794,6 +796,16 @@ Storage-Access-Framework-Bäume (`content://`) als Browse-Ort.
 - Die privaten Bereiche anderer Apps (alles in `Android/data` und `Android/obb`)
   lassen sich seit Android 11 nicht öffnen; Ordnerindex, Sync-Jobs und Spiegeln
   lassen sie als geschützte Auslassung weg und melden das.
+- Befehle anderer Geräte laufen in der App-Sandbox mit den Rechten der App
+  (`/system/bin/sh`, kein Root, kein Zugriff auf andere Apps), höchstens einer
+  gleichzeitig und nur, solange der Share-Dienst läuft (App offen oder
+  Dauerbetrieb). Android kennt keine Prozess-Container für Apps: die App hält
+  verwaiste Kindprozesse als Subreaper fest und beendet beim Abbruch den
+  ganzen Prozessbaum.
+- „In Smart Explorer öffnen“ nimmt nur Ordner auf dem internen Speicher und
+  auf SD-Karten/USB an, die eine andere App zum Öffnen übergibt (Ordner-Typ
+  `vnd.android.document/directory`); die App bietet sich nicht als Betrachter
+  für Dateien an.
 
 **Offene Punkte:**
 

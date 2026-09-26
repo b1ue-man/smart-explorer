@@ -181,6 +181,7 @@ share_desktop_up() {
 SHARE_EXEC_MARKERS=/sdcard/SmartExplorerTask/exec-host
 # Output of the phone's `am instrument` run: once it ends, no marker will come.
 SHARE_EXEC_INSTRUMENT=""
+SHARE_EXEC_TARGET=""
 
 share_marker_wait() {
   local name=$1 seconds=$2 deadline=$((SECONDS + $2)) value=""
@@ -200,6 +201,21 @@ share_marker_wait() {
   return 1
 }
 
+# A command the phone ends (cancel, time limit, revocation): the client must return with an
+# error well before its own timeout (exit 124).
+share_exec_expect_end() {
+  local step=$1 what=$2 limit=$3 code=0
+  shift 3
+  SHARE_CLIENT_TIMEOUT=$limit share_client exec "$SHARE_EXEC_TARGET" "$@" \
+    >"$SHARE_ROOT/exec-$step.out" 2>"$SHARE_ROOT/exec-$step.err" || code=$?
+  echo "exec $step ($what): exit $code"
+  [[ "$code" -ne 0 && "$code" -ne 124 ]] || {
+    echo "exec $step was not ended on the phone (exit $code)" >&2
+    cat "$SHARE_ROOT/exec-$step.out" "$SHARE_ROOT/exec-$step.err" >&2
+    return 1
+  }
+}
+
 share_exec_check() {
   local phone target out code deadline verdict=not-refused
   phone="$(share_marker_wait granted 900)"
@@ -209,6 +225,7 @@ share_exec_check() {
     return 1
   }
   target="share://room/$SHARE_ROOM_RELATION/$phone"
+  SHARE_EXEC_TARGET=$target
   echo "exec target $target"
 
   # 1. Allowed: the command runs in the phone's shell (retried while presence and grant spread).
@@ -226,39 +243,38 @@ share_exec_check() {
     return 1
   }
 
-  # 2. A shell with a background child; the phone cancels it and must end the whole tree.
-  code=0
-  SHARE_CLIENT_TIMEOUT=300s share_client exec "$target" --shell 'sleep 300 & sleep 301; wait' \
-    >"$SHARE_ROOT/exec-2.out" 2>"$SHARE_ROOT/exec-2.err" || code=$?
-  echo "exec 2 (cancelled on the phone): exit $code"
-  [[ "$code" -ne 0 && "$code" -ne 124 ]] || {
-    echo "the long command was not cancelled by the phone (exit $code)" >&2
-    cat "$SHARE_ROOT/exec-2.err" >&2
-    return 1
-  }
+  # 2. A shell that leaves a setsid child and a double-forked orphan; the phone cancels it and
+  #    must end the whole tree (ShareExecTaskTest checks /proc).
+  share_exec_expect_end 2 "cancelled on the phone" 300s --shell 'setsid sleep 302 & (sleep 303 &); sleep 301'
 
-  # 3. Revoked: the phone refuses the next attempt (not a transport failure).
+  # 3. The same kind of tree with a remote time limit.
+  share_exec_expect_end 3 "timed out on the phone" 120s --timeout 5 --shell 'setsid sleep 304 & (sleep 305 &); sleep 306'
+
+  # 4. A running command while the phone revokes the grant.
+  share_exec_expect_end 4 "revoked on the phone" 300s --shell 'setsid sleep 307 & sleep 308'
+
+  # 5. Revoked: the phone refuses the next attempt (not a transport failure).
   share_marker_wait revoked 300 >/dev/null
   deadline=$((SECONDS + 120))
   while ((SECONDS < deadline)); do
     code=0
     share_client exec "$target" --timeout 30 --shell 'echo darf-nicht-laufen' \
-      >"$SHARE_ROOT/exec-3.out" 2>"$SHARE_ROOT/exec-3.err" || code=$?
+      >"$SHARE_ROOT/exec-5.out" 2>"$SHARE_ROOT/exec-5.err" || code=$?
     if [[ "$code" -eq 0 ]]; then
       verdict=ran
       break
     fi
-    if grep -Eq 'permission_denied|exec authentication failed' "$SHARE_ROOT/exec-3.err"; then
+    if grep -Eq 'permission_denied|exec authentication failed' "$SHARE_ROOT/exec-5.err"; then
       verdict=refused
       break
     fi
     sleep 3
   done
-  echo "exec 3 (revoked): exit $code, verdict $verdict"
+  echo "exec 5 (after the revocation): exit $code, verdict $verdict"
   adb shell "echo $verdict >$SHARE_EXEC_MARKERS/host-done"
   [[ "$verdict" == refused ]] || {
     echo "the command after the revocation was not refused" >&2
-    cat "$SHARE_ROOT/exec-3.out" "$SHARE_ROOT/exec-3.err" >&2
+    cat "$SHARE_ROOT/exec-5.out" "$SHARE_ROOT/exec-5.err" >&2
     return 1
   }
 }
