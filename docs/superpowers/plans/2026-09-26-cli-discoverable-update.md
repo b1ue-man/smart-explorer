@@ -8,9 +8,10 @@ are owned by the manager and have not run yet; the root graphify refresh is
 still due (AGENTS.md → graphify).
 
 Implementation record: M1 `5d100e5`, M2 `a96432e`, M3 `578cb57`, M4 `99999b2`,
-M5 `5f1c368`, M6 in the documentation commit that follows it. Formatting was
-written by hand (no rustfmt on the workstation); the suite's rustfmt gate on
-changed lines is the first real check.
+M5 `5f1c368`, M6 `adce1cc`; review corrections `f3cda60` (discoverability),
+`d84feaf` (update) and the suite/documentation commit that follows them.
+Formatting was written by hand (no rustfmt on the workstation); the suite's
+rustfmt gate on changed lines is the first real check.
 
 ## Goal and deliverables
 
@@ -154,9 +155,53 @@ Recorded syntax and citations: `docs/refs/cli-terminal-update.md`.
 - `se update --reinstall` (terminal-only) reinstalls the feed's version even if
   it is not newer; desktop installations use the app updater semantics only.
 - The replaced `se` must report exactly the feed's `version.txt`; otherwise the
-  previous file is restored. `se update --complete-install` is a hidden
-  contract every later `se` keeps.
+  previous file is restored. `se update --complete-install <version>` is a
+  hidden contract every later `se` keeps; the new binary hands the worker over
+  only when its version is the promised one.
 - Test prefix for this batch: `cli_task_`.
+
+## Review corrections (Opus review, SHIP AFTER FIXES)
+
+- Clippy: the two `format!("…{}", e)` calls in the updater adapters use inline
+  arguments; no other changed line passes a bare identifier positionally.
+- Helper from the terminal (FIX 1): `spawn_update_helper(…, from_terminal)`
+  gives the helper null standard handles, on Linux in its own session
+  (`setsid`), so `se update --json | jq` and a closed terminal do not hold or
+  hang up the helper and the restarted app.
+- No graphical session (FIX 2): Linux refuses the desktop path before staging
+  when `DISPLAY` and `WAYLAND_DISPLAY` are empty.
+- Completion (FIX 3, 6): `--complete-install <version>`; the installed file is
+  compared with the payload hash right before it starts.
+- Swap safety (FIX 4, 5): `updater/os/shared/cli_swap.rs` holds the lock
+  (`<se>.update-lock` with the owner PID, stale locks taken over), removes
+  leftovers of ended update processes, keeps a hash-verified backup, checks it
+  again before a rollback (never deletes it on a mismatch), and restores it on
+  Ctrl+C through a handler that shares a mutex with the swap and the commit.
+  SIGHUP/SIGTERM are not handled (ctrlc without its `termination` feature);
+  their leftovers are removed by the next `se update`.
+- Publish failure (FIX 7): an offer the worker kept for the target is stopped
+  and the error says so.
+- Tests (FIX 8, 9, 10): the daemon refusal and the worker snapshot are pure
+  functions with tests; `ShareHostState::new()` keeps tests out of the app data
+  folder; the GUI state test covers `WorkerStopped` and offers that vanish; the
+  E2E adds `current` handoff, a new `se` that does not start, lock, leftovers,
+  unusable source, headless refusal and the PIN leak check. The `replaced`
+  handoff needs two builds of different versions and stays covered by the
+  decision test.
+- Terminal readers (`share status`, `lan`, identity repair, `exec`) use the
+  non-draining snapshot, which returns a copy of the UI events; `status` text
+  prints the newest 20.
+- Handoff: GUI and Android drop offers the daemon no longer lists
+  (`DiscoveryUiState::retain_live_offers`), so a handoff to a new daemon ends
+  them visibly.
+- Deliberately unchanged: daemon messages shared with the German desktop UI and
+  Android (second-offer refusal, missing state event) stay German like the
+  daemon's other errors; the shared updater errors (hash mismatch, copy) stay
+  German as elsewhere in the updater; the desktop rollback archive label uses
+  `se`'s version (the app's version cannot be read without starting it; both
+  match in installer- and updater-made installations); the IPC request that
+  carries the PIN to the local daemon is a transient JSON line as for the
+  desktop UI.
 
 ## Milestones
 
@@ -206,7 +251,7 @@ stop one/all, worker stop clears).
 
 ### M3 — Updater terminal API
 
-Files: `updater/os/shared/terminal.rs` (new), `apply.rs`, `config.rs`,
+Files: `updater/os/shared/terminal.rs` (new), `cli_swap.rs` (new, lock/swap/undo), `apply.rs`, `config.rs`,
 `feed.rs`, `staging.rs`, `core/core.rs`, `os/linux_os.rs`, `os/windows.rs`,
 `updater/mod.rs`, `daemon` handoff (`ipc_share_client.rs`).
 

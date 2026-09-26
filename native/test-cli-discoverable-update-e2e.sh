@@ -208,8 +208,8 @@ jq -e --arg name "$device_name" '
   >/dev/null <<<"$direct"
 wait_offer "$client_c" "$direct_id" published
 
-# Another reader draining the shared UI events (as the desktop GUI does) must
-# not take the offer away from the terminal.
+# The offer list is the daemon's own state, not the event stream: status and
+# list agree, however often the events were read.
 run_client "$client_c" share status --json >/dev/null
 status_c="$(run_client "$client_c" share status --json)"
 jq -e --arg id "$direct_id" '[.discoverable[] | select(.offer_id == $id)] | length == 1' \
@@ -222,11 +222,16 @@ grep -Fq "remaining=" <<<"$listed"
 expect_failure "$root/conflict.err" "already discoverable" \
   run_client "$client_c" share discoverable --pin 1454
 
-# A room, with the PIN from stdin instead of the command line.
+# A room, with the PIN from stdin instead of the command line. Only the first
+# line is the PIN; a distinctive value lets the end of this part prove that it
+# was written to no output, log or file.
 room_create="$(run_client "$client_c" share room create --name Team)"
 room_profile="$(awk -F '\t' '$1 == "room_id" { print $2 }' <<<"$room_create")"
 [[ -n "$room_profile" ]]
-room="$(printf '1454\n' | run_client "$client_c" share discoverable --room Team --pin-stdin --json)"
+probe_pin="pin-probe-5f3a9c"
+room="$(printf '%s\nnot the pin\n' "$probe_pin" \
+  | run_client "$client_c" share discoverable --room Team --pin-stdin --json 2>"$root/room.err")"
+printf '%s\n' "$room" >"$root/room.out"
 room_id="$(jq -er '.offer.offer_id' <<<"$room")"
 jq -e --arg profile "$room_profile" '
   .offer.target.kind == "room"
@@ -255,6 +260,21 @@ run_client "$client_c" share worker stop >/dev/null
 run_client "$client_c" share configure --server "127.0.0.1:$signal_port" >/dev/null
 wait_connected "$client_c"
 jq -e '.offers == []' >/dev/null <<<"$(run_client "$client_c" share discoverable list --json)"
+
+# The PIN never reaches any output, the daemon log, the profile/data files or
+# the Share server log.
+run_client "$client_c" share status >"$root/status.out"
+for evidence in "$root/room.out" "$root/room.err" "$root/status.out" "$server_log"; do
+  if grep -Fq "$probe_pin" "$evidence"; then
+    echo "the PIN appeared in $evidence" >&2
+    exit 1
+  fi
+done
+if grep -rFq "$probe_pin" "$client_c/data" "$client_c/config" "$client_c/home"; then
+  grep -rFl "$probe_pin" "$client_c/data" "$client_c/config" "$client_c/home" >&2
+  echo "the PIN was written to a file of the client" >&2
+  exit 1
+fi
 echo "se share discoverable passed"
 
 # ---------------------------------------------------------------------------
@@ -307,6 +327,23 @@ plain="$(run_as "$client_u" "$bin_dir/se" update)"
 grep -Fq "status"$'\t'"up_to_date" <<<"$plain"
 [[ "$(sha256sum "$installed" | awk '{ print $1 }')" == "$old_sha" ]]
 
+# A source that does not answer is refused and does not replace the saved one.
+expect_failure "$root/bad-source.err" "is not usable" \
+  run_as "$client_u" "$bin_dir/se" update --source "$root/missing-feed" --check
+kept="$(run_as "$client_u" "$bin_dir/se" update --check --json)"
+jq -e --arg source "$root/feed" '.source == $source' >/dev/null <<<"$kept"
+
+# One se update at a time per installed file.
+printf '%s' "$$" >"$install_dir/se.update-lock"
+expect_failure "$root/locked.err" "another se update" \
+  run_as "$client_u" "$bin_dir/se" update --reinstall
+rm "$install_dir/se.update-lock"
+[[ "$(sha256sum "$installed" | awk '{ print $1 }')" == "$old_sha" ]]
+
+# Leftovers of an update process that no longer runs are cleared.
+printf 'x' >"$install_dir/se.update-old.4294967294.1"
+printf 'x' >"$install_dir/se.update-pending.4294967294.2"
+
 # Reinstall through the link: the resolved file is replaced, the link stays.
 reinstalled="$(run_as "$client_u" "$bin_dir/se" update --reinstall --json)"
 jq -e --arg cli "$installed" --arg sha "$feed_sha" '
@@ -321,6 +358,15 @@ jq -e --arg cli "$installed" --arg sha "$feed_sha" '
 no_update_leftovers "$install_dir"
 [[ -z "$(daemon_pids "$client_u")" ]]
 
+# A running worker of the same version stays; the new se reports it current.
+run_as "$client_u" "$bin_dir/se" share status --json >/dev/null
+[[ -n "$(daemon_pids "$client_u")" ]]
+current="$(run_as "$client_u" "$bin_dir/se" update --reinstall --json)"
+jq -e '.installed.worker == "current" and .installed.worker_error == null' \
+  >/dev/null <<<"$current"
+[[ -n "$(daemon_pids "$client_u")" ]]
+stop_daemon "$client_u"
+
 # A payload that does not match its published hash never replaces anything.
 make_feed "$root/feed-bad" "$version"
 printf '%064d  se\n' 0 >"$root/feed-bad/se.sha256"
@@ -328,6 +374,18 @@ install_marked_old_se
 expect_failure "$root/bad-hash.err" "passt nicht" \
   run_as "$client_u" "$bin_dir/se" update --source "$root/feed-bad" --reinstall
 [[ "$(sha256sum "$installed" | awk '{ print $1 }')" == "$old_sha" ]]
+no_update_leftovers "$install_dir"
+
+# A new se that does not start is replaced by the previous file again.
+mkdir -p "$root/feed-broken"
+printf '%s\n' "$version" >"$root/feed-broken/version.txt"
+printf '#!/bin/sh\nexit 1\n' >"$root/feed-broken/se"
+(cd "$root/feed-broken" && sha256sum se >se.sha256)
+expect_failure "$root/broken.err" "did not start correctly" \
+  run_as "$client_u" "$bin_dir/se" update --source "$root/feed-broken" --reinstall
+grep -Fq "the previous se was restored" "$root/broken.err"
+[[ "$(sha256sum "$installed" | awk '{ print $1 }')" == "$old_sha" ]]
+[[ "$(stat -c '%a' "$installed")" == 755 ]]
 no_update_leftovers "$install_dir"
 
 # The feed announces a version its se does not report: the new file is
@@ -356,4 +414,13 @@ jq -e --arg app "$desktop_dir/smart_explorer" --arg cli "$desktop_dir/se" '
   and .installation.cli == $cli' >/dev/null <<<"$desktop"
 expect_failure "$root/desktop-reinstall.err" "terminal-only installation" \
   run_as "$client_d" "$desktop_dir/se" update --reinstall
+# Without a graphical session the helper could not restart the app, so the
+# desktop update is refused before anything is downloaded.
+expect_failure "$root/desktop-headless.err" "no graphical session" \
+  run_as "$client_d" env -u DISPLAY -u WAYLAND_DISPLAY \
+  "$desktop_dir/se" update --source "$root/feed-next"
+if compgen -G "$client_d/data/smart_explorer/*_download_*" >/dev/null; then
+  echo "a refused desktop update staged payloads" >&2
+  exit 1
+fi
 echo "se update passed"

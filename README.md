@@ -348,18 +348,25 @@ Freigabeseite des veröffentlichenden Geräts muss nicht noch einmal zustimmen.
 Im Terminal geht dasselbe mit **`se share discoverable`**: `se share
 discoverable --minutes 5 --pin 1454` macht dieses Gerät fünf Minuten suchbar,
 `--room NAME` stattdessen einen Raum, `--name` ändert den angezeigten Namen.
-Damit die PIN nicht in der Prozessliste steht, liest `--pin-stdin` sie aus der
-Standardeingabe, und ohne PIN-Angabe fragt `se` im Terminal verdeckt danach
-(nur der abschließende Zeilenumbruch wird entfernt). Die Ausgabe nennt
-Angebots-ID, Ziel, Namen, Endzeit, Restzeit und ob der Share-Server das Angebot
-schon bestätigt hat (`published`) oder noch nicht (`prepared`).
+Damit die PIN nicht in der Prozessliste steht, liest `--pin-stdin` genau die
+erste Zeile der Standardeingabe als PIN, und ohne PIN-Angabe fragt `se` im
+Terminal verdeckt danach (nur der abschließende Zeilenumbruch wird entfernt;
+endet die Eingabe ohne Zeile, bricht `se` ab). Die PIN erscheint in keiner
+Ausgabe, keinem Protokoll und keiner Datei. Die Ausgabe nennt Angebots-ID, Ziel,
+Namen, Endzeit, Restzeit und ob der Share-Server das Angebot schon bestätigt hat
+(`published`) oder noch nicht (`prepared`). Scheitert das Veröffentlichen, beendet
+`se` ein Angebot, das der Worker dabei trotzdem behalten hat, damit das Gerät
+nicht später unbemerkt suchbar wird.
 `se share discoverable list` zeigt die laufenden eigenen Angebote,
 `se share discoverable stop [ID|Präfix] [--all]` beendet eines oder alle; alle
 drei kennen `--json`, und `se share status` listet die Angebote ebenfalls. Der
 Hintergrund-Worker führt die eigenen Angebote dauerhaft, deshalb sieht das
-Terminal sie auch dann, wenn die Desktop-App gleichzeitig läuft. Ein Ziel kann
-nur einmal gleichzeitig suchbar sein; wird der Share-Worker gestoppt oder neu
-gestartet, enden seine Angebote und App und Terminal zeigen sie nicht mehr an.
+Terminal sie auch dann, wenn die Desktop-App gleichzeitig läuft; Terminal-Befehle
+nehmen der App auch keine Ereignisse mehr weg (`se share status` zeigt die
+jüngsten 20 als Kopie). Ein Ziel kann nur einmal gleichzeitig suchbar sein. Wird
+der Share-Worker gestoppt, neu gestartet oder nach einem Update an eine neue
+Version übergeben, enden seine Angebote, und App, Android und Terminal zeigen
+sie nicht mehr an.
 
 Eine erfolgreiche Direct-Kopplung installiert die vollständige Relation auf
 beiden Geräten, sodass beide Seiten sofort als Remote-Gerät nutzbar sind.
@@ -657,24 +664,32 @@ Die Android-App nutzt denselben Feed für ihre eigene APK (siehe unten).
 verfügbare Version (mit `--json` maschinenlesbar) und ändert nichts;
 `se update` installiert eine neuere Version. Fehlt eine Update-Quelle, sagt `se`
 das und nennt `se update --source <Feed-URL oder Ordner>` — das ist dieselbe
-Einstellung wie das UPDATE-Feld der App.
+Einstellung wie das UPDATE-Feld der App; gespeichert wird sie nur, wenn der Feed
+antwortet.
 
 - **Nur-Terminal-Installation** (`--cli-only`): `se` lädt das `se` des Feeds,
   prüft dessen SHA-256 und ersetzt die tatsächlich installierte Datei
   (`~/.local/opt/smart-explorer/se`; der Link `~/.local/bin/se` bleibt und zeigt
-  weiter darauf). Die Kopie wird direkt vor dem atomaren Austausch noch einmal
-  geprüft, die Dateirechte bleiben. Startet das neue `se` nicht oder meldet es
-  eine andere Version als der Feed, stellt `se update` die vorherige Datei
-  wieder her. Ein laufender Hintergrund-Worker der alten Version wird danach
-  an die neue Version übergeben; läuft keiner, startet auch keiner.
-  `se update --reinstall` installiert die Feed-Version erneut, auch wenn sie
-  nicht neuer ist (nie eine ältere).
+  weiter darauf). Die Kopie wird direkt vor dem atomaren Austausch und noch
+  einmal direkt vor ihrem ersten Start geprüft, die Dateirechte bleiben. Bis
+  dahin liegt eine per SHA-256 geprüfte Sicherung der alten Datei daneben.
+  Startet das neue `se` nicht, meldet es eine andere Version als der Feed oder
+  bricht Strg+C das Update ab, kommt die vorherige Datei zurück. Ein laufender
+  Hintergrund-Worker einer anderen Version wird an die neue Version übergeben
+  (nur wenn sie die versprochene Version ist); läuft keiner, startet auch keiner.
+  Es läuft höchstens ein `se update` je installierter Datei; Reste eines
+  abgebrochenen Updates räumt der nächste Lauf weg. `se update --reinstall`
+  installiert die Feed-Version erneut, auch wenn sie nicht neuer ist (nie eine
+  ältere).
 - **Neben der Desktop-App** (Linux-Desktop-Installation, Windows): `se update`
   lädt und prüft App, Update-Helfer und `se` genau wie die Update-Prüfung der
-  App und startet den hash-gebundenen Update-Helfer. Er ersetzt alle drei nach
-  dem Ende von `se update`, stoppt vorher den Hintergrund-Worker, wartet auf
-  offene App-Fenster und startet danach Smart Explorer (wie **Jetzt neu
-  starten**; braucht eine grafische Sitzung). Smart Explorer vorher schließen.
+  App und startet den hash-gebundenen Update-Helfer losgelöst vom Terminal (ohne
+  dessen Ein- und Ausgabe). Er ersetzt alle drei nach dem Ende von `se update`,
+  stoppt vorher den Hintergrund-Worker, wartet auf offene App-Fenster und startet
+  danach Smart Explorer (wie **Jetzt neu starten**). Smart Explorer vorher
+  schließen. Unter Linux ohne grafische Sitzung (`DISPLAY`/`WAYLAND_DISPLAY` leer)
+  lehnt `se update` das ab, bevor es etwas lädt, denn der Neustart der App würde
+  dort scheitern.
 
 ## 🤖 Android: Installieren und Updates
 

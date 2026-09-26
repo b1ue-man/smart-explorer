@@ -285,11 +285,15 @@ barrier, IPC wire and bounds, GUI and Android discovery/status consumers,
 updater feed/staging, worker version handshake, CLI surface), builds the
 development `se` and `se-share-server`, and runs
 `native/test-cli-discoverable-update-e2e.sh`: discoverable offers against a
-local Share server (Direct and Room, PIN from argument and stdin, list after
-other readers drained the UI events, conflict, stop by prefix and all, worker
-stop) and `se update` on a terminal-only installation from a local feed
-(missing source, up to date, reinstall through a link, hash mismatch, version
-mismatch rollback, desktop detection). It then checks the installer's
+local Share server (Direct and Room, PIN from argument and stdin, status and
+list agreeing, conflict, stop by prefix and all, worker stop, the PIN absent
+from every output, log and client file) and `se update` on a terminal-only
+installation from a local feed (missing and unusable source, up to date, busy
+lock, leftover cleanup, reinstall through a link, worker handed off as
+`not_running`/`current`, hash mismatch, a new `se` that does not start, version
+mismatch rollback, desktop detection and the refusal without a graphical
+session). The `replaced` handoff needs two builds of different versions and is
+covered by the handoff decision test instead. It then checks the installer's
 update-source rules and gates rustfmt and host/`x86_64-pc-windows-gnu` clippy on
 the lines the batch changed. See the
 [batch plan](superpowers/plans/2026-09-26-cli-discoverable-update.md).
@@ -726,28 +730,40 @@ directly.
 
 **Terminal update (`se update`).** `--check` reports the running and the feed
 version (`--json` for scripts) and changes nothing; without a configured source
-it fails with the `se update --source` hint. `se update` resolves the running
+it fails with the `se update --source` hint, and `--source` is saved only after
+that feed returned a plausible `version.txt`. `se update` resolves the running
 `se` to its installed file (Linux follows links such as `~/.local/bin/se`) and
 decides by what lies beside it:
 
 - **Terminal-only** (no app beside `se`, e.g. `install-linux.sh --cli-only`):
-  download `se` plus its required `.sha256` into app data, copy it next to the
-  installed file with the installed file's permissions, verify that copy again
-  and rename it over the installed name (one atomic `rename(2)`; the name never
-  disappears). A verified backup of the previous file stays until the new file
-  answers `se update --complete-install` with exactly the feed's `version.txt`;
-  otherwise the backup is renamed back. That hidden completion step runs in the
-  new binary and performs the version-bound worker handoff: a running worker of
-  another version is replaced, a missing worker is not started. Every later
-  `se` must keep accepting `se update --complete-install`. `--reinstall`
-  reinstalls the same version; `se update` never downgrades. Windows has no
-  terminal-only self-replacement (a running `se.exe` cannot replace itself) and
-  says so.
+  take `<se>.update-lock` (holding the owner PID; a lock of a process that no
+  longer runs is taken over) and remove `update-old`/`update-pending` leftovers
+  of ended update processes. Download `se` plus its required `.sha256` into app
+  data, back up the installed file with its SHA-256 checked after the copy,
+  copy the payload next to it with the installed file's permissions, verify that
+  copy again and rename it over the installed name (one atomic `rename(2)`; the
+  name never disappears). Right before the new file is started it is compared
+  with the payload hash once more; it then has to answer
+  `se update --complete-install <version>` with exactly the feed's
+  `version.txt`. Otherwise, and on Ctrl+C during the swap, the backup is checked
+  against its hash and renamed back. The hidden completion step runs in the new
+  binary and performs the version-bound worker handoff only when its version is
+  the promised one: a running worker of another version is replaced (its
+  offers end; clients drop offers the daemon no longer lists), a missing worker
+  is not started. Every later `se` must keep accepting
+  `se update --complete-install <version>`. `--reinstall` reinstalls the same
+  version; `se update` never downgrades. Windows has no terminal-only
+  self-replacement (a running `se.exe` cannot replace itself) and says so.
 - **Beside the desktop app** (Linux desktop installation, every Windows
   installation): stage app, helper and `se` exactly like the app's check and
   start the same hash-bound helper, bound to the app next to `se` with `se` as
-  the parent process. After `se` exits the helper follows the steps below and
-  starts Smart Explorer, so this needs a graphical session.
+  the parent process, with null standard handles (Linux also in its own
+  session), so pipes and the terminal are released. After `se` exits the helper
+  follows the steps below and starts Smart Explorer. Linux refuses this before
+  staging when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, because that
+  restart would fail and roll the update back. The rollback archive of the app
+  is labelled with the running `se`'s version, which equals the app's version
+  in every installation the installer or updater produced.
 
 The helper's launch protocol is a release compatibility boundary because an
 older app downloads the **new** helper before asking it to apply the update.

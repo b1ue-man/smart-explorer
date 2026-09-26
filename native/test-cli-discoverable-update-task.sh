@@ -91,8 +91,12 @@ milestone_tests=(
     cli_task_snapshot_offers_default_and_share_command_reply_roundtrips
     cli_task_worker_stop_ends_tracked_offers
     cli_task_handoff_never_starts_a_missing_worker
+    cli_task_daemon_refuses_a_second_offer_for_a_target
+    cli_task_client_snapshot_leaves_the_gui_events
+    cli_task_gui_state_drops_stopped_and_vanished_offers
     # M2 se share discoverable
     cli_task_discoverable_pin_source_rules
+    cli_task_discoverable_pin_stdin_reads_one_line
     cli_task_discoverable_name_and_duration_rules
     cli_task_discoverable_room_selector_matches_id_relation_or_unique_name
     cli_task_discoverable_stop_selection_by_id_prefix_single_and_all
@@ -102,6 +106,10 @@ milestone_tests=(
     cli_task_installation_detects_terminal_only_and_desktop
     cli_task_install_replaces_in_place_commits_and_rolls_back
     cli_task_install_rejects_a_hash_mismatch_before_replacing
+    cli_task_install_checks_the_backup_and_the_installed_file
+    cli_task_update_lock_is_exclusive_and_names_leftovers
+    cli_task_orphans_of_ended_updates_are_removed_and_stale_locks_taken_over
+    cli_task_desktop_update_needs_a_graphical_session
     cli_task_staged_payload_is_executable_and_install_keeps_the_mode
     # M4 se update
     cli_task_update_parses_check_reinstall_source_and_hidden_completion
