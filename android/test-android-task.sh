@@ -170,6 +170,8 @@ g1_tests=(
   android_task_smb_server_level_lists_only_the_configured_share
   android_task_smb_url_parses_user_host_port_share_and_path
   android_task_smb_urls_without_credentials_or_share_never_connect
+  android_task_smb_empty_first_query_is_an_empty_folder
+  android_task_smb_reparse_tags_keep_data_files_and_links_apart
   # Exec host on the phone: /proc logic of the per-job subreaper, exec targets, facade JSON
   android_task_exec_cancel_names_direction_job_and_peer
   android_task_exec_grant_counts_only_when_stored_and_applied
