@@ -360,6 +360,10 @@ impl App {
                 E::RoomRoster { .. } | E::RoomJoined { .. } | E::RoomLeft { .. } => {}
             }
         }
+        // The daemon's own-offer list is authoritative: offers of a worker
+        // that was stopped or handed over to a new version disappear here.
+        self.share_discovery
+            .retain_live_offers(&snapshot.discovery_offers);
         if let Some(target) = auto_open_target {
             self.open_share_target(target);
         }

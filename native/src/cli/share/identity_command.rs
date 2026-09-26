@@ -102,7 +102,7 @@ fn stop_share_worker_for_repair() -> Result<WorkerRepairState, String> {
     if !crate::daemon::is_running() {
         return Ok(WorkerRepairState::default());
     }
-    let was_running = crate::daemon::drain_share_worker_events()
+    let was_running = crate::daemon::share_worker_snapshot()
         .map_err(|error| format!("cannot inspect the Share worker before repair: {error}"))?
         .running;
     if !was_running {
@@ -117,7 +117,7 @@ fn stop_share_worker_for_repair() -> Result<WorkerRepairState, String> {
                 "identity repair refused because the Share worker could not be stopped: {error}"
             )
         })?;
-        let stopped = crate::daemon::drain_share_worker_events().map_err(|error| {
+        let stopped = crate::daemon::share_worker_snapshot().map_err(|error| {
             format!(
                 "identity repair refused because the Share worker stop could not be verified: {error}"
             )

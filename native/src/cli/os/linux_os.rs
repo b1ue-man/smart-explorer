@@ -55,9 +55,14 @@ pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {
     let read = io::stdin().read_line(&mut line);
     // SAFETY: restores the settings read above on the same descriptor.
     let restored = unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };
-    read.map_err(|error| format!("read hidden input: {error}"))?;
+    if read.map_err(|error| format!("read hidden input: {error}"))? == 0 {
+        return Err("the input ended before a line was entered".to_string());
+    }
     if restored != 0 {
         return Err(format!("restore terminal input: {}", io::Error::last_os_error()));
     }
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    while line.ends_with(['\r', '\n']) {
+        line.pop();
+    }
+    Ok(line)
 }

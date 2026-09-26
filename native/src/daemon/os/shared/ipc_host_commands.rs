@@ -1,9 +1,12 @@
 //! Share commands and status snapshots served to IPC clients.
 use std::time::Duration;
 
-use crate::share::{DiscoveryCommand, DiscoveryOfferBook, OfferLookup, ShareCmd, ShareCmdResult};
+use crate::share::{
+    DiscoveryCommand, DiscoveryOfferBook, DiscoveryPublishTarget, OfferLookup, ShareCmd,
+    ShareCmdResult,
+};
 
-use super::ipc_host::{stop::stop_locked, ui_events, ShareHost};
+use super::ipc_host::{stop::stop_locked, ui_events, ShareHost, ShareHostState};
 use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
 
 impl ShareHost {
@@ -49,12 +52,7 @@ impl ShareHost {
                 .lock()
                 .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
             let now = crate::share::core_now_secs();
-            if let Some(active) = state.discovery_offers.offer_for_target(target, now) {
-                return Err(format!(
-                    "Dieses Ziel ist bereits suchbar (Angebot {}) – zuerst beenden.",
-                    active.offer_id
-                ));
-            }
+            refuse_second_offer(&state.discovery_offers, target, now)?;
         }
         let service = {
             let state = self
@@ -90,12 +88,13 @@ impl ShareHost {
         self.snapshot(true)
     }
 
-    /// Snapshot for a terminal client; leaves the UI events for the GUI.
+    /// Snapshot for a terminal client; it sees a copy of the UI events and
+    /// leaves them for the GUI.
     pub(super) fn snapshot_for_client(&self) -> ShareWorkerSnapshot {
         self.snapshot(false)
     }
 
-    fn snapshot(&self, take_events: bool) -> ShareWorkerSnapshot {
+    fn snapshot(&self, drain: bool) -> ShareWorkerSnapshot {
         let should_reload = self
             .state
             .lock()
@@ -109,36 +108,54 @@ impl ShareHost {
             }
         }
         self.drain_events();
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => return ShareWorkerSnapshot::default(),
-        };
-        let running = state.service.is_some();
-        let (relay_url, candidates) = state
-            .service
-            .as_ref()
-            .map(|service| (service.relay_url(), service.peer_candidates()))
-            .unwrap_or_default();
-        let events = if take_events {
-            std::mem::take(&mut state.ui_events)
-        } else {
-            Vec::new()
-        };
-        let now = crate::share::core_now_secs();
-        ShareWorkerSnapshot {
-            events,
-            profiles: state.profiles.clone(),
-            profile_revision: state.profiles.storage_revision.clone(),
-            exec_grant_retry: state.exec_retry.clone(),
-            pending_direct_requests: Vec::new(),
-            running,
-            connected: state.signal_connected,
-            last_error: state.signal_error.clone(),
-            relay_url,
-            candidates,
-            lan: state.lan_status.clone(),
-            discovery_offers: state.discovery_offers.offers(now),
+        match self.state.lock() {
+            Ok(mut state) => state_snapshot(&mut state, drain, crate::share::core_now_secs()),
+            Err(_) => ShareWorkerSnapshot::default(),
         }
+    }
+}
+
+fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWorkerSnapshot {
+    let running = state.service.is_some();
+    let (relay_url, candidates) = state
+        .service
+        .as_ref()
+        .map(|service| (service.relay_url(), service.peer_candidates()))
+        .unwrap_or_default();
+    let events = if drain {
+        std::mem::take(&mut state.ui_events)
+    } else {
+        state.ui_events.clone()
+    };
+    ShareWorkerSnapshot {
+        events,
+        profiles: state.profiles.clone(),
+        profile_revision: state.profiles.storage_revision.clone(),
+        exec_grant_retry: state.exec_retry.clone(),
+        pending_direct_requests: Vec::new(),
+        running,
+        connected: state.signal_connected,
+        last_error: state.signal_error.clone(),
+        relay_url,
+        candidates,
+        lan: state.lan_status.clone(),
+        discovery_offers: state.discovery_offers.offers(now),
+    }
+}
+
+/// One running offer per target, whichever client asks (desktop UI, Android
+/// or the terminal).
+fn refuse_second_offer(
+    book: &DiscoveryOfferBook,
+    target: &DiscoveryPublishTarget,
+    now: i64,
+) -> Result<(), String> {
+    match book.offer_for_target(target, now) {
+        Some(active) => Err(format!(
+            "Dieses Ziel ist bereits suchbar (Angebot {}) – zuerst beenden.",
+            active.offer_id
+        )),
+        None => Ok(()),
     }
 }
 
@@ -159,10 +176,11 @@ fn discovery_offer_reply(
 
 #[cfg(test)]
 mod tests {
-    use super::discovery_offer_reply;
+    use super::{discovery_offer_reply, refuse_second_offer, state_snapshot, ShareHostState};
     use crate::daemon::ShareCommandReply;
     use crate::share::{
         DiscoveryEvent, DiscoveryOfferBook, DiscoveryOfferStopReason, DiscoveryPublishTarget,
+        ShareEvent,
     };
 
     #[test]
@@ -194,5 +212,59 @@ mod tests {
             })
         ));
         assert!(discovery_offer_reply(&book, "unknown".into()).is_err());
+    }
+
+    #[test]
+    fn cli_task_daemon_refuses_a_second_offer_for_a_target() {
+        let mut book = DiscoveryOfferBook::default();
+        let room = DiscoveryPublishTarget::Room {
+            room_profile_id: "room".into(),
+        };
+        let direct = DiscoveryPublishTarget::Direct;
+        assert!(refuse_second_offer(&book, &direct, 1_000).is_ok());
+        book.observe(&DiscoveryEvent::OfferPublished {
+            offer_id: "first".into(),
+            target: DiscoveryPublishTarget::Direct,
+            display_alias: "Laptop".into(),
+            discoverable_until: 1_300,
+        });
+        let refused = refuse_second_offer(&book, &direct, 1_000).unwrap_err();
+        assert!(refused.contains("first"));
+        assert!(refuse_second_offer(&book, &room, 1_000).is_ok());
+        // An offer past its end no longer blocks the target.
+        assert!(refuse_second_offer(&book, &direct, 1_300).is_ok());
+        book.observe(&DiscoveryEvent::OfferStopped {
+            offer_id: "first".into(),
+            reason: DiscoveryOfferStopReason::Requested,
+        });
+        assert!(refuse_second_offer(&book, &direct, 1_000).is_ok());
+    }
+
+    #[test]
+    fn cli_task_client_snapshot_leaves_the_gui_events() {
+        let mut state = ShareHostState::new();
+        state.ui_events.push(ShareEvent::Status("for the GUI".into()));
+        state.discovery_offers.observe(&DiscoveryEvent::OfferPrepared {
+            offer_id: "offer".into(),
+            target: DiscoveryPublishTarget::Direct,
+            display_alias: "Laptop".into(),
+            discoverable_until: 2_000,
+        });
+
+        let terminal = state_snapshot(&mut state, false, 1_000);
+        assert_eq!(terminal.events.len(), 1);
+        assert_eq!(terminal.discovery_offers.len(), 1);
+        assert_eq!(state.ui_events.len(), 1);
+
+        let gui = state_snapshot(&mut state, true, 1_000);
+        assert!(matches!(
+            gui.events.as_slice(),
+            [ShareEvent::Status(text)] if text == "for the GUI"
+        ));
+        assert_eq!(gui.discovery_offers.len(), 1);
+        assert!(state.ui_events.is_empty());
+        assert!(state_snapshot(&mut state, false, 2_000)
+            .discovery_offers
+            .is_empty());
     }
 }

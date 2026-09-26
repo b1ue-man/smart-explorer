@@ -209,7 +209,7 @@ struct TargetChoice {
 }
 
 fn select_target(selector: Option<&str>) -> Result<crate::share::PeerOpenTarget, String> {
-    let snapshot = crate::daemon::drain_share_worker_events()?;
+    let snapshot = crate::daemon::share_worker_snapshot()?;
     let choices = target_choices(&snapshot.profiles);
     if let Some(selector) = selector.map(str::trim).filter(|value| !value.is_empty()) {
         if let Some((target, path)) = crate::share::PeerOpenTarget::from_endpoint(selector) {

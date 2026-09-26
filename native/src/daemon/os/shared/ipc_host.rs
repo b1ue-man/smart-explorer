@@ -80,13 +80,10 @@ pub(super) struct ShareHostState {
     pub(super) discovery_offers: crate::share::DiscoveryOfferBook,
 }
 
-impl ShareHost {
-    pub(crate) fn new(generation: String) -> Self {
-        // Keep construction free of credential and profile I/O so the daemon
-        // can publish its authenticated Ping endpoint before a contended
-        // identity transaction or slow Windows Credential Manager access.
-        // The daemon calls reload_now immediately after listener publication.
-        let state = ShareHostState {
+impl ShareHostState {
+    /// Empty state without any profile, credential or file-system access.
+    pub(super) fn new() -> Self {
+        ShareHostState {
             service: None,
             identity: None,
             identity_error: None,
@@ -106,9 +103,18 @@ impl ShareHost {
             pending_lan_events: Vec::new(),
             lan_status: crate::share::LanStatus::default(),
             discovery_offers: crate::share::DiscoveryOfferBook::default(),
-        };
+        }
+    }
+}
+
+impl ShareHost {
+    pub(crate) fn new(generation: String) -> Self {
+        // Keep construction free of credential and profile I/O so the daemon
+        // can publish its authenticated Ping endpoint before a contended
+        // identity transaction or slow Windows Credential Manager access.
+        // The daemon calls reload_now immediately after listener publication.
         ShareHost {
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(Mutex::new(ShareHostState::new())),
             generation: Arc::from(generation),
             initialized: Arc::new(AtomicBool::new(false)),
             exec_state: Arc::new(super::exec_state::ExecState::new()),

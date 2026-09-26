@@ -2,6 +2,8 @@ use clap::Args;
 
 use super::{discoverable_output, grants, lifecycle_output};
 
+const RECENT_TEXT_EVENTS: usize = 20;
+
 #[derive(Args, Default)]
 pub(super) struct StatusArgs {
     #[arg(long, help = "Print machine-readable JSON")]
@@ -10,7 +12,8 @@ pub(super) struct StatusArgs {
 
 pub(super) fn run(args: StatusArgs) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
-    let (snapshot, worker_error) = match crate::daemon::drain_share_worker_events() {
+    // A copy of the recent events; the desktop app still receives them.
+    let (snapshot, worker_error) = match crate::daemon::share_worker_snapshot() {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (crate::daemon::ShareWorkerSnapshot::default(), Some(error)),
     };
@@ -167,7 +170,10 @@ fn print_text(
     for line in grants::text(profiles) {
         println!("{line}");
     }
-    for event in snapshot.events.iter().filter_map(public_event) {
+    // The worker keeps its recent events for the desktop app; show the newest.
+    let events: Vec<String> = snapshot.events.iter().filter_map(public_event).collect();
+    let newest = events.len().saturating_sub(RECENT_TEXT_EVENTS);
+    for event in &events[newest..] {
         println!("event\t{event}");
     }
     let now = crate::share::core_now_secs();

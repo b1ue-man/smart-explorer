@@ -111,9 +111,14 @@ pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {
     let restored = unsafe { SetConsoleMode(input, saved) };
     // Without echo the console does not move past the entered line either.
     let _ = writeln!(stderr);
-    read.map_err(|error| format!("read hidden input: {error}"))?;
+    if read.map_err(|error| format!("read hidden input: {error}"))? == 0 {
+        return Err("the input ended before a line was entered".to_string());
+    }
     if restored == 0 {
         return Err(format!("restore console input: {}", io::Error::last_os_error()));
     }
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    while line.ends_with(['\r', '\n']) {
+        line.pop();
+    }
+    Ok(line)
 }
