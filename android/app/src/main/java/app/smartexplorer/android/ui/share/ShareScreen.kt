@@ -32,6 +32,7 @@ import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
+import app.smartexplorer.android.service.ExecHostNotifier
 import app.smartexplorer.android.ui.AppNav
 import app.smartexplorer.android.ui.NavRequest
 import app.smartexplorer.android.ui.common.ErrorCard
@@ -46,8 +47,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-/** Blocks of the page in spec order (C: device card → devices → rooms → requests → exports). */
-private enum class ShareBlock { Problems, Device, Devices, Rooms, Buttons, Requests, Exports, Removed, DirectCode }
+/**
+ * Blocks of the page in spec order (C: device card → devices → rooms → requests → exports), then
+ * the commands other devices may run on this phone (G4).
+ */
+private enum class ShareBlock { Problems, Device, Devices, Rooms, Buttons, Requests, Exports, ExecHost, Removed, DirectCode }
 
 /**
  * Tab "Teilen" (spec F18). While visible the core polls the Share worker fast (`share.watch`);
@@ -63,6 +67,10 @@ fun ShareScreen() {
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val status = vm.status
     val pending by AppNav.pending.collectAsStateWithLifecycle()
+    val appContext = LocalContext.current.applicationContext
+
+    // Runs for the whole process once started; the Share page is where commands get allowed.
+    LaunchedEffect(Unit) { ExecHostNotifier.start(appContext) }
 
     DisposableEffect(vm) {
         onDispose { vm.setVisible(false) }
@@ -145,6 +153,7 @@ private fun blocksOf(status: ShareStatus): List<ShareBlock> = buildList {
     add(ShareBlock.Buttons)
     if (status.incoming.isNotEmpty() || status.outgoing.isNotEmpty()) add(ShareBlock.Requests)
     add(ShareBlock.Exports)
+    add(ShareBlock.ExecHost)
     if (status.removedDevices.isNotEmpty()) add(ShareBlock.Removed)
     add(ShareBlock.DirectCode)
 }
@@ -209,6 +218,17 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                 status,
                 onAdd = { scope -> open(ShareDialog.AddExport(scope)) },
                 onRemove = { scope, export -> vm.act("Freigabe nicht entfernt") { ShareApi.removeExport(scope, export.path) } },
+            )
+        }
+        ShareBlock.ExecHost -> if (status != null) {
+            ExecHostSection(
+                status,
+                vm.execJobs,
+                ExecHostActions(
+                    allow = { target -> vm.setExec(target, enabled = true) },
+                    revoke = { target -> vm.setExec(target, enabled = false) },
+                    stop = { job -> vm.stopExec(job) },
+                ),
             )
         }
         ShareBlock.Removed -> RemovedDevicesSection(status?.removedDevices.orEmpty()) { device ->

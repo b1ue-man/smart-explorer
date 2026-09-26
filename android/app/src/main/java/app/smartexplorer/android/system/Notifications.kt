@@ -15,12 +15,19 @@ object Notifications {
     const val CHANNEL_UPDATES = "updates"
     const val CHANNEL_SHARE = "share"
 
+    /** Ongoing notifications of commands other devices run on this phone (ExecHostNotifier). */
+    const val CHANNEL_EXEC = "exec"
+
     // Notification ids used across the app (one place so services never collide).
     const val ID_TRANSFERS = 1001
     const val ID_BACKGROUND = 1002
     const val ID_CATCH_UP = 1003
     const val ID_UPDATE = 1004
     const val ID_SHARE_REQUEST = 1005
+
+    /** One id per running command of another device, from [ID_EXEC_FIRST] on. */
+    const val ID_EXEC_FIRST = 1100
+    const val EXEC_ID_COUNT = 50
 
     private const val TAG = "SmartExplorer"
 
@@ -35,9 +42,17 @@ object Notifications {
                 channel(context, CHANNEL_BACKGROUND, R.string.channel_background, R.string.channel_background_description, low),
                 channel(context, CHANNEL_UPDATES, R.string.channel_updates, R.string.channel_updates_description, normal),
                 channel(context, CHANNEL_SHARE, R.string.channel_share, R.string.channel_share_description, normal),
+                execChannel(low),
             ),
         )
     }
+
+    // Texts in code like the notifications themselves (ServiceNotifications): no string resources.
+    private fun execChannel(importance: Int) =
+        NotificationChannel(CHANNEL_EXEC, "Befehle anderer Geräte", importance).apply {
+            description = "Solange ein anderes Gerät einen Befehl auf diesem Telefon ausführt, mit „Stopp“"
+            setShowBadge(false)
+        }
 
     /**
      * Posts [notification] when the user allows notifications; returns whether it was posted.

@@ -126,6 +126,9 @@ data class ShareStatus(
     val lanPresence: String = "",
     val identity: ShareIdentityInfo = ShareIdentityInfo(),
     val devices: List<ShareDevice> = emptyList(),
+    /** This phone as exec host (ShareExecApi.kt). */
+    val execProvider: ExecProviderInfo = ExecProviderInfo(),
+    val execTargets: List<ExecTarget> = emptyList(),
     val rooms: List<ShareRoom> = emptyList(),
     val incoming: List<ShareRequestInfo> = emptyList(),
     val outgoing: List<ShareRequestInfo> = emptyList(),

@@ -133,6 +133,14 @@ mod exec_job;
 mod exec_platform;
 #[path = "core/exec_policy.rs"]
 mod exec_policy;
+// Pure `/proc` logic of the Android exec host; the Linux host tests cover it.
+#[cfg(any(target_os = "android", all(target_os = "linux", test)))]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[path = "os/android/exec_proc.rs"]
+mod exec_proc;
+#[cfg(all(target_os = "linux", test))]
+#[path = "os/android/exec_proc_tests.rs"]
+mod exec_proc_tests;
 #[path = "core/exec_protocol.rs"]
 mod exec_protocol;
 #[path = "core/exec_registry.rs"]
@@ -143,6 +151,8 @@ mod exec_server;
 mod exec_session;
 #[path = "core/exec_supervisor_protocol.rs"]
 mod exec_supervisor_protocol;
+#[path = "core/exec_targets.rs"]
+mod exec_targets;
 #[path = "core/exec_types.rs"]
 mod exec_types;
 #[path = "core/framing.rs"]
@@ -375,6 +385,9 @@ pub(crate) use self::exec_client::{ExecClientEvent, ExecClientInput};
 pub use self::exec_grant_runtime::ExecGrantMutation;
 pub use self::exec_policy::ExecGrant;
 pub(crate) use self::exec_session::{ShareExecInput, ShareExecSession};
+pub use self::exec_targets::{
+    exec_target_views, resolve_exec_target, ExecTargetRelation, ExecTargetView,
+};
 pub use self::exec_types::{
     ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
     ExecTerminal, ExecTerminalKind,
@@ -398,6 +411,8 @@ pub use self::legacy_direct_request::{
     LegacyDirectDecisionState, LegacyDirectDeliveryState, LegacyDirectPresenceEvidence,
     LegacyDirectRequestEntry, MAX_LEGACY_DIRECT_REQUESTS, MAX_LEGACY_PRESENCE_FUTURE_SECS,
 };
+#[cfg(target_os = "android")]
+pub(crate) use self::platform_exec::{exec_host_activity, set_exec_host_listener};
 pub use self::profile_persistence::ProfileChange;
 pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;

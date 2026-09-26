@@ -1,5 +1,5 @@
-use crate::app::theme;
 use super::App;
+use crate::app::theme;
 use eframe::egui::{self, RichText};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,10 +137,7 @@ fn activation_controls(
         RichText::new(&warning.full_access).strong(),
     );
     if let Some(elevated) = warning.elevated {
-        ui.colored_label(
-            theme::danger(ui),
-            RichText::new(elevated).strong(),
-        );
+        ui.colored_label(theme::danger(ui), RichText::new(elevated).strong());
     }
     ui.label(
         "Dieses Geraet kann danach ohne Befehlsfilter beliebige Programme und Shell-Befehle mit den Rechten des Smart-Explorer-Prozesses starten.",
@@ -237,64 +234,29 @@ fn apply_exec_grant(app: &mut App, target: crate::share::ExecGrantTarget, enable
 }
 
 fn exec_device_views(profiles: &crate::share::ShareProfiles) -> Vec<ExecDeviceView> {
-    let mut views = Vec::new();
-    for grant in &profiles.direct_grants {
-        let target = crate::share::ExecGrantTarget::Direct {
-            device_id: grant.device_id.clone(),
-            public_key: grant.public_key.clone(),
-            fingerprint: grant.fingerprint.clone(),
-            node_id: grant.node_id.clone(),
-        };
-        views.push(ExecDeviceView {
-            target_key: format!("direct/{}/{}", grant.device_id, grant.fingerprint),
-            target,
-            relation: "Direktgeraet".into(),
-            device_id: grant.device_id.clone(),
-            device_name: display_name(&grant.device_name, &grant.device_id),
-            fingerprint: grant.fingerprint.clone(),
-            enabled: grant.exec.enabled,
-            policy_revision: grant.exec.policy_revision,
-            base_authorized: grant.state == crate::share::DirectGrantState::Accepted,
-        });
-    }
-    for room in &profiles.rooms {
-        for member in &room.members {
-            let target = crate::share::ExecGrantTarget::RoomMember {
-                room_id: room.room_id.clone(),
-                device_id: member.device_id.clone(),
-                public_key: member.public_key.clone(),
-                fingerprint: member.fingerprint.clone(),
-                node_id: member.node_id.clone(),
-            };
-            views.push(ExecDeviceView {
-                target_key: format!(
-                    "room/{}/{}/{}",
-                    room.room_id, member.device_id, member.fingerprint
-                ),
-                target,
-                relation: format!("Raum: {}", room.name),
-                device_id: member.device_id.clone(),
-                device_name: display_name(&member.device_name, &member.device_id),
-                fingerprint: member.fingerprint.clone(),
-                enabled: member.exec.enabled,
-                policy_revision: member.exec.policy_revision,
-                base_authorized: room.auto_join && !member.blocked,
-            });
-        }
-    }
-    views.sort_by(|left, right| {
-        left.device_name
-            .cmp(&right.device_name)
-            .then_with(|| left.target_key.cmp(&right.target_key))
-    });
-    views
+    crate::share::exec_target_views(profiles)
+        .into_iter()
+        .map(device_view)
+        .collect()
 }
 
-fn display_name(name: &str, device_id: &str) -> String {
-    if name.trim().is_empty() {
-        format!("Geraet {}", &device_id[..device_id.len().min(8)])
-    } else {
-        name.to_string()
+fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
+    let relation = match view.relation {
+        crate::share::ExecTargetRelation::Direct => "Direktgeraet".to_string(),
+        crate::share::ExecTargetRelation::Room => {
+            format!("Raum: {}", view.room_name.as_deref().unwrap_or_default())
+        }
+    };
+    ExecDeviceView {
+        target: view.target,
+        target_key: view.target_key,
+        relation,
+        device_id: view.device_id,
+        device_name: view.device_name,
+        fingerprint: view.fingerprint,
+        enabled: view.enabled,
+        policy_revision: view.policy_revision,
+        base_authorized: view.base_authorized,
     }
 }
 

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::args::now_secs;
+use super::share_exec;
 use super::share_status::{open_incoming, status_json, StatusInput, WorkerFacts};
 use crate::daemon::ShareWorkerSnapshot;
 use crate::mobile::{ApiError, Runtime};
@@ -18,7 +19,9 @@ use crate::share::discovery_events::{
     apply_share_discovery_event, drain_discovery_command_results,
 };
 use crate::share::discovery_state::DiscoveryUiState;
-use crate::share::{DiscoveryEvent, ProfileRevision, ShareEvent, ShareIdentity, ShareProfiles};
+use crate::share::{
+    DiscoveryEvent, ExecProviderStatus, ProfileRevision, ShareEvent, ShareIdentity, ShareProfiles,
+};
 
 const WATCH_INTERVAL: Duration = Duration::from_millis(300);
 const FOREGROUND_INTERVAL: Duration = Duration::from_secs(5);
@@ -52,6 +55,9 @@ pub(super) struct ShareState {
     pending_commit: Option<PendingCommit>,
     seen_requests: BTreeSet<String>,
     last_status: String,
+    /// Exec host activity at the last `share` event (commands started or
+    /// ended on this phone are no part of the status itself).
+    last_exec_activity: u64,
 }
 
 impl ShareState {
@@ -69,6 +75,7 @@ impl ShareState {
             pending_commit: None,
             seen_requests: BTreeSet::new(),
             last_status: String::new(),
+            last_exec_activity: 0,
         }
     }
 
@@ -163,7 +170,7 @@ impl ShareState {
         }
     }
 
-    fn status_value(&mut self) -> Value {
+    fn status_value(&mut self, exec_provider: &ExecProviderStatus) -> Value {
         if self.identity.is_none() {
             match ShareIdentity::load_or_create(device_name()) {
                 Ok(identity) => self.identity = Some(identity),
@@ -186,6 +193,7 @@ impl ShareState {
             last_exchange: self.last_exchange.as_deref(),
             notices: &self.notices,
             now_secs: now_secs(),
+            exec_provider,
         })
     }
 }
@@ -293,7 +301,9 @@ pub(super) fn start_poller(rt: &'static Runtime) {
             "share",
             &format!("Share-Poller konnte nicht starten: {error}"),
         );
+        return;
     }
+    share_exec::watch_host_activity();
 }
 
 fn poll_once(rt: &Runtime) {
@@ -302,6 +312,9 @@ fn poll_once(rt: &Runtime) {
     let Some(drained) = crate::daemon::drain_share_events_in_process() else {
         return;
     };
+    // Outside the state lock: the first use may end leftover command trees.
+    let exec_provider = share_exec::provider();
+    let exec_activity = share_exec::host_activity();
     let (errors, emit_status, open_requests) = with_state(|state| {
         let errors = match drained {
             Ok(snapshot) => {
@@ -321,9 +334,10 @@ fn poll_once(rt: &Runtime) {
             .unwrap_or_default();
         let fresh = open.iter().any(|id| !state.seen_requests.contains(id));
         state.seen_requests = open.iter().cloned().collect();
-        let status = state.status_value().to_string();
-        let changed = status != state.last_status;
+        let status = state.status_value(exec_provider).to_string();
+        let changed = status != state.last_status || exec_activity != state.last_exec_activity;
         state.last_status = status;
+        state.last_exec_activity = exec_activity;
         cadence().pairing = pairing_in_flight(&state.discovery);
         (errors, changed, fresh.then_some(open.len()))
     });
@@ -340,7 +354,8 @@ fn poll_once(rt: &Runtime) {
 }
 
 pub(super) fn status() -> Result<Value, ApiError> {
-    Ok(with_state(ShareState::status_value))
+    let exec_provider = share_exec::provider();
+    Ok(with_state(|state| state.status_value(exec_provider)))
 }
 
 /// `homeDir` of the init configuration: the Direct default export root and

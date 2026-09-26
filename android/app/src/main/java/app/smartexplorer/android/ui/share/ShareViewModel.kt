@@ -8,8 +8,12 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.smartexplorer.android.api.EndpointRemoval
+import app.smartexplorer.android.api.ExecJob
+import app.smartexplorer.android.api.ExecJobs
+import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.ShareApi
+import app.smartexplorer.android.api.ShareExecApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.Snackbars
@@ -31,6 +35,10 @@ internal class ShareViewModel : ViewModel() {
     var loadError by mutableStateOf<String?>(null)
         private set
     var loading by mutableStateOf(false)
+        private set
+
+    /** Commands in both directions (`share.execJobs`), loaded with the status while the worker runs. */
+    var execJobs by mutableStateOf<ExecJobs?>(null)
         private set
     private var running by mutableIntStateOf(0)
 
@@ -151,6 +159,18 @@ internal class ShareViewModel : ViewModel() {
         }
     }
 
+    /** Allows (after the warning) or revokes commands of [target] on this phone. */
+    fun setExec(target: ExecTarget, enabled: Boolean) {
+        val name = target.name.ifBlank { "Gerät" }
+        act(
+            if (enabled) "Befehle nicht erlaubt" else "Befehle nicht entzogen",
+            if (enabled) "Befehle von $name erlaubt" else "Befehle von $name entzogen",
+        ) { ShareExecApi.setExec(target.targetKey, enabled) }
+    }
+
+    /** [Stopp] of a command another device runs on this phone. */
+    fun stopExec(job: ExecJob) = act("Befehl nicht gestoppt") { ShareExecApi.cancel(job) }
+
     private fun report(name: String, result: EndpointRemoval) {
         removal = RemovalReport(name, result)
     }
@@ -158,13 +178,23 @@ internal class ShareViewModel : ViewModel() {
     private suspend fun load() {
         loading = true
         try {
-            status = ShareApi.status()
+            val current = ShareApi.status()
+            status = current
             loadError = null
+            execJobs = if (current.running) loadExecJobs() else null
         } catch (e: CoreException) {
             loadError = e.message ?: e.kind
         } finally {
             loading = false
         }
+    }
+
+    /** A failed job list only leaves the commands out; the status itself loaded. */
+    private suspend fun loadExecJobs(): ExecJobs? = try {
+        ShareExecApi.jobs()
+    } catch (e: CoreException) {
+        Log.w(TAG, "share.execJobs failed: ${e.kind}: ${e.message}")
+        null
     }
 
     private companion object {

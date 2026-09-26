@@ -129,7 +129,13 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
 | G1–G3 | fertig (Code) | `77d6e0e`; Gerätetests offen |
 | G4a | offen | nach Kritik neu entschieden: Subreaper je Job |
 | G4b | offen | |
-| G5a | offen | |
-| G5b | offen | |
-| G6 | fertig (Code) | Gerätetest in der Suite offen |
-| T | in Arbeit | SMB-Server/-Test, Exec-Host-Ablauf, G6-Test geschrieben; G1-Liste offen |
+| G5a | fertig (Code) | `7251ab3`; statisches Review läuft |
+| G5b | fertig (Code) | `7251ab3` |
+| G6 | fertig (Code) | `ef24f9b`; Gerätetest in der Suite offen |
+| T | in Arbeit | Tests geschrieben (`2c7bd6f`, `6dde607`, `106c101`); G1-Liste um SMB ergänzt, Exec-Tests folgen |
+
+## Release-Hinweis
+- Auf `main` liegt zusätzlich die Terminal-Arbeit CLI2 (`se update`, `se share discoverable`, TODO CLI2) einer
+  anderen Session; ihre Suite `cli-discoverable-update-task.yml` ist grün (Lauf 36230339725, 2026-09-26),
+  offen war nur ihr Release. Das Release dieses Batches liefert sie mit aus: vorher prüfen, dass kein
+  anderes Release läuft, und die CLI2-Zeile in `docs/TODO.md` mit der Version abschließen.

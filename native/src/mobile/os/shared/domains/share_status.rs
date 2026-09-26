@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::{json, Value};
 
+use super::share_exec::{provider_json, targets_json};
 use crate::share::discovery_state::{
     DiscoveryExchangeState, DiscoveryPublishTarget, DiscoveryUiKind, DiscoveryUiState,
 };
 use crate::share::lifecycle_view::{request_views, RequestView};
 use crate::share::{
-    DirectContact, DirectDecisionState, PeerOpenTarget, ShareExportConfig, ShareIdentity,
-    ShareProfiles, ShareStatus,
+    DirectContact, DirectDecisionState, ExecProviderStatus, PeerOpenTarget, ShareExportConfig,
+    ShareIdentity, ShareProfiles, ShareStatus,
 };
 
 /// Worker facts of the last successful snapshot.
@@ -47,6 +48,8 @@ pub(super) struct StatusInput<'a> {
     pub last_exchange: Option<&'a str>,
     pub notices: &'a VecDeque<String>,
     pub now_secs: i64,
+    /// This phone as exec host (`execProvider`).
+    pub exec_provider: &'a ExecProviderStatus,
 }
 
 pub(super) fn status_code(status: &ShareStatus) -> &'static str {
@@ -294,6 +297,8 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
         "lanPresence": lan_presence,
         "identity": identity,
         "devices": devices,
+        "execProvider": provider_json(input.exec_provider),
+        "execTargets": targets_json(profiles),
         "rooms": rooms_json(profiles),
         "incoming": incoming,
         "outgoing": outgoing,

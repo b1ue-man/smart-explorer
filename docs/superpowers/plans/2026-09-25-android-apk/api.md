@@ -343,17 +343,21 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   `shell:false` trennt an Leerraum, Anführungszeichen gruppieren, ein Backslash ist wörtlich außer vor
   Leerraum oder Anführungszeichen; eine verweigerte Freigabe kommt als `permission`)
 - Exec-Host (dieses Gerät führt Befehle anderer Geräte aus; Anbieter `android-subreaper`: jeder Befehl
-  läuft unter einem eigenen Subreaper-Zwischenprozess mit `/system/bin/sh`, Abbruch, Zeitlimit und
-  Entzug beenden den ganzen Prozessbaum; Arbeitsordner ohne `cwd` = `homeDir`). Freigaben gelten wie am
+  läuft unter einem eigenen Subreaper-Zwischenprozess mit `/system/bin/sh -c`, Abbruch, Zeitlimit und
+  Entzug beenden den ganzen Prozessbaum; Arbeitsordner ohne `cwd` = `homeDir`, `HOME` = `homeDir` und
+  `TMPDIR` = `<cache>/tmp`, sofern der Aufrufer sie nicht setzt; Start und Ende eines Befehls lösen
+  sofort ein `share`-Ereignis aus). Freigaben gelten wie am
   Desktop je exakter Identität; `execTargets` entsteht wie `exec_device_views` (Direkt-Freigaben und
   Raummitglieder), Schlüssel `direct/<deviceId>/<fingerprint>` bzw. `room/<roomId>/<deviceId>/<fingerprint>`:
   - `share.setExec {targetKey, enabled:Boolean}` → `{revision:Long}` (`daemon::mutate_exec_grant`,
     Journal wie am Desktop; Schlüssel gegen den aktuellen Profilstand aufgelöst, sonst `not_found`;
     nur vollständig gespeichert **und** angewendet gilt als Erfolg, sonst Fehler mit Detail;
-    `enabled:true` bei nicht verfügbarem Anbieter → `unsupported` mit Grund)
+    `enabled:true` bei nicht verfügbarem Anbieter → `unsupported` mit Grund, bei nicht aktiver
+    Grundbeziehung (`baseAuthorized:false`) → `conflict` wie am Desktop)
   - `share.execJobs {}` → `{active:[ExecJob], history:[ExecJob]}` mit `ExecJob {direction:"incoming|outgoing",
     execId, peerDeviceId, peerName, program, state, startedAt:Long?, finishedAt:Long?, exitCode:Int?,
     message:String?}`; `state` = Lebenszyklus in snake_case (`running`, `exited`, `cancelled`,
-    `timed_out`, `revoked`, …), Zeiten in Sekunden seit 1970
+    `timed_out`, `revoked`, …), Zeiten in Sekunden seit 1970; eingehende vor ausgehenden, `history`
+    unsortiert (die App sortiert)
   - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `not_found`)
 Nicht auf Android: LAN-Uplink, Anfragen im Altformat.
