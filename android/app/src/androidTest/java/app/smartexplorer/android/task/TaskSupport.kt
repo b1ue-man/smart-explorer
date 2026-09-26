@@ -357,8 +357,24 @@ object Servers {
         "password" to TaskArgs.get("seFtpPass"),
     )
 
+    /** SMB: the start folder begins with the share (`/<share>/…`). */
+    fun smbInput(password: String = TaskArgs.get("seSmbPass")): JsonObject = args(
+        "label" to "Task SMB",
+        "protocol" to "smb",
+        "host" to host,
+        "port" to TaskArgs.int("seSmbPort"),
+        "user" to TaskArgs.get("seSmbUser"),
+        "root" to "/" + TaskArgs.get("seSmbShare"),
+        "auth" to "password",
+        "useAgent" to false,
+        "https" to false,
+        "password" to password,
+    )
+
     /** The saved SFTP connection (created on first use). */
     suspend fun sftp(): JsonObject = ensure(sftpInput())
+
+    suspend fun smb(): JsonObject = ensure(smbInput())
 
     suspend fun ftp(): JsonObject = ensure(ftpInput())
 

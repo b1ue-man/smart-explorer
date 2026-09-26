@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test servers of the Android task suite, sourced by android/test-android-task.sh (emulator-run).
-# SFTP and FTP run as Docker containers on the CI runner; the emulator reaches the runner's
+# SFTP, FTP and SMB run as Docker containers on the CI runner; the emulator reaches the runner's
 # loopback as 10.0.2.2 (docs/refs/android-ci.md §10). The update feed is a plain directory served
 # over HTTP on the runner's loopback. WebDAV is deliberately absent: the app (like the desktop)
 # connects to WebDAV over HTTPS only, which needs a publicly trusted certificate, so the suite
@@ -36,6 +36,17 @@ SE_FTP_FIXTURE_SHA=""
 SE_FTP_PASV_MIN=21000
 SE_FTP_PASV_MAX=21010
 
+# dockurr/samba (docs/refs/samba-container.md): one user, one writable share, only smbd. A
+# non-default host port exercises the port of smb:// endpoints; the share maps to /shared.
+SE_SMB_IMAGE=dockurr/samba:4.23.10
+SE_SMB_CONTAINER=se-task-smb
+SE_SMB_PORT=1445
+SE_SMB_USER=sesmb
+SE_SMB_PASS=se-task-smb-pass
+SE_SMB_SHARE=seshare
+SE_SMB_FIXTURE=smb-fixture.bin
+SE_SMB_FIXTURE_SHA=""
+
 SE_FEED_PORT=18080
 SE_FEED_PID=""
 
@@ -59,12 +70,26 @@ servers_wait_banner() {
   return 1
 }
 
+# SMB servers send nothing before the client's negotiate request: wait for an accepted connect.
+servers_wait_port() {
+  local name=$1 port=$2 deadline=$((SECONDS + 180))
+  while ((SECONDS < deadline)); do
+    if timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+      echo "test server $name accepts connections on port $port"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "test server $name did not accept connections on port $port" >&2
+  return 1
+}
+
 servers_up() {
   command -v docker >/dev/null 2>&1 || {
     echo "docker is required for the SFTP/FTP test servers" >&2
     return 1
   }
-  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" "$SE_SMB_CONTAINER" >/dev/null 2>&1 || true
   # atmoz/sftp: user:password:uid:gid:dir – the user is chrooted to its home, <dir> is writable.
   docker run -d --name "$SE_SFTP_CONTAINER" -p "$SE_SFTP_PORT:22" "$SE_SFTP_IMAGE" \
     "$SE_SFTP_USER:$SE_SFTP_PASS:::${SE_SFTP_ROOT#/}" >/dev/null
@@ -84,9 +109,13 @@ servers_up() {
     "$SE_FTP_IMAGE" vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO \
     -opasv_min_port="$SE_FTP_PASV_MIN" -opasv_max_port="$SE_FTP_PASV_MAX" \
     -opasv_address="$SE_TASK_EMULATOR_HOST" >/dev/null
+  docker run -d --name "$SE_SMB_CONTAINER" -p "$SE_SMB_PORT:445" \
+    -e NAME="$SE_SMB_SHARE" -e USER="$SE_SMB_USER" -e PASS="$SE_SMB_PASS" -e RW=true \
+    "$SE_SMB_IMAGE" >/dev/null
   servers_wait_banner SFTP "$SE_SFTP_PORT" "SSH-"
   servers_wait_banner SSH "$SE_SSH_PORT" "SSH-"
   servers_wait_banner FTP "$SE_FTP_PORT" "220"
+  servers_wait_port SMB "$SE_SMB_PORT"
   # A banner session must not end the server (see above).
   sleep 2
   if [[ "$(docker inspect -f '{{.State.Running}}' "$SE_FTP_CONTAINER" 2>/dev/null)" != "true" ]]; then
@@ -102,6 +131,15 @@ servers_up() {
     echo "test server FTP: download fixture missing" >&2
     return 1
   }
+  # SMB accesses run as the share user (force user); the fixture belongs to it as well.
+  docker exec "$SE_SMB_CONTAINER" sh -c \
+    "head -c 150000 /dev/urandom >'/shared/$SE_SMB_FIXTURE' && chown '$SE_SMB_USER' '/shared/$SE_SMB_FIXTURE'"
+  SE_SMB_FIXTURE_SHA="$(docker exec "$SE_SMB_CONTAINER" sha256sum "/shared/$SE_SMB_FIXTURE" | awk '{ print $1 }')"
+  [[ "$SE_SMB_FIXTURE_SHA" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "test server SMB: download fixture missing" >&2
+    docker logs "$SE_SMB_CONTAINER" >&2 || true
+    return 1
+  }
 }
 
 # Instrumentation arguments (-e name value) that tell the tests where the servers are.
@@ -111,7 +149,9 @@ servers_instrumentation_args() {
     -e seSftpPort "$SE_SFTP_PORT" -e seSftpUser "$SE_SFTP_USER" -e seSftpPass "$SE_SFTP_PASS" -e seSftpRoot "$SE_SFTP_ROOT" \
     -e seSshPort "$SE_SSH_PORT" -e seSshUser "$SE_SSH_USER" -e seSshPass "$SE_SSH_PASS" -e seSshRoot "$SE_SSH_ROOT" \
     -e seFtpPort "$SE_FTP_PORT" -e seFtpUser "$SE_FTP_USER" -e seFtpPass "$SE_FTP_PASS" -e seFtpRoot "$SE_FTP_ROOT" \
-    -e seFtpFixture "$SE_FTP_FIXTURE" -e seFtpFixtureSha256 "$SE_FTP_FIXTURE_SHA"
+    -e seFtpFixture "$SE_FTP_FIXTURE" -e seFtpFixtureSha256 "$SE_FTP_FIXTURE_SHA" \
+    -e seSmbPort "$SE_SMB_PORT" -e seSmbUser "$SE_SMB_USER" -e seSmbPass "$SE_SMB_PASS" -e seSmbShare "$SE_SMB_SHARE" \
+    -e seSmbFixture "$SE_SMB_FIXTURE" -e seSmbFixtureSha256 "$SE_SMB_FIXTURE_SHA"
 }
 
 # Update feed: version.txt (next patch of native/Cargo.toml), the APK and its sha256sum sidecar,
@@ -147,13 +187,14 @@ servers_down() {
   local logs=$1
   mkdir -p "$logs"
   local container
-  for container in "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER"; do
+  for container in "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" "$SE_SMB_CONTAINER"; do
     docker logs "$container" >"$logs/$container.log" 2>&1 || true
   done
   docker exec "$SE_SFTP_CONTAINER" find /home >"$logs/sftp-tree.txt" 2>&1 || true
   docker exec "$SE_FTP_CONTAINER" find /ftp >"$logs/ftp-tree.txt" 2>&1 || true
   docker exec "$SE_SSH_CONTAINER" find /config -path /config/.cache -prune -o -print >"$logs/ssh-tree.txt" 2>&1 || true
-  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" >/dev/null 2>&1 || true
+  docker exec "$SE_SMB_CONTAINER" ls -laR /shared >"$logs/smb-tree.txt" 2>&1 || true
+  docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" "$SE_SMB_CONTAINER" >/dev/null 2>&1 || true
   if [[ -n "$SE_FEED_PID" ]]; then
     kill "$SE_FEED_PID" 2>/dev/null || true
     wait "$SE_FEED_PID" 2>/dev/null || true

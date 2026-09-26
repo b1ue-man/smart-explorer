@@ -9,6 +9,8 @@
 #                                                      Room-only export; writes ROOT/state.env
 #   share-desktop.sh args ROOT                          instrumentation arguments (-e name value)
 #   share-desktop.sh members ROOT COUNT                 wait until the desktop sees COUNT members
+#   share-desktop.sh exec ROOT [INSTRUMENT_OUT]         desktop side of the exec-host check, while
+#                                                      ShareExecTaskTest runs on the phone (adb)
 #   share-desktop.sh down ROOT LOGDIR                   stop client daemon and server, keep logs
 #
 # Each call is its own bash process with errexit, so a failed step always fails the call.
@@ -36,7 +38,7 @@ share_runner_ip() {
 }
 
 share_client() {
-  timeout --foreground --signal=TERM --kill-after=5s 90s env \
+  timeout --foreground --signal=TERM --kill-after=5s "${SHARE_CLIENT_TIMEOUT:-90s}" env \
     HOME="$SHARE_CLIENT/home" \
     USERPROFILE="$SHARE_CLIENT/home" \
     XDG_DATA_HOME="$SHARE_CLIENT/data" \
@@ -175,6 +177,92 @@ share_desktop_up() {
   echo "desktop Share ready: server $SHARE_SERVER, room $SHARE_ROOM_RELATION, device $SHARE_DESKTOP_DEVICE"
 }
 
+# Exec host (phase A2): markers on the phone's primary volume coordinate with ShareExecTaskTest.
+SHARE_EXEC_MARKERS=/sdcard/SmartExplorerTask/exec-host
+# Output of the phone's `am instrument` run: once it ends, no marker will come.
+SHARE_EXEC_INSTRUMENT=""
+
+share_marker_wait() {
+  local name=$1 seconds=$2 deadline=$((SECONDS + $2)) value=""
+  while ((SECONDS < deadline)); do
+    value="$(adb shell cat "$SHARE_EXEC_MARKERS/$name" 2>/dev/null | tr -d '\r' || true)"
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    if [[ -n "$SHARE_EXEC_INSTRUMENT" ]] && grep -q 'INSTRUMENTATION_CODE' "$SHARE_EXEC_INSTRUMENT" 2>/dev/null; then
+      echo "the phone test ended before writing marker $name" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "phone marker $name did not appear within ${seconds}s" >&2
+  return 1
+}
+
+share_exec_check() {
+  local phone target out code deadline verdict=not-refused
+  phone="$(share_marker_wait granted 900)"
+  phone="${phone%%$'\n'*}"
+  [[ "$phone" =~ ^[^/[:space:]]+$ ]] || {
+    echo "unexpected phone device id '$phone'" >&2
+    return 1
+  }
+  target="share://room/$SHARE_ROOM_RELATION/$phone"
+  echo "exec target $target"
+
+  # 1. Allowed: the command runs in the phone's shell (retried while presence and grant spread).
+  deadline=$((SECONDS + 240))
+  while ((SECONDS < deadline)); do
+    code=0
+    out="$(share_client exec "$target" --timeout 60 --shell 'echo exec-ok-$((6*7))' 2>"$SHARE_ROOT/exec-1.err")" || code=$?
+    [[ "$code" -eq 0 && "$out" == "exec-ok-42" ]] && break
+    sleep 3
+  done
+  echo "exec 1 (allowed): exit $code, stdout '$out'"
+  [[ "$code" -eq 0 && "$out" == "exec-ok-42" ]] || {
+    echo "the allowed command did not run on the phone" >&2
+    cat "$SHARE_ROOT/exec-1.err" >&2
+    return 1
+  }
+
+  # 2. A shell with a background child; the phone cancels it and must end the whole tree.
+  code=0
+  SHARE_CLIENT_TIMEOUT=300s share_client exec "$target" --shell 'sleep 300 & sleep 301; wait' \
+    >"$SHARE_ROOT/exec-2.out" 2>"$SHARE_ROOT/exec-2.err" || code=$?
+  echo "exec 2 (cancelled on the phone): exit $code"
+  [[ "$code" -ne 0 && "$code" -ne 124 ]] || {
+    echo "the long command was not cancelled by the phone (exit $code)" >&2
+    cat "$SHARE_ROOT/exec-2.err" >&2
+    return 1
+  }
+
+  # 3. Revoked: the phone refuses the next attempt (not a transport failure).
+  share_marker_wait revoked 300 >/dev/null
+  deadline=$((SECONDS + 120))
+  while ((SECONDS < deadline)); do
+    code=0
+    share_client exec "$target" --timeout 30 --shell 'echo darf-nicht-laufen' \
+      >"$SHARE_ROOT/exec-3.out" 2>"$SHARE_ROOT/exec-3.err" || code=$?
+    if [[ "$code" -eq 0 ]]; then
+      verdict=ran
+      break
+    fi
+    if grep -Eq 'permission_denied|exec authentication failed' "$SHARE_ROOT/exec-3.err"; then
+      verdict=refused
+      break
+    fi
+    sleep 3
+  done
+  echo "exec 3 (revoked): exit $code, verdict $verdict"
+  adb shell "echo $verdict >$SHARE_EXEC_MARKERS/host-done"
+  [[ "$verdict" == refused ]] || {
+    echo "the command after the revocation was not refused" >&2
+    cat "$SHARE_ROOT/exec-3.out" "$SHARE_ROOT/exec-3.err" >&2
+    return 1
+  }
+}
+
 STATE_VARS=(SHARE_ROOT SHARE_CLIENT SHARE_SERVER_PID SHARE_SERVER SHARE_RELAY SHARE_ROOM_CODE SHARE_ROOM_RELATION
   SHARE_DESKTOP_DEVICE SHARE_DESKTOP_DIRECT_CODE SHARE_ROOM_FOLDER SHARE_ROOM_FILE SHARE_ROOM_FILE_SHA256 SE_BIN SE_SHARE_SERVER_BIN)
 
@@ -223,7 +311,7 @@ share_desktop_down() {
 
 case "${1:-}" in
   up)
-    [[ "$#" -eq 4 ]] || { sed -n '8,12p' "$0" >&2; exit 2; }
+    [[ "$#" -eq 4 ]] || { sed -n '8,14p' "$0" >&2; exit 2; }
     mkdir -p "$2"
     share_desktop_up "$2" "$3" "$4"
     ;;
@@ -237,13 +325,19 @@ case "${1:-}" in
     share_load_state "$2"
     share_wait_members "$3"
     ;;
+  exec)
+    [[ "$#" -eq 2 || "$#" -eq 3 ]] || exit 2
+    share_load_state "$2"
+    SHARE_EXEC_INSTRUMENT="${3:-}"
+    share_exec_check
+    ;;
   down)
     [[ "$#" -eq 3 ]] || exit 2
     share_load_state "$2" || exit 0
     share_desktop_down "$3"
     ;;
   *)
-    sed -n '8,12p' "$0" >&2
+    sed -n '8,14p' "$0" >&2
     exit 2
     ;;
 esac

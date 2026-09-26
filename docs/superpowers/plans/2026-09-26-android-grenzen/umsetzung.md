@@ -28,12 +28,21 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
   `domains/share_status.rs` (exec-Felder je Gerät/Mitglied, Anbieter), Kotlin `api/ShareApi.kt`,
   `ui/share/*` (Freigabe-Schalter mit Scharfschalten + Warnung + Häkchen, Liste laufender Host-Befehle
   mit Stopp), `api.md` §5 (vom Hauptagent).
-- Methoden: `share.setExec {target:{kind:"direct",contactId}|{kind:"room",profileId,deviceId}, enabled}`
-  → `{}` (`daemon::mutate_exec_grant`); `share.execJobs {}` → `{incoming:[…], outgoing:[…]}`;
-  `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}`; `share.status` erhält
-  `execProvider:{available, provider, detail}` und je Gerät/Mitglied `exec:{enabled, allowed}`.
-- Fertig, wenn: JVM-/Host-Tests für DTOs grün; Gerätetest: Desktop-CLI führt nach Freigabe einen Befehl
-  auf dem Telefon aus, ohne Freigabe wird abgewiesen.
+- Methoden (Vertrag mit Suite T, `ShareExecTaskTest`):
+  - `share.setExec {target:{kind:"direct",contactId}|{kind:"room",profileId,deviceId}, enabled}` → `{}`
+    (`daemon::mutate_exec_grant`; unbekanntes Ziel → `notFound`, Anbieter nicht verfügbar und
+    `enabled:true` → `unsupported` mit Grund).
+  - `share.execJobs {}` → `{active:[Job], history:[Job]}`, `Job = {direction:"incoming"|"outgoing",
+    execId, peerDeviceId, peerName, program, state, startedAt?, finishedAt?, exitCode?, message?}`;
+    `state` = `ExecLifecycleState` in snake_case (`running`, `exited`, `cancelled`, …), Zeiten in
+    Sekunden seit 1970, `exitCode` aus `ExecTerminal`.
+  - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `notFound`).
+  - `share.status` erhält `execProvider:{available, provider, detail}` und je Gerät (`devices[]`) und
+    Raummitglied (`rooms[].members[]`) `exec:{enabled}`.
+- Standard-Arbeitsordner eines Host-Befehls ohne `cwd`: das `homeDir` der Fassade (`init`).
+- Fertig, wenn: Host-Tests für DTOs/Parser grün; Gerätetest `ShareExecTaskTest`: Desktop-CLI führt
+  nach Freigabe `echo` im Telefon-Shell aus, ein abgebrochener Befehl mit Hintergrundkind hinterlässt
+  keine Prozesse, nach Entzug meldet der Desktop `permission_denied`.
 
 ### G5a SMB-Backend (nativ)
 - Dateien: neu `native/src/smb/` (`mod.rs`, `core/backend.rs`, `core/connection.rs`, `core/replace.rs`,
@@ -61,10 +70,16 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
   Ordner-URI landet im Ordner.
 
 ### T Suite
-- `android/test-servers/servers.sh` (Samba-Container `dockurr/samba`), Instrumentierungs-Argumente
-  `seSmb*`, Gerätetests `RemoteTaskTest` (SMB: Liste, Upload, Download, Ersetzen, Sync-Aktualisierung),
-  `ShareRoomTaskTest`/`share-desktop.sh` (Exec-Host: Freigabe, Befehl vom Desktop, Entzug), Intent-Test
-  für G6, G1-Liste in `test-android-task.sh`.
+- `android/test-servers/servers.sh`: Samba-Container `dockurr/samba:4.23.10` auf Port 1445,
+  Freigabe `seshare`, Nutzer `sesmb`, serverseitige Download-Datei; Argumente `seSmb*`.
+- `RemoteTaskTest.smbUploadDownloadReplaceAndDelete` (Vertrag mit G5: `conn.save` mit
+  `protocol:"smb"`, `root:"/<freigabe>"`; Listing `backend:"smb"`, nicht schreibgeschützt; falsches
+  Passwort → `auth`; Upload, Download, zweiter Upload nummeriert, Ersetzen per `fs.uploadEdit`,
+  Kopie, `fs.rename`, rekursives Löschen).
+- `ShareExecTaskTest` (Phase A2) + `share-desktop.sh exec` (Marker in
+  `/sdcard/SmartExplorerTask/exec-host`), `test-android-task.sh share_exec_host` (Instrumentierung im
+  Hintergrund, Desktop parallel).
+- `IntentsTaskTest.openAFolderHandedOverByAnotherApp` (G6); G1-Liste in `test-android-task.sh`.
 
 ## Agentenplan
 - Agent A: G4a → G4b (gleiches Wissen: Exec-Lesung).
@@ -90,4 +105,4 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
 | G5a | offen | |
 | G5b | offen | |
 | G6 | fertig (Code) | Gerätetest in der Suite offen |
-| T | offen | |
+| T | in Arbeit | SMB-Server/-Test, Exec-Host-Ablauf, G6-Test geschrieben; G1-Liste offen |

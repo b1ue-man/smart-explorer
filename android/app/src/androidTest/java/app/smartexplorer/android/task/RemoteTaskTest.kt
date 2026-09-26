@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
  * G4 remote flows against the servers on the runner (10.0.2.2): SFTP files, uploads with the
  * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
  * Remote-Agent, atomic replace on plain SFTP (posix-rename), host-key reset, FTP basics (upload,
- * download, replace), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
+ * download, replace), SMB (Samba: upload, download, atomic replace, copy, delete), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -154,6 +154,51 @@ class RemoteTaskTest {
         val back = Fixture.dir(Volumes.primary(), "remote", "ftp-back")
         Api.copy(listOf(Api.child(connection.text("location"), fixture).location), back.absolutePath)
         assertEquals(TaskArgs.get("seFtpFixtureSha256"), Fixture.sha256(File(back, fixture)))
+        Api.runTask("fs.delete", args("locations" to listOf(remote), "permanent" to true))
+        assertFalse(remote.substringAfterLast('/') in Api.names(connection.text("location")))
+    }
+
+    @Test
+    fun smbUploadDownloadReplaceAndDelete() = coreTest {
+        assertTrue(Api.obj("conn.test", args("input" to Servers.smbInput())).text("message").isNotBlank())
+        Api.failure("conn.test", args("input" to Servers.smbInput(password = "falsches-passwort")), "auth")
+        val connection = Servers.smb()
+        val listing: Listing = Api.listing(connection.text("location"))
+        assertEquals("smb", listing.backend)
+        assertFalse(listing.readOnly)
+        val remote = Servers.freshDir(connection, "smb")
+        val local = Fixture.dir(Volumes.primary(), "remote", "smb")
+        val file = Fixture.bytes(File(local, "smb.bin"), 300_000, 13)
+        Api.copy(listOf(file.absolutePath), remote)
+        assertEquals(setOf("smb.bin"), Api.names(remote))
+        val downloaded = Fixture.dir(Volumes.sdCard(), "remote", "smb-down")
+        Api.copy(listOf(Api.child(remote, "smb.bin").location), downloaded.absolutePath)
+        assertEquals(Fixture.sha256(file), Fixture.sha256(File(downloaded, "smb.bin")))
+        // A second upload of the same name gets a number, never replaces (desktop rule).
+        Api.copy(listOf(file.absolutePath), remote)
+        assertEquals(setOf("smb.bin", "smb (2).bin"), Api.names(remote))
+
+        // Replacing is one rename with ReplaceIfExists on the server; a copy upload still works.
+        Api.copy(listOf(Fixture.write(File(local, "notiz.txt"), "Version 0").absolutePath), remote)
+        val location = Api.child(remote, "notiz.txt").location
+        val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+        File(edit.text("localPath")).writeText("Version 1")
+        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
+        val check = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+        assertEquals("Version 1", File(check.text("localPath")).readText())
+        File(edit.text("localPath")).writeText("Version 2")
+        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
+        assertEquals(setOf("smb.bin", "smb (2).bin", "notiz.txt", "notiz (2).txt"), Api.names(remote))
+        for (item in listOf(edit, check)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
+
+        // Downloads of a file the server side placed in the share.
+        val fixture = TaskArgs.get("seSmbFixture")
+        val back = Fixture.dir(Volumes.primary(), "remote", "smb-back")
+        Api.copy(listOf(Api.child(connection.text("location"), fixture).location), back.absolutePath)
+        assertEquals(TaskArgs.get("seSmbFixtureSha256"), Fixture.sha256(File(back, fixture)))
+
+        Api.call("fs.rename", args("location" to Api.child(remote, "smb (2).bin").location, "newName" to "umbenannt.bin"))
+        assertTrue("umbenannt.bin" in Api.names(remote))
         Api.runTask("fs.delete", args("locations" to listOf(remote), "permanent" to true))
         assertFalse(remote.substringAfterLast('/') in Api.names(connection.text("location")))
     }
