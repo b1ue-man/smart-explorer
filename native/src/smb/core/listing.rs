@@ -1,8 +1,9 @@
 //! FileBothDirectoryInformation (MS-FSCC 2.4.8) and CREATE-response
 //! metadata as `VfsMeta`, keeping the file attributes smb2's own
-//! `DirectoryEntry`/`FileInfo` drop: a reparse point (symlink, junction,
-//! mount point) is reported as a link, so recursive delete and sync never
-//! descend into it.
+//! `DirectoryEntry`/`FileInfo` drop. A reparse point is a link (never
+//! descended by recursive delete and sync) unless its tag marks a data
+//! reparse point: a deduplicated, compressed, cloud-placeholder or
+//! tiered-storage file is an ordinary file or folder.
 use crate::vfs::VfsMeta;
 
 pub(super) const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
@@ -19,6 +20,21 @@ const OFFSET_LAST_WRITE: usize = 24;
 const OFFSET_END_OF_FILE: usize = 40;
 const OFFSET_ATTRIBUTES: usize = 56;
 const OFFSET_NAME_LENGTH: usize = 60;
+/// EaSize, which holds the reparse tag when FILE_ATTRIBUTE_REPARSE_POINT is
+/// set (MS-FSCC 2.4.8).
+const OFFSET_EA_SIZE_OR_TAG: usize = 64;
+
+/// Reparse tags of data files (MS-FSCC 2.1.2.1): the entry is the file itself,
+/// only stored differently. Anything else (name surrogates such as symlinks,
+/// junctions and WSL links, NFS special files, DFS, unknown tags) is a link.
+const IO_REPARSE_TAG_HSM: u32 = 0xC000_0004;
+const IO_REPARSE_TAG_HSM2: u32 = 0x8000_0006;
+const IO_REPARSE_TAG_SIS: u32 = 0x8000_0007;
+const IO_REPARSE_TAG_DEDUP: u32 = 0x8000_0013;
+const IO_REPARSE_TAG_WOF: u32 = 0x8000_0017;
+/// IO_REPARSE_TAG_CLOUD and CLOUD_1…CLOUD_F differ only in bits 12–15.
+const IO_REPARSE_TAG_CLOUD: u32 = 0x9000_001A;
+const IO_REPARSE_TAG_CLOUD_MASK: u32 = 0xFFFF_0FFF;
 
 /// 100-ns intervals between 1601-01-01 and 1970-01-01.
 const EPOCH_DIFF_100NS: i128 = 116_444_736_000_000_000;
@@ -31,6 +47,9 @@ pub(super) struct Attributes {
     /// Windows FILETIME (100 ns since 1601), 0 = unknown.
     pub(super) last_write: u64,
     pub(super) creation: u64,
+    /// The reparse tag of a reparse point; `None` when the server did not
+    /// report one (such an entry stays link-like).
+    pub(super) reparse_tag: Option<u32>,
 }
 
 impl Attributes {
@@ -41,6 +60,32 @@ impl Attributes {
     pub(super) fn is_reparse_point(&self) -> bool {
         self.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
+
+    /// A redirecting reparse point: every reparse point except a data one
+    /// with a known tag.
+    pub(super) fn is_link(&self) -> bool {
+        self.is_reparse_point() && !self.reparse_tag.is_some_and(is_data_reparse_tag)
+    }
+}
+
+/// Whether a reparse tag marks data stored differently (deduplication, WOF
+/// compression, cloud placeholders, HSM, single-instance storage) rather than
+/// a link to another name.
+pub(super) fn is_data_reparse_tag(tag: u32) -> bool {
+    matches!(
+        tag,
+        IO_REPARSE_TAG_HSM
+            | IO_REPARSE_TAG_HSM2
+            | IO_REPARSE_TAG_SIS
+            | IO_REPARSE_TAG_DEDUP
+            | IO_REPARSE_TAG_WOF
+    ) || tag & IO_REPARSE_TAG_CLOUD_MASK == IO_REPARSE_TAG_CLOUD
+}
+
+/// The ReparseTag of a FileAttributeTagInformation buffer (MS-FSCC 2.4.6:
+/// FileAttributes, then ReparseTag); `None` when it is too short.
+pub(super) fn attribute_tag(buffer: &[u8]) -> Option<u32> {
+    u32_at(buffer, 4).ok()
 }
 
 /// Unix milliseconds of a FILETIME; 0 stays "unknown".
@@ -56,7 +101,7 @@ pub(super) fn meta(name: String, attributes: &Attributes) -> VfsMeta {
     let is_dir = attributes.is_dir();
     VfsMeta {
         is_dir,
-        is_symlink: attributes.is_reparse_point(),
+        is_symlink: attributes.is_link(),
         size: if is_dir { 0 } else { attributes.size },
         mtime_ms: filetime_ms(attributes.last_write),
         btime_ms: filetime_ms(attributes.creation),
@@ -111,7 +156,7 @@ pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> 
         let name_len = u32_at(entry, OFFSET_NAME_LENGTH)? as usize;
         let name_end = FIXED_LEN
             .checked_add(name_len)
-            .filter(|end| *end <= entry.len() && name_len % 2 == 0)
+            .filter(|end| *end <= entry.len() && name_len.is_multiple_of(2))
             .ok_or_else(|| "SMB-Verzeichniseintrag hat eine ungültige Namenslänge".to_string())?;
         let units: Vec<u16> = entry[FIXED_LEN..name_end]
             .chunks_exact(2)
@@ -121,12 +166,16 @@ pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> 
             .map_err(|_| "SMB-Verzeichniseintrag hat einen ungültigen UTF-16-Namen".to_string())?;
         let name = smb2::decode_name(&wire).into_owned();
         if !matches!(name.as_str(), "" | "." | "..") {
-            let attributes = Attributes {
+            let mut attributes = Attributes {
                 attributes: u32_at(entry, OFFSET_ATTRIBUTES)?,
                 size: u64_at(entry, OFFSET_END_OF_FILE)?,
                 last_write: u64_at(entry, OFFSET_LAST_WRITE)?,
                 creation: u64_at(entry, OFFSET_CREATION)?,
+                reparse_tag: None,
             };
+            if attributes.is_reparse_point() {
+                attributes.reparse_tag = Some(u32_at(entry, OFFSET_EA_SIZE_OR_TAG)?);
+            }
             entries.push(meta(name, &attributes));
         }
         if next == 0 {

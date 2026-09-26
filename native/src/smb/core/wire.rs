@@ -1,7 +1,8 @@
 //! SMB2 operations on one tree through smb2's public message API
 //! (`Connection::execute`/`execute_compound`). Stat and delete open the entry
 //! itself with FILE_OPEN_REPARSE_POINT, so a link is described and removed
-//! as a link and its target is never touched.
+//! as a link and its target is never touched; a reparse point's tag decides
+//! whether it is a link or a data file (`listing::is_data_reparse_tag`).
 use super::listing::{self, Attributes};
 use super::url::host_of;
 use crate::vfs::VfsMeta;
@@ -13,6 +14,7 @@ use smb2::msg::create::{
 use smb2::msg::query_directory::{
     FileInformationClass, QueryDirectoryFlags, QueryDirectoryRequest, QueryDirectoryResponse,
 };
+use smb2::msg::query_info::{QueryInfoRequest, QueryInfoResponse};
 use smb2::msg::set_info::{InfoType, SetInfoRequest};
 use smb2::pack::{ReadCursor, Unpack};
 use smb2::types::flags::FileAccessMask;
@@ -26,6 +28,9 @@ pub(super) const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 pub(super) const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 /// FileDispositionInformation (MS-FSCC 2.4.11), `DeletePending = 1`.
 const FILE_DISPOSITION_INFORMATION: u8 = 13;
+/// FileAttributeTagInformation (MS-FSCC 2.4.6): attributes + reparse tag.
+const FILE_ATTRIBUTE_TAG_INFORMATION: u8 = 35;
+const ATTRIBUTE_TAG_LEN: u32 = 8;
 /// One credit per QUERY_DIRECTORY (MS-SMB2 3.2.4.1.5).
 const QUERY_BUFFER_LEN: u32 = 65_536;
 
@@ -110,13 +115,39 @@ pub(super) fn created(frame: &Frame) -> smb2::Result<CreateResponse> {
     CreateResponse::unpack(&mut ReadCursor::new(&frame.body))
 }
 
+/// Attributes from a CREATE response, which carries no reparse tag.
 pub(super) fn attributes_of(created: &CreateResponse) -> Attributes {
     Attributes {
         attributes: created.file_attributes,
         size: created.end_of_file,
         last_write: created.last_write_time.0,
         creation: created.creation_time.0,
+        reparse_tag: None,
     }
+}
+
+/// QUERY_INFO(FileAttributeTagInformation) for `file_id` (the sentinel
+/// inside a compound).
+fn attribute_tag_request(file_id: FileId) -> QueryInfoRequest {
+    QueryInfoRequest {
+        info_type: InfoType::File,
+        file_info_class: FILE_ATTRIBUTE_TAG_INFORMATION,
+        output_buffer_length: ATTRIBUTE_TAG_LEN,
+        additional_information: 0,
+        flags: 0,
+        file_id,
+        input_buffer: Vec::new(),
+    }
+}
+
+/// The reparse tag of a QUERY_INFO answer; `None` when the server refused
+/// or answered something unreadable (the entry then stays link-like).
+fn reparse_tag_of(frame: &Frame) -> Option<u32> {
+    if frame.header.status != NtStatus::SUCCESS {
+        return None;
+    }
+    let response = QueryInfoResponse::unpack(&mut ReadCursor::new(&frame.body)).ok()?;
+    listing::attribute_tag(&response.output_buffer)
 }
 
 /// Best effort: a handle whose compound CLOSE failed must not leak.
@@ -125,8 +156,11 @@ pub(super) async fn close_quietly(conn: &Connection, tree: &Tree, file_id: FileI
     let _ = tree.close_handle(&mut conn, file_id).await;
 }
 
-/// Metadata of the entry itself (a link is not followed): CREATE + CLOSE in
-/// one round trip; the CREATE response carries attributes, times and size.
+/// Metadata of the entry itself (a link is not followed): CREATE +
+/// QUERY_INFO(FileAttributeTagInformation) + CLOSE in one round trip. The
+/// CREATE response carries attributes, times and size, the query the reparse
+/// tag. A failed query only leaves the tag unknown (and the CLOSE behind it
+/// cascades, so the handle is then closed by hand).
 pub(super) async fn stat(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<Attributes> {
     let create = open_request(
         tree,
@@ -134,17 +168,30 @@ pub(super) async fn stat(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Res
         FileAccessMask::FILE_READ_ATTRIBUTES | FileAccessMask::SYNCHRONIZE,
         FILE_OPEN_REPARSE_POINT,
     );
+    let query = attribute_tag_request(FileId::SENTINEL);
     let close = related_close();
     let ops = [
         CompoundOp::new(Command::Create, &create, Some(tree.tree_id)),
+        CompoundOp::new(Command::QueryInfo, &query, Some(tree.tree_id)),
         CompoundOp::new(Command::Close, &close, Some(tree.tree_id)),
     ];
     let frames = frames(conn.execute_compound(&ops).await?, ops.len())?;
     let response = created(&frames[0])?;
-    if frames[1].header.status != NtStatus::SUCCESS {
+    if frames[2].header.status != NtStatus::SUCCESS {
         close_quietly(conn, tree, response.file_id).await;
     }
-    Ok(attributes_of(&response))
+    let mut attributes = attributes_of(&response);
+    if attributes.is_reparse_point() {
+        attributes.reparse_tag = reparse_tag_of(&frames[1]);
+    }
+    Ok(attributes)
+}
+
+/// Whether a QUERY_DIRECTORY status ends the listing. Servers without `.`
+/// and `..` answer the first query on an empty folder with NO_SUCH_FILE
+/// (the CREATE already proved the folder exists).
+pub(super) fn ends_listing(status: NtStatus, first_query: bool) -> bool {
+    status == NtStatus::NO_MORE_FILES || (first_query && status == NtStatus::NO_SUCH_FILE)
 }
 
 /// A directory listing: CREATE, QUERY_DIRECTORY until NO_MORE_FILES, CLOSE.
@@ -194,7 +241,7 @@ async fn query_all(conn: &Connection, tree: &Tree, file_id: FileId) -> smb2::Res
         let frame = conn
             .execute(Command::QueryDirectory, &request, Some(tree.tree_id))
             .await?;
-        if frame.header.status == NtStatus::NO_MORE_FILES {
+        if ends_listing(frame.header.status, restart) {
             return Ok(entries);
         }
         if frame.header.status != NtStatus::SUCCESS {
@@ -282,10 +329,11 @@ pub(super) async fn delete(
     }
 }
 
-/// A folder-type reparse point (directory symlink, junction) is deleted as
-/// the link it is; a real folder stays a "file is a directory" refusal. The
-/// type check and the delete use the same handle, so nothing can be swapped
-/// in between.
+/// A folder-type link (directory symlink, junction, any reparse point that
+/// is not a data one) is deleted as the link it is; a real folder, including
+/// a data reparse folder such as a cloud placeholder, stays a "file is a
+/// directory" refusal. The type check and the delete use the same handle, so
+/// nothing can be swapped in between.
 async fn delete_link_dir(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<()> {
     let open = open_request(
         tree,
@@ -297,7 +345,15 @@ async fn delete_link_dir(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Res
         .execute(Command::Create, &open, Some(tree.tree_id))
         .await?;
     let response = created(&frame)?;
-    if !attributes_of(&response).is_reparse_point() {
+    let mut attributes = attributes_of(&response);
+    if attributes.is_reparse_point() {
+        let query = attribute_tag_request(response.file_id);
+        let answer = conn
+            .execute(Command::QueryInfo, &query, Some(tree.tree_id))
+            .await;
+        attributes.reparse_tag = answer.ok().as_ref().and_then(reparse_tag_of);
+    }
+    if !attributes.is_link() {
         close_quietly(conn, tree, response.file_id).await;
         return Err(protocol(NtStatus::FILE_IS_A_DIRECTORY, Command::Create));
     }

@@ -1,20 +1,21 @@
 //! Pure parts of the SMB backend: endpoint and path parsing, the directory
-//! listing parser with its reparse attribute, the rename buffer, the error
-//! mapping and the protocol/endpoint integration. Live SMB runs in the
+//! listing parser with its reparse attribute and tag, the rename buffer, the
+//! error mapping and the protocol/endpoint integration. Live SMB runs in the
 //! Android device suite against Samba.
 use super::errors::{
     connect_failed, is_dead, is_suspect, map, names_missing_share, negotiate_failed,
     session_failed, share_failed,
 };
 use super::listing::{
-    filetime_ms, parse_directory_info, server_level, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
+    attribute_tag, filetime_ms, is_data_reparse_tag, meta, parse_directory_info, server_level,
+    Attributes, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
 };
 use super::replace::rename_info;
 use super::url::{
     entry_path, host_of, parse_smb_url, rename_paths, server_addr, split_domain_user, split_path,
     SmbPath,
 };
+use super::wire::ends_listing;
 use super::{backend_from_url, root_has_share, root_with_share};
 use crate::creds::Protocol;
 use smb2::types::status::NtStatus;
@@ -29,8 +30,19 @@ fn protocol_error(status: NtStatus, command: Command) -> Error {
     Error::Protocol { status, command }
 }
 
+/// Reparse tags (MS-FSCC 2.1.2.1) used below.
+const TAG_DEDUP: u32 = 0x8000_0013;
+const TAG_MOUNT_POINT: u32 = 0xA000_0003;
+const TAG_SYMLINK: u32 = 0xA000_000C;
+
 /// One FileBothDirectoryInformation entry, padded to 8 bytes unless last.
 fn entry(name: &str, attributes: u32, size: u64, last: bool) -> Vec<u8> {
+    tagged_entry(name, attributes, size, 0, last)
+}
+
+/// An entry whose EaSize field carries `tag` (the reparse tag of a reparse
+/// point).
+fn tagged_entry(name: &str, attributes: u32, size: u64, tag: u32, last: bool) -> Vec<u8> {
     let units: Vec<u16> = name.encode_utf16().collect();
     let length = 94 + units.len() * 2;
     let padded = (length + 7) & !7;
@@ -42,6 +54,7 @@ fn entry(name: &str, attributes: u32, size: u64, last: bool) -> Vec<u8> {
     bytes[40..48].copy_from_slice(&size.to_le_bytes());
     bytes[56..60].copy_from_slice(&attributes.to_le_bytes());
     bytes[60..64].copy_from_slice(&((units.len() * 2) as u32).to_le_bytes());
+    bytes[64..68].copy_from_slice(&tag.to_le_bytes());
     for (index, unit) in units.iter().enumerate() {
         bytes[94 + index * 2..96 + index * 2].copy_from_slice(&unit.to_le_bytes());
     }
@@ -147,13 +160,24 @@ fn android_task_smb_directory_listing_keeps_reparse_points_as_links() {
     buffer.extend(entry("..", FILE_ATTRIBUTE_DIRECTORY, 0, false));
     buffer.extend(entry("bericht.txt", 0x20, 12, false));
     buffer.extend(entry("ordner", FILE_ATTRIBUTE_DIRECTORY, 4096, false));
-    buffer.extend(entry(
+    buffer.extend(tagged_entry(
         "verknüpfung",
         FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT,
         0,
+        TAG_MOUNT_POINT,
         false,
     ));
     buffer.extend(entry("versteckt", FILE_ATTRIBUTE_HIDDEN, 1, false));
+    // A deduplicated file on a Windows server is the file itself.
+    buffer.extend(tagged_entry(
+        "dedupliziert.dat",
+        0x20 | FILE_ATTRIBUTE_REPARSE_POINT,
+        70,
+        TAG_DEDUP,
+        false,
+    ));
+    // A reparse point with an unknown tag (here 0) stays link-like.
+    buffer.extend(entry("ohne-tag", FILE_ATTRIBUTE_REPARSE_POINT, 5, false));
     // smb2 maps `?` to U+F025 on the wire; the listing shows the real name.
     buffer.extend(entry("frage\u{F025}", 0x20, 3, true));
 
@@ -166,6 +190,8 @@ fn android_task_smb_directory_listing_keeps_reparse_points_as_links() {
             "ordner",
             "verknüpfung",
             "versteckt",
+            "dedupliziert.dat",
+            "ohne-tag",
             "frage?"
         ]
     );
@@ -180,6 +206,13 @@ fn android_task_smb_directory_listing_keeps_reparse_points_as_links() {
     let link = &entries[2];
     assert!(link.is_dir && link.is_symlink);
     assert!(entries[3].hidden);
+    let dedup = &entries[4];
+    assert!(!dedup.is_dir && !dedup.is_symlink);
+    assert_eq!(dedup.size, 70);
+    assert!(entries[5].is_symlink);
+    // Without the reparse attribute the EaSize field is no tag.
+    let plain = parse_directory_info(&tagged_entry("x", 0x20, 1, TAG_SYMLINK, true)).unwrap();
+    assert!(!plain[0].is_symlink);
 
     assert!(parse_directory_info(&[]).unwrap().is_empty());
     assert_eq!(filetime_ms(0), 0);
@@ -362,4 +395,69 @@ fn android_task_smb_protocol_and_endpoints_are_recognized() {
         crate::connect::validate_sync_endpoints(endpoint, "smb://FIRMA\\anna@nas:1445/daten")
             .is_err()
     );
+}
+
+#[test]
+fn android_task_smb_reparse_tags_keep_data_files_and_links_apart() {
+    let data = [
+        TAG_DEDUP,
+        0x8000_0017, // WOF (compressed)
+        0x9000_001A, // CLOUD
+        0x9000_301A, // CLOUD_3
+        0x9000_F01A, // CLOUD_F
+        0xC000_0004, // HSM
+        0x8000_0006, // HSM2
+        0x8000_0007, // SIS
+    ];
+    for tag in data {
+        assert!(is_data_reparse_tag(tag), "{tag:#x}");
+    }
+    let links = [
+        TAG_SYMLINK,
+        TAG_MOUNT_POINT,
+        0xA000_001D, // LX_SYMLINK
+        0x8000_0014, // NFS special file (Samba)
+        0x8000_000A, // DFS
+        0xB000_001A, // name surrogate with a cloud-like low part
+        0x9000_001B,
+        0x1234_5678,
+        0,
+    ];
+    for tag in links {
+        assert!(!is_data_reparse_tag(tag), "{tag:#x}");
+    }
+
+    let reparse = |tag: Option<u32>| Attributes {
+        attributes: 0x20 | FILE_ATTRIBUTE_REPARSE_POINT,
+        size: 9,
+        reparse_tag: tag,
+        ..Attributes::default()
+    };
+    assert!(!meta("d".into(), &reparse(Some(TAG_DEDUP))).is_symlink);
+    assert!(meta("l".into(), &reparse(Some(TAG_SYMLINK))).is_symlink);
+    // An unreadable tag stays link-like; no reparse attribute is never a link.
+    assert!(meta("u".into(), &reparse(None)).is_symlink);
+    let regular = Attributes {
+        attributes: 0x20,
+        reparse_tag: Some(TAG_SYMLINK),
+        ..Attributes::default()
+    };
+    assert!(!meta("r".into(), &regular).is_symlink);
+
+    // FileAttributeTagInformation: FileAttributes, then ReparseTag.
+    let mut buffer = 0x420u32.to_le_bytes().to_vec();
+    buffer.extend_from_slice(&TAG_DEDUP.to_le_bytes());
+    assert_eq!(attribute_tag(&buffer), Some(TAG_DEDUP));
+    assert_eq!(attribute_tag(&buffer[..6]), None);
+}
+
+#[test]
+fn android_task_smb_empty_first_query_is_an_empty_folder() {
+    assert!(ends_listing(NtStatus::NO_MORE_FILES, true));
+    assert!(ends_listing(NtStatus::NO_MORE_FILES, false));
+    // Servers without `.`/`..` answer an empty folder with NO_SUCH_FILE.
+    assert!(ends_listing(NtStatus::NO_SUCH_FILE, true));
+    assert!(!ends_listing(NtStatus::NO_SUCH_FILE, false));
+    assert!(!ends_listing(NtStatus::SUCCESS, true));
+    assert!(!ends_listing(NtStatus::ACCESS_DENIED, true));
 }
