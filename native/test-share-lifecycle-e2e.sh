@@ -735,6 +735,9 @@ PY
   grep -F 'cargo build --locked' "$repo_root/native/publish-update.ps1" >/dev/null
 
   local install_dry_run
+  mkdir -p "$root/release-check/install"
+  printf '%s\n' 'https://example.invalid/desktop-feed' \
+    >"$root/release-check/install/update_source.txt"
   install_dry_run="$(
     SMART_EXPLORER_RELEASE_TAG=v9.8.7 \
     SMART_EXPLORER_REQUIRE_RELEASE_ASSETS=1 \
@@ -744,10 +747,15 @@ PY
   )"
   grep -F 'releases/download/v9.8.7' <<<"$install_dry_run" >/dev/null
   grep -F '(atomic rename)' <<<"$install_dry_run" >/dev/null
-  if grep -F 'update_source.txt' <<<"$install_dry_run" >/dev/null; then
+  # A terminal-only install keeps an existing (desktop) update source and only
+  # creates one where none exists, so `se update` has a feed.
+  grep -F 'Keeping the existing update source' <<<"$install_dry_run" >/dev/null
+  if grep -F 'create the missing' <<<"$install_dry_run" >/dev/null; then
     echo "CLI-only install unexpectedly rewrites the desktop update source" >&2
     return 1
   fi
+  [[ "$(cat "$root/release-check/install/update_source.txt")" == \
+    'https://example.invalid/desktop-feed' ]]
 
   set +e
   local no_build_path="$root/release-check/no-build-path"

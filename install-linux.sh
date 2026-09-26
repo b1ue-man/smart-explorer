@@ -367,6 +367,14 @@ install_files() {
       printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
     fi
     run ln -sf "$APP_BIN" "$BIN_DIR/smart_explorer"
+  elif [ -e "$INSTALL_DIR/update_source.txt" ]; then
+    # A terminal-only reinstall never rewrites an existing (desktop) source.
+    log "Keeping the existing update source: $INSTALL_DIR/update_source.txt"
+  elif [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: create the missing $INSTALL_DIR/update_source.txt for se update"
+  else
+    # `se update` reads the feed from this file beside the installed binary.
+    printf '%s\n' "$UPDATE_SOURCE" > "$INSTALL_DIR/update_source.txt"
   fi
   run ln -sf "$CLI_BIN" "$BIN_DIR/se"
   if [ "$CLI_ONLY" = 1 ]; then
