@@ -139,3 +139,9 @@ Spec: `spec.md` · Recherche: `recherche.md`. Regeln: AGENTS.md (keine lokalen B
   anderen Session; ihre Suite `cli-discoverable-update-task.yml` ist grün (Lauf 36230339725, 2026-09-26),
   offen war nur ihr Release. Das Release dieses Batches liefert sie mit aus: vorher prüfen, dass kein
   anderes Release läuft, und die CLI2-Zeile in `docs/TODO.md` mit der Version abschließen.
+
+## Release
+- v0.5.164: Komplett-Release-Lauf 36238684321 (Release-Commit `82ff1ad`), Publikation 36243203967; GitHub
+  Release mit 20 Assets, `native/Cargo.toml` = `version.txt` = 0.5.164, alle Feed-`.sha256` gleich den
+  Release-Sidecars, APK-Digest geprüft. Enthält auch CLI2.
+
