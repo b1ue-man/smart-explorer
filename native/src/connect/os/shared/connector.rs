@@ -105,6 +105,7 @@ fn do_connect_with_agent_fallback(
         Protocol::Sftp => connect_sftp(form, secret, port, agent_fallback),
         Protocol::Ftp | Protocol::Ftps => connect_ftp(form, secret, port),
         Protocol::Webdav => connect_webdav(form, secret, port),
+        Protocol::Smb => connect_smb(form, secret, port),
         Protocol::Share => connect_share(form, secret, port),
     }
 }
@@ -274,6 +275,45 @@ fn connect_webdav(form: ConnectForm, secret: Option<String>, port: u16) -> Conne
     }
 }
 
+/// SMB 2/3: the root starts with the share, which is connected (and so
+/// verified) while connecting; `DOMAIN\user` carries the domain.
+fn connect_smb(form: ConnectForm, secret: Option<String>, port: u16) -> ConnectResult {
+    let password = secret.clone().unwrap_or_else(|| form.password.clone());
+    let root = norm_root(&form.root);
+    let cfg = crate::smb::SmbConfig {
+        host: form.host.trim().to_string(),
+        port,
+        user: form.user.trim().to_string(),
+        password: password.clone(),
+        root: root.clone(),
+    };
+    match crate::smb::SmbBackend::connect(cfg) {
+        Ok(be) => {
+            if let Err(error) = persist(&form, port, Some(&password)) {
+                return ConnectResult::Err(format!(
+                    "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"
+                ));
+            }
+            let label = label_for(&form, port);
+            ConnectResult::Ok(Connected {
+                remote: Some(RemoteState {
+                    backend: Arc::new(be),
+                    label: label.clone(),
+                    agent_version: None,
+                    zip_return: None,
+                    sftp: None,
+                    account: None,
+                    endpoint_prefix: ep_prefix(&form, port),
+                }),
+                net: None,
+                target: root,
+                label,
+            })
+        }
+        Err(e) => ConnectResult::Err(e.to_string()),
+    }
+}
+
 fn connect_share(form: ConnectForm, secret: Option<String>, port: u16) -> ConnectResult {
     let unc = form.unc.trim().to_string();
     let password = secret.clone().unwrap_or_else(|| form.password.clone());
@@ -365,6 +405,10 @@ fn open_saved_at_with_agent_fallback(
         } else {
             path.to_string()
         };
+        if c.protocol == Protocol::Smb {
+            // The server level above the shares has no session of its own.
+            form.root = crate::smb::root_with_share(&form.root, &c.root);
+        }
         form.save = false;
         match do_connect_with_agent_fallback(form, secret, agent_fallback) {
             ConnectResult::Ok(conn) => match conn.remote {

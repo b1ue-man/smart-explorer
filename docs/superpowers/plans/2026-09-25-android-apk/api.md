@@ -123,7 +123,7 @@ Ereignisse (`pollEvents`):
 
 ### 4.3 Dateien (`fs.*`)
 - `fs.list {location, showHidden:Boolean, filter:Filter?, sort:Sort}` →
-  `{location, title, crumbs:[Crumb], parent:String?, backend:"local|sftp|ftp|ftps|webdav|gdrive|share|zip|trash",
+  `{location, title, crumbs:[Crumb], parent:String?, backend:"local|sftp|ftp|ftps|webdav|smb|gdrive|share|zip|trash",
     readOnly:Boolean, canTrash:Boolean, entries:[Entry], totalBytes:Long}`
   (nicht rekursiv; Filter mit Desktop-`CompiledFilter`; trägt `location` in „Zuletzt“ ein)
 - `fs.stat {location}` → `Entry`

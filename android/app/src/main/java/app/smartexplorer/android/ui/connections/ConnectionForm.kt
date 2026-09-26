@@ -43,8 +43,9 @@ import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.ToggleSetting
 
 /**
- * Connection form (spec F12): Typ · Name · Host · Port · Benutzer · Passwort or Schlüsseldatei +
- * Passphrase (SFTP) · Startordner · Remote-Agent (SFTP) · [Testen] [Speichern]; WebDAV immer über HTTPS.
+ * Connection form (spec F12): Typ · Name · Host · Port · (SMB: Freigabe · Domäne) · Benutzer · Passwort or
+ * Schlüsseldatei + Passphrase (SFTP) · Startordner · Remote-Agent (SFTP) · [Testen] [Speichern]; WebDAV immer
+ * über HTTPS. A pasted `\\host\freigabe\pfad` or `smb://…` in the host field fills the SMB fields.
  */
 @Composable
 internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, onSave: () -> Unit, onClose: () -> Unit) {
@@ -72,7 +73,17 @@ internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, 
                     onSelect = { update(draft.withProtocol(it)) },
                 )
                 FormField("Name", draft.label, { update(draft.copy(label = it)) }, placeholder = draft.host.ifBlank { "Mein Server" })
-                FormField("Host", draft.host, { update(draft.copy(host = it)) }, error = errors[ConnField.Host], keyboard = KeyboardType.Uri)
+                FormField(
+                    "Host",
+                    draft.host,
+                    { next ->
+                        // Several characters at once = pasted: an SMB address is split into its fields;
+                        // typing is never rearranged (a typed address is split on Testen/Speichern).
+                        update(if (next.length > draft.host.length + 1) draft.withHostInput(next) else draft.copy(host = next))
+                    },
+                    error = errors[ConnField.Host],
+                    keyboard = KeyboardType.Uri,
+                )
                 FormField(
                     "Port",
                     draft.port,
@@ -80,6 +91,16 @@ internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, 
                     error = errors[ConnField.Port],
                     keyboard = KeyboardType.Number,
                 )
+                if (draft.isSmb) {
+                    FormField(
+                        "Freigabe",
+                        draft.share,
+                        { update(draft.copy(share = it)) },
+                        error = errors[ConnField.Share],
+                        keyboard = KeyboardType.Uri,
+                    )
+                    FormField("Domäne (optional)", draft.domain, { update(draft.copy(domain = it)) }, keyboard = KeyboardType.Ascii)
+                }
                 FormField("Benutzer", draft.user, { update(draft.copy(user = it)) }, keyboard = KeyboardType.Ascii)
                 if (draft.isSftp) {
                     ChoiceRow(
@@ -110,6 +131,9 @@ internal fun ConnectionFormPage(state: ConnectionFormState, onTest: () -> Unit, 
                 // server-side operations; it is not an ssh-agent login.
                 ToggleSetting("Remote-Agent verwenden", draft.useAgent, { update(draft.copy(useAgent = it)) })
                 HintLine("Den ersten Hostschlüssel speichert die App (wie am Desktop); ein geänderter Schlüssel lässt die Verbindung scheitern.")
+            }
+            if (draft.isSmb) {
+                HintLine("Unverschlüsselt, sofern der Server keine Verschlüsselung verlangt.")
             }
             // WebDAV always uses HTTPS (draft default and saved connections), like the desktop format.
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

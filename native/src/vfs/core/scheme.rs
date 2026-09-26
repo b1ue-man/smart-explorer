@@ -6,6 +6,7 @@ pub enum Scheme {
     Sftp,
     Ftp,
     Webdav,
+    Smb,
     GDrive,
     Peer,
 }

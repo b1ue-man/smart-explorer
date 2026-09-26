@@ -45,6 +45,7 @@ pub mod shell_clipboard;
 pub mod shell_menu;
 #[cfg(windows)]
 pub mod shell_register;
+pub mod smb;
 pub mod support_dirs;
 pub mod sync;
 pub mod syncjobs;

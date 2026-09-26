@@ -8,19 +8,31 @@ impl App {
         if !self.app_errors.is_empty() {
             lines.push("App-Fehler:".to_string());
             for entry in &self.app_errors {
-                lines.push(format!("[{}] {}: {}", entry.ts, entry.context, detail(&entry.detail)));
+                lines.push(format!(
+                    "[{}] {}: {}",
+                    entry.ts,
+                    entry.context,
+                    detail(&entry.detail)
+                ));
             }
         }
         if let Some(current) = &self.error_msg {
             if !self.app_errors.iter().any(|entry| entry.detail == *current) {
-                if lines.is_empty() { lines.push("App-Fehler:".to_string()); }
+                if lines.is_empty() {
+                    lines.push("App-Fehler:".to_string());
+                }
                 lines.push(format!("[aktuell] Fehler: {}", detail(current)));
             }
         }
         if !self.failed_paths.is_empty() || self.progress.errors > 0 {
-            if !lines.is_empty() { lines.push(String::new()); }
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
             let total = self.progress.errors.max(self.failed_paths.len() as u64);
-            lines.push(format!("Scan-Fehler: {total} gesamt, {} Pfade im Protokoll", self.failed_paths.len()));
+            lines.push(format!(
+                "Scan-Fehler: {total} gesamt, {} Pfade im Protokoll",
+                self.failed_paths.len()
+            ));
             for (path, message) in &self.failed_paths {
                 lines.push(String::new());
                 lines.push(format!("Pfad: {path}"));
@@ -31,19 +43,33 @@ impl App {
                 lines.push(format!("Weitere Fehler ohne gespeicherten Pfad: {omitted}"));
             }
         }
-        if lines.is_empty() { return String::new(); }
-        let scheme = self.remote.as_ref().map(|remote| remote.backend.scheme()).unwrap_or(Scheme::Local);
+        if lines.is_empty() {
+            return String::new();
+        }
+        let scheme = self
+            .remote
+            .as_ref()
+            .map(|remote| remote.backend.scheme())
+            .unwrap_or(Scheme::Local);
         let source = match scheme {
             Scheme::Local => "Dateisystem",
             Scheme::Sftp => "SFTP / SSH",
             Scheme::Ftp => "FTP / FTPS",
             Scheme::Webdav => "WebDAV",
+            Scheme::Smb => "SMB",
             Scheme::GDrive => "Google Drive",
             Scheme::Peer => "Gerätefreigabe",
         };
-        let root = if self.root_path.is_empty() { "Keine aktive Scan-Wurzel" } else { &self.root_path };
-        format!("Smart Explorer {}\r\nScan-Quelle: {source}\r\nScan-Wurzel: {root}\r\n\r\n{}",
-            env!("CARGO_PKG_VERSION"), lines.join("\r\n"))
+        let root = if self.root_path.is_empty() {
+            "Keine aktive Scan-Wurzel"
+        } else {
+            &self.root_path
+        };
+        format!(
+            "Smart Explorer {}\r\nScan-Quelle: {source}\r\nScan-Wurzel: {root}\r\n\r\n{}",
+            env!("CARGO_PKG_VERSION"),
+            lines.join("\r\n")
+        )
     }
 }
 

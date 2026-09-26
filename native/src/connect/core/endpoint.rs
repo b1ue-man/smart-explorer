@@ -26,7 +26,7 @@ pub(super) fn enc(s: &str) -> String {
     out
 }
 
-/// `proto://user@host:port` for URL protocols (sftp/ftp/ftps/webdav); `None` for
+/// `proto://user@host:port` for URL protocols (sftp/ftp/ftps/webdav/smb); `None` for
 /// a local share. The stable per-connection prefix used to key favourites/prefs.
 pub(super) fn ep_prefix(form: &crate::connect::ConnectForm, port: u16) -> Option<String> {
     if form.protocol.is_url() {
@@ -51,7 +51,7 @@ pub fn saved_and_path(url: &str) -> Option<(SavedConnection, String)> {
 }
 
 /// Is this endpoint a remote URL (`sftp://...`, `ftp://...`, `ftps://...`,
-/// `webdav://...`) rather than a local/UNC path? Used by the sync runner and the
+/// `webdav://...`, `smb://...`) rather than a local/UNC path? Used by the sync runner and the
 /// in-app picker to decide whether a saved connection must be re-opened.
 pub fn is_remote_url(s: &str) -> bool {
     let s = s.trim_start().to_ascii_lowercase();
@@ -60,6 +60,7 @@ pub fn is_remote_url(s: &str) -> bool {
         "ftp://",
         "ftps://",
         "webdav://",
+        "smb://",
         "gdrive://",
         "share://",
     ]
@@ -79,7 +80,9 @@ pub(crate) fn parse_remote_url(s: &str) -> Option<(Protocol, String, String, u16
     let s = s.trim_start();
     let (scheme, rest) = s.split_once("://")?;
     let proto = Protocol::parse(&scheme.to_ascii_lowercase())?;
-    if !proto.is_url() { return None; }
+    if !proto.is_url() {
+        return None;
+    }
     // rest = user@host:port/path  (path optional)
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], rest[i..].to_string()),

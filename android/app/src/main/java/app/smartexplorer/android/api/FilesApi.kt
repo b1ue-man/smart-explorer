@@ -47,7 +47,7 @@ data class Listing(
     val title: String = "",
     val crumbs: List<Crumb> = emptyList(),
     val parent: String? = null,
-    /** `local|sftp|ftp|ftps|webdav|gdrive|share|zip|trash` */
+    /** `local|sftp|ftp|ftps|webdav|smb|gdrive|share|zip|trash` */
     val backend: String = "local",
     val readOnly: Boolean = false,
     val canTrash: Boolean = false,

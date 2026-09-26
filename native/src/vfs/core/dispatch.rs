@@ -5,8 +5,9 @@ use super::{BackendHandle, LocalBackend};
 
 /// Build the backend for a root string. Remote schemes are recognized by URL
 /// prefix; everything else (drive paths, `\\server\share` UNC, mapped drives)
-/// is local. The SFTP/FTP arms are filled in by their respective steps so that
-/// adding a protocol never touches the callers.
+/// is local. The SFTP/FTP/SMB arms are filled in by their respective steps so
+/// that adding a protocol never touches the callers. An `smb://` root needs its
+/// password in the URL; saved connections open through `connect`.
 pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
     let r = root.trim();
     let lower = r.to_ascii_lowercase();
@@ -14,6 +15,8 @@ pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
         Ok(Arc::new(crate::sftp::backend_from_url(r)?))
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         Ok(Arc::new(crate::ftp::backend_from_url(r)?))
+    } else if lower.starts_with("smb://") {
+        Ok(Arc::new(crate::smb::backend_from_url(r)?))
     } else {
         Ok(Arc::new(LocalBackend::new(r)))
     }
@@ -24,5 +27,8 @@ pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
 /// roots without constructing a backend.
 pub fn is_remote_root(root: &str) -> bool {
     let lower = root.trim().to_ascii_lowercase();
-    lower.starts_with("sftp://") || lower.starts_with("ftp://") || lower.starts_with("ftps://")
+    lower.starts_with("sftp://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("ftps://")
+        || lower.starts_with("smb://")
 }

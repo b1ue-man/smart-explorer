@@ -4,6 +4,8 @@ pub enum Protocol {
     Ftp,
     Ftps,
     Webdav,
+    /// SMB 2/3; the root starts with the share (`/<share>/<path>`).
+    Smb,
     Share,
 }
 
@@ -14,6 +16,7 @@ impl Protocol {
             Protocol::Ftp => "ftp",
             Protocol::Ftps => "ftps",
             Protocol::Webdav => "webdav",
+            Protocol::Smb => "smb",
             Protocol::Share => "share",
         }
     }
@@ -24,6 +27,7 @@ impl Protocol {
             "ftp" => Some(Protocol::Ftp),
             "ftps" => Some(Protocol::Ftps),
             "webdav" => Some(Protocol::Webdav),
+            "smb" => Some(Protocol::Smb),
             "share" => Some(Protocol::Share),
             _ => None,
         }
@@ -34,6 +38,7 @@ impl Protocol {
             Protocol::Sftp => 22,
             Protocol::Ftp | Protocol::Ftps => 21,
             Protocol::Webdav => 443,
+            Protocol::Smb => 445,
             Protocol::Share => 0,
         }
     }
@@ -56,7 +61,8 @@ pub struct SavedConnection {
     pub port: u16,
     pub user: String,
     pub auth: AuthKind,
-    /// Remote start path (sftp/ftp) or the `\\server\share…` UNC (share).
+    /// Remote start path (sftp/ftp; smb: `/<share>/<path>`) or the
+    /// `\\server\share…` UNC (share).
     pub root: String,
     pub label: String,
     /// Opt-in: deploy + use the SSH remote agent for this connection (#24).

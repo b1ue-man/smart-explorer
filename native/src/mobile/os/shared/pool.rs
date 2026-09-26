@@ -103,7 +103,7 @@ impl BackendPool {
             LocKind::Trash => {
                 return Err(ApiError::unsupported("Der Papierkorb ist kein Dateiort"))
             }
-            LocKind::Sftp | LocKind::Ftp | LocKind::Ftps | LocKind::Webdav => {
+            LocKind::Sftp | LocKind::Ftp | LocKind::Ftps | LocKind::Webdav | LocKind::Smb => {
                 let (connection, path) =
                     crate::connect::saved_and_path(&location).ok_or_else(|| {
                         ApiError::not_found(
@@ -147,7 +147,7 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
     let (backend, path) = match plan {
         Plan::Saved(connection, path) => {
             let (backend, _) =
-                crate::connect::open_saved_at(&connection, &path).map_err(ApiError::connection)?;
+                crate::connect::open_saved_at(&connection, &path).map_err(connect_error)?;
             (backend, path)
         }
         Plan::GDrive(path) => {
@@ -172,6 +172,16 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
         Arc::new(CachingBackend::new(backend))
     };
     Ok((backend, path))
+}
+
+/// A failed connect: a missing SMB share is `not_found` (named in the
+/// message), sign-in failures `auth`, everything else `network`.
+pub(crate) fn connect_error(message: String) -> ApiError {
+    if crate::smb::names_missing_share(&message) {
+        ApiError::not_found(message)
+    } else {
+        ApiError::connection(message)
+    }
 }
 
 /// Closes the least recently used archives until a new one fits below

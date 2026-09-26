@@ -184,7 +184,7 @@ fn android_task_locations_parse_into_connection_and_path() {
 
     assert!(Loc::parse("/a/../b").is_err());
     assert!(Loc::parse("relative/path").is_err());
-    assert!(Loc::parse("smb://server/share").is_err());
+    assert!(Loc::parse("nfs://server/share").is_err());
     assert!(Loc::parse("   ").is_err());
 }
 
@@ -363,4 +363,42 @@ fn android_task_scan_tree_folds_collapsed_folders_and_windows() {
         .map(|&(index, _)| entries[index].name.as_ref())
         .collect();
     assert_eq!(names, vec!["b", "d.jpg"], "a match keeps its folder row");
+}
+
+#[test]
+fn android_task_smb_locations_parse_with_the_share_as_first_segment() {
+    let smb = Loc::parse("smb://FIRMA\\anna@nas:1445/daten/Bericht ").expect("smb");
+    assert_eq!(smb.kind, LocKind::Smb);
+    assert_eq!(smb.kind.as_str(), "smb");
+    assert_eq!(smb.prefix, "smb://FIRMA\\anna@nas:1445");
+    assert_eq!(smb.path, "/daten/Bericht ");
+    assert_eq!(
+        smb.parent().as_deref(),
+        Some("smb://FIRMA\\anna@nas:1445/daten")
+    );
+    assert_eq!(
+        super::crumbs::root_label(&smb),
+        "FIRMA\\anna@nas:1445".to_string()
+    );
+    let root = Loc::parse("smb://anna@nas:445").expect("server level");
+    assert_eq!((root.kind, root.path.as_str()), (LocKind::Smb, "/"));
+    assert!(!is_app_internal("smb://anna@nas:445/daten"));
+}
+
+#[test]
+fn android_task_smb_connect_failures_keep_their_protocol_kinds() {
+    use super::pool::connect_error;
+    let missing = connect_error("SMB-Freigabe „gibt-es-nicht“ nicht gefunden".to_string());
+    assert_eq!(missing.kind, "not_found");
+    assert!(missing.message.contains("gibt-es-nicht"));
+    let refused = connect_error(
+        "SMB-Anmeldung abgelehnt: Benutzer, Passwort oder Domäne falsch (x)".to_string(),
+    );
+    assert_eq!(refused.kind, "auth");
+    let smb1 = connect_error(
+        "Server spricht nur SMB1 oder kein unterstütztes SMB2/3 (Disconnected)".to_string(),
+    );
+    assert_eq!(smb1.kind, "network");
+    let unreachable = connect_error("SMB-Server nas:445 nicht erreichbar (x)".to_string());
+    assert_eq!(unreachable.kind, "network");
 }
