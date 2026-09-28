@@ -112,15 +112,21 @@ impl ShareIrohNode {
             Err(_) => return DirectReciprocalTransportResult::Transient,
         };
         let store = self.direct_repair_store.clone();
-        match self.block_on(tokio::time::timeout(
-            timeout,
-            super::direct_reciprocal_transport::run_outgoing(
-                connection,
-                authorized,
-                store,
-                runtime_guard,
-            ),
-        )) {
+        // The coordinator is an ordinary OS thread. Construct the timer only
+        // after entering the node runtime, otherwise Tokio panics before the
+        // attempt can return and release the coordinator's running state.
+        match self.block_on(async {
+            tokio::time::timeout(
+                timeout,
+                super::direct_reciprocal_transport::run_outgoing(
+                    connection,
+                    authorized,
+                    store,
+                    runtime_guard,
+                ),
+            )
+            .await
+        }) {
             Ok(result) => result,
             Err(_) => DirectReciprocalTransportResult::Transient,
         }
@@ -239,14 +245,17 @@ impl ShareIrohNode {
             if let Some(gate) = gates.get(key).and_then(std::sync::Weak::upgrade) {
                 gate
             } else {
-                let gate = Arc::new(Mutex::new(()));
+                let gate = Arc::new(tokio::sync::Mutex::new(()));
                 gates.insert(key.to_string(), Arc::downgrade(&gate));
                 gate
             }
         };
-        let _singleflight = connect_gate
-            .lock()
-            .map_err(|_| eio("Share-Verbindungsaufbau ist gesperrt"))?;
+        let timeout = io_deadline::remaining(deadline, "peer connection wait")?;
+        let _singleflight = self.block_on(io_deadline::run_for(
+            "peer connection wait",
+            timeout,
+            async { Ok(connect_gate.lock().await) },
+        ))?;
         if let Some(connection) = self.healthy_cached_session(key)? {
             return Ok(connection);
         }

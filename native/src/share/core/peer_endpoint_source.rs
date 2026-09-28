@@ -109,7 +109,13 @@ fn current_presence(
                     "Direktgeraet-Pins wurden waehrend des Mounts geaendert",
                 ));
             }
-            let presence = contact.presence.clone().ok_or_else(|| {
+            // Use the same fresh routing evidence as the initial open. A live
+            // handle must not keep dialing its original, now expired LAN
+            // announcement when the signaling server is unavailable.
+            let presence = super::lan_presence_match::effective_presence(
+                contact,
+                super::core::now_secs(),
+            ).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, "Direktgeraet ist offline")
             })?;
             if (!contact.expected_fingerprint.is_empty()
