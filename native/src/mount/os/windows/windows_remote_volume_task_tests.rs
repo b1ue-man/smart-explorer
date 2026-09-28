@@ -1,5 +1,7 @@
 use super::*;
 use super::super::callback_reporter::CallbackReporter;
+use super::super::runtime_selection::RuntimeSelection;
+use crate::mount::MountRuntimePreference;
 use crate::share::CopyPastePeerFixture;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -7,8 +9,6 @@ use std::sync::mpsc;
 struct MountedPeer {
     filesystem: Option<DokanyFileSystem>,
     storage: CallbackStorage,
-    _lease: CacheLease,
-    _temporary: tempfile::TempDir,
 }
 
 impl Drop for MountedPeer {
@@ -51,9 +51,13 @@ fn exercise_volume() -> io::Result<()> {
     engine.prepare_host_remote()?;
     engine.preload_metadata()?;
     eprintln!("[remote mount] metadata loaded");
-    let runtime = DokanyRuntime::preflight_private(&spool)
+    let selection = RuntimeSelection::select(&spool, &id, MountRuntimePreference::Auto)
         .map_err(|error| io::Error::other(format!("Dokany preflight: {error:?}")))?;
+    let runtime = &selection.runtime;
     assert!(runtime.is_private());
+    let marker = spool.join(id.as_str()).join(format!("private-{}.attempt",
+        super::super::private_payload::BUNDLED_DOKANY_SHA256));
+    assert!(marker.exists(), "private runtime recovery marker missing");
     eprintln!("[remote mount] private runtime ready");
     let candidates = drive_candidates(DriveSelection::Automatic).map_err(io::Error::other)?;
     let initial = *candidates.first().ok_or_else(|| io::Error::other("no unused drive letter"))?;
@@ -65,7 +69,7 @@ fn exercise_volume() -> io::Result<()> {
     eprintln!("[remote mount] create filesystem");
     let filesystem = start_on_available_drive(&runtime, &mut storage, &candidates)
         .map_err(|error| io::Error::other(format!("Dokany start: {error:?}")))?;
-    let volume = MountedPeer { filesystem: Some(filesystem), storage, _lease: lease, _temporary: temporary };
+    let volume = MountedPeer { filesystem: Some(filesystem), storage };
     eprintln!("[remote mount] filesystem created");
     let drive = volume.storage.context.selected_drive()?;
     assert!(matches!(statuses.recv_timeout(Duration::from_secs(10)), Ok(MountStatus::Mounted { drive: mounted }) if mounted == drive));
@@ -86,8 +90,12 @@ fn exercise_volume() -> io::Result<()> {
     drop(volume);
     assert!(!root.exists(), "mounted drive did not retire");
     eprintln!("[remote mount] drive retired");
-    drop(runtime);
+    assert!(marker.exists(), "recovery marker removed before runtime teardown");
+    selection.complete();
+    assert!(!marker.exists(), "controlled teardown did not clear the owned marker");
     eprintln!("[remote mount] runtime retired");
+    drop(lease);
+    temporary.close()?;
     drop(peer);
     eprintln!("[remote mount] peer retired");
     Ok(())
