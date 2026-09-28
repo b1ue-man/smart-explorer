@@ -153,7 +153,9 @@ impl FlowPermit {
 
     pub fn progress(&self, bytes: u64) {
         if bytes > 0 {
-            self.flow.lock().control.progress(bytes);
+            let mut state = self.flow.lock();
+            self.flow.tick(&mut state);
+            state.control.progress(bytes);
         }
     }
 
