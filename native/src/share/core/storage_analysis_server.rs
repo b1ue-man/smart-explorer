@@ -96,7 +96,7 @@ fn run_worker(root: String, access: FsAccess, progress: Progress, updates: &mpsc
     let scan_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     progress.check_cancel()?;
     progress.set_phase(ScanPhase::Assembling, &root);
-    analysis_transfer::send_outcome(&mut outcome, &progress, scan_ms,
+    analysis_transfer::send_outcome(&mut outcome, &progress, Some(scan_ms),
         |message| updates.blocking_send(Ok(Update::Control(message))).map_err(|_| canceled()),
         |bytes| updates.blocking_send(Ok(Update::Data(bytes))).map_err(|_| canceled()),
     )

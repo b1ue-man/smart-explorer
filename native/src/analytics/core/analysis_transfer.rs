@@ -12,14 +12,16 @@ pub(crate) enum AnalysisMessage {
 }
 
 pub(crate) fn send_outcome(
-    outcome: &mut ScanOutcome, progress: &Progress, scan_ms: u64,
+    outcome: &mut ScanOutcome, progress: &Progress, host_scan_ms: Option<u64>,
     mut control: impl FnMut(AnalysisMessage) -> io::Result<()>,
     mut data: impl FnMut(Vec<u8>) -> io::Result<()>,
 ) -> io::Result<()> {
     progress.check_cancel()?;
     let shape = tree_transfer::shape(outcome.tree.as_ref(), progress)?;
     let mut snapshot = progress.snapshot();
-    if snapshot.host_scan_ms.is_none() { snapshot.host_scan_ms = Some(scan_ms); }
+    // Only the exporting worker measures the complete host scan. Bridges pass
+    // None and preserve that evidence, including an explicitly unknown value.
+    if let Some(scan_ms) = host_scan_ms { snapshot.host_scan_ms = Some(scan_ms); }
     let report = AnalysisReport::take(outcome, snapshot, shape);
     report.validate()?;
     control(AnalysisMessage::Ready { report })?;

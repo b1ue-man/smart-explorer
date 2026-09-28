@@ -10,7 +10,7 @@ fn encoded(mut outcome: ScanOutcome, files: u64, dirs: u64) -> Vec<Item> {
     progress.dirs.store(dirs, Ordering::Relaxed);
     progress.bytes.store(outcome.tree.as_ref().map_or(0, |node| node.size), Ordering::Relaxed);
     let items = RefCell::new(Vec::new());
-    send_outcome(&mut outcome, &progress, 0,
+    send_outcome(&mut outcome, &progress, Some(0),
         |message| { items.borrow_mut().push(Item::Control(message)); Ok(()) },
         |bytes| { items.borrow_mut().push(Item::Data(bytes)); Ok(()) }).unwrap();
     items.into_inner()
@@ -84,6 +84,18 @@ fn windows_remote_task_analysis_codec_streams_large_and_deep_local_results() {
 
 #[test]
 fn windows_remote_task_analysis_progress_retains_stalls_and_actual_counters() {
+    for (received, measured, expected) in [
+        (None, None, None), (Some(0), None, Some(0)), (Some(12), Some(50), Some(50)),
+    ] {
+        let progress = Progress::default();
+        progress.receive(ScanSnapshot { host_scan_ms: received, ..Default::default() }).unwrap();
+        let mut reported = None;
+        send_outcome(&mut ScanOutcome::canceled(), &progress, measured, |message| {
+            if let AnalysisMessage::Ready { report } = message { reported = Some(report.progress.host_scan_ms); }
+            Ok(())
+        }, |_| Ok(())).unwrap();
+        assert_eq!(reported, Some(expected), "bridges preserve unknown/zero; hosts measure the whole request");
+    }
     let progress = Progress::default();
     let state = ScanSnapshot { files: 128, dirs: 3, bytes: 777, phase: ScanPhase::Scanning,
         current: "/A/waiting".into(), unchanged_ms: 5000, source_age_ms: 4000,

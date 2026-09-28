@@ -101,7 +101,6 @@ pub(super) fn serve(
             thread::park_timeout(Duration::from_millis(250));
         }
     })?;
-    let started = Instant::now();
     let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let backend = open()?;
         Ok::<_, io::Error>(crate::analytics::scan_remote(&*backend, &root, &progress))
@@ -113,7 +112,7 @@ pub(super) fn serve(
         emitter_result?;
         progress.check_cancel()?;
         progress.set_phase(ScanPhase::Assembling, &root);
-        analysis_transfer::send_outcome(&mut outcome, &progress, started.elapsed().as_millis() as u64,
+        analysis_transfer::send_outcome(&mut outcome, &progress, None,
             |message| send_control(&sink, message), |bytes| send_frame(&sink, DATA, &bytes))
     });
     if let Err(error) = &result { let _ = send_frame(&sink, ERROR, error.to_string().as_bytes()); }
