@@ -25,7 +25,7 @@ impl App {
             .map(StorageScanSource::root)
             .unwrap_or("")
             .to_string();
-        let drive = self.drive_usage(&root_path);
+        let drive = source.as_ref().and_then(|source| self.drive_usage(source));
         let drives = self.drive_info.clone();
         let root_label = source
             .as_ref()

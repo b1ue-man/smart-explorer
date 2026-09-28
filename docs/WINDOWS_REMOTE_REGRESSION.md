@@ -142,6 +142,13 @@ measured counters for canceled and disconnected workers. Cover these transitions
 through the same remote suite using the isolated GUI fixture. Starting a new
 scan may still detach the canceled predecessor; it must never reuse its results.
 
+M9 source-identity gap review: the capacity bar looked up the remote root's first
+two characters in the client's local drive table. A remote `C:/...` could thus
+display the client's `C:` capacity. Make that lookup accept `StorageScanSource`
+and only consult local drive data for a local source. Keep existing local and
+mapped-drive readings; omit unreported remote capacity. Extend the same GUI
+acceptance fixture with equal local/remote paths and an unreported UNC source.
+
 Remote evidence: [candidate da354c4](https://github.com/b1ue-man/smart-explorer/actions/runs/36423440788)
 completed real Windows drive access and the full GUI/worker/QUIC analysis path.
 For 5,289 files the measured local/host/GUI durations were 43/12/18 ms, with no

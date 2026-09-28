@@ -396,8 +396,11 @@ impl App {
         }
     }
 
-    /// Drive used/total for the drive that `root` lives on.
-    pub(in crate::app) fn drive_usage(&self, root: &str) -> Option<(u64, u64)> {
+    /// Client drive measurements only belong to local scan sources.
+    pub(in crate::app) fn drive_usage(&self, source: &StorageScanSource) -> Option<(u64, u64)> {
+        let StorageScanSource::Local { root } = source else {
+            return None;
+        };
         let dl = root.get(0..2)?.to_ascii_uppercase();
         for (r, free, total) in &self.drive_info {
             if *total > 0 && r.to_ascii_uppercase().starts_with(&dl) {
