@@ -5,6 +5,16 @@ use std::{sync::atomic::Ordering, time::Instant};
 #[test]
 fn windows_remote_task_analysis_ui_keeps_evidence_until_worker_completion() {
     let mut app = App::new_for_copy_task();
+    app.drive_info = vec![("C:\\".into(), 600, 1000), ("Z:\\".into(), 80, 100)];
+    assert_eq!(app.drive_usage(&StorageScanSource::local("C:/task")), Some((400, 1000)));
+    assert_eq!(app.drive_usage(&StorageScanSource::local("Z:/mapped")), Some((20, 100)));
+    assert_eq!(app.drive_usage(&StorageScanSource::local("//server/share")), None);
+    // No I/O: the source identity, not the spelling of its path, owns capacity.
+    let remote = StorageScanSource::remote(
+        std::sync::Arc::new(crate::vfs::LocalBackend::new("C:/")),
+        "C:/task", "Other computer",
+    );
+    assert_eq!(app.drive_usage(&remote), None);
     let install = |app: &mut App| {
         let (send, rx) = crossbeam_channel::bounded(1);
         let progress = Progress::default();
