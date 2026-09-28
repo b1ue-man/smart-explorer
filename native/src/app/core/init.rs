@@ -414,9 +414,7 @@ impl App {
             remote_edits: Vec::new(),
             edit_save_rx: Vec::new(),
             last_edit_poll: Instant::now(),
-            transfers: super::transfer_jobs::TransferLane::new(
-                super::transfer_jobs::MAX_ACTIVE_TRANSFERS,
-            ),
+            transfers: super::transfer_jobs::TransferLane::new(),
             remote_op_rx: None,
             agent_activate_rx: None,
             agent_activate_for: None,

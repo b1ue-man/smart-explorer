@@ -1,9 +1,9 @@
-use super::transfer_jobs::{launch_transfer, FinishedTransfer};
+use super::transfer_jobs::FinishedTransfer;
 use super::*;
 
 impl App {
-    /// Collect finished transfers, report each one, start queued requests
-    /// into the freed slots and refresh the remote view once.
+    /// Collect finished transfers, report each one and refresh the remote
+    /// view once.
     pub(in crate::app) fn drain_transfers(&mut self) {
         let finished = self.transfers.poll();
         if finished.is_empty() {
@@ -11,9 +11,6 @@ impl App {
         }
         for done in finished {
             self.report_transfer(done);
-        }
-        if let Err(error) = self.transfers.fill(&mut launch_transfer) {
-            self.error_msg = Some(error);
         }
         if self.remote.is_some() && !self.root_path.is_empty() {
             self.rescan();

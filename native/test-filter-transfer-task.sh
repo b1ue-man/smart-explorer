@@ -123,9 +123,9 @@ native_tests=(
     recursive_filter_task_numbered_names_keep_their_extension
     recursive_filter_task_safe_sibling_rename_never_replaces_an_existing_entry
     recursive_filter_task_plain_names_never_take_the_rename_detour
-    # M9 concurrent transfer lane
-    recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest
-    recursive_filter_task_transfer_lane_reports_lost_workers_and_shuts_down
+    # M9 (concurrent transfer lane with a fixed capacity) was superseded by
+    # the uncapped lane of the transfer-engine batch; its tests moved to
+    # native/test-transfer-engine-task.sh.
     # M10 typed agent-protocol errors (Room/Direct uploads through the daemon)
     recursive_filter_task_agent_errors_recover_not_found_and_exists_kinds
     recursive_filter_task_unrecognized_agent_errors_stay_other_with_their_text

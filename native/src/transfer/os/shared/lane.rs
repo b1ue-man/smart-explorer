@@ -1,20 +1,20 @@
-//! Concurrent remote transfers. Every upload, download or remote-to-remote
-//! copy runs in its own worker with its own progress and cancellation. Up to
-//! `MAX_ACTIVE_TRANSFERS` run at once; further requests queue in order and
-//! start as soon as a slot frees. Transfers to one or several peers (Direct,
-//! Room, SFTP, …) therefore share the transport bandwidth through concurrent
-//! streams instead of waiting behind a single slot.
+//! Concurrent transfers. Every transfer runs in its own worker with its own
+//! progress and cancellation and starts at once: there is no fixed number of
+//! transfers. Transfers on one connection share it through that connection's
+//! flow (fair turns, adaptive concurrency), transfers on different
+//! connections do not compete at all.
 use super::job::TransferJob;
-use super::types::{TransferKind, TransferMsg, TransferProgress};
+use super::types::{ResolvedRoot, TransferIssue, TransferKind, TransferMsg, TransferProgress};
 use super::{copy_remote_paths_progress, download_paths_progress};
 use super::{upload_pairs_progress, upload_paths_progress};
 use crate::types::FilterDef;
 use crossbeam_channel::{unbounded, Receiver};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Workers running at the same time; more requests queue behind them.
+/// Task slots of the Android facade (uploads, extraction, transfers). Block H
+/// of the transfer-engine plan replaces them with the engine's flows; the
+/// desktop lane has no such limit.
 pub const MAX_ACTIVE_TRANSFERS: usize = 6;
 
 /// One transfer the user asked for, before a worker exists for it.
@@ -162,6 +162,8 @@ pub struct ActiveTransfer {
     /// Joined once the worker reported a terminal message; detached on exit
     /// while a backend call still blocks it.
     pub worker: Option<std::thread::JoinHandle<()>>,
+    /// The job an engine transfer runs, kept for "transfer missing files".
+    pub job: Option<Box<TransferJob>>,
 }
 
 impl ActiveTransfer {
@@ -174,70 +176,42 @@ impl ActiveTransfer {
     }
 }
 
-/// How a submitted request was admitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Admission {
-    Started,
-    /// Waiting behind running transfers; 1-based queue position.
-    Queued(usize),
-}
-
 /// A transfer whose worker reached a terminal state.
 pub struct FinishedTransfer {
     pub cancel_requested: bool,
     /// `None` when the worker ended without a terminal message.
     pub outcome: Option<(TransferProgress, Vec<String>, bool)>,
+    /// The first issues with their paths (the log file has all of them).
+    pub issues: Vec<TransferIssue>,
+    /// Destination roots the transfer resolved, for a resumed run of `job`.
+    pub roots: Vec<ResolvedRoot>,
+    pub job: Option<Box<TransferJob>>,
 }
 
 pub type LaunchTransfer<'a> = dyn FnMut(TransferRequest) -> Result<ActiveTransfer, String> + 'a;
 
-/// Running transfers plus the ordered queue behind them.
+/// The running transfers.
+#[derive(Default)]
 pub struct TransferLane {
     pub active: Vec<ActiveTransfer>,
-    queued: VecDeque<TransferRequest>,
-    capacity: usize,
 }
 
 impl TransferLane {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            active: Vec::new(),
-            queued: VecDeque::new(),
-            capacity: capacity.max(1),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn is_idle(&self) -> bool {
-        self.active.is_empty() && self.queued.is_empty()
+        self.active.is_empty()
     }
 
-    pub fn queued_len(&self) -> usize {
-        self.queued.len()
-    }
-
-    /// Start `request` now when a slot is free, otherwise queue it.
+    /// Starts `request` at once.
     pub fn submit(
         &mut self,
         request: TransferRequest,
         launch: &mut LaunchTransfer<'_>,
-    ) -> Result<Admission, String> {
-        if self.active.len() >= self.capacity {
-            self.queued.push_back(request);
-            return Ok(Admission::Queued(self.queued.len()));
-        }
+    ) -> Result<(), String> {
         self.active.push(launch(request)?);
-        Ok(Admission::Started)
-    }
-
-    /// Start queued requests while slots are free. A launch failure drops
-    /// only that request and is reported; later requests stay queued.
-    pub fn fill(&mut self, launch: &mut LaunchTransfer<'_>) -> Result<(), String> {
-        while self.active.len() < self.capacity {
-            let Some(request) = self.queued.pop_front() else {
-                break;
-            };
-            self.active.push(launch(request)?);
-        }
         Ok(())
     }
 
@@ -248,6 +222,8 @@ impl TransferLane {
         let mut index = 0;
         while index < self.active.len() {
             let mut terminal: Option<Option<(TransferProgress, Vec<String>, bool)>> = None;
+            let mut issues = Vec::new();
+            let mut roots = Vec::new();
             for _ in 0..16 {
                 match self.active[index].rx.try_recv() {
                     Ok(TransferMsg::Progress(progress)) => {
@@ -257,9 +233,12 @@ impl TransferLane {
                         progress,
                         errors,
                         canceled,
-                        ..
+                        issues: reported,
+                        roots: resolved,
                     }) => {
                         terminal = Some(Some((progress, errors, canceled)));
+                        issues = reported;
+                        roots = resolved;
                         break;
                     }
                     Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -278,6 +257,9 @@ impl TransferLane {
                     finished.push(FinishedTransfer {
                         cancel_requested: transfer.canceling(),
                         outcome,
+                        issues,
+                        roots,
+                        job: transfer.job.take(),
                     });
                 }
                 None => index += 1,
@@ -292,9 +274,8 @@ impl TransferLane {
         }
     }
 
-    /// Cancel every running worker and drop the queue.
+    /// Cancel every running worker.
     pub fn cancel_all(&mut self) {
-        self.queued.clear();
         for transfer in &self.active {
             transfer.request_cancel();
         }
@@ -326,6 +307,10 @@ impl TransferLane {
 /// Spawn the worker for `request`.
 pub fn launch_transfer(request: TransferRequest) -> Result<ActiveTransfer, String> {
     let (tx, rx) = unbounded();
+    let job = match &request {
+        TransferRequest::Job(job) => Some(job.clone()),
+        _ => None,
+    };
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
     let progress = TransferProgress::new(
@@ -343,6 +328,7 @@ pub fn launch_transfer(request: TransferRequest) -> Result<ActiveTransfer, Strin
         progress,
         cancel,
         worker: Some(worker),
+        job,
     })
 }
 

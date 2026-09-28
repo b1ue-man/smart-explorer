@@ -96,7 +96,7 @@ pub use flow::{
 pub use flow_control::OpOutcome;
 pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, TransferJob};
 pub use lane::{
-    launch_transfer, ActiveTransfer, Admission, FinishedTransfer, LaunchTransfer, TransferLane,
+    launch_transfer, ActiveTransfer, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest, MAX_ACTIVE_TRANSFERS,
 };
 pub use local_stage::download_to_id;

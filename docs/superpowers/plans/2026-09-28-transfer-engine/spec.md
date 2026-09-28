@@ -65,7 +65,9 @@ Befunde, die diese Spec begründen: `docs/lesungen/2026-09-28-*.md` (sechs Lesun
     Zufallsanteil.
   - SFTP: vorausgelesene Blöcke und Kanal-Pool; FTP: Verbindungs-Pool; WebDAV: gepoolte Mutationen,
     Streaming-PUT ohne Temp-Puffer, 429/503-Behandlung; SMB: mehrere ausstehende Blöcke.
-  - Lokal: Kernel-Kopie (`CopyFileExW`/`copy_file_range`), parallel je Volume geregelt, neue Kopien
+  - Lokal: Kernel-Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen den
+    Handles, Windows `CopyFile2` mit „nicht ersetzen“ auf einen frischen Namen plus
+    Identitätsprüfung), parallel je Volume geregelt, neue Kopien
     ohne `fsync` je Datei (Verschieben/Überschreiben unverändert sicher), Verschieben auf demselben
     Volume als eine Umbenennung.
   - Sync: Einweg-Spiegeln kopiert parallel zum Scannen; Zwei-Wege/Jobs mit derselben Regelung.
@@ -99,8 +101,10 @@ Befunde, die diese Spec begründen: `docs/lesungen/2026-09-28-*.md` (sechs Lesun
   startet die Übertragung“. Kein Warten, keine zweite Einfüge-Aufforderung mehr.
 - **Einfügen:** wie bisher (Strg+V, Kontextmenü „Einfügen“, im Remote-Hintergrundmenü). Die
   Übertragung erscheint sofort in der Übertragungsliste; Meldung „⇄ Übertragung gestartet: N
-  Element(e) → <Ziel>“. Wartet sie hinter anderen (mehr als sechs gleichzeitig), steht dort
-  „wartet (Position n)“.
+  Element(e) → <Ziel>“. Es gibt keine feste Obergrenze gleichzeitiger Übertragungen: jede startet
+  sofort, Übertragungen auf derselben Verbindung teilen sie abwechselnd; ist die Verbindung
+  ausgelastet, steht „wartet auf <Verbindung>“. Einfügen eines Ordners in sich selbst oder einen
+  seiner Unterordner wird für jede Kombination abgelehnt („Das Ziel liegt in einer der Quellen …“).
 - **Ziehen/Ablegen** zwischen Tabs/Bereichen und aus dem Betriebssystem: wie bisher, gleicher Start.
   Aus der App in den Explorer ziehen: Remote-Einträge ohne Warten (Explorer kopiert im Hintergrund).
 - **Explorer-Einfügen (Windows):** Nach Strg+C im Remote-Tab im Explorer Strg+V → Explorer zeigt
@@ -116,6 +120,24 @@ Befunde, die diese Spec begründen: `docs/lesungen/2026-09-28-*.md` (sechs Lesun
   Details in Übertragungen“; Fehler zusätzlich im Fehler-Protokoll.
 - **Abbrechen:** „Abbrechen“ in Liste oder Chip; Zeile zeigt „wird abgebrochen…“ bis alle Worker
   stehen.
+- **Fehlende übertragen:** Nach Abbruch oder Fehlern bietet die Zeile „Fehlende übertragen“: gleiche
+  Auswahl in dieselben Zielordner (keine neuen „(2)“-Kopien), vorhandene Dateien gleicher Größe
+  werden übersprungen, nie ersetzt. Große Downloads setzen nach einem Verbindungsabbruch innerhalb
+  der Datei fort, wo das Protokoll es zulässt.
+- **Fehlerprotokoll:** Jede Übertragung schreibt alle Fehler (Pfad, Meldung) in eine Protokolldatei;
+  „Fehler anzeigen“ zeigt die Liste, „Alle Fehler kopieren“ kopiert sie vollständig,
+  „Protokoll öffnen“ öffnet die Datei.
+- **Für andere Programme bereitstellen (Windows):** Strg+C im Remote-Tab legt virtuelle Dateien ab
+  (Explorer holt sie bei Bedarf). Programme, die nur echte Dateien verstehen (Browser-Upload,
+  Messenger), bekommen sie über den Kontextmenü-Befehl „Für andere Programme bereitstellen“: Download
+  mit Fortschritt in der Übertragungsliste, danach liegen die Dateien als normale Datei-Zwischenablage
+  bereit (bisheriges Verhalten, jetzt ausdrücklich und ohne Sperre der App).
+- **Hinweise:** Kennt eine Verbindung eine feste Grenze, zeigt die Zeile sie an (z. B. „Google Drive
+  nimmt höchstens etwa 3 neue Dateien pro Sekunde an“). „Herunterladen nach…“ mit Remote-Ziel zeigt
+  zuerst „verbindet…“ und endet mit klarer Meldung, wenn das Ziel nicht erreichbar ist.
+- **Explorer-Grenzfälle:** Kann Windows die Dateiliste nicht annehmen (Speicher), meldet die App
+  „Auswahl zu groß für den Explorer – bitte in Smart Explorer einfügen“ mit Eintrag in der
+  Übertragungsliste. Pfade ab 260 Zeichen werden wie beschrieben gemeldet.
 - **Fehlerfälle:** Ziel nicht beschreibbar/voll/Verbindung weg → Übertragung endet mit Meldung und
   Liste der betroffenen Dateien; Rechteanfrage für geschützte lokale Ordner wie bisher genau einmal
   (Ablehnen stoppt die Übertragung, bis dahin Kopiertes bleibt).
@@ -151,5 +173,12 @@ Befunde, die diese Spec begründen: `docs/lesungen/2026-09-28-*.md` (sechs Lesun
    Operation und ohne globale Sperren (Ursache des langsamen ersten Herunterladens).
 6. Weitere Protokoll-Maßnahmen, weil technisch machbar und zielführend: SFTP mit vorausgelesenen
    Blöcken und Kanal-Pool, FTP mit Verbindungs-Pool, WebDAV mit gepoolten Mutationen und
-   Streaming-PUT, SMB mit mehreren ausstehenden Blöcken, lokale Kernel-Kopie (`CopyFileExW`,
+   Streaming-PUT, SMB mit mehreren ausstehenden Blöcken, lokale Kernel-Kopie (`CopyFile2`,
    `copy_file_range`), größere QUIC-Fenster. Details und Grenzen: `recherche.md` §3.
+7. Nach der Plan-Kritik (2026-09-28) selbst entschieden, weil sie Zuverlässigkeit oder Tempo
+   verbessern, ohne die Bedienung zu verschlechtern: keine feste Obergrenze gleichzeitiger
+   Übertragungen (die Flows teilen fair), „Fehlende übertragen“ und Fortsetzen in der Datei,
+   vollständiges Fehlerprotokoll, Ablehnung von Kopien in sich selbst für alle Kombinationen,
+   „Für andere Programme bereitstellen“ als ausdrücklicher Ersatz des bisherigen Vorab-Downloads,
+   gleichnamige Drive-Dateien werden beide übertragen (die zweite als „Name (2)“), lokale Namen mit
+   „\“ bleiben unter Linux kopierbar.
