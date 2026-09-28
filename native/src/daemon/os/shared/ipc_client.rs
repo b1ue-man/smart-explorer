@@ -56,6 +56,7 @@ pub fn open_share_backend(
                         let read = stream.try_clone().map_err(|error| error.to_string())?;
                         let inner: crate::vfs::BackendHandle = Arc::new(UnavailableBackend {
                             label: label.clone(),
+                            target: target.clone(),
                         });
                         let agent = match crate::agent::AgentBackend::from_streams(
                             Box::new(read),
@@ -368,9 +369,15 @@ fn worker_version_is_current(version: &str) -> bool {
 
 struct UnavailableBackend {
     label: String,
+    target: crate::share::PeerOpenTarget,
 }
 
 impl crate::vfs::Backend for UnavailableBackend {
+    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
+        -> io::Result<Option<crate::analytics::ScanOutcome>> {
+        super::ipc_analysis::scan(self.target.clone(), root, progress).map(Some)
+    }
+
     fn scheme(&self) -> crate::vfs::Scheme {
         crate::vfs::Scheme::Peer
     }

@@ -1,8 +1,4 @@
-//! Share-Server client side. The server is rendezvous-only and untrusted: it
-//! routes signed presence for persistent direct contacts and rooms. File
-//! operations run through persistent Iroh/QUIC sessions. Iroh attempts direct
-//! peer-to-peer paths first and falls back to the configured relay while all
-//! file frames remain end-to-end authenticated by the pinned relation.
+//! Authenticated Direct/Room Share over QUIC; untrusted rendezvous and relay.
 
 #[path = "core/authorization_policy.rs"]
 mod authorization_policy;
@@ -159,6 +155,14 @@ mod exec_types;
 mod framing;
 #[path = "core/fs.rs"]
 mod fs;
+#[path = "core/fs_response.rs"]
+mod fs_response;
+#[path = "core/storage_analysis_server.rs"]
+mod storage_analysis_server;
+#[path = "core/peer_storage_analysis.rs"]
+mod peer_storage_analysis;
+#[path = "os/shared/storage_analysis_host.rs"]
+mod storage_analysis_host;
 #[path = "core/fs_access.rs"]
 mod fs_access;
 #[path = "core/fs_capabilities.rs"]
@@ -277,6 +281,8 @@ pub(crate) mod removal;
 mod removed_direct_peers;
 #[path = "core/room_relation.rs"]
 mod room_relation;
+#[path = "core/server_capabilities.rs"]
+mod server_capabilities;
 #[path = "core/server.rs"]
 mod server;
 #[path = "core/server_transfer.rs"]

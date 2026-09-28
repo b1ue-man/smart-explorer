@@ -151,6 +151,7 @@ impl App {
 
     pub(in crate::app) fn start_analytics_source(&mut self, source: StorageScanSource) {
         self.cancel_analytics_worker();
+        self.analytics_totals = None;
         self.analytics_access.reset_scan();
         if source.root().is_empty() {
             let detail = "Leeres Scan-Ziel".to_string();
@@ -227,6 +228,8 @@ impl App {
         match message {
             Some(Ok(outcome)) => {
                 self.update_analytics_access(outcome.permission_denied);
+                self.analytics_totals = self.analytics_scan.as_ref()
+                    .map(|scan| (scan.progress.snapshot(), scan.started.elapsed().as_secs_f32()));
                 self.analytics_scan = None;
                 self.analytics_state = outcome.status.into();
                 if outcome.tree.is_some()
@@ -415,31 +418,7 @@ fn scan_storage_source(
         }
         StorageScanSource::Remote { backend, root, .. } => {
             backend.invalidate_cache();
-            if !backend.supports_walk_tree() {
-                return crate::analytics::scan_backend(&*backend, &root, progress);
-            }
-            let live = progress.clone();
-            let on_progress = move |files: u64, bytes: u64| -> bool {
-                live.files
-                    .store(files, std::sync::atomic::Ordering::Relaxed);
-                live.bytes
-                    .store(bytes, std::sync::atomic::Ordering::Relaxed);
-                !live.cancel.load(std::sync::atomic::Ordering::Relaxed)
-            };
-            match backend.walk_tree(&root, &on_progress) {
-                Ok(Some(tree)) if !progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
-                    crate::analytics::ScanOutcome::complete(crate::analytics::from_wire(tree))
-                }
-                Ok(Some(_)) => crate::analytics::ScanOutcome::canceled(),
-                Ok(None) if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
-                    crate::analytics::ScanOutcome::canceled()
-                }
-                Ok(None) => crate::analytics::scan_backend(&*backend, &root, progress),
-                Err(_) if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
-                    crate::analytics::ScanOutcome::canceled()
-                }
-                Err(error) => crate::analytics::ScanOutcome::failed(root, error.to_string()),
-            }
+            crate::analytics::scan_remote(&*backend, &root, progress)
         }
     }
 }

@@ -208,6 +208,7 @@ impl App {
             analytics_cells: Vec::new(),
             analytics_cells_rect: egui::Rect::ZERO,
             analytics_counts: None,
+            analytics_totals: None,
             analytics_panel: AnalyticsPanel::Treemap,
             reclaim_scan: None,
             reclaim_source: None,

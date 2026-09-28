@@ -381,6 +381,10 @@ impl Backend for CachingBackend {
     }
     // Forward the agent capability so analytics' one-shot server-side walk works
     // through the cache wrapper (otherwise it fell back to per-dir listing).
+    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
+        -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+        self.inner.scan_storage(root, progress)
+    }
     fn supports_walk_tree(&self) -> bool {
         self.inner.supports_walk_tree()
     }

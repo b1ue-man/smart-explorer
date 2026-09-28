@@ -102,3 +102,7 @@ fn eligible(name: &str) -> bool {
 fn collision() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "peer child names cannot be uniquely projected")
 }
+
+#[cfg(test)]
+#[path = "peer_names_task_tests.rs"]
+mod task_tests;

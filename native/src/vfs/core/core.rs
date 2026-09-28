@@ -379,17 +379,16 @@ pub trait Backend: Send + Sync {
     /// wrapped in `CachingBackend`). Called on an explicit refresh.
     fn invalidate_cache(&self) {}
 
-    /// Does this backend compute a whole-tree size walk server-side (the SSH
-    /// remote agent)? When true, the analytics scan calls `walk_tree` instead of
-    /// the client-side per-dir recursion.
+    /// Optional complete remote analytics outcome, including partial results.
+    fn scan_storage(&self, _root: &str, _progress: &crate::analytics::Progress)
+        -> VfsResult<Option<crate::analytics::ScanOutcome>> { Ok(None) }
+
+    /// Whether a remote agent supports the older tree-only analysis operation.
     fn supports_walk_tree(&self) -> bool {
         false
     }
 
-    /// Walk `root` server-side and return the size tree, or `None` to fall back
-    /// to the client-side walk. `on_progress(files, bytes)` is called as the walk
-    /// streams progress and returns `false` to request cancellation. Only the
-    /// agent backend overrides this; blocking (run it off the UI thread).
+    /// Legacy server-side tree and measured file/byte progress; false cancels.
     fn walk_tree(
         &self,
         _root: &str,

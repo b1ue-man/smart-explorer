@@ -210,6 +210,11 @@ impl Backend for PeerBackend {
         super::fs_error::exists_from_stat(self.stat(path))
     }
 
+    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
+        -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+        super::peer_storage_analysis::scan(self, root, progress)
+    }
+
     fn supports_walk_tree(&self) -> bool {
         true
     }

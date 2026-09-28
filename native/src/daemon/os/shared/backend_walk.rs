@@ -35,6 +35,16 @@ pub(super) fn handle_walk_tree_backend(
     root: &str,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    if backend.supports_walk_tree() {
+        let on_progress = |files, bytes| {
+            !cancel.load(Ordering::Relaxed)
+                && emit(sink, id, &Frame::Progress { done: files, total: bytes }).is_ok()
+        };
+        if let Some(tree) = backend.walk_tree(root, &on_progress)? {
+            return emit(sink, id, &Frame::Tree(tree));
+        }
+        if cancel.load(Ordering::Relaxed) { return Err(canceled("daemon tree walk")); }
+    }
     let files = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));

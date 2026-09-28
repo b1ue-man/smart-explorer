@@ -67,10 +67,13 @@ fn collect_children(
     depth: u32,
     diagnostics: &Diagnostics,
     budget: &AnalyticsBudget,
+    progress: &Progress,
 ) -> crate::vfs::VfsResult<Vec<ChildMeta>> {
+    progress.enter_directory(directory);
     let mut children = Vec::new();
     let mut names = HashSet::new();
     for metadata in backend.list_dir(directory)? {
+        progress.check_cancel()?;
         crate::vfs::validate_child_name(&metadata.name)?;
         if !names.insert(metadata.name.clone()) {
             return Err(io::Error::new(
@@ -87,6 +90,13 @@ fn collect_children(
         // Retention is bounded, counting is not: the claim only decides
         // whether this child keeps an own node.
         let path = child_path(directory, &metadata.name);
+        if metadata.is_dir && crate::agent_proto::is_pseudo_dir(&path) { continue; }
+        if metadata.is_dir {
+            progress.dirs.fetch_add(1, Ordering::Relaxed);
+        } else {
+            progress.files.fetch_add(1, Ordering::Relaxed);
+            progress.bytes.fetch_add(metadata.size, Ordering::Relaxed);
+        }
         let _ = budget.claim(
             Path::new(&path),
             depth.saturating_add(1),
@@ -172,13 +182,12 @@ fn scan_parallel(
                     (
                         directory.clone(),
                         *depth,
-                        collect_children(backend, directory, *depth, diagnostics, budget),
+                        collect_children(backend, directory, *depth, diagnostics, budget, progress),
                     )
                 })
                 .collect::<Vec<_>>()
         });
         let mut next = Vec::new();
-        let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
         for (directory, depth, result) in level {
             let children = match result {
                 Ok(children) => children,
@@ -191,19 +200,12 @@ fn scan_parallel(
                 if child.is_dir {
                     let path = child_path(&directory, &child.name);
                     if !crate::agent_proto::is_pseudo_dir(&path) {
-                        dirs = dirs.saturating_add(1);
                         next.push((path, depth.saturating_add(1)));
                     }
-                } else {
-                    files = files.saturating_add(1);
-                    bytes = bytes.saturating_add(child.size);
                 }
             }
             listings.insert(directory, children);
         }
-        progress.files.fetch_add(files, Ordering::Relaxed);
-        progress.dirs.fetch_add(dirs, Ordering::Relaxed);
-        progress.bytes.fetch_add(bytes, Ordering::Relaxed);
         frontier = next;
     }
     build_from_listings(&root, name.into_boxed_str(), &listings)
@@ -273,7 +275,7 @@ fn scan_serial(
             children: Vec::new(),
         };
     }
-    let listed = match collect_children(backend, directory, depth, diagnostics, budget) {
+    let listed = match collect_children(backend, directory, depth, diagnostics, budget, progress) {
         Ok(listed) => listed,
         Err(error) => {
             diagnostics.record_io(directory, &error, is_root);
@@ -282,7 +284,6 @@ fn scan_serial(
     };
     let mut children = Vec::with_capacity(listed.len());
     let mut size = 0u64;
-    let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
     for child in listed {
         if progress.cancel.load(Ordering::Relaxed) {
             break;
@@ -292,7 +293,6 @@ fn scan_serial(
             if crate::agent_proto::is_pseudo_dir(&path) {
                 continue;
             }
-            dirs = dirs.saturating_add(1);
             let node = scan_serial(
                 backend,
                 &path,
@@ -306,8 +306,6 @@ fn scan_serial(
             size = size.saturating_add(node.size);
             children.push(node);
         } else {
-            files = files.saturating_add(1);
-            bytes = bytes.saturating_add(child.size);
             size = size.saturating_add(child.size);
             children.push(SizeNode {
                 name: child.name.into_boxed_str(),
@@ -317,9 +315,6 @@ fn scan_serial(
             });
         }
     }
-    progress.files.fetch_add(files, Ordering::Relaxed);
-    progress.dirs.fetch_add(dirs, Ordering::Relaxed);
-    progress.bytes.fetch_add(bytes, Ordering::Relaxed);
     SizeNode {
         name,
         size,

@@ -73,6 +73,11 @@ pub(super) fn handle_client(
                 },
             )
         }
+        IpcRequest::AnalyzeShare { target, root, .. } => {
+            super::ipc_analysis::serve(stream, root, || {
+                host.open_share(target).map(|(_, backend, _)| backend).map_err(io::Error::other)
+            })
+        }
         IpcRequest::OpenShare { target, .. } => match host.open_share(target) {
             Ok((label, backend, status)) => {
                 write_response(&mut stream, &IpcResponse::OpenOk { label, status })?;

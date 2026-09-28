@@ -454,3 +454,7 @@ fn authorize_outgoing_repair_generation(
 #[cfg(test)]
 #[path = "node_sessions_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "windows_remote_session_task_tests.rs"]
+mod windows_remote_task;

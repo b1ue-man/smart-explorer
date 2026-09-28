@@ -44,6 +44,8 @@ mod handoff;
 mod host_state;
 #[path = "os/shared/ipc.rs"]
 mod ipc;
+#[path = "os/shared/ipc_analysis.rs"]
+mod ipc_analysis;
 #[path = "os/shared/ipc_client.rs"]
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]
@@ -200,3 +202,16 @@ pub use state::{
 mod tests;
 #[cfg(test)]
 pub(crate) use backend_server::serve_backend as serve_sync_link_fixture;
+
+#[cfg(test)]
+pub(crate) fn windows_remote_task_rooted(
+    backend: crate::vfs::BackendHandle,
+    mode: crate::mount::MountMode,
+) -> std::io::Result<crate::vfs::BackendHandle> {
+    rooted_backend::RootedBackend::new(backend, &crate::mount::BackendRoot::parse("/")?,
+        mode, crate::mount::MountRootSecurity::Trusted)
+}
+
+#[cfg(test)]
+#[path = "os/shared/windows_remote_task_tests.rs"]
+mod windows_remote_task_tests;

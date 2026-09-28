@@ -378,3 +378,7 @@ fn report_engine_failure(
 ) -> String {
     report_pre_mount_failure(session, engine, message)
 }
+
+#[cfg(test)]
+#[path = "windows_remote_volume_task_tests.rs"]
+mod windows_remote_task;

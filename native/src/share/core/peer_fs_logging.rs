@@ -8,6 +8,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::Stat { .. } => "stat",
         FsRequest::WalkTree { .. } => "walk_tree",
         FsRequest::StorageSnapshot { .. } => "storage_snapshot",
+        FsRequest::StorageAnalysis { .. } => "storage_analysis",
         FsRequest::Read { .. } => "read",
         FsRequest::Write { .. } => "write",
         FsRequest::WriteNew { .. } => "write_new",
@@ -30,6 +31,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
             root_confined,
             lease,
             storage_snapshot_v1,
+            ..
         } => format!(
             concat!(
                 "capabilities contract={} root_confined={} lease={} ",
@@ -92,6 +94,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         } => {
             format!("snapshot done nodes={nodes} files={files} dirs={dirs} bytes={bytes}")
         }
+        FsResponse::Analysis { .. } => "storage analysis".into(),
         FsResponse::Data { size } => format!("{size} bytes"),
         FsResponse::Ready => "bereit".into(),
         FsResponse::Ok => "ok".into(),

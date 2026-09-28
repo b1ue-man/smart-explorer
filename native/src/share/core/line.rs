@@ -76,3 +76,7 @@ mod tests {
         assert!(SignalLineReader::default().read(&mut reader, 4).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "signal_line_task_tests.rs"]
+mod task_tests;

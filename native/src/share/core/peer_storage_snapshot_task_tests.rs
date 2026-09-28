@@ -41,11 +41,13 @@ fn share_remote_task_storage_snapshot_finished_tree_and_legacy_fallback() {
         root_confined: true,
         lease: None,
         storage_snapshot_v1: true,
+        storage_analysis_v2: false,
     };
     assert!(matches!(
         advertised,
         super::super::wire::FsResponse::Capabilities {
             storage_snapshot_v1: true,
+            storage_analysis_v2: false,
             ..
         }
     ));
