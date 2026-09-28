@@ -324,7 +324,14 @@ only `.github/workflows/windows-remote-task.yml` with the full pushed
 `candidate_sha`. Its single entrypoint is `native/test-windows-remote-task.ps1`.
 It reuses a source/hash-bound development library test binary or incrementally
 builds that target once. On Windows 2025 it installs the pinned official Dokany
-runtime and uses the already committed private DLL. The suite covers actual
+runtime. It verifies and reuses the committed private DLL when it matches the
+current recipe. Its explicit `-PreparePrivateRuntime` mode can prepare a changed
+dependency through the existing recipe script in this same job; a separate
+recipe-bound cache retains that exact set throughout the fix loop. The DLL and
+corresponding-source hashes are included in fixture-cache identity and
+`approval.json`. After a successful complete suite, commit the retained
+`private-dokany/` evidence set to the approved directory described above.
+The suite covers actual
 mounted Share access, collision routing and permissions, repair worker lifetime,
 live route renewal, bounded handshake admission and fragmented signaling. It
 also compares the identical local and Direct analysis worker through the real
@@ -341,7 +348,12 @@ ProcDump attaches only to the owned fixture PID and captures one minidump on an
 unhandled exception. The fixture's real exit code controls acceptance; the
 monitor is reaped and WER policy removed afterward. Fixture processes omit
 credential environment variables. The real volume case includes bounded
-repeated create/access/close cycles to investigate intermittent native failure.
+repeated private and official create/access/close cycles, concurrent requests
+during unmount, private DLL unloading and recovery-marker completion. The
+official non-batched runtime keeps its callback code mapped until mount-host
+exit because its unmodified shutdown can leave a volume broadcast running;
+preflight alone does not pin it. The corrected private runtime drains its
+callbacks and unloads normally.
 See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must
 not invoke this task entrypoint on the workstation.
 

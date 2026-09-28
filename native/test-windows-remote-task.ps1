@@ -5,6 +5,8 @@ param(
     [string]$TestBinarySourceSha = '',
     [string]$LogRoot = '',
     [string]$BinaryCacheRoot = '',
+    [string]$DependencyCacheRoot = '',
+    [switch]$PreparePrivateRuntime,
     [switch]$InstallRuntime
 )
 $ErrorActionPreference = 'Stop'
@@ -97,7 +99,8 @@ function Invoke-TaskProcess {
     }
 }
 
-# Use the committed, approved private Dokany payload; never rebuild it here.
+# Install only the unchanged, pinned official driver on the disposable runner.
+# Private dependency preparation below is explicit and shares this one suite.
 # The pinned official driver is installed only on the disposable remote runner.
 $system = [Environment]::SystemDirectory
 $dll = Join-Path $system 'dokan2.dll'
@@ -132,19 +135,51 @@ if (-not [IO.File]::Exists((Join-Path $nativeRoot 'assets/dokany-private/dokan2.
 
 # One affected library build, or a source/hash-bound existing development binary.
 $cacheHelper = Join-Path $nativeRoot 'mount-task-binary-cache.ps1'
-foreach ($path in @($PSCommandPath, $cacheHelper, (Join-Path $nativeRoot 'windows-remote-task-diagnostics.ps1'))) {
+$toolchainHelper = Join-Path $nativeRoot 'mount-task-toolchain.ps1'
+$prepareHelper = Join-Path $nativeRoot 'prepare-dokany-private.ps1'
+foreach ($path in @($PSCommandPath, $cacheHelper, $toolchainHelper, $prepareHelper,
+        (Join-Path $nativeRoot 'windows-remote-task-diagnostics.ps1'))) {
     $tokens = $null
     $errors = $null
     [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
     if ($errors.Count -ne 0) { throw "PowerShell syntax error in $path`: $($errors.Message -join '; ')" }
 }
 . $cacheHelper
+. $toolchainHelper
 $git = (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
 $head = Invoke-TaskProcess $git @('-C', $repoRoot, 'rev-parse', 'HEAD') 30 'candidate'
 if ($head.Code -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw 'Candidate identity unavailable.' }
 $candidate = $head.Output.Trim()
+$approvedDirectory = Join-Path $nativeRoot 'assets/dokany-private'
+try {
+    $prepared = & $prepareHelper -VerifyOnly -RequireApproved -ArtifactDirectory $approvedDirectory
+} catch {
+    if (-not $PreparePrivateRuntime) { throw }
+    Write-Host "Preparing the requested private-runtime correction: $($_.Exception.Message)"
+    $dependencyRoot = if ([string]::IsNullOrWhiteSpace($DependencyCacheRoot)) {
+        Join-Path $LogRoot 'dependency-cache'
+    } else { [IO.Path]::GetFullPath($DependencyCacheRoot) }
+    Assert-MountTaskCacheDirectory $dependencyRoot
+    [void][IO.Directory]::CreateDirectory($dependencyRoot)
+    $privateDirectory = Join-Path $dependencyRoot 'private-dokany'
+    if (-not (Test-Path -LiteralPath $privateDirectory)) {
+        Ensure-MountTaskDokanyToolchain -LogRoot $LogRoot -Install:$InstallRuntime
+    }
+    $prepared = & $prepareHelper -ArtifactDirectory $privateDirectory
+}
+$env:SMART_EXPLORER_DOKANY_DLL_DIR = $prepared.Directory
+$env:SMART_EXPLORER_DOKANY_DLL_SHA256 = $prepared.DllSha256
+$dependencyEvidence = Join-Path $LogRoot 'private-dokany'
+[void][IO.Directory]::CreateDirectory($dependencyEvidence)
+foreach ($path in @($prepared.DllPath, $prepared.ManifestPath, $prepared.SourcePackagePath)) {
+    [IO.File]::Copy($path, (Join-Path $dependencyEvidence ([IO.Path]::GetFileName($path))), $false)
+}
+$dependencyManifest = ConvertFrom-Json ([IO.File]::ReadAllText($prepared.ManifestPath))
 $cache = $null
-$fingerprint = Get-MountTaskBuildFingerprint $repoRoot
+$sourceFingerprint = Get-MountTaskBuildFingerprint $repoRoot
+$dependencyIdentity = "$($prepared.DllSha256):$($dependencyManifest.source_package.sha256)"
+$fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+    [Text.Encoding]::UTF8.GetBytes("$sourceFingerprint`:$dependencyIdentity"))).ToLowerInvariant()
 $built = $false
 if (-not [string]::IsNullOrWhiteSpace($TestBinary)) {
     if ($TestBinarySourceSha -cne $candidate -or $TestBinarySha256 -notmatch '^[a-fA-F0-9]{64}$' -or
@@ -226,5 +261,7 @@ if ($result.Code -ne 0) {
     outcome = 'PASS'
     test_binary_sha256 = (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash.ToLowerInvariant()
     build_inputs_sha256 = $fingerprint
+    private_dll_sha256 = $prepared.DllSha256
+    private_source_sha256 = $dependencyManifest.source_package.sha256
     windows = [Environment]::OSVersion.VersionString
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'approval.json')

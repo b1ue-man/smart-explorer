@@ -105,6 +105,7 @@ pub(crate) enum DokanyCreateError {
     InvalidMountPoint,
     Version,
     NullHandle,
+    CallbackLibraryLifetime(u32),
     Unknown(i32),
 }
 
@@ -119,6 +120,9 @@ impl fmt::Display for DokanyCreateError {
             Self::InvalidMountPoint => "the requested Dokany mount point is invalid",
             Self::Version => "the Dokany runtime and driver versions are incompatible",
             Self::NullHandle => "Dokany reported success without returning a file-system handle",
+            Self::CallbackLibraryLifetime(code) => {
+                return write!(formatter, "Dokany callback code could not be retained safely (Windows error {code})")
+            }
             Self::Unknown(code) => {
                 return write!(formatter, "Dokany mount failed with code {code}")
             }
@@ -224,6 +228,10 @@ impl DokanyRuntime {
         options: *mut DokanOptions,
         operations: *mut DokanOperations,
     ) -> Result<DokanyFileSystem, DokanyCreateError> {
+        if !self.is_private() {
+            self.inner._module.retain_official_callbacks_until_exit()
+                .map_err(DokanyCreateError::CallbackLibraryLifetime)?;
+        }
         // Apply on every attempt, not only when initially allocating options:
         // Dokany may change its caller-owned flags while selecting workers.
         unsafe { (*options).prepare_for_create() };

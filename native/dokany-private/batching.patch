@@ -1,26 +1,100 @@
 diff --git a/dokan/dokan.c b/dokan/dokan.c
 --- a/dokan/dokan.c
 +++ b/dokan/dokan.c
-@@ -503,7 +503,13 @@
+@@ -139,6 +139,10 @@
+ }
+
+ VOID DeleteDokanInstance(PDOKAN_INSTANCE DokanInstance) {
++  // No callback may add a new cleanup-group member once draining starts.
++  EnterCriticalSection(&DokanInstance->CriticalSection);
++  DokanInstance->WorkSubmissionClosed = TRUE;
++  LeaveCriticalSection(&DokanInstance->CriticalSection);
+   SetEvent(DokanInstance->DeviceClosedWaitHandle);
+   if (DokanInstance->ThreadInfo.CleanupGroup) {
+     CloseThreadpoolCleanupGroupMembers(DokanInstance->ThreadInfo.CleanupGroup,
+@@ -362,10 +366,10 @@
+
+   if (InterlockedAdd(&DokanInstance->UnmountedCalled, 1) == 1) {
+     DokanNotifyUnmounted(DokanInstance);
+-  }
+-
+-  // set the device to a closed state
+-  SetEvent(DokanInstance->DeviceClosedWaitHandle);
++    // Only the notification owner can release the close waiter. Other failed
++    // pull workers must not let cleanup overtake this worker's broadcast work.
++    SetEvent(DokanInstance->DeviceClosedWaitHandle);
++  }
+ }
+
+ // Don't know what went wrong
+@@ -399,19 +403,38 @@
+   }
+ }
+
++BOOL DokanSubmitThreadpoolWork(PDOKAN_INSTANCE DokanInstance,
++                               PTP_WORK_CALLBACK Callback, PVOID Context) {
++  BOOL submitted = FALSE;
++  DWORD error = ERROR_OPERATION_ABORTED;
++  // Protect creation AND submission. Cleanup cannot release a work object
++  // between CreateThreadpoolWork and SubmitThreadpoolWork.
++  EnterCriticalSection(&DokanInstance->CriticalSection);
++  if (!DokanInstance->WorkSubmissionClosed) {
++    PTP_WORK work = CreateThreadpoolWork(
++        Callback, Context, &DokanInstance->ThreadInfo.CallbackEnvironment);
++    if (work) {
++      SubmitThreadpoolWork(work);
++      submitted = TRUE;
++    } else {
++      error = GetLastError();
++    }
++  }
++  LeaveCriticalSection(&DokanInstance->CriticalSection);
++  if (!submitted) SetLastError(error);
++  return submitted;
++}
++
+ VOID QueueIoEvent(PDOKAN_IO_EVENT IoEvent, PTP_WORK_CALLBACK Callback) {
+-  PTP_WORK work = CreateThreadpoolWork(
+-      Callback, IoEvent,
+-      &IoEvent->DokanInstance->ThreadInfo.CallbackEnvironment);
+-  if (!work) {
++  PDOKAN_INSTANCE instance = IoEvent->DokanInstance;
++  if (!DokanSubmitThreadpoolWork(instance, Callback, IoEvent)) {
+     DWORD lastError = GetLastError();
+-    DbgPrintW(L"Dokan Error: CreateThreadpoolWork() has returned error "
+-              L"code %u.\n",
+-              lastError);
+-    OnDeviceIoCtlFailed(IoEvent->DokanInstance, lastError);
+-    return;
+-  }
+-  SubmitThreadpoolWork(work);
++    DbgPrintW(L"Dokan Error: work submission failed with code %u.\n", lastError);
++    // Batched children own a batch reference; initial pull workers do not.
++    if (IoEvent->IoBatch) PushIoBatchBuffer(IoEvent->IoBatch);
++    PushIoEventBuffer(IoEvent);
++    OnDeviceIoCtlFailed(instance, lastError);
++  }
+ }
+
+ DWORD
+@@ -503,7 +526,13 @@
      // - New pool thread that just started with a dispatched event.
      // Note: Main pull thread does not have an EventContext when started.
      if (ioEvent && ioEvent->EventContext) {
--      DispatchEvent(ioEvent);
 +      // This worker still owns its batch reference until result submission.
 +      BOOL continuation =
 +          ioEvent->EventContext != ioEvent->IoBatch->EventContext;
-+      DispatchEvent(ioEvent);
+       DispatchEvent(ioEvent);
 +      if (continuation) {
 +        InterlockedIncrement64(&dokanInstance->SmartExplorerBatchContinuations);
 +      }
        if (!ioEvent->EventResult) {
          // Some events like Close() do not have event results.
          // Release the resource and terminate here unless we are the main pulling thread.
-@@ -606,7 +612,15 @@
+@@ -606,6 +635,14 @@
    }
  }
- 
--BOOL DOKANAPI DokanIsFileSystemRunning(_In_ DOKAN_HANDLE DokanInstance) {
+
 +ULONGLONG DOKANAPI SmartExplorerBatchContinuationCountV1(
 +    _In_ DOKAN_HANDLE DokanInstance) {
 +  PDOKAN_INSTANCE instance = (PDOKAN_INSTANCE)DokanInstance;
@@ -29,15 +103,13 @@ diff --git a/dokan/dokan.c b/dokan/dokan.c
 +                  : 0;
 +}
 +
-+BOOL DOKANAPI DokanIsFileSystemRunning(_In_ DOKAN_HANDLE DokanInstance) {
+ BOOL DOKANAPI DokanIsFileSystemRunning(_In_ DOKAN_HANDLE DokanInstance) {
    DOKAN_INSTANCE *instance = (DOKAN_INSTANCE *)DokanInstance;
    if (!instance) {
-     return FALSE;
-@@ -766,7 +780,34 @@
+@@ -766,6 +803,33 @@
               DokanOptions->UNCName);
    }
- 
--  int result = DokanStart(dokanInstance);
+
 +  // Producer and consumer must agree before the driver receives its flags.
 +  DWORD_PTR processAffinityMask;
 +  DWORD_PTR systemAffinityMask;
@@ -65,14 +137,13 @@ diff --git a/dokan/dokan.c b/dokan/dokan.c
 +  BOOLEAN allowIpcBatching =
 +      (BOOLEAN)((DokanOptions->Options & DOKAN_OPTION_ALLOW_IPC_BATCHING) != 0);
 +
-+  int result = DokanStart(dokanInstance);
+   int result = DokanStart(dokanInstance);
    if (result != DOKAN_SUCCESS) {
      DeleteDokanInstance(dokanInstance);
-     return result;
-@@ -790,31 +831,6 @@
+@@ -790,31 +854,6 @@
      return DOKAN_DRIVER_INSTALL_ERROR;
    }
- 
+
 -  DWORD_PTR processAffinityMask;
 -  DWORD_PTR systemAffinityMask;
 -  DWORD mainPullThreadCount = 0;
@@ -104,35 +175,36 @@ diff --git a/dokan/dokan.c b/dokan/dokan.c
 diff --git a/dokan/dokani.h b/dokan/dokani.h
 --- a/dokan/dokani.h
 +++ b/dokan/dokani.h
-@@ -92,7 +92,9 @@
-    * Whether the Unmounted notification was called.
+@@ -93,7 +93,14 @@
     * Only the first incrementer thread will call it.
     */
--  LONG UnmountedCalled;
-+  LONG UnmountedCalled;
+   LONG UnmountedCalled;
++  /** Work admission, protected by CriticalSection before cleanup starts. */
++  BOOL WorkSubmissionClosed;
 +  /** Completed second-or-later records from one kernel event reply. */
 +  DECLSPEC_ALIGN(8) volatile LONG64 SmartExplorerBatchContinuations;
  } DOKAN_INSTANCE, *PDOKAN_INSTANCE;
- 
++
++BOOL DokanSubmitThreadpoolWork(PDOKAN_INSTANCE DokanInstance,
++                               PTP_WORK_CALLBACK Callback, PVOID Context);
+
  /**
+  * \struct DOKAN_OPEN_INFO
 diff --git a/dokan/dokan.def b/dokan/dokan.def
 --- a/dokan/dokan.def
 +++ b/dokan/dokan.def
-@@ -3,7 +3,8 @@
- 
+@@ -3,6 +3,7 @@
+
  EXPORTS
- 
--DokanMain
+
 +SmartExplorerBatchContinuationCountV1
-+DokanMain
+ DokanMain
  DokanUnmount
  DokanIsNameInExpression
- DokanServiceInstall
 diff --git a/dokan/directory.c b/dokan/directory.c
 --- a/dokan/directory.c
 +++ b/dokan/directory.c
-@@ -406,8 +406,16 @@
-        IoEvent->DokanOpenInfo->UnimplementedFindFilesWithPattern)) {
+@@ -407,7 +407,15 @@
      patternCheck = TRUE;
    }
 
@@ -152,7 +224,8 @@ diff --git a/dokan/directory.c b/dokan/directory.c
 diff --git a/dokan/fileinfo.c b/dokan/fileinfo.c
 --- a/dokan/fileinfo.c
 +++ b/dokan/fileinfo.c
-@@ -312,7 +312,10 @@
+@@ -311,7 +311,10 @@
+   DbgPrint("\tresult =  %lx\n", Status);
 
    if (Status != STATUS_SUCCESS) {
 -    IoEvent->EventResult->Status = STATUS_INVALID_PARAMETER;
@@ -163,4 +236,26 @@ diff --git a/dokan/fileinfo.c b/dokan/fileinfo.c
      IoEvent->EventResult->BufferLength = 0;
    } else {
      ULONG fileInformationClass =
-         IoEvent->EventContext->Operation.File.FileInformationClass;
+diff --git a/dokan/mount.c b/dokan/mount.c
+--- a/dokan/mount.c
++++ b/dokan/mount.c
+@@ -597,17 +597,14 @@
+   PVOID parameter =
+       (PVOID)(size_t)((bRemoved << 31) | ((receipients & 0x7fff) << 16) |
+                       ((toupper(cLetter) - 'A') & 0xff));
+-  PTP_WORK work =
+-      CreateThreadpoolWork(DokanBroadcastCallback, parameter,
+-                           &DokanInstance->ThreadInfo.CallbackEnvironment);
+-  if (!work) {
++  if (!DokanSubmitThreadpoolWork(DokanInstance, DokanBroadcastCallback,
++                                 parameter)) {
+     DWORD lastError = GetLastError();
+     DbgPrintW(L"Dokan Error: CreateThreadpoolWork() has returned error "
+               L"code %u.\n",
+               lastError);
+     return;
+   }
+-  SubmitThreadpoolWork(work);
+
+   drive[0] = towupper(cLetter);
+   wEventId = bRemoved ? SHCNE_DRIVEREMOVED : SHCNE_DRIVEADD;

@@ -4,7 +4,7 @@
   "source_url": "https://codeload.github.com/dokan-dev/dokany/zip/f1d5de68ff459af94e309cfdd171e4b8ca2af4dd",
   "source_archive_sha256": "f07c0a13ef426234b8707862a52f30f177528d6d34294bb0dde1620f681d266b",
   "source_archive_size": 728462,
-  "patch_sha256": "c6f847835ae655e24c4aabbab4d5d209c749cbdeeee97823d95ac7bcd68eced7",
+  "patch_sha256": "95da1312e99c54aaef06c29a8f39ce3441e901db8a2065a1b4f8b0409dcc0653",
   "dll_name": "dokan2.dll",
   "library_api": 231,
   "driver_protocol": 400,
