@@ -11,8 +11,12 @@ fn windows_remote_task_repair_from_plain_thread_releases_transition() {
         let endpoint = peer.initial_endpoint().clone();
         let node = &peer.node;
         let permits = node.runtime_transition_slot.available_permits();
+        assert!(tokio::runtime::Handle::try_current().is_err());
         let result = node.repair_direct_reciprocal(&endpoint, &peer.identity, 0);
-        assert_eq!(result, DirectReciprocalTransportResult::Transient);
+        // This fixture's host has no persistence adapter: it closes only the
+        // repair stream before Offer. The established transport maps that to
+        // Unsupported while keeping the authenticated filesystem session.
+        assert_eq!(result, DirectReciprocalTransportResult::Unsupported);
         assert_eq!(node.runtime_transition_slot.available_permits(), permits);
         assert_eq!(peer.list_dir("/").unwrap().len(), 2);
     }).join().expect("repair must not panic when started outside Tokio");
