@@ -335,8 +335,11 @@ local scan, host scan and GUI end-to-end durations separately; no network-wide
 speed claim follows from a loopback measurement.
 It uses isolated profiles and loopback peers, and performs no release build.
 Its task diagnostics retain numeric/hex process exits, Windows crash events,
-mount lifecycle traces and a minidump on a native fixture crash. Dump policy is
-scoped to that executable and removed afterward; fixture processes omit
+mount lifecycle traces and native exception evidence. In addition to the
+temporary executable-specific WER policy, a SHA-256-pinned, Microsoft-signed
+ProcDump attaches only to the owned fixture PID and captures one minidump on an
+unhandled exception. The fixture's real exit code controls acceptance; the
+monitor is reaped and WER policy removed afterward. Fixture processes omit
 credential environment variables. The real volume case includes bounded
 repeated create/access/close cycles to investigate intermittent native failure.
 See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must

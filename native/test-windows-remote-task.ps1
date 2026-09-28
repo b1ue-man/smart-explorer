@@ -59,11 +59,17 @@ function Invoke-TaskProcess {
     $process.StartInfo = $start
     $stdout = $null
     $stderr = $null
+    $monitor = $null
+    $didStart = $false
     $started = [datetime]::Now
     try {
         if (-not $process.Start()) { throw "$Label did not start." }
+        $didStart = $true
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
+        if ($Fixture -and $Label -eq 'windows-remote') {
+            $monitor = Start-WindowsRemoteTaskDumpMonitor $dumpTool $process.Id $LogRoot
+        }
         $timer = [Diagnostics.Stopwatch]::StartNew()
         while (-not ($process.WaitForExit(0) -and $stdout.IsCompleted -and $stderr.IsCompleted)) {
             if ($timer.Elapsed.TotalSeconds -ge $Seconds) {
@@ -76,6 +82,11 @@ function Invoke-TaskProcess {
         Save-WindowsRemoteTaskExit $process.ExitCode $process.Id $started $Label $LogRoot $Fixture.IsPresent
         return [pscustomobject]@{ Code = $process.ExitCode; Output = $stdout.Result; Error = $stderr.Result }
     } finally {
+        if ($didStart -and -not $process.HasExited) {
+            $process.Kill($true)
+            [void]$process.WaitForExit(5000)
+        }
+        Stop-WindowsRemoteTaskDumpMonitor $monitor $LogRoot
         foreach ($entry in @(@('stdout', $stdout), @('stderr', $stderr))) {
             $task = $entry[1]
             if ($null -ne $task -and $task.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) {
@@ -196,6 +207,7 @@ foreach ($required in $requiredCases) {
 }
 $dumpKey = Enable-WindowsRemoteTaskDump $TestBinary $LogRoot
 try {
+    $dumpTool = Get-WindowsRemoteTaskDumpTool $LogRoot
     $result = Invoke-TaskProcess $TestBinary @('windows_remote_task_', '--include-ignored', '--nocapture', '--test-threads=1') 1800 'windows-remote' -Fixture
 } finally {
     Remove-Item -LiteralPath $dumpKey -Recurse -Force
