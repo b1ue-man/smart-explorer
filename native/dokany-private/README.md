@@ -40,8 +40,10 @@ proved that a volume-broadcast callback returned into the already unloaded DLL.
 Their exact new DLL/source set passed the Windows remote regression suite in
 [run 36435534429](https://github.com/b1ue-man/smart-explorer/actions/runs/36435534429)
 at source `9398fcf433390991641ba91c4e6b0b86565c5003` and is retained under
-`native/assets/dokany-private/`. The complete batch still requires acceptance of
-the later GUI capacity correction and terminal publication.
+`native/assets/dokany-private/`. The complete batch including the later GUI
+capacity correction passed [run 36438291005](https://github.com/b1ue-man/smart-explorer/actions/runs/36438291005)
+at `b6a7b2a272258de7558752d39be2769533bbdd0b` with these exact committed bytes.
+Terminal publication remains pending.
 See [the current hashes and task evidence](../../docs/WINDOWS_REMOTE_REGRESSION.md).
 
 The two bulk-access corrections above were added on 2026-09-08. Their exact

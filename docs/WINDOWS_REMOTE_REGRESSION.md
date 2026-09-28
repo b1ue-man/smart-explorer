@@ -1,8 +1,8 @@
 # Windows remote mount, Direct lifetime and storage analysis repair
 
-Investigation date: 2026-09-28. Reported client: 0.5.164. The callback repair and
-exact dependency passed remote acceptance; the later GUI capacity correction
-still awaits the same suite. Publication remains pending.
+Investigation date: 2026-09-28. Reported client: 0.5.164. The complete candidate,
+including the callback repair, exact dependency and GUI capacity correction,
+passed remote acceptance. Publication remains pending.
 
 ## Goal and stage-one plan
 
@@ -266,8 +266,21 @@ The exact accepted dependency set is retained under `native/assets/dokany-privat
 
 The archived manifest, patch, builder and patched callback sources were compared
 with the candidate before retaining the files; the source ZIP is unchanged.
-This approves the dependency, not a release. M9's later source-identity capacity
-correction in `2f99d90` still needs the same suite on the combined candidate.
+This checkpoint approved the dependency, not a release. M9's later source-identity
+capacity correction in `2f99d90` required the same suite on the combined candidate.
+
+## Complete candidate accepted, 2026-09-28
+
+[Run 36438291005](https://github.com/b1ue-man/smart-explorer/actions/runs/36438291005)
+passed the same entrypoint at `b6a7b2a272258de7558752d39be2769533bbdd0b` with
+exit `0x00000000`. This includes M9's source-identity capacity correction, all
+mount/private-and-official teardown behavior and the Direct/GUI analysis path.
+The accepted dependency files match the committed DLL, manifest and source ZIP
+byte for byte. The fixture executable SHA-256 is
+`4a3bf679db8095a8bc278114fd8f35ff84a0e025f1e5c327b619528daba37cc7`.
+Measured local/host/GUI analysis durations were 12/14/23 ms for 5,289 files,
+with zero per-file metadata calls and the same loopback/warm-cache limitation.
+All implementation milestones are accepted; only terminal publication remains.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
