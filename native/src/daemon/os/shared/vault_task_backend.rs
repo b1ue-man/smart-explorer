@@ -83,7 +83,7 @@ fn mount_vault_task_rooted_case_sensitive_stat_reuses_fresh_terminal_observation
     let raw: BackendHandle = tree.clone();
     let resolver = super::rooted_backend_case::PathResolver {
         backend: &raw, case_cache: None, root_validator: None,
-        root: "/", root_ancestors: &[], case_sensitive: true,
+        root: "/", root_ancestors: &[], case_sensitive: true, project_peer_names: false,
     };
     let before = tree.counters();
     for index in 0..10_000 {

@@ -31,6 +31,7 @@ pub(super) struct RootedBackend {
     windows_paths: bool,
     staged_write: StagedWriteCapabilities,
     case_sensitive_paths: bool,
+    project_peer_names: bool,
     root_confinement: RootConfinement,
     operation: super::rooted_backend_gate::OperationGate,
 }
@@ -73,6 +74,7 @@ impl RootedBackend {
         let case_sensitive_paths = !windows_paths
             && raw_inner.scheme() != Scheme::Peer
             && raw_inner.case_sensitive_paths(root.as_str());
+        let project_peer_names = raw_inner.scheme() == Scheme::Peer;
         let root_metadata = super::rooted_backend_case::validate_root(&raw_inner, &root_ancestors)
             .map_err(sanitize_error)?;
         if root_metadata.is_symlink || !root_metadata.is_dir {
@@ -98,6 +100,7 @@ impl RootedBackend {
             windows_paths,
             staged_write,
             case_sensitive_paths,
+            project_peer_names,
             root_confinement,
             operation: super::rooted_backend_gate::OperationGate::new(),
         };
@@ -150,6 +153,7 @@ impl RootedBackend {
             root: &self.root,
             root_ancestors: &self.root_ancestors,
             case_sensitive: self.case_sensitive_paths,
+            project_peer_names: self.project_peer_names,
         }
     }
 
@@ -187,6 +191,13 @@ impl Backend for RootedBackend {
         let _operation = self.operation.read()?;
         self.case_cache
             .refresh_directory(&self.checked_existing(path)?)
+            .and_then(|entries| {
+                if self.project_peer_names {
+                    crate::mount::peer_names::project_peer_listing(entries)
+                } else {
+                    Ok(entries)
+                }
+            })
             .map(|entries| entries.into_iter().map(sanitize_metadata).collect())
             .map_err(sanitize_error)
     }

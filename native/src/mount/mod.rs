@@ -20,6 +20,8 @@ mod file_commit;
 mod materialization;
 #[path = "core/case_semantics.rs"]
 mod case_semantics;
+#[path = "core/peer_names.rs"]
+pub(crate) mod peer_names;
 #[path = "core/commit.rs"]
 mod commit;
 #[path = "core/delete.rs"]
