@@ -238,8 +238,12 @@ Erholung von einem Live-Hänger. Eine Zertifizierung der tatsächlichen
 Obsidian-Anwendung oder sämtlicher Remote-Transporte sowie ein gemessener
 Geschwindigkeitsgewinn werden damit nicht behauptet.
 
-Der aktuelle, noch nicht veröffentlichte Regressionskandidat korrigiert außerdem
-das Beenden der privaten Runtime: Benachrichtigungen werden vollständig in die
+Seit [0.5.165](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.165)
+erhalten Share-Namen, die unter Windows kollidieren (etwa `Docs` und `docs`),
+im eingebundenen Laufwerk einen eindeutigen, stabilen Zusatz. Beide Einträge
+bleiben erreichbar; die Originalnamen auf der Gegenstelle ändern sich nicht.
+
+Beim Beenden der privaten Runtime werden Benachrichtigungen vollständig in die
 Aufräumgrenze einbezogen, bevor die DLL entladen wird. Bei der unveränderten
 System-Runtime bleibt deren bereits geladener Code nach einer Einbindung bis
 zum Ende des separaten Mount-Prozesses im Speicher; Laufwerk, Cache und
@@ -406,7 +410,7 @@ erstellen, per Code beitreten, gegenseitige Mitgliedschaft, Raum-Exporte,
 Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs auf
 Raum-Ziele nutzen denselben Backend-Pfad.
 
-Die Speicheranalyse eines Direct- oder Raum-Ziels nutzt im aktuellen Quellstand
+Die Speicheranalyse eines Direct- oder Raum-Ziels nutzt seit 0.5.165
 für lokale und UNC-Freigaben denselben Analyse-Worker auf der Gegenstelle wie
 beim eigenen Laufwerk. Auch der lokale GUI-/Daemon-Pfad leitet diese Operation
 weiter. Fortschritt umfasst tatsächlich erfasste Dateien, Ordner und Bytes,
@@ -414,6 +418,9 @@ Arbeitsphase und Pfad; ausbleibende Änderungen und das Alter der letzten Meldun
 bleiben sichtbar. Der fertige Baum wird anschließend in begrenzten Blöcken mit
 Längen- und SHA-256-Prüfung übertragen. Teilresultate, Lesefehler, Abbruch und
 zusammengefasste Verzeichnisse behalten den Status des lokalen Workers.
+Die Belegungswerte eines eigenen Laufwerks werden nur bei einer lokalen
+Scan-Quelle angezeigt; ein gleichlautender Remote-Pfad übernimmt diese Werte
+nicht. Für den neuen Analysepfad müssen beide Geräte aktualisiert sein.
 Bei älteren Gegenstellen bleibt der bisherige Analysepfad verfügbar; fehlende
 Ordnerzähler werden als „nicht gemeldet“ ausgewiesen. Scan und Ergebnisübertragung
 sind getrennte Phasen; eine gleiche Gesamtdauer über beliebige Netzverbindungen
