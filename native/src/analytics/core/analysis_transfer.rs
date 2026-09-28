@@ -80,3 +80,7 @@ impl AnalysisReceiver {
 }
 
 fn invalid(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
+
+#[cfg(test)]
+#[path = "windows_analysis_transfer_task_tests.rs"]
+mod task_tests;

@@ -186,7 +186,7 @@ impl App {
                     if let Some((state, remote_age, root, secs)) = &scan_info {
                         ui.horizontal_wrapped(|ui| {
                             ui.spinner();
-                            let dirs = if state.phase == crate::analytics::ScanPhase::Legacy {
+                            let dirs = if state.directories_unreported {
                                 "nicht gemeldet".to_string()
                             } else { state.dirs.to_string() };
                             ui.label(format!(
@@ -216,7 +216,7 @@ impl App {
                             ui.label(RichText::new(format_bytes(focus_size)).strong());
                             if focus_segs.is_empty() {
                                 if let Some((totals, seconds)) = &self.analytics_totals {
-                                    let dirs = if totals.phase == crate::analytics::ScanPhase::Legacy {
+                                    let dirs = if totals.directories_unreported {
                                         "nicht gemeldet".into()
                                     } else { totals.dirs.to_string() };
                                     ui.label(format!("· {} erfasste Dateien · {} Ordner · {:.1} s",

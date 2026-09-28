@@ -3,6 +3,37 @@ use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Cursor, Read, Write};
 
 #[test]
+fn windows_remote_task_local_scan_keeps_partial_results_and_live_counts() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("denied")).unwrap();
+    std::fs::write(root.path().join("readable"), b"1234567").unwrap();
+    let progress = Progress::default();
+    let guard = |path: &std::path::Path| {
+        if path.ends_with("denied") { Err(io::ErrorKind::PermissionDenied.into()) } else { Ok(()) }
+    };
+    let outcome = scan_with_guard(root.path(), &progress, Some(&guard));
+    assert_eq!(outcome.status, ScanStatus::Partial);
+    assert_eq!(outcome.permission_denied, 1);
+    assert_eq!(outcome.tree.unwrap().size, 7);
+    assert_eq!(progress.files.load(Ordering::Relaxed), 1);
+
+    let progress = Progress::default();
+    let diagnostics = Diagnostics::default();
+    let budget = AnalyticsBudget::default();
+    let traversal = Traversal { progress: &progress, diagnostics: &diagnostics, budget: &budget, parallel: false, guard: None };
+    let entries = (0..1024).map(|index| {
+        if index == 512 {
+            assert!(progress.files.load(Ordering::Relaxed) > 0, "wide directory stayed at zero until EOF");
+            assert_eq!(progress.files.load(Ordering::Relaxed), progress.bytes.load(Ordering::Relaxed));
+        }
+        Ok(LocalEntry { name: format!("{index}").into(), kind: EntryKind::File, size: 1, ..Default::default() })
+    });
+    let tree = scan_entries(&traversal, root.path(), "root".into(), Ok(entries), 0, true);
+    assert_eq!(tree.size, 1024);
+    assert_eq!(progress.files.load(Ordering::Relaxed), 1024);
+}
+
+#[test]
 fn analytics_access_task_sizes_and_counts() {
     let fixture = tempfile::tempdir().unwrap();
     let base = fixture.path();

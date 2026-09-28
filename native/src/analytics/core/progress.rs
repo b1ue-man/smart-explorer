@@ -26,7 +26,7 @@ impl ScanPhase {
             Self::Assembling => "Ergebnis wird zusammengestellt",
             Self::Transferring => "Fertiges Ergebnis wird übertragen",
             Self::Verifying => "Empfangenes Ergebnis wird geprüft",
-            Self::Legacy => "Ältere Gegenstelle: bisheriger Analysepfad",
+            Self::Legacy => "Bisheriger Analysepfad: nur Datei- und Bytezähler",
         }
     }
 }
@@ -43,6 +43,7 @@ pub struct ScanSnapshot {
     pub unchanged_ms: u64,
     pub host_scan_ms: Option<u64>,
     pub source_age_ms: u64,
+    pub directories_unreported: bool,
 }
 
 struct State {
@@ -70,6 +71,8 @@ pub struct Progress {
     state: Arc<Mutex<State>>,
     scope: Option<Arc<(String, String)>>,
     offset: (u64, u64, u64),
+    #[cfg(test)]
+    reports: Arc<AtomicU64>,
 }
 
 impl Progress {
@@ -106,6 +109,7 @@ impl Progress {
             state.snapshot.unchanged_ms = 0;
         }
         state.snapshot.phase = phase;
+        if phase == ScanPhase::Legacy { state.snapshot.directories_unreported = true; }
         state.snapshot.current = current;
         if !matches!(phase, ScanPhase::Transferring | ScanPhase::Verifying) {
             state.snapshot.transferred = 0;
@@ -141,6 +145,8 @@ impl Progress {
 
     /// Called only for actual received peer evidence, never by cancellation polls.
     pub(crate) fn receive(&self, mut snapshot: ScanSnapshot) -> io::Result<()> {
+        #[cfg(test)]
+        self.reports.fetch_add(1, Ordering::Relaxed);
         snapshot.files = snapshot.files.checked_add(self.offset.0).ok_or_else(counter_overflow)?;
         snapshot.dirs = snapshot.dirs.checked_add(self.offset.1).ok_or_else(counter_overflow)?;
         snapshot.bytes = snapshot.bytes.checked_add(self.offset.2).ok_or_else(counter_overflow)?;
@@ -178,6 +184,9 @@ impl Progress {
         state.snapshot.transfer_total = total;
         state.remote_received = Some(Instant::now());
     }
+
+    #[cfg(test)]
+    pub(crate) fn report_count(&self) -> u64 { self.reports.load(Ordering::Relaxed) }
 
     pub fn check_cancel(&self) -> io::Result<()> {
         if self.cancel.load(Ordering::Relaxed) {

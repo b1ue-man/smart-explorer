@@ -4,6 +4,15 @@ Live status of every request. Legend: ✅ done · 🚧 partially shipped/in prog
 · ⬜ open · `later` deliberately deferred. New items get appended here. History
 is in ROADMAP.md.
 
+Current regression batch: Windows device-share drives fail at root metadata
+preload on case-colliding names, and Direct repair can leave the worker's
+configuration barrier stuck after a timer panic. The GUI's storage analysis
+also bypasses the peer worker and requests metadata per file. The candidate
+forwards analysis through IPC to the identical local worker and preserves real
+progress, partial outcomes and cancellation. Source fixes are committed;
+the single Windows remote suite and terminal publication remain pending.
+See [evidence and acceptance plan](WINDOWS_REMOTE_REGRESSION.md).
+
 ## Still open (what's actually left)
 
 This table is the live list of remaining work, roughly by value. The lower
