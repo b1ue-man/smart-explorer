@@ -142,7 +142,10 @@ if ([string]::IsNullOrWhiteSpace($TestBinary)) {
     $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
         'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
     ) 7200 'native-incremental'
-    if ($build.Code -ne 0) { throw "Affected library target failed to build: $($build.Error)" }
+    if ($build.Code -ne 0) {
+        Write-Host $build.Error
+        throw 'Affected library target failed to build; native-incremental.stderr.log contains the diagnostics.'
+    }
     $executables = @(
         foreach ($line in ($build.Output -split '\r?\n')) {
             if (-not $line.StartsWith('{')) { continue }
@@ -190,7 +193,10 @@ Write-Host $result.Output
 foreach ($line in ($result.Error -split '\r?\n')) {
     if ($line.StartsWith('ANALYSIS_TIMING ')) { Write-Host $line }
 }
-if ($result.Code -ne 0) { throw "Windows remote task failed: $($result.Error)" }
+if ($result.Code -ne 0) {
+    Write-Host $result.Error
+    throw 'Windows remote task failed; windows-remote.stderr.log contains the diagnostics.'
+}
 [ordered]@{
     schema = 1
     candidate = $candidate

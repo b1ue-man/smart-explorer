@@ -42,7 +42,7 @@ fn windows_remote_task_live_peer_reconnects_using_fresh_lan_evidence() {
     let fixture = CopyPastePeerFixture::new().unwrap();
     let peer = &fixture.peer;
     let mut endpoint = peer.initial_endpoint().clone();
-    let crate::share::ShareScope::Direct { contact_id } = endpoint.scope.clone() else { panic!("Direct fixture") };
+    let crate::share::types::ShareScope::Direct { contact_id } = endpoint.scope.clone() else { panic!("Direct fixture") };
     let now = crate::share::core::now_secs();
     endpoint.presence.expires_at = now - 1;
     {
