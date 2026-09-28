@@ -183,6 +183,15 @@ lifetime therefore needs direct evidence, not a guessed delay or permanent DLL
 pin. Success requires all bounded mount lifecycles and the whole existing suite
 to finish normally before terminal publication.
 
+Related teardown defect found by source review: `RuntimeSelection::complete`
+removes the private-runtime recovery marker before its runtime field is dropped.
+A failure during shutdown/unload can therefore erase the evidence that should
+select the official compatibility runtime on retry. Extend M5's controlled
+teardown boundary: release the runtime before completing the marker, retain
+cache ownership throughout, and exercise the production selection/completion
+path in the real-volume case. The runtime must remain explicitly private in
+that case, so compatibility fallback cannot conceal a private-runtime failure.
+
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
 30 minutes; terminal release uses the existing six-hour remote job and

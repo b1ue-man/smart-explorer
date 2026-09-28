@@ -46,7 +46,11 @@ impl RuntimeSelection {
     /// Call only after successful controlled teardown and recovery inspection.
     /// Any other exit leaves the marker for compatibility mode on the next Retry.
     pub(super) fn complete(self) {
-        if let Some(attempt) = self.attempt {
+        let Self { runtime, attempt } = self;
+        // Shutdown and DLL unload are part of controlled teardown. Retain the
+        // recovery marker if either terminates the host before returning.
+        drop(runtime);
+        if let Some(attempt) = attempt {
             if let Err(error) = attempt.complete() {
                 let _ = writeln!(std::io::stderr().lock(),
                     "mount runtime: retaining compatibility fallback marker: {error}");
