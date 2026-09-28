@@ -47,6 +47,7 @@ impl App {
                 s.progress.remote_report_age(),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
+                s.progress.cancel.load(std::sync::atomic::Ordering::Relaxed),
             )
         });
         let run_state = self.analytics_state;
@@ -183,7 +184,7 @@ impl App {
                         );
                     }
 
-                    if let Some((state, remote_age, root, secs)) = &scan_info {
+                    if let Some((state, remote_age, root, secs, cancel_pending)) = &scan_info {
                         ui.horizontal_wrapped(|ui| {
                             ui.spinner();
                             let dirs = if state.directories_unreported {
@@ -193,7 +194,9 @@ impl App {
                                 "{} · {} Dateien · {} Ordner · {} · {:.1} s",
                                 state.phase.label(), state.files, dirs, format_bytes(state.bytes), secs,
                             ));
-                            if ui.button("Abbrechen").clicked() { cancel = true; }
+                            if *cancel_pending {
+                                ui.label("Abbruch angefordert · wartet auf Worker-Ende");
+                            } else if ui.button("Abbrechen").clicked() { cancel = true; }
                         });
                         ui.label(if state.current.is_empty() { root } else { &state.current });
                         if state.transfer_total > 0 {
@@ -221,6 +224,9 @@ impl App {
                                     } else { totals.dirs.to_string() };
                                     ui.label(format!("· {} erfasste Dateien · {} Ordner · {:.1} s",
                                         totals.files, dirs, seconds));
+                                    if !matches!(run_state, StorageRunState::Complete | StorageRunState::Partial) {
+                                        ui.label(format!("· zuletzt {} erfasst", format_bytes(totals.bytes)));
+                                    }
                                 }
                             } else {
                                 ui.label(format!("· {} Datei-Einträge · {} Ordner-Einträge dargestellt", n_files, n_dirs));

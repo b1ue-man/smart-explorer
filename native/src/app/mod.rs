@@ -6,6 +6,9 @@ mod analytics_access;
 mod analytics_accessibility;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
+#[cfg(test)]
+#[path = "core/windows_analysis_ui_task.rs"]
+mod windows_analysis_ui_task;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
 #[path = "core/analytics_ui.rs"]
