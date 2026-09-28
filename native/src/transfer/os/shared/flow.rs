@@ -3,6 +3,10 @@
 //! from one `Flow`; its controller (`core/flow_control.rs`) decides how many
 //! operations may run at once. Learned limits outlive a single transfer so the
 //! next paste on the same connection starts where the last one ended.
+//!
+//! Permits go round-robin between jobs, so a small paste next to a large
+//! transfer is not starved, and listings get one extra reserved slot so
+//! discovery never waits behind long file transfers.
 use super::flow_control::{FlowControl, OpOutcome, RESOURCE_CEILING};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,16 +16,43 @@ use std::time::{Duration, Instant};
 /// Flows unused for this long are forgotten (their connection is gone or idle).
 const FLOW_RETENTION: Duration = Duration::from_secs(15 * 60);
 const WAIT_SLICE: Duration = Duration::from_millis(100);
+/// Job id of callers that do not identify a job.
+pub const ANONYMOUS_JOB: u64 = 0;
 
 struct FlowState {
     control: FlowControl,
     in_flight: usize,
-    waiters: usize,
+    meta_in_flight: usize,
+    waiting: HashMap<u64, usize>,
+    last_job: Option<u64>,
 }
 
 impl FlowState {
+    fn waiters(&self) -> usize {
+        self.waiting.values().sum()
+    }
+
     fn saturated(&self) -> bool {
-        self.waiters > 0 || self.in_flight >= self.control.limit()
+        self.waiters() > 0 || self.in_flight >= self.control.limit()
+    }
+
+    fn free(&self) -> bool {
+        self.in_flight < self.control.limit()
+    }
+
+    /// Round robin between jobs: the job that received the last permit lets
+    /// another waiting job go first.
+    fn my_turn(&self, job: u64) -> bool {
+        self.last_job != Some(job) || self.waiting.keys().all(|waiting| *waiting == job)
+    }
+
+    fn stop_waiting(&mut self, job: u64) {
+        if let Some(count) = self.waiting.get_mut(&job) {
+            *count -= 1;
+            if *count == 0 {
+                self.waiting.remove(&job);
+            }
+        }
     }
 }
 
@@ -48,7 +79,9 @@ impl Flow {
             state: Mutex::new(FlowState {
                 control: FlowControl::new(ceiling, 0),
                 in_flight: 0,
-                waiters: 0,
+                meta_in_flight: 0,
+                waiting: HashMap::new(),
+                last_job: None,
             }),
             changed: Condvar::new(),
         }
@@ -73,54 +106,99 @@ impl Flow {
         state.control.tick(self.now_ms(), saturated);
     }
 
-    /// Waits for a permit; `None` once `cancel` is set.
+    fn wait<'a>(&self, state: MutexGuard<'a, FlowState>) -> MutexGuard<'a, FlowState> {
+        let mut state = match self.changed.wait_timeout(state, WAIT_SLICE) {
+            Ok((guard, _)) => guard,
+            Err(poisoned) => poisoned.into_inner().0,
+        };
+        self.tick(&mut state);
+        state
+    }
+
+    /// Waits for a permit without naming a job; `None` once `cancel` is set.
     pub fn acquire(self: &Arc<Self>, cancel: &AtomicBool) -> Option<FlowPermit> {
+        self.acquire_for(ANONYMOUS_JOB, cancel)
+    }
+
+    /// Waits for a permit for `job`, taking turns with other jobs.
+    pub fn acquire_for(self: &Arc<Self>, job: u64, cancel: &AtomicBool) -> Option<FlowPermit> {
         let mut state = self.lock();
         self.tick(&mut state);
-        state.waiters += 1;
+        *state.waiting.entry(job).or_insert(0) += 1;
         loop {
             if cancel.load(Ordering::Acquire) {
-                state.waiters -= 1;
+                state.stop_waiting(job);
                 drop(state);
                 self.changed.notify_all();
                 return None;
             }
-            if state.in_flight < state.control.limit() {
+            if state.free() && state.my_turn(job) {
                 break;
             }
-            state = match self.changed.wait_timeout(state, WAIT_SLICE) {
-                Ok((guard, _)) => guard,
-                Err(poisoned) => poisoned.into_inner().0,
-            };
-            self.tick(&mut state);
+            state = self.wait(state);
         }
-        state.waiters -= 1;
+        state.stop_waiting(job);
         state.in_flight += 1;
-        Some(FlowPermit::new(self.clone()))
+        state.last_job = Some(job);
+        Some(FlowPermit::new(self.clone(), false))
+    }
+
+    /// A permit for a listing: an ordinary one when free, otherwise the one
+    /// slot reserved for metadata, so discovery never waits behind transfers.
+    pub fn acquire_meta(self: &Arc<Self>, cancel: &AtomicBool) -> Option<FlowPermit> {
+        let mut state = self.lock();
+        self.tick(&mut state);
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return None;
+            }
+            if state.free() {
+                state.in_flight += 1;
+                return Some(FlowPermit::new(self.clone(), false));
+            }
+            if state.meta_in_flight == 0 {
+                state.meta_in_flight += 1;
+                return Some(FlowPermit::new(self.clone(), true));
+            }
+            state = self.wait(state);
+        }
     }
 
     /// A permit only if one is free right now.
     pub fn try_acquire(self: &Arc<Self>) -> Option<FlowPermit> {
         let mut state = self.lock();
         self.tick(&mut state);
-        if state.in_flight >= state.control.limit() {
+        if !state.free() {
             return None;
         }
         state.in_flight += 1;
-        Some(FlowPermit::new(self.clone()))
+        Some(FlowPermit::new(self.clone(), false))
+    }
+
+    /// Waits until a permit is free (without taking it); false on cancel.
+    fn wait_for_spare(&self, cancel: &AtomicBool) -> bool {
+        let mut state = self.lock();
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return false;
+            }
+            if state.free() {
+                return true;
+            }
+            state = self.wait(state);
+        }
     }
 
     /// Whether another operation could start now without waiting.
     pub fn has_spare(&self) -> bool {
-        let state = self.lock();
-        state.in_flight < state.control.limit()
+        self.lock().free()
     }
 
     pub fn snapshot(&self) -> FlowSnapshot {
         let state = self.lock();
         FlowSnapshot {
             limit: state.control.limit(),
-            in_flight: state.in_flight,
+            in_flight: state.in_flight + state.meta_in_flight,
         }
     }
 
@@ -135,19 +213,22 @@ impl Flow {
 }
 
 /// One running operation. Report streamed bytes with `progress`; `finish`
-/// ends it with an outcome. Dropping without `finish` counts as failed.
+/// ends it with an outcome, `abandon` returns it unused. Dropping without
+/// either counts as failed.
 pub struct FlowPermit {
     flow: Arc<Flow>,
     started: Instant,
     finished: bool,
+    meta: bool,
 }
 
 impl FlowPermit {
-    fn new(flow: Arc<Flow>) -> Self {
+    fn new(flow: Arc<Flow>, meta: bool) -> Self {
         Self {
             flow,
             started: Instant::now(),
             finished: false,
+            meta,
         }
     }
 
@@ -160,20 +241,31 @@ impl FlowPermit {
     }
 
     pub fn finish(mut self, outcome: OpOutcome) {
-        self.release(outcome);
+        self.release(Some(outcome));
     }
 
-    fn release(&mut self, outcome: OpOutcome) {
+    /// Returns the permit without feeding the controller (nothing was done).
+    pub fn abandon(mut self) {
+        self.release(None);
+    }
+
+    fn release(&mut self, outcome: Option<OpOutcome>) {
         if self.finished {
             return;
         }
         self.finished = true;
         let mut state = self.flow.lock();
         self.flow.tick(&mut state);
-        state.in_flight = state.in_flight.saturating_sub(1);
-        let now = self.flow.now_ms();
-        let latency = self.started.elapsed().as_millis() as u64;
-        state.control.finish(outcome, latency, now);
+        if self.meta {
+            state.meta_in_flight = state.meta_in_flight.saturating_sub(1);
+        } else {
+            state.in_flight = state.in_flight.saturating_sub(1);
+        }
+        if let Some(outcome) = outcome {
+            let now = self.flow.now_ms();
+            let latency = self.started.elapsed().as_millis() as u64;
+            state.control.finish(outcome, latency, now);
+        }
         drop(state);
         self.flow.changed.notify_all();
     }
@@ -181,12 +273,14 @@ impl FlowPermit {
 
 impl Drop for FlowPermit {
     fn drop(&mut self) {
-        self.release(OpOutcome::Failed);
+        self.release(Some(OpOutcome::Failed));
     }
 }
 
 /// Permits on one or two flows (source and target of a remote-to-remote
-/// copy), acquired in key order so opposite transfers cannot deadlock.
+/// copy). The second is only taken when free; otherwise the first goes back
+/// and the caller waits for the second, so no permit sits idle while another
+/// connection is the bottleneck and opposite transfers cannot deadlock.
 pub struct PermitPair {
     first: FlowPermit,
     second: Option<FlowPermit>,
@@ -212,11 +306,11 @@ impl PermitPair {
 pub fn acquire_pair(
     one: &Arc<Flow>,
     other: Option<&Arc<Flow>>,
+    job: u64,
     cancel: &AtomicBool,
 ) -> Option<PermitPair> {
-    let other = other.filter(|other| other.key != one.key);
-    let Some(other) = other else {
-        return one.acquire(cancel).map(|first| PermitPair {
+    let Some(other) = other.filter(|other| other.key != one.key) else {
+        return one.acquire_for(job, cancel).map(|first| PermitPair {
             first,
             second: None,
         });
@@ -226,12 +320,19 @@ pub fn acquire_pair(
     } else {
         (other, one)
     };
-    let first = low.acquire(cancel)?;
-    let second = high.acquire(cancel)?;
-    Some(PermitPair {
-        first,
-        second: Some(second),
-    })
+    loop {
+        let first = low.acquire_for(job, cancel)?;
+        if let Some(second) = high.try_acquire() {
+            return Some(PermitPair {
+                first,
+                second: Some(second),
+            });
+        }
+        first.abandon();
+        if !high.wait_for_spare(cancel) {
+            return None;
+        }
+    }
 }
 
 struct Registry {
@@ -282,32 +383,21 @@ pub fn local_flow(path: &str) -> Arc<Flow> {
     flow_for(&crate::vfs::LocalBackend::new("/"), path)
 }
 
-/// Classifies an error as a congestion signal (the peer asks to slow down)
-/// or an ordinary failure. Backends report rate limits and "too many
-/// requests/connections" as `ErrorKind::QuotaExceeded`; the textual checks
-/// cover peers and older components that only send a message.
+/// Congestion (the peer asks to slow down) or an ordinary failure. Backends
+/// report rate limits and "too many requests/connections" as
+/// `vfs::congestion_error`; timeouts count as congestion too. A full disk or
+/// an exhausted storage quota (`StorageFull`, `QuotaExceeded`) is permanent,
+/// not congestion. The text check covers older services and agents that only
+/// send their message.
 pub fn classify_error(error: &std::io::Error) -> OpOutcome {
     use std::io::ErrorKind;
-    if matches!(
-        error.kind(),
-        ErrorKind::QuotaExceeded | ErrorKind::TimedOut | ErrorKind::WouldBlock
-    ) {
-        return OpOutcome::Overload;
-    }
-    let text = error.to_string().to_ascii_lowercase();
-    const SIGNALS: [&str; 10] = [
-        "too many concurrent",
-        "too many requests",
-        "too many connections",
-        "ratelimitexceeded",
-        "rate limit exceeded",
-        "http 429",
-        "http 503",
-        "status 429",
-        "status 503",
-        "timed out",
-    ];
-    if SIGNALS.iter().any(|signal| text.contains(signal)) {
+    if crate::vfs::congestion_of(error).is_some()
+        || matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
+        || error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("too many concurrent")
+    {
         OpOutcome::Overload
     } else {
         OpOutcome::Failed

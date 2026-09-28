@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 
 pub use super::batch::{BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink};
+pub use super::congestion::{congestion_error, congestion_of, Congestion};
 pub use super::meta::{
     ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, SearchHit, VfsChange, VfsChangeBatch,
     VfsMeta, VfsResult,
@@ -74,18 +75,16 @@ pub trait Backend: Send + Sync {
         ))
     }
 
-    /// Create a private copy stage without updating any existing identity.
-    /// Defaults to exclusive namespace creation. ID-based providers may create
-    /// their own reserved ID instead, but must verify an unambiguous path on
-    /// successful flush. Neither opening nor failure authorizes path cleanup.
-    /// This weaker ID-provider contract is not a mounted exclusive-create API.
+    /// Private copy stage that updates no existing identity: exclusive creation
+    /// by default; ID providers may reserve their own ID and verify an
+    /// unambiguous path on flush (not a mounted exclusive-create API). Neither
+    /// opening nor failure authorizes path cleanup.
     fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.open_write_new(path)
     }
 
-    /// Publish a copy without replacing another identity. ID providers may
-    /// verify unique naming and roll back their own ID on collision; this does
-    /// not promise an atomic sibling-name reservation for those providers.
+    /// Publish a copy without replacing another identity (ID providers verify
+    /// unique naming and roll back their own ID; no atomic name reservation).
     fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
         self.promote_staged_no_replace(staged, destination)
     }
@@ -108,23 +107,46 @@ pub trait Backend: Send + Sync {
         Ok(None)
     }
 
-    /// The local filename a download of `path` should be saved as. Defaults to
-    /// `name`; backends that transform content on read (e.g. Google Drive
-    /// exporting a Doc to .docx) override this to add the right extension.
+    /// New file inside a folder this transfer created itself, for providers
+    /// whose objects appear only complete and never replace (Drive): no stage,
+    /// no promotion, exactly `size` bytes. `Ok(None)` = use a copy stage.
+    fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        let _ = (path, size);
+        Ok(None)
+    }
+
+    /// Read from byte `offset` to resume an interrupted download; `Ok(None)`
+    /// when this backend cannot start mid-file.
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = (path, id, offset);
+        Ok(None)
+    }
+
+    /// A fixed limit of this provider worth showing next to a transfer (for
+    /// example a documented write rate).
+    fn transfer_hint(&self) -> Option<String> {
+        None
+    }
+
+    /// Local file name for a download of `path`; exporting providers (Drive
+    /// Docs → .docx) add the extension of the exported format.
     fn download_name(&self, _path: &str, name: &str) -> String {
         name.to_string()
     }
 
-    /// Expected read-stream length, including a known empty file. A provider
-    /// that transforms content on read must explicitly return None instead of
-    /// treating metadata size zero as an unknown-length sentinel.
+    /// Expected read-stream length, including a known empty file; `None` only
+    /// for content transformed on read (never "size 0 means unknown").
     fn read_size(&self, _path: &str, metadata_size: u64) -> VfsResult<Option<u64>> {
         Ok(Some(metadata_size))
     }
 
-    /// Copy within THIS backend. The default streams read->write; `LocalBackend`
-    /// overrides with `std::fs::copy`. Cross-backend copies are the caller's job
-    /// (read from src backend, write to dst backend).
+    /// Copy within this backend (default: spooled read then write); copies
+    /// between backends are the caller's job.
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         super::copy_transfer::copy_file(self, src, dst)
     }
@@ -143,11 +165,10 @@ pub trait Backend: Send + Sync {
         ))
     }
 
-    /// Commit a complete staged regular file without exposing partial content
-    /// or removing the old file before the replacement is visible. The default
-    /// uses only declared atomic primitives. ID-addressed providers may override
-    /// this with a verified update of the existing destination identity, but
-    /// must leave the namespace unambiguous on every successful return.
+    /// Commit a complete staged file without exposing partial content or
+    /// removing the old file first; only declared atomic primitives by default.
+    /// ID providers may update the destination identity verifiably, leaving the
+    /// namespace unambiguous on success.
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         super::promotion::default_promote_staged(self, staged, destination)
     }
@@ -168,15 +189,35 @@ pub trait Backend: Send + Sync {
         self.mkdir_all(path)
     }
 
-    /// Semantics of this backend's `remove_*` methods. Most network protocols
-    /// delete permanently; providers such as Drive override this when removal
-    /// is recoverable, and read-only backends report Unsupported.
+    /// Create one new directory; `AlreadyExists` when the name is taken. The
+    /// default probes first (not atomic); protocol backends override it.
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        if self.try_exists(path)? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                path.to_string(),
+            ));
+        }
+        self.create_dir(path)
+    }
+
+    /// Remove a copy stage this client created and never published (abort);
+    /// `Unsupported` where ownership of the name cannot be proven.
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        let _ = stage;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "stage cleanup unsupported",
+        ))
+    }
+
+    /// Semantics of `remove_*`: permanent for most protocols, recoverable for
+    /// providers such as Drive, Unsupported for read-only backends.
     fn delete_disposition(&self) -> DeleteDisposition {
         DeleteDisposition::Permanent
     }
 
-    /// Directory-walk width. Local = all cores; remote backends return a small
-    /// number (a few SSH channels / one control connection).
+    /// Directory-walk width: all cores locally, small for remote protocols.
     fn parallelism(&self) -> usize {
         rayon::current_num_threads()
     }
@@ -201,20 +242,15 @@ pub trait Backend: Send + Sync {
         true
     }
 
-    /// Does `rename(src, dst)` atomically REPLACE an existing regular-file
-    /// `dst`, leaving an observer with either the old or new complete file?
-    /// Only then is the "write temp then rename" safe-copy pattern correct.
-    /// Default false. Providers such as Google Drive permit duplicate names and
-    /// therefore refuse occupied path renames; SFTP/FTP may also fail when the
-    /// target exists.
-    /// Local filesystems override this to true.
+    /// Does `rename(src, dst)` atomically replace an existing regular file, so
+    /// "write temp, then rename" is a safe replace? Default false (Drive keeps
+    /// duplicates, SFTP/FTP may refuse); local filesystems return true.
     fn rename_overwrites(&self) -> bool {
         false
     }
 
-    /// Safe staged-write guarantees at `root`. `create` includes atomic
-    /// exclusive creation through `open_write_new`. Backends with path-dependent
-    /// exports (notably a Share peer) may inspect the requested subtree.
+    /// Safe staged-write guarantees at `root` (`create` = atomic `open_write_new`);
+    /// path-dependent exports (Share peers) may inspect the subtree.
     fn staged_write_capabilities(&self, _root: &str) -> StagedWriteCapabilities {
         StagedWriteCapabilities {
             create: false,
@@ -223,28 +259,22 @@ pub trait Backend: Send + Sync {
         }
     }
 
-    /// Whether every pathname below `root` has proven case-sensitive lookup
-    /// semantics. The conservative default is false: protocols such as SFTP
-    /// and generic peer transports can target either Unix-like or Windows
-    /// storage, and a local filesystem may itself be mounted case-folded.
-    ///
-    /// Callers may advertise case-sensitive filesystem behavior only when a
-    /// backend can make this guarantee for the exact exported root and retain
-    /// it across every reconnect or transport fallback for that backend.
+    /// Whether every pathname below `root` has proven case-sensitive lookup.
+    /// Conservative default false (SFTP/peers may serve Windows storage, local
+    /// filesystems may be case-folded); true only when the exact root keeps the
+    /// guarantee across every reconnect and transport fallback.
     fn case_sensitive_paths(&self, _root: &str) -> bool {
         false
     }
 
-    /// Whether every operation is technically confined to the exact selected
-    /// root even if a pathname is exchanged concurrently after validation.
-    /// The conservative default requires an explicit trusted-root opt-in.
+    /// Whether every operation stays confined to the exact root even if a path
+    /// is exchanged after validation; requires an explicit trusted-root opt-in.
     fn root_confinement(&self, _root: &str) -> RootConfinement {
         RootConfinement::Unverified
     }
 
-    /// Resolve the mount-specific write and root guarantees as one snapshot.
-    /// Static backends can derive it from their individual declarations;
-    /// dynamic proxy backends override this with one fallible remote probe.
+    /// Mount write and root guarantees as one snapshot (dynamic proxies
+    /// override this with one fallible remote probe).
     fn mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {
         Ok(MountPathCapabilities {
             staged_write: self.staged_write_capabilities(root),
@@ -252,9 +282,8 @@ pub trait Backend: Send + Sync {
         })
     }
 
-    /// Open a file for reading by its backend-unique `id` when known (so the
-    /// caller can target one specific item among duplicate names). Default
-    /// ignores the id and opens by path; Google Drive overrides this.
+    /// Open by backend-unique `id` when known (one item among duplicate names);
+    /// the default opens by path.
     fn open_read_id(
         &self,
         path: &str,
@@ -264,16 +293,14 @@ pub trait Backend: Send + Sync {
         self.open_read(path)
     }
 
-    /// Delete a file by its backend-unique `id` when known (targets one specific
-    /// item among duplicate names). Default ignores the id and deletes by path.
+    /// Delete by backend-unique `id` when known; the default deletes by path.
     fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
         let _ = id;
         self.remove_file(path)
     }
 
-    /// Plan the exact duplicate objects a mirror cleanup would remove, without
-    /// mutating anything. The orchestration layer uses this count in its delete
-    /// safety guard before any copy or delete begins.
+    /// Plan (without mutating) the exact duplicates a mirror cleanup would
+    /// remove; its count feeds the delete safety guard before any change.
     fn plan_dedupe_recursive(
         &self,
         root: &str,
@@ -302,27 +329,20 @@ pub trait Backend: Send + Sync {
         Ok(removed)
     }
 
-    /// Make a mirror destination exact on backends that allow duplicate names
-    /// (Google Drive): within `root` (recursively), for any name that has MORE
-    /// THAN ONE file, keep just the newest if its relative path passes `keep`,
-    /// otherwise remove all copies (an orphaned duplicate name). Singleton files
-    /// are never touched (the normal plan handles those). Default no-op (names
-    /// are already unique). Returns the count removed.
+    /// Make a mirror destination exact where duplicate names exist (Drive): for
+    /// each name with several files below `root`, keep only the newest if `keep`
+    /// accepts its path, else remove all; singletons untouched. Returns removals.
     fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
         let plan = self.plan_dedupe_recursive(root, keep)?;
         self.apply_dedupe_plan(&plan)
     }
 
-    /// Is this a local-filesystem backend? Reading a local file to hash it is
-    /// cheap (no network), so sync may hash the local side to compare against a
-    /// remote's free native hash.
+    /// Local filesystem (hashing a file is cheap, no network)?
     fn is_local(&self) -> bool {
         false
     }
 
-    /// Does the backend expose a free content hash (MD5) in its listings -
-    /// Google Drive `md5Checksum`, Nextcloud/ownCloud `oc:checksums`? When true,
-    /// sync can compare by content WITHOUT downloading this side.
+    /// Free content MD5 in listings (Drive `md5Checksum`, Nextcloud checksums)?
     fn provides_content_hash(&self) -> bool {
         false
     }
@@ -332,23 +352,20 @@ pub trait Backend: Send + Sync {
         false
     }
 
-    /// Stable identity of a sync root, used to detect that a saved cursor belongs
-    /// to the same backend folder before an incremental run is trusted.
+    /// Stable identity of a sync root, so a saved cursor is trusted only there.
     fn change_root_id(&self, root: &str) -> VfsResult<Option<String>> {
         let _ = root;
         Ok(None)
     }
 
-    /// Return the cursor for future changes. Providers with snapshot semantics
-    /// should return a token before a bootstrap walk, so changes during that
-    /// bootstrap are replayed on the next incremental run.
+    /// Cursor for future changes, taken before a bootstrap walk so changes
+    /// during the walk replay on the next incremental run.
     fn current_change_cursor(&self, root: &str) -> VfsResult<Option<String>> {
         let _ = root;
         Ok(None)
     }
 
-    /// Return changes since `cursor`. `reset = true` means the cursor is invalid
-    /// and the caller must rebuild from a full snapshot.
+    /// Changes since `cursor`; `reset` = invalid cursor, rebuild from a snapshot.
     fn changes_since(&self, root: &str, cursor: &str) -> VfsResult<VfsChangeBatch> {
         let _ = (root, cursor);
         Ok(VfsChangeBatch {
@@ -357,8 +374,7 @@ pub trait Backend: Send + Sync {
         })
     }
 
-    /// Drop any internal directory-listing cache (no-op unless the backend is
-    /// wrapped in `CachingBackend`). Called on an explicit refresh.
+    /// Drop any listing cache (explicit refresh; only `CachingBackend` has one).
     fn invalidate_cache(&self) {}
 
     /// Optional complete remote analytics outcome, including partial results.
@@ -384,16 +400,13 @@ pub trait Backend: Send + Sync {
         Ok(None)
     }
 
-    /// Can this backend transfer an entire subtree in ONE session (the SSH
-    /// agent's `GetTree`/`PutTree`)? When true, folder download/upload skips the
-    /// per-file round-trips.
+    /// Whole-subtree transfer in one session (the agent's `GetTree`/`PutTree`)?
     fn supports_bulk_tree(&self) -> bool {
         false
     }
 
-    /// Download the remote subtree rooted at `root` into local `dst` (the
-    /// contents of `root` land directly under `dst`), in one streamed session.
-    /// Returns the number of files written. Only the agent overrides this.
+    /// Download the contents of `root` into local `dst` in one session;
+    /// returns the number of files written.
     fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
         let _ = (root, dst);
         Err(io::Error::new(
@@ -402,9 +415,8 @@ pub trait Backend: Send + Sync {
         ))
     }
 
-    /// Upload the local subtree `src` into remote `root` (the contents of `src`
-    /// land directly under `root`), in one streamed session. Returns the number
-    /// of files sent. Only the agent overrides this.
+    /// Upload the contents of local `src` into `root` in one session; returns
+    /// the number of files sent.
     fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
         let _ = (src, root);
         Err(io::Error::new(
@@ -444,18 +456,14 @@ pub trait Backend: Send + Sync {
         ))
     }
 
-    /// Can this backend run a recursive search SERVER-SIDE (the agent's
-    /// `Search`)? When true, a recursive name search on a remote streams only
-    /// the matches back instead of enumerating the whole tree client-side.
+    /// Recursive search on the server (the agent's `Search`), streaming matches?
     fn supports_search(&self) -> bool {
         false
     }
 
-    /// Recursively search under `root` server-side, streaming each match into
-    /// `tx` (paths RELATIVE to `root`). `Ok(true)` means the operation completed;
-    /// `Ok(false)` is reserved for an explicitly unsupported capability and may
-    /// only be returned before sending any hits. Transport, protocol, remote,
-    /// and cancellation failures are errors, never fallback signals.
+    /// Search below `root` on the server, streaming matches (paths relative to
+    /// `root`) into `tx`. `Ok(false)` only for "unsupported" before any hit;
+    /// every failure (transport, remote, cancel) is an error, never a fallback.
     fn search(
         &self,
         root: &str,
@@ -467,20 +475,15 @@ pub trait Backend: Send + Sync {
         Ok(false)
     }
 
-    /// Can this backend produce the SYNC SIGNATURE (size+mtime, and MD5 on
-    /// demand) in one SERVER-SIDE walk (the agent's `WalkHashed`)? When true,
-    /// `bisync::walk_files` gets the whole tree - including content hashes -
-    /// without downloading a single file.
+    /// Sync signatures (size, mtime, MD5 on demand) in one server-side walk
+    /// (the agent's `WalkHashed`), without downloading files?
     fn supports_walk_hashed(&self) -> bool {
         false
     }
 
-    /// Walk `root` server-side, streaming a `HashHit` per entry (rel path) into
-    /// `tx`; computes MD5 per file when `want_hash`. `Ok(true)` means the walk
-    /// completed; `Ok(false)` is reserved for an explicitly unsupported
-    /// capability and may only be returned before sending entries. All failures
-    /// after dispatch are errors so callers never merge partial and fallback
-    /// snapshots.
+    /// Walk `root` on the server, streaming a `HashHit` per entry into `tx`
+    /// (MD5 when `want_hash`). `Ok(false)` only for "unsupported" before any
+    /// entry; later failures are errors, so partial walks never merge.
     fn walk_hashed(
         &self,
         root: &str,

@@ -22,6 +22,8 @@ mod batch;
 mod cache;
 #[path = "core/capabilities.rs"]
 mod capabilities;
+#[path = "core/congestion.rs"]
+mod congestion;
 #[path = "os/shared/copy_transfer.rs"]
 mod copy_transfer;
 #[path = "core/core.rs"]
@@ -57,9 +59,9 @@ pub use self::cache::CachingBackend;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 pub(crate) use self::copy_transfer::copy_between;
 pub use self::core::{
-    Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink,
-    ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme, SearchHit, VfsChange,
-    VfsChangeBatch, VfsMeta, VfsResult,
+    congestion_error, congestion_of, Backend, BackendHandle, BatchGet, BatchLimits, BatchPut,
+    BatchPutOutcome, BatchSink, ChangeKind, Congestion, DedupeCandidate, DeleteDisposition,
+    HashHit, Scheme, SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
 };
 pub(crate) use self::delete::validate_child_name;
 pub use self::delete::{

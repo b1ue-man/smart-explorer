@@ -81,6 +81,7 @@ pub(crate) fn drain_transfer(ctx: &TaskCtx, mut active: ActiveTransfer) -> Outco
                 progress,
                 errors,
                 canceled,
+                ..
             }) => {
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();

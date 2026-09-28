@@ -52,6 +52,12 @@ pub struct TransferProgress {
     /// Where the transfer reads from and writes to, for displays.
     pub source: String,
     pub target: String,
+    /// A short hint about the current state or a limit of the connection
+    /// (for example "verbinde …" or a provider's rate for new files).
+    pub note: Option<String>,
+    /// The complete issue log of this transfer (one JSON object per line),
+    /// once the first issue was written.
+    pub log_path: Option<String>,
 }
 
 impl TransferProgress {
@@ -80,6 +86,8 @@ impl TransferProgress {
             parallel: 0,
             source: String::new(),
             target: String::new(),
+            note: None,
+            log_path: None,
         }
     }
 
@@ -94,12 +102,38 @@ impl TransferProgress {
     }
 }
 
+/// One entry that was not transferred, or a problem of the whole transfer
+/// (empty `path`), for lists users can read and copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferIssue {
+    pub path: String,
+    pub message: String,
+}
+
+/// Where a selected entry landed below the target folder (possibly under a
+/// numbered name). A later "transfer missing files" run of the same job
+/// reuses these instead of creating new copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRoot {
+    /// The selected source path.
+    pub source: String,
+    /// Its destination relative to the target folder.
+    pub rel: String,
+}
+
 #[derive(Clone, Debug)]
 pub enum TransferMsg {
     Progress(TransferProgress),
     Done {
         progress: TransferProgress,
+        /// Display lines of the first issues (legacy consumers).
         errors: Vec<String>,
         canceled: bool,
+        /// The first issues with their paths; the full list is in
+        /// `progress.log_path`.
+        issues: Vec<TransferIssue>,
+        /// Destination roots of the selected entries, for "transfer missing
+        /// files" after a cancel or failure.
+        roots: Vec<ResolvedRoot>,
     },
 }

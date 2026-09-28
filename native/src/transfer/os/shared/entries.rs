@@ -120,7 +120,7 @@ pub(super) struct RemoteFileEntry {
     pub(super) size: u64,
 }
 
-pub(super) struct RemoteFilterCtx {
+pub(crate) struct RemoteFilterCtx {
     cf: CompiledFilter,
     filter: FilterDef,
     root_prefix: String,
@@ -135,7 +135,7 @@ impl RemoteFilterCtx {
         }
     }
 
-    pub(super) fn depth_for(&self, path: &str) -> u32 {
+    pub(crate) fn depth_for(&self, path: &str) -> u32 {
         let path = path.trim_end_matches('/');
         let root = self.root_prefix.as_str();
         if path == root {
@@ -151,16 +151,16 @@ impl RemoteFilterCtx {
         rel.split('/').filter(|s| !s.is_empty()).count() as u32
     }
 
-    pub(super) fn matches(&self, e: &FileEntry) -> bool {
+    pub(crate) fn matches(&self, e: &FileEntry) -> bool {
         self.cf.matches(e, &self.root_prefix)
     }
 
-    pub(super) fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
+    pub(crate) fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
         (!e.hidden || self.filter.include_hidden) && (!e.system || self.filter.include_system)
     }
 }
 
-pub(super) fn compile_remote_filter(
+pub(crate) fn compile_remote_filter(
     filter: Option<(FilterDef, String)>,
 ) -> Option<RemoteFilterCtx> {
     filter.map(|(filter, root_prefix)| RemoteFilterCtx::new(filter, root_prefix))

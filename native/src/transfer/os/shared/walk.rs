@@ -1,14 +1,18 @@
 //! Streaming, parallel discovery of a selection. Folders are listed
-//! concurrently under the source connection's flow, and every entry is
-//! emitted as soon as it is known, a folder always before its contents.
-//! Nothing is collected first: a transfer starts with the first listing, and
-//! an Explorer hand-off lists exactly once, when the Explorer asks.
+//! concurrently under the source connection's flow (listings may use its
+//! reserved metadata slot), and every entry is emitted as soon as it is known,
+//! a folder always before its contents. Nothing is collected first: a
+//! transfer starts with the first listing, and an Explorer hand-off lists
+//! exactly once, when the Explorer asks.
+use super::access::{with_access_detail, AccessAnswer, AccessGate};
 use super::entries::{remote_file_entry, remote_parent, validate_transfer_name, RemoteFilterCtx};
 use super::flow::{classify_error, Flow};
 use super::flow_control::OpOutcome;
 use super::walk_listers::{Listed, Lister};
 use crate::types::FileEntry;
+use crate::vfs::remote_util::numbered_remote_name;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -34,20 +38,29 @@ pub(crate) enum WalkEvent {
         size: u64,
         mtime_ms: i64,
         id: Option<String>,
+        md5: Option<String>,
     },
     /// Left out on purpose (the active app trash); not an error.
     Omitted { path: String },
     /// Not transferred: listing failed, link or special file, invalid or
     /// duplicate name, nesting too deep.
     Problem { path: String, message: String },
+    /// The user declined read access for a protected folder; the walk stops.
+    AccessRefused { path: String },
 }
 
+#[derive(Default)]
 pub(crate) struct WalkOptions {
     pub filter: Option<RemoteFilterCtx>,
     /// Emit folder events; unfiltered tree copies keep empty folders.
     pub folders: bool,
     /// Every file lands directly in the target folder under its own name.
     pub flatten: bool,
+    /// Asked once when a local listing is refused (protected folders).
+    pub access: Option<Arc<AccessGate>>,
+    /// Names may contain `\`: local copies on Unix, where it is an ordinary
+    /// character. Every other rule of `vfs::validate_child_name` still holds.
+    pub allow_backslash: bool,
 }
 
 struct Pending {
@@ -56,9 +69,20 @@ struct Pending {
     depth: usize,
 }
 
+enum Task {
+    /// Selected entries of one folder, answered by one listing of it.
+    Roots {
+        parent: String,
+        members: Vec<WalkRoot>,
+    },
+    /// One selected entry, inspected on its own.
+    Root(WalkRoot),
+    Dir(Pending),
+}
+
 #[derive(Default)]
 struct Shared {
-    queue: VecDeque<Pending>,
+    queue: VecDeque<Task>,
     active: usize,
     stop: bool,
 }
@@ -76,7 +100,8 @@ struct Walk<'a> {
 
 /// Walks `roots` and hands every event to `emit`, which may block (bounded
 /// channels) and returns false to stop the walk. Returns false when the walk
-/// was canceled or stopped before it finished.
+/// was canceled or stopped (also by a declined access request) before it
+/// finished.
 pub(crate) fn walk(
     lister: &dyn Lister,
     roots: &[WalkRoot],
@@ -95,35 +120,7 @@ pub(crate) fn walk(
         changed: Condvar::new(),
         listers: AtomicUsize::new(0),
     };
-    // Selected entries are answered by one listing of their folder: a fresh
-    // stat per entry would cost one round trip each (thousands for a Ctrl+A).
-    let mut groups: Vec<(String, Vec<&WalkRoot>)> = Vec::new();
-    for root in roots {
-        let parent = parent_dir(&root.path);
-        match groups.iter_mut().find(|(known, _)| *known == parent) {
-            Some((_, members)) => members.push(root),
-            None => groups.push((parent, vec![root])),
-        }
-    }
-    for (parent, members) in groups {
-        if walk.stopped() {
-            break;
-        }
-        let listed = if members.len() > 1 {
-            walk.list_parent(&parent)
-        } else {
-            None
-        };
-        for root in members {
-            if walk.stopped() {
-                break;
-            }
-            let known = listed
-                .as_ref()
-                .and_then(|entries| entries.get(base_name(&root.path)).cloned());
-            walk.root(root, known);
-        }
-    }
+    walk.queue_roots(roots);
     std::thread::scope(|scope| loop {
         let mut shared = walk.lock();
         if shared.stop || cancel.load(Ordering::Acquire) {
@@ -134,9 +131,12 @@ pub(crate) fn walk(
         if queued == 0 && shared.active == 0 {
             break;
         }
+        // Listers that hold no task pick up queued ones themselves; start
+        // another only for tasks beyond them, within the connection's limit.
         let running = walk.listers.load(Ordering::Acquire);
+        let idle = running.saturating_sub(shared.active);
         let allowed = flow.snapshot().limit.max(1);
-        if queued > 0 && running < queued && running < allowed {
+        if queued > idle && running < allowed {
             drop(shared);
             walk.listers.fetch_add(1, Ordering::AcqRel);
             scope.spawn(|| walk.lister_loop());
@@ -157,23 +157,6 @@ fn join(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
 }
 
-/// The folder holding `path`; top-level entries resolve to their root.
-fn parent_dir(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    match trimmed.rsplit_once('/') {
-        Some(("", _)) | None => "/".to_string(),
-        Some((parent, _)) if parent.ends_with(':') => format!("{parent}/"),
-        Some((parent, _)) => parent.to_string(),
-    }
-}
-
-fn base_name(path: &str) -> &str {
-    path.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-}
-
 fn filter_entry(path: &str, listed: &Listed, filter: &RemoteFilterCtx) -> FileEntry {
     let meta = crate::vfs::VfsMeta {
         name: listed.name.clone(),
@@ -190,7 +173,27 @@ fn filter_entry(path: &str, listed: &Listed, filter: &RemoteFilterCtx) -> FileEn
     remote_file_entry(path, &remote_parent(path), &meta, filter.depth_for(path))
 }
 
-fn outcome<T>(result: &std::io::Result<T>) -> OpOutcome {
+/// Providers such as Drive allow several files of one name in a folder. A
+/// further file whose id differs from the first one is still transferred,
+/// read by its id, under the first free numbered name. Folders of one name
+/// cannot be listed apart and stay a reported problem.
+fn duplicate_name(
+    child: &Listed,
+    first_id: Option<&str>,
+    taken: &HashSet<String>,
+    assigned: &HashSet<String>,
+) -> Option<String> {
+    let distinct =
+        matches!((first_id, child.id.as_deref()), (Some(first), Some(id)) if first != id);
+    if !distinct || child.is_dir || child.is_link {
+        return None;
+    }
+    (2..)
+        .map(|index| numbered_remote_name(&child.name, index))
+        .find(|name| !taken.contains(name) && !assigned.contains(name))
+}
+
+fn outcome<T>(result: &io::Result<T>) -> OpOutcome {
     match result {
         Ok(_) => OpOutcome::Done,
         Err(error) => classify_error(error),
@@ -208,12 +211,16 @@ impl Walk<'_> {
         self.cancel.load(Ordering::Acquire) || self.lock().stop
     }
 
+    fn halt(&self) {
+        self.lock().stop = true;
+        self.changed.notify_all();
+    }
+
     fn send(&self, event: WalkEvent) -> bool {
         if (self.emit)(event) {
             return true;
         }
-        self.lock().stop = true;
-        self.changed.notify_all();
+        self.halt();
         false
     }
 
@@ -224,91 +231,66 @@ impl Walk<'_> {
         })
     }
 
-    fn queue(&self, pending: Pending) {
-        self.lock().queue.push_back(pending);
+    fn queue(&self, task: Task) {
+        self.lock().queue.push_back(task);
         self.changed.notify_all();
     }
 
-    /// One listing of a folder holding several selected entries, by name;
-    /// `None` when it fails (each entry is then inspected on its own).
-    fn list_parent(&self, parent: &str) -> Option<HashMap<String, Listed>> {
-        let permit = self.flow.acquire(self.cancel)?;
-        let listed = self.lister.list(parent);
-        permit.finish(outcome(&listed));
-        listed.ok().map(|entries| {
-            entries
-                .into_iter()
-                .map(|entry| (entry.name.clone(), entry))
-                .collect()
-        })
+    /// One listing operation under a metadata permit. A local refusal asks
+    /// the access gate outside of every permit and retries once; `None` means
+    /// the walk stops (canceled, or the user declined access).
+    fn listed<T>(
+        &self,
+        path: &str,
+        operation: impl Fn() -> io::Result<T>,
+    ) -> Option<io::Result<T>> {
+        let permit = self.flow.acquire_meta(self.cancel)?;
+        let result = operation();
+        permit.finish(outcome(&result));
+        let error = match result {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => error,
+            other => return Some(other),
+        };
+        let Some(gate) = self.options.access.as_ref() else {
+            return Some(Err(error));
+        };
+        match gate.request() {
+            AccessAnswer::Granted => {
+                let permit = self.flow.acquire_meta(self.cancel)?;
+                let retried = operation();
+                permit.finish(outcome(&retried));
+                Some(retried)
+            }
+            AccessAnswer::Refused => {
+                self.send(WalkEvent::AccessRefused {
+                    path: path.to_string(),
+                });
+                self.halt();
+                None
+            }
+            AccessAnswer::Unavailable(detail) => {
+                Some(Err(with_access_detail(error, detail.as_deref())))
+            }
+        }
     }
 
-    fn root(&self, root: &WalkRoot, known: Option<Listed>) {
-        let listed = match known {
-            Some(listed) => listed,
-            None => {
-                let Some(permit) = self.flow.acquire(self.cancel) else {
-                    return;
-                };
-                let stat = self.lister.stat(&root.path);
-                permit.finish(outcome(&stat));
-                match stat {
-                    Ok(listed) => listed,
-                    Err(error) => {
-                        self.problem(&root.path, error.to_string());
-                        return;
-                    }
-                }
-            }
-        };
-        let name = base_name(&root.path);
-        if crate::apptrash::excluded_name(name) {
-            self.send(WalkEvent::Omitted {
-                path: root.path.clone(),
-            });
-            return;
+    fn name_problem(&self, name: &str, context: &str) -> Option<String> {
+        if !self.options.allow_backslash {
+            return validate_transfer_name(name, context).err();
         }
-        if let Some(problem) = listed.problem.as_deref() {
-            self.problem(&root.path, problem);
-            return;
-        }
-        if let Err(error) = validate_transfer_name(name, &root.path) {
-            self.problem(&root.path, error);
-            return;
-        }
-        if listed.is_link {
-            self.problem(&root.path, LINK_REFUSED);
-            return;
-        }
-        if listed.is_dir {
-            if self.options.folders
-                && !self.options.flatten
-                && !self.send(WalkEvent::Dir {
-                    path: root.path.clone(),
-                    rel: root.rel.clone(),
-                })
-            {
-                return;
-            }
-            self.queue(Pending {
-                path: root.path.clone(),
-                rel: root.rel.clone(),
-                depth: 0,
-            });
-            return;
-        }
-        let rel = if self.options.flatten {
-            name.to_string()
-        } else {
-            root.rel.clone()
-        };
-        self.send(WalkEvent::File {
-            path: root.path.clone(),
-            rel,
-            size: listed.size,
-            mtime_ms: listed.mtime_ms,
-            id: listed.id,
-        });
+        let unsafe_name =
+            name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0']);
+        unsafe_name.then(|| format!("{context}: backend returned unsafe child name: {name:?}"))
+    }
+
+    /// Link, special file, unaddressable or invalid name: the reason the
+    /// entry called `name` is not transferred.
+    fn refusal(&self, listed: &Listed, name: &str, context: &str) -> Option<String> {
+        listed
+            .problem
+            .clone()
+            .or_else(|| self.name_problem(name, context))
+            .or_else(|| listed.is_link.then(|| LINK_REFUSED.to_string()))
     }
 
     fn lister_loop(&self) {
@@ -325,10 +307,14 @@ impl Walk<'_> {
                     next
                 }
             };
-            let Some(pending) = next else {
+            let Some(task) = next else {
                 break;
             };
-            self.list_one(pending);
+            match task {
+                Task::Roots { parent, members } => self.roots(&parent, members),
+                Task::Root(root) => self.stat_root(root),
+                Task::Dir(pending) => self.list_one(pending),
+            }
             self.lock().active -= 1;
             self.changed.notify_all();
         }
@@ -344,59 +330,67 @@ impl Walk<'_> {
             );
             return;
         }
-        let Some(permit) = self.flow.acquire(self.cancel) else {
-            return;
-        };
-        let listed = self.lister.list(&pending.path);
-        permit.finish(outcome(&listed));
-        let children = match listed {
-            Ok(children) => children,
-            Err(error) => {
+        let children = match self.listed(&pending.path, || self.lister.list(&pending.path)) {
+            None => return,
+            Some(Ok(children)) => children,
+            Some(Err(error)) => {
                 self.problem(&pending.path, error.to_string());
                 return;
             }
         };
-        let mut names = HashSet::with_capacity(children.len());
+        let taken: HashSet<String> = children.iter().map(|child| child.name.clone()).collect();
+        let mut first_ids: HashMap<String, Option<String>> = HashMap::with_capacity(children.len());
+        let mut assigned: HashSet<String> = HashSet::new();
         for child in children {
             if self.stopped() {
                 return;
             }
             let path = join(&pending.path, &child.name);
-            if !names.insert(child.name.clone()) {
-                let message = format!("Backend lieferte den Namen {:?} mehrfach", child.name);
-                if !self.problem(&path, message) {
-                    return;
+            let name = match first_ids.get(&child.name) {
+                None => {
+                    first_ids.insert(child.name.clone(), child.id.clone());
+                    child.name.clone()
                 }
-                continue;
-            }
+                Some(first) => match duplicate_name(&child, first.as_deref(), &taken, &assigned) {
+                    Some(name) => {
+                        assigned.insert(name.clone());
+                        name
+                    }
+                    None => {
+                        let message =
+                            format!("Backend lieferte den Namen {:?} mehrfach", child.name);
+                        if !self.problem(&path, message) {
+                            return;
+                        }
+                        continue;
+                    }
+                },
+            };
             if crate::apptrash::excluded_name(&child.name) {
                 if !self.send(WalkEvent::Omitted { path }) {
                     return;
                 }
                 continue;
             }
-            let refused = child
-                .problem
-                .clone()
-                .or_else(|| validate_transfer_name(&child.name, &pending.path).err())
-                .or_else(|| child.is_link.then(|| LINK_REFUSED.to_string()));
-            if let Some(message) = refused {
+            if let Some(message) = self.refusal(&child, &child.name, &pending.path) {
                 if !self.problem(&path, message) {
                     return;
                 }
                 continue;
             }
-            if !self.child(&pending, path, child) {
+            if !self.child(&pending, path, &name, child) {
                 return;
             }
         }
     }
 
-    fn child(&self, parent: &Pending, path: String, child: Listed) -> bool {
+    /// `name` is the entry's name below the target: its own, or a numbered
+    /// one for a second file of the same name (see `duplicate_name`).
+    fn child(&self, parent: &Pending, path: String, name: &str, child: Listed) -> bool {
         let rel = if self.options.flatten {
-            child.name.clone()
+            name.to_string()
         } else {
-            format!("{}/{}", parent.rel, child.name)
+            format!("{}/{}", parent.rel, name)
         };
         if child.is_dir {
             if let Some(filter) = &self.options.filter {
@@ -413,11 +407,11 @@ impl Walk<'_> {
             {
                 return false;
             }
-            self.queue(Pending {
+            self.queue(Task::Dir(Pending {
                 path,
                 rel,
                 depth: parent.depth + 1,
-            });
+            }));
             return true;
         }
         if let Some(filter) = &self.options.filter {
@@ -431,9 +425,13 @@ impl Walk<'_> {
             size: child.size,
             mtime_ms: child.mtime_ms,
             id: child.id,
+            md5: child.md5,
         })
     }
 }
+
+#[path = "walk_roots.rs"]
+mod roots;
 
 #[cfg(test)]
 #[path = "walk_tests.rs"]

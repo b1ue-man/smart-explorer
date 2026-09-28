@@ -1,5 +1,9 @@
-//! Path keys of the listing cache: normalized directory keys and parents.
-use super::CachingBackend;
+//! Path keys of the listing cache (normalized directory keys and parents),
+//! child lookups in retained snapshots and invalidation after mutations.
+use super::cache_index;
+use super::cache_retirement::Retirement;
+use super::cache_support::{self, cached_snapshot, invalidate_shared};
+use super::{CachingBackend, VfsMeta, VfsResult};
 
 impl CachingBackend {
     pub(super) fn norm(path: &str) -> String {
@@ -40,5 +44,39 @@ impl CachingBackend {
             None => Some(("/".to_string(), key)),
             _ => None,
         }
+    }
+
+    pub(super) fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
+        let (parent, name) = Self::parent_and_name(key)?;
+        let mut retired = Retirement::default();
+        let snapshot = {
+            let mut cache = self.cache.lock().ok()?;
+            cached_snapshot(&mut cache, &parent, &mut retired)?
+        };
+        drop(retired);
+        let key = (self.child_key)(name);
+        cache_index::lookup(&snapshot.entries, &snapshot.index, &key)
+            .ok()
+            .flatten()
+    }
+
+    pub(super) fn invalidate(&self, path: &str) {
+        invalidate_shared(&self.cache, path);
+    }
+
+    pub(super) fn invalidate_prefix(&self, path: &str) {
+        cache_support::invalidate_prefix(&self.cache, path);
+    }
+
+    pub(super) fn invalidate_ancestors(&self, path: &str) {
+        cache_support::invalidate_ancestors(&self.cache, path);
+    }
+
+    /// Resolves one child from the retained snapshot without cloning or
+    /// rescanning a wide directory on every path component.
+    pub(crate) fn unique_child(&self, parent: &str, requested: &str) -> VfsResult<Option<VfsMeta>> {
+        let snapshot = self.directory_snapshot(parent)?;
+        let requested_key = (self.child_key)(requested);
+        cache_index::lookup(&snapshot.entries, &snapshot.index, &requested_key)
     }
 }

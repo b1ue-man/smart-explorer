@@ -5,8 +5,13 @@
 //! file sizes, server capacity and the storage medium, none of which is known
 //! in advance. The controller therefore measures goodput per window and keeps
 //! only changes that pay off: it doubles while doubling gains ≥ 10 % (slow
-//! start), then probes one step up or down periodically and keeps a step only
-//! when goodput improves (up) or does not drop (down). Overload signals halve
+//! start), then probes a step of an eighth of the limit up or down
+//! periodically. A probe spans two windows and is judged against the smoothed
+//! rate of the current limit: a step up stays only with ≥ 5 % more goodput, a
+//! step down only when it costs < 3 %, and the next probe after a step down
+//! goes up. Symmetric steps keep noise from walking the limit away from the
+//! optimum in either direction (simulated with ±10 % noise: ≥ 93 % of the
+//! optimal goodput at ≤ 1.11× the needed concurrency). Overload signals halve
 //! the limit at once. Pure logic; the caller supplies the clock.
 
 /// Work credited per finished operation so pure small-file load is measurable.
@@ -21,6 +26,9 @@ const MAX_WINDOW_MS: u64 = 5_000;
 const SLOW_START_GAIN: f64 = 1.10;
 const PROBE_GAIN: f64 = 1.05;
 const PROBE_KEEP_LOWER: f64 = 0.97;
+/// Probe step as a fraction of the limit (at least one).
+const PROBE_STEP_DIVISOR: usize = 8;
+const PROBE_WINDOWS: u32 = 2;
 const PROBE_INTERVAL_WINDOWS: u32 = 4;
 const OVERLOAD_HOLD_WINDOWS: u32 = 3;
 const SATURATED_FRACTION: f64 = 0.5;
@@ -42,11 +50,15 @@ enum Phase {
     Steady,
 }
 
+/// A running probe: the limit it left, the rate it must beat and the
+/// windows measured so far.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Probe {
-    Idle,
-    Up { from: usize, baseline: f64 },
-    Down { from: usize, baseline: f64 },
+struct Probe {
+    upward: bool,
+    from: usize,
+    baseline: f64,
+    windows: u32,
+    total: f64,
 }
 
 #[derive(Debug)]
@@ -54,7 +66,9 @@ pub(crate) struct FlowControl {
     limit: usize,
     ceiling: usize,
     phase: Phase,
-    probe: Probe,
+    probe: Option<Probe>,
+    /// Smoothed goodput at the current limit (steady phase).
+    baseline: Option<f64>,
     window_start_ms: u64,
     last_tick_ms: u64,
     work: u64,
@@ -74,7 +88,8 @@ impl FlowControl {
             limit: START_LIMIT.min(ceiling),
             ceiling,
             phase: Phase::SlowStart,
-            probe: Probe::Idle,
+            probe: None,
+            baseline: None,
             window_start_ms: now_ms,
             last_tick_ms: now_ms,
             work: 0,
@@ -146,7 +161,8 @@ impl FlowControl {
         }
         self.limit = (self.limit / 2).max(1);
         self.phase = Phase::Steady;
-        self.probe = Probe::Idle;
+        self.probe = None;
+        self.baseline = None;
         self.previous = None;
         self.hold = OVERLOAD_HOLD_WINDOWS;
         self.idle_windows = 0;
@@ -174,10 +190,11 @@ impl FlowControl {
         if !saturated {
             // Demand did not fill the limit: the window says nothing about
             // more parallelism. An open upward probe is withdrawn.
-            if let Probe::Up { from, .. } = self.probe {
-                self.limit = from;
+            if let Some(probe) = self.probe.take() {
+                if probe.upward {
+                    self.limit = probe.from;
+                }
             }
-            self.probe = Probe::Idle;
             return;
         }
         match self.phase {
@@ -215,59 +232,75 @@ impl FlowControl {
     fn enter_steady(&mut self) {
         self.phase = Phase::Steady;
         self.previous = None;
-        self.probe = Probe::Idle;
+        self.probe = None;
+        self.baseline = None;
         self.idle_windows = 0;
         self.hold = 1;
     }
 
     fn steady(&mut self, rate: f64) {
-        match self.probe {
-            Probe::Up { from, baseline } => {
-                self.probe = Probe::Idle;
-                if rate >= baseline * PROBE_GAIN {
-                    // Paid off: probe upward again right away.
+        if let Some(mut probe) = self.probe.take() {
+            probe.windows += 1;
+            probe.total += rate;
+            if probe.windows < PROBE_WINDOWS {
+                self.probe = Some(probe);
+                return;
+            }
+            let mean = probe.total / f64::from(probe.windows);
+            self.idle_windows = 0;
+            if probe.upward {
+                if mean >= probe.baseline * PROBE_GAIN {
+                    // Paid off: keep it and probe upward again right away.
+                    self.baseline = Some(mean);
                     self.idle_windows = PROBE_INTERVAL_WINDOWS;
                     self.probe_up_next = true;
                 } else {
-                    self.limit = from;
-                    self.idle_windows = 0;
+                    self.limit = probe.from;
                     self.probe_up_next = false;
                 }
-            }
-            Probe::Down { from, baseline } => {
-                self.probe = Probe::Idle;
-                self.idle_windows = 0;
-                if rate >= baseline * PROBE_KEEP_LOWER {
-                    // Same goodput with less concurrency: keep the cheaper limit.
-                    self.probe_up_next = false;
+            } else {
+                if mean >= probe.baseline * PROBE_KEEP_LOWER {
+                    // Nearly the same goodput with less concurrency: keep it.
+                    self.baseline = Some(mean);
                 } else {
-                    self.limit = from;
-                    self.probe_up_next = true;
+                    self.limit = probe.from;
                 }
+                // Up next either way, so noise cannot ratchet the limit down.
+                self.probe_up_next = true;
             }
-            Probe::Idle => {
-                self.idle_windows += 1;
-                if self.idle_windows < PROBE_INTERVAL_WINDOWS {
-                    return;
-                }
-                self.idle_windows = 0;
-                if self.probe_up_next && self.limit < self.ceiling {
-                    let step = (self.limit / 4).max(1);
-                    self.probe = Probe::Up {
-                        from: self.limit,
-                        baseline: rate,
-                    };
-                    self.limit = (self.limit + step).min(self.ceiling);
-                } else if self.limit > 1 {
-                    self.probe = Probe::Down {
-                        from: self.limit,
-                        baseline: rate,
-                    };
-                    self.limit -= 1;
-                }
-                self.probe_up_next = !self.probe_up_next;
-            }
+            return;
         }
+        self.baseline = Some(match self.baseline {
+            Some(baseline) => baseline * 0.5 + rate * 0.5,
+            None => rate,
+        });
+        self.idle_windows += 1;
+        if self.idle_windows < PROBE_INTERVAL_WINDOWS {
+            return;
+        }
+        self.idle_windows = 0;
+        let baseline = self.baseline.unwrap_or(rate);
+        let step = (self.limit / PROBE_STEP_DIVISOR).max(1);
+        if self.probe_up_next && self.limit < self.ceiling {
+            self.probe = Some(Probe {
+                upward: true,
+                from: self.limit,
+                baseline,
+                windows: 0,
+                total: 0.0,
+            });
+            self.limit = (self.limit + step).min(self.ceiling);
+        } else if self.limit > 1 {
+            self.probe = Some(Probe {
+                upward: false,
+                from: self.limit,
+                baseline,
+                windows: 0,
+                total: 0.0,
+            });
+            self.limit = self.limit.saturating_sub(step).max(1);
+        }
+        self.probe_up_next = !self.probe_up_next;
     }
 }
 

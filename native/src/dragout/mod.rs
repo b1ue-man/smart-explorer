@@ -16,6 +16,11 @@ pub enum DragOutOutcome {
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod imp;
+#[cfg(windows)]
+#[path = "os/remote.rs"]
+mod remote;
 
 #[cfg(windows)]
 pub use imp::*;
+#[cfg(windows)]
+pub use remote::drag_out_remote;

@@ -1,10 +1,8 @@
 //! Directory listing sources for the discovery walker: any `vfs::Backend`, or
-//! the local filesystem through `local_access` (verbatim paths for Win32-
-//! hostile names, one consented read-access request for protected folders).
+//! the local filesystem through `local_access`.
 use crate::vfs::{Backend, VfsMeta};
 use std::io;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 /// One child entry as the walker needs it.
 #[derive(Clone, Debug, Default)]
@@ -18,6 +16,8 @@ pub(crate) struct Listed {
     pub hidden: bool,
     pub system: bool,
     pub id: Option<String>,
+    /// Content MD5 the provider lists for free (Drive, Nextcloud).
+    pub md5: Option<String>,
     /// The entry exists but cannot be addressed (for example a name that is
     /// not valid Unicode); it is reported, not transferred.
     pub problem: Option<String>,
@@ -35,6 +35,7 @@ impl From<VfsMeta> for Listed {
             hidden: meta.hidden,
             system: meta.system,
             id: meta.id,
+            md5: meta.content_md5,
             problem: None,
         }
     }
@@ -63,50 +64,10 @@ impl Lister for BackendLister<'_> {
     }
 }
 
-/// The local filesystem. A permission refusal asks once for the scoped read
-/// grant of `root`; the answer holds for every later refusal of this walk.
-pub(crate) struct LocalLister {
-    root: String,
-    access: Mutex<Option<bool>>,
-}
-
-impl LocalLister {
-    pub(crate) fn new(root: &str) -> Self {
-        Self {
-            root: root.to_string(),
-            access: Mutex::new(None),
-        }
-    }
-
-    fn with_access<T>(&self, operation: impl Fn() -> io::Result<T>) -> io::Result<T> {
-        match operation() {
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                if self.access_granted() {
-                    operation()
-                } else {
-                    Err(error)
-                }
-            }
-            other => other,
-        }
-    }
-
-    /// One consent request per walk; concurrent listers wait for the answer.
-    fn access_granted(&self) -> bool {
-        let mut access = self
-            .access
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(granted) = *access {
-            return granted;
-        }
-        let requested = crate::local_access::display_path(&native(&self.root));
-        let granted = crate::local_access::can_request_access(&requested)
-            && matches!(crate::local_access::request_access(&requested), Ok(true));
-        *access = Some(granted);
-        granted
-    }
-}
+/// The local filesystem through `local_access` (verbatim paths for Win32-
+/// hostile names). Permission refusals are returned as they are; the walker
+/// asks the transfer's `AccessGate` outside of any flow permit.
+pub(crate) struct LocalLister;
 
 pub(crate) fn native(path: &str) -> PathBuf {
     PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
@@ -115,7 +76,7 @@ pub(crate) fn native(path: &str) -> PathBuf {
 impl Lister for LocalLister {
     fn list(&self, dir: &str) -> io::Result<Vec<Listed>> {
         let path = native(dir);
-        self.with_access(|| {
+        {
             let mut listed = Vec::new();
             for entry in crate::local_access::read_directory(&path)? {
                 let entry = match entry {
@@ -150,16 +111,17 @@ impl Lister for LocalLister {
                     hidden: entry.hidden,
                     system: entry.system,
                     id: None,
+                    md5: None,
                     problem,
                 });
             }
             Ok(listed)
-        })
+        }
     }
 
     fn stat(&self, path: &str) -> io::Result<Listed> {
         let native_path = native(path);
-        self.with_access(|| {
+        {
             let metadata = crate::local_access::symlink_metadata(&native_path)?;
             let is_link = crate::local_access::metadata_is_link_like(&native_path, &metadata);
             let name = path
@@ -184,8 +146,9 @@ impl Lister for LocalLister {
                 hidden: false,
                 system: false,
                 id: None,
+                md5: None,
                 problem: None,
             })
-        })
+        }
     }
 }
