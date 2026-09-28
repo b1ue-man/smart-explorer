@@ -32,6 +32,7 @@ $env:CARGO_INCREMENTAL = '1'
 $env:CARGO_PROFILE_DEV_DEBUG = '0'
 $env:CARGO_PROFILE_TEST_DEBUG = '0'
 $env:CARGO_TERM_COLOR = 'never'
+. (Join-Path $nativeRoot 'windows-remote-task-diagnostics.ps1')
 
 function Invoke-TaskProcess {
     param([string]$File, [string[]]$Arguments, [int]$Seconds, [string]$Label, [switch]$Fixture)
@@ -44,6 +45,9 @@ function Invoke-TaskProcess {
     $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     if ($Fixture) {
+        foreach ($key in @($start.Environment.Keys)) {
+            if ($key -match '(?i)(TOKEN|SECRET|PASSWORD|CREDENTIAL)') { [void]$start.Environment.Remove($key) }
+        }
         $start.Environment['SMART_EXPLORER_COPY_PASTE_TASK'] = '1'
         $start.Environment['SMART_EXPLORER_WINDOWS_REMOTE_TASK'] = '1'
         $start.Environment['APPDATA'] = Join-Path $fixtureProfile 'roaming'
@@ -55,6 +59,7 @@ function Invoke-TaskProcess {
     $process.StartInfo = $start
     $stdout = $null
     $stderr = $null
+    $started = [datetime]::Now
     try {
         if (-not $process.Start()) { throw "$Label did not start." }
         $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -68,6 +73,7 @@ function Invoke-TaskProcess {
             }
             Start-Sleep -Milliseconds 200
         }
+        Save-WindowsRemoteTaskExit $process.ExitCode $process.Id $started $Label $LogRoot $Fixture.IsPresent
         return [pscustomobject]@{ Code = $process.ExitCode; Output = $stdout.Result; Error = $stderr.Result }
     } finally {
         foreach ($entry in @(@('stdout', $stdout), @('stderr', $stderr))) {
@@ -115,7 +121,7 @@ if (-not [IO.File]::Exists((Join-Path $nativeRoot 'assets/dokany-private/dokan2.
 
 # One affected library build, or a source/hash-bound existing development binary.
 $cacheHelper = Join-Path $nativeRoot 'mount-task-binary-cache.ps1'
-foreach ($path in @($PSCommandPath, $cacheHelper)) {
+foreach ($path in @($PSCommandPath, $cacheHelper, (Join-Path $nativeRoot 'windows-remote-task-diagnostics.ps1'))) {
     $tokens = $null
     $errors = $null
     [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
@@ -188,7 +194,12 @@ $requiredCases = @(
 foreach ($required in $requiredCases) {
     if (-not $selected.Output.Contains("$required`: test")) { throw "Missing task acceptance case: $required" }
 }
-$result = Invoke-TaskProcess $TestBinary @('windows_remote_task_', '--include-ignored', '--nocapture', '--test-threads=1') 1800 'windows-remote' -Fixture
+$dumpKey = Enable-WindowsRemoteTaskDump $TestBinary $LogRoot
+try {
+    $result = Invoke-TaskProcess $TestBinary @('windows_remote_task_', '--include-ignored', '--nocapture', '--test-threads=1') 1800 'windows-remote' -Fixture
+} finally {
+    Remove-Item -LiteralPath $dumpKey -Recurse -Force
+}
 Write-Host $result.Output
 foreach ($line in ($result.Error -split '\r?\n')) {
     if ($line.StartsWith('ANALYSIS_TIMING ')) { Write-Host $line }

@@ -334,6 +334,11 @@ and corrupted/truncated result streams. `ANALYSIS_TIMING` in the task log record
 local scan, host scan and GUI end-to-end durations separately; no network-wide
 speed claim follows from a loopback measurement.
 It uses isolated profiles and loopback peers, and performs no release build.
+Its task diagnostics retain numeric/hex process exits, Windows crash events,
+mount lifecycle traces and a minidump on a native fixture crash. Dump policy is
+scoped to that executable and removed afterward; fixture processes omit
+credential environment variables. The real volume case includes bounded
+repeated create/access/close cycles to investigate intermittent native failure.
 See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must
 not invoke this task entrypoint on the workstation.
 

@@ -142,9 +142,25 @@ measured counters for canceled and disconnected workers. Cover these transitions
 through the same remote suite using the isolated GUI fixture. Starting a new
 scan may still detach the canceled predecessor; it must never reuse its results.
 
-Implementation checkpoint: source milestones M1–M4 and M7–M9 are committed.
-The single expanded M5/M10 Windows suite is running remotely. Neither a
-throughput result nor a successful release is claimed at this checkpoint.
+Remote evidence: [candidate da354c4](https://github.com/b1ue-man/smart-explorer/actions/runs/36423440788)
+completed real Windows drive access and the full GUI/worker/QUIC analysis path.
+For 5,289 files the measured local/host/GUI durations were 43/12/18 ms, with no
+per-file metadata calls. Direct ran second with a warmed filesystem cache; this
+is loopback evidence, not a WAN throughput guarantee. That suite failed on an
+incorrect expected repair-fixture result, corrected in 2699c42.
+
+The [2699c42 run](https://github.com/b1ue-man/smart-explorer/actions/runs/36425313803)
+recorded 10/10/15 ms for the same analysis, then terminated without a Rust panic
+during real drive access. That crash is unresolved: a prior mount pass does not
+establish reliability. Extend M5's same entrypoint with process exit codes,
+Windows Application Error/WER events, a task-executable-only minidump, and
+mount-stage traces. Remove credential environment variables from the isolated
+fixture before enabling dump capture. Investigate the failed boundary, correct
+its cause, and rerun only this suite before any release.
+
+Primary diagnostic reference checked 2026-09-28:
+[Microsoft WER local dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps).
+No release is claimed at this checkpoint.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
