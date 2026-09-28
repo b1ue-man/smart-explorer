@@ -1,4 +1,4 @@
-# Windows remote mount and long-running Direct repair
+# Windows remote mount, Direct lifetime and storage analysis repair
 
 Investigation date: 2026-09-28. Reported client: 0.5.164. Acceptance is pending;
 this document is a task plan and evidence, not a release claim.
@@ -134,6 +134,10 @@ walks. The acceptance fixture must traverse the real agent/worker bridge and
 assert that no per-file metadata request reaches the peer. Socket cancellation
 must wake the real receiver, rather than discarding partially read frames on a
 poll timeout (same TCP framing research as M4).
+
+Implementation checkpoint: source milestones M1–M4 and M7–M9 are committed.
+The single expanded M5/M10 Windows suite has not run yet. Neither a throughput
+result nor a successful release is claimed at this checkpoint.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least

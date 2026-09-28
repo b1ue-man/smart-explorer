@@ -125,6 +125,12 @@ Direkt-/Relay-/SSH-Verbindungswege und Fallbacks; Anmeldedaten und das eigentlic
 Remote-Ziel bleiben im Daemon und werden nicht an den isolierten
 Dateisystem-Host weitergereicht.
 
+Enthält eine Gerätefreigabe Namen, die Windows als gleich behandelt (etwa
+`Docs` und `docs`), zeigt das Laufwerk beide mit einem eindeutigen
+`[se-…]`-Zusatz an. Dateiendungen bleiben erhalten. Diese Anzeigenamen gelten
+nur im Laufwerk; die Remote-Dateien und gespeicherten Share-Pfade werden nicht
+umbenannt. Zugriffe ohne den Zusatz bleiben bei einer Kollision gesperrt.
+
 Eine laufende Einbindung besitzt deshalb erwartungsgemäß drei Prozesse: GUI,
 den langlebigen Smart-Explorer-Daemon und genau einen isolierten Mount-Host.
 Der Daemon besitzt das gemeinsame `Backend` und dessen aktive Sitzung; der
@@ -391,12 +397,19 @@ erstellen, per Code beitreten, gegenseitige Mitgliedschaft, Raum-Exporte,
 Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs auf
 Raum-Ziele nutzen denselben Backend-Pfad.
 
-Die Speicheranalyse eines Direct- oder Raum-Ziels lässt den entfernten
-Share-Client den vollständigen, begrenzten logischen Baum aufbauen. Er überträgt
-anschließend den fertigen Snapshot samt Fortschritt, Summen und SHA-256-Prüfung;
-der anfragende Client validiert es und zeigt daraus direkt die Treemap, statt
-den Baum aus einzeln zurückgesendeten Metadatenknoten zusammenzusetzen. Nur bei
-einem älteren Peer ohne diese Fähigkeit greift der bisherige Walk-Fallback.
+Die Speicheranalyse eines Direct- oder Raum-Ziels nutzt im aktuellen Quellstand
+für lokale und UNC-Freigaben denselben Analyse-Worker auf der Gegenstelle wie
+beim eigenen Laufwerk. Auch der lokale GUI-/Daemon-Pfad leitet diese Operation
+weiter. Fortschritt umfasst tatsächlich erfasste Dateien, Ordner und Bytes,
+Arbeitsphase und Pfad; ausbleibende Änderungen und das Alter der letzten Meldung
+bleiben sichtbar. Der fertige Baum wird anschließend in begrenzten Blöcken mit
+Längen- und SHA-256-Prüfung übertragen. Teilresultate, Lesefehler, Abbruch und
+zusammengefasste Verzeichnisse behalten den Status des lokalen Workers.
+Bei älteren Gegenstellen bleibt der bisherige Analysepfad verfügbar; fehlende
+Ordnerzähler werden als „nicht gemeldet“ ausgewiesen. Scan und Ergebnisübertragung
+sind getrennte Phasen; eine gleiche Gesamtdauer über beliebige Netzverbindungen
+wird nicht behauptet. Abnahme und Veröffentlichung dieses Reparaturstands:
+[Windows-/Direct-Regressionsplan](docs/WINDOWS_REMOTE_REGRESSION.md).
 
 **Lokale Windows-Speicheranalyse (ab 0.5.153):**
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
@@ -888,6 +901,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    `analytics-access-task.yml` mit `native/test-analytics-access-task.ps1`
    (Windows 2025, echte Zugriffs-/Token-Prüfung); er wiederholt nicht die
    Mount-Suite. Release-Abfragen durch Agenten erfolgen höchstens alle 30 Minuten.
+   Der gemeinsame Windows-/Direct-Regressionsblock einschließlich Speicheranalyse
+   nutzt ausschließlich `windows-remote-task.yml` mit
+   `native/test-windows-remote-task.ps1`: echtes Windows-Laufwerk, Direct-Reparatur
+   sowie lokaler/entfernter Analysevergleich über den tatsächlichen Worker-Pfad.
 2. Für den automatisierten Remote-Pfad `build.yml` genau einmal auf `main` mit
    `complete_release_source_sha=<vollständiger aktueller origin/main-SHA>`
    dispatchen; `verify_release_candidate` und `publish_release` bleiben dabei

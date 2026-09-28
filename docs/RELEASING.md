@@ -319,6 +319,24 @@ The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
 run an exact-candidate verification pipeline by hand first.
 
+For the Windows device-share mount, long-running Direct and storage-analysis regression, use
+only `.github/workflows/windows-remote-task.yml` with the full pushed
+`candidate_sha`. Its single entrypoint is `native/test-windows-remote-task.ps1`.
+It reuses a source/hash-bound development library test binary or incrementally
+builds that target once. On Windows 2025 it installs the pinned official Dokany
+runtime and uses the already committed private DLL. The suite covers actual
+mounted Share access, collision routing and permissions, repair worker lifetime,
+live route renewal, bounded handshake admission and fragmented signaling. It
+also compares the identical local and Direct analysis worker through the real
+GUI-agent/daemon IPC/cache boundary, rejects per-file network traversal, checks
+actual counters, partial outcomes, aggregation, cancellation, junction boundaries
+and corrupted/truncated result streams. `ANALYSIS_TIMING` in the task log records
+local scan, host scan and GUI end-to-end durations separately; no network-wide
+speed claim follows from a loopback measurement.
+It uses isolated profiles and loopback peers, and performs no release build.
+See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must
+not invoke this task entrypoint on the workstation.
+
 For remote automation, dispatch `.github/workflows/build.yml` exactly once from
 the `main` ref with `complete_release_source_sha` set to the full current
 `origin/main` object ID. Leave `verify_release_candidate` and `publish_release`

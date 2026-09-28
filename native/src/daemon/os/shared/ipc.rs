@@ -292,3 +292,7 @@ mod tests {
         assert!(require_token("abc", "def").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "windows_analysis_task_tests.rs"]
+mod windows_analysis_task_tests;

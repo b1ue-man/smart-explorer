@@ -18,6 +18,7 @@ pub fn scan_remote(backend: &dyn Backend, root: &str, progress: &Progress) -> Sc
     if !backend.supports_walk_tree() {
         return super::scan_backend(backend, root, progress);
     }
+    progress.set_phase(ScanPhase::Legacy, root);
     let on_progress = |files, bytes| {
         progress.files.store(before.files.saturating_add(files), Ordering::Relaxed);
         progress.bytes.store(before.bytes.saturating_add(bytes), Ordering::Relaxed);

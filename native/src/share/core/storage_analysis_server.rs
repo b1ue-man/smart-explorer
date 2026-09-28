@@ -114,3 +114,11 @@ async fn send_response(send: &mut SendStream, response: FsResponse) -> io::Resul
 fn canceled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "Analyse-Verbindung wurde beendet")
 }
+
+#[cfg(test)]
+#[path = "storage_analysis_task_tests.rs"]
+mod task_tests;
+
+#[cfg(all(test, windows))]
+#[path = "../os/windows/storage_analysis_task_tests.rs"]
+mod windows_task_tests;

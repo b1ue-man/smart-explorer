@@ -71,6 +71,7 @@ fn collect_children(
 ) -> crate::vfs::VfsResult<Vec<ChildMeta>> {
     progress.enter_directory(directory);
     let mut children = Vec::new();
+    let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
     let mut names = HashSet::new();
     for metadata in backend.list_dir(directory)? {
         progress.check_cancel()?;
@@ -92,10 +93,10 @@ fn collect_children(
         let path = child_path(directory, &metadata.name);
         if metadata.is_dir && crate::agent_proto::is_pseudo_dir(&path) { continue; }
         if metadata.is_dir {
-            progress.dirs.fetch_add(1, Ordering::Relaxed);
+            dirs = dirs.saturating_add(1);
         } else {
-            progress.files.fetch_add(1, Ordering::Relaxed);
-            progress.bytes.fetch_add(metadata.size, Ordering::Relaxed);
+            files = files.saturating_add(1);
+            bytes = bytes.saturating_add(metadata.size);
         }
         let _ = budget.claim(
             Path::new(&path),
@@ -109,6 +110,9 @@ fn collect_children(
             size: metadata.size,
         });
     }
+    progress.files.fetch_add(files, Ordering::Relaxed);
+    progress.dirs.fetch_add(dirs, Ordering::Relaxed);
+    progress.bytes.fetch_add(bytes, Ordering::Relaxed);
     Ok(fold_large_directory(children, diagnostics))
 }
 

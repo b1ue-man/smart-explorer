@@ -54,10 +54,7 @@ pub fn open_share_backend(
                     IpcResponse::OpenOk { label, status } => {
                         set_stream_timeout(&stream, None);
                         let read = stream.try_clone().map_err(|error| error.to_string())?;
-                        let inner: crate::vfs::BackendHandle = Arc::new(UnavailableBackend {
-                            label: label.clone(),
-                            target: target.clone(),
-                        });
+                        let inner = share_backend_identity(label.clone(), target.clone());
                         let agent = match crate::agent::AgentBackend::from_streams(
                             Box::new(read),
                             Box::new(stream),
@@ -365,6 +362,10 @@ fn valid_generation(value: &str) -> bool {
 
 fn worker_version_is_current(version: &str) -> bool {
     version == env!("CARGO_PKG_VERSION")
+}
+
+pub(super) fn share_backend_identity(label: String, target: crate::share::PeerOpenTarget) -> crate::vfs::BackendHandle {
+    Arc::new(UnavailableBackend { label, target })
 }
 
 struct UnavailableBackend {
