@@ -8,7 +8,7 @@ use tungstenite::{
 };
 
 use super::core::eio;
-use super::line::{read_line_limited, MAX_SIGNAL_LINE};
+use super::line::{SignalLineReader, MAX_SIGNAL_LINE};
 
 const SIGNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SIGNAL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -19,6 +19,7 @@ pub(super) enum SignalConnection {
         label: String,
         stream: TcpStream,
         reader: io::BufReader<TcpStream>,
+        decoder: SignalLineReader,
     },
     WebSocket {
         label: String,
@@ -74,6 +75,7 @@ impl SignalConnection {
             label: format!("tcp://{addr}"),
             stream,
             reader,
+            decoder: SignalLineReader::default(),
         })
     }
 
@@ -118,6 +120,7 @@ impl SignalConnection {
             label: "tcp://test".into(),
             stream,
             reader,
+            decoder: SignalLineReader::default(),
         })
     }
 
@@ -147,14 +150,7 @@ impl SignalConnection {
 
     pub(super) fn read_message(&mut self) -> io::Result<Option<String>> {
         match self {
-            Self::Tcp { reader, .. } => {
-                let mut line = String::new();
-                match read_line_limited(reader, &mut line, MAX_SIGNAL_LINE) {
-                    Ok(0) => Ok(None),
-                    Ok(_) => Ok(Some(line)),
-                    Err(error) => Err(error),
-                }
-            }
+            Self::Tcp { reader, decoder, .. } => decoder.read(reader, MAX_SIGNAL_LINE),
             Self::WebSocket { socket, .. } => loop {
                 match socket.read() {
                     Ok(Message::Text(text)) => return Ok(Some(text)),
