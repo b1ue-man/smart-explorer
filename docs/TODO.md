@@ -11,6 +11,8 @@ also bypasses the peer worker and requests metadata per file. The candidate
 forwards analysis through IPC to the identical local worker and preserves real
 progress, partial outcomes and cancellation. Source fixes are committed;
 the single Windows remote suite and terminal publication remain pending.
+The real-volume case now exposes an intermittent native process termination;
+its cause remains open despite successful mount and analysis runs beforehand.
 See [evidence and acceptance plan](WINDOWS_REMOTE_REGRESSION.md).
 
 ## Still open (what's actually left)
