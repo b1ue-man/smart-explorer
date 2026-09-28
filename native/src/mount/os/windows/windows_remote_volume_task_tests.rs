@@ -86,5 +86,9 @@ fn exercise_volume() -> io::Result<()> {
     drop(volume);
     assert!(!root.exists(), "mounted drive did not retire");
     eprintln!("[remote mount] drive retired");
+    drop(runtime);
+    eprintln!("[remote mount] runtime retired");
+    drop(peer);
+    eprintln!("[remote mount] peer retired");
     Ok(())
 }

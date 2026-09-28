@@ -162,6 +162,27 @@ Primary diagnostic reference checked 2026-09-28:
 [Microsoft WER local dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps).
 No release is claimed at this checkpoint.
 
+The [60c8dba run](https://github.com/b1ue-man/smart-explorer/actions/runs/36428857419)
+exits with an access violation (`0xC0000005`) after successful alias reads,
+read-only rejection, filesystem close and drive removal. The implicit runtime
+and peer destruction boundary remains unproven. WER returned no dump or event;
+that absence does not indicate a normal exit. Keep M5's single entrypoint and
+add explicit destruction traces plus an external exception monitor attached
+only to the owned fixture PID. Use the reviewed SHA-256-pinned, Microsoft-signed
+[ProcDump](https://learn.microsoft.com/en-us/sysinternals/downloads/procdump)
+to capture one minidump on an unhandled exception; the fixture's exit code still
+controls acceptance. No production unload workaround is justified without the
+crash location. The analysis timings in this run were 20/13/21 ms for local,
+exporting host and GUI completion, again loopback with Direct running second.
+
+Gap research checked 2026-09-28: Dokany closes its per-instance cleanup group
+before returning from `DokanCloseHandle`, then its global pool at shutdown.
+[CloseThreadpool](https://learn.microsoft.com/en-us/windows/win32/api/threadpoolapiset/nf-threadpoolapiset-closethreadpool)
+can release asynchronously when outstanding objects remain; the dynamic loader
+lifetime therefore needs direct evidence, not a guessed delay or permanent DLL
+pin. Success requires all bounded mount lifecycles and the whole existing suite
+to finish normally before terminal publication.
+
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
 30 minutes; terminal release uses the existing six-hour remote job and
