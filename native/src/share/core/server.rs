@@ -11,15 +11,15 @@ use super::framing::{
     recv_ctrl_limited, reply, reply_err, send_ctrl, MAX_HANDSHAKE_CTRL_FRAME,
     MAX_REQUEST_CTRL_FRAME,
 };
-use super::fs::{self, ShareExportConfig};
+use super::fs;
 use super::fs_access::FsAccess;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
-use super::mount_lease::{run_authorized, MountLeaseAuthorization, PeerMountLeases};
+use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::node::ShareIrohNode;
-use super::session::{authenticate_incoming_session, IncomingSession, PeerPrincipal};
+use super::session::{authenticate_incoming_session, IncomingSession};
 use super::types::{ExecRequest, ShareEvent};
-use super::wire::{Ctrl, FsRequest, FsResponse, MOUNT_PATH_CAPABILITY_CONTRACT_VERSION};
+use super::wire::{Ctrl, FsRequest, FsResponse};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -179,7 +179,7 @@ async fn handle_peer_stream(
             acquire_lease,
             lease_request_id,
         } => {
-            return handle_capabilities(
+            return super::server_capabilities::handle_capabilities(
                 &mut send,
                 path,
                 acquire_lease,
@@ -260,6 +260,9 @@ async fn handle_peer_stream(
         FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, access).await,
         FsRequest::StorageSnapshot { path } => {
             super::storage_snapshot::serve_snapshot(send, path, access).await
+        }
+        FsRequest::StorageAnalysis { path } => {
+            super::storage_analysis_server::serve(send, path, access).await
         }
         FsRequest::Read { path } => super::server_transfer::read_file(send, path, access).await,
         FsRequest::Write { path } => {
@@ -356,82 +359,6 @@ async fn handle_peer_stream(
             .await
         }
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
-    }
-}
-
-async fn handle_capabilities(
-    send: &mut SendStream,
-    path: String,
-    acquire_lease: bool,
-    exports: ShareExportConfig,
-    principal: PeerPrincipal,
-    lease_request_id: Option<String>,
-    legacy_connection: usize,
-    authorization_epoch: u64,
-    mount_leases: Arc<PeerMountLeases>,
-) -> io::Result<()> {
-    let result = blocking_fs("Share filesystem capabilities", move || {
-        if acquire_lease {
-            if let Some(grant) = mount_leases.existing_acquisition(
-                &path,
-                &exports,
-                &principal,
-                lease_request_id.as_deref(),
-                legacy_connection,
-                authorization_epoch,
-            )? {
-                let capabilities = grant.lease.capabilities();
-                return Ok(FsResponse::Capabilities {
-                    capabilities: capabilities.staged_write.into(),
-                    contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
-                    root_confined: capabilities.root_confinement.is_enforced(),
-                    lease: Some(grant.token),
-                    storage_snapshot_v1: true,
-                });
-            }
-        }
-        let snapshot = Arc::new(Mutex::new(exports.clone()));
-        let resolved = super::fs_capabilities::resolve_mount_capabilities(&path, &snapshot)?;
-        let Some(resolved) = resolved else {
-            return Ok(FsResponse::Capabilities {
-                capabilities: Default::default(),
-                contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
-                root_confined: false,
-                lease: None,
-                storage_snapshot_v1: true,
-            });
-        };
-        if !acquire_lease {
-            let root_confined = resolved.lease_root_confined();
-            return Ok(FsResponse::Capabilities {
-                capabilities: resolved.capabilities.staged_write.into(),
-                contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
-                root_confined,
-                lease: None,
-                storage_snapshot_v1: true,
-            });
-        }
-        let grant = mount_leases.acquire(
-            resolved,
-            exports,
-            principal,
-            lease_request_id,
-            legacy_connection,
-            authorization_epoch,
-        )?;
-        let capabilities = grant.lease.capabilities();
-        Ok(FsResponse::Capabilities {
-            capabilities: capabilities.staged_write.into(),
-            contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
-            root_confined: capabilities.root_confinement.is_enforced(),
-            lease: Some(grant.token),
-            storage_snapshot_v1: true,
-        })
-    })
-    .await;
-    match result {
-        Ok(response) => reply(send, response).await,
-        Err(error) => reply_err(send, error).await,
     }
 }
 

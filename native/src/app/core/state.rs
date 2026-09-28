@@ -92,6 +92,7 @@ pub struct App {
     pub(in crate::app) analytics_cells_rect: egui::Rect,
     /// (files, dirs) under the current focus, cached.
     pub(in crate::app) analytics_counts: Option<(u64, u64)>,
+    pub(in crate::app) analytics_totals: Option<(crate::analytics::ScanSnapshot, f32)>,
     pub(in crate::app) analytics_panel: AnalyticsPanel,
     pub(in crate::app) reclaim_scan: Option<ReclaimScan>,
     pub(in crate::app) reclaim_source: Option<StorageScanSource>,

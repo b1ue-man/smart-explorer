@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 const MAX_SCAN_ISSUES: usize = 64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScanStatus {
     Complete,
     Partial,
@@ -61,7 +61,7 @@ mod access_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScanIssue {
     pub path: String,
     pub detail: String,

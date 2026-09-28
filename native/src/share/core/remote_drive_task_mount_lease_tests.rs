@@ -52,6 +52,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 root_confined: true,
                 lease: Some("lease-a".into()),
                 storage_snapshot_v1: true,
+                storage_analysis_v2: false,
             },
             true,
         )
@@ -78,6 +79,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 root_confined: true,
                 lease: None,
                 storage_snapshot_v1: true,
+                storage_analysis_v2: false,
             },
             false,
         )
@@ -93,6 +95,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
             root_confined: true,
             lease: Some("probe-must-not-allocate".into()),
             storage_snapshot_v1: true,
+            storage_analysis_v2: false,
         },
         false,
     );
@@ -109,6 +112,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 root_confined: false,
                 lease: None,
                 storage_snapshot_v1: true,
+                storage_analysis_v2: false,
             },
             true,
         )
@@ -124,6 +128,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 root_confined: false,
                 lease: Some("lease-unverified".into()),
                 storage_snapshot_v1: true,
+                storage_analysis_v2: false,
             },
             true,
         )
@@ -145,6 +150,7 @@ fn remote_drive_task_peer_capability_contract_is_conservative_and_token_bound() 
                 root_confined: true,
                 lease: Some(releasable_token.clone()),
                 storage_snapshot_v1: true,
+                storage_analysis_v2: false,
             },
             true,
         )

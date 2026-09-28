@@ -17,6 +17,8 @@ mod metadata;
 mod mux;
 #[path = "core/stream.rs"]
 mod stream;
+#[path = "core/walk.rs"]
+mod walk;
 #[path = "core/transfer.rs"]
 mod transfer;
 #[path = "core/transport.rs"]

@@ -5,21 +5,28 @@ pub(super) fn run_worker(
     shared: Arc<Shared>,
     completions: SyncSender<()>,
 ) {
+    run_worker_with(shared, completions, |candidate| {
+        node.repair_direct_reciprocal(
+            &candidate.endpoint, &candidate.identity, candidate.key.local_generation,
+        )
+    }, || {
+        let _ = node.ev.try_send(super::super::types::ShareEvent::Error(
+            "Direct-Reparatur wurde unerwartet beendet; erneuter Versuch vorgemerkt".into(),
+        ));
+    });
+}
+
+fn run_worker_with(
+    shared: Arc<Shared>,
+    completions: SyncSender<()>,
+    mut attempt: impl FnMut(&DirectRepairCandidate) -> DirectReciprocalTransportResult,
+    report_panic: impl Fn(),
+) {
     loop {
         let Some((key, epoch, candidate)) = take_due(&shared) else {
             return;
         };
-        let result = run_attempt(|| {
-            node.repair_direct_reciprocal(
-                &candidate.endpoint,
-                &candidate.identity,
-                candidate.key.local_generation,
-            )
-        }, || {
-            let _ = node.ev.try_send(super::super::types::ShareEvent::Error(
-                "Direct-Reparatur wurde unerwartet beendet; erneuter Versuch vorgemerkt".into(),
-            ));
-        });
+        let result = run_attempt(|| attempt(&candidate), &report_panic);
         let Ok(mut state) = shared.state.lock() else {
             return;
         };
@@ -118,3 +125,7 @@ fn run_attempt(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "direct_reciprocal_worker_task_tests.rs"]
+mod task_tests;

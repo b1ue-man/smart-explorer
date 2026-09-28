@@ -206,7 +206,8 @@ mod tests {
 
     #[test]
     fn remote_drive_task_live_endpoint_refreshes_routes_but_not_identity() {
-        let initial = endpoint("127.0.0.1:1000", 10);
+        let now = super::super::core::now_secs();
+        let initial = endpoint("127.0.0.1:1000", now + 10);
         let mut contact = contact(initial.presence.clone());
         let auth = Arc::new(Mutex::new(state(contact.clone())));
         let source = PeerEndpointSource::live(
@@ -218,11 +219,11 @@ mod tests {
         );
 
         contact.presence.as_mut().unwrap().candidates = vec!["127.0.0.1:2000".into()];
-        contact.presence.as_mut().unwrap().expires_at = 20;
+        contact.presence.as_mut().unwrap().expires_at = now + 20;
         auth.lock().unwrap().direct_contacts = vec![contact];
         let refreshed = source.current().unwrap();
         assert_eq!(refreshed.presence.candidates, ["127.0.0.1:2000"]);
-        assert_eq!(refreshed.presence.expires_at, 20);
+        assert_eq!(refreshed.presence.expires_at, now + 20);
         assert_eq!(refreshed.relation_secret, initial.relation_secret);
 
         auth.lock().unwrap().direct_contacts[0].presence = None;
@@ -246,6 +247,29 @@ mod tests {
             source.current().unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+
+    #[test]
+    fn windows_remote_task_live_routes_follow_lan_renewal_and_keep_pins() {
+        remote_drive_task_live_endpoint_refreshes_routes_but_not_identity();
+        let now = super::super::core::now_secs();
+        let initial = endpoint("127.0.0.1:1000", now - 1);
+        let mut contact = contact(initial.presence.clone());
+        contact.lan_candidates = vec!["127.0.0.1:2000".into()];
+        contact.lan_seen_at = Some(now);
+        let auth = Arc::new(Mutex::new(state(contact)));
+        let source = PeerEndpointSource::live(initial.clone(),
+            PeerOpenTarget::Direct { contact_id: "contact".into() }, auth.clone());
+        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:2000"]);
+        auth.lock().unwrap().direct_contacts[0].lan_candidates = vec!["127.0.0.1:3000".into()];
+        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:3000"]);
+        auth.lock().unwrap().direct_contacts[0].presence = None;
+        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:3000"]);
+        auth.lock().unwrap().direct_contacts[0].expected_node_id = "replacement".into();
+        assert_eq!(source.current().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        auth.lock().unwrap().direct_contacts[0].expected_node_id = "node".into();
+        auth.lock().unwrap().direct_contacts[0].access_state = DirectAccessState::Ignored;
+        assert_eq!(source.current().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     }
 
     fn endpoint(candidate: &str, expires_at: i64) -> PeerEndpoint {

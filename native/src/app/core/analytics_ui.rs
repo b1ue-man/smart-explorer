@@ -8,7 +8,6 @@ impl App {
     /// nested (WizTree-style) squarified treemap. Defaults to the whole drive of
     /// the current folder; click a box to drill in, use the breadcrumb to go up.
     pub(in crate::app) fn ui_analytics(&mut self, ctx: &egui::Context) {
-        use std::sync::atomic::Ordering::Relaxed;
         self.poll_analytics_scan();
         if self.analytics_panel == AnalyticsPanel::Reclaim {
             self.ui_reclaim(ctx);
@@ -44,9 +43,8 @@ impl App {
         let (n_files, n_dirs) = self.analytics_counts.unwrap_or((0, 0));
         let scan_info = self.analytics_scan.as_ref().map(|s| {
             (
-                s.progress.files.load(Relaxed),
-                s.progress.dirs.load(Relaxed),
-                s.progress.bytes.load(Relaxed),
+                s.progress.snapshot(),
+                s.progress.remote_report_age(),
                 s.root.clone(),
                 s.started.elapsed().as_secs_f32(),
             )
@@ -185,27 +183,48 @@ impl App {
                         );
                     }
 
-                    if let Some((f, d, b, root, secs)) = &scan_info {
-                        ui.horizontal(|ui| {
+                    if let Some((state, remote_age, root, secs)) = &scan_info {
+                        ui.horizontal_wrapped(|ui| {
                             ui.spinner();
-                            let rate = if *secs > 0.0 { *f as f32 / *secs } else { 0.0 };
+                            let dirs = if state.phase == crate::analytics::ScanPhase::Legacy {
+                                "nicht gemeldet".to_string()
+                            } else { state.dirs.to_string() };
                             ui.label(format!(
-                                "Scanne {} … {} Dateien · {} Ordner · {}  ({:.0}/s)",
-                                root,
-                                f,
-                                d,
-                                format_bytes(*b),
-                                rate
+                                "{} · {} Dateien · {} Ordner · {} · {:.1} s",
+                                state.phase.label(), state.files, dirs, format_bytes(state.bytes), secs,
                             ));
-                            if ui.button("Abbrechen").clicked() {
-                                cancel = true;
-                            }
+                            if ui.button("Abbrechen").clicked() { cancel = true; }
                         });
+                        ui.label(if state.current.is_empty() { root } else { &state.current });
+                        if state.transfer_total > 0 {
+                            ui.add(egui::ProgressBar::new(state.transferred as f32 / state.transfer_total as f32)
+                                .text(format!("Ergebnis: {} von {} empfangen",
+                                    format_bytes(state.transferred), format_bytes(state.transfer_total))));
+                        }
+                        if state.unchanged_ms >= 2000 {
+                            ui.colored_label(theme::warning(ui), format!(
+                                "Seit {:.1} s keine neue Arbeit bestätigt; letzter Zustand: {}",
+                                state.unchanged_ms as f64 / 1000.0, state.phase.label(),
+                            ));
+                        }
+                        if let Some(age) = remote_age {
+                            ui.label(format!("Letzte Fortschrittsmeldung vor {:.1} s", age.as_secs_f64()));
+                        }
                         ctx.request_repaint_after(std::time::Duration::from_millis(150));
                     } else {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(format_bytes(focus_size)).strong());
-                            ui.label(format!("· {} Dateien · {} Ordner", n_files, n_dirs));
+                            if focus_segs.is_empty() {
+                                if let Some((totals, seconds)) = &self.analytics_totals {
+                                    let dirs = if totals.phase == crate::analytics::ScanPhase::Legacy {
+                                        "nicht gemeldet".into()
+                                    } else { totals.dirs.to_string() };
+                                    ui.label(format!("· {} erfasste Dateien · {} Ordner · {:.1} s",
+                                        totals.files, dirs, seconds));
+                                }
+                            } else {
+                                ui.label(format!("· {} Datei-Einträge · {} Ordner-Einträge dargestellt", n_files, n_dirs));
+                            }
                             ui.label(
                                 RichText::new("· Klick = reinzoomen")
                                     .small()

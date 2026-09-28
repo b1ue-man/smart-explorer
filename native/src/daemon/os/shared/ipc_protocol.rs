@@ -271,6 +271,11 @@ pub(super) enum IpcRequest {
     ShareSnapshot {
         token: String,
     },
+    AnalyzeShare {
+        token: String,
+        target: crate::share::PeerOpenTarget,
+        root: String,
+    },
     OpenShare {
         token: String,
         target: crate::share::PeerOpenTarget,
@@ -345,6 +350,7 @@ impl IpcRequest {
             | Self::DrainShareEvents { token }
             | Self::ShareSnapshot { token }
             | Self::OpenShare { token, .. }
+            | Self::AnalyzeShare { token, .. }
             | Self::ProbeShareMount { token, .. }
             | Self::ExecShare { token, .. }
             | Self::ExecStream { token, .. }

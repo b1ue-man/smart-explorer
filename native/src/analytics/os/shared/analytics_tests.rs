@@ -48,6 +48,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
         diagnostics: &diagnostics,
         budget: &budget,
         parallel: false,
+        guard: None,
     };
     let entries = vec![
         Err(io::Error::new(
@@ -136,6 +137,7 @@ fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_dire
         diagnostics: &diagnostics,
         budget: &budget,
         parallel: false,
+        guard: None,
     };
     let entries = vec![
         Ok(LocalEntry {

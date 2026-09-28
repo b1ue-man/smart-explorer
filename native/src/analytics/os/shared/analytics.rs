@@ -14,8 +14,8 @@ use crate::analytics::os::{parallel_scan_allowed, read_directory, EntryKind, Loc
 use rayon::prelude::*;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use crate::analytics::Progress;
 
 #[path = "analytics_backend.rs"]
 mod backend;
@@ -39,15 +39,6 @@ pub struct SizeNode {
     pub children: Vec<SizeNode>,
 }
 
-/// Shared live progress + cancellation for a running scan.
-#[derive(Clone, Default)]
-pub struct Progress {
-    pub files: Arc<AtomicU64>,
-    pub dirs: Arc<AtomicU64>,
-    pub bytes: Arc<AtomicU64>,
-    pub cancel: Arc<AtomicBool>,
-}
-
 /// Stack reserved for every scan thread: recursion depth is bounded by
 /// `MAX_ANALYTICS_DEPTH`, and the reservation is virtual until touched.
 pub const SCAN_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
@@ -60,6 +51,14 @@ pub const SCAN_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// one directory are recorded and the traversal continues with exact sizes
 /// for everything that could be read.
 pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
+    scan_with_guard(root, p, None)
+}
+
+pub(crate) fn scan_with_guard(
+    root: &Path,
+    p: &Progress,
+    guard: Option<&(dyn Fn(&Path) -> io::Result<()> + Sync)>,
+) -> ScanOutcome {
     let name = root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -85,6 +84,7 @@ pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
         // This also makes a failed pool creation genuinely serial: recursive
         // work must not silently escape into Rayon's global pool.
         parallel: pool.is_some(),
+        guard,
     };
     let visit = || scan_dir(&traversal, &root, name.into_boxed_str(), 0, true);
     let tree = match pool {
@@ -107,6 +107,7 @@ struct Traversal<'a> {
     diagnostics: &'a Diagnostics,
     budget: &'a AnalyticsBudget,
     parallel: bool,
+    guard: Option<&'a (dyn Fn(&Path) -> io::Result<()> + Sync)>,
 }
 
 fn empty_dir(name: Box<str>) -> SizeNode {
@@ -153,6 +154,15 @@ fn scan_dir(
     // enumerator — must never take the rest of the scan down with it.
     let fallback_name = name.clone();
     let visit = std::panic::AssertUnwindSafe(|| {
+        traversal.progress.enter_directory(&crate::analytics::os::display_path(dir));
+        if let Some(guard) = traversal.guard {
+            if let Err(error) = guard(dir) {
+                traversal.diagnostics.record_io(
+                    crate::analytics::os::display_path(dir), &error, is_root,
+                );
+                return empty_dir(name);
+            }
+        }
         scan_entries(traversal, dir, name, read_directory(dir), depth, is_root)
     });
     match std::panic::catch_unwind(visit) {
@@ -185,6 +195,8 @@ fn scan_entries(
     let mut own_bytes = 0u64;
     let mut aggregated_bytes = 0u64;
     let mut aggregated_entries = 0u64;
+    let mut reported_files = 0u64;
+    let mut reported_bytes = 0u64;
 
     match entries {
         Ok(rd) => {
@@ -203,7 +215,7 @@ fn scan_entries(
                 if p.cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                if matches!(ent.kind, EntryKind::Link | EntryKind::Other) {
+                if ent.is_link_like || matches!(ent.kind, EntryKind::Link | EntryKind::Other) {
                     continue;
                 }
                 let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
@@ -236,6 +248,12 @@ fn scan_entries(
                     own_files += 1;
                     own_bytes = own_bytes.saturating_add(ent.size);
                     files.push((nm, ent.size));
+                    if own_files - reported_files >= 128 {
+                        p.files.fetch_add(own_files - reported_files, Ordering::Relaxed);
+                        p.bytes.fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
+                        reported_files = own_files;
+                        reported_bytes = own_bytes;
+                    }
                 }
             }
         }
@@ -244,8 +262,8 @@ fn scan_entries(
         }
     }
 
-    p.files.fetch_add(own_files, Ordering::Relaxed);
-    p.bytes.fetch_add(own_bytes, Ordering::Relaxed);
+    p.files.fetch_add(own_files - reported_files, Ordering::Relaxed);
+    p.bytes.fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
     p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
 
     // Retain the largest files individually; fold the rest of a huge

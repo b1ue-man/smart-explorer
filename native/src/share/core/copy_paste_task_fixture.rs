@@ -19,6 +19,7 @@ const NO_RELAY: &str = "relay-disabled://copy-paste-task";
 
 pub(crate) struct CopyPastePeerFixture {
     pub(crate) backend: BackendHandle,
+    pub(super) peer: Arc<PeerBackend>,
     pub(crate) root_a: PathBuf,
     pub(crate) root_b: PathBuf,
     host_auth: Arc<Mutex<ShareAuthState>>,
@@ -42,6 +43,10 @@ impl CopyPastePeerFixture {
     }
 
     pub(crate) fn new() -> io::Result<Self> {
+        Self::with_labels(["A", "B"])
+    }
+
+    pub(crate) fn with_labels(labels: [&str; 2]) -> io::Result<Self> {
         if !Self::enabled() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -64,7 +69,7 @@ impl CopyPastePeerFixture {
         let host = identity("copy/paste host")?;
         let mut host_state = auth_state(&host);
         host_state.default_direct_exports = ShareExportConfig {
-            roots: vec![export("A", &root_a)?, export("B", &root_b)?],
+            roots: vec![export(labels[0], &root_a)?, export(labels[1], &root_b)?],
             include_connections: false,
         };
         host_state.direct_grants.push(DirectGrant {
@@ -140,13 +145,13 @@ impl CopyPastePeerFixture {
             relation_secret: host.direct_secret(),
             expected_node_id: Some(host.node_id.clone()),
         };
-        let backend: BackendHandle =
-            Arc::new(PeerBackend::new(endpoint, client, client_node.0.clone()));
+        let peer = Arc::new(PeerBackend::new(endpoint, client, client_node.0.clone()));
+        let backend: BackendHandle = peer.clone();
         // This is deliberately unleased: two exported roots must remain
         // independently authorized destinations in the same peer namespace.
         let entries = backend.list_dir("/")?;
         if entries.len() != 2
-            || !["A", "B"].iter().all(|name| {
+            || !labels.iter().all(|name| {
                 entries
                     .iter()
                     .any(|entry| entry.name == *name && entry.is_dir)
@@ -159,6 +164,7 @@ impl CopyPastePeerFixture {
         }
         Ok(Self {
             backend,
+            peer,
             root_a,
             root_b,
             host_auth,

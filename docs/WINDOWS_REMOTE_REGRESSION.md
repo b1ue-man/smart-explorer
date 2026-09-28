@@ -9,6 +9,10 @@ Restore mounting a device share on Windows when its children collide under
 Windows case comparison, and restore Direct connections after extended uptime
 without terminating the worker. Preserve endpoint identity, stored paths,
 permissions, mount leases, cancellation and the no-replay rule for mutations.
+The same batch also includes Direct Share storage analysis: run the identical
+local analytics worker on the exporting host, preserve its complete/partial/
+failed/canceled outcome, and expose measured counters and current work. A spinner,
+invented estimates, silent stalls or an unexplained fallback are not acceptance.
 
 Evidence from the current source and the user's log:
 
@@ -71,6 +75,65 @@ M1 preserves Direct/Room identity and the existing saved remote/UNC/Drive
 boundary; it does not change sync or stored path syntax. M4 preserves the
 current TCP/WebSocket protocol. The suite must retain negative permission,
 collision and stale-identity cases, not merely a successful open.
+
+## Storage analysis extension: both planning stages
+
+Stage-one evidence: `PeerBackend::walk_tree` requests a host snapshot, but
+`storage_snapshot::build_snapshot` uses the serial `ServerWalker`, not
+`analytics::scan`. Each directory repeats Share resolution and emits a blocking
+progress update. The GUI's two-counter callback drops the directory count and
+cannot carry the local worker's partial-result diagnostics or aggregation notes.
+The local worker already uses batched Windows directory records and a bounded
+Rayon pool. Reusing that exact worker, rather than adding another scanner, is the
+implementation boundary.
+
+Additional primary research checked on 2026-09-28:
+
+- [Windows directory records](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_extd_dir_info)
+  supply lengths, names, attributes and reparse tags in batches; retain the
+  existing `local_access` enumerator and its provider fallbacks.
+- [Rayon pool configuration](https://docs.rs/rayon/latest/rayon/struct.ThreadPoolBuilder.html)
+  and [Windows impersonation tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/impersonation-tokens):
+  retain the local worker's pool limits and authority check.
+- [Tokio blocking tasks](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html):
+  running synchronous work is not canceled by aborting a future. A stream-owned
+  cancellation flag must reach the actual scanner, including queue and transfer.
+- [Tokio watch semantics](https://docs.rs/tokio/latest/tokio/sync/watch/index.html):
+  progress is sampled state, not a queue of events that may throttle traversal.
+
+Stage-two milestones, integrated into M5's single suite before M6:
+
+| Milestone | Boundary/files | Concrete expected result |
+| --- | --- | --- |
+| M7: identical host worker | `analytics` scanner/progress, new Share host adapter | Local/UNC exports resolve once and invoke `analytics::scan` with the same enumeration, pool, retention, counts and diagnostics as local analysis. A confined adapter preserves Share roots and skips links; synthetic roots combine real outcomes. Nonlocal exported backends retain their identity and existing scan capability. |
+| M8: complete analysis transport | additive Share capability/request and bounded report/tree stream; VFS/cache forwarding | Direct/Room callers receive the local outcome, including partial errors and aggregate counts, without per-file network requests. Finished trees transfer in bounded chunks with exact length/count checks and SHA-256. Legacy peers remain accessible and explicitly identify the older analysis path. Cancellation stops the host worker; loss of contact is distinct from unchanged counters. |
+| M9: truthful shared progress | shared analytics progress model and GUI | Local and Direct display actual files, directories and bytes, current phase/path, elapsed time without ETA or percentage guesses, time since new work and age of remote evidence. Transfer shows measured received bytes separately. Terminal partial/failure/canceled states remain visible. |
+| M10: equivalence and throughput evidence | task fixtures selected by `windows_remote_task_` | Compare local and real authenticated Direct analysis of the same wide/deep tree, including aggregation. Assert identical counts/tree/outcome, bounded progress traffic independent of file count, cancellation and negative protocol/confinement cases; record measured local, host and end-to-end timing without claiming network transfer costs disappear. |
+
+Second gap review: the existing snapshot-v1 wire format equates retained nodes
+with scanned files and cannot represent the local worker's aggregation/partial
+outcomes. Preserve v1 for older callers; negotiate a richer additive analysis
+operation. Stream the local tree with an iterative codec rather than narrowing
+the local worker to v1's tree limits or retaining a second full encoded copy.
+Progress emission runs independently of scanning at a bounded cadence. Keep
+directory authority/confinement checks at the OS adapter; never resolve a remote
+backend path as a local path. Expose additional transport latency separately and
+use measurements, not an unsupported promise of equal end-to-end elapsed time.
+
+Integration gap found before extending the IPC implementation: the actual GUI
+receives `AgentBackend` from `daemon::open_share_backend`. Its legacy WalkTree
+handler unconditionally instantiates `TreeWalker`, whose recursive entry path
+calls `backend.stat` even for files already present in a listing. This bypasses
+`PeerBackend::walk_tree` entirely and makes latency proportional to file count.
+M8/M10 therefore include this required boundary: an authenticated, cancellable
+analysis IPC operation, selected through the agent wrapper's underlying Share
+identity, forwards the rich analysis operation to the peer. Reuse the same
+bounded tree/report receiver for IPC and QUIC. Keep SSH agent framing/version
+unchanged; correct the legacy daemon tree handler to forward supported server
+walks. The acceptance fixture must traverse the real agent/worker bridge and
+assert that no per-file metadata request reaches the peer. Socket cancellation
+must wake the real receiver, rather than discarding partially read frames on a
+poll timeout (same TCP framing research as M4).
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
