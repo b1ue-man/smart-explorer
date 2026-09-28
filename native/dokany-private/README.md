@@ -43,7 +43,8 @@ at source `9398fcf433390991641ba91c4e6b0b86565c5003` and is retained under
 `native/assets/dokany-private/`. The complete batch including the later GUI
 capacity correction passed [run 36438291005](https://github.com/b1ue-man/smart-explorer/actions/runs/36438291005)
 at `b6a7b2a272258de7558752d39be2769533bbdd0b` with these exact committed bytes.
-Terminal publication remains pending.
+These exact bytes shipped in [Smart Explorer 0.5.165](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.165)
+through complete release run 36440635719 and publication run 36453822142.
 See [the current hashes and task evidence](../../docs/WINDOWS_REMOTE_REGRESSION.md).
 
 The two bulk-access corrections above were added on 2026-09-08. Their exact

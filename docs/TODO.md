@@ -4,19 +4,17 @@ Live status of every request. Legend: ✅ done · 🚧 partially shipped/in prog
 · ⬜ open · `later` deliberately deferred. New items get appended here. History
 is in ROADMAP.md.
 
-Current regression batch: Windows device-share drives fail at root metadata
-preload on case-colliding names, and Direct repair can leave the worker's
-configuration barrier stuck after a timer panic. The GUI's storage analysis
-also bypasses the peer worker and requests metadata per file. The candidate
-forwards analysis through IPC to the identical local worker and preserves real
-progress, partial outcomes and cancellation. Source fixes are committed.
-The real-volume dump proves that a Dokany volume notification returned into an
-already unloaded DLL. Closure ordering/work admission and official-runtime
-callback lifetime are corrected; the exact new dependency passed remote suite
-36435534429 and is retained for release. The complete candidate `b6a7b2a`, including
-the fix that keeps remote capacity separate from client drive readings, passed
-the same suite in run 36438291005. Terminal publication remains pending.
-See [evidence and acceptance plan](WINDOWS_REMOTE_REGRESSION.md).
+The Windows/Direct regression batch shipped in
+[0.5.165](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.165):
+case-colliding Share mount names, stuck Direct repair, callback unloading and
+GUI analysis routing are corrected. Analysis uses the identical local worker
+on the exporting host, with measured progress and preserved partial/canceled
+outcomes; remote paths no longer inherit client drive capacity. Remote suite
+36438291005 accepted `b6a7b2a`; complete release 36440635719 and publication
+36453822142 succeeded at `03ae191`. Version/tag/installer and all published
+asset hashes were checked on 2026-09-28. These are loopback/runner results;
+end-to-end performance on the user's network has not been measured.
+See [evidence and scope](WINDOWS_REMOTE_REGRESSION.md).
 
 ## Still open (what's actually left)
 

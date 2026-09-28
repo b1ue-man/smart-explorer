@@ -2,7 +2,8 @@
 
 Investigation date: 2026-09-28. Reported client: 0.5.164. The complete candidate,
 including the callback repair, exact dependency and GUI capacity correction,
-passed remote acceptance. Publication remains pending.
+passed remote acceptance and shipped in
+[0.5.165](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.165).
 
 ## Goal and stage-one plan
 
@@ -173,7 +174,7 @@ No release is claimed at this checkpoint.
 The [60c8dba run](https://github.com/b1ue-man/smart-explorer/actions/runs/36428857419)
 exits with an access violation (`0xC0000005`) after successful alias reads,
 read-only rejection, filesystem close and drive removal. The implicit runtime
-and peer destruction boundary remains unproven. WER returned no dump or event;
+and peer destruction boundary was still unproven at that checkpoint. WER returned no dump or event;
 that absence does not indicate a normal exit. Keep M5's single entrypoint and
 add explicit destruction traces plus an external exception monitor attached
 only to the owned fixture PID. Use the reviewed SHA-256-pinned, Microsoft-signed
@@ -280,7 +281,29 @@ byte for byte. The fixture executable SHA-256 is
 `4a3bf679db8095a8bc278114fd8f35ff84a0e025f1e5c327b619528daba37cc7`.
 Measured local/host/GUI analysis durations were 12/14/23 ms for 5,289 files,
 with zero per-file metadata calls and the same loopback/warm-cache limitation.
-All implementation milestones are accepted; only terminal publication remains.
+All implementation milestones were accepted before the terminal publication below.
+
+## Published complete release, 2026-09-28
+
+The single [complete release run 36440635719](https://github.com/b1ue-man/smart-explorer/actions/runs/36440635719)
+consumed source `538138b9daba2dd2ce384efb9444602a0564e70b`, which differs from
+the accepted candidate only in acceptance documentation. Its checked-in
+`native/publish-release-local.ps1` entrypoint created release commit/tag
+`03ae1919bf4d233bf4e3730d5392e125fcf80138` / `v0.5.165` and orchestrated the
+single [publication run 36453822142](https://github.com/b1ue-man/smart-explorer/actions/runs/36453822142).
+Both jobs succeeded; [the GitHub Release](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.165)
+became public at 16:53:34 UTC. Publication consumed the committed bytes without
+rebuilding or repeating the task suite.
+
+Final inspection confirmed matching Cargo/lock/feed version, installer, immutable
+tag and all 20 expected GitHub assets. Every published asset's SHA-256 and size
+match its committed file, including all six desktop update payloads, Android
+APK, hash sidecars, Linux installer script, context-menu DLL and Share servers.
+The corrected private DLL/source set remains byte-identical to the accepted
+dependency. Both Direct endpoints need the update for the new analysis path;
+older peers retain the explicitly identified legacy path. Real-device/WAN
+completion time is unmeasured; the loopback timings above are not a guarantee
+for the user's connection.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
