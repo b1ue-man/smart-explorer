@@ -104,7 +104,8 @@ if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
     git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
 fi
 mapfile -t batch_files < <(
-    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/src/*.rs'
+    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- \
+        'native/src/*.rs' 'native/tests/*.rs'
 )
 if [[ "${#batch_files[@]}" -eq 0 ]]; then
     echo "no batch source files found relative to $batch_base" >&2
@@ -139,7 +140,7 @@ for batch_file in "${batch_files[@]}"; do
 done
 batch_diagnostics() {
     local log=$1
-    { grep -E '^src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
+    { grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
         BEGIN {
             while ((getline line < ranges) > 0) {
                 split(line, range, " ")
