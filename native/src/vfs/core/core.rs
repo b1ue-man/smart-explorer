@@ -3,74 +3,12 @@ use std::sync::Arc;
 
 use super::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 
+pub use super::batch::{BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink};
+pub use super::meta::{
+    ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, SearchHit, VfsChange, VfsChangeBatch,
+    VfsMeta, VfsResult,
+};
 pub use super::scheme::Scheme;
-
-/// Backend-neutral directory entry / file metadata. Fields a remote backend
-/// can't supply (`btime`, `hidden`, `system`) default to `0` / `false`.
-#[derive(Clone, Debug, Default)]
-pub struct VfsMeta {
-    pub name: String,
-    pub is_dir: bool,
-    pub is_symlink: bool,
-    pub size: u64,
-    pub mtime_ms: i64,
-    pub btime_ms: i64,
-    pub hidden: bool,
-    pub system: bool,
-    /// Backend-unique id when names alone aren't unique (e.g. Google Drive
-    /// keys by file-id and allows duplicate names in one folder). None = the
-    /// path/name uniquely identifies the item (local, SFTP, FTP, WebDAV).
-    pub id: Option<String>,
-    /// Server-provided content MD5 (hex), if the backend exposes one for free in
-    /// its listing - Google Drive `md5Checksum`, Nextcloud/ownCloud
-    /// `oc:checksums`. Lets checksum-mode compare without downloading the file.
-    /// None = not provided (local/SFTP/FTP, Google-Docs/folders).
-    pub content_md5: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChangeKind {
-    Upsert,
-    Remove,
-}
-
-/// One backend-reported change. `rel` is optional because ID-addressed remotes
-/// such as Drive may report a stable file id and parent id; the sync index can
-/// resolve that into a relative path from previous state.
-#[derive(Clone, Debug)]
-pub struct VfsChange {
-    pub kind: ChangeKind,
-    pub rel: Option<String>,
-    pub id: Option<String>,
-    pub parent_id: Option<String>,
-    pub name: Option<String>,
-    pub meta: Option<VfsMeta>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct VfsChangeBatch {
-    pub changes: Vec<VfsChange>,
-    pub new_cursor: Option<String>,
-    pub reset: bool,
-}
-
-pub type VfsResult<T> = io::Result<T>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeleteDisposition {
-    Recycle,
-    Permanent,
-    Unsupported,
-}
-
-/// One exact, read-only-planned duplicate cleanup target. Backends with stable
-/// IDs must populate `id` so applying an earlier safety preflight cannot delete
-/// a different same-name object after concurrent changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DedupeCandidate {
-    pub path: String,
-    pub id: Option<String>,
-}
 
 /// The storage interface. One implementation per protocol. `Send + Sync` so a
 /// single handle can be shared across rayon workers / scan + copy threads.
@@ -152,6 +90,24 @@ pub trait Backend: Send + Sync {
         self.promote_staged_no_replace(staged, destination)
     }
 
+    /// Private copy stage of known final length, so spooling providers can
+    /// stream; such a writer fails on `flush` unless exactly `size` bytes came.
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        let _ = size;
+        self.open_write_copy_stage(path)
+    }
+
+    /// Server-side copy of `src` (length `size`) into the new private stage
+    /// `stage`, published later via `promote_copy_stage`. `Ok(None)` = stream.
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        let _ = (src, stage, size);
+        Ok(None)
+    }
+
     /// The local filename a download of `path` should be saved as. Defaults to
     /// `name`; backends that transform content on read (e.g. Google Drive
     /// exporting a Doc to .docx) override this to add the right extension.
@@ -206,6 +162,12 @@ pub trait Backend: Send + Sync {
     fn remove_dir(&self, path: &str) -> VfsResult<()>;
     fn mkdir_all(&self, path: &str) -> VfsResult<()>;
 
+    /// Create one directory whose parent exists; an existing plain directory
+    /// is success. Override where `mkdir_all` costs a round trip per level.
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.mkdir_all(path)
+    }
+
     /// Semantics of this backend's `remove_*` methods. Most network protocols
     /// delete permanently; providers such as Drive override this when removal
     /// is recoverable, and read-only backends report Unsupported.
@@ -217,6 +179,26 @@ pub trait Backend: Send + Sync {
     /// number (a few SSH channels / one control connection).
     fn parallelism(&self) -> usize {
         rayon::current_num_threads()
+    }
+
+    /// Key of the connection (or local volume) serving `path`; users of one
+    /// key share one adaptive concurrency controller. Wrappers forward it.
+    fn flow_key(&self, path: &str) -> String {
+        let _ = path;
+        format!("{:?}@{:p}", self.scheme(), self as *const Self as *const ())
+    }
+
+    /// Hard bound of concurrent transfer operations the protocol or peer
+    /// imposes on this connection; `None` = adaptive control only.
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        let _ = path;
+        None
+    }
+
+    /// Whether a reader and a writer may be open at once; false (FTP) makes
+    /// same-backend copies bridge through a local spool.
+    fn concurrent_read_write(&self) -> bool {
+        true
     }
 
     /// Does `rename(src, dst)` atomically REPLACE an existing regular-file
@@ -380,8 +362,13 @@ pub trait Backend: Send + Sync {
     fn invalidate_cache(&self) {}
 
     /// Optional complete remote analytics outcome, including partial results.
-    fn scan_storage(&self, _root: &str, _progress: &crate::analytics::Progress)
-        -> VfsResult<Option<crate::analytics::ScanOutcome>> { Ok(None) }
+    fn scan_storage(
+        &self,
+        _root: &str,
+        _progress: &crate::analytics::Progress,
+    ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+        Ok(None)
+    }
 
     /// Whether a remote agent supports the older tree-only analysis operation.
     fn supports_walk_tree(&self) -> bool {
@@ -423,6 +410,37 @@ pub trait Backend: Send + Sync {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "bulk tree transfer not supported",
+        ))
+    }
+
+    /// Batch limits when this backend (and its peer) move many small whole
+    /// files in one round trip for paths below `dir`; `None` = unsupported.
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        let _ = dir;
+        None
+    }
+
+    /// Create every entry as a new file (private stage, no-replace publish,
+    /// numbered name when taken) from `data` = the bytes back to back. One
+    /// outcome per entry; `Err` = outcome unknown, never retried blindly.
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        let _ = (entries, data);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "batch upload not supported",
+        ))
+    }
+
+    /// Read every item and hand it to `sink` in request order.
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        let _ = (items, sink);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "batch download not supported",
         ))
     }
 
@@ -473,26 +491,6 @@ pub trait Backend: Send + Sync {
         let _ = (root, want_hash, tx, cancel);
         Ok(false)
     }
-}
-
-/// One server-side search match (path relative to the search root).
-#[derive(Clone, Debug)]
-pub struct SearchHit {
-    pub rel: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub mtime_ms: i64,
-}
-
-/// One entry of a server-side signature walk (path relative to the walk root).
-/// `md5` is the hex content hash, present only for files when hashing was asked.
-#[derive(Clone, Debug)]
-pub struct HashHit {
-    pub rel: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub mtime_ms: i64,
-    pub md5: Option<String>,
 }
 
 pub type BackendHandle = Arc<dyn Backend>;

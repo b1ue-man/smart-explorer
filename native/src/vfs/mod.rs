@@ -16,6 +16,8 @@
 //!    the hot local walk. The local fast path stays exactly as it is.
 #![allow(dead_code)] // staged interface: wired in by the SFTP/FTP/connect steps.
 
+#[path = "core/batch.rs"]
+mod batch;
 #[path = "core/cache.rs"]
 mod cache;
 #[path = "core/capabilities.rs"]
@@ -36,6 +38,8 @@ mod local_platform;
 #[cfg(not(windows))]
 #[path = "os/linux_os/local_platform.rs"]
 mod local_platform;
+#[path = "core/meta.rs"]
+mod meta;
 #[path = "core/promotion.rs"]
 mod promotion;
 #[path = "os/shared/remote_util.rs"]
@@ -53,8 +57,9 @@ pub use self::cache::CachingBackend;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
 pub(crate) use self::copy_transfer::copy_between;
 pub use self::core::{
-    Backend, BackendHandle, ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme,
-    SearchHit, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
+    Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink,
+    ChangeKind, DedupeCandidate, DeleteDisposition, HashHit, Scheme, SearchHit, VfsChange,
+    VfsChangeBatch, VfsMeta, VfsResult,
 };
 pub(crate) use self::delete::validate_child_name;
 pub use self::delete::{

@@ -18,6 +18,14 @@ mod download_file;
 mod downloads;
 #[path = "os/shared/entries.rs"]
 mod entries;
+#[path = "os/shared/external.rs"]
+mod external;
+#[path = "os/shared/flow.rs"]
+pub(crate) mod flow;
+#[path = "core/flow_control.rs"]
+mod flow_control;
+#[path = "core/job.rs"]
+mod job;
 #[path = "os/shared/lane.rs"]
 mod lane;
 #[path = "os/shared/local_stage.rs"]
@@ -32,6 +40,8 @@ mod platform;
 mod progress;
 #[path = "os/shared/remote_copy.rs"]
 mod remote_copy;
+#[path = "os/shared/selection.rs"]
+mod selection;
 #[path = "os/shared/snapshot_download.rs"]
 mod snapshot_download;
 #[path = "os/shared/temp.rs"]
@@ -50,6 +60,10 @@ mod upload_reader;
 mod upload_stream;
 #[path = "os/shared/uploads.rs"]
 mod uploads;
+#[path = "os/shared/walk.rs"]
+pub(crate) mod walk;
+#[path = "os/shared/walk_listers.rs"]
+pub(crate) mod walk_listers;
 
 #[cfg(test)]
 #[path = "os/shared/cancel_tests.rs"]
@@ -67,6 +81,13 @@ mod tests;
 pub use downloads::{
     download_paths_progress, download_remote_clipboard_items, download_remote_paths_for_clipboard,
 };
+pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
+pub use flow::{
+    acquire_pair, classify_error, flow, flow_for, local_flow, Flow, FlowPermit, FlowSnapshot,
+    PermitPair,
+};
+pub use flow_control::OpOutcome;
+pub use job::{Endpoint, JobItems, Layout, TransferJob};
 pub use lane::{
     launch_transfer, ActiveTransfer, Admission, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest, MAX_ACTIVE_TRANSFERS,
@@ -74,6 +95,7 @@ pub use lane::{
 pub use local_stage::download_to_id;
 pub(crate) use platform::{replace_file_atomic, upload_is_link_like};
 pub use remote_copy::copy_remote_paths_progress;
+pub use selection::{ListedEntry, SelectionListing, SelectionSource};
 pub use snapshot_download::download_clipboard_snapshot;
 pub use temp::{
     cleanup_session_temp, cleanup_temp_copy, open_temp_path, safe_temp_name, session_temp_dir,

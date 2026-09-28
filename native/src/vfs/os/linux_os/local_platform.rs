@@ -14,6 +14,22 @@ pub(crate) fn to_os(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Key of the volume serving `path` for shared concurrency control: the
+/// device of the nearest existing ancestor, so separate disks are separate.
+pub(crate) fn volume_key(path: &str) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let mut current = Path::new(path);
+    loop {
+        if let Ok(metadata) = std::fs::metadata(current) {
+            return format!("local:dev{}", metadata.dev());
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent,
+            _ => return "local:".to_string(),
+        }
+    }
+}
+
 pub(crate) fn reported_name(path: &Path) -> Option<OsString> {
     path.file_name().map(OsString::from)
 }

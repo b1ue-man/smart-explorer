@@ -4,20 +4,22 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use super::{
-    Backend, BackendHandle, DeleteDisposition, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta,
-    VfsResult,
+    Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink,
+    DeleteDisposition, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta, VfsResult,
 };
 
 #[path = "cache_index.rs"]
 mod cache_index;
+#[path = "cache_load.rs"]
+mod cache_load;
+#[path = "cache_paths.rs"]
+mod cache_paths;
+#[path = "cache_retirement.rs"]
+mod cache_retirement;
 #[path = "cache_support.rs"]
 mod cache_support;
 #[path = "cache_writer.rs"]
 mod cache_writer;
-#[path = "cache_load.rs"]
-mod cache_load;
-#[path = "cache_retirement.rs"]
-mod cache_retirement;
 use cache_index::ChildKey;
 use cache_load::{DirectoryLoad, DirectorySnapshot};
 use cache_retirement::Retirement;
@@ -36,12 +38,24 @@ mod vault_cache_task_tests;
 /// would only add staleness with no hit benefit.
 const CACHE_TTL: Duration = Duration::from_secs(20);
 #[derive(Clone, Copy)]
-struct CacheLimits { directories: usize, entries: usize, bytes: usize }
+struct CacheLimits {
+    directories: usize,
+    entries: usize,
+    bytes: usize,
+}
 
 impl CacheLimits {
-    const BROWSING: Self = Self { directories: 4_096, entries: 50_000, bytes: 32 * 1024 * 1024 };
+    const BROWSING: Self = Self {
+        directories: 4_096,
+        entries: 50_000,
+        bytes: 32 * 1024 * 1024,
+    };
     // Mount limits govern retention, never directory validity or traversal.
-    const MOUNT: Self = Self { directories: usize::MAX, entries: usize::MAX, bytes: 64 * 1024 * 1024 };
+    const MOUNT: Self = Self {
+        directories: usize::MAX,
+        entries: usize::MAX,
+        bytes: 64 * 1024 * 1024,
+    };
 }
 
 struct CachedDirectory {
@@ -87,47 +101,10 @@ impl CachingBackend {
     }
 
     pub(crate) fn for_mount(inner: BackendHandle, child_key: Option<fn(&str) -> String>) -> Self {
-        let mut cache = Self::with_child_key(inner, child_key.unwrap_or(cache_index::exact_child_key));
+        let mut cache =
+            Self::with_child_key(inner, child_key.unwrap_or(cache_index::exact_child_key));
         cache.limits = CacheLimits::MOUNT;
         cache
-    }
-
-    fn norm(path: &str) -> String {
-        let p = path.trim_end_matches('/');
-        if p.is_empty() {
-            "/".to_string()
-        } else {
-            p.to_string()
-        }
-    }
-
-    fn parent_of(key: &str) -> Option<String> {
-        if key == "/" { return None; }
-        key.rfind('/').map(|i| {
-            if i == 0 {
-                "/".to_string()
-            } else {
-                key[..i].to_string()
-            }
-        })
-    }
-
-    fn parent_and_name(key: &str) -> Option<(String, &str)> {
-        if key.is_empty() || key == "/" {
-            return None;
-        }
-        match key.rsplit_once('/') {
-            Some((parent, name)) if !name.is_empty() => Some((
-                if parent.is_empty() {
-                    "/".to_string()
-                } else {
-                    parent.to_string()
-                },
-                name,
-            )),
-            None => Some(("/".to_string(), key)),
-            _ => None,
-        }
     }
 
     fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
@@ -179,7 +156,11 @@ impl Backend for CachingBackend {
         self.inner.namespace_identity()
     }
     fn uncached_backend(&self) -> Option<BackendHandle> {
-        Some(self.inner.uncached_backend().unwrap_or_else(|| self.inner.clone()))
+        Some(
+            self.inner
+                .uncached_backend()
+                .unwrap_or_else(|| self.inner.clone()),
+        )
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -250,14 +231,39 @@ impl Backend for CachingBackend {
         self.invalidate(path);
         let result = self.inner.open_write_copy_stage(path);
         self.invalidate(path);
-        result.map(|writer| Box::new(InvalidatingWriter::new(
-            writer, Arc::clone(&self.cache), path,
-        )) as Box<dyn Write + Send>)
+        result.map(|writer| {
+            Box::new(InvalidatingWriter::new(
+                writer,
+                Arc::clone(&self.cache),
+                path,
+            )) as Box<dyn Write + Send>
+        })
     }
     fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
         let result = self.inner.promote_copy_stage(staged, destination);
         self.invalidate(staged);
         self.invalidate(destination);
+        result
+    }
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.invalidate(path);
+        let result = self.inner.open_write_copy_stage_sized(path, size);
+        self.invalidate(path);
+        result.map(|writer| {
+            Box::new(InvalidatingWriter::new(
+                writer,
+                Arc::clone(&self.cache),
+                path,
+            )) as Box<dyn Write + Send>
+        })
+    }
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        let result = self.inner.server_copy_to_stage(src, stage, size);
+        self.invalidate(stage);
         result
     }
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
@@ -311,6 +317,44 @@ impl Backend for CachingBackend {
     }
     fn parallelism(&self) -> usize {
         self.inner.parallelism()
+    }
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        let result = self.inner.create_dir(path);
+        self.invalidate_ancestors(path);
+        result
+    }
+    fn flow_key(&self, path: &str) -> String {
+        self.inner.flow_key(path)
+    }
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        self.inner.transfer_ceiling(path)
+    }
+    fn concurrent_read_write(&self) -> bool {
+        self.inner.concurrent_read_write()
+    }
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        self.inner.batch_limits(dir)
+    }
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        let result = self.inner.put_batch(entries, data);
+        for entry in entries {
+            self.invalidate(&entry.path);
+        }
+        if let Ok(outcomes) = &result {
+            for outcome in outcomes {
+                if let BatchPutOutcome::Published(path) = outcome {
+                    self.invalidate(path);
+                }
+            }
+        }
+        result
+    }
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        self.inner.get_batch(items, sink)
     }
     fn rename_overwrites(&self) -> bool {
         self.inner.rename_overwrites()
@@ -366,12 +410,17 @@ impl Backend for CachingBackend {
         let retired = if let Ok(mut cache) = self.cache.lock() {
             let generation = cache.generation.wrapping_add(1);
             let loads = std::mem::take(&mut cache.loads);
-            Some(std::mem::replace(&mut *cache, CacheState {
-                generation,
-                loads,
-                ..CacheState::default()
-            }))
-        } else { None };
+            Some(std::mem::replace(
+                &mut *cache,
+                CacheState {
+                    generation,
+                    loads,
+                    ..CacheState::default()
+                },
+            ))
+        } else {
+            None
+        };
         // The global epoch fences every live flight; registrations survive so
         // their waiters still serialize. Old snapshot destructors run unlocked.
         drop(retired);
@@ -381,8 +430,11 @@ impl Backend for CachingBackend {
     }
     // Forward the agent capability so analytics' one-shot server-side walk works
     // through the cache wrapper (otherwise it fell back to per-dir listing).
-    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
-        -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+    fn scan_storage(
+        &self,
+        root: &str,
+        progress: &crate::analytics::Progress,
+    ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
         self.inner.scan_storage(root, progress)
     }
     fn supports_walk_tree(&self) -> bool {

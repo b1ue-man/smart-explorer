@@ -173,6 +173,12 @@ impl Backend for LocalBackend {
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         mkdir_all_plain(&local_platform::to_os(path))
     }
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        ensure_plain_component(&local_platform::to_os(path))
+    }
+    fn flow_key(&self, path: &str) -> String {
+        local_platform::volume_key(path)
+    }
 }
 
 /// Create each missing component while refusing existing symlinks, junctions,

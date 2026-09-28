@@ -1,0 +1,300 @@
+# QUIC (iroh/noq) transport windows and SFTP (russh-sftp) pipelined reads
+
+Checked 2026-09-28 against local crate sources under
+`/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` (read via `sudo -n`).
+
+Versions (pinned in `native/Cargo.toml:38-40,95`): iroh 1.0.1, **noq 1.0.1**, **noq-proto 1.0.1**
+(iroh's fork of quinn/quinn-proto — `repository = "…/n0-computer/noq"`, noq-1.0.1/Cargo.toml:31;
+"builds on top of noq-proto", noq-1.0.1/src/lib.rs:1-7), russh 0.61.2, russh-sftp 2.3.0.
+
+Project files read (as scoped): `native/src/share/core/keepalive.rs` (`iroh_transport_config()`
+only), `native/src/sftp/core/posix_rename.rs` (full), `native/src/sftp/core/backend.rs`
+(`open_session_channel` only).
+
+Two unrelated stacks: (A) QUIC transport flow control for iroh peer shares, (B) SFTP
+application-layer request pipelining over an SSH channel. Neither affects the other.
+
+---
+
+## A. iroh 1.0.1 / noq QUIC transport windows
+
+### A.1 Current project baseline
+
+`keepalive.rs:57-70` (`iroh_transport_config()`) only calls `.max_idle_timeout`,
+`.keep_alive_interval`, `.default_path_keep_alive_interval`,
+`.max_concurrent_bidi_streams(VarInt::from_u32(64))`, `.max_concurrent_uni_streams(VarInt::from_u32(0))`.
+It never calls `.stream_receive_window` / `.receive_window` / `.send_window`, so those three sit at
+whatever `QuicTransportConfigBuilder::new()` inherits from `noq_proto::TransportConfig::default()`
+(A.4) — windows sized for "100 Mbps, 100 ms RTT" — while `max_concurrent_bidi_streams` is already
+narrowed from noq-proto's default of 100 down to 64.
+
+### A.2 `QuicTransportConfigBuilder` — exact signatures (iroh-1.0.1/src/endpoint/quic.rs)
+
+Wraps `noq::TransportConfig` (`pub struct QuicTransportConfigBuilder(noq::TransportConfig)`, :92);
+consuming-builder style; entry `QuicTransportConfig::builder()` (:134) → private `::new()` (:152,
+see A.5) → `.build(self) -> QuicTransportConfig` (:166).
+
+```rust
+pub fn max_concurrent_bidi_streams(mut self, value: VarInt) -> Self   // :176
+pub fn max_concurrent_uni_streams(mut self, value: VarInt) -> Self    // :182
+pub fn max_idle_timeout(mut self, value: Option<IdleTimeout>) -> Self // :211
+pub fn stream_receive_window(mut self, value: VarInt) -> Self         // :224
+pub fn receive_window(mut self, value: VarInt) -> Self                // :235
+pub fn send_window(mut self, value: u64) -> Self                      // :246  (u64, NOT VarInt)
+pub fn send_fairness(mut self, value: bool) -> Self                   // :261
+pub fn persistent_congestion_threshold(mut self, value: u32) -> Self  // :268
+pub fn keep_alive_interval(mut self, value: Duration) -> Self         // :365 (wraps Some() internally)
+pub fn congestion_controller_factory(
+    mut self, factory: Arc<dyn noq_proto::congestion::ControllerFactory + Send + Sync + 'static>,
+) -> Self                                                              // :419
+pub fn enable_segmentation_offload(mut self, enabled: bool) -> Self    // :437 (GSO, default true)
+```
+
+Each setter forwards 1:1 to the same-named method on the wrapped `noq::TransportConfig`; doc
+comments are copied verbatim from transport.rs (e.g. :216-223 ≡ transport.rs:120-128).
+
+Congestion controllers in `noq_proto::congestion` (congestion.rs:11-13): `Cubic`/`CubicConfig`
+(**default**, transport.rs:581), `NewReno`/`NewRenoConfig`, `Bbr3`/`Bbr3Config`, built via
+`ControllerFactory::build(self: Arc<Self>, now: Instant, current_mtu: u16) -> Box<dyn Controller>`
+(congestion.rs:143). This is orthogonal to flow control: the congestion window
+(`ControllerMetrics::congestion_window`, congestion.rs:131) is a separate, self-tuning cap on
+in-flight bytes — raising `send_window`/`receive_window` removes the flow-control ceiling only, it
+does not disable congestion control.
+
+### A.3 `VarInt` (noq-proto-1.0.1/src/varint.rs)
+
+```rust
+pub struct VarInt(pub(crate) u64);                             // :14, values < 2^62
+pub const MAX: Self = Self((1 << 62) - 1);                     // :18 = 4_611_686_018_427_387_903
+pub const MAX_SIZE: usize = 8;                                 // :20
+pub const fn from_u32(x: u32) -> Self                          // :23  infallible, const fn
+pub fn from_u64(x: u64) -> Result<Self, VarIntBoundsExceeded>  // :28  Err iff x >= 2^62
+pub const unsafe fn from_u64_unchecked(x: u64) -> Self          // :41  caller ensures < 2^62
+pub const fn into_inner(self) -> u64                            // :46
+```
+
+`max_concurrent_{bidi,uni}_streams`/`stream_receive_window`/`receive_window` take `VarInt`;
+`send_window` takes plain `u64`.
+
+### A.4 `noq_proto::TransportConfig::default()` (transport.rs:544-583)
+
+Doc rationale (transport.rs:17-28): "…data window sizes can be tuned for a particular expected
+round trip time, link capacity, and memory availability… **The default configuration is tuned for a
+100Mbps link with a 100ms round trip time.**"
+
+```rust
+const EXPECTED_RTT: u32 = 100;                    // ms
+const MAX_STREAM_BANDWIDTH: u32 = 12_500_000;     // bytes/s (100 Mbps / 8)
+const STREAM_RWND: u32 = MAX_STREAM_BANDWIDTH / 1000 * EXPECTED_RTT;  // bandwidth-delay product
+```
+
+| Field | Default | Source |
+|---|---|---|
+| `max_concurrent_bidi_streams` / `_uni_streams` | `100` / `100` | :553-554 |
+| `max_idle_timeout` | `Some(30_000 ms)` (RFC 9308 §3.2) | :555-556 |
+| `stream_receive_window` | `STREAM_RWND` = **1,250,000 B** (~1.19 MiB) | :557 |
+| `receive_window` | `VarInt::MAX` (unbounded aggregate) | :558 |
+| `send_window` | `8 * STREAM_RWND` = **10,000,000 B** (~9.54 MiB) | :559 |
+| `send_fairness` | `true` | :560 |
+| `datagram_receive_buffer_size` | `Some(STREAM_RWND)` | :576 |
+| `datagram_send_buffer_size` | `1_048_576 B` | :577 |
+| `congestion_controller_factory` | Cubic | :581 |
+
+Memory-scaling rule, quoted (transport.rs:81-82, repeated quic.rs:107-109,174-175):
+> "Worst-case memory use is directly proportional to `max_concurrent_bidi_streams *
+> stream_receive_window`, with an upper bound proportional to `receive_window`."
+
+With the project's `max_concurrent_bidi_streams = 64` and a raised `stream_receive_window` of N
+bytes, worst case is `64 * N` if all 64 streams are simultaneously full and unread, capped above by
+`receive_window`. Leaving `receive_window` at `VarInt::MAX` doesn't itself inflate memory; it just
+stops being an extra ceiling below `64 * N`. When raising `stream_receive_window` well past ~1.19
+MiB, consider also bounding `receive_window` explicitly (e.g. a small multiple of the new
+`stream_receive_window`) instead of leaving it unbounded.
+
+### A.5 iroh-specific overrides in `QuicTransportConfigBuilder::new()` (quic.rs:152-160)
+
+```rust
+cfg.keep_alive_interval(Some(HEARTBEAT_INTERVAL));              // Some(5s)
+cfg.default_path_keep_alive_interval(Some(HEARTBEAT_INTERVAL)); // Some(5s)
+cfg.default_path_max_idle_timeout(Some(PATH_MAX_IDLE_TIMEOUT)); // Some(15s)
+cfg.max_concurrent_multipath_paths(MAX_MULTIPATH_PATHS);        // 8
+cfg.max_remote_nat_traversal_addresses(MAX_QNT_ADDRESSES);      // 32
+cfg.server_handshake_migration(true);
+```
+
+Constants (iroh-1.0.1/src/socket.rs): `HEARTBEAT_INTERVAL = 5s` (:109, same value the project's own
+`IROH_CONNECTION_KEEPALIVE_INTERVAL` uses — no conflict); `PATH_MAX_IDLE_TIMEOUT = 15s` (:117, "3x
+HEARTBEAT_INTERVAL… WiFi reconnect 2-5s, cellular handoff 2-10s"); `MAX_MULTIPATH_PATHS = 8` (:137);
+`MAX_QNT_ADDRESSES = 32` (:145).
+
+None of this touches the window/stream-count fields. The struct doc (quic.rs:107-116) warns about
+four *other* methods only: "In iroh, the config has some specific default values that make iroh's
+holepunching work well with QUIC multipath. Adjusting those settings may cause suboptimal usage" —
+naming `default_path_keep_alive_interval`, `default_path_max_idle_timeout`,
+`max_concurrent_multipath_paths`, `max_remote_nat_traversal_addresses`. `stream_receive_window` /
+`receive_window` / `send_window` / `max_concurrent_bidi_streams` are not among the warned-about
+settings.
+
+### A.6 Direction: which side's config limits which throughput
+
+Doc text, quoted exactly:
+- `stream_receive_window` (transport.rs:120-128): "Maximum number of bytes **the peer** may transmit
+  without acknowledgement on any one stream before becoming blocked… set to at least the expected
+  connection latency multiplied by the maximum desired throughput."
+- `receive_window` (transport.rs:139-146): "Maximum number of bytes **the peer** may transmit across
+  all streams of a connection before becoming blocked."
+- `send_window` (transport.rs:148-155): "Maximum number of bytes **to transmit to a peer** without
+  acknowledgment… upper bound on memory when communicating with peers that issue large amounts of
+  flow control credit."
+
+QUIC flow control is receiver-advertised, per direction (same model as upstream quinn/RFC 9000 §4).
+`stream_receive_window`/`receive_window` are configured on the **receiving** side and bound how fast
+the **remote peer** may send **to it** — they cap this side's inbound/download ceiling. `send_window`
+is a local memory cap on this side's own unacked bytes; achievable outbound/upload throughput is
+`min(local send_window, remote peer's advertised stream_receive_window/receive_window)`. Since both
+Smart Explorer peers run the same `iroh_transport_config()`, raising all three symmetrically raises
+the ceiling both ways; raising them on only one peer only raises that peer's inbound ceiling and its
+own send-side memory budget, not what the unmodified peer will accept from it.
+
+---
+
+## B. russh-sftp 2.3.0 pipelined reader
+
+### B.1 `RawSftpSession` (russh-sftp-2.3.0/src/client/rawsession.rs)
+
+```rust
+pub fn new<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream: S) -> Self   // :149
+pub fn new_with_config<S: ...>(stream: S, cfg: Config) -> Self                     // :156
+pub fn set_timeout(&self, secs: u64)                                                // :178
+pub fn set_limits(&mut self, limits: Limits)                                        // :183  <- &mut self
+pub async fn init(&self) -> SftpResult<Version>                                     // :238  {version:u32, extensions:HashMap<String,String>}
+pub async fn open<T: Into<String>>(&self, filename: T, flags: OpenFlags, attrs: FileAttributes) -> SftpResult<Handle> // :247
+pub async fn close<H: Into<String>>(&self, handle: H) -> SftpResult<Status>          // :282
+pub async fn read<H: Into<String>>(&self, handle: H, offset: u64, len: u32) -> SftpResult<Data> // :324
+pub async fn write<H: Into<String>>(&self, handle: H, offset: u64, data: Vec<u8>) -> SftpResult<Status> // :351
+pub async fn limits(&self) -> SftpResult<LimitsExtension>                           // :679
+pub fn close_session(&self) -> SftpResult<()>                                       // :230 (also Drop, :745)
+```
+
+`Config` (client/mod.rs:29-45): `max_packet_len: u32` (default `262_144` = 256 KiB),
+`max_concurrent_writes: usize` (default `8`), `request_timeout_secs: u64` (default `10`).
+`Handle{id:u32, handle:String}` (protocol/handle.rs:5-8). `Data{id:u32, data:Vec<u8>}`
+(protocol/data.rs:5-9). `Limits{packet_len,read_len,write_len,open_handles:Option<u64>}`
+(rawsession.rs:96-102; server's `0` → `None`/unlimited via `From<LimitsExtension>`, :104-113).
+
+**Concurrent/pipelined reads — safe.** `request()`/`send()` (:187-223) assign a fresh id per call
+via `next_req_id: AtomicU32::fetch_add` (:225), insert a fresh `oneshot::Sender` into
+`requests: Arc<DashMap<Option<u32>, oneshot::Sender<...>>>` keyed by that id, push the serialized
+packet onto a shared `mpsc::UnboundedSender<Bytes>`, then await only that call's own
+`oneshot::Receiver`. A background task from `client::run()` (client/mod.rs:79-121) dispatches each
+reply to the matching sender via `SessionInner::reply()` (:37-58), looked up by id regardless of
+arrival order. Since every method but `set_limits` takes `&self` over thread-safe primitives, **N
+calls to `.read(handle, offset_i, len)` may be in flight simultaneously** (multiple tokio tasks, or
+one task driving `FuturesUnordered`/`join_all`) and may complete **out of order** — replies are
+correlated by id, not response order, which is exactly what an explicit-offset pipelined reader
+needs. Call `set_limits` once up front, before sharing the session across concurrent readers.
+
+**Send + Sync.** Every field (:119-126: `mpsc::UnboundedSender`, `Arc<DashMap<...>>`, two
+`AtomicU32`/`AtomicU64`, a `Copy` `Limits`) is `Send + Sync`, with no manual `unsafe impl` overriding
+the auto traits — so `RawSftpSession` is automatically `Send + Sync` and can be wrapped in `Arc` and
+driven from several tokio tasks, matching how `posix_rename.rs:31` builds one per short-lived
+channel.
+
+### B.2 `OpenFlags` — read-only open (protocol/open.rs:6-18)
+
+```rust
+pub struct OpenFlags(u32);  // bitflags
+const READ = 0x01; const WRITE = 0x02; const APPEND = 0x04;
+const CREATE = 0x08; const TRUNCATE = 0x10; const EXCLUDE = 0x20;
+```
+
+Read-only open is just `OpenFlags::READ` (compare `backend.rs:282`'s
+`OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE` for the bit-or pattern already in use).
+
+### B.3 EOF signaling
+
+`StatusCode` (protocol/status.rs:7-41): `Ok=0`, **`Eof=1`** ("for SSH_FX_READ it means that no more
+data is available in the file"), `NoSuchFile=2`, `PermissionDenied=3`, `Failure=4`, `BadMessage=5`,
+`NoConnection=6`/`ConnectionLost=7` (client-only pseudo-errors), `OpUnsupported=8`.
+
+A `read()` past EOF returns `Packet::Status{status_code: Eof, ..}`, turned by `into_with_status!`
+into `Err(Error::Status(status))` (`impl From<Status> for Error`, client/error.rs:31-35). The
+high-level `File::poll_read` (client/fs/file.rs:172-176) treats exactly this as end-of-stream:
+
+```rust
+Err(Error::Status(status)) if status.status_code == StatusCode::Eof => Ok(None),
+```
+
+A pipelined reader should apply the same match on each outstanding read's result — `Eof` means "no
+more data at/after this offset"; every other `Err` is a real error.
+
+### B.4 Safe read chunk size (mirrors `File::poll_read` exactly)
+
+`file.rs:22`: `const READ_OVERHEAD_LENGTH: u32 = 9;` (`SSH_FXP_DATA` header: type(1)+id(4)+len(4)).
+
+```rust
+let max_read_len = features.limits
+    .and_then(|l| l.read_len)
+    .unwrap_or_else(|| features.max_packet_len.saturating_sub(READ_OVERHEAD_LENGTH)) as usize;
+let len = usize::min(buf.remaining(), max_read_len);  // buf.remaining() is poll_read-buffer-specific
+```
+
+Use the server's advertised `limits@openssh.com` `read_len` if present, else `max_packet_len - 9` =
+**262,135 bytes** with the crate's default `max_packet_len` (262,144). A pipelined reader that owns
+its own buffers should request exactly this many bytes per in-flight READ (shorter only for the
+final, EOF-bounded chunk) — the `buf.remaining()` clause is specific to `AsyncRead::poll_read`.
+
+### B.5 Discovering the server's `limits@openssh.com` values
+
+`extensions.rs:3`: `pub const LIMITS: &str = "limits@openssh.com";`. `LimitsExtension`
+(extensions.rs:21-25): `{max_packet_len,max_read_len,max_write_len,max_open_handles:u64}` (`0` =
+unlimited). Sequence used by `SftpSession::new()` (client/session.rs:35-68), to replicate manually
+on a hand-built `RawSftpSession` (which bypasses `SftpSession`):
+
+1. `session.init().await?` → `Version{version, extensions}`.
+2. Check `has_extension(extensions::LIMITS, "1")` on `Version.extensions` (same map
+   `posix_rename.rs:40` already checks for `posix-rename@openssh.com`).
+3. If present: `let limits = Limits::from(session.limits().await?); session.set_limits(limits);`
+   use `limits.read_len` in the B.4 formula; clamp `max_packet_len = min(server's, Config's)`
+   (session.rs:67-68).
+4. If absent: fall back to `Config.max_packet_len - 9`.
+
+### B.6 russh 0.61.2 — opening the "sftp" subsystem channel
+
+Same two calls `posix_rename.rs:27` and `backend.rs`'s `open_session_channel` (:99-129) already use:
+
+```rust
+// russh-0.61.2/src/client/mod.rs:675 — client::Handle
+pub async fn channel_open_session(&self) -> Result<Channel<Msg>, crate::Error>
+// Doc: "…returns Some(..) immediately if the connection is authenticated, but the channel only
+// becomes usable when it's confirmed by the server."
+
+// russh-0.61.2/src/channels/mod.rs:248 — Channel<Msg>
+pub async fn request_subsystem<A: Into<String>>(&self, want_reply: bool, name: A) -> Result<(), Error>
+// Doc: "Request the start of a subsystem with the given name."
+```
+Used as `channel.request_subsystem(true, "sftp")` (posix_rename.rs:27), then `channel.into_stream()`
+feeds `RawSftpSession::new(stream)` (posix_rename.rs:31).
+
+**Opening while another SFTP channel is busy is fine.** SSH (RFC 4254) multiplexes any number of
+channels over one authenticated transport; `channel_open_session` sends its open request over an
+internal `mpsc` and awaits its own confirmation independently of any other channel — there is no
+connection-wide "one SFTP channel at a time" lock. This is why `posix_rename.rs`'s module doc
+(lines 1-6) already opens "a short-lived second SFTP subsystem channel of the same SSH connection"
+alongside the long-lived main `SftpSession` channel. A third, dedicated channel purely for pipelined
+reads can coexist with both, reusing `backend.rs`'s retry-once-on-dead-generation pattern (:99-129).
+
+---
+
+## Unresolved questions
+
+- Whether `noq`/iroh exposes the *current* connection's peer-advertised transport parameters at
+  runtime (to auto-tune `send_window` to what the remote actually granted) — not investigated; would
+  need `endpoint/connection.rs`'s stats API, outside this task's read scope (`keepalive.rs` only).
+- Whether russh's own SSH-level channel flow-control window (RFC 4254 §5.2 — independent of both
+  QUIC and of SFTP request pipelining) also needs enlarging for the SFTP fix's full benefit to show —
+  not checked; only russh-sftp internals plus the two named russh functions were read.
+- No numeric throughput model beyond noq-proto's "100 Mbps / 100 ms" rationale and the qualitative
+  `bidi_streams * stream_receive_window` memory rule exists; concrete target numbers for a given
+  higher-bandwidth/higher-latency link are an implementer sizing decision, not a crate default.
+- `noq-udp` (pinned alongside `noq`/`noq-proto`) was not read — it's the UDP I/O/GSO layer, not the transport-config/flow-control API this task scoped in.

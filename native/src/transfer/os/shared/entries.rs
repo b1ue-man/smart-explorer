@@ -135,7 +135,7 @@ impl RemoteFilterCtx {
         }
     }
 
-    fn depth_for(&self, path: &str) -> u32 {
+    pub(super) fn depth_for(&self, path: &str) -> u32 {
         let path = path.trim_end_matches('/');
         let root = self.root_prefix.as_str();
         if path == root {
@@ -151,11 +151,11 @@ impl RemoteFilterCtx {
         rel.split('/').filter(|s| !s.is_empty()).count() as u32
     }
 
-    fn matches(&self, e: &FileEntry) -> bool {
+    pub(super) fn matches(&self, e: &FileEntry) -> bool {
         self.cf.matches(e, &self.root_prefix)
     }
 
-    fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
+    pub(super) fn allows_dir_descendants(&self, e: &FileEntry) -> bool {
         (!e.hidden || self.filter.include_hidden) && (!e.system || self.filter.include_system)
     }
 }
@@ -176,14 +176,14 @@ fn remote_ext_of(name: &str, is_dir: bool) -> String {
     }
 }
 
-fn remote_parent(path: &str) -> String {
+pub(super) fn remote_parent(path: &str) -> String {
     path.trim_end_matches('/')
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .unwrap_or_default()
 }
 
-fn remote_file_entry(
+pub(super) fn remote_file_entry(
     path: &str,
     parent: &str,
     meta: &crate::vfs::VfsMeta,
