@@ -204,8 +204,8 @@ g2_paths=(
   transfer::cancel_tests::pre_canceled_transfers_are_terminal_without_mutation
   transfer::cancel_tests::canceled_download_removes_partial_staging_file
   transfer::cancel_tests::canceled_upload_reports_retained_remote_staging_file
-  transfer::lane::tests::recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest
-  transfer::lane::tests::recursive_filter_task_transfer_lane_reports_lost_workers_and_shuts_down
+  transfer::lane::tests::transfer_engine_task_transfer_lane_starts_every_request_at_once
+  transfer::lane::tests::transfer_engine_task_transfer_lane_reports_lost_workers_and_shuts_down
   vfs::remote_util::tests::remote_unique_name_checks_the_bound_and_never_reuses_it
   syncjobs::editor::tests::rejects_invalid_glob_instead_of_silently_skipping_it
   syncjobs::editor::tests::rejects_equal_and_nested_endpoints_without_prefix_confusion

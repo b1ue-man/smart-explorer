@@ -62,7 +62,6 @@ impl App {
             .filter(|(_, transfer)| !transfer.progress.done)
             .map(|(index, transfer)| (index, transfer.progress.clone(), transfer.canceling()))
             .collect();
-        let queued_transfers = self.transfers.queued_len();
         let copy = self
             .copy_progress
             .as_ref()
@@ -82,21 +81,12 @@ impl App {
                     if self.scan_handle.is_some() {
                         ui.label("⟳ Scan läuft…");
                     } else {
-                        ui.colored_label(
-                            theme::warning(ui),
-                            "⏹ Scan wird abgebrochen…",
-                        );
+                        ui.colored_label(theme::warning(ui), "⏹ Scan wird abgebrochen…");
                     }
                 } else if self.scan_was_canceled {
-                    ui.colored_label(
-                        theme::warning(ui),
-                        "⚠ Scan abgebrochen · Teilergebnis",
-                    );
+                    ui.colored_label(theme::warning(ui), "⚠ Scan abgebrochen · Teilergebnis");
                 } else if progress.errors > 0 {
-                    ui.colored_label(
-                        theme::warning(ui),
-                        "⚠ Scan teilweise abgeschlossen",
-                    );
+                    ui.colored_label(theme::warning(ui), "⚠ Scan teilweise abgeschlossen");
                 } else if !self.entries.is_empty() {
                     ui.label("Bereit");
                 }
@@ -105,10 +95,19 @@ impl App {
                     let text = if self.scan_running {
                         format!("{} gescannt · {}", p.scanned, format_bytes(p.bytes))
                     } else {
-                        format!("{} Einträge · {}", self.tree.rows.len(), format_bytes(p.bytes))
+                        format!(
+                            "{} Einträge · {}",
+                            self.tree.rows.len(),
+                            format_bytes(p.bytes)
+                        )
                     };
-                    ui.colored_label(theme::muted(ui), text).on_hover_text(format!(
-                        "{} gescannt · {:.1} Sekunden · {} Fehler", p.scanned, p.elapsed_ms as f64 / 1000.0, p.errors));
+                    ui.colored_label(theme::muted(ui), text)
+                        .on_hover_text(format!(
+                            "{} gescannt · {:.1} Sekunden · {} Fehler",
+                            p.scanned,
+                            p.elapsed_ms as f64 / 1000.0,
+                            p.errors
+                        ));
                 }
                 if !p.current_path.is_empty() && self.scan_running {
                     ui.add(
@@ -118,40 +117,38 @@ impl App {
                     .on_hover_text(&p.current_path);
                 }
             });
-            let has_details = !transfers.is_empty() || queued_transfers > 0 || copy.is_some() || self.sync_running
-                || self.bisync_running || delete_progress.is_some()
-                || notice.as_ref().is_some_and(|(_, time)| time.elapsed().as_secs() < 6)
-                || self.error_msg.is_some() || progress.errors > 0
-                || !self.failed_paths.is_empty() || !self.app_errors.is_empty()
+            let has_details = !transfers.is_empty()
+                || copy.is_some()
+                || self.sync_running
+                || self.bisync_running
+                || delete_progress.is_some()
+                || notice
+                    .as_ref()
+                    .is_some_and(|(_, time)| time.elapsed().as_secs() < 6)
+                || self.error_msg.is_some()
+                || progress.errors > 0
+                || !self.failed_paths.is_empty()
+                || !self.app_errors.is_empty()
                 || !self.selection.is_empty();
-            if !has_details { return; }
+            if !has_details {
+                return;
+            }
             ui.horizontal_wrapped(|ui| {
                 for (index, p, canceling) in &transfers {
                     ui_transfer_chip(ui, p);
                     if *canceling {
-                        ui.colored_label(
-                            theme::warning(ui),
-                            "Übertragung wird abgebrochen…",
-                        );
+                        ui.colored_label(theme::warning(ui), "Übertragung wird abgebrochen…");
                     } else if ui
                         .add(egui::Button::new("Abbrechen").small())
-                        .on_hover_text("Diese Übertragung nach dem laufenden Backend-Aufruf sicher abbrechen")
+                        .on_hover_text(
+                            "Diese Übertragung nach dem laufenden Backend-Aufruf sicher abbrechen",
+                        )
                         .clicked()
                     {
                         self.transfers.cancel(*index);
                     }
                 }
-                if queued_transfers > 0 {
-                    ui.colored_label(
-                        theme::muted(ui),
-                        format!("{queued_transfers} Übertragung(en) wartend"),
-                    )
-                    .on_hover_text(format!(
-                        "Bis zu {} Übertragungen laufen gleichzeitig und teilen sich die Bandbreite; weitere starten automatisch.",
-                        super::transfer_jobs::MAX_ACTIVE_TRANSFERS
-                    ));
-                }
-                if (transfers.len() > 1 || queued_transfers > 0)
+                if transfers.len() > 1
                     && ui
                         .add(egui::Button::new("Alle Übertragungen abbrechen").small())
                         .clicked()
@@ -215,10 +212,8 @@ impl App {
                     let label = format!("⚠ {} Fehler", total_errors);
                     if ui
                         .add(
-                            egui::Button::new(
-                                RichText::new(label).color(theme::danger(ui)),
-                            )
-                            .small(),
+                            egui::Button::new(RichText::new(label).color(theme::danger(ui)))
+                                .small(),
                         )
                         .on_hover_text("Fehler-Protokoll anzeigen und kopieren")
                         .clicked()

@@ -3,26 +3,17 @@
 //! previous names.
 use super::prelude::*;
 use super::*;
-use crate::transfer::Admission;
 pub(in crate::app) use crate::transfer::{
-    launch_transfer, FinishedTransfer, TransferLane, TransferRequest, MAX_ACTIVE_TRANSFERS,
+    launch_transfer, FinishedTransfer, TransferLane, TransferRequest,
 };
 
 impl App {
-    /// Admit a transfer: it starts at once when fewer than
-    /// `MAX_ACTIVE_TRANSFERS` run, otherwise it waits in order.
+    /// Start a transfer at once; transfers on one connection share it
+    /// through its flow.
     pub(in crate::app) fn submit_transfer(&mut self, request: TransferRequest) {
         let announcement = request.announcement();
         match self.transfers.submit(request, &mut launch_transfer) {
-            Ok(Admission::Started) => {
-                self.notice = Some((announcement, Instant::now()));
-            }
-            Ok(Admission::Queued(position)) => {
-                self.notice = Some((
-                    format!("{announcement} wartet (Position {position})"),
-                    Instant::now(),
-                ));
-            }
+            Ok(()) => self.notice = Some((announcement, Instant::now())),
             Err(error) => self.error_msg = Some(error),
         }
     }

@@ -40,6 +40,7 @@ impl Releases {
                 progress,
                 cancel: Arc::new(AtomicBool::new(false)),
                 worker: Some(worker),
+                job: None,
             })
         }
     }
@@ -57,24 +58,16 @@ fn wait_finished(lane: &mut TransferLane) -> Vec<FinishedTransfer> {
 }
 
 #[test]
-fn recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest() {
+fn transfer_engine_task_transfer_lane_starts_every_request_at_once() {
     let mut releases = Releases(Vec::new());
-    let mut lane = TransferLane::new(2);
+    let mut lane = TransferLane::new();
     {
         let mut launch = releases.launcher();
-        assert_eq!(lane.submit(request(), &mut launch), Ok(Admission::Started));
-        assert_eq!(lane.submit(request(), &mut launch), Ok(Admission::Started));
-        assert_eq!(
-            lane.submit(request(), &mut launch),
-            Ok(Admission::Queued(1))
-        );
-        assert_eq!(
-            lane.submit(request(), &mut launch),
-            Ok(Admission::Queued(2))
-        );
+        for _ in 0..10 {
+            assert_eq!(lane.submit(request(), &mut launch), Ok(()));
+        }
     }
-    assert_eq!(lane.active.len(), 2);
-    assert_eq!(lane.queued_len(), 2);
+    assert_eq!(lane.active.len(), 10, "no fixed number of transfers");
     assert!(lane.poll().is_empty(), "nothing finished yet");
     assert!(lane.workers_unfinished());
 
@@ -82,11 +75,8 @@ fn recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest()
     let finished = wait_finished(&mut lane);
     assert_eq!(finished.len(), 1);
     assert!(finished[0].outcome.is_some() && !finished[0].cancel_requested);
-    assert_eq!(lane.active.len(), 1);
-
-    lane.fill(&mut releases.launcher()).unwrap();
-    assert_eq!(lane.active.len(), 2, "the next queued request started");
-    assert_eq!(lane.queued_len(), 1);
+    assert!(finished[0].job.is_none(), "legacy requests carry no job");
+    assert_eq!(lane.active.len(), 9);
 
     lane.cancel(0);
     assert!(lane.active[0].canceling() && !lane.active[1].canceling());
@@ -94,41 +84,27 @@ fn recursive_filter_task_transfer_lane_runs_up_to_capacity_and_queues_the_rest()
         let _ = release.send(true);
     }
     let mut done = 0;
-    while done < 2 {
+    while done < 9 {
         done += wait_finished(&mut lane).len();
     }
-    lane.fill(&mut releases.launcher()).unwrap();
-    assert_eq!(lane.active.len(), 1);
-    assert_eq!(lane.queued_len(), 0);
-    releases.0.last().unwrap().send(true).unwrap();
-    assert_eq!(wait_finished(&mut lane).len(), 1);
     assert!(lane.is_idle());
 }
 
 #[test]
-fn recursive_filter_task_transfer_lane_reports_lost_workers_and_shuts_down() {
+fn transfer_engine_task_transfer_lane_reports_lost_workers_and_shuts_down() {
     let mut releases = Releases(Vec::new());
-    let mut lane = TransferLane::new(1);
+    let mut lane = TransferLane::new();
     {
         let mut launch = releases.launcher();
-        assert_eq!(lane.submit(request(), &mut launch), Ok(Admission::Started));
-        assert_eq!(
-            lane.submit(request(), &mut launch),
-            Ok(Admission::Queued(1))
-        );
+        assert_eq!(lane.submit(request(), &mut launch), Ok(()));
+        assert_eq!(lane.submit(request(), &mut launch), Ok(()));
     }
     // Ending the worker without a terminal message is reported as lost.
     releases.0[0].send(false).unwrap();
     let finished = wait_finished(&mut lane);
     assert_eq!(finished.len(), 1);
     assert!(finished[0].outcome.is_none());
-
-    lane.fill(&mut releases.launcher()).unwrap();
     assert_eq!(lane.active.len(), 1);
     lane.shutdown();
-    assert!(
-        lane.is_idle(),
-        "shutdown drops the queue and running entries"
-    );
-    let _ = releases.0[1].send(true);
+    assert!(lane.is_idle(), "shutdown drops the running entries");
 }
