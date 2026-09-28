@@ -13,9 +13,9 @@ progress, partial outcomes and cancellation. Source fixes are committed.
 The real-volume dump proves that a Dokany volume notification returned into an
 already unloaded DLL. Closure ordering/work admission and official-runtime
 callback lifetime are corrected; the exact new dependency passed remote suite
-36435534429 and is retained for release. The later fix that keeps remote capacity
-separate from client drive readings still requires the same suite on the combined
-candidate. Terminal publication remains pending.
+36435534429 and is retained for release. The complete candidate `b6a7b2a`, including
+the fix that keeps remote capacity separate from client drive readings, passed
+the same suite in run 36438291005. Terminal publication remains pending.
 See [evidence and acceptance plan](WINDOWS_REMOTE_REGRESSION.md).
 
 ## Still open (what's actually left)
