@@ -29,6 +29,8 @@ impl Releases {
                         progress: done_progress,
                         errors: Vec::new(),
                         canceled: false,
+                        issues: Vec::new(),
+                        roots: Vec::new(),
                     });
                 }
                 // `false` ends the worker without a terminal message.

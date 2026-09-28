@@ -22,8 +22,6 @@ mod cache_support;
 mod cache_writer;
 use cache_index::ChildKey;
 use cache_load::{DirectoryLoad, DirectorySnapshot};
-use cache_retirement::Retirement;
-use cache_support::*;
 use cache_writer::InvalidatingWriter;
 
 #[cfg(test)]
@@ -105,40 +103,6 @@ impl CachingBackend {
             Self::with_child_key(inner, child_key.unwrap_or(cache_index::exact_child_key));
         cache.limits = CacheLimits::MOUNT;
         cache
-    }
-
-    fn cached_child_meta(&self, key: &str) -> Option<VfsMeta> {
-        let (parent, name) = Self::parent_and_name(key)?;
-        let mut retired = Retirement::default();
-        let snapshot = {
-            let mut cache = self.cache.lock().ok()?;
-            cached_snapshot(&mut cache, &parent, &mut retired)?
-        };
-        drop(retired);
-        let key = (self.child_key)(name);
-        cache_index::lookup(&snapshot.entries, &snapshot.index, &key)
-            .ok()
-            .flatten()
-    }
-
-    fn invalidate(&self, path: &str) {
-        invalidate_shared(&self.cache, path);
-    }
-
-    fn invalidate_prefix(&self, path: &str) {
-        cache_support::invalidate_prefix(&self.cache, path);
-    }
-
-    fn invalidate_ancestors(&self, path: &str) {
-        cache_support::invalidate_ancestors(&self.cache, path);
-    }
-
-    /// Resolves one child from the retained snapshot without cloning or
-    /// rescanning a wide directory on every path component.
-    pub(crate) fn unique_child(&self, parent: &str, requested: &str) -> VfsResult<Option<VfsMeta>> {
-        let snapshot = self.directory_snapshot(parent)?;
-        let requested_key = (self.child_key)(requested);
-        cache_index::lookup(&snapshot.entries, &snapshot.index, &requested_key)
     }
 }
 
@@ -322,6 +286,38 @@ impl Backend for CachingBackend {
         let result = self.inner.create_dir(path);
         self.invalidate_ancestors(path);
         result
+    }
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        let result = self.inner.create_dir_new(path);
+        self.invalidate_ancestors(path);
+        result
+    }
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        let result = self.inner.discard_copy_stage(stage);
+        self.invalidate(stage);
+        result
+    }
+    fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        self.invalidate(path);
+        let writer = self.inner.open_write_fresh(path, size)?;
+        Ok(writer.map(|writer| {
+            Box::new(InvalidatingWriter::new(
+                writer,
+                Arc::clone(&self.cache),
+                path,
+            )) as Box<dyn Write + Send>
+        }))
+    }
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.inner.open_read_at(path, id, offset)
+    }
+    fn transfer_hint(&self) -> Option<String> {
+        self.inner.transfer_hint()
     }
     fn flow_key(&self, path: &str) -> String {
         self.inner.flow_key(path)

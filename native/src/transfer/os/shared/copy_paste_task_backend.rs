@@ -60,6 +60,7 @@ pub(super) fn done(
             progress,
             errors,
             canceled,
+            ..
         } = message
         {
             assert!(terminal.is_none(), "duplicate terminal transfer message");

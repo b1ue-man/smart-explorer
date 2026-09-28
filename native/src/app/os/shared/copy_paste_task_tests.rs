@@ -122,6 +122,7 @@ fn finish_upload(app: &mut App, files: u64, transferred_bytes: u64) {
             progress,
             errors,
             canceled,
+            ..
         } = message
         {
             assert!(!canceled, "unexpected transfer cancellation");

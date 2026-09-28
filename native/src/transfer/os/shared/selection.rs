@@ -68,7 +68,7 @@ impl SelectionSource {
         let options = WalkOptions {
             filter: compile_remote_filter(self.filter.clone()),
             folders: self.filter.is_none(),
-            flatten: false,
+            ..WalkOptions::default()
         };
         let first = self.paths.first().map(String::as_str).unwrap_or("/");
         let flow = flow_for(&*self.backend, first);
@@ -99,6 +99,7 @@ impl SelectionSource {
                         size,
                         mtime_ms,
                         id,
+                        ..
                     } => {
                         let known = self.backend.read_size(&path, size).ok().flatten();
                         let rel = match rel.rsplit_once('/') {
@@ -119,6 +120,10 @@ impl SelectionSource {
                     }
                     WalkEvent::Omitted { .. } => listing.omitted += 1,
                     WalkEvent::Problem { path, message } => listing.problems.push((path, message)),
+                    // Remote selections have no access gate; kept for completeness.
+                    WalkEvent::AccessRefused { path } => listing
+                        .problems
+                        .push((path, "Lesezugriff wurde abgelehnt".to_string())),
                 }
                 let found = listing.entries.len() as u64;
                 drop(listing);

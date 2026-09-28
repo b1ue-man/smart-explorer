@@ -176,6 +176,31 @@ impl Backend for LocalBackend {
     fn create_dir(&self, path: &str) -> VfsResult<()> {
         ensure_plain_component(&local_platform::to_os(path))
     }
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        std::fs::create_dir(local_platform::to_os(path))
+    }
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        let path = local_platform::to_os(stage);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || crate::local_access::metadata_is_link_like(&path, &metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "copy stage is not a regular file",
+            ));
+        }
+        std::fs::remove_file(path)
+    }
+    fn open_read_at(
+        &self,
+        path: &str,
+        _id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        use std::io::{Seek, SeekFrom};
+        let mut file = crate::local_access::open_read(&local_platform::to_os(path))?;
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Some(Box::new(file)))
+    }
     fn flow_key(&self, path: &str) -> String {
         local_platform::volume_key(path)
     }

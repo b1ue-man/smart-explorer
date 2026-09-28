@@ -132,6 +132,28 @@ impl Backend for UncBackend {
         self.local.create_dir(path)
     }
 
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.local.create_dir_new(path)
+    }
+
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.local.discard_copy_stage(stage)
+    }
+
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        Ok(self.local.open_read_at(path, id, offset)?.map(|inner| {
+            Box::new(UncReader {
+                inner,
+                _connection: self.connection.clone(),
+            }) as Box<dyn Read + Send>
+        }))
+    }
+
     fn flow_key(&self, path: &str) -> String {
         self.local.flow_key(path)
     }

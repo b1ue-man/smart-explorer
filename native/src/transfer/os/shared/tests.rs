@@ -40,6 +40,7 @@ fn done_from(
             progress,
             errors,
             canceled,
+            ..
         } = msg
         {
             done = Some((progress, errors, canceled));

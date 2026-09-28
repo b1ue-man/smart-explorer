@@ -8,6 +8,8 @@
 //! (`apptrash::excluded_name`, counted in `TransferProgress::omitted`); the
 //! desktop builds never activate the app trash.
 
+#[path = "os/shared/access.rs"]
+pub(crate) mod access;
 #[path = "os/shared/cancel.rs"]
 mod cancel;
 #[path = "os/shared/copy_commit.rs"]
@@ -16,8 +18,10 @@ mod copy_commit;
 mod download_file;
 #[path = "os/shared/downloads.rs"]
 mod downloads;
+#[path = "os/shared/engine/mod.rs"]
+mod engine;
 #[path = "os/shared/entries.rs"]
-mod entries;
+pub(crate) mod entries;
 #[path = "os/shared/external.rs"]
 mod external;
 #[path = "os/shared/flow.rs"]
@@ -30,6 +34,8 @@ mod job;
 mod lane;
 #[path = "os/shared/local_stage.rs"]
 mod local_stage;
+#[path = "os/shared/memory.rs"]
+mod memory;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 mod platform;
@@ -78,21 +84,23 @@ mod copy_paste_task_tests;
 #[path = "os/shared/tests.rs"]
 mod tests;
 
+pub use access::{AccessAnswer, AccessGate};
 pub use downloads::{
     download_paths_progress, download_remote_clipboard_items, download_remote_paths_for_clipboard,
 };
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
 pub use flow::{
     acquire_pair, classify_error, flow, flow_for, local_flow, Flow, FlowPermit, FlowSnapshot,
-    PermitPair,
+    PermitPair, ANONYMOUS_JOB,
 };
 pub use flow_control::OpOutcome;
-pub use job::{Endpoint, JobItems, Layout, TransferJob};
+pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, TransferJob};
 pub use lane::{
     launch_transfer, ActiveTransfer, Admission, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest, MAX_ACTIVE_TRANSFERS,
 };
 pub use local_stage::download_to_id;
+pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub(crate) use platform::{replace_file_atomic, upload_is_link_like};
 pub use remote_copy::copy_remote_paths_progress;
 pub use selection::{ListedEntry, SelectionListing, SelectionSource};
@@ -103,7 +111,7 @@ pub use temp::{
 };
 pub(crate) use temp::{session_marker_path, session_tag, write_session_marker};
 pub(crate) use temp_delete::{remove_owned_tree, remove_owned_tree_controlled};
-pub use types::{TransferKind, TransferMsg, TransferProgress};
+pub use types::{ResolvedRoot, TransferIssue, TransferKind, TransferMsg, TransferProgress};
 pub use upload_pairs::upload_pairs_progress;
 pub use upload_reader::upload_reader_progress;
 pub use uploads::{upload_file, upload_paths_progress};

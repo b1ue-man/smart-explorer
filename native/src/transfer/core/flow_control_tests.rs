@@ -32,7 +32,7 @@ fn transfer_engine_task_flow_settles_where_more_concurrency_stops_paying() {
         highest = highest.max(control.limit());
         if step > 10 {
             assert!(
-                (7..=10).contains(&control.limit()),
+                (7..=9).contains(&control.limit()),
                 "limit {} left the optimum",
                 control.limit()
             );
@@ -113,4 +113,51 @@ fn transfer_engine_task_flow_respects_protocol_ceiling() {
     control.set_ceiling(5);
     assert_eq!(control.limit(), 5);
     assert_eq!(control.ceiling(), 5);
+}
+
+/// Deterministic multiplicative noise in [1 - spread, 1 + spread).
+struct Noise(u64);
+
+impl Noise {
+    fn factor(&mut self, spread: f64) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let unit = (self.0 >> 33) as f64 / (1u64 << 31) as f64;
+        1.0 + 2.0 * spread * (unit - 0.5)
+    }
+}
+
+#[test]
+fn transfer_engine_task_flow_holds_the_optimum_under_measurement_noise() {
+    for optimum in [8usize, 24] {
+        for seed in [1u64, 42] {
+            let mut noise = Noise(seed);
+            let mut now = 0;
+            let mut control = FlowControl::new(RESOURCE_CEILING, now);
+            let mut tail = Vec::new();
+            for step in 0..400 {
+                let factor = noise.factor(0.10);
+                let goodput = (control.limit().min(optimum) as f64 * MB as f64 * factor) as u64;
+                control.progress(goodput);
+                now += 1_000;
+                control.tick(now, true);
+                if step >= 250 {
+                    tail.push(control.limit());
+                }
+            }
+            let useful: usize = tail.iter().map(|limit| (*limit).min(optimum)).sum();
+            let efficiency = useful as f64 / (tail.len() * optimum) as f64;
+            let mean = tail.iter().sum::<usize>() as f64 / tail.len() as f64;
+            assert!(
+                efficiency >= 0.9,
+                "optimum {optimum}, seed {seed}: efficiency {efficiency:.3}"
+            );
+            assert!(
+                mean <= optimum as f64 * 1.5,
+                "optimum {optimum}, seed {seed}: mean limit {mean:.1} overshoots"
+            );
+        }
+    }
 }

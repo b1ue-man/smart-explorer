@@ -257,6 +257,7 @@ impl TransferLane {
                         progress,
                         errors,
                         canceled,
+                        ..
                     }) => {
                         terminal = Some(Some((progress, errors, canceled)));
                         break;

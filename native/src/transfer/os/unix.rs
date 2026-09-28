@@ -14,3 +14,14 @@ pub(crate) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()
 pub(crate) fn available_space_for_path(_path: &Path) -> Option<u64> {
     None
 }
+
+/// Memory currently available to programs (`MemAvailable` on Linux and
+/// Android), for the transfer budget.
+pub(crate) fn available_memory() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("MemAvailable:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    kib.checked_mul(1024)
+}

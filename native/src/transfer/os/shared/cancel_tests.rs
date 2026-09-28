@@ -30,6 +30,7 @@ fn terminal(rx: &crossbeam_channel::Receiver<TransferMsg>) -> (u64, bool, Vec<St
                 progress,
                 errors,
                 canceled,
+                ..
             } => return (progress.files_done, canceled, errors),
         }
     }
