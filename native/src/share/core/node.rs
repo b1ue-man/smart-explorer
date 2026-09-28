@@ -35,7 +35,7 @@ pub(crate) struct ShareIrohNode {
     direct_repair_coordinator: Mutex<Weak<DirectReciprocalCoordinator>>,
     pub(super) ev: crossbeam_channel::Sender<ShareEvent>,
     pub(super) sessions: Mutex<HashMap<String, Connection>>,
-    pub(super) session_connects: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    pub(super) session_connects: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
     pub(super) session_epoch: AtomicU64,
     pub(super) mount_leases: Arc<super::mount_lease::PeerMountLeases>,
     sharing_active: AtomicBool,
