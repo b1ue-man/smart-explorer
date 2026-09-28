@@ -4,29 +4,30 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 19835 nodes · 51472 edges · 794 communities (772 shown, 22 thin omitted)
+- 19835 nodes · 51472 edges · 796 communities (773 shown, 23 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 2798 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `b619078b`
+- Built from commit: `a576637b`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- RoomProfile
-- TaskCtx
 - str_arg
+- TaskCtx
+- MountConfig
+- String
 - SyncOmissions
 - TransferPlan
 - DirectPeerIdentity
-- String
 - Loc
-- MountConfig
+- RoomProfile
 - ipc_client.rs
+- ApiError
 - App
-- prelude.rs
 - store.rs
+- prelude.rs
 - ExecId
 - CachingBackend
 - Backend
@@ -34,14 +35,14 @@
 - error_tests.rs
 - PendingDirectEvent
 - vault_scheduler_task_tests.rs
-- HandleTable
 - exec_client.rs
 - OptimizationBackend
 - sync_conflicts.rs
 - FsResponse
 - ShareEvent
-- MountDraft
 - IdentityPersistence
+- DokanFileInfo
+- MountPathCapabilities
 - recovery_manifest.rs
 - ItemRecord
 - fwd
@@ -59,24 +60,22 @@
 - DiscoveryPortError
 - PeerMountLease
 - SftpBackend
-- request_selection.rs
 - ShareAuthState
 - TransferRequest
-- ApiError
 - DirectDecisionKind
 - RelationStoreError
-- DokanFileInfo
 - AgentBackend
 - SyncStateStore
 - scan.rs
 - PeerEndpoint
+- MountedFixture
+- invalid
 - connection.rs
 - sha256_file
-- io.rs
-- download_clipboard_snapshot
 - VfsResult
 - exec.rs
 - FilterDef
+- io.rs
 - net.rs
 - Baseline
 - VfsResult
@@ -86,15 +85,20 @@
 - TaskBackend
 - RootedBackend
 - MountedOptimization
+- crypto.rs
 - DirectRepairPersisted
 - signal_worker.rs
 - exec_contain.rs
-- Scheme
+- PeerOpenTarget
+- DirectGrant
 - DokanOperations
 - ChangeSource
+- write_lock
+- HandleTable
 - DirectRepairSessionError
 - exec_protocol.rs
 - connection.rs
+- Scheme
 - FileEntry
 - exec_ipc.rs
 - callback_timeout.rs
@@ -107,21 +111,17 @@
 - BulkLocalBackend
 - resumable.rs
 - FtpConnection
-- DirectGrant
+- download_clipboard_snapshot
 - RootConfinedLocalBackend
-- write_lock
 - NavigationBackend
 - remote_drive_task_tests.rs
-- io_err
 - DirectLedgerError
 - direct_reciprocal_transport.rs
 - LandingTile
 - Result
 - discoverable_input.rs
 - linux_file_store.rs
-- invalid
 - MountEngine
-- ProjectedPath
 - CountingBackend
 - discovery_signal_types.rs
 - WebdavBackend
@@ -129,6 +129,8 @@
 - IconCache
 - scope.rs
 - windows.rs
+- MountId
+- LegacyDirectRequestEntry
 - transfer_file
 - catch_up.rs
 - ipc_listener.rs
@@ -140,26 +142,23 @@
 - ShareExportConfig
 - TreeBackend
 - MockBackend
-- MountId
 - ConnectForm
 - FaultBackend
 - GDriveBackend
 - linemerge.rs
+- CallbackContext
 - DokanyRuntime
-- LegacyDirectRequestEntry
+- direct_reciprocal.rs
 - DiscoveryUiState
-- ShareService
 - mux.rs
 - drive.rs
 - state.rs
-- CallbackStorage
 - WalkState
-- direct_reciprocal.rs
 - tracked_signal_dispatch.rs
-- PeerOpenTarget
 - MappedBackend
 - dispatch_backend
 - log
+- win32
 - exec_systemd.rs
 - CancelIoBackend
 - FixtureBackend
@@ -172,6 +171,7 @@
 - endpoint.rs
 - share_exec.rs
 - MetadataPointCache
+- CallbackStorage
 - ShareIrohNode
 - RecordingBackend
 - exec.rs
@@ -181,16 +181,13 @@
 - DokanyFileSystem
 - mod.rs
 - DriveObject
-- analyze.rs
 - RacingDirectoryBackend
 - ConflictResolutionTask
 - remote_util.rs
 - platform.rs
 - copy_writer_task_tests.rs
-- callbacks_metadata.rs
 - walk.rs
 - direct_transcript.rs
-- ProfilePersistence
 - WebdavWriter
 - wire.rs
 - api.rs
@@ -202,9 +199,11 @@
 - identity_tests.rs
 - exec_self_test.rs
 - download_file_progress
-- promotion.rs
 - InterfaceFacts
 - dispatch
+- ops.rs
+- put_tree.rs
+- MountUiState
 - exec.rs
 - platform.rs
 - backend_transfer.rs
@@ -212,9 +211,8 @@
 - BlockingBackend
 - cli_swap.rs
 - send_server_frame
+- promotion.rs
 - AgentWriteStream
-- ops.rs
-- put_tree.rs
 - ReclaimItem
 - direct_reciprocal_wire.rs
 - peer_storage_snapshot.rs
@@ -222,6 +220,7 @@
 - ReadStream_Impl
 - SyntheticSource
 - direct_ledger.rs
+- request_selection.rs
 - handoff.rs
 - mount_client.rs
 - ipc_storage.rs
@@ -244,16 +243,18 @@
 - ExecStart
 - ExecGrantTarget
 - Progress
+- analytics.rs
+- App
 - launch.rs
 - lifecycle_output.rs
 - TreeSource
 - PeerPresence
 - MountProxy
-- CallbackContext
 - io_deadline.rs
 - RoomRelationMaterial
 - exec_supervisor.rs
 - archive.rs
+- sync_run.rs
 - filter.rs
 - walk.rs
 - signal_connection.rs
@@ -271,7 +272,6 @@
 - UnavailableInner
 - fs.rs
 - ScanOutcome
-- App
 - reclaim_results_ui.rs
 - .install_delete_worker
 - DeleteOutcome
@@ -287,10 +287,10 @@
 - discovery_signal_exchange.rs
 - session.rs
 - Result
+- ProfilePersistence
 - signal_commands.rs
 - tracked_signal_tests.rs
 - url.rs
-- sync_run.rs
 - FileData_Impl
 - SmbWriter
 - RemovedEndpointScope
@@ -327,7 +327,6 @@
 - delete.rs
 - copy_writer_task_tests.rs
 - Harness
-- MountedFixture
 - agent_error
 - ReclaimProgress
 - remote_context_menu.rs
@@ -337,6 +336,7 @@
 - ftp.rs
 - mod.rs
 - start_scan_backend
+- SftpWriter
 - DiscoveryPin
 - migration.rs
 - persistence_codec.rs
@@ -348,19 +348,15 @@
 - StagedWriteCapabilities
 - deploy.rs
 - transfer.rs
-- scan_parallel
 - PickerState
 - process.rs
 - DirectRequestTombstone
-- SearchFailureBackend
 - mount_launch.rs
 - copy_writer.rs
 - metadata_cache_support.rs
 - CleanCache
-- run_checker
 - optimization_script_callbacks.rs
 - CopyPastePeerFixture
-- DirectReciprocalPeer
 - sync.rs
 - direct_request_tombstone_tests.rs
 - promote_tests.rs
@@ -368,17 +364,21 @@
 - .decode
 - AnalysisReport
 - CountingLocal
+- SearchFailureBackend
 - backend_walk.rs
 - ShareHostState
 - ApplyError
 - live.rs
 - broker.rs
 - tests.rs
+- ProjectedPath
 - KeyQueue<K>
 - resolve_peer_child
+- metadata.rs
 - ScriptProbe
 - vault_open_task_tests.rs
 - MockPlatform
+- DirectReciprocalPeer
 - exec_server.rs
 - identity_lock.rs
 - LanPresence
@@ -386,11 +386,11 @@
 - session.rs
 - platform_helpers.rs
 - removal.rs
+- requests.rs
 - FakeQueue
 - ShareHost
 - norm
 - trash.rs
-- open_regular_file
 - lan_uplink_policy.rs
 - known_hosts.rs
 - direct_ledger_tests.rs
@@ -422,7 +422,6 @@
 - doctor.rs
 - share_peer.rs
 - exports.rs
-- requests_inbox.rs
 - update.rs
 - VaultTaskBridge
 - FtpBackend
@@ -440,14 +439,13 @@
 - tests.rs
 - VirtualFilesDataObject_Impl
 - RootConfinement
-- analytics.rs
 - analytics_access.rs
 - join_save_worker
 - dirs_home
 - status_errors.rs
+- requests_inbox.rs
 - tree_preflight_tests.rs
 - UplinkRuntime
-- MountProxyIdentity
 - mount_proxy.rs
 - mount_registry.rs
 - sync_jobs.rs
@@ -457,7 +455,6 @@
 - path.rs
 - MetadataRefreshWorker
 - ShutdownWatchdog
-- crypto.rs
 - DirectContact
 - receive_walk
 - service_tests.rs
@@ -477,6 +474,7 @@
 - linux_os.rs
 - import.rs
 - vault_volume_enumeration.rs
+- io_err
 - RuntimeConfiguration
 - EndpointRoutes
 - ShareProfiles
@@ -499,6 +497,7 @@
 - exec_grant_journal.rs
 - ipc_analysis.rs
 - connection_tests.rs
+- MountEngine
 - connection_events.rs
 - direct_protocol_tests.rs
 - identity_profile_reconciliation_tests.rs
@@ -551,6 +550,7 @@
 - tests.rs
 - verify_sha256
 - handle_walk_hashed
+- scan_parallel
 - verify.rs
 - DiscoveryListEntry
 - render_file_table
@@ -591,7 +591,6 @@
 - elevation.rs
 - mod.rs
 - retirement_queue_task_tests.rs
-- metadata.rs
 - ExchangeState
 - Fragments
 - tracked_signal_sender_tests.rs
@@ -611,6 +610,7 @@
 - clipboard_snapshot
 - paths.rs
 - .publish_snapshot
+- HandleReservation<'a>
 - interfaces.rs
 - QuickShare
 - appdata_dir
@@ -678,6 +678,7 @@
 - handle_search
 - .update
 - .start_clipboard_upload
+- invalid
 - ensure_embedded_daemon
 - try_acquire_daemon_mutex
 - Result
@@ -708,12 +709,12 @@
 - peer_telemetry.rs
 - poll_status.rs
 - profile_edits.rs
-- identity_lock.rs
 - windows.rs
 - copy_between
 - LimitExceeded
 - paint
 - open_gdrive_result
+- copy_paste_state_task_tests.rs
 - .ui_sync_jobs
 - .ui_share_add_device
 - ui
@@ -725,6 +726,7 @@
 - stop_locked
 - line.rs
 - decode
+- MountEngine
 - copy_paste_task_tests.rs
 - ShareProfiles
 - ensure_firewall_rule_for
@@ -779,14 +781,14 @@
 ## Surprising Connections (you probably didn't know these)
 - `artifact_selection_and_quoting()` --calls--> `artifact_for()`  [INFERRED]
   native/src/agent/core/tests.rs → native/src/agent/core/deploy.rs
-- `analytics_access_task_first_entry_error_preserves_readable_sibling()` --calls--> `scan_entries()`  [INFERRED]
-  native/src/analytics/os/shared/analytics_tests.rs → native/src/analytics/os/shared/analytics.rs
-- `analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_directory()` --calls--> `scan_entries()`  [INFERRED]
-  native/src/analytics/os/shared/analytics_tests.rs → native/src/analytics/os/shared/analytics.rs
+- `analytics_access_task_backend_child_error_is_partial_and_root_error_is_failed()` --calls--> `scan_backend()`  [INFERRED]
+  native/src/analytics/os/shared/analytics_tests.rs → native/src/analytics/os/shared/analytics_backend.rs
+- `scan_backend_via_local_backend()` --calls--> `scan_backend()`  [INFERRED]
+  native/src/analytics/os/shared/analytics_tests.rs → native/src/analytics/os/shared/analytics_backend.rs
+- `parallel_tree_assembly()` --calls--> `build_from_listings()`  [INFERRED]
+  native/src/analytics/os/shared/analytics_tests.rs → native/src/analytics/os/shared/analytics_backend.rs
 - `share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary()` --calls--> `plan_remote_context_menu()`  [INFERRED]
   native/src/app/core/share_remote_task_tests.rs → native/src/app/core/remote_context_menu.rs
-- `treemap_areas_proportional()` --calls--> `treemap_layout()`  [INFERRED]
-  native/src/app/core/tests.rs → native/src/app/core/support_paths.rs
 
 ## Import Cycles
 - 1-file cycle: `native/src/smb/core/io.rs -> native/src/smb/core/io.rs`
@@ -799,91 +801,91 @@
 - 3-file cycle: `native/src/share/core/discovery_signal_offline.rs -> native/src/share/core/signal_commands.rs -> native/src/share/core/signal_worker.rs -> native/src/share/core/discovery_signal_offline.rs`
 - 3-file cycle: `native/src/mount/core/engine.rs -> native/src/mount/core/open_handle.rs -> native/src/mount/core/entry_lifecycle.rs -> native/src/mount/core/engine.rs`
 
-## Communities (794 total, 22 thin omitted)
+## Communities (796 total, 23 thin omitted)
 
-### Community 0 - "RoomProfile"
-Cohesion: 0.04
-Nodes (63): grant_state_code(), PendingCommit, Instant, LegacyDirectRequestTombstone, ProfileChange, direct_code_parses_lookup_ids_with_dashes(), direct_contact_secret_account(), direct_grant_upsert_persists_state_by_device() (+55 more)
+### Community 0 - "str_arg"
+Cohesion: 0.06
+Nodes (92): now_ms(), now_secs(), str_arg(), set_exec(), add_direct(), add_export(), canonical_directory(), create_room() (+84 more)
 
 ### Community 1 - "TaskCtx"
 Cohesion: 0.04
 Nodes (60): Fresh, AtomicBool, Condvar, Drop, Mutex, Option, Self, SlotGuard (+52 more)
 
-### Community 2 - "str_arg"
-Cohesion: 0.06
-Nodes (90): now_ms(), now_secs(), str_arg(), set_exec(), add_direct(), add_export(), canonical_directory(), create_room() (+82 more)
+### Community 2 - "MountConfig"
+Cohesion: 0.04
+Nodes (49): crate::vfs::DeleteDisposition, crate::vfs::MountPathCapabilities, crate::vfs::Scheme, MountBackendScheme, MountDeleteDisposition, MountHostConfig, MountPathCapabilitiesWire, BackendHandle (+41 more)
 
-### Community 3 - "SyncOmissions"
+### Community 3 - "String"
+Cohesion: 0.04
+Nodes (62): App, App, Result, App, App, add_remote(), add_room(), build_saved_connection() (+54 more)
+
+### Community 4 - "SyncOmissions"
 Cohesion: 0.04
 Nodes (70): BTreeSet, Option, Self, Tree, SyncOmissions, plan(), Action, Conflict (+62 more)
 
-### Community 4 - "TransferPlan"
+### Community 5 - "TransferPlan"
 Cohesion: 0.06
 Nodes (66): parent_of(), Option, apply_transfer(), create_external_ancestors(), create_planned_directories(), publish_file(), require_plain_directory(), Result (+58 more)
 
-### Community 5 - "DirectPeerIdentity"
+### Community 6 - "DirectPeerIdentity"
 Cohesion: 0.08
 Nodes (53): require_digest(), require_request_match(), require_target_matches_pin(), Into, Option, Result, SecretKey, Self (+45 more)
-
-### Community 6 - "String"
-Cohesion: 0.05
-Nodes (58): App, App, Result, App, App, add_remote(), add_room(), build_saved_connection() (+50 more)
 
 ### Community 7 - "Loc"
 Cohesion: 0.06
 Nodes (68): Location, PathBuf, TempDir, VolumeInfo, crumbs(), is_volume_root(), root_label(), Option (+60 more)
 
-### Community 8 - "MountConfig"
-Cohesion: 0.05
-Nodes (42): MountHostConfig, resolve(), BackendHandle, Result, ShareHost, MountCachePolicy, MountRuntimePreference, D (+34 more)
+### Community 8 - "RoomProfile"
+Cohesion: 0.06
+Nodes (45): PendingCommit, Instant, ProfileChange, direct_contact_secret_account(), ProfileRevision, room_secret_account(), RoomPersistenceOutcome, RoomProfile (+37 more)
 
 ### Community 9 - "ipc_client.rs"
 Cohesion: 0.06
 Nodes (64): connect(), drain_share_worker_events(), ensure_worker_ready(), exec_share(), launch_replacement(), new_generation(), open_share_backend(), probe_worker() (+56 more)
 
-### Community 10 - "App"
+### Community 10 - "ApiError"
+Cohesion: 0.06
+Nodes (61): Result, Self, validate_volume(), ApiError, envelope(), err_envelope(), io_kind(), io_label() (+53 more)
+
+### Community 11 - "App"
 Cohesion: 0.04
 Nodes (69): EditSaveTask, FileOpenTask, FolderSearchRx, JobConnectRx, MergeApplyRx, MergeLoadRx, ScanStatus, should_log_failure() (+61 more)
-
-### Community 11 - "prelude.rs"
-Cohesion: 0.03
-Nodes (23): scan_storage_source(), empty_treemap_is_disabled_and_named(), WidgetInfo, treemap_semantics_include_location_count_and_size_state(), treemap_widget_info(), Any, Box, Send (+15 more)
 
 ### Community 12 - "store.rs"
 Cohesion: 0.07
 Nodes (67): entry_id(), numbered_name(), plain_name(), Record, Option, Path, PathBuf, Self (+59 more)
 
-### Community 13 - "ExecId"
+### Community 13 - "prelude.rs"
+Cohesion: 0.03
+Nodes (22): empty_treemap_is_disabled_and_named(), WidgetInfo, treemap_semantics_include_location_count_and_size_state(), treemap_widget_info(), Any, Box, Send, worker_panic_detail() (+14 more)
+
+### Community 14 - "ExecId"
 Cohesion: 0.06
 Nodes (59): active_jobs(), ActiveJobControls, cancel_target(), cancellation_keeps_direction_id_and_peer_identity(), ExecJobsUiState, history_jobs(), job_card(), jobs_cache() (+51 more)
 
-### Community 14 - "CachingBackend"
+### Community 15 - "CachingBackend"
 Cohesion: 0.06
 Nodes (16): CachingBackend, Arc, BackendHandle, Box, Fn, Mutex, Option, Path (+8 more)
 
-### Community 15 - "Backend"
+### Community 16 - "Backend"
 Cohesion: 0.09
 Nodes (59): scan_remote(), Instant, Throttle, delete_guarded(), delete_guarded_with_progress(), delete_guarded_with_progress_and_guard(), DeleteGuardedPhase, interrupted() (+51 more)
 
-### Community 16 - "BisyncOptions"
+### Community 17 - "BisyncOptions"
 Cohesion: 0.06
 Nodes (42): Action, BisyncOptions, BisyncStats, CompareMode, Conflict, ConflictMode, DeletePolicy, Direction (+34 more)
 
-### Community 17 - "error_tests.rs"
+### Community 18 - "error_tests.rs"
 Cohesion: 0.05
 Nodes (55): committed_mutation_disconnect_never_invokes_inner_backend(), committed_mutation_is_not_replayed_across_keepalive_reconnect(), handshake(), hash_hit_followed_by_error_propagates_without_listing_fallback(), hash_walk_or_fallback(), lost_write_ack_stays_failed_on_every_flush_without_replay(), reconnectable_backend(), AgentBackend (+47 more)
 
-### Community 18 - "PendingDirectEvent"
+### Community 19 - "PendingDirectEvent"
 Cohesion: 0.09
 Nodes (67): DirectPersistBatch, empty_batch(), persist_all(), persist_with_loaded_identity(), reject_group(), retry_batch(), retry_group(), Option (+59 more)
 
-### Community 19 - "vault_scheduler_task_tests.rs"
+### Community 20 - "vault_scheduler_task_tests.rs"
 Cohesion: 0.07
 Nodes (50): prepare_targets(), Condvar, Error, Fn, HashMap, Mutex, MutexGuard, Option (+42 more)
-
-### Community 20 - "HandleTable"
-Cohesion: 0.07
-Nodes (34): invalid_handle(), Error, sharing_violation(), HandleReservation, HandleReservation<'a>, RenameReservation, RenameReservation<'a>, reserved_handle_missing() (+26 more)
 
 ### Community 21 - "exec_client.rs"
 Cohesion: 0.10
@@ -905,85 +907,85 @@ Nodes (51): decode_resp(), recv_ctrl(), recv_ctrl_limited(), recv_resp(), recv_r
 Cohesion: 0.09
 Nodes (34): every_append_path_keeps_only_the_newest_bounded_events(), push(), Vec, DiscoverySignalRuntime, Option, Result, Sender, DiscoveryCommandOutcome (+26 more)
 
-### Community 26 - "MountDraft"
-Cohesion: 0.06
-Nodes (46): begin_peer_probe(), poll_peer_probe(), Context, install_controls(), present_install_outcome(), App, Ui, App (+38 more)
-
-### Community 27 - "IdentityPersistence"
+### Community 26 - "IdentityPersistence"
 Cohesion: 0.11
 Nodes (34): random_uuid_v4(), allocate_direct_secret(), cleanup_secret(), decode_secret(), DirectCodeRotation, IdentityDisk, IdentityPersistence, load_disk() (+26 more)
 
-### Community 28 - "recovery_manifest.rs"
+### Community 27 - "DokanFileInfo"
+Cohesion: 0.08
+Nodes (56): FillFindStreamData, context_from_file_info(), guard_caught(), guard_impl(), guard_long_with_context(), guard_with_context(), io_status(), NtStatus (+48 more)
+
+### Community 28 - "MountPathCapabilities"
+Cohesion: 0.07
+Nodes (46): begin_peer_probe(), build_peer_roots(), discover_peer_mount(), peer_mount_target(), peer_root_paths_for_test(), peer_roots(), PeerDraft, PeerMountDiscovery (+38 more)
+
+### Community 29 - "recovery_manifest.rs"
 Cohesion: 0.08
 Nodes (51): atomic_write_manifest(), legacy_manifest_entries(), preserve_marker_state(), PreserveMarkerState, recognized_manifest_entries(), recovery_manifest_entry(), RecoveryManifest, RecoveryManifestEntry (+43 more)
 
-### Community 29 - "ItemRecord"
+### Community 30 - "ItemRecord"
 Cohesion: 0.09
 Nodes (51): join(), parent_of(), rel_of(), Option, action_plan_for(), apply_trees(), collect_ids(), delete_guard_trips() (+43 more)
 
-### Community 30 - "fwd"
+### Community 31 - "fwd"
 Cohesion: 0.09
 Nodes (53): run_with_store_path(), app_data_dir(), baseline_path(), pair_id_for(), PathBuf, versions_dir(), empty_globset(), both_sides_change_is_a_conflict_not_overwrite() (+45 more)
 
-### Community 31 - "UplinkTarget"
+### Community 32 - "UplinkTarget"
 Cohesion: 0.06
 Nodes (26): Facility, Option, Result, Self, Send, Vec, SharingRecord, UnsupportedAdapter (+18 more)
 
-### Community 32 - "direct_reciprocal_coordinator.rs"
+### Community 33 - "direct_reciprocal_coordinator.rs"
 Cohesion: 0.06
 Nodes (43): DirectReciprocalCoordinator, DirectRepairCandidate, DirectRepairCandidateError, DirectRepairCompletionReceiver, DirectRepairKey, DirectRepairScheduleError, DirectRepairScheduleOutcome, jittered_delay() (+35 more)
 
-### Community 33 - "ListingBackend"
+### Community 34 - "ListingBackend"
 Cohesion: 0.08
 Nodes (37): Active, Answer, cache(), Gate, ListingBackend, load(), mount_vault_task_daemon_fresh_unretained_image_retires_old_authority_but_errors_do_not(), mount_vault_task_daemon_mutation_fences_persistent_and_waiter_authority() (+29 more)
 
-### Community 34 - "FeedBackend"
+### Community 35 - "FeedBackend"
 Cohesion: 0.06
 Nodes (36): active_item(), canceled_and_over_budget_feeds_fail_closed(), change(), feed(), FeedBackend, ignored_remove_feed_never_becomes_a_delete_action(), record(), rename_swap_applies_and_persists_both_final_paths() (+28 more)
 
-### Community 35 - "MountSnapshot"
+### Community 36 - "MountSnapshot"
 Cohesion: 0.09
 Nodes (37): MountEntry, MountManager, Arc, BackendHandle, Default, HashMap, Mutex, MutexGuard (+29 more)
 
-### Community 36 - "DiscoveryCryptoError"
+### Community 37 - "DiscoveryCryptoError"
 Cohesion: 0.12
 Nodes (27): ConnectorCommit, DiscoveryCryptoError, DiscoveryExchangeBinding, PairingRole, PairingStage, Display, Error, ConnectorAwaitingPublisherBundle (+19 more)
 
-### Community 37 - "copy.rs"
+### Community 38 - "copy.rs"
 Cohesion: 0.07
 Nodes (43): App, FnOnce, Sender, CopyHandle, CopyMsg, Arc, AtomicBool, Option (+35 more)
 
-### Community 38 - "eio"
+### Community 39 - "eio"
 Cohesion: 0.07
 Nodes (23): PeerBackend, Arc, Box, Fn, From, FsMeta, Instant, Mutex (+15 more)
 
-### Community 39 - "VfsResult"
+### Community 40 - "VfsResult"
 Cohesion: 0.09
 Nodes (23): BlockingListingBackend, BlockingState, DropCommitBackend, DropCommitWriter, remote_drive_task_ambiguous_flush_invalidates_while_writer_is_open(), remote_drive_task_mutation_prevents_racing_stale_snapshot_install(), remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open(), Arc (+15 more)
 
-### Community 40 - "discovery_pake.rs"
+### Community 41 - "discovery_pake.rs"
 Cohesion: 0.07
 Nodes (38): ChaCha20Rng, CipherSuite, ClientLogin, CredentialFinalization, CredentialRequest, CredentialResponse, CryptoRng, GenericArray (+30 more)
 
-### Community 41 - "support_paths.rs"
+### Community 42 - "support_paths.rs"
 Cohesion: 0.07
 Nodes (33): App, Ui, App, Context, App, Ui, App, Context (+25 more)
 
-### Community 42 - "DiscoveryPortError"
+### Community 43 - "DiscoveryPortError"
 Cohesion: 0.09
 Nodes (37): invalid_error(), pairing_bundle_from_connector(), pairing_bundle_from_publisher(), persisted_packet(), persistence_error(), protocol_error(), protocol_message(), require_packet() (+29 more)
 
-### Community 43 - "PeerMountLease"
+### Community 44 - "PeerMountLease"
 Cohesion: 0.08
 Nodes (37): copy_between(), Option, Result, SendStream, serve(), LegacyLeaseCleanup, Arc, Drop (+29 more)
 
-### Community 44 - "SftpBackend"
+### Community 45 - "SftpBackend"
 Cohesion: 0.08
 Nodes (27): FileAttributes, append_bounded(), capture_exec(), CapturedExec, deadline_error(), Arc, Box, Channel (+19 more)
-
-### Community 45 - "request_selection.rs"
-Cohesion: 0.10
-Nodes (52): ambiguous_pending_error(), blocker_resolution_commands(), exact_or_prefix(), is_pending_incoming(), legacy_conflict_resolution_commands(), legacy_retryable(), legacy_selector_matches(), matching_legacy() (+44 more)
 
 ### Community 46 - "ShareAuthState"
 Cohesion: 0.07
@@ -993,37 +995,37 @@ Nodes (49): access_state_code(), send_share_command(), member(), append_room_pol
 Cohesion: 0.07
 Nodes (29): LaunchTransfer, App, App, ActiveTransfer, Admission, FinishedTransfer, launch_transfer(), Arc (+21 more)
 
-### Community 48 - "ApiError"
-Cohesion: 0.09
-Nodes (39): Result, Self, validate_volume(), ApiError, envelope(), err_envelope(), io_kind(), io_label() (+31 more)
-
-### Community 49 - "DirectDecisionKind"
+### Community 48 - "DirectDecisionKind"
 Cohesion: 0.10
 Nodes (33): DirectDecisionDeliveryState, DirectDecisionDeliveryStatus, DirectDecisionStatus, DirectDeliveryState, DirectDeliveryStatus, DirectFailure, DirectLifecycleEvent, DirectRequestRecord (+25 more)
 
-### Community 50 - "RelationStoreError"
+### Community 49 - "RelationStoreError"
 Cohesion: 0.09
 Nodes (26): canonical_direct_outcome(), DiscoveryRelationOutcome, InMemoryRelationStore, map_direct_domain_error(), RelationStore, RelationStoreCommit, RelationStoreError, Debug (+18 more)
 
-### Community 51 - "DokanFileInfo"
-Cohesion: 0.11
-Nodes (49): FillFindStreamData, context_from_file_info(), context_key(), guard_caught(), guard_impl(), guard_long_with_context(), guard_with_context(), io_status() (+41 more)
-
-### Community 52 - "AgentBackend"
+### Community 50 - "AgentBackend"
 Cohesion: 0.09
 Nodes (17): AgentBackend, AgentReconnect, AgentStreams, BackendHandle, Box, Fn, Option, Path (+9 more)
 
-### Community 53 - "SyncStateStore"
+### Community 51 - "SyncStateStore"
 Cohesion: 0.09
 Nodes (32): default_db_path(), AsRef, BTreeMap, Connection, Option, Path, PathBuf, Result (+24 more)
 
-### Community 54 - "scan.rs"
+### Community 52 - "scan.rs"
 Cohesion: 0.10
 Nodes (47): bool_or(), filter_arg(), nonempty_list(), opt_i64(), opt_str(), parse_filter(), pass_all(), Default (+39 more)
 
-### Community 55 - "PeerEndpoint"
+### Community 53 - "PeerEndpoint"
 Cohesion: 0.09
 Nodes (33): authorize_outgoing_repair_generation(), classify_repair_session_setup(), classify_repair_setup_io(), OpenedPeerStream, Arc, Connection, Error, Instant (+25 more)
+
+### Community 54 - "MountedFixture"
+Cohesion: 0.09
+Nodes (39): FixtureBackend, CapturedChild, CheckerMode, Handshake, NamedEvent, Child, Drop, Duration (+31 more)
+
+### Community 55 - "invalid"
+Cohesion: 0.10
+Nodes (50): analysis_task(), bind_task(), checked_location(), groups(), insert_analysis_for_test(), issues(), node(), open_slot() (+42 more)
 
 ### Community 56 - "connection.rs"
 Cohesion: 0.11
@@ -1033,61 +1035,61 @@ Nodes (33): Client, Option, SftpAuth, SftpConfig, block_on_absolute(), block_on_
 Cohesion: 0.10
 Nodes (44): Path, PathBuf, Result, sha256_file(), unique_temp_file(), verify_sha256_rejects_same_size_tamper(), AppliedTransaction, cleanup_pending() (+36 more)
 
-### Community 58 - "io.rs"
-Cohesion: 0.05
-Nodes (22): invalid(), Error, Into, Result, WalkBudget, require_absent(), B, Result (+14 more)
-
-### Community 59 - "download_clipboard_snapshot"
-Cohesion: 0.06
-Nodes (28): ClipboardPreparation, PreparationResult, PreparationStamp, Option, Result, T, copy_paste_task_cancel_and_restart_never_readmit_an_old_result(), copy_paste_task_external_sequence_supersedes_a_pending_result() (+20 more)
-
-### Community 60 - "VfsResult"
+### Community 58 - "VfsResult"
 Cohesion: 0.09
 Nodes (15): Counting, FailingHashWalk, hash_mode_picks_cheapest_source(), Native, Arc, AtomicBool, AtomicUsize, Box (+7 more)
 
-### Community 61 - "exec.rs"
+### Community 59 - "exec.rs"
 Cohesion: 0.09
 Nodes (33): StopReason, active_processes(), AttributeList, ContainedExec, Control, create_job(), launch_supervisor(), LaunchedProcess (+25 more)
 
-### Community 62 - "FilterDef"
+### Community 60 - "FilterDef"
 Cohesion: 0.10
 Nodes (35): cleanup_local_results(), collect_download_root(), download_collected_file(), download_paths_progress(), download_remote_clipboard_items(), download_remote_dir_for_clipboard(), download_remote_paths_for_clipboard(), open_download_temp_path() (+27 more)
 
-### Community 63 - "net.rs"
+### Community 61 - "io.rs"
+Cohesion: 0.06
+Nodes (23): require_absent(), B, Result, VfsMeta, connect_impl(), disconnect_impl(), Option, Result (+15 more)
+
+### Community 62 - "net.rs"
 Cohesion: 0.09
 Nodes (34): connect_rejects_non_unc(), connect_unsupported_off_windows(), Entry, EntryState, is_unc(), Lease, lease_key(), Lifecycle (+26 more)
 
-### Community 64 - "Baseline"
+### Community 63 - "Baseline"
 Cohesion: 0.10
 Nodes (41): gfs_bucket(), hash_bytes(), invalid(), keep_per_bucket(), load_baseline(), pair_id(), pair_id_parts(), parse_binary() (+33 more)
 
-### Community 65 - "VfsResult"
+### Community 64 - "VfsResult"
 Cohesion: 0.09
 Nodes (11): DeleteProbe, AtomicUsize, Box, Read, Send, Vec, VfsMeta, VfsResult (+3 more)
 
-### Community 66 - "ipc_storage.rs"
+### Community 65 - "ipc_storage.rs"
 Cohesion: 0.12
 Nodes (48): app_data_path(), app_directory(), clear_ipc_addr(), clear_ipc_generation(), commit_exec_journal_temp(), create_token(), enforce_directory_mode(), enforce_token_mode() (+40 more)
 
-### Community 67 - "journal.rs"
+### Community 66 - "journal.rs"
 Cohesion: 0.12
 Nodes (34): EntryState, Instant, Action, apply(), artifact_exists(), DeletePhase, encode_record(), Journal (+26 more)
 
-### Community 68 - "FixtureBackend"
+### Community 67 - "FixtureBackend"
 Cohesion: 0.08
 Nodes (22): FixtureBackend, insert(), Arc, AtomicUsize, Box, BTreeMap, Condvar, Drop (+14 more)
 
-### Community 69 - "TaskBackend"
+### Community 68 - "TaskBackend"
 Cohesion: 0.09
 Nodes (24): copy_tree(), create_foreign(), fwd(), Arc, AtomicBool, AtomicUsize, Box, Drop (+16 more)
 
-### Community 70 - "RootedBackend"
+### Community 69 - "RootedBackend"
 Cohesion: 0.12
 Nodes (12): RootedBackend, BackendHandle, Box, CachingBackend, Option, Read, Result, Send (+4 more)
 
-### Community 71 - "MountedOptimization"
+### Community 70 - "MountedOptimization"
 Cohesion: 0.09
 Nodes (36): Deadline, mount_vault_task_actual_volume_metadata_apps_watchers(), MountedOptimization, Arc, Drop, JoinHandle, Option, PathBuf (+28 more)
+
+### Community 71 - "crypto.rs"
+Cohesion: 0.07
+Nodes (35): b64_decode(), entropy_failure_is_returned_after_bounded_retries(), fill_random(), fill_random_with(), hex(), hex_decode(), hex_val(), iroh_signature() (+27 more)
 
 ### Community 72 - "DirectRepairPersisted"
 Cohesion: 0.07
@@ -1101,137 +1103,137 @@ Nodes (40): acknowledge_offline(), ConnectionWait, Duration, Receiver, Result, w
 Cohesion: 0.09
 Nodes (36): Armed, end_leftover(), intermediate_hook(), JobRoot, kill_tree_once(), proc_table(), records_dir(), recover_once() (+28 more)
 
-### Community 75 - "Scheme"
-Cohesion: 0.05
-Nodes (12): crate::vfs::DeleteDisposition, crate::vfs::MountPathCapabilities, crate::vfs::Scheme, MountBackendScheme, MountDeleteDisposition, MountPathCapabilitiesWire, BackendHandle, From (+4 more)
+### Community 75 - "PeerOpenTarget"
+Cohesion: 0.08
+Nodes (23): CmdTx, App, Option, App, Arc, AtomicBool, BackendHandle, Clone (+15 more)
 
-### Community 76 - "DokanOperations"
+### Community 76 - "DirectGrant"
+Cohesion: 0.09
+Nodes (43): clean(), DeleteArgs, exact_or_prefix(), grant_selector_matches(), grant_state_code(), GrantsArgs, GrantsCommand, latest_accepted_request() (+35 more)
+
+### Community 77 - "DokanOperations"
 Cohesion: 0.05
 Nodes (40): FileCallback, FindFilesCallback, FindFilesWithPatternCallback, FindStreamsCallback, GetDiskFreeSpaceCallback, GetVolumeInformationCallback, LockFileCallback, MountedCallback (+32 more)
 
-### Community 77 - "ChangeSource"
+### Community 78 - "ChangeSource"
 Cohesion: 0.09
 Nodes (14): ChangeSource, Counting, Arc, AtomicUsize, Box, HashMap, Mutex, Option (+6 more)
 
-### Community 78 - "DirectRepairSessionError"
+### Community 79 - "write_lock"
+Cohesion: 0.08
+Nodes (30): baseline_from_meta(), require_regular(), RwLockWriteGuard, VfsMeta, write_lock(), MountEngine, Arc, Entry (+22 more)
+
+### Community 80 - "HandleTable"
+Cohesion: 0.12
+Nodes (24): invalid_handle(), Error, sharing_violation(), MutexGuard, Self, HandleTable, PendingDelete, AtomicU64 (+16 more)
+
+### Community 81 - "DirectRepairSessionError"
 Cohesion: 0.11
 Nodes (30): authenticate_peer(), AuthenticatedDirectSession, DirectRepairInitiator, DirectRepairInitiatorAwaitingComplete, DirectRepairInitiatorAwaitingOffer, DirectRepairInitiatorAwaitingStore, DirectRepairInitiatorComplete, DirectRepairReceiver (+22 more)
 
-### Community 79 - "exec_protocol.rs"
+### Community 82 - "exec_protocol.rs"
 Cohesion: 0.15
 Nodes (42): delayed_terminal_acknowledgement_fits_the_shared_server_and_client_budgets(), matching_pongs_keep_an_unlimited_silent_command_alive(), silent_authenticated_peer_hits_the_application_liveness_deadline(), dropping_input_sends_cancel_after_the_single_start(), fixture(), hello_ok(), identity(), matching_cached_terminal_is_valid_without_another_started_frame() (+34 more)
 
-### Community 80 - "connection.rs"
+### Community 83 - "connection.rs"
 Cohesion: 0.10
 Nodes (40): FtpError, FtpResult, connect_addresses_with(), connect_data_stream(), connect_stream(), connect_stream_with_timing(), decode_userinfo(), ftp_err() (+32 more)
 
-### Community 81 - "FileEntry"
+### Community 84 - "Scheme"
+Cohesion: 0.06
+Nodes (10): MountProxyIdentity, Box, Read, Send, T, Vec, VfsMeta, VfsResult (+2 more)
+
+### Community 85 - "FileEntry"
 Cohesion: 0.08
 Nodes (33): App, Vec, plain_selection_paths(), Arc, HashSet, Vec, dedupe_entries(), dedupe_paths() (+25 more)
 
-### Community 82 - "exec_ipc.rs"
+### Community 86 - "exec_ipc.rs"
 Cohesion: 0.10
 Nodes (37): decode(), ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession, invalid(), read_frame(), remaining_write_time() (+29 more)
 
-### Community 83 - "callback_timeout.rs"
+### Community 87 - "callback_timeout.rs"
 Cohesion: 0.10
 Nodes (31): allocate_id(), mount_vault_task_supervisor_finish_waits_for_claim_and_never_rearms(), mount_vault_task_supervisor_rearm_checks_identity_stop_and_claim_failure(), mount_vault_task_supervisor_registers_ten_thousand_actual_leases(), Arc, supervisor_without_reset_worker(), CallbackTimeoutLease, CallbackTimeoutSupervisor (+23 more)
 
-### Community 84 - "HandleRecord"
+### Community 88 - "HandleRecord"
 Cohesion: 0.08
 Nodes (29): callback_path_key(), requests_delete(), requests_read(), requests_write(), require_delete_access(), Result, same_or_descendant(), share_allows() (+21 more)
 
-### Community 85 - "acquire_msi"
+### Community 89 - "acquire_msi"
 Cohesion: 0.08
 Nodes (35): absolute_path(), acquire_msi(), manifest_value(), MsiArtifact, pinned_msi(), PinnedMsi, Drop, Option (+27 more)
 
-### Community 86 - "AbsoluteDeadline"
+### Community 90 - "AbsoluteDeadline"
 Cohesion: 0.12
 Nodes (28): AbsoluteDeadline, Generation, Generation<T>, lock_unpoisoned(), lock_with_deadline(), ReconnectAccess, ReconnectGate, ReconnectGate<T> (+20 more)
 
-### Community 87 - "PairingBundle"
+### Community 91 - "PairingBundle"
 Cohesion: 0.10
 Nodes (17): DiscoveryId, DiscoveryOfferBinding, ExchangeId, kind_from_tag(), kind_tag(), OfferId, PairingBundle, push_field() (+9 more)
 
-### Community 88 - "DiscoverySignalState"
+### Community 92 - "DiscoverySignalState"
 Cohesion: 0.09
 Nodes (15): ActiveDiscoveryExchange, ActiveDiscoveryOffer, DiscoveryExchangeRole, DiscoveryExchangeStage, DiscoverySignalState, PendingPublisherStart, ActiveDiscoveryOffer, DiscoveryPublishTarget (+7 more)
 
-### Community 89 - "TransferMsg"
+### Community 93 - "TransferMsg"
 Cohesion: 0.09
 Nodes (39): Vec, TransferMsg, validate_transfer_name(), Instant, Sender, send_transfer_progress(), copy_remote_paths_progress(), AtomicBool (+31 more)
 
-### Community 90 - "BulkLocalBackend"
+### Community 94 - "BulkLocalBackend"
 Cohesion: 0.10
 Nodes (27): android_task_upload_reader_cancel_publishes_nothing(), android_task_upload_reader_reserves_a_free_name_and_never_replaces(), BulkLocalBackend, copy_tree_contents(), done_from(), fwd(), remote_clipboard_downloads_folder_tree(), remote_clipboard_filters_folder_tree() (+19 more)
 
-### Community 91 - "resumable.rs"
+### Community 95 - "resumable.rs"
 Cohesion: 0.12
 Nodes (37): Build, GetBearer, ambiguous_or_error(), classify(), Completion, confirmed_offset(), invalid_range(), request_error() (+29 more)
 
-### Community 92 - "FtpConnection"
+### Community 96 - "FtpConnection"
 Cohesion: 0.12
 Nodes (28): FtpReconnect, ControlHealth, ControlState, FtpConnection, FtpReader, io_err(), KeepaliveControl, Arc (+20 more)
 
-### Community 93 - "DirectGrant"
-Cohesion: 0.10
-Nodes (41): clean(), DeleteArgs, exact_or_prefix(), grant_selector_matches(), GrantsArgs, GrantsCommand, latest_accepted_request(), list() (+33 more)
+### Community 97 - "download_clipboard_snapshot"
+Cohesion: 0.07
+Nodes (23): ClipboardPreparation, PreparationResult, PreparationStamp, Option, Result, T, App, App (+15 more)
 
-### Community 94 - "RootConfinedLocalBackend"
+### Community 98 - "RootConfinedLocalBackend"
 Cohesion: 0.08
 Nodes (28): Fixture, forward_slashes(), only_error(), remote_drive_task_case_colliding_listing_fails_closed(), remote_drive_task_confined_projection_blocks_escape_and_preserves_exclusive_owner(), remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live(), remote_drive_task_enforced_root_rejects_unverified_backend(), remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() (+20 more)
 
-### Community 95 - "write_lock"
-Cohesion: 0.10
-Nodes (22): MountEngine, EntryState, Result, Vec, baseline_from_meta(), RwLockWriteGuard, write_lock(), MountEngine (+14 more)
-
-### Community 96 - "NavigationBackend"
+### Community 99 - "NavigationBackend"
 Cohesion: 0.11
 Nodes (30): BoundedRendezvous, directory(), engine(), file(), NavigationBackend, remote_drive_task_directory_snapshot_budget_is_not_a_validity_limit(), remote_drive_task_engine_listing_preserves_name_and_collision_validation(), remote_drive_task_metadata_handle_downloads_only_on_first_data_access() (+22 more)
 
-### Community 97 - "remote_drive_task_tests.rs"
+### Community 100 - "remote_drive_task_tests.rs"
 Cohesion: 0.11
 Nodes (30): assert_cached_missing(), cached_root_names(), Fixture, forward_slash(), remote_drive_task_atomic_replace_detaches_the_old_open_destination(), remote_drive_task_exclusive_writer_collision_preserves_existing_bytes(), remote_drive_task_host_audits_local_cache_before_remote_root(), remote_drive_task_lazy_writable_handle_commits_on_flush() (+22 more)
 
-### Community 98 - "io_err"
-Cohesion: 0.08
-Nodes (25): IntoIoError, io_err(), io::Error, Error, russh::Error, russh::keys::Error, russh_sftp::client::error::Error, &str (+17 more)
-
-### Community 99 - "DirectLedgerError"
+### Community 101 - "DirectLedgerError"
 Cohesion: 0.11
 Nodes (26): DirectLedgerError, apply_relay_forwarded(), find_index(), find_mut(), require_decision(), require_decision_receipt(), require_request_receipt(), DirectRequestEntry (+18 more)
 
-### Community 100 - "direct_reciprocal_transport.rs"
+### Community 102 - "direct_reciprocal_transport.rs"
 Cohesion: 0.12
 Nodes (43): admit_incoming_direct_repair(), classify_early_stream_failure(), classify_session_error(), direct_repair_runtime_guard(), DirectReciprocalTransportResult, DirectRepairRuntimeGuard, finish_send(), persist_initiator() (+35 more)
 
-### Community 101 - "LandingTile"
+### Community 103 - "LandingTile"
 Cohesion: 0.11
 Nodes (29): FontId, App, landing_sync_meta(), landing_time_secs(), BTreeMap, Option, SyncJob, Ui (+21 more)
 
-### Community 102 - "Result"
+### Community 104 - "Result"
 Cohesion: 0.12
 Nodes (31): IdentityLock, append_cleanup_warning(), default_home(), default_home_path(), delete_secret(), finish_pending_cleanup_locked(), finish_pending_cleanup_with(), identity_path() (+23 more)
 
-### Community 103 - "discoverable_input.rs"
+### Community 105 - "discoverable_input.rs"
 Cohesion: 0.09
 Nodes (35): await_publication(), DiscoverableArgs, DiscoverableCommand, duration_secs(), pin_source(), PinSource, read_pin(), read_pin_line() (+27 more)
 
-### Community 104 - "linux_file_store.rs"
+### Community 106 - "linux_file_store.rs"
 Cohesion: 0.15
 Nodes (35): account_digest(), acquire_lock(), c_name(), create_stage(), decode_record(), encode_record(), FileStore, hex() (+27 more)
 
-### Community 105 - "invalid"
-Cohesion: 0.11
-Nodes (40): bool_arg(), canceled(), i64_arg(), invalid(), io_error(), opt_bool(), opt_i64(), opt_str() (+32 more)
-
-### Community 106 - "MountEngine"
+### Community 107 - "MountEngine"
 Cohesion: 0.09
 Nodes (31): Entry, lock(), MountEngine, read_lock(), Arc, AsRef, AtomicU64, AtomicUsize (+23 more)
-
-### Community 107 - "ProjectedPath"
-Cohesion: 0.11
-Nodes (27): not_found(), require_regular(), VfsMeta, MaterializationSlot, MountEngine, PreparedMaterialization, Arc, AtomicU64 (+19 more)
 
 ### Community 108 - "CountingBackend"
 Cohesion: 0.11
@@ -1261,177 +1263,177 @@ Nodes (32): App, Option, RetentionHandle, ScanScope, search_recursive_access_tas
 Cohesion: 0.12
 Nodes (40): add_path_component(), broadcast_environment_change(), ignore_missing(), normalize_component(), path_editing_is_exact_idempotent_and_preserves_other_entries(), path_text(), read_user_path(), register() (+32 more)
 
-### Community 115 - "transfer_file"
+### Community 115 - "MountId"
+Cohesion: 0.09
+Nodes (27): status_text(), authenticated_entry(), BackendStreamLease, host_status_is_terminal(), host_transition_allowed(), HostGrant, MountManager, BackendHandle (+19 more)
+
+### Community 116 - "LegacyDirectRequestEntry"
+Cohesion: 0.09
+Nodes (28): legacy_retryable(), LegacyDirectDecisionDelivery, LegacyDirectDecisionSource, LegacyDirectDecisionState, LegacyDirectDeliveryState, LegacyDirectPresenceEvidence, LegacyDirectRequestEntry, apply_authenticated_decision() (+20 more)
+
+### Community 117 - "transfer_file"
 Cohesion: 0.14
 Nodes (41): moved_target_changed_error(), quarantine_source(), QuarantinedSource, random_suffix(), remove_quarantine(), restore_after_error(), restore_quarantine(), restore_quarantine_if_any() (+33 more)
 
-### Community 116 - "catch_up.rs"
+### Community 118 - "catch_up.rs"
 Cohesion: 0.12
 Nodes (24): Admitted, Cancel, catch_up_due(), CatchUpBook, CatchUpGate, CatchUpQueue, CatchUpSkip, CatchUpStatus (+16 more)
 
-### Community 117 - "ipc_listener.rs"
+### Community 119 - "ipc_listener.rs"
 Cohesion: 0.10
 Nodes (36): constant_time_eq(), eio(), handle_client(), accepted_ipc_stream_is_forced_back_to_blocking(), clear_pre_auth_deadline(), clear_publication(), deadline_elapsed(), incomplete_pre_auth_read_times_out_and_releases_capacity() (+28 more)
 
-### Community 118 - "edits.rs"
+### Community 120 - "edits.rs"
 Cohesion: 0.14
 Nodes (38): check_on_start(), discard_edit(), download_one(), edits(), fetch(), find(), handle(), make_room() (+30 more)
 
-### Community 119 - "MetadataCache"
+### Community 121 - "MetadataCache"
 Cohesion: 0.13
 Nodes (16): CachedDirectory, CacheState, MetadataCache, Admission, Arc, BTreeMap, BTreeSet, HashMap (+8 more)
 
-### Community 120 - "LoadSlot"
+### Community 122 - "LoadSlot"
 Cohesion: 0.12
 Nodes (29): Admission, CompletedDirectory, expire_observed_path(), invalidate_descendants(), invalidate_direct_children(), invalidate_paths(), invalidate_slot(), LoadSlot (+21 more)
 
-### Community 121 - "MetadataBackend"
+### Community 123 - "MetadataBackend"
 Cohesion: 0.10
 Nodes (30): directory(), file(), MetadataBackend, remote_drive_task_background_preload_honors_stop_between_targets(), remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cache(), remote_drive_task_concurrent_directory_misses_share_one_remote_load(), remote_drive_task_failed_background_preload_reports_no_progress(), remote_drive_task_failed_refresh_keeps_last_complete_snapshot() (+22 more)
 
-### Community 122 - "ExecRegistry"
+### Community 124 - "ExecRegistry"
 Cohesion: 0.11
 Nodes (28): ActiveJob, cancel_matching(), ExecAdmission, ExecAuthorizationLease, ExecCancellation, ExecCancelReason, ExecRegistry, ExecRegistryError (+20 more)
 
-### Community 123 - "ShareExportConfig"
+### Community 125 - "ShareExportConfig"
 Cohesion: 0.13
 Nodes (38): clean_mount_label(), connection_mounts(), dir_meta(), ensure_under_root(), from_os_path(), list_dir(), local_mounts(), local_target_stays_under_root() (+30 more)
 
-### Community 124 - "TreeBackend"
+### Community 126 - "TreeBackend"
 Cohesion: 0.10
 Nodes (19): apply_failure_reports_already_removed_entries(), cancellation_during_apply_reports_confirmed_mutations(), cancellation_during_planning_does_not_mutate(), LinkBoundaryBackend, local_recursive_delete_unlinks_symlink_without_following_it(), recursive_delete_stops_at_link_like_root(), root_target(), AtomicUsize (+11 more)
 
-### Community 125 - "MockBackend"
+### Community 127 - "MockBackend"
 Cohesion: 0.09
 Nodes (26): normalize_root(), scan_reclaim_backend(), agent_walk_hashed_is_preferred(), backend_retains_only_bounded_top_candidates_and_reports_totals(), file(), hashless_remote_does_not_download_to_hash(), MockBackend, partial_agent_walk_error_is_reported_without_listing_fallback() (+18 more)
 
-### Community 126 - "MountId"
-Cohesion: 0.09
-Nodes (26): status_text(), authenticated_entry(), BackendStreamLease, host_status_is_terminal(), host_transition_allowed(), MountManager, BackendHandle, Drop (+18 more)
-
-### Community 127 - "ConnectForm"
+### Community 128 - "ConnectForm"
 Cohesion: 0.13
 Nodes (32): ep_prefix(), norm_root(), ConnectForm, ConnectResult, Default, Self, AgentFallback, connect_ftp() (+24 more)
 
-### Community 128 - "FaultBackend"
+### Community 129 - "FaultBackend"
 Cohesion: 0.08
 Nodes (28): Candidate, check_cancel(), collect(), DeleteBudget, invalid(), join(), remove_tree_backend(), AtomicBool (+20 more)
 
-### Community 129 - "GDriveBackend"
+### Community 130 - "GDriveBackend"
 Cohesion: 0.10
 Nodes (13): export_ext(), export_format(), Option, GDriveBackend, RawEntry, Box, Option, Read (+5 more)
 
-### Community 130 - "linemerge.rs"
+### Community 131 - "linemerge.rs"
 Cohesion: 0.11
 Nodes (34): assemble(), assemble_rows(), Choice, diff(), Hunk, LineMergeError, MergeDeadline, Row (+26 more)
 
-### Community 131 - "DokanyRuntime"
+### Community 132 - "CallbackContext"
+Cohesion: 0.08
+Nodes (21): DriveLetter, Display, callback_path_key(), CallbackContext, Arc, AtomicBool, AtomicUsize, Duration (+13 more)
+
+### Community 133 - "DokanyRuntime"
 Cohesion: 0.09
 Nodes (23): DokanyCreateError, DokanyPreflightError, DokanyRuntime, load_error(), LoadedModule, rejected(), Drop, Error (+15 more)
 
-### Community 132 - "LegacyDirectRequestEntry"
-Cohesion: 0.10
-Nodes (27): LegacyDirectDecisionDelivery, LegacyDirectDecisionSource, LegacyDirectDecisionState, LegacyDirectDeliveryState, LegacyDirectPresenceEvidence, LegacyDirectRequestEntry, apply_authenticated_decision(), authenticated_decision() (+19 more)
+### Community 134 - "direct_reciprocal.rs"
+Cohesion: 0.11
+Nodes (29): DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError, DirectReciprocalPolicyDenied, grant_matches(), Display, Error, PairingOrigin (+21 more)
 
-### Community 133 - "DiscoveryUiState"
+### Community 135 - "DiscoveryUiState"
 Cohesion: 0.08
 Nodes (14): prune_orphaned_terminal_exchanges(), replace_exchange_record(), ActiveDiscoveryOffer, DiscoveryExchangeRecord, DiscoveryExchangeState, DiscoveryOfferPhase, DiscoveryPublishTarget, DiscoveryUiState (+6 more)
 
-### Community 134 - "ShareService"
-Cohesion: 0.10
-Nodes (19): CmdTx, Arc, AtomicBool, BackendHandle, Clone, DirectReciprocalCoordinator, Drop, ExecGrantMutation (+11 more)
-
-### Community 135 - "mux.rs"
+### Community 136 - "mux.rs"
 Cohesion: 0.14
 Nodes (23): Activity, close_transport(), make_out_channel(), remote_drive_task_closing_transport_disconnects_existing_and_new_requests(), remote_drive_task_registered_stream_is_bounded_and_receiver_drop_unblocks_sender(), remote_drive_task_retired_mux_drains_existing_and_rejects_new_requests(), remote_drive_task_stalled_writer_queue_times_out_and_disconnects_pending_operations(), remote_drive_task_unregister_releases_a_router_waiting_on_backpressure() (+15 more)
 
-### Community 136 - "drive.rs"
+### Community 137 - "drive.rs"
 Cohesion: 0.13
 Nodes (38): bounded_label(), clean(), DriveArgs, DriveCommand, exit_for_status(), install_runtime(), InstallRuntimeArgs, list() (+30 more)
 
-### Community 137 - "state.rs"
+### Community 138 - "state.rs"
 Cohesion: 0.14
 Nodes (39): autopause_flags(), autopause_path(), cadence_path(), cadence_secs(), control_replacement_preserves_complete_values(), heartbeat_path(), invalid_data(), is_running() (+31 more)
-
-### Community 138 - "CallbackStorage"
-Cohesion: 0.10
-Nodes (31): absolute_path_wide(), CallbackStorage, drive_candidates(), inspect_recovery(), close_and_finalize(), Option, Result, run_until_stopped() (+23 more)
 
 ### Community 139 - "WalkState"
 Cohesion: 0.11
 Nodes (22): BackendHandle, run(), serial_fallback(), bounded_text(), diagnostic_preview(), downstream_disconnect_sets_the_shared_cancellation_flag(), PendingRemoteDir, retained_text_bytes() (+14 more)
 
-### Community 140 - "direct_reciprocal.rs"
-Cohesion: 0.11
-Nodes (28): DirectReciprocalApply, DirectReciprocalConflict, DirectReciprocalError, DirectReciprocalPolicyDenied, Display, Error, PairingOrigin, apply_contact_id() (+20 more)
-
-### Community 141 - "tracked_signal_dispatch.rs"
+### Community 140 - "tracked_signal_dispatch.rs"
 Cohesion: 0.10
 Nodes (36): contact_secret(), dispatch_server_line(), envelope_kind(), find_entry(), handle_tracked_server_message(), has_outbox(), is_discovery_error(), local_identity() (+28 more)
 
-### Community 142 - "PeerOpenTarget"
-Cohesion: 0.10
-Nodes (29): build_peer_roots(), discover_peer_mount(), peer_mount_target(), peer_root_paths_for_test(), peer_roots(), PeerDraft, PeerMountDiscovery, PeerProbePermit (+21 more)
-
-### Community 143 - "MappedBackend"
+### Community 141 - "MappedBackend"
 Cohesion: 0.10
 Nodes (21): forward(), MappedBackend, remote(), BackendHandle, Box, Path, Read, Self (+13 more)
 
-### Community 144 - "dispatch_backend"
+### Community 142 - "dispatch_backend"
 Cohesion: 0.11
 Nodes (36): abort_requests(), cancel_request(), canceled_request_lost_client(), dispatch_backend(), emit(), handle_read_backend(), handle_write_backend(), Arc (+28 more)
 
-### Community 145 - "log"
+### Community 143 - "log"
 Cohesion: 0.12
 Nodes (38): blocked_message(), enqueue_connect_jobs(), enqueue_job(), enqueue_realtime_jobs(), enqueue_startup_jobs(), Handoff, load_configured_jobs(), poll_jobs() (+30 more)
 
-### Community 146 - "exec_systemd.rs"
+### Community 144 - "win32"
+Cohesion: 0.12
+Nodes (36): context_key(), set_context_key(), CallbackFailure, insufficient_buffer(), Error, From, Self, win32() (+28 more)
+
+### Community 145 - "exec_systemd.rs"
 Cohesion: 0.15
 Nodes (37): Self, cleanup_runtime_unit(), Connection, PathBuf, run_runtime_backstop_test(), cgroup_populated(), checked_cgroup_path(), complex_value() (+29 more)
 
-### Community 147 - "CancelIoBackend"
+### Community 146 - "CancelIoBackend"
 Cohesion: 0.10
 Nodes (22): CancelAfterRead, CancelAfterWrite, canceled_download_removes_partial_staging_file(), canceled_upload_reports_retained_remote_staging_file(), CancelIoBackend, fwd(), pre_canceled_transfers_are_terminal_without_mutation(), Arc (+14 more)
 
-### Community 148 - "FixtureBackend"
+### Community 147 - "FixtureBackend"
 Cohesion: 0.12
 Nodes (20): copy_paste_task_vfs_cache_forwards_private_copy_and_read_contracts(), copy_paste_task_vfs_serial_reader_finishes_before_destination_access(), enabled(), FixtureBackend, HeldReader, path(), Arc, AtomicBool (+12 more)
 
-### Community 149 - "JobSupervisor"
+### Community 148 - "JobSupervisor"
 Cohesion: 0.12
 Nodes (26): JobRunner, ActiveJob, android_task_cancel_jobs_stops_only_the_selected_work(), completed_job_is_not_requeued_in_a_tight_loop(), EnqueueStatus, job(), JobSupervisor, poll_until_idle() (+18 more)
 
-### Community 150 - "Mux"
+### Community 149 - "Mux"
 Cohesion: 0.17
 Nodes (21): Mux, AtomicU64, AgentConnection, establish(), heartbeat_loop(), HeartbeatPolicy, AgentReconnect, AgentStreams (+13 more)
 
-### Community 151 - "Scanner"
+### Community 150 - "Scanner"
 Cohesion: 0.13
 Nodes (31): finish_root_failure(), record_failure(), Arc, AtomicBool, AtomicU64, HashSet, Instant, Mutex (+23 more)
 
-### Community 152 - "replace_platform.rs"
+### Community 151 - "replace_platform.rs"
 Cohesion: 0.18
 Nodes (35): install_one(), install_over_existing(), copy_backup(), copy_checked(), create_backup(), ensure_missing(), hard_link_can_fall_back(), InstallError (+27 more)
 
-### Community 153 - "mod.rs"
+### Community 152 - "mod.rs"
 Cohesion: 0.08
 Nodes (25): Command, ConnectionAddArgs, ConnectionProtocolArg, ConnectionsArgs, PeerAddArgs, PeerSelectorArgs, RoomAddArgs, Command (+17 more)
 
-### Community 154 - "target.rs"
+### Community 153 - "target.rs"
 Cohesion: 0.12
 Nodes (30): account_shorthand_can_disambiguate_duplicate_labels(), conn(), duplicate_saved_labels_fail_with_candidates(), endpoint_backend_keys(), endpoint_backend_keys_separate_peers_but_join_each_peer_paths(), is_drive_root(), is_endpoint_namespace_root(), is_exact_drive_root() (+22 more)
 
-### Community 155 - "endpoint.rs"
+### Community 154 - "endpoint.rs"
 Cohesion: 0.08
 Nodes (28): enc(), gdrive_endpoint(), parse_remote_url(), remote_endpoint(), remote_url_detection_and_parse(), Option, saved_and_path(), endpoint_key() (+20 more)
 
-### Community 156 - "share_exec.rs"
+### Community 155 - "share_exec.rs"
 Cohesion: 0.10
 Nodes (34): cancel_exec_job(), cancel_target(), exec_jobs(), grant_answer(), job_json(), job_list(), jobs_json(), provider() (+26 more)
 
-### Community 157 - "MetadataPointCache"
+### Community 156 - "MetadataPointCache"
 Cohesion: 0.13
 Nodes (23): MetadataLookup, CachedPoint, meta_bytes(), MetadataPointCache, parent_and_name(), PointState, BTreeMap, BTreeSet (+15 more)
+
+### Community 157 - "CallbackStorage"
+Cohesion: 0.10
+Nodes (30): absolute_path_wide(), CallbackStorage, drive_candidates(), inspect_recovery(), close_and_finalize(), Option, Result, run_until_stopped() (+22 more)
 
 ### Community 158 - "ShareIrohNode"
 Cohesion: 0.11
@@ -1469,281 +1471,281 @@ Nodes (25): Option, Ui, treemap_accessible_list(), App, Context, count_subtree()
 Cohesion: 0.14
 Nodes (26): split_parent(), DriveObject, committed_cleanup_error(), GDriveBackend, invalid(), MoveContext, require_absent(), require_one() (+18 more)
 
-### Community 167 - "analyze.rs"
-Cohesion: 0.14
-Nodes (36): analysis_task(), bind_task(), checked_location(), groups(), insert_analysis_for_test(), issues(), node(), open_slot() (+28 more)
-
-### Community 168 - "RacingDirectoryBackend"
+### Community 167 - "RacingDirectoryBackend"
 Cohesion: 0.12
 Nodes (24): Barrier, directory(), file(), RacingDirectoryBackend, remote_drive_task_cached_enumerations_share_one_immutable_snapshot(), remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits(), remote_drive_task_older_parent_fetch_cannot_resurrect_removed_child(), remote_drive_task_parent_snapshot_recursively_reconciles_point_metadata() (+16 more)
 
-### Community 169 - "ConflictResolutionTask"
+### Community 168 - "ConflictResolutionTask"
 Cohesion: 0.08
 Nodes (21): App, resolve_phase_label(), Context, Ui, App, ConflictBulkRun, ConflictResolutionFailure, ConflictResolutionMessage (+13 more)
 
-### Community 170 - "remote_util.rs"
+### Community 169 - "remote_util.rs"
 Cohesion: 0.09
 Nodes (21): App, Option, is_zip_name(), App, Context, sel_key_path(), ensure_remote_destination_free(), find_remote_unique_name() (+13 more)
 
-### Community 171 - "platform.rs"
+### Community 170 - "platform.rs"
 Cohesion: 0.11
 Nodes (33): acquire_daemon_instance_guard(), acquire_daemon_instance_guard_in(), atomic_replace(), daemon_lock_directory(), DaemonInstanceGuard, DriveInfo, guard_excludes_a_second_process_until_drop(), guard_excludes_an_independent_open_until_drop() (+25 more)
 
-### Community 172 - "copy_writer_task_tests.rs"
+### Community 171 - "copy_writer_task_tests.rs"
 Cohesion: 0.16
 Nodes (32): assert_owned_create(), Capture, copy_paste_task_provider_drive_409_reconciles_only_owned_identity(), copy_paste_task_provider_drive_concurrent_name_collision_never_adopts_or_replays(), copy_paste_task_provider_drive_create_ignores_stale_path_and_pending_ids(), copy_paste_task_provider_drive_lost_upload_ack_reconciles_own_content(), copy_paste_task_provider_drive_occupied_or_duplicate_stage_never_mutates(), copy_paste_task_provider_drive_wrong_metadata_keeps_pending_read_only() (+24 more)
 
-### Community 173 - "callbacks_metadata.rs"
-Cohesion: 0.10
-Nodes (33): insufficient_buffer(), fill_disposition(), fill_entry(), FillDisposition, find_entries(), find_files(), find_files_with_pattern(), get_disk_free_space() (+25 more)
-
-### Community 174 - "walk.rs"
+### Community 172 - "walk.rs"
 Cohesion: 0.11
 Nodes (26): directory(), Lineage, recursive_filter_task_lineage_emits_each_pending_ancestor_once(), recursive_filter_task_lineage_stops_when_the_sink_refuses(), Arc, FnMut, Mutex, Option (+18 more)
 
-### Community 175 - "direct_transcript.rs"
+### Community 173 - "direct_transcript.rs"
 Cohesion: 0.17
 Nodes (28): sha256_b64(), decision_digest(), decision_receipt_transcript(), decision_transcript(), put_len(), request_digest(), request_receipt_transcript(), request_transcript() (+20 more)
 
-### Community 176 - "ProfilePersistence"
-Cohesion: 0.13
-Nodes (18): MemoryStorage, HashMap, Option, Result, cleanup_new_secret(), direct_grant(), FakePersistence, persisted_empty_export_list_is_not_replaced_with_home() (+10 more)
-
-### Community 177 - "WebdavWriter"
+### Community 174 - "WebdavWriter"
 Cohesion: 0.13
 Nodes (25): CountingUpload, dropping_unflushed_writer_never_sends_put(), failed_put_is_never_replayed_by_another_flush(), FailingUpload, io_err(), large_payload_is_disk_spooled_and_streamed_once(), request_err(), Agent (+17 more)
 
-### Community 178 - "wire.rs"
+### Community 175 - "wire.rs"
 Cohesion: 0.17
 Nodes (35): CloseRequest, CreateRequest, CreateResponse, FileId, attribute_tag_request(), attributes_of(), close_quietly(), create_set_close() (+27 more)
 
-### Community 179 - "api.rs"
+### Community 176 - "api.rs"
 Cohesion: 0.12
 Nodes (29): DriveRequestResult, drive_err(), drive_request(), err(), is_rate_limited(), mutation_once(), MutationRequestError, not_found() (+21 more)
 
-### Community 180 - "shared.rs"
+### Community 177 - "shared.rs"
 Cohesion: 0.17
 Nodes (34): app_data_dir(), connections_path(), delete_secret(), delete_secret_checked(), file_save_load_roundtrip(), get_secret(), get_secret_checked(), load_connections() (+26 more)
 
-### Community 181 - "VaultTree"
+### Community 178 - "VaultTree"
 Cohesion: 0.11
 Nodes (15): Active, Counters, Arc, AtomicUsize, Box, BTreeMap, Drop, Read (+7 more)
 
-### Community 182 - "AnalysisOnly"
+### Community 179 - "AnalysisOnly"
 Cohesion: 0.10
 Nodes (23): AnalysisOnly, Bridge, flatten(), Arc, AtomicU64, BackendHandle, Box, BTreeMap (+15 more)
 
-### Community 183 - "WholeFileSpool"
+### Community 180 - "WholeFileSpool"
 Cohesion: 0.14
 Nodes (20): AllocatedSpool, audit_recovery(), ensure_directory(), is_spool_name(), lock(), prepare_spool_root(), random_hex(), reject_link_ancestors() (+12 more)
 
-### Community 184 - "UncBackend"
+### Community 181 - "UncBackend"
 Cohesion: 0.10
 Nodes (12): Box, Read, Result, Self, Send, Vec, VfsMeta, VfsResult (+4 more)
 
-### Community 185 - "identity_tests.rs"
+### Community 182 - "identity_tests.rs"
 Cohesion: 0.12
 Nodes (29): direct_secret_account(), corrupt_secret_is_not_treated_as_missing(), create_identity(), direct_repair_metadata_failure_rolls_back_candidate_secret(), failed_rotation_metadata_write_keeps_old_code_and_removes_candidate_secret(), failed_rotation_secret_write_keeps_the_old_identity_and_code(), FakePersistence, healthy_identity_refuses_repair_without_mutation() (+21 more)
 
-### Community 186 - "exec_self_test.rs"
+### Community 183 - "exec_self_test.rs"
 Cohesion: 0.16
 Nodes (34): assign_to_outer_job(), create_ui_restricted_job(), helper_request(), launch_suspended_test_host(), launch_suspended_test_host_in_job(), HANDLE, OwnedHandle, Result (+26 more)
 
-### Community 187 - "download_file_progress"
+### Community 184 - "download_file_progress"
 Cohesion: 0.09
 Nodes (28): CommitMode, retained_stage_error(), AtomicBool, Box, FnOnce, Option, Result, Self (+20 more)
 
-### Community 188 - "promotion.rs"
-Cohesion: 0.15
-Nodes (25): Component, absolute_path(), ensure_destination_parent_plain(), ensure_plain_directory_tree(), invalid(), promote_staged_no_replace(), promote_staged_replace(), push_component() (+17 more)
-
-### Community 189 - "InterfaceFacts"
+### Community 185 - "InterfaceFacts"
 Cohesion: 0.09
 Nodes (31): Ipv6Addr, classify_links(), iface(), InterfaceFacts, is_link_local(), lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink(), lan_cleanup_task_apipa_without_gateway_is_router_less(), lan_cleanup_task_dhcp_lease_without_gateway_is_routed() (+23 more)
 
-### Community 190 - "dispatch"
+### Community 186 - "dispatch"
 Cohesion: 0.12
 Nodes (33): abort_requests(), mount_vault_task_agent_reaps_completed_capacity_before_new_admission(), Result, cancel_disconnects_a_blocked_transfer_receiver(), cancel_request(), dispatch(), handle_walk_tree(), inbound_transfer_channel_is_bounded_and_disconnects_both_ends() (+25 more)
 
-### Community 191 - "exec.rs"
+### Community 187 - "ops.rs"
+Cohesion: 0.14
+Nodes (25): SearchSpec, cat(), copy(), copy_file_requires_force_for_overwrite(), fallback_search(), glob_match(), join(), list() (+17 more)
+
+### Community 188 - "put_tree.rs"
+Cohesion: 0.12
+Nodes (26): BufferedTree, BufferedTreeEntry, BufferedTreeReceiver, canceled(), disconnect_preserves_existing_destination_and_does_not_create_missing_root(), handle_put_tree(), invalid(), invalid_manifest_never_creates_the_destination_root() (+18 more)
+
+### Community 189 - "MountUiState"
+Cohesion: 0.08
+Nodes (26): install_controls(), present_install_outcome(), App, Ui, App, bounded_label(), drive_selection_label(), mount_status_alert() (+18 more)
+
+### Community 190 - "exec.rs"
 Cohesion: 0.11
 Nodes (22): block_sigpipe(), ContainedExec, note_activity(), provider_status(), recv_timeout_error(), Arc, Drop, Error (+14 more)
 
-### Community 192 - "platform.rs"
+### Community 191 - "platform.rs"
 Cohesion: 0.09
 Nodes (22): ClipboardEffect, drive_info_list(), EditProcess, launch_local_for_edit(), list_drives(), open_local_path(), read_clipboard_files(), reveal_path_in_file_manager() (+14 more)
 
-### Community 193 - "backend_transfer.rs"
+### Community 192 - "backend_transfer.rs"
 Cohesion: 0.12
 Nodes (31): backend_ancestors(), cancellation_preserves_existing_destination_and_removes_stage(), canonical_backend_root(), disconnect_preserves_existing_destination_and_removes_stage(), handle_put_tree_backend(), has_stage(), join_path(), local_backend() (+23 more)
 
-### Community 194 - "SearchRelay"
+### Community 193 - "SearchRelay"
 Cohesion: 0.13
 Nodes (23): duplicate_search_hits_are_terminal_errors(), hit(), internal_search_relay_channel_is_bounded(), Arc, AtomicBool, BackendHandle, HashSet, Instant (+15 more)
 
-### Community 195 - "BlockingBackend"
+### Community 194 - "BlockingBackend"
 Cohesion: 0.10
 Nodes (23): blocked_backend_does_not_starve_timer_or_independent_work(), BlockingBackend, BlockingTask, BlockingTask<T>, Arc, Box, Condvar, JoinHandle (+15 more)
 
-### Community 196 - "cli_swap.rs"
+### Community 195 - "cli_swap.rs"
 Cohesion: 0.14
 Nodes (26): arm_interrupt_undo(), cli_task_install_checks_the_backup_and_the_installed_file(), cli_task_install_rejects_a_hash_mismatch_before_replacing(), cli_task_install_replaces_in_place_commits_and_rolls_back(), cli_task_update_lock_is_exclusive_and_names_leftovers(), file_sha256(), install_cli_in_place(), InterruptUndo (+18 more)
 
-### Community 197 - "send_server_frame"
+### Community 196 - "send_server_frame"
 Cohesion: 0.13
 Nodes (28): AsyncWrite, id(), missing_or_wrong_terminal_acknowledgement_never_reports_success(), output_frames_do_not_extend_the_authenticated_peer_deadline(), PendingWriter, policy(), remote_terminal_error_is_acknowledged_before_it_is_returned(), Context (+20 more)
+
+### Community 197 - "promotion.rs"
+Cohesion: 0.16
+Nodes (25): Component, absolute_path(), ensure_destination_parent_plain(), ensure_plain_directory_tree(), invalid(), promote_staged_no_replace(), promote_staged_replace(), push_component() (+17 more)
 
 ### Community 198 - "AgentWriteStream"
 Cohesion: 0.12
 Nodes (22): agent_with_open_error(), AgentBackend, AgentReadStream, AgentWriteStream, open_read_and_write_surface_agent_errors_without_fallback(), open_read_once(), ReadOpening, Arc (+14 more)
 
-### Community 199 - "ops.rs"
-Cohesion: 0.14
-Nodes (25): SearchSpec, cat(), copy(), copy_file_requires_force_for_overwrite(), fallback_search(), glob_match(), join(), list() (+17 more)
-
-### Community 200 - "put_tree.rs"
-Cohesion: 0.12
-Nodes (26): BufferedTree, BufferedTreeEntry, BufferedTreeReceiver, canceled(), disconnect_preserves_existing_destination_and_does_not_create_missing_root(), handle_put_tree(), invalid(), invalid_manifest_never_creates_the_destination_root() (+18 more)
-
-### Community 201 - "ReclaimItem"
+### Community 199 - "ReclaimItem"
 Cohesion: 0.10
 Nodes (24): collector_keeps_deterministic_best_values_at_the_bound(), compare_group(), compare_item_path(), compare_item_size(), retain_best(), Fn, Ordering, T (+16 more)
 
-### Community 202 - "direct_reciprocal_wire.rs"
+### Community 200 - "direct_reciprocal_wire.rs"
 Cohesion: 0.17
 Nodes (24): digest_payload(), DirectRepairCommit, DirectRepairComplete, DirectRepairDigest, DirectRepairHello, DirectRepairMaterial, DirectRepairMessage, DirectRepairOffer (+16 more)
 
-### Community 203 - "peer_storage_snapshot.rs"
+### Community 201 - "peer_storage_snapshot.rs"
 Cohesion: 0.16
 Nodes (28): Announcement, interrupted(), PeerSnapshotFailure, receive_snapshot(), receive_snapshot_responses(), recv_control(), recv_data(), reported_totals() (+20 more)
 
-### Community 204 - "windows.rs"
+### Community 202 - "windows.rs"
 Cohesion: 0.12
 Nodes (29): app_payload_spec(), cli_payload_spec(), updater_payload_spec(), PayloadSpec, app_payload_spec(), archived_name_without_binary_suffix(), cli_payload_spec(), cli_self_replacement() (+21 more)
 
-### Community 205 - "ReadStream_Impl"
+### Community 203 - "ReadStream_Impl"
 Cohesion: 0.09
 Nodes (20): ISequentialStream_Impl, IStream, IStream_Impl, LOCKTYPE, com_error(), open(), ReadStream, ReadStream_Impl (+12 more)
 
-### Community 206 - "SyntheticSource"
+### Community 204 - "SyntheticSource"
 Cohesion: 0.09
 Nodes (17): AtomicUsize, BackendHandle, Box, Drop, PathBuf, Read, Self, Send (+9 more)
 
-### Community 207 - "direct_ledger.rs"
+### Community 205 - "direct_ledger.rs"
 Cohesion: 0.12
 Nodes (22): relay_outcome_code(), envelope_code(), relay_code(), DirectEnvelopeKind, DirectRelayOutcome, DirectRequestEntry, DirectRequestRetries, DirectRetryState (+14 more)
 
-### Community 208 - "handoff.rs"
+### Community 206 - "request_selection.rs"
+Cohesion: 0.18
+Nodes (31): ambiguous_pending_error(), blocker_resolution_commands(), exact_or_prefix(), is_pending_incoming(), legacy_accept_eligible(), legacy_conflict_resolution_commands(), legacy_selector_matches(), matching_legacy() (+23 more)
+
+### Community 207 - "handoff.rs"
 Cohesion: 0.16
 Nodes (28): acquire_instance_guard(), claim_current_stop(), claim_handoff_after_singleton(), claim_stop_at(), ClaimedStop, discard_stop_after_singleton(), handoff_activation_checked(), HandoffActivation (+20 more)
 
-### Community 209 - "mount_client.rs"
+### Community 208 - "mount_client.rs"
 Cohesion: 0.13
 Nodes (27): authenticated_stream(), connect_backend(), connect_mount_host(), host_stream(), HostEnvironment, list_mounts(), mount_request(), MountHostSession (+19 more)
 
-### Community 210 - "ipc_storage.rs"
+### Community 209 - "ipc_storage.rs"
 Cohesion: 0.18
 Nodes (32): clear_ipc_addr(), clear_ipc_generation(), commit_exec_journal_temp(), create_token(), exec_journal_path(), generate_token(), ipc_addr_path(), ipc_generation_path() (+24 more)
 
-### Community 211 - "cache.rs"
+### Community 210 - "cache.rs"
 Cohesion: 0.12
 Nodes (24): cache_path(), clean_map(), corrupt_cache_is_ignored_by_public_loader_shape(), DiskCache, GDriveBackend, load(), load_from_path(), load_save_roundtrip_excludes_root_and_empty_values() (+16 more)
 
-### Community 212 - "transfer.rs"
+### Community 211 - "transfer.rs"
 Cohesion: 0.13
 Nodes (18): DriveWriter, GDriveBackend, initiate(), initiation_location(), is_internal_staging_path(), open_writer(), Box, Context (+10 more)
 
-### Community 213 - "PreloadTicket"
+### Community 212 - "PreloadTicket"
 Cohesion: 0.13
 Nodes (25): clear_retry(), cool_down_child(), finish_ticket(), has_work(), MetadataCache, PreloadBatch, PreloadTicket, prune_retries() (+17 more)
 
-### Community 214 - "cache_lease.rs"
+### Community 213 - "cache_lease.rs"
 Cohesion: 0.14
 Nodes (27): audit_recovery(), CacheLease, file_information(), is_reparse_point(), open_plain_directory(), prepare_plain_directory(), BY_HANDLE_FILE_INFORMATION, Error (+19 more)
 
-### Community 215 - "Generation"
+### Community 214 - "Generation"
 Cohesion: 0.17
 Nodes (21): activate_share_encryption(), connect_generation(), Generation, lock(), Arc, AtomicBool, Connection, Error (+13 more)
 
-### Community 216 - "linux_os.rs"
+### Community 215 - "linux_os.rs"
 Cohesion: 0.13
 Nodes (26): archived_name_without_binary_suffix(), cli_self_replacement(), cli_task_staged_payload_is_executable_and_install_keeps_the_mode(), create_startup_ack(), desktop_session(), detach_from_terminal(), graphical_session(), installed_cli_path() (+18 more)
 
-### Community 217 - "writer.rs"
+### Community 216 - "writer.rs"
 Cohesion: 0.12
 Nodes (23): FtpConnection, CountingUpload, dropping_unflushed_writer_never_uploads(), failed_upload_is_never_replayed_by_another_flush(), FailingUpload, FtpConnection, FtpUpload, FtpWriter (+15 more)
 
-### Community 218 - "vault_frame_task_tests.rs"
+### Community 217 - "vault_frame_task_tests.rs"
 Cohesion: 0.12
 Nodes (25): read_frame(), Frame, Option, Read, Result, Write, write_frame(), assert_error() (+17 more)
 
-### Community 219 - "local.rs"
+### Community 218 - "local.rs"
 Cohesion: 0.12
 Nodes (29): Acc, DirScan, max_items_bounds_categories_and_duplicate_inputs_during_walk(), missing_reclaim_root_is_explicit(), push_error(), reclaim_finds_duplicates_empty_and_cleanup(), record_dir(), record_file() (+21 more)
 
-### Community 220 - "share_value_field"
+### Community 219 - "share_value_field"
 Cohesion: 0.08
 Nodes (21): App, Ui, App, App, Ui, export_summary(), App, Option (+13 more)
 
-### Community 221 - "args.rs"
+### Community 220 - "args.rs"
 Cohesion: 0.14
 Nodes (27): ApplyRequest, arg_value(), base_args(), current_protocol_rejects_elevated_gui_handoff(), current_protocol_rejects_unknown_or_duplicate_arguments(), has_key(), legacy_args(), legacy_protocol_rejects_any_elevation_handoff() (+19 more)
 
-### Community 222 - "apply_update"
+### Community 221 - "apply_update"
 Cohesion: 0.21
 Nodes (30): LegacyApplyArgs, verify_sha256(), abort_unstarted_update(), apply_update(), completed_winner(), elevation_refused(), finish_bookkeeping(), parse_release_version() (+22 more)
 
-### Community 223 - "Sig"
+### Community 222 - "Sig"
 Cohesion: 0.13
 Nodes (30): Sig, destination_expected_is_present(), expected(), interrupted(), resolve(), resolve_checked(), AtomicBool, Conflict (+22 more)
 
-### Community 224 - "duplicates.rs"
+### Community 223 - "duplicates.rs"
 Cohesion: 0.11
 Nodes (23): canonical_order(), disambiguate(), full_marker_name(), lan_cleanup_task_duplicate_folders_keep_newest_plain_and_mark_the_rest(), lan_cleanup_task_entries_without_id_keep_their_raw_name(), lan_cleanup_task_equal_timestamps_break_ties_by_id(), lan_cleanup_task_marker_collision_with_literal_name_uses_full_id(), lan_cleanup_task_unique_names_are_untouched() (+15 more)
 
-### Community 225 - "MountEngine"
+### Community 224 - "MountEngine"
 Cohesion: 0.17
 Nodes (12): is_reserved_mount_sibling(), MetadataPreloadProgress, MountEngine, Admission, Arc, Fn, Instant, Option (+4 more)
 
-### Community 226 - "ApplicationBundleError"
+### Community 225 - "ApplicationBundleError"
 Cohesion: 0.21
 Nodes (17): ApplicationBundleError, bundle_header(), BundleReader, ConnectorApplicationBundle, decode_direct_peer(), encode_direct_peer(), finish_encoding(), PublisherApplicationBundle (+9 more)
 
-### Community 227 - "ExecStart"
+### Community 226 - "ExecStart"
 Cohesion: 0.10
 Nodes (19): delayed_terminal_ack_uses_the_server_budget_and_strict_slack(), id(), direct_argv_preserves_literals_and_has_a_stable_digest(), ExecCommand, ExecStart, ids_are_exact_random_128_bit_hex_values(), invalid(), BTreeMap (+11 more)
 
-### Community 228 - "ExecGrantTarget"
+### Community 227 - "ExecGrantTarget"
 Cohesion: 0.16
 Nodes (28): Id, activation_controls(), activation_ready(), apply_exec_grant(), cached_provider_status(), clear_confirmation(), confirmation_id(), device_view() (+20 more)
 
-### Community 229 - "Progress"
+### Community 228 - "Progress"
 Cohesion: 0.10
 Nodes (17): counter_overflow(), Progress, Arc, AtomicBool, AtomicU64, Default, Duration, Error (+9 more)
 
-### Community 230 - "launch.rs"
+### Community 229 - "analytics.rs"
+Cohesion: 0.13
+Nodes (29): empty_dir(), from_wire(), local_scan_threads(), panic_text(), Any, Box, Fn, Iterator (+21 more)
+
+### Community 230 - "App"
+Cohesion: 0.10
+Nodes (10): App, BackendHandle, Option, Vec, scan_storage_source(), normalize_storage_root(), BackendHandle, Into (+2 more)
+
+### Community 231 - "launch.rs"
 Cohesion: 0.20
 Nodes (29): ack_listener(), AckEnvironment, acknowledged_launch_waits_for_child_response(), acknowledgement_tokens_are_128_bit_hex(), cleanup_ack(), configured_command(), ensure_ack_path_missing(), fail_after_stopping() (+21 more)
 
-### Community 231 - "lifecycle_output.rs"
+### Community 232 - "lifecycle_output.rs"
 Cohesion: 0.15
 Nodes (28): authorization(), clean(), connectivity(), current_relay(), decision_peer_receipt(), effective_decision(), failure_text(), failure_value() (+20 more)
 
-### Community 232 - "TreeSource"
+### Community 233 - "TreeSource"
 Cohesion: 0.10
 Nodes (19): deep_path_depth(), directory_meta(), DriftReader, Fault, file_meta(), AtomicBool, AtomicUsize, Box (+11 more)
 
-### Community 233 - "PeerPresence"
+### Community 234 - "PeerPresence"
 Cohesion: 0.17
 Nodes (28): enqueue(), LegacyPersistBatch, permanent_event_error(), persist_all(), presence(), retry_backlog_is_deduplicated_and_bounded(), Option, Result (+20 more)
 
-### Community 234 - "MountProxy"
+### Community 235 - "MountProxy"
 Cohesion: 0.12
 Nodes (7): decode(), MountProxy, Option, T, Vec, VfsMeta, VfsResult
-
-### Community 235 - "CallbackContext"
-Cohesion: 0.11
-Nodes (15): DriveLetter, Display, callback_path_key(), CallbackContext, Arc, AtomicBool, AtomicUsize, Duration (+7 more)
 
 ### Community 236 - "io_deadline.rs"
 Cohesion: 0.10
@@ -1761,77 +1763,77 @@ Nodes (26): Intermediate, invalid(), join_output(), reserve_output(), Root, Arc,
 Cohesion: 0.14
 Nodes (24): archived_versions_parse_and_sort_numerically(), pin_roundtrip(), archive_binary(), archive_current_version(), archive_sidecar(), archived_sha256(), cleanup_old_binaries(), exe_stem() (+16 more)
 
-### Community 240 - "filter.rs"
+### Community 240 - "sync_run.rs"
+Cohesion: 0.16
+Nodes (28): Bounds, canceled(), Into, checked_settings(), claim(), mirror(), mirror_task(), open_pair() (+20 more)
+
+### Community 241 - "filter.rs"
 Cohesion: 0.13
 Nodes (21): GlobMatcher, CompiledFilter, entry(), normalize_loose_spaces(), parse_size_input(), recursive_filter_task_problem_names_filter_keeps_only_win32_hostile_names(), regex_filter_keeps_commas_literal(), Option (+13 more)
 
-### Community 241 - "walk.rs"
+### Community 242 - "walk.rs"
 Cohesion: 0.15
 Nodes (22): IntoIter, child_path(), DirSeed, NodeBatch, norm_path(), reply_walk(), Arc, FsMeta (+14 more)
 
-### Community 242 - "signal_connection.rs"
+### Community 243 - "signal_connection.rs"
 Cohesion: 0.13
 Nodes (20): MaybeTlsStream, connect_resolved(), normalize_signal_endpoint(), normalize_tcp_addr(), resolve_host(), Duration, Error, IntoIterator (+12 more)
 
-### Community 243 - "linux_os.rs"
+### Community 244 - "linux_os.rs"
 Cohesion: 0.11
 Nodes (18): OpenMode, drag_out_files(), drive_info_list(), EditProcess, launch_local_for_edit(), list_drives(), open_local_path(), read_clipboard_files() (+10 more)
 
-### Community 244 - "ApplyFailure"
+### Community 245 - "ApplyFailure"
 Cohesion: 0.15
 Nodes (26): apply_update(), ApplyFailure, ApplyArgs, elevation_refused(), finish_bookkeeping(), handle_failure_with(), appdata_dir(), default_error_file() (+18 more)
 
-### Community 245 - "bookkeeping.rs"
+### Community 246 - "bookkeeping.rs"
 Cohesion: 0.18
 Nodes (22): app_written_challenged_receipt_is_completion_proof(), atomic_write(), changed_new_status_is_not_clobbered_during_rollback(), commit_leaves_new_status_and_hidden_files_absent(), HiddenFile, launch_complete_matches(), launch_complete_path(), launch_complete_payload() (+14 more)
 
-### Community 246 - "cloud.rs"
+### Community 247 - "cloud.rs"
 Cohesion: 0.13
 Nodes (25): accept_with_deadline(), auth_url_has_required_params(), authorize(), build_auth_url(), now_secs(), parse_redirect(), parse_redirect_extracts_code_and_state(), pkce_pair() (+17 more)
 
-### Community 247 - "LanRuntime"
+### Community 248 - "LanRuntime"
 Cohesion: 0.14
 Nodes (12): LanRuntime, LanTickInput, HashMap, Instant, LanSettings, Option, Self, Vec (+4 more)
 
-### Community 248 - "TaskRecord"
+### Community 249 - "TaskRecord"
 Cohesion: 0.14
 Nodes (10): Arc, AtomicBool, Instant, Option, Self, Value, Vec, TaskRecord (+2 more)
 
-### Community 249 - "optimization_cache_tests.rs"
+### Community 250 - "optimization_cache_tests.rs"
 Cohesion: 0.12
 Nodes (28): config(), contents(), DiskBudget, mount_optimization_task_conflict_and_delete_pending_are_not_disposable(), mount_optimization_task_failed_upload_and_restart_preserve_dirty_bytes(), mount_optimization_task_idle_byte_limits_lru_zero_and_generation_age(), mount_optimization_task_idle_record_cap_and_failed_disposal_accounting(), mount_optimization_task_lazy_destination_survives_atomic_replace() (+20 more)
 
-### Community 250 - "copy_paste_task_tests.rs"
+### Community 251 - "copy_paste_task_tests.rs"
 Cohesion: 0.18
 Nodes (24): assert_lock_released(), assert_selection(), clear(), copy_paste_task_windows_ansi_hdrop_conversion(), copy_paste_task_windows_contention_and_recovery(), copy_paste_task_windows_guarded_sequence(), copy_paste_task_windows_malformed_dropfiles_and_recovery(), copy_paste_task_windows_roundtrip_copy_move() (+16 more)
 
-### Community 251 - "persistence.rs"
+### Community 252 - "persistence.rs"
 Cohesion: 0.20
 Nodes (28): app_data_dir(), atomic_write(), dir_store_roundtrip_upsert_and_remove(), ensure_jobs_dir(), invalid_data(), invalid_or_mismatched_config_is_never_loaded(), job_file(), jobs_dir() (+20 more)
 
-### Community 252 - "feed.rs"
+### Community 253 - "feed.rs"
 Cohesion: 0.16
 Nodes (21): app_release_asset_name(), classify_feed(), download_update(), download_version(), download_with_required_sha256(), Feed, format_http_error(), github_repo() (+13 more)
 
-### Community 253 - "EntryPin"
+### Community 254 - "EntryPin"
 Cohesion: 0.14
 Nodes (13): Deref, Entry, EntryPin, MountEngine, OperationReaper, Arc, Clone, Drop (+5 more)
 
-### Community 254 - "UnavailableInner"
+### Community 255 - "UnavailableInner"
 Cohesion: 0.12
 Nodes (17): agent_backend_over_socket(), agent_with_walk_reply(), artifact_selection_and_quoting(), real_agent_binary_child_process(), AgentBackend, Box, Frame, JoinHandle (+9 more)
 
-### Community 255 - "fs.rs"
+### Community 256 - "fs.rs"
 Cohesion: 0.20
 Nodes (25): claim(), invalid(), is_pseudo_dir(), list_local(), require_plain_directory(), AtomicBool, AtomicU64, Error (+17 more)
 
-### Community 256 - "ScanOutcome"
+### Community 257 - "ScanOutcome"
 Cohesion: 0.14
 Nodes (19): analytics_access_task_cancellation_never_becomes_partial_success(), analytics_access_task_diagnostics_keep_denial_identity_when_report_is_full(), Diagnostics, AtomicBool, AtomicU64, Error, Into, Mutex (+11 more)
-
-### Community 257 - "App"
-Cohesion: 0.11
-Nodes (9): App, BackendHandle, Option, Vec, normalize_storage_root(), BackendHandle, Into, Self (+1 more)
 
 ### Community 258 - "reclaim_results_ui.rs"
 Cohesion: 0.12
@@ -1893,21 +1895,21 @@ Nodes (25): incoming_session_fixture(), Arc, Mutex, authenticate_incoming_sessio
 Cohesion: 0.21
 Nodes (16): decode_commit(), decode_complete(), decode_direct_repair_frame(), decode_frame_inner(), decode_hello(), decode_identity(), decode_material(), decode_offer() (+8 more)
 
-### Community 273 - "signal_commands.rs"
+### Community 273 - "ProfilePersistence"
+Cohesion: 0.18
+Nodes (14): cleanup_new_secret(), direct_grant(), FakePersistence, persisted_empty_export_list_is_not_replaced_with_home(), profile_versions_older_than_v3_and_newer_than_v6_fail_closed(), ProfilePersistence, room_with_member(), HashMap (+6 more)
+
+### Community 274 - "signal_commands.rs"
 Cohesion: 0.22
 Nodes (23): apply_persisted_exec_grant(), CommandOutcome, ConnectedCommandRuntime, mutate_exec_grant(), OfflineCommandRuntime, plan_current_subscription_teardown(), Arc, AttemptCounters (+15 more)
 
-### Community 274 - "tracked_signal_tests.rs"
+### Community 275 - "tracked_signal_tests.rs"
 Cohesion: 0.15
 Nodes (24): envelope(), pending_envelopes(), PendingTrackedEnvelope, push(), retry_due(), DirectRequestEntry, Option, SignedDirectDecision (+16 more)
 
-### Community 275 - "url.rs"
+### Community 276 - "url.rs"
 Cohesion: 0.13
 Nodes (24): Result, Vec, VfsMeta, android_task_smb_paths_split_into_share_and_share_relative_path(), android_task_smb_url_parses_user_host_port_share_and_path(), android_task_smb_urls_without_credentials_or_share_never_connect(), backend_from_url(), entry_path() (+16 more)
-
-### Community 276 - "sync_run.rs"
-Cohesion: 0.17
-Nodes (26): Bounds, checked_settings(), claim(), mirror(), mirror_task(), open_pair(), report_errors(), BTreeMap (+18 more)
 
 ### Community 277 - "FileData_Impl"
 Cohesion: 0.12
@@ -2053,45 +2055,45 @@ Nodes (22): Capture, copy_paste_task_provider_webdav_conditional_create_and_abor
 Cohesion: 0.18
 Nodes (16): Capture, Modifiers, gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard(), gui_design_task_settings_persistence_shortcut_guard_and_dialogs(), gui_design_task_start_page_and_chart_visuals(), gui_design_task_workspace_layout_selection_filters_and_split(), Harness, App (+8 more)
 
-### Community 313 - "MountedFixture"
-Cohesion: 0.16
-Nodes (20): FixtureBackend, assert_directory(), assert_file(), await_start(), exercise_parallel(), mount_batching_task_real_driver_navigation_and_checker(), MountedFixture, path_context() (+12 more)
-
-### Community 314 - "agent_error"
+### Community 313 - "agent_error"
 Cohesion: 0.10
 Nodes (17): agent_error(), kind_from_message(), os_error_code(), recursive_filter_task_unrecognized_agent_errors_stay_other_with_their_text(), Error, ErrorKind, Option, operation_canceled() (+9 more)
 
-### Community 315 - "ReclaimProgress"
+### Community 314 - "ReclaimProgress"
 Cohesion: 0.16
 Nodes (24): remote_duplicate_groups(), Vec, RemoteCandidate, bytes_equal(), cancel_stops_before_hashing(), duplicate_groups(), duplicate_reducer_caps_inputs_before_building_hash_maps(), DuplicateAnalysis (+16 more)
 
-### Community 316 - "remote_context_menu.rs"
+### Community 315 - "remote_context_menu.rs"
 Cohesion: 0.15
 Nodes (16): App, plan_remote_context_menu(), RemoteContextAction, RemoteContextActionTarget, RemoteContextCapabilities, RemoteContextEntryKind, RemoteContextMenu, RemoteContextSubject (+8 more)
 
-### Community 317 - "HookBackend"
+### Community 316 - "HookBackend"
 Cohesion: 0.14
 Nodes (9): HookBackend, Box, Option, Read, Send, Vec, VfsMeta, VfsResult (+1 more)
 
-### Community 318 - "Endpoint"
+### Community 317 - "Endpoint"
 Cohesion: 0.13
 Nodes (21): Endpoint, AgentBackend, BackendHandle, Drop, FnOnce, JoinHandle, Option, Self (+13 more)
 
-### Community 319 - "MountHostProcess"
+### Community 318 - "MountHostProcess"
 Cohesion: 0.16
 Nodes (18): CapturedStderr, drain_stderr(), MountHostExit, MountHostProcess, normalize_stderr(), retain_utf8_tail(), Arc, ExitStatus (+10 more)
 
-### Community 320 - "ftp.rs"
+### Community 319 - "ftp.rs"
 Cohesion: 0.12
 Nodes (21): ambiguous_mutation_marks_channel_suspect_and_next_read_reconnects(), basename(), dir_meta(), idle_ftp_control_channel_is_pinged_and_reconnected(), io_err(), list_rows_are_fail_closed(), parent_dir(), parse_list_line() (+13 more)
 
-### Community 321 - "mod.rs"
+### Community 320 - "mod.rs"
 Cohesion: 0.11
 Nodes (17): maximum_allowed_full_grant(), maximum_allowed_read_grant(), remote_drive_task_explicit_access_is_never_rewritten(), remote_drive_task_maximum_allowed_full_grant_adds_write_and_delete(), remote_drive_task_maximum_allowed_read_grant_carries_no_write_or_delete(), DokanyVersionCompatibilityError, drive_runtime_info(), DriveRuntimeInfo (+9 more)
 
-### Community 322 - "start_scan_backend"
+### Community 321 - "start_scan_backend"
 Cohesion: 0.17
 Nodes (24): ext_of(), join(), report_spawn_failure(), Arc, AtomicBool, BackendHandle, Error, Option (+16 more)
+
+### Community 322 - "SftpWriter"
+Cohesion: 0.15
+Nodes (16): BlockingRead, BlockingRead<R>, BlockingWrite, BlockingWrite<W>, Arc, Drop, File, Option (+8 more)
 
 ### Community 323 - "DiscoveryPin"
 Cohesion: 0.12
@@ -2137,129 +2139,129 @@ Nodes (22): agent_cache_path(), AgentArtifact, artifact_for(), deploy_over_sftp(
 Cohesion: 0.19
 Nodes (23): collect_local_tree(), copy_file_safe(), create_staged_file(), finish_local_tree_file(), handle_get_tree(), handle_read(), handle_write(), LocalTreeEntry (+15 more)
 
-### Community 334 - "scan_parallel"
-Cohesion: 0.15
-Nodes (23): build_from_listings(), child_path(), ChildMeta, collect_children(), fold_large_directory(), normalized(), Box, HashMap (+15 more)
-
-### Community 335 - "PickerState"
+### Community 334 - "PickerState"
 Cohesion: 0.10
 Nodes (15): copy_paste_task_keyboard_blocked_queue_is_consumed_not_replayed(), Option, Receiver, take_clipboard_keys(), App, Context, Option, ClipKey (+7 more)
 
-### Community 336 - "process.rs"
+### Community 335 - "process.rs"
 Cohesion: 0.20
 Nodes (22): clear_daemon_runtime_markers(), find_target_processes(), is_last_error_elevation_related(), linux_target_pids(), normalize_path_for_compare(), normalize_path_string(), process_image_path(), request_daemon_stop_marker() (+14 more)
 
-### Community 337 - "DirectRequestTombstone"
+### Community 336 - "DirectRequestTombstone"
 Cohesion: 0.15
 Nodes (13): direction(), direction_code(), DirectRequestDirection, DirectDecisionState, From, DirectRequestDeleteDisposition, DirectRequestTombstone, DirectRequestEntry (+5 more)
 
-### Community 338 - "SearchFailureBackend"
-Cohesion: 0.12
-Nodes (12): partial_server_search_error_does_not_run_listing_fallback(), AtomicBool, AtomicUsize, Box, Read, Send, Sender, Vec (+4 more)
-
-### Community 339 - "mount_launch.rs"
+### Community 337 - "mount_launch.rs"
 Cohesion: 0.20
 Nodes (20): AttributeList, environment_block(), inheritable_attributes(), launch(), LaunchedMountHost, open_null(), c_void, Drop (+12 more)
 
-### Community 340 - "copy_writer.rs"
+### Community 338 - "copy_writer.rs"
 Cohesion: 0.15
 Nodes (20): binary_mime(), closed_spool(), CopyState, CopyWriter, matches_stage(), open_writer(), OwnedStage, Box (+12 more)
 
-### Community 341 - "metadata_cache_support.rs"
+### Community 339 - "metadata_cache_support.rs"
 Cohesion: 0.21
 Nodes (24): identity_key(), build_entry_index(), evict_until(), fits(), join(), lookup_metadata(), lookup_metadata_at(), meta_bytes() (+16 more)
 
-### Community 342 - "CleanCache"
+### Community 340 - "CleanCache"
 Cohesion: 0.18
 Nodes (11): affected(), CleanCache, IdleClean, BTreeSet, HashMap, Instant, Mutex, Option (+3 more)
 
-### Community 343 - "run_checker"
-Cohesion: 0.18
-Nodes (18): CapturedChild, CheckerMode, Handshake, NamedEvent, Child, Drop, Duration, ExitStatus (+10 more)
-
-### Community 344 - "optimization_script_callbacks.rs"
+### Community 341 - "optimization_script_callbacks.rs"
 Cohesion: 0.14
 Nodes (22): arm(), begin(), create(), Event, finish(), information(), Originals, read() (+14 more)
 
-### Community 345 - "CopyPastePeerFixture"
+### Community 342 - "CopyPastePeerFixture"
 Cohesion: 0.15
 Nodes (19): auth_state(), CopyPastePeerFixture, export(), identity(), loopback_candidates(), NodeGuard, Arc, BackendHandle (+11 more)
 
-### Community 346 - "DirectReciprocalPeer"
-Cohesion: 0.15
-Nodes (13): contact_matches(), DirectReciprocalPeer, DirectRelationMaterial, grant_matches(), Debug, Drop, Formatter, Into (+5 more)
-
-### Community 347 - "sync.rs"
+### Community 343 - "sync.rs"
 Cohesion: 0.16
 Nodes (22): join(), parent_of(), record_error(), rel_of(), require_plain_directory(), Arc, AtomicBool, BackendHandle (+14 more)
 
-### Community 348 - "direct_request_tombstone_tests.rs"
+### Community 344 - "direct_request_tombstone_tests.rs"
 Cohesion: 0.20
 Nodes (24): accepted_incoming_history_requires_delivered_signed_revoke_before_deletion(), contact(), decision(), decision_receipt(), deleted_outgoing_accept_still_applies_a_newer_signed_remote_revocation(), deletion_has_no_half_persisted_snapshot(), expired_tombstones_are_pruned_before_capacity_is_reused(), failed_durable_commit_keeps_visible_entry_and_tombstone_absent() (+16 more)
 
-### Community 349 - "promote_tests.rs"
+### Community 345 - "promote_tests.rs"
 Cohesion: 0.15
 Nodes (20): android_task_webdav_promote_creates_a_new_name_without_overwrite(), android_task_webdav_promote_replaces_with_one_move_overwrite_true(), answer(), file(), folder(), moves(), Request, response() (+12 more)
 
-### Community 350 - "checked_job_settings"
+### Community 346 - "checked_job_settings"
 Cohesion: 0.09
 Nodes (14): CheckedJobSettings, App, Context, App, apply_one_removes_action_only_after_success(), finish_preview_action(), Action, Option (+6 more)
 
-### Community 351 - ".decode"
+### Community 347 - ".decode"
 Cohesion: 0.22
 Nodes (8): Frame, get_meta(), Reader, Reader<'a>, Option, Result, Self, Vec
 
-### Community 352 - "AnalysisReport"
+### Community 348 - "AnalysisReport"
 Cohesion: 0.13
 Nodes (16): AnalysisReport, Option, Result, Self, Vec, AnalysisMessage, AnalysisReceiver, invalid() (+8 more)
 
-### Community 353 - "CountingLocal"
+### Community 349 - "CountingLocal"
 Cohesion: 0.13
 Nodes (10): CountingLocal, AtomicUsize, Box, Mutex, Read, Send, Vec, VfsMeta (+2 more)
 
-### Community 354 - "backend_walk.rs"
+### Community 350 - "SearchFailureBackend"
+Cohesion: 0.12
+Nodes (12): partial_server_search_error_does_not_run_listing_fallback(), AtomicBool, AtomicUsize, Box, Read, Send, Sender, Vec (+4 more)
+
+### Community 351 - "backend_walk.rs"
 Cohesion: 0.22
 Nodes (21): canceled(), combine_walk_and_emitter(), glob_match(), handle_search_backend(), handle_walk_hashed_backend(), handle_walk_tree_backend(), join_path(), matches_spec() (+13 more)
 
-### Community 355 - "ShareHostState"
+### Community 352 - "ShareHostState"
 Cohesion: 0.13
 Nodes (18): default_device_name(), default_home(), end_tracked_offers(), ShareHost, upsert_room_member(), Instant, Option, ShareIdentity (+10 more)
 
-### Community 356 - "ApplyError"
+### Community 353 - "ApplyError"
 Cohesion: 0.20
 Nodes (19): apply(), ApplyError, ensure_authenticated_request_decision(), ensure_request_receipt(), GroupPersistError, local_peer(), outgoing_request_and_secret(), persist_group() (+11 more)
 
-### Community 357 - "live.rs"
+### Community 354 - "live.rs"
 Cohesion: 0.18
 Nodes (22): active_job(), cancel_catch_up(), catch_up_status(), drain_share_events_in_process(), is_embedded(), last_catch_up_ms(), Live, lock() (+14 more)
 
-### Community 358 - "broker.rs"
+### Community 355 - "broker.rs"
 Cohesion: 0.17
 Nodes (21): Client, clients(), duplicate_file(), error_code(), granted(), install(), open_granted(), remove_test_grant() (+13 more)
 
-### Community 359 - "tests.rs"
+### Community 356 - "tests.rs"
 Cohesion: 0.18
 Nodes (23): android_task_app_internal_locations_are_rejected(), android_task_bad_arguments_and_unknown_ids(), android_task_changed_or_unreadable_edit_registers_are_kept(), android_task_edit_register_round_trip_and_change_event(), android_task_full_edit_register_forgets_the_oldest_unchanged_copy(), android_task_local_copy_keeps_both_names_and_delete_is_permanent(), android_task_local_fs_methods_create_rename_check_and_list(), android_task_scan_view_returns_a_windowed_tree_and_revisions() (+15 more)
 
-### Community 360 - "KeyQueue<K>"
+### Community 357 - "ProjectedPath"
+Cohesion: 0.20
+Nodes (14): not_found(), MaterializationSlot, MountEngine, PreparedMaterialization, Arc, AtomicU64, Drop, Entry (+6 more)
+
+### Community 358 - "KeyQueue<K>"
 Cohesion: 0.17
 Nodes (11): KeyQueue, KeyQueue<K>, Links, RefreshOrder, Default, HashMap, HashSet, K (+3 more)
 
-### Community 361 - "resolve_peer_child"
+### Community 359 - "resolve_peer_child"
 Cohesion: 0.15
 Nodes (19): collision(), eligible(), is_peer_alias(), peer_alias(), project_peer_listing(), resolve_peer_child(), Error, Option (+11 more)
 
-### Community 362 - "ScriptProbe"
+### Community 360 - "metadata.rs"
+Cohesion: 0.15
+Nodes (22): attributes(), file_information(), file_time(), find_data(), reject_open_symlink(), BY_HANDLE_FILE_INFORMATION, FILETIME, Result (+14 more)
+
+### Community 361 - "ScriptProbe"
 Cohesion: 0.16
 Nodes (15): powershell(), ProcessState, Arc, Child, Drop, Mutex, MutexGuard, Option (+7 more)
 
-### Community 363 - "vault_open_task_tests.rs"
+### Community 362 - "vault_open_task_tests.rs"
 Cohesion: 0.15
 Nodes (22): create(), error_code(), exercise(), injected(), Injection, IoStatus, metadata_open(), native_overwrite() (+14 more)
 
-### Community 364 - "MockPlatform"
+### Community 363 - "MockPlatform"
 Cohesion: 0.13
 Nodes (16): DisconnectGate, failed_disconnect_stays_registered_and_rejects_another_user(), last_drop_and_new_connect_serialize_disconnect_before_connect(), MockPlatform, multiple_leases_share_one_session_and_disconnect_once(), Arc, AtomicBool, AtomicUsize (+8 more)
+
+### Community 364 - "DirectReciprocalPeer"
+Cohesion: 0.16
+Nodes (12): contact_matches(), DirectReciprocalPeer, DirectRelationMaterial, Debug, Drop, Formatter, Into, Option (+4 more)
 
 ### Community 365 - "exec_server.rs"
 Cohesion: 0.24
@@ -2289,25 +2291,25 @@ Nodes (13): App, Context, appdata_file(), date_to_ms_end(), date_to_ms_start(), 
 Cohesion: 0.18
 Nodes (19): CleanupReport, lan_cleanup_task_report_suffix_lists_only_what_happened(), location_key(), Option, Vec, android_task_cleanup_notice_joins_lines_and_reports_unclean_stores(), cleanup_notice(), CleanupNotice (+11 more)
 
-### Community 372 - "FakeQueue"
+### Community 372 - "requests.rs"
+Cohesion: 0.20
+Nodes (21): AcceptDecisionArgs, answer_legacy(), clean(), DecisionArgs, delete_history(), DeleteSelectionArgs, list(), print_action() (+13 more)
+
+### Community 373 - "FakeQueue"
 Cohesion: 0.15
 Nodes (16): android_task_catch_up_cancel_touches_only_this_runs_jobs(), android_task_catch_up_closed_gate_ends_open_runs_with_reason(), android_task_catch_up_lists_supervisor_rejections_with_reason(), android_task_catch_up_reports_load_failures_and_bounds_history(), android_task_catch_up_run_finishes_when_admitted_jobs_are_done(), android_task_catch_up_selects_due_timers_missed_calendar_and_realtime_once(), FakeQueue, job() (+8 more)
 
-### Community 373 - "ShareHost"
+### Community 374 - "ShareHost"
 Cohesion: 0.14
 Nodes (9): load_share_server(), Arc, AtomicBool, BackendHandle, MountManager, Mutex, Result, Self (+1 more)
 
-### Community 374 - "norm"
+### Community 375 - "norm"
 Cohesion: 0.15
 Nodes (13): cloud_urlenc(), norm(), norm_and_split(), parse_rfc3339_ms(), Option, ambiguous_trash(), GDriveBackend, Error (+5 more)
 
-### Community 375 - "trash.rs"
+### Community 376 - "trash.rs"
 Cohesion: 0.20
 Nodes (20): entry_json(), extension(), file_entry(), mime_of(), Value, VfsMeta, TreeInfo, delete_task() (+12 more)
-
-### Community 376 - "open_regular_file"
-Cohesion: 0.16
-Nodes (20): set_context_key(), CallbackFailure, Error, From, Self, cache_safe_namespace_open(), clear_context(), create_file() (+12 more)
 
 ### Community 377 - "lan_uplink_policy.rs"
 Cohesion: 0.17
@@ -2433,521 +2435,521 @@ Nodes (18): add_output_exposes_copyable_selector_endpoint_and_request_id(), add_
 Cohesion: 0.25
 Nodes (20): add_export(), canonical_directory(), export_config(), export_config_mut(), export_label(), ExportAddArgs, ExportArgs, ExportCommand (+12 more)
 
-### Community 408 - "requests_inbox.rs"
-Cohesion: 0.21
-Nodes (20): legacy_accept_eligible(), acceptable_selectors(), active_old_grant_emits_revoke_then_new_request_becomes_acceptable(), append_resolution(), clean(), grant(), legacy_entry(), next_command() (+12 more)
-
-### Community 409 - "update.rs"
+### Community 408 - "update.rs"
 Cohesion: 0.20
 Nodes (17): clean(), complete_install(), CompletedInstall, handoff_code(), install_terminal_only(), Installed, print(), Report (+9 more)
 
-### Community 410 - "VaultTaskBridge"
+### Community 409 - "VaultTaskBridge"
 Cohesion: 0.16
 Nodes (15): await_shutdown(), mount_vault_task_framed_tcp_latency_diagnostic(), mount_vault_task_rooted_case_sensitive_stat_reuses_fresh_terminal_observation(), mount_vault_task_rooted_refresh_crosses_daemon_ttl(), Arc, BackendHandle, Drop, JoinHandle (+7 more)
 
-### Community 411 - "FtpBackend"
+### Community 410 - "FtpBackend"
 Cohesion: 0.17
 Nodes (7): FtpBackend, Arc, Box, Read, Send, VfsResult, Write
 
-### Community 412 - ".submit_reserved_folder"
+### Community 411 - ".submit_reserved_folder"
 Cohesion: 0.22
 Nodes (10): ambiguous_create(), combine_attempt_errors(), folder_state_matches(), GDriveBackend, meta_from_json_requires_a_usable_name(), Error, Option, Value (+2 more)
 
-### Community 413 - "Pipe"
+### Community 412 - "Pipe"
 Cohesion: 0.22
 Nodes (12): pause(), Pipe, Duration, File, HANDLE, Instant, Result, Self (+4 more)
 
-### Community 414 - "tests.rs"
+### Community 413 - "tests.rs"
 Cohesion: 0.12
 Nodes (12): android_task_analysis_node_lists_children_by_size_with_locations(), android_task_job_json_round_trip_keeps_every_desktop_field(), android_task_job_validation_reports_desktop_errors_per_field(), android_task_share_status_maps_a_worker_snapshot(), android_task_sync_options_list_every_mode_without_device_triggers(), errors_of(), ok(), BTreeMap (+4 more)
 
-### Community 415 - "EntryTable"
+### Community 414 - "EntryTable"
 Cohesion: 0.20
 Nodes (11): parent_path(), EntryTable, IndexedEntry, Arc, Entry, HashMap, IntoIterator, Iterator (+3 more)
 
-### Community 416 - "mounted_volume_task_trace.rs"
+### Community 415 - "mounted_volume_task_trace.rs"
 Cohesion: 0.18
 Nodes (19): assert_metadata_queries(), bounded_wide(), create_file(), FileInfoSnapshot, find_files(), find_files_with_pattern(), get_file_information(), install() (+11 more)
 
-### Community 417 - "collect.rs"
+### Community 416 - "collect.rs"
 Cohesion: 0.18
 Nodes (16): ext_of(), ms_since_unix(), SystemTime, collect(), collect_recursive(), collect_recursive_with_access(), CollectIssue, CollectOutcome (+8 more)
 
-### Community 418 - "public_fingerprint"
+### Community 417 - "public_fingerprint"
 Cohesion: 0.24
 Nodes (19): eligible_snapshot(), ShareIdentity, share_identity(), share_remote_task_reciprocal_direct_offline_snapshot_plans_nothing(), public_fingerprint(), ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful(), ci_remote_task_first_verified_identity_wins_in_both_arrival_orders(), ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity() (+11 more)
 
-### Community 419 - "handshake_limits.rs"
+### Community 418 - "handshake_limits.rs"
 Cohesion: 0.18
 Nodes (15): ApplicationHandshakePermit, caps_each_endpoint_and_releases_capacity(), distinct_endpoint_map_is_bounded_and_pruned(), limit_reached(), PeerHandshakeLimiter, PeerHandshakeLimiterInner, PeerHandshakePermit, Arc (+7 more)
 
-### Community 420 - "lifecycle_view.rs"
+### Community 419 - "lifecycle_view.rs"
 Cohesion: 0.28
 Nodes (20): append_failures(), append_retry(), authorized_device_views(), AuthorizedDeviceView, created_at(), decision_label(), incoming_facts(), LifecycleFact (+12 more)
 
-### Community 421 - "spawn_output"
+### Community 420 - "spawn_output"
 Cohesion: 0.20
 Nodes (20): invalid(), join_output(), reserve_output(), Arc, AtomicBool, AtomicU64, Child, ChildStdin (+12 more)
 
-### Community 422 - "validation.rs"
+### Community 421 - "validation.rs"
 Cohesion: 0.26
 Nodes (18): checked_age_days(), checked_globs_reject_the_entire_invalid_set(), checked_i64_seconds(), checked_mul_u64(), compile_ignore_patterns(), rejects_equal_or_nested_endpoints(), rejects_invalid_safety_schedule_and_filter_ranges(), rejects_overflowing_runtime_conversions() (+10 more)
 
-### Community 423 - "tests.rs"
+### Community 422 - "tests.rs"
 Cohesion: 0.14
 Nodes (12): backend_for(), BackendHandle, Result, android_task_smb_roots_dispatch_to_the_smb_backend(), copy_file_default_impl_streams(), fwd(), local_list_and_stat(), local_list_rejects_non_unicode_names() (+4 more)
 
-### Community 424 - "VirtualFilesDataObject_Impl"
+### Community 423 - "VirtualFilesDataObject_Impl"
 Cohesion: 0.17
 Nodes (11): BOOL, FORMATETC, HRESULT, IAdviseSink, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, Option (+3 more)
 
-### Community 425 - "RootConfinement"
+### Community 424 - "RootConfinement"
 Cohesion: 0.12
 Nodes (9): RootConfinement, invalid(), overlap(), BackendHandle, Error, Into, Result, sync_backend() (+1 more)
 
-### Community 426 - "analytics.rs"
-Cohesion: 0.22
-Nodes (19): empty_dir(), from_wire(), local_scan_threads(), panic_text(), Any, Box, Fn, Iterator (+11 more)
-
-### Community 427 - "analytics_access.rs"
+### Community 425 - "analytics_access.rs"
 Cohesion: 0.14
 Nodes (14): ScanIssue, access_offer(), access_ui(), analytics_access_task_new_scan_resets_prompt_without_canceling_consented_launch(), analytics_access_task_report_lists_each_retained_path_and_omissions(), AnalyticsAccess, App, issue_report() (+6 more)
 
-### Community 428 - "join_save_worker"
+### Community 426 - "join_save_worker"
 Cohesion: 0.16
 Nodes (14): App, failure_disconnect_panic_and_missing_worker_all_redirty(), join_save_worker(), panic_detail(), resolve_save(), Any, Box, JoinHandle (+6 more)
 
-### Community 429 - "dirs_home"
+### Community 427 - "dirs_home"
 Cohesion: 0.16
 Nodes (7): App, reload(), App, Result, AsRef, ShareProfiles, dirs_home()
 
-### Community 430 - "status_errors.rs"
+### Community 428 - "status_errors.rs"
 Cohesion: 0.21
 Nodes (15): App, copy_fraction(), notice_color(), rate_text(), Color32, Into, Option, Ui (+7 more)
 
-### Community 431 - "tree_preflight_tests.rs"
+### Community 429 - "requests_inbox.rs"
+Cohesion: 0.23
+Nodes (19): acceptable_selectors(), active_old_grant_emits_revoke_then_new_request_becomes_acceptable(), append_resolution(), clean(), grant(), legacy_entry(), next_command(), one_conflicted_legacy_request_never_advertises_accept() (+11 more)
+
+### Community 430 - "tree_preflight_tests.rs"
 Cohesion: 0.28
 Nodes (15): copy_between(), duplicate_child_names_fail_before_destination_mutation(), late_destination_collision_is_found_before_any_source_read(), late_source_read_failure_is_spooled_before_destination_mutation(), late_source_stat_failure_leaves_destination_untouched(), late_unsafe_child_leaves_destination_untouched(), link_like_destination_ancestor_is_rejected_before_apply(), over_depth_tree_fails_before_destination_mutation() (+7 more)
 
-### Community 432 - "UplinkRuntime"
+### Community 431 - "UplinkRuntime"
 Cohesion: 0.18
 Nodes (8): Box, Instant, LanSettings, Option, Self, Vec, UplinkRuntime, UplinkTickInput
 
-### Community 433 - "MountProxyIdentity"
-Cohesion: 0.19
-Nodes (9): MountProxyIdentity, Box, Read, Send, T, Vec, VfsMeta, VfsResult (+1 more)
-
-### Community 434 - "mount_proxy.rs"
+### Community 432 - "mount_proxy.rs"
 Cohesion: 0.18
 Nodes (12): DecodedReader, DecodedWriter, prepare_stream(), Arc, BackendHandle, Box, Read, Result (+4 more)
 
-### Community 435 - "mount_registry.rs"
+### Community 433 - "mount_registry.rs"
 Cohesion: 0.27
 Nodes (19): ensure_registry_directory(), invalid_data(), load(), persist(), Registry, registry_directory(), reject_link_ancestors(), reject_non_file_destination() (+11 more)
 
-### Community 436 - "sync_jobs.rs"
+### Community 434 - "sync_jobs.rs"
 Cohesion: 0.27
 Nodes (19): check_draft(), Checked, delete(), find_job(), jobs(), load_jobs(), notify_jobs(), one_job() (+11 more)
 
-### Community 437 - "index.rs"
+### Community 435 - "index.rs"
 Cohesion: 0.28
 Nodes (19): build(), current(), handle(), IndexSlot, IndexState, persist_path(), Arc, FolderIndex (+11 more)
 
-### Community 438 - "RetirementQueue"
+### Community 436 - "RetirementQueue"
 Cohesion: 0.19
 Nodes (14): assert_index(), entry(), mount_vault_task_entry_table_dense_slots_survive_10000_removals(), mount_vault_task_entry_table_replace_and_rename_keys_across_10000_identities(), Arc, HashMap, RetirementQueue, Arc (+6 more)
 
-### Community 439 - "metadata_cache_order.rs"
+### Community 437 - "metadata_cache_order.rs"
 Cohesion: 0.24
 Nodes (19): comparison_only(), cool_down(), cooldown_bytes(), descendants(), detach(), expire(), insert(), pin_changes() (+11 more)
 
-### Community 440 - "path.rs"
+### Community 438 - "path.rs"
 Cohesion: 0.17
 Nodes (13): invalid(), is_dos_device_name(), join_backend(), PathProjector, Error, Into, Result, Self (+5 more)
 
-### Community 441 - "MetadataRefreshWorker"
+### Community 439 - "MetadataRefreshWorker"
 Cohesion: 0.19
 Nodes (14): is_stopped(), MetadataRefreshWorker, Arc, Condvar, Drop, Duration, JoinHandle, MountEngine (+6 more)
 
-### Community 442 - "ShutdownWatchdog"
+### Community 440 - "ShutdownWatchdog"
 Cohesion: 0.14
 Nodes (14): Arc, Condvar, Drop, Instant, JoinHandle, Mutex, Option, Self (+6 more)
 
-### Community 443 - "crypto.rs"
-Cohesion: 0.18
-Nodes (19): b64_decode(), entropy_failure_is_returned_after_bounded_retries(), fill_random(), fill_random_with(), hex(), hex_decode(), hex_val(), iroh_signature() (+11 more)
-
-### Community 444 - "DirectContact"
+### Community 441 - "DirectContact"
 Cohesion: 0.24
 Nodes (18): candidates_for(), contact(), contact_lan_id(), effective_presence(), hashed_lan_id(), lan_cleanup_task_candidates_cover_v4_global_v6_and_scoped_link_local(), lan_cleanup_task_effective_presence_merges_or_synthesizes(), lan_cleanup_task_hashed_ids_are_stable_short_and_not_the_key() (+10 more)
 
-### Community 445 - "receive_walk"
+### Community 442 - "receive_walk"
 Cohesion: 0.27
 Nodes (15): interrupted(), PeerWalkFailure, receive_responses(), receive_walk(), recv_checked(), Error, Fn, Option (+7 more)
 
-### Community 446 - "service_tests.rs"
+### Community 443 - "service_tests.rs"
 Cohesion: 0.17
 Nodes (15): remote_drive_task_stop_is_a_synchronous_idempotent_authorization_barrier(), configure_requires_worker_ack_before_reporting_success(), direct_accept_or_reject_requires_signed_owner_presence(), dropping_probe_clone_does_not_stop_owner_service(), local_commands_are_acknowledged_while_server_hello_is_stalled(), local_direct_request_requires_own_direct_secret(), nonce_cache_detects_replay(), presence_binds_node_id_and_relay_url() (+7 more)
 
-### Community 447 - "startup_ack.rs"
+### Community 444 - "startup_ack.rs"
 Cohesion: 0.18
 Nodes (18): ack_request_requires_updated_mode(), acknowledge_update_startup(), AckRequest, arbitrary_ack_path_is_rejected(), capture_update_startup_ack(), completion_receipt_is_bound_to_appdata_target_and_nonce(), env_lock(), no_request_is_a_noop() (+10 more)
 
-### Community 448 - "extract.rs"
+### Community 445 - "extract.rs"
 Cohesion: 0.16
 Nodes (18): extract_all_controlled(), ExtractProgress, ExtractReport, native(), open_failure(), AtomicBool, E, Error (+10 more)
 
-### Community 449 - "FailingBackend"
+### Community 446 - "FailingBackend"
 Cohesion: 0.16
 Nodes (8): FailingBackend, Box, Read, Send, Vec, VfsMeta, VfsResult, Write
 
-### Community 450 - "App"
+### Community 447 - "App"
 Cohesion: 0.16
 Nodes (7): App, append_reclaim_journal(), reclaim_items(), reclaim_scan_outcome(), BackendHandle, Result, Vec
 
-### Community 451 - "remove_recovery_session_controlled"
+### Community 448 - "remove_recovery_session_controlled"
 Cohesion: 0.22
 Nodes (15): App, Ui, is_direct_child(), is_recovery_directory(), recovery_delete_plan(), recovery_inventory(), recovery_session_count(), RecoveryDeletePlan (+7 more)
 
-### Community 452 - "theme.rs"
+### Community 449 - "theme.rs"
 Cohesion: 0.20
 Nodes (16): accent(), danger(), install(), muted(), Palette, Color32, Context, Self (+8 more)
 
-### Community 453 - "grants_exec.rs"
+### Community 450 - "grants_exec.rs"
 Cohesion: 0.21
 Nodes (17): choice(), choices(), clean(), confirm_enable(), ExecChoice, ExecGrantArgs, ExecGrantCommand, ExecToggleArgs (+9 more)
 
-### Community 454 - "SavedConnection"
+### Community 451 - "SavedConnection"
 Cohesion: 0.20
 Nodes (11): connection(), account_and_target_formats(), parse(), Protocol, Option, sample_pw(), sanitize(), SavedConnection (+3 more)
 
-### Community 455 - "UnavailableBackend"
+### Community 452 - "UnavailableBackend"
 Cohesion: 0.20
 Nodes (10): Box, Read, Send, T, Vec, VfsMeta, VfsResult, Write (+2 more)
 
-### Community 456 - "job.rs"
+### Community 453 - "job.rs"
 Cohesion: 0.21
 Nodes (16): canceled(), exit_failure(), persist_attempt(), preparation_checks_time_dependent_filter_arithmetic(), preparation_rejects_invalid_config_before_runtime_work(), PreparedJob, AtomicBool, GlobSet (+8 more)
 
-### Community 457 - "MountRequestPermit"
+### Community 454 - "MountRequestPermit"
 Cohesion: 0.28
 Nodes (10): mount_vault_task_remote_drive_task_metadata_gate_times_out_without_service_progress(), mount_vault_task_remote_drive_task_metadata_waiter_has_priority_over_a_new_transfer(), mount_vault_task_remote_drive_task_transfer_gate_times_out_instead_of_starving_the_drive(), MountRequestGate, MountRequestPermit, Arc, Drop, Mutex (+2 more)
 
-### Community 458 - ".walk"
+### Community 455 - ".walk"
 Cohesion: 0.30
 Nodes (14): append_component(), not_found(), PathResolver, permission_denied(), BackendHandle, CachingBackend, Error, Option (+6 more)
 
-### Community 459 - "promotion_api.rs"
+### Community 456 - "promotion_api.rs"
 Cohesion: 0.20
 Nodes (12): ambiguous_rename(), GDriveBackend, invalid(), parse_object(), query_literal(), required_text(), Error, Into (+4 more)
 
-### Community 460 - "linux_os.rs"
+### Community 457 - "linux_os.rs"
 Cohesion: 0.16
 Nodes (16): display_path(), metadata_is_link_like(), normalize_scan_root(), open_read(), read_directory(), request_access(), File, Iterator (+8 more)
 
-### Community 461 - "import.rs"
+### Community 458 - "import.rs"
 Cohesion: 0.25
 Nodes (18): create_unique_dir(), extract(), extract_into(), finish_extract(), folder_name(), import(), Incoming, incoming_name() (+10 more)
 
-### Community 462 - "vault_volume_enumeration.rs"
+### Community 459 - "vault_volume_enumeration.rs"
 Cohesion: 0.18
 Nodes (16): collect(), decode(), Directory, exercise(), IoStatus, Reply, File, HashSet (+8 more)
 
-### Community 463 - "RuntimeConfiguration"
+### Community 460 - "io_err"
+Cohesion: 0.15
+Nodes (9): IntoIoError, io_err(), io::Error, Error, russh::Error, russh::keys::Error, russh_sftp::client::error::Error, &str (+1 more)
+
+### Community 461 - "RuntimeConfiguration"
 Cohesion: 0.22
 Nodes (15): Arc, DirectReciprocalCoordinator, DirectRequestEntry, FnMut, HashSet, Mutex, Option, Result (+7 more)
 
-### Community 464 - "EndpointRoutes"
+### Community 462 - "EndpointRoutes"
 Cohesion: 0.16
 Nodes (11): EndpointRoutes, NodeTransportOptions, PublishedEndpointRoutes, Arc, AtomicU64, EndpointAddr, RelayUrl, Runtime (+3 more)
 
-### Community 465 - "ShareProfiles"
+### Community 463 - "ShareProfiles"
 Cohesion: 0.21
 Nodes (8): live_legacy_identity_claim(), live_tracked_identity_claim(), mark_revoked(), peer_identity_conflicts(), DirectRequestEntry, Result, ShareProfiles, exact_grant()
 
-### Community 466 - "share_remote_direct_task_tests.rs"
+### Community 464 - "share_remote_direct_task_tests.rs"
 Cohesion: 0.24
 Nodes (17): assert_complete_relation(), grant_for(), lan_cleanup_task_removed_peer_blocks_automatic_repair_until_user_pairs_again(), legacy_presence(), local_identity(), reciprocal_peer(), roundtrip(), roundtrip_hello() (+9 more)
 
-### Community 467 - "signal_configure_tests.rs"
+### Community 465 - "signal_configure_tests.rs"
 Cohesion: 0.19
 Nodes (18): configure_emits_real_teardown_before_republishing_new_state(), configure_write_failure_forces_reconnect_and_new_state_has_no_old_subscriptions(), connection_pair(), contact(), discovery_runtime(), empty_configuration(), Fixture, message_type() (+10 more)
 
-### Community 468 - "listing.rs"
+### Community 466 - "listing.rs"
 Cohesion: 0.21
 Nodes (14): attribute_tag(), Attributes, bytes(), filetime_ms(), meta(), parse_directory_info(), Option, Result (+6 more)
 
-### Community 469 - "sync_delete.rs"
+### Community 467 - "sync_delete.rs"
 Cohesion: 0.34
 Nodes (18): Candidate, check_cancel(), collect_candidates(), delete_directory(), delete_extras(), delete_file(), ensure_still_extra(), invalid() (+10 more)
 
-### Community 470 - "Capture"
+### Community 468 - "Capture"
 Cohesion: 0.15
 Nodes (12): ColorImage, Capture, Context, FullOutput, HashMap, Path, Pos2, Rect (+4 more)
 
-### Community 471 - "DeleteReporter"
+### Community 469 - "DeleteReporter"
 Cohesion: 0.19
 Nodes (10): DeletePhase, DeleteReporter, disconnected_progress_receiver_requests_cancel(), Arc, AtomicBool, Instant, Self, Sender (+2 more)
 
-### Community 472 - "encode"
+### Community 470 - "encode"
 Cohesion: 0.31
 Nodes (12): encode(), invalid(), Pending, Error, FnMut, Option, Result, Vec (+4 more)
 
-### Community 473 - "cleanup.rs"
+### Community 471 - "cleanup.rs"
 Cohesion: 0.21
 Nodes (11): CleanupDecision, dir_cleanup_by_name(), dir_cleanup_reason(), file_cleanup_reason(), git_is_never_auto(), has_build_context(), has_node_project_context(), remote_dir_cleanup_reason() (+3 more)
 
-### Community 474 - "App"
+### Community 472 - "App"
 Cohesion: 0.19
 Nodes (3): empty_progress(), App, PathBuf
 
-### Community 475 - "App"
+### Community 473 - "App"
 Cohesion: 0.14
 Nodes (4): App, Context, Result, settings_path()
 
-### Community 476 - "share_discovery_ui.rs"
+### Community 474 - "share_discovery_ui.rs"
 Cohesion: 0.31
 Nodes (15): active_room_offers_ui(), App, discovery_heading(), discovery_list_ui(), expiration_label(), offer_expiration_label(), offer_phase_label(), pin_guidance() (+7 more)
 
-### Community 477 - "location_prefs.rs"
+### Community 475 - "location_prefs.rs"
 Cohesion: 0.22
 Nodes (12): App, Ui, dir_sort_path(), favorites_path(), load_dir_sort(), load_favorites(), HashMap, PathBuf (+4 more)
 
-### Community 478 - "run_with_retry"
+### Community 476 - "run_with_retry"
 Cohesion: 0.18
 Nodes (15): FailurePhase, interrupted(), is_transient(), AtomicBool, Duration, ErrorKind, FnMut, Result (+7 more)
 
-### Community 479 - "exec_status.rs"
+### Community 477 - "exec_status.rs"
 Cohesion: 0.26
 Nodes (17): active(), cancel_target(), clean(), colliding_exec_ids_are_ambiguous_until_peer_selects_exact_direction(), exact_or_prefix(), ExecStatusArgs, ExecStatusCommand, history() (+9 more)
 
-### Community 480 - "Provider"
+### Community 478 - "Provider"
 Cohesion: 0.26
 Nodes (15): ClientConfig, Provider, cfg_path(), cloud_dir(), disconnect(), is_connected(), keyring_account(), load_config() (+7 more)
 
-### Community 481 - "linux_os.rs"
+### Community 479 - "linux_os.rs"
 Cohesion: 0.25
 Nodes (17): commit_staged(), file_identity(), is_cross_device(), metadata_is_link_like(), move_file(), path_key(), path_matches_identity(), path_text() (+9 more)
 
-### Community 482 - "exec_grant_journal.rs"
+### Community 480 - "exec_grant_journal.rs"
 Cohesion: 0.24
 Nodes (16): ExecGrantPersistResult, ExecGrantRetryState, execute_locked(), failed_result(), JournalPhase, mask_all(), mask_pending(), prepare_pending_runtime() (+8 more)
 
-### Community 483 - "ipc_analysis.rs"
+### Community 481 - "ipc_analysis.rs"
 Cohesion: 0.23
 Nodes (16): read_frame(), ReaderGuard, receive(), BackendHandle, Drop, FnOnce, JoinHandle, Mutex (+8 more)
 
-### Community 484 - "connection_tests.rs"
+### Community 482 - "connection_tests.rs"
 Cohesion: 0.18
 Nodes (17): decode(), explicit_ftps_keepalive_reconnects_relogs_and_bounds_data_inactivity(), FtpsEvents, read_command(), reply(), Arc, AtomicUsize, BufRead (+9 more)
 
-### Community 485 - "connection_events.rs"
+### Community 483 - "MountEngine"
+Cohesion: 0.34
+Nodes (5): MountEngine, EntryState, Result, Vec, DeleteToken
+
+### Community 484 - "connection_events.rs"
 Cohesion: 0.17
 Nodes (11): ConnectionErrorKind, ConnectionEventReporter, ErrorBucket, AsRef, Default, Instant, Mutex, Option (+3 more)
 
-### Community 486 - "direct_protocol_tests.rs"
+### Community 485 - "direct_protocol_tests.rs"
 Cohesion: 0.29
 Nodes (16): decision_and_revision_are_cryptographically_bound(), every_request_field_is_bound_by_hmac_and_requester_signature(), every_tracked_wire_payload_uses_the_coordinated_tag(), expiry_and_signer_mismatch_fail_closed(), identity(), key(), legacy_d3_target_pin_can_sign_offline_request(), optional_message_presence_is_bound_without_ambiguity() (+8 more)
 
-### Community 487 - "identity_profile_reconciliation_tests.rs"
+### Community 486 - "identity_profile_reconciliation_tests.rs"
 Cohesion: 0.27
 Nodes (17): contact(), decision(), decision_receipt(), direct_code_rotation_preserves_outgoing_authorization_and_history(), full_identity_replacement_ignores_saturated_permanent_tombstones(), full_identity_replacement_stops_outbox_and_resets_contact_projection(), key(), outgoing_profiles() (+9 more)
 
-### Community 488 - "storage_analysis_server.rs"
+### Community 487 - "storage_analysis_server.rs"
 Cohesion: 0.20
 Nodes (16): canceled(), CancelOnDrop, heartbeat(), Arc, Drop, Error, Result, Semaphore (+8 more)
 
-### Community 489 - "sync_tests.rs"
+### Community 488 - "sync_tests.rs"
 Cohesion: 0.31
 Nodes (16): delete_extra_aborts_all_deletes_when_source_probe_fails(), delete_extra_removes_orphans(), dry_run_writes_nothing(), fwd(), handles(), link_like_destination_child_never_receives_copied_content(), link_like_destination_root_never_reaches_external_victim(), mirror_cancel_during_preflight_deletes_nothing() (+8 more)
 
-### Community 490 - "InvalidatingWriter"
+### Community 489 - "InvalidatingWriter"
 Cohesion: 0.22
 Nodes (11): InvalidatingWriter, Arc, Box, CacheState, Drop, Mutex, Option, Result (+3 more)
 
-### Community 491 - "job_json.rs"
+### Community 490 - "job_json.rs"
 Cohesion: 0.26
 Nodes (16): Map, apply_calendar(), apply_draft(), calendar_kind(), enum_field(), field_for_message(), job_json(), minute_field() (+8 more)
 
-### Community 492 - "share_lifecycle_ui.rs"
+### Community 491 - "share_lifecycle_ui.rs"
 Cohesion: 0.34
 Nodes (15): authorized_card(), decide(), default_home(), delete_history(), LifecycleAction, perform_action(), queue_contact(), refresh_after_action() (+7 more)
 
-### Community 493 - "win32_names.rs"
+### Community 492 - "win32_names.rs"
 Cohesion: 0.15
 Nodes (9): problem_of(), Option, is_dos_device_name(), is_win32_device_name(), is_win32_invalid_char(), Option, win32_name_issue(), win32_safe_name() (+1 more)
 
-### Community 494 - "windows.rs"
+### Community 493 - "windows.rs"
 Cohesion: 0.17
 Nodes (13): drag_out_files(), DragOutEffect, DragOutOutcome, classify_drag_result(), drag_out(), DropSource, FileData, hdrop_format() (+5 more)
 
-### Community 495 - "platform.rs"
+### Community 494 - "platform.rs"
 Cohesion: 0.17
 Nodes (11): DriveInfo, invalid_test_namespace(), metadata_is_link_like(), normalize_local_backend_path(), removable(), removable_drives(), Cow, Error (+3 more)
 
-### Community 496 - "mutation_reconcile_tests.rs"
+### Community 495 - "mutation_reconcile_tests.rs"
 Cohesion: 0.35
 Nodes (16): ambiguous_folder_retry_reuses_the_reserved_id_and_never_generates_another(), assert_folder_create(), folder_create_commit_then_drop_uses_reserved_id_and_updates_parent_snapshot(), folder_state(), listener(), pending_folder_reservation_survives_backend_restart_and_reconciles_without_post(), receive(), rename_commit_then_drop_reconciles_exact_id_without_replaying_patch() (+8 more)
 
-### Community 497 - "directory_records.rs"
+### Community 496 - "directory_records.rs"
 Cohesion: 0.28
 Nodes (16): analytics_access_task_directory_decoder_rejects_malformed_records(), analytics_access_task_sdk_layout_and_native_names(), decode(), decode_inner(), DecodeError, filetime_ms(), invalid(), Layout (+8 more)
 
-### Community 498 - "optimization_metadata_tests.rs"
+### Community 497 - "optimization_metadata_tests.rs"
 Cohesion: 0.22
 Nodes (16): directory(), file(), mount_optimization_task_change_queue_preserves_concrete_events(), mount_optimization_task_failed_refresh_attempts_remain_fair(), mount_optimization_task_metadata_parallelism_and_selected_ancestor_order(), mount_optimization_task_speculative_admission_preserves_demand(), mount_vault_task_metadata_authority_and_revision(), mount_vault_task_point_stat_coalescence_and_error_policy() (+8 more)
 
-### Community 499 - "uplink_helper.rs"
+### Community 498 - "uplink_helper.rs"
 Cohesion: 0.29
 Nodes (16): directory(), escape_single(), HelperOp, HelperRequest, HelperResponse, powershell(), request_path(), response_path() (+8 more)
 
-### Community 500 - "OpaqueKe3ConnectorBundle"
+### Community 499 - "OpaqueKe3ConnectorBundle"
 Cohesion: 0.18
 Nodes (7): OpaqueKe3ConnectorBundle, Debug, Formatter, Result, Self, Vec, validate_opaque_message()
 
-### Community 501 - "LockedGlobal"
+### Community 500 - "LockedGlobal"
 Cohesion: 0.18
 Nodes (9): LockedGlobal, OwnedGlobal, Drop, HGLOBAL, NonNull, PhantomData, Rc, Result (+1 more)
 
-### Community 502 - "support_dirs.rs"
+### Community 501 - "support_dirs.rs"
 Cohesion: 0.31
 Nodes (15): android_task_host_values_redirect_data_and_temp_roots(), app_data_dir(), app_data_file(), data_home(), data_home_for(), host(), HostConfig, platform_data_home() (+7 more)
 
-### Community 503 - "JobEditor"
+### Community 502 - "JobEditor"
 Cohesion: 0.21
 Nodes (12): hm_to_min(), JobEditor, malformed_delete_guard_and_ambiguous_mirror_are_not_saved(), parse_number(), rejects_invalid_glob_instead_of_silently_skipping_it(), Option, Result, Self (+4 more)
 
-### Community 504 - "Observation"
+### Community 503 - "Observation"
 Cohesion: 0.20
 Nodes (13): Observation, AtomicBool, File, FnMut, Metadata, Option, Path, PathBuf (+5 more)
 
-### Community 505 - "ResetSchedule"
+### Community 504 - "ResetSchedule"
 Cohesion: 0.20
 Nodes (10): Links, Links, ResetSchedule, HashMap, Instant, Option, Result, mount_vault_task_reset_schedule_unlinks_and_clamps_deadlines() (+2 more)
 
-### Community 506 - "ValidatedRelativePath"
+### Community 505 - "ValidatedRelativePath"
 Cohesion: 0.16
 Nodes (10): has_windows_drive_prefix(), invalid(), joins_wire_components_without_reinterpreting_them(), Error, Path, PathBuf, Result, Self (+2 more)
 
-### Community 507 - "AnalyticsBudget"
+### Community 506 - "AnalyticsBudget"
 Cohesion: 0.20
 Nodes (9): analytics_access_task_existing_budget_stops_honestly(), AnalyticsBudget, claim_counter(), Retention, AtomicBool, AtomicU64, Default, Path (+1 more)
 
-### Community 508 - "App"
+### Community 507 - "App"
 Cohesion: 0.24
 Nodes (8): App, BackendHandle, Context, Option, Pos2, Vec, same_drop_namespace(), is_local_style()
 
-### Community 509 - "handle_get_tree_backend"
+### Community 508 - "handle_get_tree_backend"
 Cohesion: 0.32
 Nodes (15): check_canceled(), collect_source(), handle_get_tree_backend(), invalid(), join_path(), AtomicBool, BackendHandle, Error (+7 more)
 
-### Community 510 - "ShareExecSession"
+### Community 509 - "ShareExecSession"
 Cohesion: 0.23
 Nodes (7): Arc, Result, Self, Sender, ShareIrohNode, ShareExecInput, ShareExecSession
 
-### Community 511 - "ipc_protocol_tests.rs"
+### Community 510 - "ipc_protocol_tests.rs"
 Cohesion: 0.15
 Nodes (8): bound_snapshot_for_ipc(), encoded_response_len(), retain_newest_with_budget(), T, Vec, truncate_utf8(), maximum_profile_and_event_backlog_fit_one_ipc_response(), response_read_preserves_following_stream_bytes()
 
-### Community 512 - "RequestWorkers"
+### Community 511 - "RequestWorkers"
 Cohesion: 0.24
 Nodes (11): panic_message(), RequestWorkers, Any, Error, JoinHandle, Result, Send, Vec (+3 more)
 
-### Community 513 - "build_index"
+### Community 512 - "build_index"
 Cohesion: 0.33
 Nodes (15): build_index(), check_canceled(), emit_progress(), insert_path(), normalized_path(), require_plain_directory(), AtomicBool, FolderIndex (+7 more)
 
-### Community 514 - "normalize_scan_root"
+### Community 513 - "normalize_scan_root"
 Cohesion: 0.36
 Nodes (15): ReadKind, normalize_scan_root(), PathBuf, access(), identity(), open(), open_direct(), open_read() (+7 more)
 
-### Community 515 - "Directory"
+### Community 514 - "Directory"
 Cohesion: 0.18
 Nodes (12): Directory, enumeration_ended(), Error, HashSet, Iterator, Option, OsString, PathBuf (+4 more)
 
-### Community 516 - "update.rs"
+### Community 515 - "update.rs"
 Cohesion: 0.23
 Nodes (14): builtin_feed(), check(), download(), download_task(), DownloadSlot, feed(), remove_old_downloads(), Drop (+6 more)
 
-### Community 517 - "RuntimeSelection"
+### Community 516 - "RuntimeSelection"
 Cohesion: 0.13
 Nodes (10): File, Path, Result, Self, RuntimeAttempt, Option, Path, Result (+2 more)
 
-### Community 518 - "exec_registry_tests.rs"
+### Community 517 - "exec_registry_tests.rs"
 Cohesion: 0.40
 Nodes (15): assert_error(), auth(), every_stop_reason_is_signalled_and_requires_matching_terminal_after_empty(), failed_platform_prepare_or_launch_releases_the_slot_without_running(), history_and_terminal_cache_are_bounded_and_persisted_views_are_redacted(), limits(), model_enforces_exact_authorization_deduplication_and_admission_limits(), principal() (+7 more)
 
-### Community 519 - "PeerReader"
+### Community 518 - "PeerReader"
 Cohesion: 0.17
 Nodes (13): PeerReader, reader(), Arc, Box, Error, ErrorKind, Option, Read (+5 more)
 
-### Community 520 - "errors.rs"
+### Community 519 - "errors.rs"
 Cohesion: 0.27
 Nodes (14): connect_failed(), io_kind(), is_connection_loss(), is_dead(), is_suspect(), kind_of(), label(), map() (+6 more)
 
-### Community 521 - "results.rs"
+### Community 520 - "results.rs"
 Cohesion: 0.30
 Nodes (14): invalid_result(), JobResult, load_results(), load_results_for_update(), parse_result_line(), record_rejects_malformed_history_without_erasing_it(), record_result(), record_result_to() (+6 more)
 
-### Community 522 - "local_platform.rs"
+### Community 521 - "local_platform.rs"
 Cohesion: 0.25
 Nodes (15): file_attributes(), is_reparse_point(), local_attrs(), long_path(), remove_file_like(), rename_no_replace(), reported_name(), reported_temp_ancestor_names_match_directory_listings() (+7 more)
 
-### Community 523 - "connection_tests.rs"
+### Community 522 - "connection_tests.rs"
 Cohesion: 0.24
 Nodes (15): backend_for(), backend_for_timeout(), delete_response_loss_is_not_replayed(), get_reconnects_before_exposing_body_after_stale_pool_close(), mutation_redirect_is_not_followed_or_reported_as_success(), propfind_body_blackhole_stops_after_one_bounded_retry(), propfind_reconnects_after_ambiguous_stale_pool_close(), propfind_retries_when_body_drops_after_headers() (+7 more)
 
-### Community 524 - "heartbeat_tests.rs"
+### Community 523 - "heartbeat_tests.rs"
 Cohesion: 0.24
 Nodes (14): backend(), handshake(), remote_drive_task_heartbeat_keeps_responsive_idle_generation_active(), remote_drive_task_heartbeat_retires_blackholed_live_channel_and_reconnects(), remote_drive_task_metadata_timeout_drains_old_mutation_without_poisoning_replacement(), remote_drive_task_reconnectless_proxy_survives_one_timed_out_request(), AgentBackend, AgentStreams (+6 more)
 
-### Community 525 - "drain_scan_channel"
+### Community 524 - "drain_scan_channel"
 Cohesion: 0.15
 Nodes (7): App, Option, drain_scan_channel(), Option, Receiver, Vec, ScanProgress
 
-### Community 526 - "bind_legacy_parent"
+### Community 525 - "bind_legacy_parent"
 Cohesion: 0.28
 Nodes (10): bind_legacy_parent(), bound_parent_tracks_the_exact_child_until_reaped(), bound_parent_treats_unreaped_zombie_as_exited(), LegacyParent, linux_process_identity(), LinuxProcessIdentity, Drop, HANDLE (+2 more)
 
-### Community 527 - "lan.rs"
+### Community 526 - "lan.rs"
 Cohesion: 0.25
 Nodes (13): clean(), LanArgs, LanCommand, print_settings(), LanSettings, Option, Result, run() (+5 more)
 
-### Community 528 - "WorkerRefresh"
+### Community 527 - "WorkerRefresh"
 Cohesion: 0.20
 Nodes (12): clean(), print(), print_action(), print_deleted(), Result, ShareProfiles, text(), value() (+4 more)
 
-### Community 529 - "durability.rs"
+### Community 528 - "durability.rs"
 Cohesion: 0.30
 Nodes (14): committed_error(), copy_parent_sync_failure_reports_that_destination_is_committed(), direct_move_sync_failure_reports_committed_target(), finish_direct_move(), finish_staged_commit(), injected(), move_parent_sync_failure_reports_and_retains_quarantine(), root() (+6 more)
 
-### Community 530 - "linux_file_store_tests.rs"
+### Community 529 - "linux_file_store_tests.rs"
 Cohesion: 0.27
 Nodes (13): copied_record_cannot_be_read_as_another_account(), corruption_truncation_and_oversize_are_explicit_errors(), created_directory_lock_and_record_have_exact_private_modes(), empty_accounts_are_rejected_without_touching_the_store(), fixture(), replacement_and_idempotent_delete_preserve_store_health(), round_trip_survives_a_fresh_store_instance(), Path (+5 more)
 
-### Community 531 - "FixtureGate"
+### Community 530 - "FixtureGate"
 Cohesion: 0.14
 Nodes (9): FixtureDirectory, FixtureGate, Drop, Option, Path, PathBuf, Receiver, Sender (+1 more)
 
-### Community 532 - "FrameReader"
+### Community 531 - "FrameReader"
 Cohesion: 0.18
 Nodes (12): cancelling_one_next_call_does_not_cancel_frame_decoding(), client_frames(), FrameReader, FrameReader<T>, Drop, JoinHandle, Option, R (+4 more)
 
-### Community 533 - "share_remote_discovery_task_tests.rs"
+### Community 532 - "share_remote_discovery_task_tests.rs"
 Cohesion: 0.20
 Nodes (12): assert_crypto_error(), bindings(), bundle(), complete_pairing(), FixtureLine, reciprocal_peer(), Result, T (+4 more)
 
-### Community 534 - "tests.rs"
+### Community 533 - "tests.rs"
 Cohesion: 0.22
 Nodes (10): android_task_smb_directory_listing_keeps_reparse_points_as_links(), android_task_smb_directory_listing_rejects_malformed_entries(), android_task_smb_operation_errors_map_to_io_kinds(), entry(), protocol_error(), Command, Error, NtStatus (+2 more)
 
-### Community 535 - "verify_sha256"
+### Community 534 - "verify_sha256"
 Cohesion: 0.30
 Nodes (14): copy_file_checked(), is_newer(), parse_sha256_file(), parse_ver(), replace_file_with_staged(), Option, Path, PathBuf (+6 more)
 
-### Community 536 - "handle_walk_hashed"
+### Community 535 - "handle_walk_hashed"
 Cohesion: 0.26
 Nodes (9): handle_walk_hashed(), Md5, md5_file(), md5_known_vectors(), AtomicBool, Path, Result, Self (+1 more)
+
+### Community 536 - "scan_parallel"
+Cohesion: 0.34
+Nodes (13): build_from_listings(), child_path(), ChildMeta, collect_children(), fold_large_directory(), normalized(), Box, HashMap (+5 more)
 
 ### Community 537 - "verify.rs"
 Cohesion: 0.25
@@ -3109,85 +3111,85 @@ Nodes (12): EntryKind, LocalEntry, open_read(), File, Metadata, OsString, Path, 
 Cohesion: 0.24
 Nodes (12): engine(), entry(), identities(), mount_vault_task_retirement_batches_deduplicate_10000_identities(), mount_vault_task_retirement_last_pin_reuses_clean_spool_without_double_disposal(), mount_vault_task_retirement_preserves_dirty_and_recovery_referenced_spools(), mount_vault_task_retirement_tickets_are_weak_and_last_pin_driven(), Arc (+4 more)
 
-### Community 577 - "metadata.rs"
-Cohesion: 0.32
-Nodes (12): attributes(), file_information(), file_time(), find_data(), reject_open_symlink(), BY_HANDLE_FILE_INFORMATION, FILETIME, Result (+4 more)
-
-### Community 578 - "ExchangeState"
+### Community 577 - "ExchangeState"
 Cohesion: 0.22
 Nodes (8): ExchangeState, PreparedOfferState, DiscoveryPublishTarget, HashMap, Instant, Result, VecDeque, UsedIdTracker
 
-### Community 579 - "Fragments"
+### Community 578 - "Fragments"
 Cohesion: 0.24
 Nodes (9): Fragments, BufRead, Cursor, Read, Result, Vec, VecDeque, windows_remote_task_signal_frames_reject_truncation_limits_and_stalls() (+1 more)
 
-### Community 580 - "tracked_signal_sender_tests.rs"
+### Community 579 - "tracked_signal_sender_tests.rs"
 Cohesion: 0.24
 Nodes (12): connection_pair(), entry(), missing_legacy_bridge_does_not_block_signed_request_or_later_outboxes(), presence(), read_json(), request(), BufReader, DirectRequestEntry (+4 more)
 
-### Community 581 - "write.rs"
+### Community 580 - "write.rs"
 Cohesion: 0.24
 Nodes (11): invalid(), preferred_drop_effect_fmt(), Error, Result, encode_paths(), publish(), Option, Result (+3 more)
 
-### Community 582 - "schedule.rs"
+### Community 581 - "schedule.rs"
 Cohesion: 0.21
 Nodes (5): local_min_of_day(), now_secs(), Option, SyncJob, within_window()
 
-### Community 583 - ".upload"
+### Community 582 - ".upload"
 Cohesion: 0.29
 Nodes (11): copy_stream(), AtomicBool, FnMut, Instant, Option, Read, Result, Sender (+3 more)
 
-### Community 584 - "local_platform.rs"
+### Community 583 - "local_platform.rs"
 Cohesion: 0.23
 Nodes (12): is_reparse_point(), local_attrs(), remove_file_like(), rename_no_replace(), reported_name(), Metadata, Option, OsString (+4 more)
 
-### Community 585 - "sandbox.rs"
+### Community 584 - "sandbox.rs"
 Cohesion: 0.30
 Nodes (11): c_long, OpenHow, PathBeneathAttr, raw_fd(), restrict_filesystem(), OwnedFd, Path, Result (+3 more)
 
-### Community 586 - "interfaces.rs"
+### Community 585 - "interfaces.rs"
 Cohesion: 0.26
 Nodes (11): IP_ADAPTER_ADDRESSES_LH, ansi_string(), collect(), gather_interface_facts(), IpAddr, Option, Result, Vec (+3 more)
 
-### Community 587 - "emit"
+### Community 586 - "emit"
 Cohesion: 0.17
 Nodes (10): emit(), Frame, Result, Sink, handle_write_new(), AtomicBool, Frame, Receiver (+2 more)
 
-### Community 588 - "delete_hostile_names.rs"
+### Community 587 - "delete_hostile_names.rs"
 Cohesion: 0.32
 Nodes (10): native_path(), numbered(), recursive_filter_task_plain_names_never_take_the_rename_detour(), recursive_filter_task_safe_sibling_rename_never_replaces_an_existing_entry(), recycle_local_target(), RecycleRoute, rename_to_safe_sibling(), PathBuf (+2 more)
 
-### Community 589 - "App"
+### Community 588 - "App"
 Cohesion: 0.21
 Nodes (6): App, PickerLocation, BackendHandle, Option, Result, Vec
 
-### Community 590 - "args_for"
+### Community 589 - "args_for"
 Cohesion: 0.33
 Nodes (11): args_for(), duplicate_worker_accepts_matching_completed_version_idempotently(), durable_intent_blocks_a_crash_before_replacement(), durable_intent_prevents_downgrade_after_replace_before_status_crash(), missing_completion_receipt_forces_verified_relaunch(), Path, serialized_winner_retires_old_request_and_rebases_newer_request(), tampered_legacy_staging_is_rejected_before_target_changes() (+3 more)
 
-### Community 591 - "apply_transfer_tests.rs"
+### Community 590 - "apply_transfer_tests.rs"
 Cohesion: 0.32
 Nodes (11): conflict_siblings_never_replace_same_second_names(), destination_drift_after_backup_blocks_promotion(), forward(), Hook, AtomicBool, AtomicUsize, Path, PathBuf (+3 more)
 
-### Community 592 - "CountWrites"
+### Community 591 - "CountWrites"
 Cohesion: 0.30
 Nodes (7): CountWrites, FailOnceRemove, AtomicUsize, Box, Send, VfsResult, Write
 
-### Community 593 - "share_values"
+### Community 592 - "share_values"
 Cohesion: 0.26
 Nodes (11): clean(), direct_endpoint(), print_connections(), Iterator, Result, ShareProfiles, Value, Vec (+3 more)
 
-### Community 594 - "clipboard_snapshot"
+### Community 593 - "clipboard_snapshot"
 Cohesion: 0.26
 Nodes (11): clipboard_snapshot(), relative_path(), result_rows(), Arc, FnMut, HashSet, Option, Ordering (+3 more)
 
-### Community 595 - "paths.rs"
+### Community 594 - "paths.rs"
 Cohesion: 0.29
 Nodes (11): analytics_access_task_verbatim_roots_and_display(), display_path(), fold_relative(), join_root(), resolve(), FnOnce, Option, Path (+3 more)
 
-### Community 596 - ".publish_snapshot"
+### Community 595 - ".publish_snapshot"
 Cohesion: 0.36
 Nodes (7): DirectoryObservation, Self, SnapshotPublication, MetadataCache, Admission, Option, Result
+
+### Community 596 - "HandleReservation<'a>"
+Cohesion: 0.21
+Nodes (4): HandleReservation<'a>, RenameReservation<'a>, MountEngine, Result
 
 ### Community 597 - "interfaces.rs"
 Cohesion: 0.29
@@ -3449,125 +3451,125 @@ Nodes (4): App, Context, Frame, Option
 Cohesion: 0.46
 Nodes (4): App, BackendHandle, Vec, UploadSelection
 
-### Community 664 - "ensure_embedded_daemon"
+### Community 664 - "invalid"
+Cohesion: 0.29
+Nodes (5): invalid(), Error, Into, Result, WalkBudget
+
+### Community 665 - "ensure_embedded_daemon"
 Cohesion: 0.50
 Nodes (7): ensure_embedded_daemon(), ensure_for_client(), ready(), Duration, Result, start_if_needed(), worker_alive()
 
-### Community 665 - "try_acquire_daemon_mutex"
+### Community 666 - "try_acquire_daemon_mutex"
 Cohesion: 0.36
 Nodes (7): acquire_daemon_instance_guard(), DaemonInstanceGuard, Drop, Duration, HANDLE, Option, try_acquire_daemon_mutex()
 
-### Community 666 - "Result"
+### Community 667 - "Result"
 Cohesion: 0.32
 Nodes (8): atomic_replace(), daemon_mutex_name(), daemon_mutex_name_for(), restore_control_if_absent(), ExitStatus, Path, Result, run_shell_command()
 
-### Community 667 - "LockedImage"
+### Community 668 - "LockedImage"
 Cohesion: 0.25
 Nodes (6): LockedImage, File, PathBuf, Result, Self, Vec
 
-### Community 668 - ".retry_no_replace_rename"
+### Community 669 - ".retry_no_replace_rename"
 Cohesion: 0.50
 Nodes (4): MountEngine, Error, Result, unresolved()
 
-### Community 669 - "stage"
+### Community 670 - "stage"
 Cohesion: 0.39
 Nodes (7): identity(), File, Path, Result, Vec, stage(), stage_file()
 
-### Community 670 - "uplink_polkit.rs"
+### Community 671 - "uplink_polkit.rs"
 Cohesion: 0.43
 Nodes (6): current_user(), install_rule(), lan_cleanup_task_rule_names_both_actions_and_the_user(), pkexec_available(), Result, rule_text()
 
-### Community 671 - "can_prune"
+### Community 672 - "can_prune"
 Cohesion: 0.39
 Nodes (5): can_prune(), retention_timestamp(), DirectRequestEntry, Result, ShareProfiles
 
-### Community 672 - "direct_fixture"
+### Community 673 - "direct_fixture"
 Cohesion: 0.43
 Nodes (7): concurrent_revision_change_is_not_overwritten(), direct_fixture(), identity(), pending_enable_is_masked_without_advancing_its_revision(), persisted_enable_uses_exact_revision_and_is_idempotent(), ShareIdentity, ShareProfiles
 
-### Community 673 - "dispatch_connection"
+### Community 674 - "dispatch_connection"
 Cohesion: 0.36
 Nodes (6): dispatch_connection(), Arc, Connection, Result, Self, ShareIrohNode
 
-### Community 674 - "replace.rs"
+### Community 675 - "replace.rs"
 Cohesion: 0.36
 Nodes (7): rename(), rename_info(), Connection, Result, Tree, Vec, android_task_smb_rename_information_buffer_layout()
 
-### Community 675 - "unix.rs"
+### Community 676 - "unix.rs"
 Cohesion: 0.32
 Nodes (7): available_space_for_path(), replace_file_atomic(), Metadata, Option, Path, Result, upload_is_link_like()
 
-### Community 676 - "lookup"
+### Community 677 - "lookup"
 Cohesion: 0.32
 Nodes (7): build(), exact_child_key(), lookup(), EntryIndex, Option, VfsMeta, VfsResult
 
-### Community 677 - "lib.rs"
+### Community 678 - "lib.rs"
 Cohesion: 0.38
 Nodes (5): IconData, install_panic_logger(), Result, run_gui(), window_icon()
 
-### Community 678 - "gui_design_task_tests.rs"
+### Community 679 - "gui_design_task_tests.rs"
 Cohesion: 0.33
 Nodes (3): contrast(), gui_design_task_text_control_focus_and_chart_contrast(), Color32
 
-### Community 679 - ".ui_sidebar_connections"
+### Community 680 - ".ui_sidebar_connections"
 Cohesion: 0.43
 Nodes (4): App, Response, Ui, sidebar_button()
 
-### Community 680 - "location_row"
+### Community 681 - "location_row"
 Cohesion: 0.52
 Nodes (5): App, location_row(), Response, Ui, sidebar_row()
 
-### Community 681 - "linux_os.rs"
+### Community 682 - "linux_os.rs"
 Cohesion: 0.38
 Nodes (6): local_path(), read_hidden_line(), PathBuf, Result, same_file(), validate_connection_protocol()
 
-### Community 682 - "mod.rs"
+### Community 683 - "mod.rs"
 Cohesion: 0.38
 Nodes (6): local_path(), read_hidden_line(), PathBuf, Result, same_file(), validate_connection_protocol()
 
-### Community 683 - "set_url_opener"
+### Community 684 - "set_url_opener"
 Cohesion: 0.33
 Nodes (5): Box, Fn, Send, Sync, set_url_opener()
 
-### Community 684 - "host_state.rs"
+### Community 685 - "host_state.rs"
 Cohesion: 0.57
 Nodes (5): decode(), encode(), host_state(), HostState, set_host_state()
 
-### Community 685 - "ipc_host_profile_merge.rs"
+### Community 686 - "ipc_host_profile_merge.rs"
 Cohesion: 0.52
 Nodes (6): contact(), merge_members(), merge_worker_updates(), ShareProfiles, runtime_contact_changed(), worker_runtime_update_preserves_concurrent_user_configuration()
 
-### Community 686 - "Process"
+### Community 687 - "Process"
 Cohesion: 0.38
 Nodes (4): Process, Child, Drop, search_recursive_access_task_authenticated_helper_reuses_read_handles_in_parent()
 
-### Community 687 - ".refresh_targets_with_revisions"
+### Community 688 - ".refresh_targets_with_revisions"
 Cohesion: 0.52
 Nodes (4): MetadataCache, Option, Result, Vec
-
-### Community 688 - "path_text"
-Cohesion: 0.33
-Nodes (6): get_attrs(), is_link_like(), path_text(), Metadata, Option, Path
 
 ### Community 689 - "path_text"
 Cohesion: 0.33
 Nodes (6): get_attrs(), is_link_like(), path_text(), Metadata, Option, Path
 
-### Community 690 - "posix_rename.rs"
+### Community 690 - "path_text"
+Cohesion: 0.33
+Nodes (6): get_attrs(), is_link_like(), path_text(), Metadata, Option, Path
+
+### Community 691 - "posix_rename.rs"
 Cohesion: 0.52
 Nodes (6): posix_rename(), rename_on(), Channel, Msg, Result, RawSftpSession
 
-### Community 691 - "peer_telemetry.rs"
+### Community 692 - "peer_telemetry.rs"
 Cohesion: 0.57
 Nodes (6): remote_drive_task_full_telemetry_channel_never_blocks_peer_operation(), report_exec_success(), report_fs_success(), Instant, Sender, try_emit()
 
-### Community 693 - "profile_edits.rs"
+### Community 694 - "profile_edits.rs"
 Cohesion: 0.48
 Nodes (6): contact(), gui_edit_rebases_without_reverting_worker_runtime_state(), merge_contact(), merge_room(), merge_user_edits(), ShareProfiles
-
-### Community 694 - "identity_lock.rs"
-Cohesion: 0.57
-Nodes (6): acquire(), IdentityLock, open_exclusive(), File, Path, Result
 
 ### Community 695 - "windows.rs"
 Cohesion: 0.71
@@ -3585,134 +3587,138 @@ Nodes (4): LimitExceeded, Display, Formatter, Result
 Cohesion: 0.40
 Nodes (5): label_color(), paint(), Color32, Rect, Ui
 
-### Community 700 - ".ui_sync_jobs"
+### Community 700 - "copy_paste_state_task_tests.rs"
+Cohesion: 0.60
+Nodes (5): copy_paste_task_cancel_and_restart_never_readmit_an_old_result(), copy_paste_task_external_sequence_supersedes_a_pending_result(), copy_paste_task_generation_exhaustion_cannot_reuse_an_old_stamp(), copy_paste_task_pending_admission_requires_current_generation_and_sequence(), task_runner_only()
+
+### Community 701 - ".ui_sync_jobs"
 Cohesion: 0.47
 Nodes (3): App, Context, fmt_ms()
 
-### Community 702 - "ui"
+### Community 703 - "ui"
 Cohesion: 0.40
 Nodes (3): App, App, ui()
 
-### Community 703 - "App"
+### Community 704 - "App"
 Cohesion: 0.47
 Nodes (3): App, Context, Ui
 
-### Community 704 - ".update_table_band_selection"
+### Community 705 - ".update_table_band_selection"
 Cohesion: 0.53
 Nodes (4): App, Pos2, Rect, Ui
 
-### Community 705 - "write_marker"
+### Community 706 - "write_marker"
 Cohesion: 0.53
 Nodes (5): remote_drive_task_empty_complete_recovery_markers_are_cleanup_only(), remote_drive_task_empty_marker_with_real_payload_is_recovery(), remote_drive_task_invalid_or_declared_recovery_fails_closed(), Path, write_marker()
 
-### Community 706 - "App"
+### Community 707 - "App"
 Cohesion: 0.33
 Nodes (3): app_is_foreground(), App, Context
 
-### Community 707 - "RemoteState"
+### Community 708 - "RemoteState"
 Cohesion: 0.60
 Nodes (5): Connected, RemoteState, Arc, BackendHandle, Option
 
-### Community 708 - "stop_locked"
+### Community 709 - "stop_locked"
 Cohesion: 0.60
 Nodes (5): cli_task_worker_stop_ends_tracked_offers(), ensure_can_stop(), Result, stop_locked(), stop_refuses_to_strand_a_pending_profile_commit()
 
-### Community 709 - "line.rs"
+### Community 710 - "line.rs"
 Cohesion: 0.53
 Nodes (5): connected_pair(), read_line_limited_from_stream(), Result, TcpStream, stream_reader_rejects_oversized_line()
 
-### Community 710 - "decode"
+### Community 711 - "decode"
 Cohesion: 0.47
 Nodes (5): decode(), encode(), invalid(), Error, Result
 
-### Community 711 - "copy_paste_task_tests.rs"
+### Community 713 - "copy_paste_task_tests.rs"
 Cohesion: 0.53
 Nodes (5): copy_paste_task_share_cross_export_nested_unicode_and_empty(), copy_paste_task_share_operation_whitespace_is_exact(), copy_paste_task_share_rename_conflict_and_export_authority(), copy_paste_task_share_typed_errors_keep_legacy_compatibility(), Result
 
-### Community 713 - "ensure_firewall_rule_for"
+### Community 715 - "ensure_firewall_rule_for"
 Cohesion: 0.60
 Nodes (5): ensure_firewall_rule(), ensure_firewall_rule_for(), request_firewall_rule_elevated(), Path, Result
 
-### Community 714 - ".report_daemon_control"
+### Community 716 - ".report_daemon_control"
 Cohesion: 0.50
 Nodes (3): App, Result, Ui
 
-### Community 716 - "spawn"
+### Community 718 - "spawn"
 Cohesion: 0.50
 Nodes (4): Path, Result, SocketAddr, spawn()
 
-### Community 717 - "claim_startup_pass"
+### Community 719 - "claim_startup_pass"
 Cohesion: 0.50
 Nodes (3): claim_startup_pass(), Option, startup_pass_due()
 
-### Community 718 - "filters.rs"
+### Community 720 - "filters.rs"
 Cohesion: 0.60
 Nodes (3): is_generic_id(), path_has_skipped_segment(), should_skip()
 
-### Community 720 - ".from"
+### Community 722 - ".from"
 Cohesion: 0.50
 Nodes (4): FsMeta, From, Self, VfsMeta
 
-### Community 721 - "signal_commands_task_tests.rs"
+### Community 723 - "signal_commands_task_tests.rs"
 Cohesion: 0.60
 Nodes (4): direct_grant(), ShareIdentity, share_identity(), share_remote_task_reciprocal_exec_grant_epoch_resynchronizes_coordinator()
 
-### Community 722 - "mirror"
+### Community 724 - "mirror"
 Cohesion: 0.80
 Nodes (4): forward(), mirror(), Path, sync_links_task_quick_mirror_preserves_links_counterparts_and_parent_directories()
 
-### Community 723 - ".new"
+### Community 725 - ".new"
 Cohesion: 0.50
 Nodes (3): Range<T>, Default, Self
 
-### Community 725 - "Breadcrumb"
+### Community 727 - "Breadcrumb"
 Cohesion: 0.67
 Nodes (3): Breadcrumb, breadcrumbs(), Vec
 
-### Community 726 - "share_removed_devices_ui.rs"
+### Community 728 - "share_removed_devices_ui.rs"
 Cohesion: 0.50
 Nodes (3): App, timestamp(), ui()
 
-### Community 728 - "link_fixture.rs"
+### Community 730 - "link_fixture.rs"
 Cohesion: 0.83
 Nodes (3): directory(), remove_directory(), Path
 
-### Community 729 - "link_fixture.rs"
+### Community 731 - "link_fixture.rs"
 Cohesion: 0.83
 Nodes (3): directory(), remove_directory(), Path
 
-### Community 730 - "acquire_daemon_instance_guard"
+### Community 732 - "acquire_daemon_instance_guard"
 Cohesion: 0.50
 Nodes (4): acquire_daemon_instance_guard(), DaemonInstanceGuard, Duration, Option
 
-### Community 731 - "panic_detail"
+### Community 733 - "panic_detail"
 Cohesion: 0.50
 Nodes (4): panic_detail(), Any, Box, Send
 
-### Community 732 - "exit_mount_host"
+### Community 734 - "exit_mount_host"
 Cohesion: 0.83
 Nodes (3): exit_mount_host(), main(), Result
 
-### Community 733 - "adopt"
+### Community 735 - "adopt"
 Cohesion: 0.67
 Nodes (3): adopt(), File, Result
 
-### Community 734 - "IncomingConnectionGuard"
+### Community 736 - "IncomingConnectionGuard"
 Cohesion: 0.50
 Nodes (3): IncomingConnectionGuard, Drop, Weak
 
-### Community 735 - "storage_analysis_task_tests.rs"
+### Community 737 - "storage_analysis_task_tests.rs"
 Cohesion: 0.67
 Nodes (3): Result, windows_remote_task_analysis_cancel_closes_queued_peer_request(), windows_remote_task_analysis_combines_export_roots_and_rejects_escape()
 
-### Community 736 - "header"
+### Community 738 - "header"
 Cohesion: 0.50
 Nodes (4): Vec, wide_payload(), header(), Vec
 
 ## Knowledge Gaps
 - **56 isolated node(s):** `AgentBackend`, `Frame`, `RulesetAttr`, `PathBeneathAttr`, `OpenHow` (+51 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **22 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **23 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Work-memory lessons
 
@@ -3725,17 +3731,17 @@ Nodes (4): Vec, wide_payload(), header(), Vec
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `String` connect `String` to `RoomProfile`, `TaskCtx`, `str_arg`, `SyncOmissions`, `TransferPlan`, `DirectPeerIdentity`, `Loc`, `MountConfig`, `ipc_client.rs`, `App`, `prelude.rs`, `store.rs`, `ExecId`, `CachingBackend`, `Backend`, `BisyncOptions`, `error_tests.rs`, `PendingDirectEvent`, `vault_scheduler_task_tests.rs`, `HandleTable`, `exec_client.rs`, `OptimizationBackend`, `sync_conflicts.rs`, `FsResponse`, `ShareEvent`, `MountDraft`, `IdentityPersistence`, `recovery_manifest.rs`, `ItemRecord`, `fwd`, `UplinkTarget`, `direct_reciprocal_coordinator.rs`, `ListingBackend`, `FeedBackend`, `MountSnapshot`, `copy.rs`, `eio`, `VfsResult`, `support_paths.rs`, `DiscoveryPortError`, `PeerMountLease`, `SftpBackend`, `request_selection.rs`, `ShareAuthState`, `TransferRequest`, `ApiError`, `DirectDecisionKind`, `RelationStoreError`, `AgentBackend`, `SyncStateStore`, `scan.rs`, `PeerEndpoint`, `connection.rs`, `sha256_file`, `io.rs`, `download_clipboard_snapshot`, `VfsResult`, `FilterDef`, `net.rs`, `Baseline`, `VfsResult`, `ipc_storage.rs`, `journal.rs`, `FixtureBackend`, `TaskBackend`, `RootedBackend`, `MountedOptimization`, `DirectRepairPersisted`, `signal_worker.rs`, `Scheme`, `ChangeSource`, `DirectRepairSessionError`, `exec_protocol.rs`, `connection.rs`, `FileEntry`, `exec_ipc.rs`, `HandleRecord`, `acquire_msi`, `PairingBundle`, `DiscoverySignalState`, `TransferMsg`, `BulkLocalBackend`, `resumable.rs`, `DirectGrant`, `RootConfinedLocalBackend`, `write_lock`, `NavigationBackend`, `remote_drive_task_tests.rs`, `io_err`, `DirectLedgerError`, `LandingTile`, `Result`, `discoverable_input.rs`, `linux_file_store.rs`, `invalid`, `MountEngine`, `ProjectedPath`, `CountingBackend`, `discovery_signal_types.rs`, `WebdavBackend`, `ZipBackend`, `IconCache`, `scope.rs`, `windows.rs`, `catch_up.rs`, `ipc_listener.rs`, `edits.rs`, `MetadataCache`, `LoadSlot`, `MetadataBackend`, `ExecRegistry`, `ShareExportConfig`, `TreeBackend`, `MockBackend`, `MountId`, `ConnectForm`, `FaultBackend`, `GDriveBackend`, `linemerge.rs`, `DokanyRuntime`, `LegacyDirectRequestEntry`, `DiscoveryUiState`, `ShareService`, `drive.rs`, `state.rs`, `CallbackStorage`, `WalkState`, `direct_reciprocal.rs`, `tracked_signal_dispatch.rs`, `PeerOpenTarget`, `MappedBackend`, `log`, `exec_systemd.rs`, `CancelIoBackend`, `FixtureBackend`, `JobSupervisor`, `Mux`, `Scanner`, `replace_platform.rs`, `mod.rs`, `target.rs`, `endpoint.rs`, `share_exec.rs`, `MetadataPointCache`, `ShareIrohNode`, `RecordingBackend`, `exec.rs`, `HookBackend`, `.acquire_directory`, `LocalBackend`, `mod.rs`, `DriveObject`, `analyze.rs`, `RacingDirectoryBackend`, `ConflictResolutionTask`, `remote_util.rs`, `platform.rs`, `copy_writer_task_tests.rs`, `callbacks_metadata.rs`, `walk.rs`, `direct_transcript.rs`, `ProfilePersistence`, `WebdavWriter`, `wire.rs`, `api.rs`, `shared.rs`, `VaultTree`, `AnalysisOnly`, `WholeFileSpool`, `UncBackend`, `identity_tests.rs`, `exec_self_test.rs`, `download_file_progress`, `InterfaceFacts`, `platform.rs`, `backend_transfer.rs`, `SearchRelay`, `BlockingBackend`, `cli_swap.rs`, `AgentWriteStream`, `ops.rs`, `put_tree.rs`, `ReclaimItem`, `direct_reciprocal_wire.rs`, `peer_storage_snapshot.rs`, `windows.rs`, `SyntheticSource`, `direct_ledger.rs`, `handoff.rs`, `mount_client.rs`, `ipc_storage.rs`, `cache.rs`, `transfer.rs`, `PreloadTicket`, `Generation`, `linux_os.rs`, `writer.rs`, `local.rs`, `share_value_field`, `args.rs`, `apply_update`, `Sig`, `duplicates.rs`, `ApplicationBundleError`, `ExecStart`, `ExecGrantTarget`, `Progress`, `launch.rs`, `lifecycle_output.rs`, `TreeSource`, `PeerPresence`, `MountProxy`, `CallbackContext`, `io_deadline.rs`, `RoomRelationMaterial`, `archive.rs`, `filter.rs`, `walk.rs`, `signal_connection.rs`, `linux_os.rs`, `ApplyFailure`, `bookkeeping.rs`, `cloud.rs`, `LanRuntime`, `TaskRecord`, `copy_paste_task_tests.rs`, `persistence.rs`, `feed.rs`, `UnavailableInner`, `fs.rs`, `ScanOutcome`, `App`, `reclaim_results_ui.rs`, `DeleteOutcome`, `discovery_events.rs`, `LegacyIntent`, `try_incremental_mirror`, `move_path`, `OwnDiscoveryOffer`, `folder_create_journal.rs`, `places.rs`, `.open_at_root`, `PreloadRecords`, `discovery_signal_exchange.rs`, `session.rs`, `Result`, `signal_commands.rs`, `url.rs`, `sync_run.rs`, `FileData_Impl`, `SmbWriter`, `RemovedEndpointScope`, `linux_os.rs`, `windows.rs`, `ShareStatus`, `connections.rs`, `resolver.rs`, `GDriveBackend`, `tests.rs`, `HandleId`, `nm_shared.rs`, `ExecGrant`, `exec_supervisor_protocol.rs`, `FsAccess`, `mod.rs`, `SmbBackend`, `SwapQueuedDirectory`, `run`, `bad`, `scan_backend_dir`, `PlannedDedupe`, `completions_requests.rs`, `share.rs`, `Watch`, `optimization_runtime_tests.rs`, `exec_auth.rs`, `exec.rs`, `remote_drive_task_mount_lease_tests.rs`, `FsWalkNode`, `delete.rs`, `copy_writer_task_tests.rs`, `Harness`, `agent_error`, `ReclaimProgress`, `remote_context_menu.rs`, `HookBackend`, `MountHostProcess`, `ftp.rs`, `mod.rs`, `start_scan_backend`, `DiscoveryPin`, `migration.rs`, `persistence_codec.rs`, `StagedUpdate`, `staging.rs`, `multistatus.rs`, `StagedWriteCapabilities`, `deploy.rs`, `scan_parallel`, `PickerState`, `process.rs`, `DirectRequestTombstone`, `SearchFailureBackend`, `copy_writer.rs`, `metadata_cache_support.rs`, `CleanCache`, `run_checker`, `optimization_script_callbacks.rs`, `CopyPastePeerFixture`, `DirectReciprocalPeer`, `sync.rs`, `promote_tests.rs`, `checked_job_settings`, `.decode`, `AnalysisReport`, `CountingLocal`, `backend_walk.rs`, `ShareHostState`, `ApplyError`, `live.rs`, `broker.rs`, `tests.rs`, `KeyQueue<K>`, `resolve_peer_child`, `LanPresence`, `TransferProgress`, `session.rs`, `removal.rs`, `FakeQueue`, `ShareHost`, `norm`, `trash.rs`, `open_regular_file`, `lan_uplink_policy.rs`, `known_hosts.rs`, `PeerWriter`, `promotion.rs`, `exec.rs`, `PendingDiff`, `WireNode`, `Item`, `copy_paste_task_tests.rs`, `completions.rs`, `windows.rs`, `ListingFailure`, `HostSettings`, `BackendPool`, `ServerFrame`, `removed_direct_peers.rs`, `write_file`, `exec_proc.rs`, `windows.rs`, `App`, `ColorMode`, `doctor.rs`, `share_peer.rs`, `exports.rs`, `requests_inbox.rs`, `update.rs`, `FtpBackend`, `.submit_reserved_folder`, `tests.rs`, `EntryTable`, `mounted_volume_task_trace.rs`, `collect.rs`, `public_fingerprint`, `handshake_limits.rs`, `lifecycle_view.rs`, `validation.rs`, `tests.rs`, `RootConfinement`, `analytics.rs`, `analytics_access.rs`, `join_save_worker`, `dirs_home`, `status_errors.rs`, `tree_preflight_tests.rs`, `UplinkRuntime`, `MountProxyIdentity`, `mount_registry.rs`, `index.rs`, `RetirementQueue`, `metadata_cache_order.rs`, `path.rs`, `crypto.rs`, `DirectContact`, `receive_walk`, `startup_ack.rs`, `extract.rs`, `FailingBackend`, `App`, `grants_exec.rs`, `SavedConnection`, `UnavailableBackend`, `job.rs`, `.walk`, `promotion_api.rs`, `linux_os.rs`, `import.rs`, `vault_volume_enumeration.rs`, `RuntimeConfiguration`, `EndpointRoutes`, `ShareProfiles`, `signal_configure_tests.rs`, `listing.rs`, `sync_delete.rs`, `Capture`, `DeleteReporter`, `App`, `App`, `share_discovery_ui.rs`, `location_prefs.rs`, `exec_status.rs`, `Provider`, `linux_os.rs`, `exec_grant_journal.rs`, `ipc_analysis.rs`, `connection_tests.rs`, `connection_events.rs`, `direct_protocol_tests.rs`, `storage_analysis_server.rs`, `sync_tests.rs`, `InvalidatingWriter`, `job_json.rs`, `share_lifecycle_ui.rs`, `win32_names.rs`, `windows.rs`, `platform.rs`, `mutation_reconcile_tests.rs`, `uplink_helper.rs`, `support_dirs.rs`, `JobEditor`, `Observation`, `ValidatedRelativePath`, `App`, `handle_get_tree_backend`, `ipc_protocol_tests.rs`, `RequestWorkers`, `build_index`, `update.rs`, `exec_registry_tests.rs`, `PeerReader`, `results.rs`, `connection_tests.rs`, `drain_scan_channel`, `bind_legacy_parent`, `lan.rs`, `WorkerRefresh`, `durability.rs`, `FixtureGate`, `share_remote_discovery_task_tests.rs`, `verify_sha256`, `handle_walk_hashed`, `verify.rs`, `DiscoveryListEntry`, `status.rs`, `transfer.rs`, `path_guard.rs`, `FolderIndex`, `IndexMsg`, `state.rs`, `fs_error.rs`, `peer_storage_analysis.rs`, `MarkerPersistence`, `legacy_direct_actions.rs`, `terminal.rs`, `feed_files.rs`, `.new_inner`, `search_recursive_access_task.rs`, `instance.rs`, `discoverable_output.rs`, `windows.rs`, `JournalEntry`, `tests.rs`, `elevation.rs`, `ExchangeState`, `write.rs`, `.upload`, `interfaces.rs`, `delete_hostile_names.rs`, `App`, `apply_transfer_tests.rs`, `share_values`, `clipboard_snapshot`, `paths.rs`, `interfaces.rs`, `QuickShare`, `appdata_dir`, `verbatim.rs`, `search.rs`, `check_and_stage`, `path_safety.rs`, `windows.rs`, `rooted_backend_paths.rs`, `url.rs`, `LanSettings`, `LanStatus`, `signal_subscriptions.rs`, `send_pending_tracked_with`, `DiscoveryPinDraft`, `App`, `finish_success`, `.launch_bisync`, `table_accessibility.rs`, `se.rs`, `identity_command.rs`, `token_persistence.rs`, `protocol.rs`, `ics.rs`, `SignalLineReader`, `PeerMountLeaseClient`, `.update`, `read_files`, `send_done`, `commit_secret_and_metadata`, `App`, `share_legacy_lifecycle_ui.rs`, `App`, `unlink_and_sync_with_recovery`, `prepare`, `guarded`, `.load`, `copy_stream`, `windows.rs`, `windows_test_namespace.rs`, `.start_clipboard_upload`, `ensure_embedded_daemon`, `Result`, `LockedImage`, `.retry_no_replace_rename`, `stage`, `uplink_polkit.rs`, `lookup`, `linux_os.rs`, `mod.rs`, `.refresh_targets_with_revisions`, `path_text`, `path_text`, `peer_telemetry.rs`, `.ui_sync_jobs`, `RemoteState`, `stop_locked`, `line.rs`, `decode`, `ensure_firewall_rule_for`, `mirror`, `Breadcrumb`, `share_removed_devices_ui.rs`, `panic_detail`, `exit_mount_host`, `adopt`?**
+- **Why does `String` connect `String` to `str_arg`, `TaskCtx`, `MountConfig`, `SyncOmissions`, `TransferPlan`, `DirectPeerIdentity`, `Loc`, `RoomProfile`, `ipc_client.rs`, `ApiError`, `App`, `store.rs`, `prelude.rs`, `ExecId`, `CachingBackend`, `Backend`, `BisyncOptions`, `error_tests.rs`, `PendingDirectEvent`, `vault_scheduler_task_tests.rs`, `exec_client.rs`, `OptimizationBackend`, `sync_conflicts.rs`, `FsResponse`, `ShareEvent`, `IdentityPersistence`, `DokanFileInfo`, `MountPathCapabilities`, `recovery_manifest.rs`, `ItemRecord`, `fwd`, `UplinkTarget`, `direct_reciprocal_coordinator.rs`, `ListingBackend`, `FeedBackend`, `MountSnapshot`, `copy.rs`, `eio`, `VfsResult`, `support_paths.rs`, `DiscoveryPortError`, `PeerMountLease`, `SftpBackend`, `ShareAuthState`, `TransferRequest`, `DirectDecisionKind`, `RelationStoreError`, `AgentBackend`, `SyncStateStore`, `scan.rs`, `PeerEndpoint`, `MountedFixture`, `invalid`, `connection.rs`, `sha256_file`, `VfsResult`, `FilterDef`, `io.rs`, `net.rs`, `Baseline`, `VfsResult`, `ipc_storage.rs`, `journal.rs`, `FixtureBackend`, `TaskBackend`, `RootedBackend`, `MountedOptimization`, `crypto.rs`, `DirectRepairPersisted`, `signal_worker.rs`, `PeerOpenTarget`, `DirectGrant`, `ChangeSource`, `write_lock`, `HandleTable`, `DirectRepairSessionError`, `exec_protocol.rs`, `connection.rs`, `Scheme`, `FileEntry`, `exec_ipc.rs`, `HandleRecord`, `acquire_msi`, `PairingBundle`, `DiscoverySignalState`, `TransferMsg`, `BulkLocalBackend`, `resumable.rs`, `download_clipboard_snapshot`, `RootConfinedLocalBackend`, `NavigationBackend`, `remote_drive_task_tests.rs`, `DirectLedgerError`, `LandingTile`, `Result`, `discoverable_input.rs`, `linux_file_store.rs`, `MountEngine`, `CountingBackend`, `discovery_signal_types.rs`, `WebdavBackend`, `ZipBackend`, `IconCache`, `scope.rs`, `windows.rs`, `MountId`, `LegacyDirectRequestEntry`, `catch_up.rs`, `ipc_listener.rs`, `edits.rs`, `MetadataCache`, `LoadSlot`, `MetadataBackend`, `ExecRegistry`, `ShareExportConfig`, `TreeBackend`, `MockBackend`, `ConnectForm`, `FaultBackend`, `GDriveBackend`, `linemerge.rs`, `CallbackContext`, `DokanyRuntime`, `direct_reciprocal.rs`, `DiscoveryUiState`, `drive.rs`, `state.rs`, `WalkState`, `tracked_signal_dispatch.rs`, `MappedBackend`, `log`, `win32`, `exec_systemd.rs`, `CancelIoBackend`, `FixtureBackend`, `JobSupervisor`, `Mux`, `Scanner`, `replace_platform.rs`, `mod.rs`, `target.rs`, `endpoint.rs`, `share_exec.rs`, `MetadataPointCache`, `CallbackStorage`, `ShareIrohNode`, `RecordingBackend`, `exec.rs`, `HookBackend`, `.acquire_directory`, `LocalBackend`, `mod.rs`, `DriveObject`, `RacingDirectoryBackend`, `ConflictResolutionTask`, `remote_util.rs`, `platform.rs`, `copy_writer_task_tests.rs`, `walk.rs`, `direct_transcript.rs`, `WebdavWriter`, `wire.rs`, `api.rs`, `shared.rs`, `VaultTree`, `AnalysisOnly`, `WholeFileSpool`, `UncBackend`, `identity_tests.rs`, `exec_self_test.rs`, `download_file_progress`, `InterfaceFacts`, `ops.rs`, `put_tree.rs`, `MountUiState`, `platform.rs`, `backend_transfer.rs`, `SearchRelay`, `BlockingBackend`, `cli_swap.rs`, `AgentWriteStream`, `ReclaimItem`, `direct_reciprocal_wire.rs`, `peer_storage_snapshot.rs`, `windows.rs`, `SyntheticSource`, `direct_ledger.rs`, `request_selection.rs`, `handoff.rs`, `mount_client.rs`, `ipc_storage.rs`, `cache.rs`, `transfer.rs`, `PreloadTicket`, `Generation`, `linux_os.rs`, `writer.rs`, `local.rs`, `share_value_field`, `args.rs`, `apply_update`, `Sig`, `duplicates.rs`, `ApplicationBundleError`, `ExecStart`, `ExecGrantTarget`, `Progress`, `analytics.rs`, `App`, `launch.rs`, `lifecycle_output.rs`, `TreeSource`, `PeerPresence`, `MountProxy`, `io_deadline.rs`, `RoomRelationMaterial`, `archive.rs`, `sync_run.rs`, `filter.rs`, `walk.rs`, `signal_connection.rs`, `linux_os.rs`, `ApplyFailure`, `bookkeeping.rs`, `cloud.rs`, `LanRuntime`, `TaskRecord`, `copy_paste_task_tests.rs`, `persistence.rs`, `feed.rs`, `UnavailableInner`, `fs.rs`, `ScanOutcome`, `reclaim_results_ui.rs`, `DeleteOutcome`, `discovery_events.rs`, `LegacyIntent`, `try_incremental_mirror`, `move_path`, `OwnDiscoveryOffer`, `folder_create_journal.rs`, `places.rs`, `.open_at_root`, `PreloadRecords`, `discovery_signal_exchange.rs`, `session.rs`, `Result`, `ProfilePersistence`, `signal_commands.rs`, `url.rs`, `FileData_Impl`, `SmbWriter`, `RemovedEndpointScope`, `linux_os.rs`, `windows.rs`, `ShareStatus`, `connections.rs`, `resolver.rs`, `GDriveBackend`, `tests.rs`, `HandleId`, `nm_shared.rs`, `ExecGrant`, `exec_supervisor_protocol.rs`, `FsAccess`, `mod.rs`, `SmbBackend`, `SwapQueuedDirectory`, `run`, `bad`, `scan_backend_dir`, `PlannedDedupe`, `completions_requests.rs`, `share.rs`, `Watch`, `optimization_runtime_tests.rs`, `exec_auth.rs`, `exec.rs`, `remote_drive_task_mount_lease_tests.rs`, `FsWalkNode`, `delete.rs`, `copy_writer_task_tests.rs`, `Harness`, `agent_error`, `ReclaimProgress`, `remote_context_menu.rs`, `HookBackend`, `MountHostProcess`, `ftp.rs`, `mod.rs`, `start_scan_backend`, `SftpWriter`, `DiscoveryPin`, `migration.rs`, `persistence_codec.rs`, `StagedUpdate`, `staging.rs`, `multistatus.rs`, `StagedWriteCapabilities`, `deploy.rs`, `PickerState`, `process.rs`, `DirectRequestTombstone`, `copy_writer.rs`, `metadata_cache_support.rs`, `CleanCache`, `optimization_script_callbacks.rs`, `CopyPastePeerFixture`, `sync.rs`, `promote_tests.rs`, `checked_job_settings`, `.decode`, `AnalysisReport`, `CountingLocal`, `SearchFailureBackend`, `backend_walk.rs`, `ShareHostState`, `ApplyError`, `live.rs`, `broker.rs`, `tests.rs`, `ProjectedPath`, `KeyQueue<K>`, `resolve_peer_child`, `DirectReciprocalPeer`, `LanPresence`, `TransferProgress`, `session.rs`, `removal.rs`, `requests.rs`, `FakeQueue`, `ShareHost`, `norm`, `trash.rs`, `lan_uplink_policy.rs`, `known_hosts.rs`, `PeerWriter`, `promotion.rs`, `exec.rs`, `PendingDiff`, `WireNode`, `Item`, `copy_paste_task_tests.rs`, `completions.rs`, `windows.rs`, `ListingFailure`, `HostSettings`, `BackendPool`, `ServerFrame`, `removed_direct_peers.rs`, `write_file`, `exec_proc.rs`, `windows.rs`, `App`, `ColorMode`, `doctor.rs`, `share_peer.rs`, `exports.rs`, `update.rs`, `FtpBackend`, `.submit_reserved_folder`, `tests.rs`, `EntryTable`, `mounted_volume_task_trace.rs`, `collect.rs`, `public_fingerprint`, `handshake_limits.rs`, `lifecycle_view.rs`, `validation.rs`, `tests.rs`, `RootConfinement`, `analytics_access.rs`, `join_save_worker`, `dirs_home`, `status_errors.rs`, `requests_inbox.rs`, `tree_preflight_tests.rs`, `UplinkRuntime`, `mount_registry.rs`, `index.rs`, `RetirementQueue`, `metadata_cache_order.rs`, `path.rs`, `DirectContact`, `receive_walk`, `startup_ack.rs`, `extract.rs`, `FailingBackend`, `App`, `grants_exec.rs`, `SavedConnection`, `UnavailableBackend`, `job.rs`, `.walk`, `promotion_api.rs`, `linux_os.rs`, `import.rs`, `vault_volume_enumeration.rs`, `io_err`, `RuntimeConfiguration`, `EndpointRoutes`, `ShareProfiles`, `signal_configure_tests.rs`, `listing.rs`, `sync_delete.rs`, `Capture`, `DeleteReporter`, `App`, `App`, `share_discovery_ui.rs`, `location_prefs.rs`, `exec_status.rs`, `Provider`, `linux_os.rs`, `exec_grant_journal.rs`, `ipc_analysis.rs`, `connection_tests.rs`, `connection_events.rs`, `direct_protocol_tests.rs`, `storage_analysis_server.rs`, `sync_tests.rs`, `InvalidatingWriter`, `job_json.rs`, `share_lifecycle_ui.rs`, `win32_names.rs`, `windows.rs`, `platform.rs`, `mutation_reconcile_tests.rs`, `uplink_helper.rs`, `support_dirs.rs`, `JobEditor`, `Observation`, `ValidatedRelativePath`, `App`, `handle_get_tree_backend`, `ipc_protocol_tests.rs`, `RequestWorkers`, `build_index`, `update.rs`, `exec_registry_tests.rs`, `PeerReader`, `results.rs`, `connection_tests.rs`, `drain_scan_channel`, `bind_legacy_parent`, `lan.rs`, `WorkerRefresh`, `durability.rs`, `FixtureGate`, `share_remote_discovery_task_tests.rs`, `verify_sha256`, `handle_walk_hashed`, `scan_parallel`, `verify.rs`, `DiscoveryListEntry`, `status.rs`, `transfer.rs`, `path_guard.rs`, `FolderIndex`, `IndexMsg`, `state.rs`, `fs_error.rs`, `peer_storage_analysis.rs`, `MarkerPersistence`, `legacy_direct_actions.rs`, `terminal.rs`, `feed_files.rs`, `.new_inner`, `search_recursive_access_task.rs`, `instance.rs`, `discoverable_output.rs`, `windows.rs`, `JournalEntry`, `tests.rs`, `elevation.rs`, `ExchangeState`, `write.rs`, `.upload`, `interfaces.rs`, `delete_hostile_names.rs`, `App`, `apply_transfer_tests.rs`, `share_values`, `clipboard_snapshot`, `paths.rs`, `interfaces.rs`, `QuickShare`, `appdata_dir`, `verbatim.rs`, `search.rs`, `check_and_stage`, `path_safety.rs`, `windows.rs`, `rooted_backend_paths.rs`, `url.rs`, `LanSettings`, `LanStatus`, `signal_subscriptions.rs`, `send_pending_tracked_with`, `DiscoveryPinDraft`, `App`, `finish_success`, `.launch_bisync`, `table_accessibility.rs`, `se.rs`, `identity_command.rs`, `token_persistence.rs`, `protocol.rs`, `ics.rs`, `SignalLineReader`, `PeerMountLeaseClient`, `.update`, `read_files`, `send_done`, `commit_secret_and_metadata`, `App`, `share_legacy_lifecycle_ui.rs`, `App`, `unlink_and_sync_with_recovery`, `prepare`, `guarded`, `.load`, `copy_stream`, `windows.rs`, `windows_test_namespace.rs`, `.start_clipboard_upload`, `invalid`, `ensure_embedded_daemon`, `Result`, `LockedImage`, `.retry_no_replace_rename`, `stage`, `uplink_polkit.rs`, `lookup`, `linux_os.rs`, `mod.rs`, `.refresh_targets_with_revisions`, `path_text`, `path_text`, `peer_telemetry.rs`, `.ui_sync_jobs`, `RemoteState`, `stop_locked`, `line.rs`, `decode`, `ensure_firewall_rule_for`, `mirror`, `Breadcrumb`, `share_removed_devices_ui.rs`, `panic_detail`, `exit_mount_host`, `adopt`?**
   _High betweenness centrality (0.749) - this node is a cross-community bridge._
-- **Why does `ApiError` connect `ApiError` to `TaskCtx`, `str_arg`, `update.rs`, `String`, `Loc`, `HostSettings`, `BackendPool`, `places.rs`, `guarded`, `sync_run.rs`, `sync_conflicts.rs`, `connections.rs`, `share_exec.rs`, `tests.rs`, `tests.rs`, `analyze.rs`, `dispatch`, `sync_jobs.rs`, `index.rs`, `scan.rs`, `import.rs`, `tests.rs`, `invalid`, `edits.rs`, `trash.rs`?**
+- **Why does `ApiError` connect `ApiError` to `str_arg`, `TaskCtx`, `String`, `update.rs`, `Loc`, `HostSettings`, `BackendPool`, `places.rs`, `guarded`, `sync_conflicts.rs`, `share_exec.rs`, `connections.rs`, `tests.rs`, `tests.rs`, `dispatch`, `sync_jobs.rs`, `index.rs`, `scan.rs`, `invalid`, `import.rs`, `tests.rs`, `trash.rs`, `sync_run.rs`, `edits.rs`?**
   _High betweenness centrality (0.032) - this node is a cross-community bridge._
-- **Why does `Backend` connect `Backend` to `TaskCtx`, `SyncOmissions`, `TransferPlan`, `Loc`, `CachingBackend`, `BisyncOptions`, `error_tests.rs`, `OptimizationBackend`, `sync_conflicts.rs`, `verify_and_delete_source`, `ItemRecord`, `fwd`, `ListingBackend`, `FeedBackend`, `eio`, `VfsResult`, `PeerMountLease`, `SftpBackend`, `AgentBackend`, `download_clipboard_snapshot`, `VfsResult`, `FilterDef`, `Baseline`, `VfsResult`, `FixtureBackend`, `TaskBackend`, `RootedBackend`, `.upload`, `delete_hostile_names.rs`, `ChangeSource`, `CountWrites`, `TransferMsg`, `BulkLocalBackend`, `RootConfinedLocalBackend`, `NavigationBackend`, `remote_drive_task_tests.rs`, `CountingBackend`, `WebdavBackend`, `ZipBackend`, `.open_host_cache`, `MetadataBackend`, `ShareExportConfig`, `TreeBackend`, `MockBackend`, `FaultBackend`, `GDriveBackend`, `MappedBackend`, `copy_stream`, `CancelIoBackend`, `FixtureBackend`, `RecordingBackend`, `HookBackend`, `LocalBackend`, `RacingDirectoryBackend`, `remote_util.rs`, `VaultTree`, `AnalysisOnly`, `UncBackend`, `download_file_progress`, `BlockingBackend`, `ops.rs`, `SyntheticSource`, `Sig`, `TreeSource`, `MountProxy`, `UnavailableInner`, `try_incremental_mirror`, `SmbBackend`, `SwapQueuedDirectory`, `PlannedDedupe`, `delete.rs`, `HookBackend`, `deploy.rs`, `scan_parallel`, `SearchFailureBackend`, `sync.rs`, `CountingLocal`, `ListingFailure`, `FtpBackend`, `RootConfinement`, `MountProxyIdentity`, `FailingBackend`, `UnavailableBackend`, `sync_delete.rs`?**
+- **Why does `Backend` connect `Backend` to `TaskCtx`, `SyncOmissions`, `TransferPlan`, `Loc`, `CachingBackend`, `BisyncOptions`, `error_tests.rs`, `OptimizationBackend`, `sync_conflicts.rs`, `scan_parallel`, `verify_and_delete_source`, `ItemRecord`, `fwd`, `ListingBackend`, `FeedBackend`, `eio`, `VfsResult`, `PeerMountLease`, `SftpBackend`, `AgentBackend`, `VfsResult`, `FilterDef`, `Baseline`, `VfsResult`, `FixtureBackend`, `TaskBackend`, `RootedBackend`, `.upload`, `delete_hostile_names.rs`, `ChangeSource`, `CountWrites`, `Scheme`, `TransferMsg`, `BulkLocalBackend`, `download_clipboard_snapshot`, `RootConfinedLocalBackend`, `NavigationBackend`, `remote_drive_task_tests.rs`, `CountingBackend`, `WebdavBackend`, `ZipBackend`, `.open_host_cache`, `MetadataBackend`, `ShareExportConfig`, `TreeBackend`, `MockBackend`, `FaultBackend`, `GDriveBackend`, `MappedBackend`, `copy_stream`, `CancelIoBackend`, `FixtureBackend`, `RecordingBackend`, `HookBackend`, `LocalBackend`, `RacingDirectoryBackend`, `remote_util.rs`, `VaultTree`, `AnalysisOnly`, `UncBackend`, `download_file_progress`, `ops.rs`, `BlockingBackend`, `SyntheticSource`, `Sig`, `TreeSource`, `MountProxy`, `UnavailableInner`, `try_incremental_mirror`, `SmbBackend`, `SwapQueuedDirectory`, `PlannedDedupe`, `delete.rs`, `HookBackend`, `deploy.rs`, `sync.rs`, `CountingLocal`, `SearchFailureBackend`, `ListingFailure`, `FtpBackend`, `RootConfinement`, `FailingBackend`, `UnavailableBackend`, `sync_delete.rs`?**
   _High betweenness centrality (0.028) - this node is a cross-community bridge._
 - **Are the 115 inferred relationships involving `eio()` (e.g. with `.copy_file()` and `.exec()`) actually correct?**
   _`eio()` has 115 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `AgentBackend`, `Frame`, `RulesetAttr` to the rest of the system?**
   _56 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `RoomProfile` be split into smaller, more focused modules?**
-  _Cohesion score 0.04085180356366797 - nodes in this community are weakly interconnected._
+- **Should `str_arg` be split into smaller, more focused modules?**
+  _Cohesion score 0.05901389682086427 - nodes in this community are weakly interconnected._
 - **Should `TaskCtx` be split into smaller, more focused modules?**
   _Cohesion score 0.04173946806445351 - nodes in this community are weakly interconnected._
