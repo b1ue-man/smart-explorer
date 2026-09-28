@@ -5,6 +5,8 @@ use crate::mount::MountRuntimePreference;
 use crate::share::CopyPastePeerFixture;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
 struct MountedPeer {
     filesystem: Option<DokanyFileSystem>,
@@ -25,16 +27,20 @@ impl Drop for MountedPeer {
 #[ignore = "requires the remote Windows task runner and pinned Dokany runtime"]
 fn windows_remote_task_actual_drive_mounts_case_colliding_share_roots() -> io::Result<()> {
     assert_eq!(std::env::var("SMART_EXPLORER_WINDOWS_REMOTE_TASK").as_deref(), Ok("1"));
+    assert_eq!(std::env::var("SMART_EXPLORER_DOKANY_DLL_SHA256").as_deref(),
+        Ok(super::super::private_payload::BUNDLED_DOKANY_SHA256));
     // Exercise the observed intermittent native failure in the same bounded
     // acceptance case, including repeated runtime creation and teardown.
-    for attempt in 1..=4 {
-        eprintln!("[remote mount] lifecycle {attempt}/4");
-        exercise_volume()?;
+    for preference in [MountRuntimePreference::Auto, MountRuntimePreference::System] {
+        for attempt in 1..=4 {
+            eprintln!("[remote mount] {preference:?} lifecycle {attempt}/4");
+            exercise_volume(preference)?;
+        }
     }
     Ok(())
 }
 
-fn exercise_volume() -> io::Result<()> {
+fn exercise_volume(preference: MountRuntimePreference) -> io::Result<()> {
     eprintln!("[remote mount] peer setup");
     let peer = CopyPastePeerFixture::with_labels(["Docs", "docs"])?;
     eprintln!("[remote mount] peer ready");
@@ -51,14 +57,16 @@ fn exercise_volume() -> io::Result<()> {
     engine.prepare_host_remote()?;
     engine.preload_metadata()?;
     eprintln!("[remote mount] metadata loaded");
-    let selection = RuntimeSelection::select(&spool, &id, MountRuntimePreference::Auto)
+    let selection = RuntimeSelection::select(&spool, &id, preference)
         .map_err(|error| io::Error::other(format!("Dokany preflight: {error:?}")))?;
     let runtime = &selection.runtime;
-    assert!(runtime.is_private());
+    let private = preference == MountRuntimePreference::Auto;
+    assert_eq!(runtime.is_private(), private, "runtime must not silently fall back");
+    let loaded: Vec<u16> = runtime.loaded_path()?.as_os_str().encode_wide().chain(Some(0)).collect();
     let marker = spool.join(id.as_str()).join(format!("private-{}.attempt",
         super::super::private_payload::BUNDLED_DOKANY_SHA256));
-    assert!(marker.exists(), "private runtime recovery marker missing");
-    eprintln!("[remote mount] private runtime ready");
+    assert_eq!(marker.exists(), private, "incorrect private runtime recovery marker");
+    eprintln!("[remote mount] runtime ready");
     let candidates = drive_candidates(DriveSelection::Automatic).map_err(io::Error::other)?;
     let initial = *candidates.first().ok_or_else(|| io::Error::other("no unused drive letter"))?;
     let (send, statuses) = mpsc::channel();
@@ -67,7 +75,7 @@ fn exercise_volume() -> io::Result<()> {
         super::super::metadata::volume_serial(id.as_str()), absolute_path_wide(&spool)?)?);
     let mut storage = CallbackStorage::new(context, true);
     eprintln!("[remote mount] create filesystem");
-    let filesystem = start_on_available_drive(&runtime, &mut storage, &candidates)
+    let filesystem = start_on_available_drive(runtime, &mut storage, &candidates)
         .map_err(|error| io::Error::other(format!("Dokany start: {error:?}")))?;
     let volume = MountedPeer { filesystem: Some(filesystem), storage };
     eprintln!("[remote mount] filesystem created");
@@ -87,12 +95,39 @@ fn exercise_volume() -> io::Result<()> {
     contents.sort();
     assert_eq!(contents, [b"lower".to_vec(), b"upper".to_vec()]);
     assert!(!volume.storage.context.stop_requested());
-    drop(volume);
+    std::thread::scope(|scope| -> io::Result<()> {
+        let (ready, started) = mpsc::channel();
+        let mut readers = Vec::new();
+        for _ in 0..4 {
+            let path = root.clone();
+            let ready = ready.clone();
+            readers.push(scope.spawn(move || -> io::Result<()> {
+                let _ = std::fs::read_dir(&path)?.collect::<io::Result<Vec<_>>>()?;
+                ready.send(()).map_err(io::Error::other)?;
+                for _ in 0..64 {
+                    let Ok(entries) = std::fs::read_dir(&path) else { break };
+                    if entries.collect::<io::Result<Vec<_>>>().is_err() { break; }
+                }
+                Ok(())
+            }));
+        }
+        for _ in 0..4 {
+            started.recv_timeout(Duration::from_secs(10)).map_err(io::Error::other)?;
+        }
+        // Close while real kernel directory requests can still be in flight.
+        drop(volume);
+        for reader in readers {
+            reader.join().map_err(|_| io::Error::other("concurrent drive reader panicked"))??;
+        }
+        Ok(())
+    })?;
     assert!(!root.exists(), "mounted drive did not retire");
     eprintln!("[remote mount] drive retired");
-    assert!(marker.exists(), "recovery marker removed before runtime teardown");
+    assert_eq!(marker.exists(), private, "recovery marker changed before runtime teardown");
     selection.complete();
     assert!(!marker.exists(), "controlled teardown did not clear the owned marker");
+    let still_loaded = !unsafe { GetModuleHandleW(loaded.as_ptr()) }.is_null();
+    assert_eq!(still_loaded, !private, "incorrect callback-code lifetime after teardown");
     eprintln!("[remote mount] runtime retired");
     drop(lease);
     temporary.close()?;

@@ -32,6 +32,8 @@ function Start-WindowsRemoteTaskDumpMonitor {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::Unicode
+    $start.StandardErrorEncoding = [Text.Encoding]::Unicode
     foreach ($argument in @('-accepteula', '-mm', '-e', '-n', '1', '-at', '15', [string]$ProcessId, $folder)) {
         $start.ArgumentList.Add($argument)
     }

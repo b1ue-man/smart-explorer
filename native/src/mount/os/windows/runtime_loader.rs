@@ -9,7 +9,9 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{FreeLibrary, GetLastError, ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, HMODULE},
     System::LibraryLoader::{
-        GetModuleFileNameW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        GetModuleFileNameW, GetModuleHandleExW, GetProcAddress, LoadLibraryExW,
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN,
+        LOAD_LIBRARY_SEARCH_SYSTEM32,
     },
 };
 
@@ -66,6 +68,21 @@ impl LoadedModule {
             return Err(io::Error::other("loaded DLL pathname exceeds Windows limit"));
         }
         Ok(PathBuf::from(OsString::from_wide(&path[..length as usize])))
+    }
+
+    pub(super) fn retain_official_callbacks_until_exit(&self) -> Result<(), u32> {
+        // Official 2.3.1 can return from close/shutdown before its asynchronous
+        // volume broadcast returns. That callback uses encoded event data only,
+        // but its code must remain mapped until this isolated host exits. Pin
+        // the exact loaded System32 image by address, never a searched name.
+        let mut pinned = null_mut();
+        if unsafe { GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            self.handle.cast(), &mut pinned,
+        ) } == 0 {
+            return Err(unsafe { GetLastError() });
+        }
+        Ok(())
     }
 
     pub(super) fn symbol(

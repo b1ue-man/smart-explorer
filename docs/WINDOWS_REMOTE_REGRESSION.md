@@ -192,6 +192,50 @@ cache ownership throughout, and exercise the production selection/completion
 path in the real-volume case. The runtime must remain explicitly private in
 that case, so compatibility fallback cannot conceal a private-runtime failure.
 
+## Teardown evidence and final repair boundary
+
+The [1a3273f dump](https://github.com/b1ue-man/smart-explorer/actions/runs/36431808950)
+records an execute access violation at unloaded `smart-explorer-dokan2.dll`
+RVA `0x9aa3`. Disassembly of the exact approved DLL maps that address to the
+return from `BroadcastSystemMessage` inside `DokanBroadcastCallback` (entry
+`0x9a20`). Runtime destruction had already returned. This is direct evidence of
+code unloading while a notification callback is still executing.
+
+Source review identifies the race: one I/O worker owns `DokanNotifyUnmounted`,
+but every failing worker signals `DeviceClosedWaitHandle`. Another worker can
+therefore start cleanup before the owner has queued its notification. Windows
+documents that new members created during `CloseThreadpoolCleanupGroupMembers`
+need synchronization and can miss that cleanup operation.
+
+M11 extends the same task suite and the existing dependency preparation path:
+
+- In `native/dokany-private/batching.patch`, only the notification owner signals
+  device closure after submitting notifications. Serialize work creation and
+  submission with a per-instance closing flag, set before cleanup begins.
+  Rejected I/O work returns its batch/event resources without invoking a new
+  filesystem callback. Private shutdown must then drain callbacks before unload.
+- The official non-batched System32 fallback cannot receive this source patch.
+  Before it creates any filesystem callbacks, pin that already loaded module
+  by address until the isolated mount-host process exits. Filesystems, pools,
+  cache and callback context still close normally; the late notification uses
+  only its encoded event data. Preflight without filesystem creation stays
+  unloadable. The corrected private DLL remains normally unloadable.
+- Extend the real-volume case with concurrent directory requests during close,
+  repeated private and official lifecycles, private unload and recovery-marker
+  completion checks. Keep all prior Direct analysis/repair cases in this suite.
+- The same remote entrypoint uses `prepare-dokany-private.ps1` only for this
+  affected dependency, caches its exact recipe-bound output, then embeds its
+  verified hash in the single incremental library target. Successful acceptance
+  retains that exact DLL/manifest/source set for the terminal release; release
+  never rebuilds the dependency. No extra workflow or local build is introduced.
+
+Gap review completed 2026-09-28 against the pinned C source and Microsoft
+[cleanup-group synchronization](https://learn.microsoft.com/en-us/windows/win32/api/threadpoolapiset/nf-threadpoolapiset-closethreadpoolcleanupgroupmembers),
+[module pinning](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw)
+and callback-lifetime documentation. The acceptance signal is normal completion
+of the entire existing suite with these lifecycles, exact dependency hashes and
+no native crash. The old dump remains failure evidence, not acceptance.
+
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least
 30 minutes; terminal release uses the existing six-hour remote job and

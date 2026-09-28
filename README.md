@@ -238,6 +238,15 @@ Erholung von einem Live-Hänger. Eine Zertifizierung der tatsächlichen
 Obsidian-Anwendung oder sämtlicher Remote-Transporte sowie ein gemessener
 Geschwindigkeitsgewinn werden damit nicht behauptet.
 
+Der aktuelle, noch nicht veröffentlichte Regressionskandidat korrigiert außerdem
+das Beenden der privaten Runtime: Benachrichtigungen werden vollständig in die
+Aufräumgrenze einbezogen, bevor die DLL entladen wird. Bei der unveränderten
+System-Runtime bleibt deren bereits geladener Code nach einer Einbindung bis
+zum Ende des separaten Mount-Prozesses im Speicher; Laufwerk, Cache und
+Dateisystem-Callbacks werden regulär beendet. Der Wiederholungsmarker wird erst
+nach dem Abschluss der Runtime entfernt. Die Abnahme ist in der
+[Windows-Regressionsdokumentation](docs/WINDOWS_REMOTE_REGRESSION.md) festgehalten.
+
 Die Wurzelisolation ist unabhängig vom Schreibmodus standardmäßig strikt. Bei
 einem SFTP-Ziel verlangt ein solcher Mount eine gespeicherte Verbindung mit
 aktiviertem, erfolgreich gestartetem Linux-SSH-Agent; ein Agent-Fehler wird

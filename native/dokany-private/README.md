@@ -9,8 +9,8 @@ of Dokany. The corrected DLL still uses API 231 and driver protocol 0x190/400.
 
 The source is the immutable Dokany commit
 `f1d5de68ff459af94e309cfdd171e4b8ca2af4dd` (v2.3.1.1000), obtained from the URL,
-exact ZIP length and SHA-256 in `recipe.json`. `batching.patch` makes five
-bounded changes:
+exact ZIP length and SHA-256 in `recipe.json`. `batching.patch` corrects these
+bounded implementation details:
 
 - Normalize batching/SingleThread worker options before sending them to the
   driver, and turn the batching mask into a Boolean comparison before its
@@ -28,6 +28,18 @@ bounded changes:
 - Preserve failed metadata callback statuses instead of replacing every failure
   with `STATUS_INVALID_PARAMETER`. An invalid asynchronous pending status is
   still rejected by end-dispatch rather than sent as a completed operation.
+- Signal device closure only from the worker that completed unmount notification
+  submission. Another failing pull worker must not release cleanup before that
+  notification has entered the cleanup group.
+- Serialize threadpool work creation/submission with closing admission before
+  draining the cleanup group. A rejected I/O child releases its batch/event
+  ownership. No new work object can escape cleanup or be released before submit.
+
+The last two corrections were added on 2026-09-28 after a native crash dump
+proved that a volume-broadcast callback returned into the already unloaded DLL.
+Their exact new bytes require acceptance by the same Windows remote regression
+suite; the September 8 approval below applies only to the earlier payload.
+See [the current task evidence](../../docs/WINDOWS_REMOTE_REGRESSION.md).
 
 The two bulk-access corrections above were added on 2026-09-08. Their exact
 remote-built DLL/source set passed the complete mount task in
@@ -149,8 +161,8 @@ does not prove how somebody built a DLL.
 
 Dokany's library is LGPL-3.0-or-later; see `LICENSE.LGPL-3.0.txt` (copied from
 the pinned source) and `LICENSE.GPL-3.0.txt` (GNU's GPLv3 text). Preserve upstream
-copyright notices. Smart Explorer's modifications are dated 2026-09-06 and
-2026-09-08 and are
+copyright notices. Smart Explorer's modifications are dated 2026-09-06,
+2026-09-08 and 2026-09-28 and are
 identified by this recipe and patch. The corresponding-source ZIP contains
 the complete patched upstream source, this recipe, the patch, preparation
 script, this README and both license texts, before compiler outputs exist.
