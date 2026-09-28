@@ -135,9 +135,16 @@ assert that no per-file metadata request reaches the peer. Socket cancellation
 must wake the real receiver, rather than discarding partially read frames on a
 poll timeout (same TCP framing research as M4).
 
+Acceptance review, M9: the GUI used to discard the running receiver on cancel
+and immediately label the operation canceled. Retain the receiver, show the
+pending cancellation request until the worker responds, and preserve the final
+measured counters for canceled and disconnected workers. Cover these transitions
+through the same remote suite using the isolated GUI fixture. Starting a new
+scan may still detach the canceled predecessor; it must never reuse its results.
+
 Implementation checkpoint: source milestones M1–M4 and M7–M9 are committed.
-The single expanded M5/M10 Windows suite has not run yet. Neither a throughput
-result nor a successful release is claimed at this checkpoint.
+The single expanded M5/M10 Windows suite is running remotely. Neither a
+throughput result nor a successful release is claimed at this checkpoint.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least

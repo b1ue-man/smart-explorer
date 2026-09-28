@@ -250,6 +250,8 @@ impl App {
                 self.log_analytics_outcome();
             }
             Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
+                self.analytics_totals = self.analytics_scan.as_ref()
+                    .map(|scan| (scan.progress.snapshot(), scan.started.elapsed().as_secs_f32()));
                 self.analytics_scan = None;
                 self.analytics_state = StorageRunState::Failed;
                 let detail = "Scan-Thread wurde ohne Ergebnis beendet".to_string();
@@ -264,11 +266,10 @@ impl App {
     }
 
     pub(in crate::app) fn cancel_analytics_scan(&mut self) {
-        if self.cancel_analytics_worker() {
-            self.analytics_state = StorageRunState::Canceled;
-            self.analytics_issues.clear();
-            self.analytics_suppressed_issues = 0;
-            self.analytics_access.reset_scan();
+        if let Some(scan) = &self.analytics_scan {
+            // Keep the receiver and live evidence until the worker actually
+            // answers. Requesting cancellation is not a terminal result.
+            scan.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

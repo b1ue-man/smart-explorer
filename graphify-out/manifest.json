@@ -340,9 +340,9 @@
     "semantic_hash": "3b15dade9496432ea1e7c07d6fd413ac"
   },
   "app/core/analytics_core.rs": {
-    "mtime": 1790596762.5759509,
-    "ast_hash": "7ad1509d40df230da07fa3e6c16e52a9",
-    "semantic_hash": "7ad1509d40df230da07fa3e6c16e52a9"
+    "mtime": 1790598188.3750343,
+    "ast_hash": "3d5c84f058a77e6f24d36da612f50ff7",
+    "semantic_hash": "3d5c84f058a77e6f24d36da612f50ff7"
   },
   "app/core/analytics_paint.rs": {
     "mtime": 1789466735.8264902,
@@ -350,9 +350,9 @@
     "semantic_hash": "2c961d93398facee37e8e59c6b8a06dd"
   },
   "app/core/analytics_ui.rs": {
-    "mtime": 1790597425.047354,
-    "ast_hash": "bbad917b153fd906bc328a421ec84220",
-    "semantic_hash": "bbad917b153fd906bc328a421ec84220"
+    "mtime": 1790598188.3750343,
+    "ast_hash": "7ce1299444e59c154ddb5f8f8e7c5f51",
+    "semantic_hash": "7ce1299444e59c154ddb5f8f8e7c5f51"
   },
   "app/core/app_models.rs": {
     "mtime": 1790354490.8631177,
@@ -969,10 +969,15 @@
     "ast_hash": "8b6e6e0b2dfa50f26ba0628c32c041d4",
     "semantic_hash": "8b6e6e0b2dfa50f26ba0628c32c041d4"
   },
+  "app/core/windows_analysis_ui_task.rs": {
+    "mtime": 1790598217.368402,
+    "ast_hash": "7d4ff4d2c52321ec809e903863dccde9",
+    "semantic_hash": "7d4ff4d2c52321ec809e903863dccde9"
+  },
   "app/mod.rs": {
-    "mtime": 1790159434.4732704,
-    "ast_hash": "299e7ab422889ea48f4583c6904979ff",
-    "semantic_hash": "299e7ab422889ea48f4583c6904979ff"
+    "mtime": 1790598217.367402,
+    "ast_hash": "7a4f986eed63a53907fa138b27a176fd",
+    "semantic_hash": "7a4f986eed63a53907fa138b27a176fd"
   },
   "app/os/linux_os.rs": {
     "mtime": 1790354503.6893685,
