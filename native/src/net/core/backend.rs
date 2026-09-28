@@ -128,6 +128,14 @@ impl Backend for UncBackend {
         self.local.mkdir_all(path)
     }
 
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.local.create_dir(path)
+    }
+
+    fn flow_key(&self, path: &str) -> String {
+        self.local.flow_key(path)
+    }
+
     fn rename_overwrites(&self) -> bool {
         self.local.rename_overwrites()
     }

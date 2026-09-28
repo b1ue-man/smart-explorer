@@ -46,6 +46,36 @@ pub(crate) fn to_os(path: &str) -> PathBuf {
     }
 }
 
+/// Key of the volume serving `path` for shared concurrency control: the drive
+/// (`C:`) or the UNC share (`//server/share`), case-folded like Win32 names.
+pub(crate) fn volume_key(path: &str) -> String {
+    let lower = path.replace('\\', "/").to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("//?/")
+        .or_else(|| lower.strip_prefix("//./"))
+        .unwrap_or(&lower);
+    if let Some(unc) = rest.strip_prefix("unc/") {
+        return unc_volume_key(unc);
+    }
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return format!("local:{}", &rest[..2]);
+    }
+    match rest.strip_prefix("//") {
+        Some(unc) => unc_volume_key(unc),
+        None => "local:".to_string(),
+    }
+}
+
+fn unc_volume_key(rest: &str) -> String {
+    let mut parts = rest.split('/').filter(|part| !part.is_empty());
+    match (parts.next(), parts.next()) {
+        (Some(server), Some(share)) => format!("unc://{server}/{share}"),
+        (Some(server), None) => format!("unc://{server}"),
+        _ => "unc:".to_string(),
+    }
+}
+
 /// Return the name stored by the filesystem rather than the spelling used to
 /// address it. Windows can address one entry through both its long name and an
 /// 8.3 alias (for example `runneradmin` and `RUNNER~1`), while `read_dir`

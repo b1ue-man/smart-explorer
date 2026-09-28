@@ -5,6 +5,10 @@ pub enum TransferKind {
     Upload,
     Download,
     RemoteCopy,
+    /// Local folder to local folder.
+    Local,
+    /// Local folder to local folder, removing the sources.
+    Move,
 }
 
 impl TransferKind {
@@ -13,6 +17,8 @@ impl TransferKind {
             TransferKind::Upload => "Upload",
             TransferKind::Download => "Download",
             TransferKind::RemoteCopy => "Remote-Kopie",
+            TransferKind::Local => "Kopieren",
+            TransferKind::Move => "Verschieben",
         }
     }
 }
@@ -32,6 +38,20 @@ pub struct TransferProgress {
     /// active); never counted as errors. Always 0 on the desktop builds.
     pub omitted: u64,
     pub done: bool,
+    /// Selected folders are still being walked; the totals are the entries
+    /// found so far and keep growing until this turns false.
+    pub discovering: bool,
+    /// Entries left alone by the conflict policy "skip".
+    pub skipped: u64,
+    /// Current throughput over the last few seconds (bytes per second).
+    pub rate_bps: u64,
+    /// Up to three entries being transferred right now.
+    pub active: Vec<String>,
+    /// Operations running concurrently on the transfer's connection(s).
+    pub parallel: u32,
+    /// Where the transfer reads from and writes to, for displays.
+    pub source: String,
+    pub target: String,
 }
 
 impl TransferProgress {
@@ -53,6 +73,13 @@ impl TransferProgress {
             errors: 0,
             omitted: 0,
             done: false,
+            discovering: false,
+            skipped: 0,
+            rate_bps: 0,
+            active: Vec::new(),
+            parallel: 0,
+            source: String::new(),
+            target: String::new(),
         }
     }
 
