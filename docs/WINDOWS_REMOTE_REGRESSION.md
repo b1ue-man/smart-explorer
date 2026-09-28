@@ -1,7 +1,8 @@
 # Windows remote mount, Direct lifetime and storage analysis repair
 
-Investigation date: 2026-09-28. Reported client: 0.5.164. Acceptance is pending;
-this document is a task plan and evidence, not a release claim.
+Investigation date: 2026-09-28. Reported client: 0.5.164. The callback repair and
+exact dependency passed remote acceptance; the later GUI capacity correction
+still awaits the same suite. Publication remains pending.
 
 ## Goal and stage-one plan
 
@@ -158,8 +159,8 @@ incorrect expected repair-fixture result, corrected in 2699c42.
 
 The [2699c42 run](https://github.com/b1ue-man/smart-explorer/actions/runs/36425313803)
 recorded 10/10/15 ms for the same analysis, then terminated without a Rust panic
-during real drive access. That crash is unresolved: a prior mount pass does not
-establish reliability. Extend M5's same entrypoint with process exit codes,
+during real drive access. That crash was unresolved at this checkpoint: a prior
+mount pass did not establish reliability. Extend M5's same entrypoint with process exit codes,
 Windows Application Error/WER events, a task-executable-only minidump, and
 mount-stage traces. Remove credential environment variables from the isolated
 fixture before enabling dump capture. Investigate the failed boundary, correct
@@ -242,6 +243,31 @@ Gap review completed 2026-09-28 against the pinned C source and Microsoft
 and callback-lifetime documentation. The acceptance signal is normal completion
 of the entire existing suite with these lifecycles, exact dependency hashes and
 no native crash. The old dump remains failure evidence, not acceptance.
+
+## Accepted dependency checkpoint, 2026-09-28
+
+[Run 36435534429](https://github.com/b1ue-man/smart-explorer/actions/runs/36435534429)
+completed the whole task entrypoint normally at
+`9398fcf433390991641ba91c4e6b0b86565c5003` (exit `0x00000000`). The private and
+official volume lifecycles, concurrent directory access during close, alias
+content/permission checks, private unload and recovery-marker completion all
+passed. Direct repair and GUI/worker/QUIC analysis completed in the same run.
+The measured local/host/GUI durations for 5,289 files were 17/14/23 ms, with
+zero per-file metadata calls. Direct ran second on loopback with a warm cache;
+these figures do not predict WAN completion time.
+
+The exact accepted dependency set is retained under `native/assets/dokany-private/`:
+
+- DLL SHA-256: `d05a3c8ad19038b48808fc13a5ed097f2d277ae873f8bb1ccc1fa609017f4df1`.
+- Corresponding-source ZIP SHA-256: `8ba3d9b2f870a334153e9748eaa9df01098ebe075ddacca3160482eb2317f880`.
+- Recipe SHA-256: `5f24957ac1d9f26bfcdb1e59d37016fd412409b304dbff255333f545a498bbd1`.
+- Patch SHA-256: `95da1312e99c54aaef06c29a8f39ce3441e901db8a2065a1b4f8b0409dcc0653`.
+- Fixture executable SHA-256: `54da33431a1b638a4355043d9e78d67f6710772457b3fb64b1abf8bc4e775a72`.
+
+The archived manifest, patch, builder and patched callback sources were compared
+with the candidate before retaining the files; the source ZIP is unchanged.
+This approves the dependency, not a release. M9's later source-identity capacity
+correction in `2f99d90` still needs the same suite on the combined candidate.
 
 No local builds, compilers, native formatters or tests. Static parsing and diff
 inspection only during implementation. The one remote suite must have at least

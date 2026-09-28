@@ -9,12 +9,13 @@ preload on case-colliding names, and Direct repair can leave the worker's
 configuration barrier stuck after a timer panic. The GUI's storage analysis
 also bypasses the peer worker and requests metadata per file. The candidate
 forwards analysis through IPC to the identical local worker and preserves real
-progress, partial outcomes and cancellation. Source fixes are committed;
-the single Windows remote suite and terminal publication remain pending.
+progress, partial outcomes and cancellation. Source fixes are committed.
 The real-volume dump proves that a Dokany volume notification returned into an
 already unloaded DLL. Closure ordering/work admission and official-runtime
-callback lifetime are being corrected; the exact new dependency still requires
-remote acceptance and terminal publication.
+callback lifetime are corrected; the exact new dependency passed remote suite
+36435534429 and is retained for release. The later fix that keeps remote capacity
+separate from client drive readings still requires the same suite on the combined
+candidate. Terminal publication remains pending.
 See [evidence and acceptance plan](WINDOWS_REMOTE_REGRESSION.md).
 
 ## Still open (what's actually left)
