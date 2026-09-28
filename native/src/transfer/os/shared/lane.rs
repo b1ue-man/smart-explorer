@@ -4,6 +4,7 @@
 //! start as soon as a slot frees. Transfers to one or several peers (Direct,
 //! Room, SFTP, …) therefore share the transport bandwidth through concurrent
 //! streams instead of waiting behind a single slot.
+use super::job::TransferJob;
 use super::types::{TransferKind, TransferMsg, TransferProgress};
 use super::{copy_remote_paths_progress, download_paths_progress};
 use super::{upload_pairs_progress, upload_paths_progress};
@@ -42,6 +43,8 @@ pub enum TransferRequest {
         dest_root: String,
         filter: Option<(FilterDef, String)>,
     },
+    /// Any source to any target through the streaming engine.
+    Job(Box<TransferJob>),
 }
 
 impl TransferRequest {
@@ -50,6 +53,7 @@ impl TransferRequest {
             Self::Upload { .. } | Self::UploadPairs { .. } => TransferKind::Upload,
             Self::Download { .. } => TransferKind::Download,
             Self::RemoteCopy { .. } => TransferKind::RemoteCopy,
+            Self::Job(job) => job.kind(),
         }
     }
 
@@ -58,6 +62,7 @@ impl TransferRequest {
             Self::Upload { paths, .. } => paths.len(),
             Self::UploadPairs { pairs, .. } => pairs.len(),
             Self::Download { files, .. } | Self::RemoteCopy { files, .. } => files.len(),
+            Self::Job(job) => job.items.len(),
         }
     }
 
@@ -74,6 +79,7 @@ impl TransferRequest {
             Self::Download { .. } => "Lade herunter",
             Self::RemoteCopy { .. } if self.same_server() => "Kopiere remote",
             Self::RemoteCopy { .. } => "Uebertrage remote",
+            Self::Job(job) => job.kind().label(),
         }
     }
 
@@ -82,6 +88,7 @@ impl TransferRequest {
             Self::Upload { .. } | Self::UploadPairs { .. } => "remote-upload",
             Self::Download { .. } => "remote-download-multi",
             Self::RemoteCopy { .. } => "remote-to-remote",
+            Self::Job(_) => "transfer-job",
         }
     }
 
@@ -97,6 +104,11 @@ impl TransferRequest {
                 format!("⇄ Übertrage {n} Element(e) (Remote→Remote, serverseitig)…")
             }
             Self::RemoteCopy { .. } => format!("⇄ Übertrage {n} Element(e) (Remote→Remote)…"),
+            Self::Job(job) => format!(
+                "⇄ {}: {n} Element(e) → {}",
+                job.kind().label(),
+                job.target_label
+            ),
         }
     }
 
@@ -137,6 +149,7 @@ impl TransferRequest {
                     &cancel,
                 );
             }
+            Self::Job(job) => super::engine::run_job(*job, &tx, &cancel),
         }
     }
 }

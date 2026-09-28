@@ -80,6 +80,19 @@ Spec: `spec.md` · Recherche/Durchsatz-Analyse: `recherche.md` · Lesungen: `doc
     per `download_name`).
   - Externe Übergaben: `register_external(label) -> Arc<ExternalTransfer>` (`set_files_total`,
     `add_bytes`, `file_done`, `error`, `set_note`, `finish`), `external_snapshots()`.
+  - Lane: `TransferRequest::Job(Box<TransferJob>)` existiert (Kind/Label/Ansage aus dem Job) und ruft
+    `super::engine::run_job(job, &tx, &cancel)` mit der Signatur
+    `pub(crate) fn run_job(job: TransferJob, tx: &crossbeam_channel::Sender<TransferMsg>, cancel:
+    &AtomicBool)` – Modul `transfer/engine/` (Deklaration `mod engine;` in `transfer/mod.rs`) liefert
+    Block A.
+  - Walker-Wurzeln: ausgewählte Einträge eines Ordners werden mit **einer** Auflistung des Ordners
+    beantwortet (Rückfall: `stat` je Eintrag).
+- App-Adapter (fest, Block F füllt die Windows-Seite): `set_remote_clipboard(SelectionSource) ->
+  Result<u32, String>`, `drag_out_remote(SelectionSource) -> Result<DragOutOutcome, String>`,
+  `remote_clipboard_supported() -> bool` in `app/os/windows/platform.rs` (ruft
+  `crate::virtual_clipboard::set_remote_clipboard(source) -> windows::core::Result<u32>` und
+  `crate::dragout::drag_out_remote(source) -> windows::core::Result<DragOutOutcome>`) und Linux-Stubs
+  in `app/os/linux_os.rs`.
 
 ## Block A – Engine und lokale Kopie (Agent, Opus)
 

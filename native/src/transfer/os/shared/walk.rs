@@ -8,7 +8,7 @@ use super::flow::{classify_error, Flow};
 use super::flow_control::OpOutcome;
 use super::walk_listers::{Listed, Lister};
 use crate::types::FileEntry;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -95,11 +95,34 @@ pub(crate) fn walk(
         changed: Condvar::new(),
         listers: AtomicUsize::new(0),
     };
+    // Selected entries are answered by one listing of their folder: a fresh
+    // stat per entry would cost one round trip each (thousands for a Ctrl+A).
+    let mut groups: Vec<(String, Vec<&WalkRoot>)> = Vec::new();
     for root in roots {
+        let parent = parent_dir(&root.path);
+        match groups.iter_mut().find(|(known, _)| *known == parent) {
+            Some((_, members)) => members.push(root),
+            None => groups.push((parent, vec![root])),
+        }
+    }
+    for (parent, members) in groups {
         if walk.stopped() {
             break;
         }
-        walk.root(root);
+        let listed = if members.len() > 1 {
+            walk.list_parent(&parent)
+        } else {
+            None
+        };
+        for root in members {
+            if walk.stopped() {
+                break;
+            }
+            let known = listed
+                .as_ref()
+                .and_then(|entries| entries.get(base_name(&root.path)).cloned());
+            walk.root(root, known);
+        }
     }
     std::thread::scope(|scope| loop {
         let mut shared = walk.lock();
@@ -132,6 +155,16 @@ pub(crate) fn walk(
 
 fn join(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
+}
+
+/// The folder holding `path`; top-level entries resolve to their root.
+fn parent_dir(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some(("", _)) | None => "/".to_string(),
+        Some((parent, _)) if parent.ends_with(':') => format!("{parent}/"),
+        Some((parent, _)) => parent.to_string(),
+    }
 }
 
 fn base_name(path: &str) -> &str {
@@ -196,17 +229,36 @@ impl Walk<'_> {
         self.changed.notify_all();
     }
 
-    fn root(&self, root: &WalkRoot) {
-        let Some(permit) = self.flow.acquire(self.cancel) else {
-            return;
-        };
-        let stat = self.lister.stat(&root.path);
-        permit.finish(outcome(&stat));
-        let listed = match stat {
-            Ok(listed) => listed,
-            Err(error) => {
-                self.problem(&root.path, error.to_string());
-                return;
+    /// One listing of a folder holding several selected entries, by name;
+    /// `None` when it fails (each entry is then inspected on its own).
+    fn list_parent(&self, parent: &str) -> Option<HashMap<String, Listed>> {
+        let permit = self.flow.acquire(self.cancel)?;
+        let listed = self.lister.list(parent);
+        permit.finish(outcome(&listed));
+        listed.ok().map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| (entry.name.clone(), entry))
+                .collect()
+        })
+    }
+
+    fn root(&self, root: &WalkRoot, known: Option<Listed>) {
+        let listed = match known {
+            Some(listed) => listed,
+            None => {
+                let Some(permit) = self.flow.acquire(self.cancel) else {
+                    return;
+                };
+                let stat = self.lister.stat(&root.path);
+                permit.finish(outcome(&stat));
+                match stat {
+                    Ok(listed) => listed,
+                    Err(error) => {
+                        self.problem(&root.path, error.to_string());
+                        return;
+                    }
+                }
             }
         };
         let name = base_name(&root.path);

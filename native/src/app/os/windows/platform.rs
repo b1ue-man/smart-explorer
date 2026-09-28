@@ -263,6 +263,25 @@ pub(in crate::app) fn clipboard_file_ops_supported() -> bool {
     true
 }
 
+/// Remote selection on the clipboard as virtual files: listed when Explorer
+/// pastes, contents streamed on demand. Returns the clipboard sequence.
+pub(in crate::app) fn set_remote_clipboard(
+    source: crate::transfer::SelectionSource,
+) -> Result<u32, String> {
+    crate::virtual_clipboard::set_remote_clipboard(source).map_err(|error| error.to_string())
+}
+
+/// Drag a remote selection out to Explorer as virtual files (no pre-download).
+pub(in crate::app) fn drag_out_remote(
+    source: crate::transfer::SelectionSource,
+) -> Result<crate::dragout::DragOutOutcome, String> {
+    crate::dragout::drag_out_remote(source).map_err(|error| error.to_string())
+}
+
+pub(in crate::app) fn remote_clipboard_supported() -> bool {
+    true
+}
+
 pub(in crate::app) fn drag_out_files(
     files: &[String],
 ) -> Result<crate::dragout::DragOutOutcome, String> {

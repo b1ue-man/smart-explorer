@@ -115,6 +115,23 @@ pub(in crate::app) fn clipboard_file_ops_supported() -> bool {
     false
 }
 
+/// No desktop file-clipboard protocol is spoken here; the app keeps its own.
+pub(in crate::app) fn set_remote_clipboard(
+    _source: crate::transfer::SelectionSource,
+) -> Result<u32, String> {
+    Err("Virtuelle Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
+}
+
+pub(in crate::app) fn drag_out_remote(
+    _source: crate::transfer::SelectionSource,
+) -> Result<crate::dragout::DragOutOutcome, String> {
+    Err("OS drag-and-drop is not available on this platform".to_string())
+}
+
+pub(in crate::app) fn remote_clipboard_supported() -> bool {
+    false
+}
+
 pub(in crate::app) fn drag_out_files(
     _files: &[String],
 ) -> Result<crate::dragout::DragOutOutcome, String> {
