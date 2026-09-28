@@ -12,6 +12,7 @@ pub(super) struct PathResolver<'a> {
     pub root: &'a str,
     pub root_ancestors: &'a [String],
     pub case_sensitive: bool,
+    pub project_peer_names: bool,
 }
 
 impl PathResolver<'_> {
@@ -56,12 +57,15 @@ impl PathResolver<'_> {
                 append_component(&mut current, requested);
                 None
             } else {
-                match unique_child(self.backend, self.case_cache, &current, requested)? {
-                    Some(metadata) => {
+                match self.child(&current, requested)? {
+                    Some((metadata, alias)) => {
                         append_component(&mut current, &metadata.name);
-                        Some(metadata)
+                        Some((metadata, alias))
                     }
                     None if allow_missing => {
+                        if self.project_peer_names && crate::mount::peer_names::is_peer_alias(requested) {
+                            return Err(not_found());
+                        }
                         missing = true;
                         append_component(&mut current, requested);
                         continue;
@@ -69,11 +73,11 @@ impl PathResolver<'_> {
                     None => return Err(not_found()),
                 }
             };
-            if let Some(metadata) = &listed_metadata {
+            if let Some((metadata, _)) = &listed_metadata {
                 validate_entry(metadata, is_final)?;
             }
             if let Some(raw) = terminal.filter(|_| is_final) {
-                let metadata = match raw.stat(&current) {
+                let mut metadata = match raw.stat(&current) {
                     Ok(metadata) => metadata,
                     // Keep the previous cold case-sensitive error contract,
                     // but do not add a probe or second stat to the success path.
@@ -87,6 +91,9 @@ impl PathResolver<'_> {
                     Err(error) => return Err(error),
                 };
                 validate_entry(&metadata, true)?;
+                if let Some((_, Some(alias))) = listed_metadata {
+                    metadata.name = alias;
+                }
                 return Ok((current, Some(metadata)));
             }
             if listed_metadata.is_none() {
@@ -102,6 +109,22 @@ impl PathResolver<'_> {
             }
         }
         Ok((current, None))
+    }
+
+    fn child(&self, parent: &str, requested: &str) -> io::Result<Option<(VfsMeta, Option<String>)>> {
+        if self.project_peer_names {
+            if !crate::mount::peer_names::is_peer_alias(requested) {
+                // Keep indexed normal navigation. Ambiguous original spellings
+                // still fail closed; only explicit aliases can select them.
+                return unique_child(self.backend, self.case_cache, parent, requested)
+                    .map(|child| child.map(|metadata| (metadata, None)));
+            }
+            return crate::mount::peer_names::resolve_peer_child(
+                self.backend.list_dir(parent)?, requested,
+            );
+        }
+        unique_child(self.backend, self.case_cache, parent, requested)
+            .map(|child| child.map(|metadata| (metadata, None)))
     }
 }
 

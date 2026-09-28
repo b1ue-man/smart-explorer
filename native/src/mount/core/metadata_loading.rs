@@ -365,7 +365,7 @@ impl MountEngine {
     }
 }
 
-fn is_reserved_mount_sibling(name: &str) -> bool {
+pub(super) fn is_reserved_mount_sibling(name: &str) -> bool {
     [".se-mount-", ".se-mount-delete-"]
         .into_iter()
         .any(|marker| {
