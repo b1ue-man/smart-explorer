@@ -56,6 +56,8 @@ mod session;
 mod stage_ops;
 #[path = "os/shared/transfer.rs"]
 mod transfer;
+#[path = "core/transport_error.rs"]
+mod transport_error;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_bounds_tests.rs"]
 mod transfer_engine_task_bounds_tests;
@@ -97,3 +99,4 @@ pub use types::{
     has_link_aware_hash, BatchEntry, BatchItem, Frame, SearchSpec, WireMeta, WireNode, CHUNK,
     HASH_WALK_LINK_BOUNDARY, HASH_WALK_SERVER_VERSION, PROTO_VERSION, TRANSFER_FRAME_BACKLOG,
 };
+pub(crate) use transport_error::{parse_transport_error, transport_error_message};

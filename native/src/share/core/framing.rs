@@ -115,6 +115,11 @@ pub(super) fn read_exact_error(error: ReadExactError) -> io::Error {
             io::ErrorKind::UnexpectedEof,
             format!("peer stream closed after {read} bytes"),
         ),
+        ReadExactError::ReadError(iroh::endpoint::ReadError::ConnectionLost(error)) => {
+            // ReadError's Display is only "connection lost". Keep the cause
+            // (idle timeout, peer close, etc.) across the daemon error frame.
+            super::io_deadline::disconnected(format!("connection lost: {error}"))
+        }
         ReadExactError::ReadError(error) => io::Error::from(error),
     }
 }

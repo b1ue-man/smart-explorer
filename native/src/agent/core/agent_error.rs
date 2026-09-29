@@ -12,6 +12,9 @@ use std::io;
 /// (or a peer behind the service that asked to slow down) is congestion, so
 /// transfers back off instead of failing.
 pub(super) fn agent_error(message: String) -> io::Error {
+    if let Some(error) = crate::agent_proto::parse_transport_error(&message) {
+        return error;
+    }
     if let Some((retry_after, text)) = crate::agent_proto::parse_busy(&message) {
         return crate::vfs::congestion_error(text, retry_after);
     }
