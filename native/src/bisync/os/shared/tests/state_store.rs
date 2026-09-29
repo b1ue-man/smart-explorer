@@ -206,9 +206,8 @@ fn corrupt_incremental_state_falls_back_to_a_safe_full_rebuild() {
         ..Default::default()
     };
     let endpoints = SyncEndpoints::new(&backend_a, &root_a, &backend_b, &root_b);
-    assert!(run_with_store_path(endpoints, opts, &cancel, &filter, &db)
-        .errors
-        .is_empty());
+    let first = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
 
     rusqlite::Connection::open(&db)
         .unwrap()
@@ -216,7 +215,7 @@ fn corrupt_incremental_state_falls_back_to_a_safe_full_rebuild() {
         .unwrap();
     std::fs::write(a.join("f.txt"), b"two-longer").unwrap();
     let recovered = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
-    assert!(recovered.errors.is_empty());
+    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
     assert_eq!(std::fs::read(b.join("f.txt")).unwrap(), b"two-longer");
 
     let sync_pair = pair_id_for(&backend_a, &root_a, &backend_b, &root_b);

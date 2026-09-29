@@ -153,6 +153,15 @@ impl SyncStateStore {
         Ok(())
     }
 
+    /// Removes a pair's record and items in one transaction; the next full
+    /// scan bootstraps the pair anew.
+    pub fn forget_pair(&mut self, pair: &str) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM items WHERE pair = ?1", [pair])?;
+        tx.execute("DELETE FROM pairs WHERE pair = ?1", [pair])?;
+        tx.commit()
+    }
+
     pub fn update_cursor(&self, pair: &str, cursor: Option<&str>) -> rusqlite::Result<()> {
         validate_cursor(cursor)?;
         self.conn.execute(
