@@ -8,7 +8,7 @@ use std::time::Duration;
 use super::incremental::SyncEndpoints;
 use super::omissions::SyncOmissions;
 use super::snapshot::{hash_mode, prev_side, walk_snapshot, HashMode, Snapshot, WalkFilter};
-use super::types::{Baseline, BisyncOptions, DeletePolicy, Direction, Tree};
+use super::types::{Action, Baseline, BisyncOptions, Conflict, DeletePolicy, Direction, Tree};
 use crate::vfs::Backend;
 
 /// The reading thread passes the user's cancel on to both walks this often
@@ -23,6 +23,19 @@ pub(super) struct PairSnapshot {
     pub a: Tree,
     pub b: Tree,
     pub omissions: SyncOmissions,
+    pub repairs: Vec<Conflict>,
+    pub conflicts: Vec<Conflict>,
+}
+
+impl PairSnapshot {
+    pub(super) fn plan(&self, base: &Baseline, opts: BisyncOptions)
+        -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
+        let mut base = self.omissions.planning_baseline(base);
+        for conflict in &self.conflicts { base.remove(&conflict.rel); }
+        let (actions, mut conflicts, converged) = super::core::plan(&self.a, &self.b, &base, opts);
+        conflicts.extend(self.conflicts.iter().cloned());
+        (actions, conflicts, converged)
+    }
 }
 
 type SideRead = Result<Snapshot, String>;
@@ -129,7 +142,10 @@ pub(super) fn read_pair(
     let (mut a, mut b) = (at.tree, bt.tree);
     omissions.exclude_tree(&mut a);
     omissions.exclude_tree(&mut b);
-    Ok(PairSnapshot { a, b, omissions })
+    let (repairs, conflicts) = super::duplicate_plan::prepare(
+        endpoints, at.duplicates, bt.duplicates, &mut a, &mut b, &mut omissions, opts, cancel,
+    )?;
+    Ok(PairSnapshot { a, b, omissions, repairs, conflicts })
 }
 
 fn still_running<T>(side: &io::Result<ScopedJoinHandle<'_, T>>) -> bool {

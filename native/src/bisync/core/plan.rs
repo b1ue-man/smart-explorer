@@ -184,6 +184,7 @@ pub fn plan(
                         rel: rel.clone(),
                         a: an,
                         b: bn,
+                        duplicates: None,
                     });
                 } else if opts.conflict == ConflictMode::KeepBoth {
                     // Winner (newer) keeps the name; loser preserved as a copy.

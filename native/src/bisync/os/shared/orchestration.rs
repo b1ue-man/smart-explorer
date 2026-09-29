@@ -130,13 +130,21 @@ fn run_full(
         Ok(snapshot) => snapshot,
         Err(error) => return Outcome { errors: vec![error], baseline: base, ..Default::default() },
     };
+    let (actions, conflicts, converged) = snapshot.plan(&base, opts);
+    let physical_a = snapshot.a.len() as u64 + snapshot.repairs.iter()
+        .filter_map(|c| c.duplicates.as_ref()).map(|d| d.a.len().saturating_sub(1) as u64).sum::<u64>()
+        + snapshot.conflicts.iter().filter_map(|c| c.duplicates.as_ref()).map(|d| d.a.len() as u64).sum::<u64>();
+    let physical_b = snapshot.b.len() as u64 + snapshot.repairs.iter()
+        .filter_map(|c| c.duplicates.as_ref()).map(|d| d.b.len().saturating_sub(1) as u64).sum::<u64>()
+        + snapshot.conflicts.iter().filter_map(|c| c.duplicates.as_ref()).map(|d| d.b.len() as u64).sum::<u64>();
+    let repairs = snapshot.repairs;
+    let duplicate_removals: u64 = repairs.iter().filter_map(|c| c.duplicates.as_ref())
+        .map(|d| d.redundant_count()).sum();
     let (at, bt) = (snapshot.a, snapshot.b);
     let mut omissions = snapshot.omissions;
-    let planning_base = omissions.planning_baseline(&base);
     if cancel.load(Ordering::Relaxed) {
         return Outcome { baseline: base, omissions, ..Default::default() };
     }
-    let (actions, conflicts, converged) = plan(&at, &bt, &planning_base, opts);
 
     // Duplicate-name providers need an exact, read-only cleanup plan before
     // the first mutation. Its ID-addressed entries participate in the same
@@ -196,8 +204,9 @@ fn run_full(
     };
     let deletes = explicit_deletes
         .saturating_add(move_deletes)
+        .saturating_add(duplicate_removals)
         .saturating_add(dedupe_plan.len() as u64);
-    let total = at.len().max(bt.len()) as u64;
+    let total = physical_a.max(physical_b);
     let pct_limit = if opts.max_delete_pct > 0 {
         total * opts.max_delete_pct as u64 / 100
     } else {
@@ -225,7 +234,7 @@ fn run_full(
     }
 
     let mut errors = Vec::new();
-    let deduped = if let Some(backend) = dedupe_backend {
+    let mut deduped = if let Some(backend) = dedupe_backend {
         match backend.apply_dedupe_plan(&dedupe_plan) {
             Ok(count) => count as u64,
             Err(error) => {
@@ -244,6 +253,20 @@ fn run_full(
     } else {
         0
     };
+    if !opts.dry_run {
+        for repair in &repairs {
+            let id = repair.duplicates.as_ref().and_then(|d| d.common_choice())
+                .and_then(|(a, _)| a.id.as_deref());
+            if let Err(error) = super::duplicate_apply::resolve(
+                SyncEndpoints::new(a, root_a, b, root_b), repair, true, id,
+                &vdir, cancel, opts.bwlimit_bps, |_| {},
+            ) {
+                errors.push((repair.rel.clone(), format!("Duplikatbereinigung: {error}")));
+                return Outcome { errors, baseline: base, omissions, conflicts, ..Default::default() };
+            }
+            deduped += repair.duplicates.as_ref().map_or(0, |d| d.redundant_count());
+        }
+    }
     if cancel.load(Ordering::Relaxed) {
         return Outcome {
             stats: BisyncStats {
@@ -309,10 +332,11 @@ fn run_full(
         // Only re-walk a side the run could have modified. A one-way sync without
         // move leaves its SOURCE side untouched, so re-walking it is pure wasted
         // round-trips (decisive when the source is a remote like Drive).
-        let a_touched = opts.direction != Direction::AtoB || opts.move_files;
-        let b_touched = opts.direction != Direction::BtoA || opts.move_files;
+        let a_touched = opts.direction != Direction::AtoB || opts.move_files || !repairs.is_empty();
+        let b_touched = opts.direction != Direction::BtoA || opts.move_files || !repairs.is_empty();
         let at2 = if a_touched {
-            match walk_snapshot(a, root_a, cancel, filter, mode_a, Some(&prev_a), false, fold_case) {
+            match walk_snapshot(a, root_a, cancel, filter, mode_a, Some(&prev_a), false, fold_case)
+                .and_then(|s| super::duplicate_plan::check_post_scan(s, &conflicts)) {
                 Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
                 Err(error) => {
                     errors.push((
@@ -332,7 +356,8 @@ fn run_full(
             at
         };
         let bt2 = if b_touched {
-            match walk_snapshot(b, root_b, cancel, filter, mode_b, Some(&prev_b), false, fold_case) {
+            match walk_snapshot(b, root_b, cancel, filter, mode_b, Some(&prev_b), false, fold_case)
+                .and_then(|s| super::duplicate_plan::check_post_scan(s, &conflicts)) {
                 Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
                 Err(error) => {
                     errors.push((

@@ -382,6 +382,7 @@ pub struct Conflict {
     pub rel: String,
     pub a: Option<Sig>,
     pub b: Option<Sig>,
+    pub duplicates: Option<super::duplicate_types::DuplicateConflict>,
 }
 
 #[derive(Default, Clone, Debug)]

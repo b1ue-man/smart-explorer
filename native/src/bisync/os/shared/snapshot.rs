@@ -95,7 +95,7 @@ pub fn walk_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
-    walk_files_impl(be, root, cancel, filter, hash, prev, false, None)
+    walk_files_impl(be, root, cancel, filter, hash, prev, false, None, None)
 }
 
 /// Mirror destinations on ID-addressed providers may contain pre-existing
@@ -110,12 +110,13 @@ pub(super) fn walk_files_with_duplicate_files(
     hash: HashMode,
     prev: Option<&Tree>,
 ) -> io::Result<Tree> {
-    walk_files_impl(be, root, cancel, filter, hash, prev, true, None)
+    walk_files_impl(be, root, cancel, filter, hash, prev, true, None, None)
 }
 
 pub(super) struct Snapshot {
     pub tree: Tree,
     pub omissions: super::omissions::SyncOmissions,
+    pub duplicates: super::snapshot_duplicates::DuplicateGroups,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -130,6 +131,7 @@ pub(super) fn walk_snapshot(
     fold_case: bool,
 ) -> io::Result<Snapshot> {
     let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
+    let duplicates = Mutex::new(super::snapshot_duplicates::DuplicateGroups::new());
     let tree = walk_files_impl(
         be,
         root,
@@ -139,10 +141,12 @@ pub(super) fn walk_snapshot(
         prev,
         allow_duplicate_files,
         Some(&omissions),
+        Some(&duplicates),
     )?;
     Ok(Snapshot {
         tree,
         omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),
+        duplicates: duplicates.into_inner().unwrap_or_else(|e| e.into_inner()),
     })
 }
 
@@ -156,6 +160,7 @@ fn walk_files_impl(
     prev: Option<&Tree>,
     allow_duplicate_files: bool,
     omissions: Option<&Mutex<super::omissions::SyncOmissions>>,
+    duplicates: Option<&Mutex<super::snapshot_duplicates::DuplicateGroups>>,
 ) -> io::Result<Tree> {
     let canceled = || {
         io::Error::new(
@@ -170,7 +175,7 @@ fn walk_files_impl(
     // agent's WalkHashed), get the whole tree — including content MD5 for Full —
     // in one pass without downloading a single file. Falls through to the per-dir
     // walk if it didn't run.
-    if be.supports_walk_hashed() {
+    if be.supports_walk_hashed() && !be.has_duplicate_file_names() {
         if let Some(tree) =
             super::snapshot_agent::walk_hashed_via_agent(be, root, cancel, filter, hash)?
         {
@@ -188,6 +193,7 @@ fn walk_files_impl(
         prev,
         allow_duplicate_files,
         omissions,
+        duplicates,
         nodes: AtomicU64::new(1),
         text_bytes: AtomicU64::new(root.len() as u64),
         reads: flow.clone().map(|flow| (flow, next_job())),

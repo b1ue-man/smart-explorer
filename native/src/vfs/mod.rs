@@ -30,6 +30,8 @@ mod copy_transfer;
 mod core;
 #[path = "core/delete.rs"]
 mod delete;
+#[path = "core/dedupe.rs"]
+mod dedupe;
 #[path = "core/dispatch.rs"]
 mod dispatch;
 #[path = "os/shared/local.rs"]

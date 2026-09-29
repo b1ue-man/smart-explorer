@@ -29,6 +29,7 @@ pub(super) struct WalkContext<'a> {
     pub(super) prev: Option<&'a Tree>,
     pub(super) allow_duplicate_files: bool,
     pub(super) omissions: Option<&'a Mutex<SyncOmissions>>,
+    pub(super) duplicates: Option<&'a Mutex<super::snapshot_duplicates::DuplicateGroups>>,
     pub(super) nodes: AtomicU64,
     pub(super) text_bytes: AtomicU64,
     /// A remote side reads file contents (checksums) under a permit of its
@@ -54,6 +55,7 @@ pub(super) fn scan_listing(
     dir: &str,
     entries: Vec<VfsMeta>,
 ) -> io::Result<Listed> {
+    let entries = super::snapshot_duplicates::observe(ctx, dir, entries)?;
     let mut listed = Listed {
         files: Vec::new(),
         dirs: Vec::new(),

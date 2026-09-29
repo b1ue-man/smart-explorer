@@ -250,6 +250,18 @@ impl Backend for CachingBackend {
         self.invalidate(destination);
         result
     }
+    fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.inner.list_dir_for_sync(path)
+    }
+    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+        let result = self.inner.promote_staged_to_id(staged, destination, id);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        result
+    }
+    fn has_duplicate_file_names(&self) -> bool {
+        self.inner.has_duplicate_file_names()
+    }
     fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
         let result = self.inner.promote_staged_no_replace(staged, destination);
         self.invalidate(staged);

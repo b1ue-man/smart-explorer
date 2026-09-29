@@ -51,6 +51,7 @@ fn fixture(tag: &str, a_bytes: Option<&[u8]>, b_bytes: Option<&[u8]>) -> Resolve
         rel: "f.txt".into(),
         a: a_bytes.map(|_| signature(&backend_a, &path_a)),
         b: b_bytes.map(|_| signature(&backend_b, &path_b)),
+        duplicates: None,
     };
     let pair = format!("resolve-test-{}-{tag}", std::process::id());
     ResolveFixture {

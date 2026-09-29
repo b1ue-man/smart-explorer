@@ -97,6 +97,22 @@ impl Backend for GDriveBackend {
         self.stat_marker_aware(path)
     }
 
+    fn has_duplicate_file_names(&self) -> bool { true }
+
+    fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        let mut entries = self.list_dir(path)?;
+        for entry in &mut entries {
+            // Directory aliases identify distinct roots and stay distinct.
+            // Literal marker-like titles are encoded and never match here.
+            if !entry.is_dir && !entry.is_symlink {
+                if let Some((plain, _)) = super::duplicates::parse_marker(&entry.name) {
+                    entry.name = plain.to_string();
+                }
+            }
+        }
+        Ok(entries)
+    }
+
     fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
         self.resolve(path).map(Some)
     }
@@ -255,6 +271,9 @@ impl Backend for GDriveBackend {
 
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         self.promote_staged_file(staged, destination)
+    }
+    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+        self.promote_staged_file_to_id(staged, destination, id)
     }
 
     fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {

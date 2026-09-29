@@ -69,7 +69,8 @@ fn canceled_error() -> io::Error {
     )
 }
 
-fn list_plain_directory(be: &dyn Backend, path: &str) -> io::Result<Vec<crate::vfs::VfsMeta>> {
+fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<Vec<crate::vfs::VfsMeta>> {
+    let be = ctx.be;
     let metadata = be.stat(path)?;
     if metadata.is_symlink || !metadata.is_dir {
         return Err(io::Error::new(
@@ -77,7 +78,7 @@ fn list_plain_directory(be: &dyn Backend, path: &str) -> io::Result<Vec<crate::v
             format!("sync directory changed into a link or non-directory: {path}"),
         ));
     }
-    be.list_dir(path)
+    if ctx.duplicates.is_some() { be.list_dir_for_sync(path) } else { be.list_dir(path) }
 }
 
 #[derive(Default)]
@@ -273,7 +274,7 @@ impl TreeWalk<'_> {
             ));
         }
         let entries = match &self.flow {
-            None => list_plain_directory(self.context.be, dir),
+            None => list_plain_directory(self.context, dir),
             Some(flow) => under_permits(
                 self.context.cancel,
                 &self.context.progress,
@@ -286,7 +287,7 @@ impl TreeWalk<'_> {
                     self.stop_waiting(enlisted);
                     permit
                 },
-                |_| list_plain_directory(self.context.be, dir),
+                |_| list_plain_directory(self.context, dir),
             )
             .unwrap_or_else(|| Err(canceled_error())),
         };

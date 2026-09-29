@@ -32,6 +32,16 @@ mod apply_retry;
 mod apply_transfer;
 #[path = "core/plan.rs"]
 mod core;
+#[path = "core/duplicate_types.rs"]
+mod duplicate_types;
+#[path = "os/shared/duplicate_observation.rs"]
+mod duplicate_observation;
+#[path = "os/shared/duplicate_plan.rs"]
+mod duplicate_plan;
+#[path = "os/shared/duplicate_apply.rs"]
+mod duplicate_apply;
+#[path = "os/shared/duplicate_backup.rs"]
+mod duplicate_backup;
 #[path = "os/shared/incremental.rs"]
 mod incremental;
 #[path = "os/shared/incremental_changes.rs"]
@@ -58,6 +68,8 @@ mod snapshot;
 mod snapshot_agent;
 #[path = "os/shared/snapshot_dir.rs"]
 mod snapshot_dir;
+#[path = "os/shared/snapshot_duplicates.rs"]
+mod snapshot_duplicates;
 #[path = "os/shared/snapshot_hash.rs"]
 mod snapshot_hash;
 #[path = "os/shared/snapshot_pair.rs"]
@@ -79,13 +91,14 @@ mod types;
 
 pub use apply::apply;
 pub use core::{plan, update_baseline};
+pub use duplicate_types::{DuplicateConflict, FileVariant};
 pub use omissions::SyncOmissions;
 pub use orchestration::{run, Outcome};
 pub use persistence::{
     baseline_path, load_baseline, pair_id, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
 pub use preview::{preview, Preview};
-pub use resolve_conflict::{resolve, resolve_checked, ResolvePhase};
+pub use resolve_conflict::{resolve, resolve_checked, resolve_variant_checked, ResolvePhase};
 pub use snapshot::{empty_globset, walk_files, HashMode, WalkFilter};
 pub use types::{
     Action, Baseline, BisyncOptions, BisyncStats, CompareMode, Conflict, ConflictMode,
