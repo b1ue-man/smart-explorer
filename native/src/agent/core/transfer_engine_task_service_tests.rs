@@ -215,22 +215,23 @@ fn transfer_engine_task_server_without_labels_keeps_the_single_file_path() {
         backend.put_batch(&[], &mut io::empty()).unwrap_err().kind(),
         io::ErrorKind::Unsupported
     );
-    assert!(backend
+    // Server copies and their cleanup go to the connection underneath (the
+    // local filesystem here, SFTP `copy-data` over SSH), never as agent frames.
+    let root = temp_root("old_agent_stage");
+    std::fs::write(root.join("a"), b"abc").unwrap();
+    let stage = fwd(&root.join("a.se-copy-1"));
+    let copied = backend
         .server_copy_to_stage(
-            "/a",
-            "/a.se-copy-1",
-            1,
-            &std::sync::atomic::AtomicBool::new(false)
+            &fwd(&root.join("a")),
+            &stage,
+            3,
+            &std::sync::atomic::AtomicBool::new(false),
         )
-        .unwrap()
-        .is_none());
-    assert_eq!(
-        backend
-            .discard_copy_stage("/a.se-copy-1")
-            .unwrap_err()
-            .kind(),
-        io::ErrorKind::Unsupported
-    );
+        .unwrap();
+    assert_eq!(copied, Some(3));
+    backend.discard_copy_stage(&stage).unwrap();
+    assert!(!root.join("a.se-copy-1").exists());
+    let _ = std::fs::remove_dir_all(&root);
     backend.create_dir("/new").unwrap();
     assert_eq!(
         backend.create_dir_new("/existing").unwrap_err().kind(),
