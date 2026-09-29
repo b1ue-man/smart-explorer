@@ -153,12 +153,15 @@ fn transfer_engine_task_sftp_reader_failure_stays_a_failure() {
     assert_eq!(read.source().closed, 1);
 }
 
-/// READs answered by tokio tasks, later ones sooner than earlier ones.
+/// READs answered by tokio tasks; the first one only after a later one has
+/// answered. The order is explicit, not a race of sleeps: Windows wakes
+/// timers on a ~15.6 ms tick, so delays 10 ms apart may end together.
 struct Delayed {
     rt: Arc<tokio::runtime::Runtime>,
     content: Arc<Vec<u8>>,
     issued: u64,
     arrivals: Arc<Mutex<Vec<u64>>>,
+    later_answered: Arc<tokio::sync::Notify>,
 }
 
 impl ReadSource for Delayed {
@@ -167,11 +170,21 @@ impl ReadSource for Delayed {
     fn issue(&mut self, offset: u64, len: u32) -> Self::Pending {
         let content = self.content.clone();
         let arrivals = self.arrivals.clone();
-        let delay = Duration::from_millis(40u64.saturating_sub(self.issued * 10));
+        let later_answered = self.later_answered.clone();
+        let first = self.issued == 0;
         self.issued += 1;
         self.rt.spawn(async move {
-            tokio::time::sleep(delay).await;
+            if first {
+                // Bounded: a reader that never issues a second READ before
+                // waiting for the first fails the order check instead of
+                // hanging.
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(5), later_answered.notified()).await;
+            }
             arrivals.lock().unwrap().push(offset);
+            if !first {
+                later_answered.notify_one();
+            }
             let start = offset as usize;
             let reply = if start >= content.len() {
                 Reply::Eof
@@ -213,6 +226,7 @@ fn transfer_engine_task_sftp_reader_orders_answers_that_arrive_out_of_order() {
         content: Arc::new(content.clone()),
         issued: 0,
         arrivals: arrivals.clone(),
+        later_answered: Arc::new(tokio::sync::Notify::new()),
     };
     let mut read = PipelinedRead::new(source, 0, 10, Pipeline::new(10, 64));
     let mut out = Vec::new();
