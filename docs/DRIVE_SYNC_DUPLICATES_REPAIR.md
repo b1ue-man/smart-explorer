@@ -93,3 +93,10 @@ Remote fixtures exercise the real Drive HTTP adapter against controlled response
 They do not access or modify the user's real Drive account. Physical Android
 radio/Doze transitions and a real-account duplicate cleanup remain validation
 limits to report, not claims inferred from a loopback result.
+
+The combined entrypoint additionally invokes only the Android conflict-model
+JVM fixture on Linux; Gradle incrementally compiles the affected Kotlin app
+sources but does not package an APK or build native Android libraries. The
+workflow and entrypoint budgets are 250 and 245 minutes. Native assertions cover
+the mobile JSON fields, alongside the desktop/core transactions, and retain the
+directly affected ordinary conflict, cancellation, link and snapshot integrations.

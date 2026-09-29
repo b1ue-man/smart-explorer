@@ -335,3 +335,7 @@ pub(super) fn finish(args: &Value) -> Result<Value, ApiError> {
     save_resolved(str_arg(args, "id")?)?;
     Ok(json!({}))
 }
+
+#[cfg(test)]
+#[path = "sync_conflict_variant_task_tests.rs"]
+mod variant_tests;

@@ -103,7 +103,14 @@ cached boundary is included in the source-drift and real-peer acceptance cases.
 | M4: bounded open recovery | `transfer/os/shared/local_stage.rs`, new `edit_download.rs`, transfer re-exports, desktop download call; depends on M3 | At most three attempts, delayed between attempts, with a 45-second window for starting retries. Only Share remote read failures retry; each starts from byte zero. Final output is complete, failures leave no partial published file. Local errors, permission denial, protocol corruption and source drift stop. IDs, empty files, exports and non-Share backends preserve their contracts. The successful attempt supplies the conflict baseline. |
 | M5: integration and delivery | Focused task fixtures, one `native/test-direct-open-task.py`, one manual Windows/Linux workflow, root graph, README/release docs; depends on M1–M4 | Real Direct reconnect plus daemon/agent streaming, authorization/identity, Room/shared read path, recovery lifecycle, conflict/save-back and stage cleanup checked in one remote pipeline. Reuse source/hash-bound library fixture or incremental host-library build. Commit/push milestones, evaluate the suite, then one existing complete-release dispatch. |
 
-No protocol capability, global timeout, Android background preference, sync path,
+For M1–M4, no protocol capability, global timeout, Android background preference, sync path,
 mount identity, mutation replay rule, or release procedure is changed. CI uses
 isolated profiles and no GUI launch. A physical Android network/Doze transition
 cannot be proven by loopback fixtures and must be reported as a validation limit.
+
+The active batch now also includes [Drive duplicate conflict repair](DRIVE_SYNC_DUPLICATES_REPAIR.md).
+The earlier Direct candidate `ea553ef2952fa72df2278207a92b79b1c8cc345b`
+passed Windows/Linux in [run 36618661175](https://github.com/b1ue-man/smart-explorer/actions/runs/36618661175).
+That result predates the final save-back revision guard and added sync work.
+The same entrypoint now covers the complete candidate; its final acceptance and
+the one terminal publication remain pending.

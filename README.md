@@ -456,6 +456,18 @@ Wiederverbindung und mit einer frischen temporären Datei. Ein dauerhaft offline
 oder von Android angehaltenes Gerät bleibt ein sichtbarer Fehler. Abnahme und
 Veröffentlichungsstand: [Direct-Dateiöffnen](docs/DIRECT_REMOTE_OPEN_REPAIR.md).
 
+Beim Sync behandelt der aktuelle Quellstand gleichnamige Drive-Dateien als
+Varianten einer Datei. Gibt es genau einen gemeinsamen Inhalt auf beiden Seiten,
+bleibt dieser jeweils einmal erhalten; zusätzliche Kopien werden nach Sicherung
+in den Drive-Papierkorb verschoben. Andernfalls zeigt die Konfliktlösung die
+Versionen zur Auswahl. „A verwenden“ übernimmt den gewählten Inhalt auf beide
+Seiten und entfernt die übrigen Varianten nach Sicherung. Enthält A selbst
+unterschiedliche Versionen, ist eine konkrete Auswahl nötig. „Nie löschen“
+verhindert automatische Bereinigung; die Löschlimits gelten auch für Duplikate.
+Drive-Paare benötigen dafür derzeit einen vollständigen Vergleich, was zusätzliche
+Ordnerabfragen verursacht. Abnahme und Veröffentlichungsstand:
+[Sync-Duplikate](docs/DRIVE_SYNC_DUPLICATES_REPAIR.md).
+
 **Lokale Windows-Speicheranalyse (ab 0.5.153):**
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
 begrenzten Windows-Backup-Lesezugriff ausgewertet — Administratorzugehörigkeit

@@ -19,10 +19,12 @@ pub(super) struct FakeDrive {
     next: AtomicUsize,
     objects: Mutex<HashMap<String, Value>>,
     sessions: Mutex<Sessions>,
+    media: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 impl FakeDrive {
     pub(super) fn insert(&self, id: &str, name: &str, parent: &str, mime: &str, content: &[u8]) {
+        self.media.lock().unwrap().insert(id.to_string(), content.to_vec());
         self.objects.lock().unwrap().insert(
             id.to_string(),
             object(id, name, parent, mime, Some(content)),
@@ -113,6 +115,18 @@ impl FakeDrive {
                 }
             },
             ("PUT", session) if session.starts_with("/upload/session/") => self.put(request),
+            ("PATCH", item) if item.starts_with("/upload/drive/v3/files/") => {
+                let id = item.rsplit('/').next().unwrap();
+                let Some(mut metadata) = self.object(id) else {
+                    return Answer::status(404, json!({"error": {"message": "File not found"}}));
+                };
+                metadata["_replace"] = json!(true);
+                let total = request.header("x-upload-content-length").unwrap().parse().unwrap();
+                let session = format!("s{}", self.next.fetch_add(1, Ordering::SeqCst));
+                self.sessions.lock().unwrap().insert(session.clone(), (metadata, total, Vec::new()));
+                Answer::json(json!({})).header("Location", &format!(
+                    "http://{}/upload/session/{session}", request.header("host").unwrap()))
+            }
             ("GET", "/drive/v3/files") => {
                 let query = request.query("q").unwrap_or_default();
                 let parent = query.split('\'').nth(1).unwrap_or_default().to_string();
@@ -143,10 +157,18 @@ impl FakeDrive {
                     .lock()
                     .unwrap()
                     .insert(metadata["id"].as_str().unwrap().to_string(), copy.clone());
+                let copied_bytes = self.media.lock().unwrap().get(source["id"].as_str().unwrap()).cloned();
+                if let Some(bytes) = copied_bytes {
+                    self.media.lock().unwrap().insert(metadata["id"].as_str().unwrap().to_string(), bytes);
+                }
                 Answer::json(copy)
             }
             ("GET", item) if item.starts_with("/drive/v3/files/") => {
                 match self.object(item.rsplit('/').next().unwrap()) {
+                    Some(object) if request.query("alt").as_deref() == Some("media") => Answer {
+                        status: 200, headers: Vec::new(),
+                        body: self.media.lock().unwrap().get(object["id"].as_str().unwrap()).cloned().unwrap_or_default(),
+                    },
                     Some(object) => Answer::json(object),
                     None => Answer::status(404, json!({"error": {"message": "File not found"}})),
                 }
@@ -187,6 +209,9 @@ impl FakeDrive {
             content,
         );
         objects.insert(id, created.clone());
+        if let Some(content) = content {
+            self.media.lock().unwrap().insert(metadata["id"].as_str().unwrap().to_string(), content.to_vec());
+        }
         Answer::json(created)
     }
 
@@ -214,6 +239,12 @@ impl FakeDrive {
         if data.len() as u64 == *total {
             let (metadata, content) = (metadata.clone(), data.clone());
             drop(sessions);
+            if metadata["_replace"].as_bool() == Some(true) {
+                let id = metadata["id"].as_str().unwrap();
+                self.insert(id, metadata["name"].as_str().unwrap(), metadata["parents"][0].as_str().unwrap(),
+                    metadata["mimeType"].as_str().unwrap(), &content);
+                return Answer::json(self.object(id).unwrap());
+            }
             return self.create(&metadata, "application/octet-stream", Some(&content));
         }
         match data.len() {
