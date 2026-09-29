@@ -368,7 +368,7 @@ impl Pass<'_> {
                     if halted {
                         break None;
                     }
-                    if let Some(task) = take(&mut *state) {
+                    if let Some(task) = take(&mut state) {
                         let crew = state.crew(kind);
                         crew.busy += 1;
                         if kind == Kind::Copier {

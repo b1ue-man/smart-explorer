@@ -221,19 +221,18 @@ impl Pool<'_> {
 
     /// Entered counted as waiting (set when the group was taken).
     fn run_group(&self, group: &[usize]) {
-        let mut waiting = true;
+        let mut counted = true;
         for &position in group {
             if self.canceled() {
                 break;
             }
             let action = &self.actions[position];
-            if !waiting {
+            if !counted {
                 self.lock().waiting += 1;
-                waiting = true;
             }
             let permits = (self.admit)(action);
             self.lock().waiting -= 1;
-            waiting = false;
+            counted = false;
             self.changed.notify_all();
             // `None`: canceled before the action started; nothing to report.
             let Some(permits) = permits else {
@@ -249,7 +248,7 @@ impl Pool<'_> {
             }
             self.record(action, result);
         }
-        if waiting {
+        if counted {
             self.lock().waiting -= 1;
             self.changed.notify_all();
         }
