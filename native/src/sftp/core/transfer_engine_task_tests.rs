@@ -2,10 +2,10 @@
 //! decisions and the SSH window settings. No server: the READ source is a
 //! script, so the ordering rules are checked exactly.
 use super::channel_pool::{learned_limit, pick, Pick};
-use super::pipeline::Pipeline;
 use super::pipelined_read::{PipelinedRead, ReadSource, Reply};
 use super::pool_writer::{check_length, SizedWriter};
 use super::session::client_config;
+use crate::transfer::read_pipeline::Pipeline;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};

@@ -4,9 +4,12 @@
 //!
 //! The writer's `flush` is its commit boundary, like the SFTP and FTP
 //! writers: pending bytes go out, then FLUSH and CLOSE (`FileWriter::finish`)
-//! and only their success reports the file as written. A writer dropped
-//! without a successful `flush` aborts (no FLUSH) and removes the partial
-//! file, so an interrupted upload never leaves a truncated file behind.
+//! and only their success reports the file as written. An unsynced copy
+//! stage skips the FLUSH: every WRITE answer is still awaited and must
+//! confirm all accepted bytes before CLOSE (`FileWriter::abort`, which sends
+//! no FLUSH). A writer dropped without a successful `flush` aborts and
+//! removes the partial file, so an interrupted upload never leaves a
+//! truncated file behind.
 //! WRITEs are already pipelined by smb2 (`WriteBehind::Adaptive`: about
 //! uplink rate × round trip in flight, within the credit window).
 use super::errors;
@@ -27,6 +30,29 @@ enum WriteState {
     Failed,
 }
 
+/// What `flush` (the commit) does after the last WRITE.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Commit {
+    /// FLUSH, then CLOSE (`FileWriter::finish`).
+    Durable,
+    /// CLOSE without FLUSH: an engine copy stage whose source stays (plan W1
+    /// `open_write_copy_stage_unsynced`); sync, mounts and replacements keep
+    /// `Durable`.
+    Unsynced,
+}
+
+/// An unsynced commit holds only when the server confirmed every accepted
+/// byte: `FileWriter::abort` counts the WRITE answers that succeeded and
+/// skips refused ones and those lost with the connection.
+pub(super) fn unsynced_commit(accepted: u64, confirmed: u64) -> io::Result<()> {
+    if confirmed == accepted {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "SMB-Server hat nur {confirmed} von {accepted} Bytes bestätigt"
+    )))
+}
+
 pub(super) struct SmbWriter {
     writer: Option<FileWriter>,
     pending: Vec<u8>,
@@ -34,6 +60,7 @@ pub(super) struct SmbWriter {
     /// Exact length of a sized copy stage (plan W1); `flush` refuses others.
     expected: Option<u64>,
     accepted: u64,
+    commit: Commit,
     /// Share-relative path, for removing a partial file.
     rel: String,
     path: String,
@@ -58,12 +85,18 @@ impl SmbWriter {
             state: WriteState::Open,
             expected,
             accepted: 0,
+            commit: Commit::Durable,
             rel: rel.to_string(),
             path: path.to_string(),
             tree,
             generation,
             rt,
         }
+    }
+
+    pub(super) fn with_commit(mut self, commit: Commit) -> Self {
+        self.commit = commit;
+        self
     }
 
     /// A sized stage whose source delivered another length: the partial
@@ -153,10 +186,22 @@ impl Write for SmbWriter {
         let Some(writer) = self.writer.take() else {
             return Err(io::Error::other("SMB-Datei ist bereits geschlossen"));
         };
-        match self.rt.block_on(writer.finish()) {
-            Ok(_) => {
+        let committed = match self.commit {
+            Commit::Durable => self.rt.block_on(writer.finish()).map(|_| Ok(())),
+            Commit::Unsynced => self
+                .rt
+                .block_on(writer.abort())
+                .map(|confirmed| unsynced_commit(self.accepted, confirmed)),
+        };
+        match committed {
+            Ok(Ok(())) => {
                 self.state = WriteState::Committed;
                 Ok(())
+            }
+            Ok(Err(error)) => {
+                self.state = WriteState::Failed;
+                self.remove_partial(None);
+                Err(error)
             }
             Err(error) => {
                 // The handle is gone with `finish`; the file content is not

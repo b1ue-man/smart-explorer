@@ -333,7 +333,14 @@ fn transfer_engine_task_agent_stage_operations_stay_exclusive() {
     let stage = fwd(&root.join("copy.txt.se-copy-1"));
     let source = fwd(&root.join("a.txt"));
     assert_eq!(
-        backend.server_copy_to_stage(&source, &stage, 5).unwrap(),
+        backend
+            .server_copy_to_stage(
+                &source,
+                &stage,
+                5,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
         Some(5)
     );
     backend
@@ -341,7 +348,14 @@ fn transfer_engine_task_agent_stage_operations_stay_exclusive() {
         .unwrap();
     assert_eq!(std::fs::read(root.join("copy.txt")).unwrap(), b"alpha");
     let wrong = fwd(&root.join("wrong.se-copy-2"));
-    assert!(backend.server_copy_to_stage(&source, &wrong, 4).is_err());
+    assert!(backend
+        .server_copy_to_stage(
+            &source,
+            &wrong,
+            4,
+            &std::sync::atomic::AtomicBool::new(false)
+        )
+        .is_err());
 
     // Only stage names may be discarded; a published file stays.
     assert!(backend

@@ -22,7 +22,12 @@ fn transfer_engine_task_local_server_copy_fills_a_new_stage() {
     fs::write(&source, &bytes).expect("source");
     let stage = root.path().join("copy.bin.se-upload-0123456789abcdef");
     let copied = LocalBackend::new("/")
-        .server_copy_to_stage(&fwd(&source), &fwd(&stage), bytes.len() as u64)
+        .server_copy_to_stage(
+            &fwd(&source),
+            &fwd(&stage),
+            bytes.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .expect("server copy");
     assert_eq!(copied, Some(bytes.len() as u64));
     assert_eq!(fs::read(&stage).expect("stage"), bytes);
@@ -45,7 +50,12 @@ fn transfer_engine_task_local_server_copy_never_adopts_an_existing_stage() {
     let stage = root.path().join("taken.se-upload-0123456789abcdef");
     fs::write(&stage, b"foreign").expect("foreign stage");
     let error = LocalBackend::new("/")
-        .server_copy_to_stage(&fwd(&source), &fwd(&stage), 9)
+        .server_copy_to_stage(
+            &fwd(&source),
+            &fwd(&stage),
+            9,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .expect_err("an existing stage name is never used");
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     assert_eq!(fs::read(&stage).expect("foreign data"), b"foreign");
@@ -59,7 +69,12 @@ fn transfer_engine_task_local_server_copy_checks_the_expected_length() {
     fs::write(&source, &bytes).expect("source");
     let stage = root.path().join("short.se-upload-0123456789abcdef");
     let error = LocalBackend::new("/")
-        .server_copy_to_stage(&fwd(&source), &fwd(&stage), bytes.len() as u64 + 1)
+        .server_copy_to_stage(
+            &fwd(&source),
+            &fwd(&stage),
+            bytes.len() as u64 + 1,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .expect_err("a copy of another length than listed is refused");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("geändert"), "{error}");
@@ -74,7 +89,12 @@ fn transfer_engine_task_local_server_copy_refuses_folders() {
     fs::create_dir(&folder).expect("folder");
     let stage = root.path().join("folder.se-upload-0123456789abcdef");
     let error = LocalBackend::new("/")
-        .server_copy_to_stage(&fwd(&folder), &fwd(&stage), 0)
+        .server_copy_to_stage(
+            &fwd(&folder),
+            &fwd(&stage),
+            0,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .expect_err("only regular files are copied");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(!stage.exists());
@@ -90,7 +110,12 @@ fn transfer_engine_task_local_server_copy_refuses_links() {
     std::os::unix::fs::symlink(&target, &link).expect("link");
     let stage = root.path().join("link.se-upload-0123456789abcdef");
     let error = LocalBackend::new("/")
-        .server_copy_to_stage(&fwd(&link), &fwd(&stage), 15)
+        .server_copy_to_stage(
+            &fwd(&link),
+            &fwd(&stage),
+            15,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .expect_err("a link as source is refused, not followed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(

@@ -318,7 +318,13 @@ impl Backend for WebdavBackend {
 
     /// COPY with `Overwrite: F` into the stage: the bytes never leave the
     /// server. `None` when the server has no COPY (the engine streams).
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         let _ = size;
         self.copy_to_stage(src, stage)
     }

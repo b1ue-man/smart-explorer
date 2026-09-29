@@ -1,7 +1,7 @@
 use super::channel_pool::{note_failure, ChannelPool};
 use super::config::SftpConfig;
 use super::connection::{SftpConnection, SftpGeneration};
-use super::io_adapters::{seek_start, SftpReader, SftpWriter};
+use super::io_adapters::{seek_start, Commit, SftpReader, SftpWriter};
 use super::io_err;
 use super::metadata::{basename, to_vfs};
 use super::pool_writer::SizedWriter;
@@ -126,7 +126,12 @@ impl SftpBackend {
         })
     }
 
-    fn open_main_writer(&self, path: &str, flags: OpenFlags) -> io::Result<SftpWriter> {
+    fn open_main_writer(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        commit: Commit,
+    ) -> io::Result<SftpWriter> {
         let generation = self.connection.current()?;
         let file = self
             .rt
@@ -140,6 +145,7 @@ impl SftpBackend {
             connection: self.connection.clone(),
             generation,
             file: Some(file),
+            commit,
         })
     }
 
@@ -149,11 +155,12 @@ impl SftpBackend {
         path: &str,
         flags: OpenFlags,
         expected: Option<u64>,
+        commit: Commit,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        if let Some(writer) = self.open_pool_writer(path, flags, expected)? {
+        if let Some(writer) = self.open_pool_writer(path, flags, expected, commit)? {
             return Ok(Box::new(writer));
         }
-        let writer = self.open_main_writer(path, flags)?;
+        let writer = self.open_main_writer(path, flags, commit)?;
         let writer: Box<dyn Write + Send> = match expected {
             Some(size) => Box::new(SizedWriter::new(writer, size)),
             None => Box::new(writer),
@@ -244,11 +251,11 @@ impl Backend for SftpBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.writer(path, create_flags(), None)
+        self.writer(path, create_flags(), None, Commit::Durable)
     }
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.writer(path, create_new_flags(), None)
+        self.writer(path, create_new_flags(), None, Commit::Durable)
     }
 
     /// The exclusive stage streams anyway; the known length is enforced at
@@ -258,7 +265,29 @@ impl Backend for SftpBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.writer(path, create_new_flags(), Some(size))
+        self.writer(path, create_new_flags(), Some(size), Commit::Durable)
+    }
+
+    /// The sized stage committed without `fsync@openssh.com`: all
+    /// acknowledgements and CLOSE still come before `flush` returns.
+    fn open_write_copy_stage_unsynced(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.writer(path, create_new_flags(), Some(size), Commit::Unsynced)
+    }
+
+    /// Inside one server the server copies itself (`copy-data`,
+    /// copy_data.rs); `None` streams.
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        self.copy_on_server(src, stage, size, cancel)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {

@@ -190,7 +190,13 @@ impl Backend for GDriveBackend {
         super::sized_writer::open_stage(self, path, size)
     }
 
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         self.copy_to_stage(src, stage, size)
     }
 

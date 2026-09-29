@@ -291,9 +291,17 @@ impl Backend for AgentBackend {
         self.agent_open_write_new(path)
     }
 
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         if !self.features().stage {
-            return Ok(None);
+            // An older agent: the SSH connection underneath may still copy
+            // on the server (SFTP `copy-data`); a proxied peer answers `None`.
+            return self.inner.server_copy_to_stage(src, stage, size, cancel);
         }
         self.agent_copy_to_stage(src, stage, size)
     }

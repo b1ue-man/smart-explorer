@@ -1,13 +1,15 @@
 use super::listing;
 use super::reader::SmbReader;
 use super::replace;
+use super::server_copy::{self, ServerCopy, TreeOps};
 use super::session::{SmbConfig, SmbSession};
-use super::streams::SmbWriter;
+use super::streams::{Commit, SmbWriter};
 use super::url::{entry_path, rename_paths, split_path, SmbPath};
 use super::wire::{self, DeleteKind};
 use crate::vfs::{Backend, Scheme, StagedWriteCapabilities, VfsMeta, VfsResult};
 use smb2::ErrorKind;
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -20,6 +22,9 @@ pub struct SmbBackend {
     url: String,
     /// `smb://user@host:port`, independent of the start folder.
     namespace: String,
+    /// The server answered COPYCHUNK as unsupported once: later copies
+    /// stream without asking again.
+    copy_refused: Arc<AtomicBool>,
 }
 
 fn name_of(path: &str) -> String {
@@ -53,6 +58,7 @@ impl SmbBackend {
             root,
             url,
             namespace,
+            copy_refused: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -61,6 +67,7 @@ impl SmbBackend {
         path: &str,
         exclusive: bool,
         expected: Option<u64>,
+        commit: Commit,
     ) -> VfsResult<Box<dyn Write + Send>> {
         let target = entry_path(path)?;
         let (generation, tree) = self.session.target(&target.share)?;
@@ -77,7 +84,7 @@ impl SmbBackend {
             generation.note(&error);
             super::errors::map(error, "Datei anlegen", path)
         })?;
-        Ok(Box::new(SmbWriter::new(
+        let writer = SmbWriter::new(
             writer,
             &target.rel,
             path,
@@ -85,7 +92,43 @@ impl SmbBackend {
             generation,
             self.session.runtime(),
             expected,
-        )))
+        );
+        Ok(Box::new(writer.with_commit(commit)))
+    }
+
+    /// `server_copy_to_stage` (server_copy.rs). Paths the server cannot
+    /// copy (two shares) and a tree that cannot be reached stream instead:
+    /// the stream path reports what is wrong and has no stage to clean up.
+    fn copy_on_server(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        if self.copy_refused.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let (Ok(source), Ok(target)) = (entry_path(src), entry_path(stage)) else {
+            return Ok(None);
+        };
+        if source.share != target.share {
+            return Ok(None);
+        }
+        let Ok((generation, tree)) = self.session.target(&target.share) else {
+            return Ok(None);
+        };
+        let mut ops = TreeOps {
+            conn: generation.connection(),
+            tree: &*tree,
+            generation: &*generation,
+        };
+        let copied = self.session.block_on(server_copy::copy_to_stage(
+            &mut ops,
+            &source.rel,
+            &target.rel,
+            size,
+        ));
+        let copied =
+            copied.map_err(|error| super::errors::map(error, "Serverseitig kopieren", stage))?;
+        if copied == ServerCopy::Refused {
+            self.copy_refused.store(true, Ordering::Release);
+        }
+        Ok(copied.engine_answer())
     }
 
     /// A reader from byte `start`; a connection lost before any byte was
@@ -230,13 +273,13 @@ impl Backend for SmbBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.write_file(path, false, None)
+        self.write_file(path, false, None, Commit::Durable)
     }
 
     /// One CREATE with `FileCreate`: an existing name fails with
     /// `AlreadyExists` instead of being truncated.
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.write_file(path, true, None)
+        self.write_file(path, true, None, Commit::Durable)
     }
 
     /// The exclusive stage streams anyway; its known length is enforced at
@@ -246,7 +289,29 @@ impl Backend for SmbBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.write_file(path, true, Some(size))
+        self.write_file(path, true, Some(size), Commit::Durable)
+    }
+
+    /// The sized stage committed without FLUSH (io.rs `Commit::Unsynced`).
+    fn open_write_copy_stage_unsynced(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.write_file(path, true, Some(size), Commit::Unsynced)
+    }
+
+    /// Inside one share the server copies itself (COPYCHUNK); `None` streams.
+    /// smb2 drives the whole range at the server's own speed, so a cancel is
+    /// seen when it returns.
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        self.copy_on_server(src, stage, size)
     }
 
     /// ReplaceIfExists = 1: an existing file is replaced in one step.

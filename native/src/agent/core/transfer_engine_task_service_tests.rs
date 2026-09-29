@@ -216,7 +216,12 @@ fn transfer_engine_task_server_without_labels_keeps_the_single_file_path() {
         io::ErrorKind::Unsupported
     );
     assert!(backend
-        .server_copy_to_stage("/a", "/a.se-copy-1", 1)
+        .server_copy_to_stage(
+            "/a",
+            "/a.se-copy-1",
+            1,
+            &std::sync::atomic::AtomicBool::new(false)
+        )
         .unwrap()
         .is_none());
     assert_eq!(

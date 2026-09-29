@@ -12,7 +12,7 @@
 //! up to `cap`. Every chunk beyond the first is read-ahead that sits in memory
 //! until the caller takes it, so it is reserved from the transfer memory
 //! budget before the depth grows (plan K7); without budget the depth stays.
-//! Used by the SFTP channel pool and the SMB reader.
+//! Shared by the SFTP channel pool (reads and writes) and the SMB reader.
 use crate::transfer::{try_reserve_memory, MemoryReservation};
 use std::time::Duration;
 

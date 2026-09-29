@@ -429,12 +429,18 @@ impl Backend for TaskBackend {
             "fixture cannot prove the stage is still its own",
         ))
     }
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         if !self.server_copy {
             return Ok(None);
         }
         self.mutations.fetch_add(1, Ordering::Relaxed);
-        self.inner.server_copy_to_stage(src, stage, size)
+        self.inner.server_copy_to_stage(src, stage, size, cancel)
     }
     fn transfer_ceiling(&self, _path: &str) -> Option<usize> {
         self.ceiling

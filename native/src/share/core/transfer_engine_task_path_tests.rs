@@ -149,13 +149,23 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
     fs::write(fixture.root_b.join("source.bin"), &payload)?;
     let copies = fixture.root_b.join("copies");
     assert_eq!(
-        backend.server_copy_to_stage("/B/source.bin", "/B/copies/source.bin.se-copy-a", size)?,
+        backend.server_copy_to_stage(
+            "/B/source.bin",
+            "/B/copies/source.bin.se-copy-a",
+            size,
+            &std::sync::atomic::AtomicBool::new(false)
+        )?,
         Some(size)
     );
     backend.promote_copy_stage("/B/copies/source.bin.se-copy-a", "/B/copies/source.bin")?;
     assert_eq!(fs::read(copies.join("source.bin"))?, payload);
     assert_eq!(
-        backend.server_copy_to_stage("/B/source.bin", "/B/copies/source.bin.se-copy-b", size)?,
+        backend.server_copy_to_stage(
+            "/B/source.bin",
+            "/B/copies/source.bin.se-copy-b",
+            size,
+            &std::sync::atomic::AtomicBool::new(false)
+        )?,
         Some(size)
     );
     let taken = backend

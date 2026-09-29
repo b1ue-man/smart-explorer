@@ -15,6 +15,7 @@
 //! can be opened at all, transfers use the main session as before.
 use super::backend::SftpBackend;
 use super::connection::{classify_sftp_error, SftpConnection, SftpGeneration};
+use super::copy_data::COPY_DATA;
 use super::exec::ChannelOpen;
 use super::io_err;
 use super::posix_rename::POSIX_RENAME;
@@ -23,6 +24,7 @@ use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::rawsession::Limits;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::extensions;
+use russh_sftp::protocol::Version;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -60,6 +62,9 @@ pub(super) struct PoolChannel {
     /// `posix-rename@openssh.com` offered: an atomic replace needs no extra
     /// channel then (posix_rename.rs).
     pub(super) posix_rename: bool,
+    /// `copy-data` offered: the server copies between two handles of this
+    /// channel (copy_data.rs).
+    pub(super) copy_data: bool,
     active: AtomicUsize,
     idle_since: Mutex<Instant>,
     broken: AtomicBool,
@@ -84,6 +89,7 @@ impl PoolChannel {
             write_len: setup.limits.and_then(|limits| limits.write_len),
             fsync: setup.fsync,
             posix_rename: setup.posix_rename,
+            copy_data: setup.copy_data,
             active: AtomicUsize::new(0),
             idle_since: Mutex::new(Instant::now()),
             broken: AtomicBool::new(false),
@@ -202,6 +208,9 @@ pub(super) fn pick(loads: &[usize], opening: usize, limit: Option<usize>) -> Pic
 #[derive(Default)]
 pub(super) struct ChannelPool {
     state: Mutex<PoolState>,
+    /// The server refused `copy-data` once: its request policy holds for
+    /// every channel, so later copies stream without asking again.
+    copy_refused: AtomicBool,
 }
 
 #[derive(Default)]
@@ -288,9 +297,27 @@ struct Setup {
     limits: Option<Limits>,
     fsync: bool,
     posix_rename: bool,
+    copy_data: bool,
+}
+
+/// Whether the server's VERSION reply offers extension `name` in the
+/// version these clients speak ("1" for every extension used here).
+pub(super) fn offered(version: &Version, name: &str) -> bool {
+    version
+        .extensions
+        .get(name)
+        .is_some_and(|value| value == "1")
 }
 
 impl ChannelPool {
+    pub(super) fn copy_data_refused(&self) -> bool {
+        self.copy_refused.load(Ordering::Acquire)
+    }
+
+    pub(super) fn refuse_copy_data(&self) {
+        self.copy_refused.store(true, Ordering::Release);
+    }
+
     /// Closes channels idle past `IDLE_RETIRE` (all but the warm one)
     /// without waiting for the next transfer.
     pub(super) fn retire_idle(&self) {
@@ -360,15 +387,10 @@ async fn setup(channel: russh::Channel<client::Msg>) -> io::Result<Setup> {
         let mut session = RawSftpSession::new(channel.into_stream());
         session.set_timeout(REQUEST_TIMEOUT_SECS);
         let version = session.init().await.map_err(io_err)?;
-        let offered = |name: &str| {
-            version
-                .extensions
-                .get(name)
-                .is_some_and(|value| value == "1")
-        };
-        let fsync = offered(extensions::FSYNC);
-        let posix_rename = offered(POSIX_RENAME);
-        let limits = if offered(extensions::LIMITS) {
+        let fsync = offered(&version, extensions::FSYNC);
+        let posix_rename = offered(&version, POSIX_RENAME);
+        let copy_data = offered(&version, COPY_DATA);
+        let limits = if offered(&version, extensions::LIMITS) {
             let limits = Limits::from(session.limits().await.map_err(io_err)?);
             session.set_limits(limits);
             Some(limits)
@@ -380,6 +402,7 @@ async fn setup(channel: russh::Channel<client::Msg>) -> io::Result<Setup> {
             limits,
             fsync,
             posix_rename,
+            copy_data,
         })
     })
     .await;

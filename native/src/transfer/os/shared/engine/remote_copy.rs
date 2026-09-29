@@ -68,7 +68,7 @@ fn server_copy(
         let stage = publish::stage_name(&path);
         match pair
             .target
-            .server_copy_to_stage(&file.source, &stage, file.size)
+            .server_copy_to_stage(&file.source, &stage, file.size, engine.stop_flag())
         {
             Ok(None) => return Ok(None),
             Ok(Some(copied)) => {

@@ -192,16 +192,7 @@ impl Backend for CachingBackend {
         self.inner.read_size(path, metadata_size)
     }
     fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.invalidate(path);
-        let result = self.inner.open_write_copy_stage(path);
-        self.invalidate(path);
-        result.map(|writer| {
-            Box::new(InvalidatingWriter::new(
-                writer,
-                Arc::clone(&self.cache),
-                path,
-            )) as Box<dyn Write + Send>
-        })
+        self.invalidating_writer(path, || self.inner.open_write_copy_stage(path))
     }
     fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
         let result = self.inner.promote_copy_stage(staged, destination);
@@ -214,35 +205,25 @@ impl Backend for CachingBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.invalidate(path);
-        let result = self.inner.open_write_copy_stage_sized(path, size);
-        self.invalidate(path);
-        result.map(|writer| {
-            Box::new(InvalidatingWriter::new(
-                writer,
-                Arc::clone(&self.cache),
-                path,
-            )) as Box<dyn Write + Send>
-        })
+        self.invalidating_writer(path, || self.inner.open_write_copy_stage_sized(path, size))
     }
     fn open_write_copy_stage_unsynced(
         &self,
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.invalidate(path);
-        let result = self.inner.open_write_copy_stage_unsynced(path, size);
-        self.invalidate(path);
-        result.map(|writer| {
-            Box::new(InvalidatingWriter::new(
-                writer,
-                Arc::clone(&self.cache),
-                path,
-            )) as Box<dyn Write + Send>
+        self.invalidating_writer(path, || {
+            self.inner.open_write_copy_stage_unsynced(path, size)
         })
     }
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
-        let result = self.inner.server_copy_to_stage(src, stage, size);
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        let result = self.inner.server_copy_to_stage(src, stage, size, cancel);
         self.invalidate(stage);
         result
     }
@@ -316,13 +297,7 @@ impl Backend for CachingBackend {
     fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
         self.invalidate(path);
         let writer = self.inner.open_write_fresh(path, size)?;
-        Ok(writer.map(|writer| {
-            Box::new(InvalidatingWriter::new(
-                writer,
-                Arc::clone(&self.cache),
-                path,
-            )) as Box<dyn Write + Send>
-        }))
+        Ok(writer.map(|writer| self.wrap_writer(writer, path)))
     }
     fn open_read_at(
         &self,

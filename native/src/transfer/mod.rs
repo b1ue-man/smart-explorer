@@ -48,6 +48,8 @@ mod platform;
 mod platform;
 #[path = "os/shared/progress.rs"]
 mod progress;
+#[path = "os/shared/read_pipeline.rs"]
+pub(crate) mod read_pipeline;
 #[path = "os/shared/remote_copy.rs"]
 mod remote_copy;
 #[path = "os/shared/selection.rs"]

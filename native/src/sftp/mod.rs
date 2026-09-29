@@ -15,6 +15,7 @@
 //! (channel_pool.rs) with many READs/WRITEs of one file in flight
 //! (pipelined_read.rs, pool_writer.rs); listing and metadata stay on the
 //! main session, which also serves transfers when no extra channel opens.
+//! Copies inside one server run on the server (`copy-data`, copy_data.rs).
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -24,6 +25,8 @@ mod channel_pool;
 mod config;
 #[path = "core/connection.rs"]
 mod connection;
+#[path = "core/copy_data.rs"]
+mod copy_data;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/exec.rs"]
@@ -34,8 +37,6 @@ mod io_adapters;
 mod known_hosts;
 #[path = "core/metadata.rs"]
 mod metadata;
-#[path = "core/pipeline.rs"]
-mod pipeline;
 #[path = "core/pipelined_read.rs"]
 mod pipelined_read;
 #[path = "core/pool_reader.rs"]
@@ -55,6 +56,9 @@ mod url;
 #[path = "core/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;
 #[cfg(test)]
+#[path = "core/stage_copy_task_tests.rs"]
+mod stage_copy_task_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 
@@ -63,5 +67,3 @@ pub use config::{SftpAuth, SftpConfig};
 pub use url::backend_from_url;
 
 pub(crate) use errors::io_err;
-/// The read-ahead/write-behind depth controller, shared with the SMB reader.
-pub(crate) use pipeline::Pipeline;

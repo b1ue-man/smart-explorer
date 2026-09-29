@@ -3,7 +3,10 @@
 use super::cache_index;
 use super::cache_retirement::Retirement;
 use super::cache_support::{self, cached_snapshot, invalidate_shared};
+use super::cache_writer::InvalidatingWriter;
 use super::{CachingBackend, VfsMeta, VfsResult};
+use std::io::Write;
+use std::sync::Arc;
 
 impl CachingBackend {
     pub(super) fn norm(path: &str) -> String {
@@ -58,6 +61,31 @@ impl CachingBackend {
         cache_index::lookup(&snapshot.entries, &snapshot.index, &key)
             .ok()
             .flatten()
+    }
+
+    /// A writer of the inner backend for `path`, with the listing
+    /// invalidated before and after opening and again when it commits.
+    pub(super) fn invalidating_writer(
+        &self,
+        path: &str,
+        open: impl FnOnce() -> VfsResult<Box<dyn Write + Send>>,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.invalidate(path);
+        let result = open();
+        self.invalidate(path);
+        result.map(|writer| self.wrap_writer(writer, path))
+    }
+
+    pub(super) fn wrap_writer(
+        &self,
+        writer: Box<dyn Write + Send>,
+        path: &str,
+    ) -> Box<dyn Write + Send> {
+        Box::new(InvalidatingWriter::new(
+            writer,
+            Arc::clone(&self.cache),
+            path,
+        ))
     }
 
     pub(super) fn invalidate(&self, path: &str) {

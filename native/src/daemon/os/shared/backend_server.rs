@@ -279,7 +279,7 @@ fn dispatch_backend(
         }
         Frame::CopyToStage { src, stage, size } => answer(
             backend
-                .server_copy_to_stage(&src, &stage, size)
+                .server_copy_to_stage(&src, &stage, size, cancel)
                 .map(Frame::Copied),
         ),
         Frame::CreateDir { path, exclusive } => answer(
