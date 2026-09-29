@@ -34,10 +34,14 @@ object TransferTasks {
         return Format.fraction(tasks.sumOf { it.doneItems.coerceAtLeast(0) }, totalItems)
     }
 
-    /** "12 von 40 Dateien · 1,2 GB · 8 MB/s" (parts only when known). */
+    /**
+     * "12 von 40 Dateien · 1,2 GB · 8 MB/s" (parts only when known). A running task's message comes
+     * first ("Suche Dateien… 120 gefunden" while folders are still being walked, a waiting connection).
+     */
     fun progressLine(task: TaskInfo): String {
         if (task.state == "queued") return "In Warteschlange"
         val parts = mutableListOf<String>()
+        if (task.state == "running") task.message?.takeIf { it.isNotBlank() }?.let { parts += it }
         when {
             task.totalItems > 0 -> parts += "${task.doneItems} von ${task.totalItems} Dateien"
             task.doneItems > 0 -> parts += "${task.doneItems} Dateien"
@@ -47,7 +51,7 @@ object TransferTasks {
             task.doneBytes > 0 -> parts += Format.size(task.doneBytes)
         }
         if (task.rateBps > 0) parts += Format.rate(task.rateBps)
-        return parts.joinToString(" · ").ifEmpty { task.message ?: "Läuft…" }
+        return parts.joinToString(" · ").ifEmpty { task.message?.takeIf { it.isNotBlank() } ?: "Läuft…" }
     }
 
     /** Outcome line of a finished task. */

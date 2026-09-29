@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     /// Open the picker to fill a sync-setup field, starting from `initial`
@@ -164,7 +164,11 @@ impl App {
                                     .small()
                                     .color(theme::muted(ui)),
                             );
-                            if conns.is_empty() && !gdrive_connected && peer_locations.is_empty() && tab_locations.is_empty() {
+                            if conns.is_empty()
+                                && !gdrive_connected
+                                && peer_locations.is_empty()
+                                && tab_locations.is_empty()
+                            {
                                 ui.colored_label(theme::muted(ui), "(keine)");
                             }
                             if gdrive_connected
@@ -182,12 +186,18 @@ impl App {
                                 }
                             }
                             for (label, target) in &peer_locations {
-                                if ui.selectable_label(false, format!("Share: {label}")).clicked() {
+                                if ui
+                                    .selectable_label(false, format!("Share: {label}"))
+                                    .clicked()
+                                {
                                     open_peer = Some((label.clone(), target.clone()));
                                 }
                             }
                             for (index, location) in tab_locations.iter().enumerate() {
-                                if ui.selectable_label(false, format!("Tab: {}", location.label)).clicked() {
+                                if ui
+                                    .selectable_label(false, format!("Tab: {}", location.label))
+                                    .clicked()
+                                {
                                     open_tab = Some(index);
                                 }
                             }
@@ -203,10 +213,7 @@ impl App {
                                 go_up = true;
                             }
                             if !conn_label.is_empty() {
-                                ui.colored_label(
-                                    theme::accent(ui),
-                                    format!("● {}", conn_label),
-                                );
+                                ui.colored_label(theme::accent(ui), format!("● {}", conn_label));
                             }
                         });
                         ui.label(
@@ -261,10 +268,7 @@ impl App {
                                     }
                                 }
                                 if has_loc && entries.is_empty() && error.is_none() && !connecting {
-                                    ui.colored_label(
-                                        theme::muted(ui),
-                                        "(keine Unterordner)",
-                                    );
+                                    ui.colored_label(theme::muted(ui), "(keine Unterordner)");
                                 }
                             });
                     });
@@ -373,16 +377,25 @@ impl App {
                         }
                     }
                     PickerPurpose::MirrorDest => {
-                        if let Some(backend) = p.backend { self.start_mirror(backend, p.cwd); }
+                        if let Some(backend) = p.backend {
+                            self.start_mirror(backend, p.cwd);
+                        }
                     }
                     PickerPurpose::BisyncDest => {
-                        if let Some(backend) = p.backend { self.start_bisync(backend, p.cwd); }
+                        if let Some(backend) = p.backend {
+                            self.start_bisync(backend, p.cwd);
+                        }
                     }
                     PickerPurpose::CopyDest => self.copy_dest = native,
-                    PickerPurpose::DownloadTo { src } => {
-                        if let Some(backend) = self.remote.as_ref().map(|rs| rs.backend.clone()) {
-                            self.start_remote_download(backend, vec![src], native, None);
-                        }
+                    PickerPurpose::DownloadTo { src, source } => {
+                        self.download_to_picked(
+                            src,
+                            source,
+                            p.backend,
+                            p.is_remote,
+                            p.cwd,
+                            p.conn_label,
+                        );
                     }
                 }
             }

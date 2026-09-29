@@ -1,6 +1,9 @@
-use super::api::FOLDER_MIME;
 use super::core::{norm, split_parent};
 use super::promotion_api::DriveObject;
+use super::promotion_checks::{
+    committed_cleanup_error, invalid, require_absent, require_one, validate_destination_object,
+    validate_paths, validate_staged_content, validate_staging_object, verify_unique_id,
+};
 use super::GDriveBackend;
 use crate::vfs::{Backend, VfsResult};
 use std::fs::File;
@@ -34,26 +37,35 @@ impl GDriveBackend {
         }
 
         let _paths = self.upload_path_pair_guard(&source, &destination)?;
-        let _mutation = self.mutation_guard()?;
         let (source_parent, source_segment) = split_parent(&source);
         let (destination_parent, destination_name) = split_parent(&destination);
         let source_parent_id = self.resolve(&source_parent)?;
         let destination_parent_id = self.ensure_dir(&destination_parent)?;
         let marker = super::duplicates::parse_marker(source_segment);
-        let source_name = super::names::decode(marker.map(|(plain, _)| plain).unwrap_or(source_segment))?;
+        let source_name =
+            super::names::decode(marker.map(|(plain, _)| plain).unwrap_or(source_segment))?;
         let destination_name = super::names::decode(destination_name)?;
         let source_name = source_name.as_str();
         let destination_name = destination_name.as_str();
+        // Both names stay untouched by other in-process renames/promotions
+        // until the exact-ID move is verified or rolled back.
+        let _slots = self.mutation_slots_guard(&[
+            (source_parent_id.as_str(), source_name),
+            (destination_parent_id.as_str(), destination_name),
+        ])?;
         let source_object = if let Some((_, prefix)) = marker {
             self.marker_object(&source_parent_id, source_name, prefix)?
         } else {
-            require_one(self.named_objects(&source_parent_id, source_name)?, "Drive rename source")?
+            require_one(
+                self.named_objects(source_parent_id.as_str(), source_name)?,
+                "Drive rename source",
+            )?
         };
         let source_object = source_object.ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Drive rename source is absent")
         })?;
         require_absent(
-            &self.named_objects(&destination_parent_id, destination_name)?,
+            &self.named_objects(destination_parent_id.as_str(), destination_name)?,
             "Drive rename destination",
         )?;
         let context = MoveContext {
@@ -117,9 +129,12 @@ impl GDriveBackend {
         };
 
         let (staged_object, destination_object) = {
-            let _mutation = self.mutation_guard()?;
+            let _slots = self.mutation_slots_guard(&[
+                (staged_parent_id.as_str(), staged_name),
+                (destination_parent_id.as_str(), destination_name),
+            ])?;
             let staged_object = require_one(
-                self.named_objects(&staged_parent_id, staged_name)?,
+                self.named_objects(staged_parent_id.as_str(), staged_name)?,
                 "Drive staging path",
             )?
             .ok_or_else(|| {
@@ -127,7 +142,7 @@ impl GDriveBackend {
             })?;
             validate_staging_object(&staged_object)?;
             let destination_object = require_one(
-                self.named_objects(&destination_parent_id, destination_name)?,
+                self.named_objects(destination_parent_id.as_str(), destination_name)?,
                 "Drive destination path",
             )?;
             let destination_object = if let Some(destination_object) = destination_object {
@@ -145,16 +160,24 @@ impl GDriveBackend {
                 }
                 destination_object
             } else {
-                return self.rename_absent_locked(&context, &staged_object);
+                let published = self.rename_absent_locked(&context, &staged_object);
+                if published.is_ok() {
+                    self.forget_owned_stage(&staged);
+                }
+                return published;
             };
             (staged_object, destination_object)
         };
 
-        self.replace_existing(&context, staged_object, destination_object)
+        let replaced = self.replace_existing(&context, staged_object, destination_object);
+        if replaced.is_ok() {
+            self.forget_owned_stage(&staged);
+        }
+        replaced
     }
 
     /// Rename one exact source ID into an absent name while the namespace
-    /// mutation lock is held. Since Drive has no conditional no-replace rename,
+    /// slots of both names are held. Since Drive has no conditional no-replace rename,
     /// verification failure or a collision rolls our ID back to its unique
     /// source name before returning.
     fn rename_absent_locked(
@@ -363,121 +386,6 @@ impl GDriveBackend {
         }
         self.persist_path_cache();
     }
-}
-
-fn validate_paths(staged: &str, destination: &str) -> VfsResult<()> {
-    if staged.is_empty() || destination.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Drive rename paths must name non-root objects",
-        ));
-    }
-    Ok(())
-}
-
-fn require_one(objects: Vec<DriveObject>, label: &'static str) -> VfsResult<Option<DriveObject>> {
-    match objects.len() {
-        0 => Ok(None),
-        1 => Ok(objects.into_iter().next()),
-        _ => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("{label} is ambiguous because more than one object has that name"),
-        )),
-    }
-}
-
-fn require_absent(objects: &[DriveObject], label: &'static str) -> VfsResult<()> {
-    if objects.is_empty() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("{label} already exists; Drive rename will not create a duplicate name"),
-        ))
-    }
-}
-
-fn validate_staging_object(object: &DriveObject) -> VfsResult<()> {
-    if object.mime_type == FOLDER_MIME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Drive staging source must be a regular file",
-        ));
-    }
-    if object.mime_type.starts_with("application/vnd.google-apps.") {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Drive-native staging objects cannot be promoted as binary media",
-        ));
-    }
-    if object.size.is_none() || object.md5.is_none() {
-        return Err(invalid(
-            "Drive staging object has no verifiable size or MD5 checksum",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_destination_object(object: &DriveObject) -> VfsResult<()> {
-    if object.mime_type == FOLDER_MIME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "refusing to replace a Drive directory with a file",
-        ));
-    }
-    if object.mime_type.starts_with("application/vnd.google-apps.") {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Drive-native destination replacement needs an explicit import media type; binary staging promotion cannot safely preserve its ID",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_staged_content(object: &DriveObject, size: u64, md5: &str) -> VfsResult<()> {
-    if object.size != Some(size)
-        || !object
-            .md5
-            .as_deref()
-            .is_some_and(|expected| expected.eq_ignore_ascii_case(md5))
-    {
-        return Err(invalid(
-            "Drive staging download does not match its advertised size and checksum",
-        ));
-    }
-    Ok(())
-}
-
-fn verify_unique_id(objects: &[DriveObject], expected_id: &str) -> VfsResult<()> {
-    if objects.len() == 1 && objects[0].id == expected_id {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        if objects.len() > 1 {
-            io::ErrorKind::AlreadyExists
-        } else {
-            io::ErrorKind::InvalidData
-        },
-        "Drive destination name does not resolve uniquely to the expected ID",
-    ))
-}
-
-fn committed_cleanup_error(
-    kind: io::ErrorKind,
-    destination_id: &str,
-    staged_id: &str,
-    detail: &str,
-) -> io::Error {
-    io::Error::new(
-        kind,
-        format!(
-            "Drive destination content is committed and verified on existing ID {destination_id}, but cleanup of unique staging ID {staged_id} is pending and safe to retry: {detail}"
-        ),
-    )
-}
-
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
 #[cfg(test)]

@@ -44,16 +44,16 @@ Plan-Kritik (28 Befunde, 2026-09-28) ist eingearbeitet; Befundnummern stehen als
 
 | Block | Inhalt | Zustand |
 |---|---|---|
-| W1 | Grundlagen und Verträge (unten) | fertig; Commits ea7a8da, 8e47d9b, 4d2b6be + Lane-Vertrag; Remote-Check läuft |
-| A | Engine + lokale Kopie + Lane | offen (Welle 1) |
-| B1 | Share-Peer-Protokoll (Iroh): Pakete, Aufnahmegrenze, Server-Kopie, QUIC-Fenster | offen (Welle 1) |
-| B2 | Agent-Protokoll, Dienst-Weiterleitung, AgentBackend, IPC-Flusskontrolle | offen (Welle 1) |
-| C | Google Drive | offen (Welle 1) |
-| D | SFTP, SMB, FTP, WebDAV, ZIP | offen (Welle 1) |
-| F | Windows: virtuelle Dateien für Remote (Zwischenablage, Ziehen) | offen (Welle 1) |
-| H | App-Integration, Übertragungsfenster, Android | offen (Welle 1) |
+| W1 | Grundlagen und Verträge (unten) | fertig; Commits ea7a8da, 8e47d9b, 4d2b6be, 315a00b, 6659839; enger Remote-Check: Linux Bibliothek+Tests kompilieren (Run 36497664619), Windows-Target nach Stub-Fix offen bis zur nächsten Prüfung |
+| A | Engine + lokale Kopie + Lane | läuft (Welle 1) |
+| B1 | Share-Peer-Protokoll (Iroh): Pakete, Aufnahmegrenze, Server-Kopie, QUIC-Fenster | umgesetzt (unkompiliert): `fs_transfer_v1` (PutBatch/Status/GetBatch/ReadAt/CreateDir/PromoteNoReplace/DiscardStage), `Busy` statt Warteschlange, Aufnahme 60, Fenster 16 MiB/Strom; `peer_fs_logging.rs` vom Orchestrator ergänzt |
+| B2 | Agent-Protokoll, Dienst-Weiterleitung, AgentBackend, IPC-Flusskontrolle | umgesetzt (unkompiliert): Kredit je Anfrage (`+credit-v1`), Pakete (`+batch-v1`), Stufen-Frames, Exec-Kanal-Pool; K18e-Statusabfrage nicht umgesetzt (kein Trait), eingecheckte Agent-Binaries alt (neue Frames erst nach Release) |
+| C | Google Drive | umgesetzt (unkompiliert): 1 API-Aufruf je neuer Datei ≤ 5 MB, gepoolte Agents, Cache im Hintergrund, Schlüssel-Sperren, Congestion; Suite: alle `gdrive::`-Tests + `copy_paste_task_provider_drive_*`/`gui_design_task_drive_*` |
+| D | SFTP, SMB, FTP, WebDAV, ZIP | läuft (Welle 1) |
+| F | Windows: virtuelle Dateien für Remote (Zwischenablage, Ziehen) | umgesetzt (unkompiliert); offen für T: `ExternalTransfer::issue(path, message)`, Ref-Nachtrag `MSHCTX_LOCAL` |
+| H | App-Integration, Übertragungsfenster, Android | umgesetzt (unkompiliert); offen für A/T: `MAX_ACTIVE_TRANSFERS` entfernen, `base` ohne Schrägstrich, `progress.source/target` |
 | G | Sync: paralleles Spiegeln, Zwei-Wege mit Regelung | offen (Welle 2, nach A) |
-| T | Task-Suite, Workflow, Doku, Graph | offen |
+| T | Task-Suite, Workflow, Doku, Graph | Workflow mit allen Jobs und Messtest (`native/tests/transfer_throughput.rs`) angelegt; Suite-Modus des Skripts, Doku, Graph offen |
 
 Welle 1 läuft parallel gegen die W1-Verträge (7 Agents). G startet, sobald A das Ordner-Register
 und `run_job` geliefert hat (K27). Nach jeder Welle: Integration, enger Remote-Check

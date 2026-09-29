@@ -6,8 +6,6 @@ use std::sync::{atomic::AtomicBool, Arc};
 const MAX_TRANSFER_NODES: u64 = 1_000_000;
 const MAX_TRANSFER_TEXT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TRANSFER_DEPTH: usize = 512;
-const MAX_DISPLAYED_ERRORS: usize = 100;
-const MAX_ERROR_TEXT_BYTES: usize = 4 * 1024;
 
 #[derive(Default)]
 pub(super) struct TransferCollectionBudget {
@@ -55,59 +53,6 @@ impl TransferCollectionBudget {
         self.nodes += 1;
         Ok(())
     }
-}
-
-#[derive(Default)]
-pub(super) struct TransferErrorLog {
-    displayed: Vec<String>,
-    total: u64,
-}
-
-impl TransferErrorLog {
-    pub(super) fn push(&mut self, message: impl Into<String>) {
-        self.total = self.total.saturating_add(1);
-        if self.displayed.len() < MAX_DISPLAYED_ERRORS {
-            self.displayed.push(bounded_error_text(message.into()));
-        }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.total == 0
-    }
-
-    pub(super) fn total(&self) -> u64 {
-        self.total
-    }
-
-    pub(super) fn into_displayed(mut self) -> Vec<String> {
-        if self.total > self.displayed.len() as u64 {
-            let suppressed = self.total - self.displayed.len() as u64;
-            let suffix = format!(" [… {suppressed} weitere Fehler unterdrückt]");
-            if let Some(first) = self.displayed.first_mut() {
-                let max_prefix = MAX_ERROR_TEXT_BYTES.saturating_sub(suffix.len());
-                let mut end = first.len().min(max_prefix);
-                while !first.is_char_boundary(end) {
-                    end -= 1;
-                }
-                first.truncate(end);
-                first.push_str(&suffix);
-            }
-        }
-        self.displayed
-    }
-}
-
-fn bounded_error_text(mut message: String) -> String {
-    if message.len() <= MAX_ERROR_TEXT_BYTES {
-        return message;
-    }
-    let mut end = MAX_ERROR_TEXT_BYTES;
-    while !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    message.truncate(end);
-    message.push('…');
-    message
 }
 
 pub(super) fn validate_transfer_name(name: &str, context: &str) -> Result<(), String> {
@@ -218,21 +163,6 @@ pub(super) struct RemoteEntryCollector<'a> {
 }
 
 impl RemoteEntryCollector<'_> {
-    pub(super) fn collect(
-        &mut self,
-        src: &str,
-        rel: String,
-        selected_root: bool,
-    ) -> Result<(), String> {
-        super::cancel::check_optional(self.cancel)?;
-        let meta = self
-            .be
-            .stat(src)
-            .map_err(|error| format!("{src}: {error}"))?;
-        super::cancel::check_optional(self.cancel)?;
-        self.collect_with_meta(src, rel, selected_root, meta, 0)
-    }
-
     pub(super) fn collect_with_meta(
         &mut self,
         src: &str,

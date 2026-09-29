@@ -1,5 +1,5 @@
+use super::wire::{FsBatchStatus, FsErrorKind, FsMeta, FsWalkNode, FsWriteCapabilities};
 use serde::{Deserialize, Serialize};
-use super::wire::{FsErrorKind, FsMeta, FsWalkNode, FsWriteCapabilities};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "r", rename_all = "snake_case")]
@@ -59,16 +59,21 @@ pub(crate) enum FsResponse {
         bytes: u64,
         nodes: u64,
     },
-    Analysis { message: crate::analytics::analysis_transfer::AnalysisMessage },
+    Analysis {
+        message: crate::analytics::analysis_transfer::AnalysisMessage,
+    },
     Data {
         size: u64,
     },
     Ready,
     Ok,
+    /// Transfer v1: reply to a committed PutBatch and to PutBatchStatus.
+    Batch {
+        status: FsBatchStatus,
+    },
     Err {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<FsErrorKind>,
         msg: String,
     },
 }
-

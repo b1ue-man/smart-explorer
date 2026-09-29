@@ -22,7 +22,7 @@ use super::session::{
     AuthorizedDirectRepair,
 };
 use super::types::{PeerEndpoint, ShareEvent};
-use super::wire::{Ctrl, FsResponse, PeerHello};
+use super::wire::{Ctrl, FsResponse, PeerHello, TRANSFER_V1_CAPABILITY};
 
 pub(super) struct OpenedPeerStream {
     pub(super) send: SendStream,
@@ -59,16 +59,12 @@ impl ShareIrohNode {
         let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
         let key = session_key(endpoint);
         let expected_epoch = self.session_epoch.load(Ordering::Acquire);
-        let connection = match self.session_connection_until(
-            &key,
-            endpoint,
-            identity,
-            expected_epoch,
-            deadline,
-        ) {
-            Ok(connection) => connection,
-            Err(error) => return classify_repair_setup_io(&error),
-        };
+        let connection =
+            match self.session_connection_until(&key, endpoint, identity, expected_epoch, deadline)
+            {
+                Ok(connection) => connection,
+                Err(error) => return classify_repair_setup_io(&error),
+            };
         let session = match AuthenticatedDirectSession::from_verified_handshake(
             endpoint.presence.device_id.clone(),
             connection.remote_id().to_string(),
@@ -88,13 +84,11 @@ impl ShareIrohNode {
             Ok(material) => material,
             Err(_) => return DirectReciprocalTransportResult::Conflict,
         };
-        let expected_remote_material = match DirectRelationMaterial::new(
-            relation_id,
-            endpoint.relation_secret.clone(),
-        ) {
-            Ok(material) => material,
-            Err(_) => return DirectReciprocalTransportResult::Conflict,
-        };
+        let expected_remote_material =
+            match DirectRelationMaterial::new(relation_id, endpoint.relation_secret.clone()) {
+                Ok(material) => material,
+                Err(_) => return DirectReciprocalTransportResult::Conflict,
+            };
         let authorized = AuthorizedDirectRepair {
             local_identity: DirectPeerIdentity {
                 device_id: identity.device_id.clone(),
@@ -192,6 +186,17 @@ impl ShareIrohNode {
         // reconnect, but does not actively close unrelated concurrent streams
         // (notably an in-flight mutation) that still own this connection.
         Ok(failed.is_some())
+    }
+
+    /// Generation of the cached outgoing connection to `endpoint`, if any; a
+    /// reconnect (possibly to an updated host) changes it.
+    pub(super) fn outgoing_generation(&self, endpoint: &PeerEndpoint) -> Option<usize> {
+        let key = session_key(endpoint);
+        let connection = self.sessions.lock().ok()?.get(&key).cloned()?;
+        connection
+            .close_reason()
+            .is_none()
+            .then(|| connection.stable_id())
     }
 
     pub(super) fn session_transport(&self, endpoint: &PeerEndpoint) -> Option<&'static str> {
@@ -323,7 +328,13 @@ impl ShareIrohNode {
         let local_addr = self.routes.current(&self.endpoint);
         let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
         let (kind, relation_id) = relation_kind_id(endpoint);
-        let mut requested_capabilities = vec!["fs".to_string(), "fs_walk_batches_v1".to_string()];
+        // Transfer v1: this client understands `Busy` replies, so a full host
+        // answers at once instead of queueing its transfers.
+        let mut requested_capabilities = vec![
+            "fs".to_string(),
+            "fs_walk_batches_v1".to_string(),
+            TRANSFER_V1_CAPABILITY.to_string(),
+        ];
         if kind == "direct" {
             requested_capabilities.push(DIRECT_RECIPROCAL_CAPABILITY.to_string());
         }

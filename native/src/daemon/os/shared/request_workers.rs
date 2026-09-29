@@ -1,10 +1,13 @@
 use std::io;
 
-// Mount clients admit at most eight live requests. Keep bounded completion
+// Requests of a client without credit flow control (former behaviour):
+// mount clients admit at most eight live requests. Keep bounded completion
 // headroom because a client may receive the final response and release its
 // permit just before the serving worker removes bookkeeping and becomes
 // joinable; that harmless tail must not reject the next Explorer request.
-const MAX_REQUEST_WORKERS: usize = 16;
+// Credit clients get `agent_proto::CREDIT_REQUEST_LIMIT`: the connection's
+// buffer budget divided by the implicit credit of one request.
+pub(super) const LEGACY_MAX_REQUEST_WORKERS: usize = 16;
 
 #[derive(Default)]
 pub(super) struct RequestWorkers {
@@ -12,10 +15,11 @@ pub(super) struct RequestWorkers {
 }
 
 impl RequestWorkers {
-    pub(super) fn has_capacity(&mut self) -> io::Result<bool> {
+    /// Whether one more request fits below `limit` running workers.
+    pub(super) fn has_capacity(&mut self, limit: usize) -> io::Result<bool> {
         let errors = self.reap();
         if errors.is_empty() {
-            Ok(self.handles.len() < MAX_REQUEST_WORKERS)
+            Ok(self.handles.len() < limit)
         } else {
             Err(worker_errors(errors))
         }

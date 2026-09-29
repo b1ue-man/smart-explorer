@@ -8,9 +8,18 @@ use super::super::{
 };
 use super::{bad, validate_frame_len, MIN_WIRE_META_BYTES};
 
+#[path = "frame_ext.rs"]
+pub(super) mod frame_ext;
+
 impl Frame {
     pub fn encode(&self, req_id: u64) -> io::Result<Vec<u8>> {
         encode(self, req_id, false)
+    }
+
+    /// Encoded body length (request id, tag and fields; the transport length
+    /// prefix excluded). Flow-control credit is charged by this length.
+    pub fn wire_len(&self) -> io::Result<usize> {
+        encoded_len(self)
     }
 }
 
@@ -191,6 +200,11 @@ pub(super) fn encode(frame: &Frame, req_id: u64, with_length: bool) -> io::Resul
             put_str(&mut b, staged);
             put_str(&mut b, destination);
         }
+        other => {
+            if !frame_ext::encode(other, &mut b) {
+                return Err(bad("frame has no wire encoding"));
+            }
+        }
     }
     if b.len() != capacity {
         return Err(bad("frame size calculation mismatch"));
@@ -340,6 +354,10 @@ fn encoded_len(frame: &Frame) -> io::Result<usize> {
         Frame::Progress { .. } => add_len(&mut length, 16)?,
         Frame::Exists(_) => add_len(&mut length, 1)?,
         Frame::Ok | Frame::End | Frame::Cancel => {}
+        other => match frame_ext::payload_len(other) {
+            Some(extra) => add_len(&mut length, extra?)?,
+            None => return Err(bad("frame has no wire encoding")),
+        },
     }
     Ok(length)
 }

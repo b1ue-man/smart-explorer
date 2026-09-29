@@ -10,12 +10,13 @@ impl AgentBackend {
     /// has handshaken, a missing or malformed reply is an ambiguous remote
     /// completion and must never be retried through the wrapped backend.
     pub(super) fn agent_unit_op(&self, req: Frame) -> io::Result<()> {
-        let (mux, reply) = self.connection.mutation_call(req)?;
+        let lease = self.pool.lease();
+        let (mux, reply) = lease.mutation_call(req)?;
         match reply {
             Frame::Ok => Ok(()),
             Frame::Err(e) => Err(super::agent_error::agent_error(e)),
             other => {
-                self.connection.invalidate(&mux);
+                lease.invalidate(&mux);
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("unexpected agent mutation reply: {other:?}"),
@@ -27,7 +28,8 @@ impl AgentBackend {
     /// Stream an entire remote subtree (`root`) down into local `dst`.
     pub(super) fn agent_get_tree(&self, root: &str, dst: &Path) -> io::Result<u64> {
         agent_proto::validate_destination_root(dst)?;
-        let mux = self.connection.mux()?;
+        let lease = self.pool.lease();
+        let mux = lease.mux()?;
         let (id, rx) = mux.register();
         let r = (|| {
             let mut receiver = BufferedTreeReceiver::create("download", id)?;
@@ -68,7 +70,8 @@ impl AgentBackend {
     /// Stream an entire local subtree (`src`) up into remote `root`.
     pub(super) fn agent_put_tree(&self, src: &Path, root: &str) -> io::Result<u64> {
         let entries = agent_proto::collect_local_tree(src, &AtomicBool::new(false))?;
-        let mux = self.connection.mutation_mux()?;
+        let lease = self.pool.lease();
+        let mux = lease.mutation_mux()?;
         let (id, rx) = mux.register();
         let r = (|| {
             mux.send(id, Frame::PutTree(root.to_string()))?;
@@ -76,14 +79,19 @@ impl AgentBackend {
             if let Err(error) = send_tree_manifest(&mux, id, src, &entries, &mut files) {
                 let _ = mux.send(id, Frame::Cancel);
                 let _ = mux.send(id, Frame::End);
-                return Err(error);
+                // A server that refused the tree ended the upload early; its
+                // reply names the reason.
+                return Err(match rx.try_recv() {
+                    Ok(Frame::Err(message)) => super::agent_error::agent_error(message),
+                    _ => error,
+                });
             }
             mux.send(id, Frame::End)?;
             match rx.recv() {
                 Ok(Frame::Ok) => Ok(files),
                 Ok(Frame::Err(e)) => Err(super::agent_error::agent_error(e)),
                 Ok(other) => {
-                    self.connection.invalidate(&mux);
+                    lease.invalidate(&mux);
                     Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("unexpected agent put-tree reply: {other:?}"),
@@ -96,7 +104,7 @@ impl AgentBackend {
             }
         })();
         if r.is_err() && mux.is_closed() {
-            self.connection.invalidate(&mux);
+            lease.invalidate(&mux);
         }
         mux.unregister(id);
         r

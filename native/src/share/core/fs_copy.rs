@@ -7,16 +7,22 @@ use super::fs_access::FsAccess;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::wire::FsResponse;
 
-pub(super) async fn serve(
+/// The whole copy runs on the host while `slot` (its transfer admission) is
+/// held; the reply follows once the copy is complete.
+pub(super) async fn serve<G: Send + 'static>(
     send: &mut SendStream,
     source: String,
     destination: String,
     access: FsAccess,
     authorization: Option<MountLeaseAuthorization>,
+    slot: G,
 ) -> io::Result<()> {
-    let result = super::blocking::run("Share copy file", move || {
-        run_authorized(authorization.as_ref(), || access.copy_file(&source, &destination))
-    }).await;
+    let result = super::blocking::run_holding("Share copy file", slot, move || {
+        run_authorized(authorization.as_ref(), || {
+            access.copy_file(&source, &destination)
+        })
+    })
+    .await;
     match result {
         Ok(size) => super::framing::reply(send, FsResponse::Data { size }).await,
         Err(error) => super::framing::reply_err(send, error).await,

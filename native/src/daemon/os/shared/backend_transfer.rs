@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-use crate::agent_proto::{BufferedTree, BufferedTreeReceiver, Frame};
+use crate::agent_proto::{BufferedTree, BufferedTreeReceiver, Frame, Inbound};
 use crate::vfs::BackendHandle;
 
 use super::backend_server::{emit, Sink};
@@ -24,7 +24,7 @@ pub(super) fn handle_put_tree_backend(
     id: u64,
     backend: &BackendHandle,
     root: &str,
-    inbound: &Receiver<Frame>,
+    inbound: &dyn Inbound,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     let root = canonical_backend_root(backend, root);

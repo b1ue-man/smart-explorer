@@ -12,11 +12,6 @@ use crossbeam_channel::{unbounded, Receiver};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Task slots of the Android facade (uploads, extraction, transfers). Block H
-/// of the transfer-engine plan replaces them with the engine's flows; the
-/// desktop lane has no such limit.
-pub const MAX_ACTIVE_TRANSFERS: usize = 6;
-
 /// One transfer the user asked for, before a worker exists for it.
 pub enum TransferRequest {
     Upload {

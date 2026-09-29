@@ -3,12 +3,12 @@
 //! occupied names become `Name (2)`.
 use super::args::{opt_str, str_arg};
 use super::crumbs;
-use super::drive::run_transfer;
+use super::drive::{run_job, transfer_job};
 use super::error::ApiError;
 use super::fs_list::require_writable;
 use super::location::{parent_path, validate_name, Loc, LocKind};
 use super::runtime::{Runtime, TaskCtx};
-use crate::transfer::{TransferMsg, TransferRequest};
+use crate::transfer::{Endpoint, TransferMsg};
 use serde_json::{json, Value};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -64,7 +64,7 @@ pub(crate) fn import(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         crumbs::title(&target, &rt.volumes())
     );
     let runtime = rt.clone();
-    let id = rt.spawn_transfer_task("upload", title, move |ctx| {
+    let id = rt.spawn_task("upload", title, move |ctx| {
         run_import(&runtime, ctx, &target, incoming)
     });
     Ok(json!({ "taskId": id }))
@@ -163,7 +163,7 @@ pub(crate) fn extract(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     require_writable(&target)?;
     let title = format!("Entpacken: {}", archive.name());
     let runtime = rt.clone();
-    let id = rt.spawn_transfer_task("extract", title, move |ctx| {
+    let id = rt.spawn_task("extract", title, move |ctx| {
         run_extract(&runtime, ctx, &archive, &target)
     });
     Ok(json!({ "taskId": id }))
@@ -232,15 +232,15 @@ fn run_extract(
         }
         ctx.message("Lade hoch…");
         let (backend, dest_root) = rt.resolve_live(target)?;
-        let outcome = run_transfer(
-            ctx,
-            TransferRequest::Upload {
-                paths: vec![dest.to_string_lossy().into_owned()],
-                backend,
-                dest_root,
-            },
-        )?;
-        outcome.into_result(ctx)?;
+        let job = transfer_job(
+            Endpoint::Local,
+            vec![dest.to_string_lossy().into_owned()],
+            Endpoint::Remote(backend),
+            dest_root,
+            archive.name().to_string(),
+            crumbs::title(target, &rt.volumes()),
+        );
+        run_job(ctx, job)?.into_result(ctx)?;
         // The upload may number the folder; the result names its parent.
         finish_extract(ctx, report, json!(target.location()))
     })();

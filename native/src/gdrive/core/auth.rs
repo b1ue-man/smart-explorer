@@ -5,6 +5,9 @@ use crate::cloud::{self, Provider};
 use crate::vfs::VfsResult;
 
 impl GDriveBackend {
+    /// The current access token. An expired token is refreshed while the
+    /// token lock is held, so concurrent callers wait for that one refresh
+    /// instead of starting their own.
     pub(super) fn bearer(&self) -> VfsResult<String> {
         let mut t = self.tokens_guard()?;
         if now_secs() >= t.expires_at {
@@ -21,12 +24,15 @@ impl GDriveBackend {
         Ok(tokens.access_token.clone())
     }
 
+    /// Metadata GET over the pooled API client, read completely so the socket
+    /// returns to the pool.
     pub(super) fn get_json(&self, url: &str) -> VfsResult<serde_json::Value> {
         let auth = self.bearer()?;
         let bearer = format!("Bearer {}", auth);
+        let agent = self.http.api();
         parse_json(send_retry(|| {
             drive_request(
-                self.timed_request(ureq::get(url))
+                self.timed_request(agent.get(url))
                     .set("Authorization", &bearer)
                     .call(),
             )

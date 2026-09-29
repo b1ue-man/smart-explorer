@@ -1,8 +1,8 @@
 use super::backend::AgentBackend;
 use super::mux::Mux;
-use super::transport::AgentConnection;
+use super::pool::ChannelLease;
+use super::route::RequestRx;
 use crate::agent_proto::{Frame, CHUNK};
-use crossbeam_channel::Receiver;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
@@ -10,10 +10,12 @@ use std::sync::Arc;
 struct AgentReadStream {
     mux: Arc<Mux>,
     id: u64,
-    rx: Receiver<Frame>,
+    rx: RequestRx,
     buf: Vec<u8>,
     pos: usize,
     done: bool,
+    /// Keeps the pooled channel counted as busy while the stream is open.
+    _lease: ChannelLease,
 }
 
 impl Read for AgentReadStream {
@@ -72,10 +74,10 @@ impl Drop for AgentReadStream {
 
 /// `std::io::Write` over a streamed `Write` op.
 struct AgentWriteStream {
-    connection: Arc<AgentConnection>,
+    lease: ChannelLease,
     mux: Arc<Mux>,
     id: u64,
-    rx: Receiver<Frame>,
+    rx: RequestRx,
     state: WriteState,
 }
 
@@ -106,14 +108,14 @@ impl AgentWriteStream {
             Ok(Frame::Ok) => Ok(()),
             Ok(Frame::Err(e)) => Err(super::agent_error::agent_error(e)),
             Ok(other) => {
-                self.connection.invalidate(&self.mux);
+                self.lease.invalidate(&self.mux);
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("unexpected agent write-stream reply: {other:?}"),
                 ))
             }
             Err(_) => {
-                self.connection.invalidate(&self.mux);
+                self.lease.invalidate(&self.mux);
                 Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "agent write stream closed",
@@ -145,8 +147,18 @@ impl Write for AgentWriteStream {
             ));
         }
         let written = buf.len().min(CHUNK);
-        self.mux
-            .send(self.id, Frame::Data(buf[..written].to_vec()))?;
+        if let Err(error) = self.mux.send(self.id, Frame::Data(buf[..written].to_vec())) {
+            // The server may have ended the upload; its reply names the
+            // reason. Either way the upload is over: never commit it later.
+            let error = match self.rx.try_recv() {
+                Ok(Frame::Err(message)) => super::agent_error::agent_error(message),
+                _ => error,
+            };
+            let _ = self.mux.send(self.id, Frame::Cancel);
+            self.mux.unregister(self.id);
+            self.remember_failure(&error);
+            return Err(error);
+        }
         Ok(written)
     }
 
@@ -169,49 +181,49 @@ impl Drop for AgentWriteStream {
 }
 
 impl AgentBackend {
-    /// Begin a streamed read of `path`. Protocol-v6 makes this mandatory, so
-    /// every transport, protocol, or remote failure is returned to the caller.
-    pub(super) fn agent_open_read(&self, path: &str) -> io::Result<Box<dyn Read + Send>> {
-        let opened = self
-            .connection
-            .retry_safe(|mux| open_read_once(mux, path))?;
-        let result = match opened.first {
-            Frame::Data(d) if d.len() <= CHUNK => Ok(Box::new(AgentReadStream {
-                mux: opened.mux.clone(),
-                id: opened.id,
-                rx: opened.rx,
-                buf: d,
-                pos: 0,
-                done: false,
-            }) as Box<dyn Read + Send>),
+    /// Begin a streamed read of `path` from byte `offset`. Protocol-v6 makes
+    /// this mandatory, so every transport, protocol, or remote failure is
+    /// returned to the caller.
+    pub(super) fn agent_open_read_at(
+        &self,
+        path: &str,
+        offset: u64,
+    ) -> io::Result<Box<dyn Read + Send>> {
+        let lease = self.pool.lease();
+        let opened = lease.retry_safe(|mux| open_read_once(mux, path, offset))?;
+        let (buf, done) = match opened.first {
+            Frame::Data(d) if d.len() <= CHUNK => (d, false),
+            Frame::End => (Vec::new(), true),
             Frame::Data(_) => {
-                self.connection.invalidate(&opened.mux);
-                Err(io::Error::new(
+                lease.invalidate(&opened.mux);
+                opened.mux.unregister(opened.id);
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "agent read frame exceeds the protocol chunk limit",
-                ))
+                ));
             }
-            Frame::End => Ok(Box::new(AgentReadStream {
-                mux: opened.mux.clone(),
-                id: opened.id,
-                rx: opened.rx,
-                buf: Vec::new(),
-                pos: 0,
-                done: true,
-            }) as Box<dyn Read + Send>),
-            Frame::Err(error) => Err(super::agent_error::agent_error(error)),
+            Frame::Err(error) => {
+                opened.mux.unregister(opened.id);
+                return Err(super::agent_error::agent_error(error));
+            }
             other => {
-                self.connection.invalidate(&opened.mux);
-                Err(io::Error::new(
+                lease.invalidate(&opened.mux);
+                opened.mux.unregister(opened.id);
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("unexpected agent reply to read: {other:?}"),
-                ))
+                ));
             }
         };
-        if result.is_err() {
-            opened.mux.unregister(opened.id);
-        }
-        result
+        Ok(Box::new(AgentReadStream {
+            mux: opened.mux,
+            id: opened.id,
+            rx: opened.rx,
+            buf,
+            pos: 0,
+            done,
+            _lease: lease,
+        }))
     }
 
     /// Begin a streamed write of `path`. Protocol-v6 makes this mandatory, so
@@ -225,39 +237,40 @@ impl AgentBackend {
     }
 
     fn agent_open_write_request(&self, request: Frame) -> io::Result<Box<dyn Write + Send>> {
-        let mux = self.connection.mutation_mux()?;
+        let lease = self.pool.lease();
+        let mux = lease.mutation_mux()?;
         let (id, rx) = mux.register();
         if let Err(error) = mux.send(id, request) {
             mux.unregister(id);
             return Err(error);
         }
         let result = match rx.recv() {
-            Ok(Frame::Progress { .. }) => Ok(Box::new(AgentWriteStream {
-                connection: self.connection.clone(),
-                mux: mux.clone(),
-                id,
-                rx,
-                state: WriteState::Open,
-            }) as Box<dyn Write + Send>),
+            Ok(Frame::Progress { .. }) => {
+                return Ok(Box::new(AgentWriteStream {
+                    lease,
+                    mux,
+                    id,
+                    rx,
+                    state: WriteState::Open,
+                }))
+            }
             Ok(Frame::Err(error)) => Err(super::agent_error::agent_error(error)),
             Ok(other) => {
-                self.connection.invalidate(&mux);
+                lease.invalidate(&mux);
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("unexpected agent reply to write: {other:?}"),
                 ))
             }
             Err(_) => {
-                self.connection.invalidate(&mux);
+                lease.invalidate(&mux);
                 Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "agent write stream closed before opening",
                 ))
             }
         };
-        if result.is_err() {
-            mux.unregister(id);
-        }
+        mux.unregister(id);
         result
     }
 }
@@ -265,17 +278,17 @@ impl AgentBackend {
 struct ReadOpening {
     mux: Arc<Mux>,
     id: u64,
-    rx: Receiver<Frame>,
+    rx: RequestRx,
     first: Frame,
 }
 
-fn open_read_once(mux: &Arc<Mux>, path: &str) -> io::Result<ReadOpening> {
+fn open_read_once(mux: &Arc<Mux>, path: &str, offset: u64) -> io::Result<ReadOpening> {
     let (id, rx) = mux.register();
     if let Err(error) = mux.send(
         id,
         Frame::Read {
             path: path.to_string(),
-            offset: 0,
+            offset,
             len: 0,
         },
     ) {

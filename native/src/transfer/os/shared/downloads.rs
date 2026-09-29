@@ -1,9 +1,8 @@
 use super::download_file::download_file_progress;
 use super::entries::{
     compile_remote_filter, validate_transfer_name, RemoteEntryCollector, RemoteFilterCtx,
-    TransferCollectionBudget, TransferErrorLog,
+    TransferCollectionBudget,
 };
-use super::progress::send_transfer_progress;
 use super::temp::{cleanup_temp_copy, open_temp_path};
 use super::types::{TransferKind, TransferMsg, TransferProgress};
 use crate::types::FilterDef;
@@ -277,6 +276,8 @@ fn cleanup_local_results(paths: &[String]) {
     }
 }
 
+/// Downloads remote entries (files and whole folders) into the local folder
+/// `dest_local` through the streaming engine; name conflicts keep both.
 pub fn download_paths_progress(
     be: &dyn crate::vfs::Backend,
     paths: &[String],
@@ -285,124 +286,16 @@ pub fn download_paths_progress(
     tx: &crossbeam_channel::Sender<TransferMsg>,
     cancel: &AtomicBool,
 ) {
-    let filter = compile_remote_filter(filter);
-    let mut errors = TransferErrorLog::default();
-    let mut budget = TransferCollectionBudget::default();
-    let mut roots = Vec::new();
-    let dest_root = PathBuf::from(dest_local.replace('/', std::path::MAIN_SEPARATOR_STR));
-    for src in paths {
-        if super::cancel::requested(cancel) {
-            break;
-        }
-        match collect_download_root(be, filter.as_ref(), src, None, &mut budget, Some(cancel)) {
-            Ok(root) => roots.push(root),
-            Err(error) => {
-                if !super::cancel::requested(cancel) {
-                    errors.push(error);
-                }
-                break;
-            }
-        }
-    }
-    if super::cancel::requested(cancel) {
-        super::cancel::send_done(
-            tx,
-            TransferProgress::new(TransferKind::Download, "Lade herunter", 0, 0),
-            Vec::new(),
-            cancel,
-        );
-        return;
-    }
-    if !errors.is_empty() {
-        let mut progress = TransferProgress::new(TransferKind::Download, "Lade herunter", 0, 0);
-        progress.errors = errors.total();
-        super::cancel::send_done(tx, progress, errors.into_displayed(), cancel);
-        return;
-    }
-    let bytes_total = roots
-        .iter()
-        .flat_map(|root| root.files.iter())
-        .map(|f| f.size)
-        .fold(0u64, u64::saturating_add);
-    let mut progress = TransferProgress::new(
-        TransferKind::Download,
-        "Lade herunter",
-        roots
-            .iter()
-            .map(|root| root.files.len() as u64)
-            .sum::<u64>(),
-        bytes_total,
+    super::engine::run_legacy(
+        super::engine::Side::Remote(be),
+        super::engine::Side::Local,
+        dest_local,
+        super::job::JobItems::Roots {
+            paths: paths.to_vec(),
+            base: None,
+        },
+        filter,
+        tx,
+        cancel,
     );
-    progress.errors = errors.total();
-    progress.omitted = roots
-        .iter()
-        .map(|root| root.omitted)
-        .fold(0u64, u64::saturating_add);
-    let mut last = std::time::Instant::now();
-    send_transfer_progress(tx, &progress, &mut last, true);
-
-    let start = std::time::Instant::now();
-    'roots: for root in roots {
-        if super::cancel::requested(cancel) {
-            break;
-        }
-        // GetTree has no no-replace contract. Only private clipboard trees may
-        // use it; user destinations always receive protected per-file commits.
-        let mut seen_dirs = std::collections::HashSet::new();
-        for dir in &root.dirs {
-            if super::cancel::requested(cancel) {
-                break 'roots;
-            }
-            if !seen_dirs.insert(dir.as_str()) {
-                continue;
-            }
-            let local = dest_root.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR));
-            if let Err(e) = std::fs::create_dir_all(&local) {
-                errors.push(format!("{}: {}", local.display(), e));
-                progress.errors = errors.total();
-            }
-            if super::cancel::requested(cancel) {
-                break 'roots;
-            }
-        }
-
-        for file in root.files {
-            if super::cancel::requested(cancel) {
-                break 'roots;
-            }
-            let dest = dest_root.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-            progress.current = file.rel.clone();
-            progress.elapsed_ms = start.elapsed().as_millis() as u64;
-            send_transfer_progress(tx, &progress, &mut last, true);
-            let result = download_file_progress(
-                be,
-                &file.src,
-                &dest,
-                file.size,
-                tx,
-                &mut progress,
-                &mut last,
-                Some(cancel),
-            );
-            match result {
-                Ok(_) => {
-                    progress.files_done = progress.files_done.saturating_add(1);
-                }
-                Err(e) if e == super::cancel::CANCELED_ERROR => {}
-                Err(e) => {
-                    errors.push(format!("{}: {}", file.rel, e));
-                    progress.errors = errors.total();
-                }
-            }
-            if super::cancel::requested(cancel) {
-                break 'roots;
-            }
-            progress.elapsed_ms = start.elapsed().as_millis() as u64;
-            send_transfer_progress(tx, &progress, &mut last, true);
-        }
-    }
-
-    progress.elapsed_ms = start.elapsed().as_millis() as u64;
-    progress.errors = errors.total();
-    super::cancel::send_done(tx, progress, errors.into_displayed(), cancel);
 }

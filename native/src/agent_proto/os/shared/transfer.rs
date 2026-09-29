@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use super::fs::{is_pseudo_dir, systemtime_ms};
@@ -10,7 +10,7 @@ use super::promotion::{
     ensure_destination_parent_plain, promote_staged_replace, validate_destination_root,
 };
 use super::put_tree::TreeManifestValidator;
-use super::session::{emit, Sink};
+use super::session::{emit, Inbound, Sink};
 use super::{Frame, ValidatedRelativePath, CHUNK};
 
 /// Read a file `[offset, offset+len)` (len 0 = to EOF) -> `Data`* then `End`.
@@ -48,7 +48,7 @@ pub(crate) fn handle_write(
     sink: &Sink,
     id: u64,
     path: &str,
-    inbound: &Receiver<Frame>,
+    inbound: &dyn Inbound,
     cancel: &AtomicBool,
     promote: fn(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -194,7 +194,8 @@ pub(crate) fn collect_local_tree(
 ) -> io::Result<Vec<LocalTreeEntry>> {
     validate_destination_root(root)?;
     let root_metadata = std::fs::symlink_metadata(root)?;
-    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir() {
+    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir()
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "bulk source root must be a plain directory",
@@ -335,7 +336,9 @@ pub(crate) fn open_local_tree_file(
         .identity
         .ok_or_else(|| io::Error::other("bulk directory cannot be opened as a file"))?;
     let link_metadata = std::fs::symlink_metadata(&path)?;
-    if super::local_platform::metadata_is_link_like(&path, &link_metadata) || !link_metadata.is_file() {
+    if super::local_platform::metadata_is_link_like(&path, &link_metadata)
+        || !link_metadata.is_file()
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "bulk source changed into a link or non-file",
@@ -388,7 +391,8 @@ fn validate_local_source_ancestors(root: &Path, entry: &LocalTreeEntry) -> io::R
     validate_destination_root(root)?;
     let mut current = root.to_path_buf();
     let root_metadata = std::fs::symlink_metadata(&current)?;
-    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir() {
+    if super::local_platform::metadata_is_link_like(root, &root_metadata) || !root_metadata.is_dir()
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "bulk source root changed into a link or non-directory",

@@ -2,7 +2,10 @@ use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+use crate::vfs::{
+    Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme, VfsMeta,
+    VfsResult,
+};
 
 use super::core::eio;
 use super::framing::recv_ctrl;
@@ -20,11 +23,20 @@ const MOUNT_CAPABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(40);
 pub(super) use super::framing::{recv_tagged, reply, send_ctrl};
 pub(crate) use super::node::ShareIrohNode;
 
+#[path = "peer_batch_get.rs"]
+mod peer_batch_get;
+#[path = "peer_batch_put.rs"]
+mod peer_batch_put;
+#[path = "peer_transfer.rs"]
+mod peer_transfer;
+
 pub struct PeerBackend {
     pub(super) endpoint_source: PeerEndpointSource,
     pub(super) identity: ShareIdentity,
     pub(super) node: Arc<ShareIrohNode>,
     pub(super) mount_lease: super::mount_lease_client::PeerMountLeaseClient,
+    /// Transfer v1 capabilities of the host and this client's own stages.
+    pub(super) transfer: peer_transfer::PeerTransferState,
 }
 
 impl PeerBackend {
@@ -38,6 +50,7 @@ impl PeerBackend {
             identity,
             node,
             mount_lease: Default::default(),
+            transfer: Default::default(),
         }
     }
 
@@ -53,6 +66,7 @@ impl PeerBackend {
             identity,
             node,
             mount_lease: Default::default(),
+            transfer: Default::default(),
         }
     }
 
@@ -210,8 +224,11 @@ impl Backend for PeerBackend {
         super::fs_error::exists_from_stat(self.stat(path))
     }
 
-    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
-        -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+    fn scan_storage(
+        &self,
+        root: &str,
+        progress: &crate::analytics::Progress,
+    ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
         super::peer_storage_analysis::scan(self, root, progress)
     }
 
@@ -231,6 +248,19 @@ impl Backend for PeerBackend {
         self.open_reader(path)
     }
 
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        self.read_by_id(path, id)
+    }
+
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read_at(path, id, offset)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.open_writer(
             FsRequest::Write {
@@ -247,6 +277,64 @@ impl Backend for PeerBackend {
             },
             "peer exclusive write open",
         )
+    }
+
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        let writer = self.open_write_new(path)?;
+        self.track_stage(path);
+        Ok(writer)
+    }
+
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        let writer = self.open_write_copy_stage(path)?;
+        Ok(peer_transfer::sized_writer(writer, size))
+    }
+
+    fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_without_replace(staged, destination, true)
+    }
+
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        self.copy_to_stage(src, stage, size)
+    }
+
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.discard_own_stage(stage)
+    }
+
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        self.batch_limits_below(dir)
+    }
+
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        self.put_batch_v1(entries, data)
+    }
+
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        self.get_batch_v1(items, sink)
+    }
+
+    fn flow_key(&self, _path: &str) -> String {
+        self.connection_flow_key()
+    }
+
+    fn transfer_ceiling(&self, _path: &str) -> Option<usize> {
+        Some(self.transfer_slots())
+    }
+
+    fn transfer_hint(&self) -> Option<String> {
+        // A relay path carries all bytes through the relay server, whose
+        // bandwidth is a limit of its own (research §3.1).
+        (self.node.session_transport(self.initial_endpoint()) == Some("relay"))
+            .then(|| "über Relay: die Bandbreite begrenzt der Relay-Server".to_string())
     }
 
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
@@ -268,6 +356,10 @@ impl Backend for PeerBackend {
             FsResponse::Ok => Ok(()),
             _ => Err(eio("unerwartete Antwort auf rename")),
         }
+    }
+
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_without_replace(staged, destination, false)
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
@@ -315,6 +407,14 @@ impl Backend for PeerBackend {
             FsResponse::Ok => Ok(()),
             _ => Err(eio("unerwartete Antwort auf mkdir_all")),
         }
+    }
+
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.create_directory(path, false)
+    }
+
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.create_directory(path, true)
     }
 
     fn parallelism(&self) -> usize {

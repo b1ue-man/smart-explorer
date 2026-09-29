@@ -20,6 +20,7 @@ use super::io_deadline;
 use super::keepalive::iroh_transport_config;
 use super::session::endpoint_addr;
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
+use super::wire::FsTransferCapabilities;
 
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
@@ -48,6 +49,9 @@ pub(crate) struct ShareIrohNode {
     pub(super) runtime_transition_slot: Arc<Semaphore>,
     pub(super) peer_handshake_slots: PeerHandshakeLimiter,
     pub(super) routes: EndpointRoutes,
+    /// Tests pose this host as one before transfer v1.
+    #[cfg(test)]
+    legacy_transfer_host: AtomicBool,
 }
 
 impl ShareIrohNode {
@@ -123,6 +127,8 @@ impl ShareIrohNode {
                 MAX_PENDING_APPLICATION_HANDSHAKES,
             ),
             routes,
+            #[cfg(test)]
+            legacy_transfer_host: AtomicBool::new(false),
         });
         node.spawn_accept_loop();
         Ok(node)
@@ -299,6 +305,31 @@ impl ShareIrohNode {
 
     pub(super) fn emit_connection_error(&self, kind: ConnectionErrorKind, message: String) {
         self.connection_events.report(kind, message, &self.ev);
+    }
+
+    /// Transfer features this host advertises in every Capabilities reply.
+    pub(super) fn transfer_capabilities(&self) -> FsTransferCapabilities {
+        if self.legacy_transfer_host() {
+            FsTransferCapabilities::default()
+        } else {
+            FsTransferCapabilities::host()
+        }
+    }
+
+    /// Whether this host answers like one before transfer v1 (tests only).
+    #[cfg(test)]
+    pub(super) fn legacy_transfer_host(&self) -> bool {
+        self.legacy_transfer_host.load(Ordering::Acquire)
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn legacy_transfer_host(&self) -> bool {
+        false
+    }
+
+    #[cfg(test)]
+    pub(super) fn pose_as_legacy_transfer_host(&self) {
+        self.legacy_transfer_host.store(true, Ordering::Release);
     }
 }
 

@@ -7,6 +7,10 @@ fn token() -> io::Result<String> {
     Ok("test-token".to_string())
 }
 
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().redirects(0).build()
+}
+
 fn receive(listener: &TcpListener) -> (TcpStream, String, Vec<u8>) {
     let (mut stream, _) = listener.accept().unwrap();
     let mut raw = Vec::new();
@@ -81,6 +85,7 @@ fn chunk_boundary_rotation_truncated_completion_and_empty_query() {
     let mut spool = tempfile::tempfile().unwrap();
     spool.set_len((CHUNK_SIZE + 1) as u64).unwrap();
     let done = upload(
+        &agent(),
         &format!("{base}/first"),
         &mut spool,
         (CHUNK_SIZE + 1) as u64,
@@ -92,6 +97,7 @@ fn chunk_boundary_rotation_truncated_completion_and_empty_query() {
     assert_eq!(done, Completion::VerifyExpected);
     let mut empty = tempfile::tempfile().unwrap();
     let done = upload(
+        &agent(),
         &format!("{base}/empty"),
         &mut empty,
         0,
@@ -131,6 +137,7 @@ fn refreshes_once_on_unauthorized_without_losing_the_chunk() {
     let mut spool = tempfile::tempfile().unwrap();
     spool.set_len(1).unwrap();
     let done = upload(
+        &agent(),
         &format!("{base}/token"),
         &mut spool,
         1,

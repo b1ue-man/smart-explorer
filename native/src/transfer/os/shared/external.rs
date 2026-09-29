@@ -1,9 +1,14 @@
 //! Transfers another program performs from our data, for example Explorer
 //! copying virtual files it pasted from our clipboard. They appear in the
 //! transfer list next to our own transfers so every copy stays traceable.
+use super::types::TransferIssue;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
+
+/// Issues listed per external transfer, like the first issues of our own
+/// transfers; the error count covers every one.
+const MAX_LISTED_ISSUES: usize = 100;
 
 /// Counters the providing side updates while the other program reads.
 pub struct ExternalTransfer {
@@ -16,6 +21,7 @@ pub struct ExternalTransfer {
     errors: AtomicU64,
     finished: AtomicBool,
     note: Mutex<Option<String>>,
+    issues: Mutex<Vec<TransferIssue>>,
 }
 
 /// A point-in-time copy of an external transfer.
@@ -30,6 +36,8 @@ pub struct ExternalSnapshot {
     pub elapsed_ms: u64,
     pub finished: bool,
     pub note: Option<String>,
+    /// The first entries the other program could not receive, with reasons.
+    pub issues: Vec<TransferIssue>,
 }
 
 impl ExternalTransfer {
@@ -47,6 +55,22 @@ impl ExternalTransfer {
 
     pub fn error(&self) {
         self.errors.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// One entry the other program cannot receive (or a problem of the whole
+    /// hand-off with an empty `path`): counted as an error and listed.
+    pub fn issue(&self, path: impl Into<String>, message: impl Into<String>) {
+        self.error();
+        let mut issues = self
+            .issues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if issues.len() < MAX_LISTED_ISSUES {
+            issues.push(TransferIssue {
+                path: path.into(),
+                message: message.into(),
+            });
+        }
     }
 
     /// A short explanation shown with the entry (listing progress, entries
@@ -74,6 +98,11 @@ impl ExternalTransfer {
             finished: self.finished.load(Ordering::Acquire),
             note: self
                 .note
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+            issues: self
+                .issues
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone(),
@@ -112,6 +141,7 @@ pub fn register_external(label: impl Into<String>) -> Arc<ExternalTransfer> {
         errors: AtomicU64::new(0),
         finished: AtomicBool::new(false),
         note: Mutex::new(None),
+        issues: Mutex::new(Vec::new()),
     });
     registry.next_id += 1;
     registry.live.push(Arc::downgrade(&transfer));

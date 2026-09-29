@@ -1,6 +1,7 @@
 //! Focused acceptance of search -> tree presentation -> transfer membership.
 use super::prelude::*;
 use super::*;
+use crate::copy::CopyMsg;
 use crate::filter::{parse_extensions, scan_restart_needed, FilterRetention};
 use crate::scanner::ScanRetention;
 
@@ -179,6 +180,26 @@ fn finish_scan(app: &mut App) {
     assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
 }
 
+/// The copy dialog runs its job in the transfer list; wait for it to end
+/// without any issue.
+fn finish_transfers(app: &mut App) {
+    assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
+    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    while !app.transfer_center.is_idle() {
+        app.drain_transfers();
+        assert!(Instant::now() < deadline, "transfer never completed");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let finished = app
+        .transfer_center
+        .finished
+        .front()
+        .expect("the copy is listed as finished");
+    assert!(finished.failure.is_none(), "{:?}", finished.failure);
+    assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+    assert_eq!(finished.progress.errors, 0, "{:?}", finished.errors);
+}
+
 #[test]
 fn search_recursive_access_task_wide_scan_folded_copy_preserves_exact_structure() {
     let fixture = tempfile::tempdir().unwrap();
@@ -280,20 +301,14 @@ fn search_recursive_access_task_unfiltered_folded_folder_copy_keeps_empty_direct
     app.toggle_recursive_folder(folder);
     app.select_all();
     assert_eq!(
-        recursive_clipboard::plain_selection_paths(&app.entries, &app.selection).len(),
+        recursive_clipboard::outer_selection_roots(&app.entries, &app.selection).len(),
         1
     );
     let destination = fixture.path().join("destination");
     app.copy_dest = destination.to_string_lossy().into_owned();
     app.copy_preserve = true;
     app.confirm_copy();
-    let deadline = Instant::now() + std::time::Duration::from_secs(30);
-    while app.copy_rx.is_some() {
-        app.drain_copy();
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(app.copy_errors.is_empty(), "{:?}", app.copy_errors);
+    finish_transfers(&mut app);
     assert!(destination.join("bundle/empty").is_dir());
     assert_eq!(
         std::fs::read(destination.join("bundle/asset.dat")).unwrap(),
@@ -375,13 +390,7 @@ fn search_recursive_access_task_long_clipboard_snapshot_and_remote_materializati
     app.select_all();
     app.copy_dest = destination.to_string_lossy().into_owned();
     app.confirm_copy();
-    let deadline = Instant::now() + std::time::Duration::from_secs(30);
-    while app.copy_rx.is_some() {
-        app.drain_copy();
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(app.copy_errors.is_empty(), "{:?}", app.copy_errors);
+    finish_transfers(&mut app);
     let target = names.iter().fold(destination, |path, part| path.join(part));
     assert_eq!(
         std::fs::read(target.join("selected.blend")).unwrap(),

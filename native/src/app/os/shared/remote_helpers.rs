@@ -11,10 +11,7 @@ mod temp;
 #[path = "remote_helpers/temp_delete.rs"]
 mod temp_delete;
 
-pub(in crate::app) use crate::transfer::{
-    download_clipboard_snapshot, download_remote_clipboard_items,
-    download_remote_paths_for_clipboard, upload_file,
-};
+pub(in crate::app) use crate::transfer::{download_clipboard_snapshot, upload_file};
 pub(in crate::app) use crate::vfs::remote_util::{
     conflict_rel_name, ep_join, find_remote_unique_name, read_text, rjoin, sig_from, write_bytes,
 };
@@ -61,6 +58,12 @@ pub(crate) fn is_local_style(path: &str) -> bool {
     let b = p.as_bytes();
     let has_drive = b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic();
     has_drive || p.starts_with("//") || p.starts_with("\\\\")
+}
+
+/// A local path of this platform: drive and UNC paths on Windows, absolute
+/// paths on Linux (where `is_local_style` never matches).
+pub(in crate::app) fn is_local_path(path: &str) -> bool {
+    is_local_style(path) || std::path::Path::new(path.trim_start()).is_absolute()
 }
 
 /// A ZIP archive we can browse in-app / extract.

@@ -71,7 +71,7 @@ impl GDriveBackend {
         let url = self.api_url(&format!("files/{}?fields=id,trashed", cloud_urlenc(id)));
         let payload = serde_json::json!({ "trashed": true }).to_string();
         match mutation_once(drive_request(
-            self.timed_request(ureq::request("PATCH", &url))
+            self.timed_request(self.http.api().request("PATCH", &url))
                 .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
                 .send_string(&payload),

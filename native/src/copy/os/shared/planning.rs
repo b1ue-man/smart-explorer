@@ -4,46 +4,10 @@ use std::path::Path;
 
 use super::super::platform;
 
+/// Explicit pair lists are held in memory as a whole; the bounds the older
+/// copy collection used keep one paste from exhausting it.
 const MAX_COPY_ENTRIES: usize = 1_000_000;
 const MAX_COPY_TEXT_BYTES: usize = 128 * 1024 * 1024;
-
-#[derive(Default)]
-pub(super) struct EntryAccumulator {
-    entries: Vec<FileEntry>,
-    text_bytes: usize,
-}
-
-impl EntryAccumulator {
-    pub(super) fn push(&mut self, entry: FileEntry) -> Result<(), String> {
-        let added = entry
-            .path
-            .len()
-            .saturating_add(entry.parent.len())
-            .saturating_add(entry.name.len())
-            .saturating_add(entry.ext.len());
-        let next_bytes = self.text_bytes.saturating_add(added);
-        if self.entries.len() >= MAX_COPY_ENTRIES || next_bytes > MAX_COPY_TEXT_BYTES {
-            return Err(limit_error());
-        }
-        self.text_bytes = next_bytes;
-        self.entries.push(entry);
-        Ok(())
-    }
-
-    pub(super) fn extend(
-        &mut self,
-        entries: impl IntoIterator<Item = FileEntry>,
-    ) -> Result<(), String> {
-        for entry in entries {
-            self.push(entry)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn into_entries(self) -> Vec<FileEntry> {
-        self.entries
-    }
-}
 
 pub(super) fn dedupe_entries(mut entries: Vec<FileEntry>) -> Vec<FileEntry> {
     entries.sort_by_key(|entry| path_depth(Path::new(entry.path.as_ref())));

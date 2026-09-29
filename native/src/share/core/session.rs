@@ -82,6 +82,14 @@ impl IncomingSession {
         )
     }
 
+    /// Whether the client asked for `capability` in its hello.
+    pub(super) fn requested(&self, capability: &str) -> bool {
+        self.hello
+            .requested_capabilities
+            .iter()
+            .any(|value| value == capability)
+    }
+
     /// Re-evaluates the identity, grant, relation secret, and export policy for
     /// every accepted filesystem stream. The QUIC connection alone is never an
     /// authorization cache.

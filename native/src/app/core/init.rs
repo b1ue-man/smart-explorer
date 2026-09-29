@@ -234,12 +234,6 @@ impl App {
             copy_dest: String::new(),
             copy_preserve: true,
             copy_conflict: Conflict::Rename,
-            copy_rx: None,
-            copy_handle: None,
-            copy_progress: None,
-            copy_errors: Vec::new(),
-            copy_active_mode: None,
-            copy_refresh_after: false,
 
             error_msg: startup_update_error,
             notice: recovery_notice
@@ -351,9 +345,9 @@ impl App {
             pending_initial_path: initial_path,
             integration_ctx_menu: Self::initial_context_menu_enabled(),
 
+            clip: None,
             clipboard_preparation: Default::default(),
             clip_prepare_rx: None,
-            virtual_clip: None,
 
             watcher: None,
             watcher_rx: None,
@@ -414,7 +408,7 @@ impl App {
             remote_edits: Vec::new(),
             edit_save_rx: Vec::new(),
             last_edit_poll: Instant::now(),
-            transfers: super::transfer_jobs::TransferLane::new(),
+            transfer_center: Default::default(),
             remote_op_rx: None,
             agent_activate_rx: None,
             agent_activate_for: None,

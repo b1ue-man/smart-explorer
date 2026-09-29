@@ -18,9 +18,11 @@ pub(in crate::app) enum PickerPurpose {
     BisyncDest,
     /// Copy-dialog destination folder (local).
     CopyDest,
-    /// Download a remote file (at remote path `src`) into the picked dir.
+    /// Copy the entry at `src` of `source` into the picked folder, local or
+    /// on any connection (the source is captured when the picker opens).
     DownloadTo {
         src: String,
+        source: super::transfer_route::TransferPlace,
     },
 }
 
@@ -38,7 +40,8 @@ impl PickerPurpose {
             PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
         }
     }
-    /// All sync and storage-analysis targets support remote connections.
+    /// Sync, storage-analysis and "Herunterladen nach…" targets support
+    /// remote connections.
     pub(in crate::app) fn local_only(&self) -> bool {
         !matches!(
             self,
@@ -48,6 +51,7 @@ impl PickerPurpose {
                 | PickerPurpose::BisyncDest
                 | PickerPurpose::AnalyticsFolder
                 | PickerPurpose::ReclaimFolder
+                | PickerPurpose::DownloadTo { .. }
         )
     }
 }

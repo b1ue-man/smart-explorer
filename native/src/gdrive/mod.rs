@@ -19,8 +19,12 @@ mod auth;
 mod backend;
 #[path = "core/cache.rs"]
 mod cache;
+#[path = "core/cache_store.rs"]
+mod cache_store;
 #[path = "core/changes.rs"]
 mod changes;
+#[path = "core/chunk_stream.rs"]
+mod chunk_stream;
 #[path = "os/shared/copy_writer.rs"]
 mod copy_writer;
 #[path = "core/core.rs"]
@@ -31,22 +35,40 @@ mod duplicates;
 mod file_list;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
+#[path = "core/http.rs"]
+mod http;
+#[path = "core/id_pool.rs"]
+mod id_pool;
+#[path = "core/key_locks.rs"]
+mod key_locks;
 #[path = "core/metadata.rs"]
 mod metadata;
 #[path = "core/names.rs"]
 mod names;
-#[path = "core/resolution.rs"]
-mod resolution;
+#[path = "core/new_object.rs"]
+mod new_object;
+#[path = "core/overload.rs"]
+mod overload;
 #[path = "core/promotion.rs"]
 mod promotion;
 #[path = "core/promotion_api.rs"]
 mod promotion_api;
+#[path = "core/promotion_checks.rs"]
+mod promotion_checks;
+#[path = "core/resolution.rs"]
+mod resolution;
 #[path = "core/resumable.rs"]
 mod resumable;
+#[path = "core/resumable_session.rs"]
+mod resumable_session;
+#[path = "core/sized_writer.rs"]
+mod sized_writer;
 #[path = "core/state.rs"]
 mod state;
 #[path = "core/transfer.rs"]
 mod transfer;
+#[path = "core/transfer_ops.rs"]
+mod transfer_ops;
 #[path = "core/trash.rs"]
 mod trash;
 
@@ -56,6 +78,18 @@ mod mutation_reconcile_tests;
 #[cfg(test)]
 #[path = "core/read_retry_tests.rs"]
 mod read_retry_tests;
+#[cfg(test)]
+#[path = "core/task_drive.rs"]
+mod task_drive;
+#[cfg(test)]
+#[path = "core/task_http.rs"]
+mod task_http;
+#[cfg(test)]
+#[path = "core/transfer_engine_task_ops_tests.rs"]
+mod transfer_engine_task_ops_tests;
+#[cfg(test)]
+#[path = "core/transfer_engine_task_tests.rs"]
+mod transfer_engine_task_tests;
 
 pub use state::GDriveBackend;
 

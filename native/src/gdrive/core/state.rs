@@ -1,33 +1,13 @@
+use super::cache_store::CacheStore;
+use super::http::DriveHttp;
+use super::id_pool::IdPool;
+use super::key_locks::{self, KeyGuard, KeyLocks};
 use crate::cloud::{self, Provider};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-
-struct UploadPathLocks {
-    active: Mutex<HashSet<String>>,
-    ready: Condvar,
-}
-
-pub(super) struct UploadPathGuard {
-    locks: Arc<UploadPathLocks>,
-    path: String,
-}
-
-pub(super) struct UploadPathPairGuard {
-    _first: UploadPathGuard,
-    _second: Option<UploadPathGuard>,
-}
-
-impl Drop for UploadPathGuard {
-    fn drop(&mut self) {
-        if let Ok(mut active) = self.locks.active.lock() {
-            active.remove(&self.path);
-            self.locks.ready.notify_all();
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct GDriveBackend {
@@ -45,13 +25,16 @@ pub struct GDriveBackend {
     /// skip a redundant lookup; file uploads always re-probe because Drive
     /// sibling names are not unique and this snapshot can become stale.
     pub(super) listed: Arc<Mutex<HashSet<String>>>,
-    /// Serializes folder creation so concurrent transfers can't create the same
-    /// directory twice (Drive happily makes duplicate same-name folders).
-    pub(super) create_lock: Arc<Mutex<()>>,
-    /// Serializes namespace transitions that span more than one path. Drive
-    /// names are not unique, so exact-ID rename verification must not interleave
-    /// with another in-process rename or promotion.
-    pub(super) mutation_lock: Arc<Mutex<()>>,
+    /// One folder create per namespace slot (parent ID + encoded name) at a
+    /// time, so concurrent transfers never create the same directory twice
+    /// (Drive happily makes duplicate same-name folders); other folders are
+    /// created in parallel.
+    create_slots: Arc<KeyLocks>,
+    /// Namespace transitions (rename, promotion) hold the Drive name slots of
+    /// their source and destination. Drive names are not unique, so exact-ID
+    /// rename verification must not interleave with another in-process rename
+    /// or promotion of the same names; unrelated names move in parallel.
+    mutation_slots: Arc<KeyLocks>,
     /// Pre-generated ids reserved by uploads that have not reached a locally
     /// verified commit yet. Keeping them across writer retries prevents an
     /// ambiguous completion from allocating a second same-name Drive file.
@@ -61,19 +44,39 @@ pub struct GDriveBackend {
     /// path hints: transient validation failure must never discard it.
     pub(super) pending_folder_creates:
         Arc<Mutex<HashMap<String, super::folder_create_journal::PendingFolderCreate>>>,
+    /// Private copy stages this backend created (path -> the ID it generated);
+    /// only these may be discarded, always by exact ID.
+    pub(super) owned_stages: Arc<Mutex<HashMap<String, String>>>,
     pub(super) drive_account_key: Arc<str>,
     pub(super) pending_folder_dir: Option<Arc<PathBuf>>,
     /// Serializes uploads only when they target the same normalized path;
     /// unrelated file uploads remain parallel.
-    upload_paths: Arc<UploadPathLocks>,
+    upload_paths: Arc<KeyLocks>,
+    pub(super) id_pool: Arc<IdPool>,
+    pub(super) cache_store: Arc<CacheStore>,
     pub(super) root: String,
     pub(super) api_base: Arc<str>,
-    pub(super) persist_cache: bool,
     pub(super) request_timeout: Duration,
-    /// Streaming downloads use per-socket inactivity deadlines rather than an
-    /// overall request timeout, so an active large transfer has no wall-clock
-    /// cap while a blackholed read still fails.
-    pub(super) stream_agent: ureq::Agent,
+    /// Pooled clients: one for API calls and upload sessions, one for
+    /// streaming downloads (per-socket inactivity deadlines, no overall
+    /// request timeout, so an active large transfer has no wall-clock cap
+    /// while a blackholed read still fails).
+    pub(super) http: Arc<DriveHttp>,
+}
+
+/// Everything a backend is built from.
+struct Setup {
+    tokens: cloud::Tokens,
+    ids: HashMap<String, String>,
+    untrusted_ids: HashSet<String>,
+    mimes: HashMap<String, String>,
+    drive_account_key: String,
+    pending_folder_dir: Option<PathBuf>,
+    cache_path: Option<PathBuf>,
+    root: String,
+    api_base: String,
+    request_timeout: Duration,
+    http: DriveHttp,
 }
 
 impl GDriveBackend {
@@ -81,33 +84,53 @@ impl GDriveBackend {
     /// `cloud::authorize`). `root` is the forward-slash start folder.
     pub fn connect(root: &str) -> Result<Self, String> {
         let tokens = cloud::refresh_access(Provider::GDrive)?;
-        let drive_account_key = load_drive_account_key(&tokens.access_token)?;
+        let http = DriveHttp::new(super::api::DRIVE_REQUEST_TIMEOUT);
+        // The account lookup already opens the pooled socket later calls use.
+        let drive_account_key = load_drive_account_key(&http.api(), &tokens.access_token)?;
         let loaded = super::cache::load();
         let mut ids = loaded.ids;
         ids.insert(String::new(), "root".to_string());
         let untrusted_ids = super::cache::loaded_untrusted(&ids);
-        Ok(GDriveBackend {
-            tokens: Arc::new(Mutex::new(tokens)),
-            ids: Arc::new(Mutex::new(ids)),
-            untrusted_ids: Arc::new(Mutex::new(untrusted_ids)),
-            mimes: Arc::new(Mutex::new(loaded.mimes)),
+        Ok(Self::from_setup(Setup {
+            tokens,
+            ids,
+            untrusted_ids,
+            mimes: loaded.mimes,
+            drive_account_key,
+            pending_folder_dir: Some(super::folder_create_journal::record_dir()),
+            cache_path: Some(super::cache::cache_path()),
+            root: super::core::norm(root),
+            api_base: super::api::API.to_string(),
+            request_timeout: super::api::DRIVE_REQUEST_TIMEOUT,
+            http,
+        }))
+    }
+
+    fn from_setup(setup: Setup) -> Self {
+        let ids = Arc::new(Mutex::new(setup.ids));
+        let mimes = Arc::new(Mutex::new(setup.mimes));
+        let cache_store = CacheStore::new(setup.cache_path, Arc::clone(&ids), Arc::clone(&mimes));
+        GDriveBackend {
+            tokens: Arc::new(Mutex::new(setup.tokens)),
+            ids,
+            untrusted_ids: Arc::new(Mutex::new(setup.untrusted_ids)),
+            mimes,
             listed: Arc::new(Mutex::new(HashSet::new())),
-            create_lock: Arc::new(Mutex::new(())),
-            mutation_lock: Arc::new(Mutex::new(())),
+            create_slots: KeyLocks::new("Drive-Erzeugungssperre vergiftet"),
+            mutation_slots: KeyLocks::new("Drive-Mutationssperre vergiftet"),
             pending_upload_ids: Arc::new(Mutex::new(HashMap::new())),
             pending_folder_creates: Arc::new(Mutex::new(HashMap::new())),
-            drive_account_key: Arc::from(drive_account_key),
-            pending_folder_dir: Some(Arc::new(super::folder_create_journal::record_dir())),
-            upload_paths: Arc::new(UploadPathLocks {
-                active: Mutex::new(HashSet::new()),
-                ready: Condvar::new(),
-            }),
-            root: super::core::norm(root),
-            api_base: Arc::from(super::api::API),
-            persist_cache: true,
-            request_timeout: super::api::DRIVE_REQUEST_TIMEOUT,
-            stream_agent: stream_agent(super::api::DRIVE_REQUEST_TIMEOUT),
-        })
+            owned_stages: Arc::new(Mutex::new(HashMap::new())),
+            drive_account_key: Arc::from(setup.drive_account_key),
+            pending_folder_dir: setup.pending_folder_dir.map(Arc::new),
+            upload_paths: KeyLocks::new("Drive-Upload-Pfadsperre vergiftet"),
+            id_pool: Arc::new(IdPool::default()),
+            cache_store: Arc::new(cache_store),
+            root: setup.root,
+            api_base: Arc::from(setup.api_base),
+            request_timeout: setup.request_timeout,
+            http: Arc::new(setup.http),
+        }
     }
 
     pub(super) fn api_url(&self, suffix: &str) -> String {
@@ -149,35 +172,26 @@ impl GDriveBackend {
     ) -> Self {
         let mut ids = HashMap::new();
         ids.insert(String::new(), "root".to_string());
-        let refresh_token = "test-refresh".to_string();
-        let drive_account_key =
-            super::folder_create_journal::account_key("test-drive-permission-id");
-        Self {
-            tokens: Arc::new(Mutex::new(cloud::Tokens {
+        Self::from_setup(Setup {
+            tokens: cloud::Tokens {
                 access_token: "test-token".into(),
-                refresh_token,
+                refresh_token: "test-refresh".to_string(),
                 expires_at: i64::MAX,
-            })),
-            ids: Arc::new(Mutex::new(ids)),
-            untrusted_ids: Arc::new(Mutex::new(HashSet::new())),
-            mimes: Arc::new(Mutex::new(HashMap::new())),
-            listed: Arc::new(Mutex::new(HashSet::new())),
-            create_lock: Arc::new(Mutex::new(())),
-            mutation_lock: Arc::new(Mutex::new(())),
-            pending_upload_ids: Arc::new(Mutex::new(HashMap::new())),
-            pending_folder_creates: Arc::new(Mutex::new(HashMap::new())),
-            drive_account_key: Arc::from(drive_account_key),
-            pending_folder_dir: pending_folder_dir.map(Arc::new),
-            upload_paths: Arc::new(UploadPathLocks {
-                active: Mutex::new(HashSet::new()),
-                ready: Condvar::new(),
-            }),
+            },
+            ids,
+            untrusted_ids: HashSet::new(),
+            mimes: HashMap::new(),
+            drive_account_key: super::folder_create_journal::account_key(
+                "test-drive-permission-id",
+            ),
+            pending_folder_dir,
+            // Memory-only path cache.
+            cache_path: None,
             root: String::new(),
-            api_base: Arc::from(api_base),
-            persist_cache: false,
+            api_base: api_base.to_string(),
             request_timeout,
-            stream_agent: stream_agent(request_timeout),
-        }
+            http: DriveHttp::new(request_timeout),
+        })
     }
 
     pub(super) fn tokens_guard(&self) -> io::Result<MutexGuard<'_, cloud::Tokens>> {
@@ -210,16 +224,21 @@ impl GDriveBackend {
             .map_err(|_| io::Error::other("Drive-Verzeichnisstatus-Cache vergiftet"))
     }
 
-    pub(super) fn create_guard(&self) -> io::Result<MutexGuard<'_, ()>> {
-        self.create_lock
-            .lock()
-            .map_err(|_| io::Error::other("Drive-Erzeugungssperre vergiftet"))
+    /// Hold the create slot of `segment` (encoded name) below `parent_id`.
+    pub(super) fn create_slot_guard(&self, parent_id: &str, segment: &str) -> io::Result<KeyGuard> {
+        key_locks::lock(&self.create_slots, &key_locks::slot(parent_id, segment))
     }
 
-    pub(super) fn mutation_guard(&self) -> io::Result<MutexGuard<'_, ()>> {
-        self.mutation_lock
-            .lock()
-            .map_err(|_| io::Error::other("Drive-Mutationssperre vergiftet"))
+    /// Hold the name slots (parent ID, Drive title) a rename or promotion
+    /// reads and changes. Callers take their path locks first; slot holders
+    /// may create folders (create slots) but never wait for a path lock.
+    pub(super) fn mutation_slots_guard(&self, slots: &[(&str, &str)]) -> io::Result<Vec<KeyGuard>> {
+        key_locks::lock_all(
+            &self.mutation_slots,
+            slots
+                .iter()
+                .map(|(parent_id, title)| key_locks::slot(parent_id, title)),
+        )
     }
 
     pub(super) fn pending_upload_ids_guard(
@@ -240,24 +259,14 @@ impl GDriveBackend {
             .map_err(|_| io::Error::other("Drive-Ordnerreservierungs-Cache vergiftet"))
     }
 
-    pub(super) fn upload_path_guard(&self, path: &str) -> io::Result<UploadPathGuard> {
-        let mut active = self
-            .upload_paths
-            .active
+    pub(super) fn owned_stages_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {
+        self.owned_stages
             .lock()
-            .map_err(|_| io::Error::other("Drive-Upload-Pfadsperre vergiftet"))?;
-        while active.contains(path) {
-            active = self
-                .upload_paths
-                .ready
-                .wait(active)
-                .map_err(|_| io::Error::other("Drive-Upload-Pfadsperre vergiftet"))?;
-        }
-        active.insert(path.to_string());
-        Ok(UploadPathGuard {
-            locks: self.upload_paths.clone(),
-            path: path.to_string(),
-        })
+            .map_err(|_| io::Error::other("Drive-Stufenliste vergiftet"))
+    }
+
+    pub(super) fn upload_path_guard(&self, path: &str) -> io::Result<KeyGuard> {
+        key_locks::lock(&self.upload_paths, path)
     }
 
     /// Lock two paths in lexical order. Transfers take one path lock, while a
@@ -267,32 +276,19 @@ impl GDriveBackend {
         &self,
         left: &str,
         right: &str,
-    ) -> io::Result<UploadPathPairGuard> {
-        let (first, second) = if left <= right {
-            (left, right)
-        } else {
-            (right, left)
-        };
-        let first = self.upload_path_guard(first)?;
-        let second_guard = if first.path == second {
-            None
-        } else {
-            Some(self.upload_path_guard(second)?)
-        };
-        Ok(UploadPathPairGuard {
-            _first: first,
-            _second: second_guard,
-        })
+    ) -> io::Result<Vec<KeyGuard>> {
+        key_locks::lock_all(&self.upload_paths, [left.to_string(), right.to_string()])
     }
 }
 
 /// Drive publishes `user.permissionId` as the requesting user's opaque grantee
 /// ID. Unlike a refresh token, it remains the same when OAuth credentials are
 /// refreshed or re-authorized, so durable mutation records stay discoverable.
-fn load_drive_account_key(access_token: &str) -> Result<String, String> {
+fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<String, String> {
     let url = format!("{}/about?fields=user(permissionId)", super::api::API);
     let bearer = format!("Bearer {access_token}");
-    let response = ureq::get(&url)
+    let response = agent
+        .get(&url)
         .timeout(super::api::DRIVE_REQUEST_TIMEOUT)
         .set("Authorization", &bearer)
         .call()
@@ -311,14 +307,6 @@ fn parse_drive_account_key(body: &str) -> Result<String, String> {
         .filter(|id| !id.is_empty())
         .ok_or_else(|| "Drive account identity response has no permissionId".to_string())?;
     Ok(super::folder_create_journal::account_key(permission_id))
-}
-
-fn stream_agent(inactivity_timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(super::api::DRIVE_CONNECT_TIMEOUT)
-        .timeout_read(inactivity_timeout)
-        .timeout_write(inactivity_timeout)
-        .build()
 }
 
 #[cfg(test)]

@@ -11,17 +11,46 @@ use super::framing::{
     recv_ctrl_limited, reply, reply_err, send_ctrl, MAX_HANDSHAKE_CTRL_FRAME,
     MAX_REQUEST_CTRL_FRAME,
 };
-use super::fs;
 use super::fs_access::FsAccess;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
-use super::mount_lease::{run_authorized, MountLeaseAuthorization};
+use super::mount_lease::MountLeaseAuthorization;
 use super::node::ShareIrohNode;
 use super::session::{authenticate_incoming_session, IncomingSession};
-use super::types::{ExecRequest, ShareEvent};
-use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::types::{ExecRequest, ShareAuthState, ShareEvent};
+use super::wire::{Ctrl, FsRequest, FsResponse, TRANSFER_V1_CAPABILITY};
+
+#[path = "server_admission.rs"]
+mod admission;
+#[path = "server_batch_get.rs"]
+mod batch_get;
+#[path = "server_batch_put.rs"]
+mod batch_put;
+#[path = "batch_status.rs"]
+mod batch_status;
+#[path = "server_fs.rs"]
+mod fs_dispatch;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What every stream of one authenticated connection shares.
+struct StreamContext {
+    session: Arc<IncomingSession>,
+    auth: Arc<Mutex<ShareAuthState>>,
+    node: Arc<ShareIrohNode>,
+    exec_slots: Arc<AtomicUsize>,
+    legacy_connection: usize,
+}
+
+impl StreamContext {
+    /// Admits one transfer. A client that declared transfer v1 gets `Busy`
+    /// at once when the host is full; older clients keep waiting as before.
+    async fn admit(&self) -> io::Result<admission::TransferSlot> {
+        let fail_fast =
+            self.session.requested(TRANSFER_V1_CAPABILITY) && !self.node.legacy_transfer_host();
+        admission::admit(fail_fast).await
+    }
+}
 
 pub(super) async fn handle_connection(
     node: Arc<ShareIrohNode>,
@@ -101,22 +130,16 @@ pub(super) async fn handle_connection(
             Ok(streams) => streams,
             Err(error) => return Err(eio(error)),
         };
-        let session = session.clone();
-        let auth = node.auth.clone();
-        let exec_slots = exec_slots.clone();
+        let context = StreamContext {
+            session: session.clone(),
+            auth: node.auth.clone(),
+            node: node.clone(),
+            exec_slots: exec_slots.clone(),
+            legacy_connection,
+        };
         let node = node.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_peer_stream(
-                send,
-                recv,
-                session,
-                auth,
-                node.clone(),
-                exec_slots,
-                legacy_connection,
-            )
-            .await
-            {
+            if let Err(error) = handle_peer_stream(send, recv, context).await {
                 node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
             }
         });
@@ -126,24 +149,30 @@ pub(super) async fn handle_connection(
 async fn handle_peer_stream(
     mut send: SendStream,
     mut recv: RecvStream,
-    session: Arc<IncomingSession>,
-    auth: Arc<Mutex<super::types::ShareAuthState>>,
-    node: Arc<ShareIrohNode>,
-    exec_slots: Arc<AtomicUsize>,
-    legacy_connection: usize,
+    context: StreamContext,
 ) -> io::Result<()> {
     let ctrl = io_deadline::run(
         "Share operation frame",
         recv_ctrl_limited(&mut recv, MAX_REQUEST_CTRL_FRAME),
     )
     .await?;
+    let node = context.node.clone();
+    let session = context.session.clone();
+    let auth = context.auth.clone();
+    let legacy_connection = context.legacy_connection;
     node.require_sharing_active()?;
     if matches!(&ctrl, Ctrl::DirectReciprocal) {
         super::direct_reciprocal_transport::serve_incoming_bounded(
-            send, recv, session, auth, node.direct_repair_store.clone(),
-            node.direct_repair_slots.clone(), node.runtime_transition_slot.clone(),
+            send,
+            recv,
+            session,
+            auth,
+            node.direct_repair_store.clone(),
+            node.direct_repair_slots.clone(),
+            node.runtime_transition_slot.clone(),
             node.ev.clone(),
-        ).await?;
+        )
+        .await?;
         return Ok(());
     }
     let exports = match session.authorize(&auth) {
@@ -168,7 +197,7 @@ async fn handle_peer_stream(
     };
     let (req, requested_lease) = match ctrl {
         Ctrl::Fs { req, lease } => (req, lease),
-        Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, exec_slots).await,
+        Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, context.exec_slots).await,
         _ => return Err(eio("Dateioperation erwartet")),
     };
     let principal = session.principal();
@@ -179,18 +208,18 @@ async fn handle_peer_stream(
             acquire_lease,
             lease_request_id,
         } => {
-            return super::server_capabilities::handle_capabilities(
-                &mut send,
+            let query = super::server_capabilities::CapabilityQuery {
                 path,
                 acquire_lease,
+                lease_request_id,
                 exports,
                 principal,
-                lease_request_id,
                 legacy_connection,
-                node.filesystem_authorization_epoch(),
+                authorization_epoch: node.filesystem_authorization_epoch(),
                 mount_leases,
-            )
-            .await;
+                transfer: node.transfer_capabilities(),
+            };
+            return super::server_capabilities::handle_capabilities(&mut send, query).await;
         }
         FsRequest::ReleaseLease => {
             let Some(token) = requested_lease.as_deref() else {
@@ -214,8 +243,9 @@ async fn handle_peer_stream(
     if matches!(&req, FsRequest::WriteDone) {
         return reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await;
     }
-    let mutation = req.mutates_filesystem();
-    let (access, write_authorization) = match requested_lease {
+    // Mutations and every batch entry are admitted again through the lease.
+    let admit_each = req.mutates_filesystem() || req.is_batch();
+    let (access, authorization) = match requested_lease {
         Some(token) => {
             match mount_leases.authorize(
                 &token,
@@ -225,7 +255,7 @@ async fn handle_peer_stream(
                 node.filesystem_authorization_epoch(),
             ) {
                 Ok(lease) => {
-                    let authorization = mutation.then(|| {
+                    let authorization = admit_each.then(|| {
                         MountLeaseAuthorization::new(
                             token,
                             lease.clone(),
@@ -242,124 +272,15 @@ async fn handle_peer_stream(
         }
         None => (FsAccess::dynamic(exports), None),
     };
-    match req {
-        FsRequest::Capabilities { .. } => Err(eio("Capabilities wurden doppelt verarbeitet")),
-        FsRequest::ReleaseLease => Err(eio("Lease-Freigabe wurde doppelt verarbeitet")),
-        FsRequest::ListDir { path } => {
-            match blocking_fs("Share list directory", move || access.list_dir(&path)).await {
-                Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
-                Err(error) => reply_err(&mut send, error).await,
-            }
-        }
-        FsRequest::Stat { path } => {
-            match blocking_fs("Share stat", move || access.stat(&path)).await {
-                Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
-                Err(error) => reply_err(&mut send, error).await,
-            }
-        }
-        FsRequest::WalkTree { path } => super::walk::serve_walk(send, path, access).await,
-        FsRequest::StorageSnapshot { path } => {
-            super::storage_snapshot::serve_snapshot(send, path, access).await
-        }
-        FsRequest::StorageAnalysis { path } => {
-            super::storage_analysis_server::serve(send, path, access).await
-        }
-        FsRequest::Read { path } => super::server_transfer::read_file(send, path, access).await,
-        FsRequest::Write { path } => {
-            super::server_transfer::write_file(
-                send,
-                recv,
-                path,
-                access,
-                super::server_transfer::WriteMode::Replace,
-                write_authorization,
-            )
-            .await
-        }
-        FsRequest::WriteNew { path } => {
-            super::server_transfer::write_file(
-                send,
-                recv,
-                path,
-                access,
-                super::server_transfer::WriteMode::Create,
-                write_authorization,
-            )
-            .await
-        }
-        FsRequest::MkdirAll { path } => {
-            simple(
-                &mut send,
-                path,
-                access,
-                write_authorization,
-                "Share create directory",
-                |target| target.backend.mkdir_all(&target.path),
-            )
-            .await
-        }
-        FsRequest::Rename { src, dst } => match blocking_fs("Share rename", move || {
-            run_authorized(write_authorization.as_ref(), || {
-                access.rename(&src, &dst, false)
-            })
-        })
-        .await
-        {
-            Ok(()) => reply(&mut send, FsResponse::Ok).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
-        FsRequest::RenameNoReplace { src, dst } => {
-            match blocking_fs("Share no-replace rename", move || {
-                run_authorized(write_authorization.as_ref(), || {
-                    access.rename(&src, &dst, true)
-                })
-            })
-            .await
-            {
-                Ok(()) => reply(&mut send, FsResponse::Ok).await,
-                Err(error) => reply_err(&mut send, error).await,
-            }
-        }
-        FsRequest::PromoteStaged {
-            staged,
-            destination,
-        } => match blocking_fs("Share promote staged file", move || {
-            run_authorized(write_authorization.as_ref(), || {
-                access.promote_staged(&staged, &destination)
-            })
-        })
-        .await
-        {
-            Ok(()) => reply(&mut send, FsResponse::Ok).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
-        FsRequest::CopyFile { src, dst } => {
-            super::fs_copy::serve(&mut send, src, dst, access, write_authorization).await
-        }
-        FsRequest::RemoveFile { path } => {
-            simple(
-                &mut send,
-                path,
-                access,
-                write_authorization,
-                "Share remove file",
-                |target| target.backend.remove_file(&target.path),
-            )
-            .await
-        }
-        FsRequest::RemoveDir { path } => {
-            simple(
-                &mut send,
-                path,
-                access,
-                write_authorization,
-                "Share remove directory",
-                |target| fs::remove_dir_recursive(&*target.backend, &target.path),
-            )
-            .await
-        }
-        FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
-    }
+    let stream = fs_dispatch::FsStream {
+        send,
+        recv,
+        access,
+        authorization,
+        context,
+        principal,
+    };
+    fs_dispatch::serve(stream, req).await
 }
 
 async fn handle_exec_stream(
@@ -387,29 +308,6 @@ async fn handle_exec_stream(
             )
             .await
         }
-    }
-}
-
-async fn simple<F>(
-    send: &mut SendStream,
-    path: String,
-    access: FsAccess,
-    authorization: Option<MountLeaseAuthorization>,
-    label: &'static str,
-    operation: F,
-) -> io::Result<()>
-where
-    F: FnOnce(fs::ResolvedTarget) -> io::Result<()> + Send + 'static,
-{
-    match blocking_fs(label, move || {
-        run_authorized(authorization.as_ref(), || {
-            access.resolve(&path).and_then(operation)
-        })
-    })
-    .await
-    {
-        Ok(()) => reply(send, FsResponse::Ok).await,
-        Err(error) => reply_err(send, error).await,
     }
 }
 

@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use super::promotion::{
     ensure_plain_directory_tree, validate_destination_root, validate_file_destination,
     StagedLocalFile, StagingArea,
 };
-use super::session::{emit, Sink};
+use super::session::{emit, Inbound, Sink};
 use super::{Frame, ValidatedRelativePath};
 
 pub(crate) const MAX_TREE_ENTRIES: u64 = 1_000_000;
@@ -230,7 +230,7 @@ pub(crate) fn handle_put_tree(
     sink: &Sink,
     id: u64,
     root: &str,
-    inbound: &Receiver<Frame>,
+    inbound: &dyn Inbound,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     let root = Path::new(root);

@@ -5,16 +5,25 @@ use super::wire::{FsErrorKind, FsResponse};
 /// Preserve legacy message detail while typing the cases that callers need for
 /// safe control flow and fail-closed mount authorization.
 pub(super) fn response(error: &io::Error) -> FsResponse {
-    let kind = match error.kind() {
+    FsResponse::Err {
+        kind: kind_of(error),
+        msg: error.to_string(),
+    }
+}
+
+/// The wire kind of `error`; congestion (a full host, a rate-limited backend
+/// behind the export) travels as `Busy` so the client backs off instead of
+/// failing.
+pub(super) fn kind_of(error: &io::Error) -> Option<FsErrorKind> {
+    if crate::vfs::congestion_of(error).is_some() {
+        return Some(FsErrorKind::Busy);
+    }
+    match error.kind() {
         io::ErrorKind::NotFound => Some(FsErrorKind::NotFound),
         io::ErrorKind::PermissionDenied => Some(FsErrorKind::PermissionDenied),
         io::ErrorKind::AlreadyExists => Some(FsErrorKind::AlreadyExists),
         io::ErrorKind::Unsupported => Some(FsErrorKind::Unsupported),
         _ => None,
-    };
-    FsResponse::Err {
-        kind,
-        msg: error.to_string(),
     }
 }
 
@@ -33,6 +42,7 @@ pub(super) fn into_io(kind: Option<FsErrorKind>, message: String) -> io::Error {
         }
         Some(FsErrorKind::AlreadyExists) => io::Error::new(io::ErrorKind::AlreadyExists, message),
         Some(FsErrorKind::Unsupported) => io::Error::new(io::ErrorKind::Unsupported, message),
+        Some(FsErrorKind::Busy) => crate::vfs::congestion_error(message, None),
         Some(FsErrorKind::Unknown) | None => io::Error::other(message),
     }
 }
@@ -65,6 +75,38 @@ mod tests {
         let result = exists_from_stat::<()>(Err(error)).unwrap_err();
         assert_eq!(result.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(result.to_string(), "denied");
+    }
+
+    #[test]
+    fn transfer_engine_task_busy_reply_becomes_congestion() {
+        let busy = crate::vfs::congestion_error("Share-Host ausgelastet", None);
+        let FsResponse::Err { kind, msg } = response(&busy) else {
+            panic!("error response expected");
+        };
+        assert_eq!(kind, Some(FsErrorKind::Busy));
+        let encoded = serde_json::to_string(&FsResponse::Err {
+            kind,
+            msg: msg.clone(),
+        })
+        .unwrap();
+        assert!(encoded.contains("\"kind\":\"busy\""), "{encoded}");
+        let decoded = into_io(kind, msg);
+        let congestion = crate::vfs::congestion_of(&decoded).expect("congestion survives the wire");
+        assert_eq!(congestion.message, "Share-Host ausgelastet");
+        assert_eq!(decoded.to_string(), "Share-Host ausgelastet");
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyKind {
+            NotFound,
+            #[serde(other)]
+            Unknown,
+        }
+        let legacy: LegacyKind = serde_json::from_str("\"busy\"").unwrap();
+        assert!(matches!(legacy, LegacyKind::Unknown));
+        assert!(!matches!(legacy, LegacyKind::NotFound));
+        let plain = io::Error::new(io::ErrorKind::TimedOut, "langsam");
+        assert_eq!(kind_of(&plain), None);
     }
 
     #[test]

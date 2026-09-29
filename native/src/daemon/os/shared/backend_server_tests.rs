@@ -1,12 +1,14 @@
-use super::{cancel_request, canceled_request_lost_client, serve_backend, transfer_channel};
-use crate::agent_proto::{write_frame, Frame, TRANSFER_FRAME_BACKLOG};
+use super::{canceled_request_lost_client, serve_backend};
+use crate::agent_proto::{
+    transfer_channel, write_frame, Frame, ServerSession, TRANSFER_FRAME_BACKLOG,
+};
 use crate::vfs::Backend;
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::TrySendError;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{RecvTimeoutError, TrySendError};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[test]
 fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends() {
@@ -30,13 +32,15 @@ fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends() {
 
 #[test]
 fn cancel_disconnects_a_blocked_transfer_receiver() {
-    let (sender, receiver) = transfer_channel();
-    let inbound = Mutex::new(HashMap::from([(9, sender)]));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancels = Mutex::new(HashMap::from([(9, cancel.clone())]));
-    cancel_request(9, &inbound, &cancels);
-    assert!(cancel.load(Ordering::Relaxed));
-    assert!(receiver.recv().is_err());
+    let session = ServerSession::new(Arc::new(Mutex::new(Box::new(Vec::<u8>::new()))));
+    let context = session.open(9, &Frame::Write("/upload".into()));
+    let inbound = context.inbound.expect("upload requests receive frames");
+    session.cancel(9);
+    assert!(context.cancel.load(Ordering::Relaxed));
+    assert!(matches!(
+        inbound.recv_timeout(Duration::from_secs(1)),
+        Err(RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[test]

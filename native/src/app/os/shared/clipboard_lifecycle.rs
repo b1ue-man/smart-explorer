@@ -1,11 +1,13 @@
-use super::clipboard_state::PreparationStamp;
+use super::clipboard_state::{PreparationResult, PreparationStamp};
 use super::prelude::*;
+use super::transfer_selection::ViewSelection;
 use super::*;
 use crate::app::shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
 
-/// Owns only paths produced by the remote clipboard downloader. A dropped
-/// receiver or stale result must release these session files. Ambiguous publish
-/// errors retain them: CF_HDROP may already refer to them despite a close error.
+/// Owns only the temp copies of filtered local files whose relative paths are
+/// too long for virtual files. A dropped receiver or stale result must release
+/// these session files. Ambiguous publish errors retain them: CF_HDROP may
+/// already refer to them despite a close error.
 pub(in crate::app) struct PreparedTempClipboard {
     paths: Vec<String>,
 }
@@ -39,7 +41,6 @@ impl App {
 
     pub(in crate::app) fn begin_clipboard_preparation(&mut self) -> Option<PreparationStamp> {
         self.cancel_clipboard_preparation();
-        self.virtual_clip = None;
         let Some(sequence) = virtual_clipboard_sequence() else {
             self.error_msg = Some("Zwischenablage: Änderungsstand nicht lesbar.".to_string());
             return None;
@@ -65,16 +66,45 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn clipboard_paste_is_pending(&mut self) -> bool {
-        self.refresh_clipboard_preparation();
-        if self.clipboard_preparation.pending().is_none() {
-            return false;
+    /// Windows: a filtered local selection becomes virtual files (matching
+    /// files with their folder structure) in the background. Pasting inside
+    /// the app does not wait for it: our own clipboard entry is current.
+    pub(in crate::app) fn start_filtered_preparation(&mut self, view: ViewSelection) {
+        let recursive = view.snapshot.is_some();
+        let seeds: Vec<FileEntry> = match view.snapshot {
+            Some(files) => files,
+            None => self
+                .entries
+                .iter()
+                .filter(|entry| self.selection.contains(&entry.key()))
+                .cloned()
+                .collect(),
+        };
+        let filter = self.filter.clone();
+        let prefix = self.root_prefix();
+        let Some(stamp) = self.begin_clipboard_preparation() else {
+            return;
+        };
+        let (tx, rx) = unbounded();
+        let spawn = std::thread::Builder::new()
+            .name("clip-prepare".into())
+            .spawn(move || {
+                let result = if recursive {
+                    super::recursive_clipboard::clipboard_snapshot(seeds, &prefix)
+                } else {
+                    prepare_filtered_clipboard(seeds, filter, prefix)
+                };
+                let _ = tx.send(PreparationResult { stamp, result });
+            });
+        match spawn {
+            Ok(_) => self.clip_prepare_rx = Some(rx),
+            Err(error) => {
+                self.cancel_clipboard_preparation();
+                self.error_msg = Some(format!(
+                    "Gefilterte Zwischenablage für andere Programme konnte nicht starten: {error}"
+                ));
+            }
         }
-        self.notice = Some((
-            "Zwischenablage wird vorbereitet — bitte danach erneut einfügen.".to_string(),
-            Instant::now(),
-        ));
-        true
     }
 
     pub(in crate::app) fn drain_clip_prepare(&mut self) {
@@ -104,7 +134,9 @@ impl App {
             Ok(files) => files,
             Err(error) => {
                 self.cancel_clipboard_preparation();
-                self.error_msg = Some(error);
+                self.error_msg = Some(format!(
+                    "Für andere Programme nicht bereitgestellt: {error} — Einfügen in Smart Explorer funktioniert"
+                ));
                 return;
             }
         };
@@ -123,10 +155,6 @@ impl App {
             self.materialize_long_clipboard(files, prepared.stamp);
             return;
         }
-        let pairs = files
-            .iter()
-            .map(|f| (f.abs.clone(), f.rel.clone()))
-            .collect();
         let n = files.len();
         let published = set_virtual_clipboard_if_sequence(files, prepared.stamp.sequence);
         // OLE may dispatch messages. A newer own preparation must keep its
@@ -137,10 +165,12 @@ impl App {
         self.cancel_clipboard_preparation();
         match published {
             Ok(Some(seq)) if virtual_clipboard_sequence() == Some(seq) => {
-                self.virtual_clip = Some((seq, pairs));
+                if let Some(clip) = self.clip.as_mut() {
+                    clip.add_sequence(seq);
+                }
                 self.notice = Some((
                     format!(
-                        "✓ {n} gefilterte Datei(en) kopiert — Einfügen erhält die Ordnerstruktur"
+                        "✓ {n} gefilterte Datei(en) auch für andere Programme bereitgestellt (mit Ordnerstruktur)"
                     ),
                     Instant::now(),
                 ));
@@ -189,11 +219,13 @@ impl App {
             ClipboardEffect::Copy,
             prepared.stamp.sequence,
         ) {
-            Ok(Some(_)) => {
-                self.virtual_clip = None;
+            Ok(Some(sequence)) => {
+                if let Some(clip) = self.clip.as_mut() {
+                    clip.add_sequence(sequence);
+                }
                 self.notice = Some((
                     format!(
-                        "✓ {} Element(e) kopiert — in Explorer einfügbar (Ctrl+V)",
+                        "✓ {} Element(e) auch für andere Programme bereitgestellt (Strg+V im Explorer)",
                         local.paths.len()
                     ),
                     Instant::now(),

@@ -125,16 +125,6 @@ pub struct App {
     pub(in crate::app) copy_dest: String,
     pub(in crate::app) copy_preserve: bool,
     pub(in crate::app) copy_conflict: Conflict,
-    pub(in crate::app) copy_rx: Option<Receiver<CopyMsg>>,
-    pub(in crate::app) copy_handle: Option<CopyHandle>,
-    pub(in crate::app) copy_progress: Option<CopyProgress>,
-    pub(in crate::app) copy_errors: Vec<(String, String)>,
-    /// Mode captured when the current worker is admitted. Unlike the dialog
-    /// draft, this cannot change while completion handling is pending.
-    pub(in crate::app) copy_active_mode: Option<CopyMode>,
-    /// Refresh the current directory when the running copy job finishes
-    /// (set for paste operations into the current folder).
-    pub(in crate::app) copy_refresh_after: bool,
 
     pub(in crate::app) error_msg: Option<String>,
     pub(in crate::app) notice: Option<(String, std::time::Instant)>,
@@ -310,11 +300,12 @@ pub struct App {
     // ─── Shell integration (Windows; mirrors actual registry state) ─────
     pub(in crate::app) integration_ctx_menu: bool,
 
-    // Filter-aware clipboard (virtual files)
+    /// What Ctrl+C / Ctrl+X remembered; Ctrl+V starts the transfer from it.
+    pub(in crate::app) clip: Option<super::transfer_clip::AppClip>,
+    // Windows: publishing a filtered local selection as virtual files.
     pub(in crate::app) clipboard_preparation: super::clipboard_state::ClipboardPreparation,
     pub(in crate::app) clip_prepare_rx:
         Option<Receiver<super::clipboard_state::PreparationResult<Vec<ClipboardVirtualFile>>>>,
-    pub(in crate::app) virtual_clip: Option<(u32, Vec<(String, String)>)>, // (clipboard seq, (abs, rel))
 
     // Filesystem watcher state
     pub(in crate::app) watcher: Option<notify::RecommendedWatcher>,
@@ -409,9 +400,9 @@ pub struct App {
     pub(in crate::app) remote_edits: Vec<RemoteEdit>,
     pub(in crate::app) edit_save_rx: Vec<EditSaveTask>,
     pub(in crate::app) last_edit_poll: Instant,
-    /// Remote uploads, downloads and remote-to-remote copies: several run at
-    /// once (each with its own progress and cancellation), the rest queue.
-    pub(in crate::app) transfers: super::transfer_jobs::TransferLane,
+    /// Every copy, upload, download and remote copy (each with its own
+    /// progress and cancellation), finished ones and Explorer hand-overs.
+    pub(in crate::app) transfer_center: super::transfer_center::TransferCenter,
     /// In-flight one-shot remote op (new folder, rename, download-to).
     /// Ok(notice)/Err(msg); the worker includes the op context in both.
     pub(in crate::app) remote_op_rx: Option<Receiver<Result<String, String>>>,
@@ -424,8 +415,8 @@ pub struct App {
     pub(in crate::app) agent_activate_for: Option<Arc<crate::sftp::SftpBackend>>,
     /// Open egui context menu for a remote row or its empty background.
     pub(in crate::app) remote_ctx: Option<super::remote_context_menu::RemoteContextMenu>,
-    /// In-flight download of selected remote files to temp for a Ctrl+C →
-    /// Explorer paste. Result is the local temp paths to put on the clipboard.
+    /// Windows: filtered local files with relative paths too long for virtual
+    /// files, copied to temp and published as a file clipboard.
     pub(in crate::app) clip_download_rx: Option<
         Receiver<
             super::clipboard_state::PreparationResult<

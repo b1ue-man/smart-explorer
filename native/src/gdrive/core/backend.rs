@@ -71,7 +71,9 @@ impl Backend for GDriveBackend {
         for entry in &listed {
             crate::vfs::validate_child_name(&entry.name)?;
             if !names.insert(&entry.name) {
-                return Err(std::io::Error::other("Drive returned conflicting path names"));
+                return Err(std::io::Error::other(
+                    "Drive returned conflicting path names",
+                ));
             }
         }
         for entry in &listed {
@@ -107,21 +109,22 @@ impl Backend for GDriveBackend {
             _ => return self.open_read(path),
         };
         let auth = self.bearer()?;
-        let mime = self.mime_of_id(&id).unwrap_or_default();
+        // A download right after a listing costs one request: the listing
+        // cached this exact ID's type.
+        let mime = self.mime_for(path, &id).unwrap_or_default();
         let url = if let Some(fmt) = export_format(&mime) {
-            self.api_url(&format!("files/{}/export?mimeType={}", cloud_urlenc(&id), cloud_urlenc(fmt)))
+            self.api_url(&format!(
+                "files/{}/export?mimeType={}",
+                cloud_urlenc(&id),
+                cloud_urlenc(fmt)
+            ))
         } else {
             self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
         let bearer = format!("Bearer {}", auth);
-        let resp = open_stream(|| {
-            drive_request(
-                self.stream_agent
-                    .get(&url)
-                    .set("Authorization", &bearer)
-                    .call(),
-            )
-        })?;
+        let agent = self.http.stream();
+        let resp =
+            open_stream(|| drive_request(agent.get(&url).set("Authorization", &bearer).call()))?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -133,19 +136,18 @@ impl Backend for GDriveBackend {
         // EXPORTED to an Office/PDF format instead.
         let mime = self.mime_of(path).unwrap_or_default();
         let url = if let Some(fmt) = export_format(&mime) {
-            self.api_url(&format!("files/{}/export?mimeType={}", cloud_urlenc(&id), cloud_urlenc(fmt)))
+            self.api_url(&format!(
+                "files/{}/export?mimeType={}",
+                cloud_urlenc(&id),
+                cloud_urlenc(fmt)
+            ))
         } else {
             self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
         let bearer = format!("Bearer {}", auth);
-        let resp = open_stream(|| {
-            drive_request(
-                self.stream_agent
-                    .get(&url)
-                    .set("Authorization", &bearer)
-                    .call(),
-            )
-        })?;
+        let agent = self.http.stream();
+        let resp =
+            open_stream(|| drive_request(agent.get(&url).set("Authorization", &bearer).call()))?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -178,6 +180,61 @@ impl Backend for GDriveBackend {
 
     fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         super::copy_writer::open_writer(self, path)
+    }
+
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        super::sized_writer::open_stage(self, path, size)
+    }
+
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        self.copy_to_stage(src, stage, size)
+    }
+
+    fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        super::sized_writer::open_fresh(self, path, size).map(Some)
+    }
+
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        if offset == 0 {
+            return self.open_read_id(path, id).map(Some);
+        }
+        self.read_from(path, id, offset)
+    }
+
+    fn transfer_hint(&self) -> Option<String> {
+        // Drive's documented sustained write rate per account (ref §2); it
+        // cannot be raised, so it is worth showing next to a slow upload.
+        Some("Google Drive nimmt höchstens etwa 3 neue Dateien pro Sekunde an".to_string())
+    }
+
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.create_dir_exclusive(path)
+    }
+
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.discard_stage(stage)
+    }
+
+    fn flow_key(&self, _path: &str) -> String {
+        // Quotas and the write rate apply per Drive account, so every
+        // connection (and clone) of one account shares one adaptive flow.
+        format!("gdrive:{}", self.drive_account_key)
+    }
+
+    fn namespace_identity(&self) -> String {
+        // Paths are absolute in My Drive whatever the start folder, so all
+        // connections of one account share one namespace (overlap checks,
+        // server-side copies).
+        format!("gdrive:path-v2:{}", self.drive_account_key)
     }
 
     fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
@@ -293,7 +350,9 @@ impl GDriveBackend {
                     std::io::Error::other("Drive listing contains an object without a name")
                 })?;
                 if meta.id.as_deref().is_none_or(|id| id.is_empty()) {
-                    return Err(std::io::Error::other("Drive listing contains an object without an ID"));
+                    return Err(std::io::Error::other(
+                        "Drive listing contains an object without an ID",
+                    ));
                 }
                 out.push(RawEntry {
                     meta,
@@ -303,8 +362,13 @@ impl GDriveBackend {
             page_token = page.next_token.map(str::to_owned);
             match &page_token {
                 None => break,
-                Some(token) if !token.is_empty() && seen.len() < 1_000 && seen.insert(token.clone()) => {},
-                _ => return Err(std::io::Error::other("Drive folder listing repeated or exceeded its page tokens")),
+                Some(token)
+                    if !token.is_empty() && seen.len() < 1_000 && seen.insert(token.clone()) => {}
+                _ => {
+                    return Err(std::io::Error::other(
+                        "Drive folder listing repeated or exceeded its page tokens",
+                    ))
+                }
             }
         }
         Ok(out)
@@ -330,7 +394,8 @@ impl GDriveBackend {
         }
         let id = self.resolve(&key)?;
         let url = self.api_url(&format!(
-            "files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum", cloud_urlenc(&id)
+            "files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
+            cloud_urlenc(&id)
         ));
         let v = self.get_json(&url)?;
         let segment = key.rsplit('/').next().filter(|s| !s.is_empty());
@@ -341,10 +406,14 @@ impl GDriveBackend {
             )
         })?;
         if let Some(segment) = segment {
-            let plain = super::duplicates::parse_marker(segment).map(|(plain, _)| plain).unwrap_or(segment);
+            let plain = super::duplicates::parse_marker(segment)
+                .map(|(plain, _)| plain)
+                .unwrap_or(segment);
             if super::names::decode(plain)? != meta.name {
                 self.forget_path_prefix(&key);
-                return Err(std::io::Error::other("Drive object title changed; refresh the folder"));
+                return Err(std::io::Error::other(
+                    "Drive object title changed; refresh the folder",
+                ));
             }
             meta.name = segment.to_string();
         }

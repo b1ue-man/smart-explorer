@@ -6,6 +6,15 @@ use super::direct_protocol::{
 };
 use super::types::{ExecRequest, ExecResult, PeerPresence};
 
+#[path = "batch_wire.rs"]
+mod batch_wire;
+
+pub(crate) use self::batch_wire::{
+    plan_batches, validate_get, validate_put, BatchPart, FsBatchGet, FsBatchOutcome, FsBatchPut,
+    FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES, BATCH_MAX_FILES, NONCE_HEX_LEN,
+    TRANSFER_V1_CAPABILITY,
+};
+
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
 pub(crate) const MOUNT_PATH_CAPABILITY_CONTRACT_VERSION: u8 = 1;
 
@@ -207,6 +216,10 @@ pub(crate) struct FsWriteCapabilities {
     pub(crate) create: bool,
     pub(crate) replace: bool,
     pub(crate) namespace_replace: bool,
+    /// Additive: the host's transfer features, the same for every path.
+    /// Hosts before transfer v1 omit it; their clients ignore it.
+    #[serde(default, skip_serializing_if = "FsTransferCapabilities::is_absent")]
+    pub(crate) transfer: FsTransferCapabilities,
 }
 
 impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
@@ -215,6 +228,7 @@ impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
             create: value.create,
             replace: value.replace,
             namespace_replace: value.namespace_replace,
+            transfer: FsTransferCapabilities::default(),
         }
     }
 }
@@ -239,6 +253,9 @@ pub(crate) enum FsErrorKind {
     PermissionDenied,
     AlreadyExists,
     Unsupported,
+    /// The host is full or its backend reported a rate limit: congestion,
+    /// not failure. Older peers read it as `Unknown`.
+    Busy,
     #[serde(other)]
     Unknown,
 }
@@ -310,6 +327,47 @@ pub(crate) enum FsRequest {
     RemoveDir {
         path: String,
     },
+    /// Transfer v1: many small new files in one stream. Each entry lands in a
+    /// private stage named with `nonce`; nothing is published before the
+    /// client's WriteDone, and nothing is ever replaced.
+    PutBatch {
+        nonce: String,
+        entries: Vec<FsBatchPut>,
+    },
+    /// Transfer v1: the state of this principal's PutBatch `nonce` after its
+    /// reply was lost.
+    PutBatchStatus {
+        nonce: String,
+    },
+    /// Transfer v1: many small files in one stream, in request order.
+    GetBatch {
+        items: Vec<FsBatchGet>,
+    },
+    /// Transfer v1: read from `offset` (resume) or by provider ID.
+    ReadAt {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        offset: u64,
+    },
+    /// Transfer v1: one directory level; `exclusive` fails on a taken name.
+    CreateDir {
+        path: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        exclusive: bool,
+    },
+    /// Transfer v1: publish a stage only if `destination` is absent; the
+    /// host validates the stage itself. `copy` selects the copy-stage commit.
+    PromoteNoReplace {
+        staged: String,
+        destination: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        copy: bool,
+    },
+    /// Transfer v1: remove a copy stage the client created and never published.
+    DiscardStage {
+        path: String,
+    },
 }
 
 impl FsRequest {
@@ -319,12 +377,36 @@ impl FsRequest {
             Self::Write { .. }
                 | Self::WriteNew { .. }
                 | Self::MkdirAll { .. }
+                | Self::CreateDir { .. }
                 | Self::Rename { .. }
                 | Self::RenameNoReplace { .. }
                 | Self::PromoteStaged { .. }
+                | Self::PromoteNoReplace { .. }
                 | Self::CopyFile { .. }
                 | Self::RemoveFile { .. }
                 | Self::RemoveDir { .. }
+                | Self::DiscardStage { .. }
+                | Self::PutBatch { .. }
+        )
+    }
+
+    /// Batches admit every entry again, exactly like one single request.
+    pub(super) fn is_batch(&self) -> bool {
+        matches!(self, Self::PutBatch { .. } | Self::GetBatch { .. })
+    }
+
+    /// Requests a host before transfer v1 cannot parse; clients send them
+    /// only after that host's Capabilities advertised v1.
+    pub(super) fn is_transfer_v1(&self) -> bool {
+        matches!(
+            self,
+            Self::PutBatch { .. }
+                | Self::PutBatchStatus { .. }
+                | Self::GetBatch { .. }
+                | Self::ReadAt { .. }
+                | Self::CreateDir { .. }
+                | Self::PromoteNoReplace { .. }
+                | Self::DiscardStage { .. }
         )
     }
 }
@@ -369,49 +451,5 @@ pub(crate) enum Ctrl {
 }
 
 #[cfg(test)]
-mod remote_drive_task_wire_tests {
-    use super::*;
-
-    #[derive(serde::Deserialize)]
-    #[serde(tag = "op", rename_all = "snake_case")]
-    enum LegacyRequest {
-        Capabilities {
-            path: String,
-            #[serde(default)]
-            acquire_lease: bool,
-        },
-    }
-
-    #[test]
-    fn remote_drive_task_mount_request_id_is_additive_for_legacy_peer() {
-        let request = FsRequest::Capabilities {
-            path: "/Docs".into(),
-            acquire_lease: true,
-            lease_request_id: Some("request-a".into()),
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        let LegacyRequest::Capabilities {
-            path,
-            acquire_lease,
-        } = serde_json::from_str(&json).unwrap();
-        assert_eq!(path, "/Docs");
-        assert!(acquire_lease);
-
-        let decoded: FsRequest =
-            serde_json::from_str(r#"{"op":"capabilities","path":"/Docs","acquire_lease":true}"#)
-                .unwrap();
-        assert!(matches!(
-            decoded,
-            FsRequest::Capabilities {
-                lease_request_id: None,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn remote_drive_task_legacy_peer_rejects_unknown_release_without_reinterpreting_it() {
-        let json = serde_json::to_string(&FsRequest::ReleaseLease).unwrap();
-        assert!(serde_json::from_str::<LegacyRequest>(&json).is_err());
-    }
-}
+#[path = "wire_tests.rs"]
+mod remote_drive_task_wire_tests;

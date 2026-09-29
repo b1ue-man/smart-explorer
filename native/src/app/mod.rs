@@ -6,9 +6,6 @@ mod analytics_access;
 mod analytics_accessibility;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
-#[cfg(test)]
-#[path = "core/windows_analysis_ui_task.rs"]
-mod windows_analysis_ui_task;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
 #[path = "core/analytics_ui.rs"]
@@ -27,14 +24,16 @@ mod bisync_ui;
 mod central_tabs;
 #[path = "os/shared/clipboard.rs"]
 mod clipboard;
+#[path = "core/clipboard_keys.rs"]
+mod clipboard_keys;
 #[path = "os/shared/clipboard_lifecycle.rs"]
 mod clipboard_lifecycle;
 #[path = "os/shared/clipboard_materialize.rs"]
 mod clipboard_materialize;
+#[path = "os/shared/clipboard_provide.rs"]
+mod clipboard_provide;
 #[path = "core/clipboard_state.rs"]
 mod clipboard_state;
-#[path = "os/shared/clipboard_upload.rs"]
-mod clipboard_upload;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
 #[path = "core/connection_cleanup.rs"]
@@ -42,13 +41,14 @@ mod connection_cleanup;
 #[cfg(all(test, windows))]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
+#[cfg(test)]
+#[path = "core/windows_analysis_ui_task.rs"]
+mod windows_analysis_ui_task;
 pub use connection_cleanup::{cleanup_removed_endpoint_state, CleanupReport, RemovedEndpointScope};
 #[path = "core/connection_state.rs"]
 mod connection_state;
 #[path = "core/copy_dialog.rs"]
 mod copy_dialog;
-#[path = "core/copy_job.rs"]
-mod copy_job;
 #[path = "core/delete_actions.rs"]
 mod delete_actions;
 #[path = "core/delete_drain.rs"]
@@ -119,12 +119,12 @@ mod mount_ui_helpers;
 mod omni_accel;
 #[path = "core/picker_async.rs"]
 mod picker_async;
+#[path = "os/shared/picker_connections.rs"]
+mod picker_connections;
 #[path = "core/picker_impl.rs"]
 mod picker_impl;
 #[path = "core/picker_locations.rs"]
 mod picker_locations;
-#[path = "os/shared/picker_connections.rs"]
-mod picker_connections;
 #[path = "core/picker_types.rs"]
 mod picker_types;
 #[cfg(windows)]
@@ -189,6 +189,8 @@ mod reclaim_results_ui;
 mod reclaim_ui;
 #[path = "core/remote_context_menu.rs"]
 mod remote_context_menu;
+#[path = "core/remote_context_plan.rs"]
+mod remote_context_plan;
 #[path = "os/shared/remote_helpers.rs"]
 mod remote_helpers;
 #[path = "os/shared/remote_open.rs"]
@@ -231,14 +233,14 @@ mod sync_core;
 #[path = "os/shared/sync_jobs.rs"]
 mod sync_jobs;
 #[cfg(test)]
+#[path = "os/shared/sync_links_task_tests.rs"]
+mod sync_links_task_tests;
+#[cfg(test)]
 #[path = "os/shared/sync_paths_task_fixture.rs"]
 mod sync_paths_task_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_paths_task_tests.rs"]
 mod sync_paths_task_tests;
-#[cfg(test)]
-#[path = "os/shared/sync_links_task_tests.rs"]
-mod sync_links_task_tests;
 #[path = "core/table.rs"]
 mod table;
 #[path = "core/table_accessibility.rs"]
@@ -254,12 +256,29 @@ mod temp_recovery_ui;
 mod tests;
 #[path = "core/theme.rs"]
 mod theme;
+#[path = "core/transfer_center.rs"]
+mod transfer_center;
+#[path = "core/transfer_clip.rs"]
+mod transfer_clip;
 #[path = "os/shared/transfer_helpers.rs"]
 mod transfer_helpers;
 #[path = "core/transfer_jobs.rs"]
 mod transfer_jobs;
 #[path = "core/transfer_lifecycle.rs"]
 mod transfer_lifecycle;
+#[path = "core/transfer_route.rs"]
+mod transfer_route;
+#[path = "core/transfer_rows.rs"]
+mod transfer_rows;
+#[path = "core/transfer_selection.rs"]
+mod transfer_selection;
+#[path = "core/transfer_targets.rs"]
+mod transfer_targets;
+#[cfg(test)]
+#[path = "core/transfer_test_support.rs"]
+mod transfer_test_support;
+#[path = "core/transfer_window.rs"]
+mod transfer_window;
 #[path = "core/treemap.rs"]
 mod treemap;
 #[path = "core/ui_preferences.rs"]

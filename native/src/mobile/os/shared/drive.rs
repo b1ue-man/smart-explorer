@@ -1,10 +1,15 @@
-//! Runs the desktop transfer and copy workers inside a task: forwards their
-//! progress, errors and cancellation, and turns the terminal message into the
-//! task result.
+//! Runs the transfer engine and the local copy worker inside a task:
+//! forwards their progress (growing totals while folders are still being
+//! walked), notes, errors and cancellation, and turns the terminal message
+//! into the task result.
 use super::error::ApiError;
 use super::runtime::TaskCtx;
 use crate::copy::{CopyHandle, CopyMsg};
-use crate::transfer::{ActiveTransfer, TransferMsg, TransferProgress, TransferRequest};
+use crate::transfer::{
+    ActiveTransfer, Endpoint, JobItems, Layout, TransferJob, TransferMsg, TransferProgress,
+    TransferRequest,
+};
+use crate::types::{Conflict, CopyMode};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
@@ -51,49 +56,109 @@ impl Outcome {
     }
 }
 
+/// Whole entries from `source` into `target_dir` of `target`, each under its
+/// own name; occupied names become "Name (2)", nothing is replaced.
+pub(crate) fn transfer_job(
+    source: Endpoint,
+    paths: Vec<String>,
+    target: Endpoint,
+    target_dir: String,
+    source_label: String,
+    target_label: String,
+) -> TransferJob {
+    TransferJob {
+        source,
+        target,
+        target_dir,
+        items: JobItems::Roots { paths, base: None },
+        layout: Layout::Tree,
+        filter: None,
+        conflict: Conflict::Rename,
+        mode: CopyMode::Copy,
+        source_label,
+        target_label,
+        resume: None,
+    }
+}
+
+/// Runs `job` through the transfer engine and waits for its end.
+pub(crate) fn run_job(ctx: &TaskCtx, job: TransferJob) -> Result<Outcome, ApiError> {
+    job.validate().map_err(ApiError::invalid)?;
+    run_transfer(ctx, TransferRequest::Job(Box::new(job)))
+}
+
 /// Launches `request` like the desktop lane and waits for its end.
 pub(crate) fn run_transfer(ctx: &TaskCtx, request: TransferRequest) -> Result<Outcome, ApiError> {
     let active = crate::transfer::launch_transfer(request).map_err(ApiError::internal)?;
     Ok(drain_transfer(ctx, active))
 }
 
-fn report_transfer(ctx: &TaskCtx, progress: &TransferProgress) {
+/// What the task list shows next to the numbers: the search while folders
+/// are still being walked, otherwise the engine's note (a connection that is
+/// busy, a provider's limit).
+pub(crate) fn task_message(progress: &TransferProgress) -> Option<String> {
+    if progress.discovering {
+        return Some(format!("Suche Dateien… {} gefunden", progress.files_total));
+    }
+    progress
+        .note
+        .as_ref()
+        .filter(|note| !note.trim().is_empty())
+        .cloned()
+}
+
+fn report_transfer(ctx: &TaskCtx, progress: &TransferProgress, shown: &mut Option<String>) {
     ctx.progress(
         progress.bytes_done,
         progress.bytes_total,
         progress.files_done,
         progress.files_total,
     );
+    let message = task_message(progress);
+    if message != *shown {
+        ctx.message(message.as_deref().unwrap_or_default());
+        *shown = message;
+    }
 }
 
 pub(crate) fn drain_transfer(ctx: &TaskCtx, mut active: ActiveTransfer) -> Outcome {
     let mut last = active.progress.clone();
+    let mut shown = None;
     loop {
         if ctx.cancelled() && !active.canceling() {
             active.request_cancel();
         }
         match active.rx.recv_timeout(POLL) {
             Ok(TransferMsg::Progress(progress)) => {
-                report_transfer(ctx, &progress);
+                report_transfer(ctx, &progress, &mut shown);
                 last = progress;
             }
             Ok(TransferMsg::Done {
                 progress,
                 errors,
                 canceled,
+                issues,
                 ..
             }) => {
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
-                report_transfer(ctx, &progress);
-                for error in &errors {
-                    ctx.error("", error);
+                report_transfer(ctx, &progress, &mut shown);
+                // The issues carry their paths; older workers report lines.
+                if issues.is_empty() {
+                    for error in &errors {
+                        ctx.error("", error);
+                    }
+                } else {
+                    for issue in &issues {
+                        ctx.error(&issue.path, &issue.message);
+                    }
                 }
+                let listed = issues.len().max(errors.len()) as u64;
                 return Outcome {
                     files: progress.files_done,
                     bytes: progress.bytes_done,
-                    errors: progress.errors.max(errors.len() as u64),
+                    errors: progress.errors.max(listed),
                     omitted: progress.omitted,
                     canceled,
                 };

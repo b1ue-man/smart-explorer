@@ -5,7 +5,6 @@ use super::error::ApiError;
 use super::events::{HubState, MAX_POLL_EVENTS};
 use super::location::{self, Loc, LocKind};
 use super::pool::BackendPool;
-use super::slots::Slots;
 use super::tasks::TaskState;
 use crate::vfs::{Backend, BackendHandle, VfsMeta};
 use serde_json::{json, Value};
@@ -91,7 +90,6 @@ pub(crate) struct RuntimeInner {
     volumes: RwLock<Vec<VolumeInfo>>,
     errors: Mutex<VecDeque<ErrorItem>>,
     pub(super) pool: BackendPool,
-    pub(super) transfer_slots: Arc<Slots>,
     pub(super) scans: super::scan::ScanRegistry,
     pub(super) index: super::index::IndexSlot,
     /// Serializes read-modify-write of `recent.json`.
@@ -127,7 +125,6 @@ impl Runtime {
                 volumes: RwLock::new(volumes),
                 errors: Mutex::new(VecDeque::new()),
                 pool: BackendPool::new(),
-                transfer_slots: Arc::new(Slots::new(crate::transfer::MAX_ACTIVE_TRANSFERS)),
                 scans: Default::default(),
                 index: Default::default(),
                 recent_lock: Mutex::new(()),
@@ -284,24 +281,9 @@ impl Runtime {
     }
 
     /// Starts `work` as a task on its own thread and returns the task id.
+    /// Transfers start at once as well: the transfer engine's per-connection
+    /// flows share each connection fairly, so no task waits for a slot.
     pub(crate) fn spawn_task<F>(&self, kind: &str, title: String, work: F) -> String
-    where
-        F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static,
-    {
-        self.start_task(kind, title, None, work)
-    }
-
-    /// Like `spawn_task`, but the task stays `queued` until one of the
-    /// `MAX_ACTIVE_TRANSFERS` transfer slots is free.
-    pub(crate) fn spawn_transfer_task<F>(&self, kind: &str, title: String, work: F) -> String
-    where
-        F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static,
-    {
-        let slots = self.inner.transfer_slots.clone();
-        self.start_task(kind, title, Some(slots), work)
-    }
-
-    fn start_task<F>(&self, kind: &str, title: String, slots: Option<Arc<Slots>>, work: F) -> String
     where
         F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static,
     {
@@ -321,16 +303,6 @@ impl Runtime {
         let spawned = std::thread::Builder::new()
             .name(format!("task-{kind}"))
             .spawn(move || {
-                let _slot = match slots.as_deref() {
-                    Some(slots) => match slots.acquire(&ctx.cancel) {
-                        Some(slot) => Some(slot),
-                        None => {
-                            runtime.finish_task(&ctx, &action, Err(ApiError::canceled()));
-                            return;
-                        }
-                    },
-                    None => None,
-                };
                 ctx.update(|record| record.set_running());
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&ctx)))
                     .unwrap_or_else(|payload| {

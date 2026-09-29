@@ -6,6 +6,11 @@ pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
+/// `\` is an ordinary character in Unix file names.
+pub(crate) fn backslash_is_name_char() -> bool {
+    true
+}
+
 pub(crate) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::rename(src, dest)
 }

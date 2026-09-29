@@ -1,6 +1,5 @@
 use super::api::{
-    drive_request, err, mutation_once, parse_generated_id, parse_json,
-    MutationRequestError, FOLDER_MIME,
+    drive_request, err, mutation_once, parse_json, MutationRequestError, FOLDER_MIME,
 };
 use super::core::{cloud_urlenc, norm, parse_rfc3339_ms, split_parent};
 use super::folder_create_journal::PendingFolderCreate;
@@ -65,7 +64,7 @@ impl GDriveBackend {
 
     /// MIME type of a file by its id (for export detection when opening by id).
     pub(super) fn mime_of_id(&self, id: &str) -> Option<String> {
-        let url = self.api_url(&format!("files/{}?fields=mimeType", cloud_urlenc(&id)));
+        let url = self.api_url(&format!("files/{}?fields=mimeType", cloud_urlenc(id)));
         self.get_json(&url).ok()?["mimeType"]
             .as_str()
             .map(|s| s.to_string())
@@ -73,8 +72,9 @@ impl GDriveBackend {
 
     /// Ensure a folder path exists, returning the deepest folder's id.
     /// Thread-safe: concurrent transfers may need the same folder, so the
-    /// find-or-create of each level is serialized (parents are resolved first,
-    /// outside the lock, to avoid re-entrancy).
+    /// find-or-create of each level holds that level's namespace slot (parent
+    /// ID + encoded name); parents are resolved first, outside the slot, and
+    /// other folders are created in parallel.
     pub(super) fn ensure_dir(&self, path: &str) -> VfsResult<String> {
         let key = norm(path);
         if key.is_empty() {
@@ -89,11 +89,11 @@ impl GDriveBackend {
         let (parent, name) = split_parent(&key);
         let parent_id = self.ensure_dir(&parent)?;
 
-        let _g = self.create_guard()?;
+        let _slot = self.create_slot_guard(&parent_id, name)?;
         if let Some(pending) = self.pending_folder_create(&key)? {
             return self.resume_pending_folder_create(&parent, &key, name, &parent_id, &pending);
         }
-        // Re-check under the lock - another thread may have just created it.
+        // Re-check in the slot - another thread may have just created it.
         if let Some(id) = self.valid_cached_id(&key)? {
             return Ok(id);
         }
@@ -112,19 +112,18 @@ impl GDriveBackend {
         }
         // New folder metadata uses the original Drive title.
         let decoded_name = super::names::decode(name)?;
-        let name = decoded_name.as_str();
+        let title = decoded_name.as_str();
         // Create the folder.
-        let id_url = self.api_url("files/generateIds?count=1&space=drive&type=files");
-        let reserved_id = parse_generated_id(&self.get_json(&id_url)?)?;
+        let reserved_id = self.take_generated_id()?;
         let (pending, newly_claimed) =
-            self.reserve_pending_folder_create(&key, &reserved_id, name, &parent_id)?;
+            self.reserve_pending_folder_create(&key, &reserved_id, title, &parent_id)?;
         if !newly_claimed {
-            return self.resume_pending_folder_create(&parent, &key, split_parent(&key).1, &parent_id, &pending);
+            return self.resume_pending_folder_create(&parent, &key, name, &parent_id, &pending);
         }
         self.submit_reserved_folder(&parent, &key, &pending, None)
     }
 
-    fn resume_pending_folder_create(
+    pub(super) fn resume_pending_folder_create(
         &self,
         parent: &str,
         key: &str,
@@ -150,7 +149,7 @@ impl GDriveBackend {
         }
     }
 
-    fn submit_reserved_folder(
+    pub(super) fn submit_reserved_folder(
         &self,
         parent: &str,
         key: &str,
@@ -168,7 +167,7 @@ impl GDriveBackend {
         let payload = body.to_string();
         let create_url = self.api_url("files?fields=id");
         let response = mutation_once(drive_request(
-            self.timed_request(ureq::post(&create_url))
+            self.timed_request(self.http.api().post(&create_url))
                 .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
                 .send_string(&payload),
@@ -197,6 +196,14 @@ impl GDriveBackend {
                         combine_attempt_errors(preflight_error, response_error),
                     );
                 }
+            }
+            Err(MutationRequestError::Definite(error))
+                if crate::vfs::congestion_of(&error).is_some() =>
+            {
+                // Drive refused the create before running it. The durable
+                // reservation stays, so the retry after slowing down sends the
+                // same ID again (409 if an earlier attempt did commit).
+                return Err(error);
             }
             Err(MutationRequestError::Definite(error))
             | Err(MutationRequestError::Ambiguous(error)) => {

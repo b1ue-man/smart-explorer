@@ -1,223 +1,158 @@
-use super::clipboard_lifecycle::{prepare_filtered_clipboard, PreparedTempClipboard};
-use super::clipboard_state::PreparationResult;
+//! Ctrl+C / Ctrl+X / Ctrl+V. Copying only remembers the selection (see
+//! `transfer_clip`); where the platform has a file clipboard it is also
+//! offered to other programs the way they expect it: local files as CF_HDROP
+//! (a filtered selection as virtual files, prepared in the background) and
+//! remote entries as virtual files that are listed and streamed only when
+//! the other program pastes. Pasting starts the transfer at once from our own
+//! entry while it is current, otherwise from the OS file clipboard.
 use super::prelude::*;
+use super::transfer_clip::{clip_marker_text, AppClip};
+use super::transfer_selection::{os_paths_selection, SelectionIssue, ViewSelection};
 use super::*;
 use crate::app::shared_platform_helpers::ClipboardEffect;
 
+const REMOTE_CUT_REFUSED: &str =
+    "Remote-Ausschneiden wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.";
+
 impl App {
     pub(in crate::app) fn clipboard_copy_files(&mut self, cut: bool) {
-        if !clipboard_file_ops_supported() {
-            self.error_msg =
-                Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
+        if cut && self.remote.is_some() {
+            self.error_msg = Some(REMOTE_CUT_REFUSED.to_string());
             return;
         }
-        if self.selection.is_empty() {
-            self.notice = Some((
-                "Nichts ausgewählt — bitte erst Dateien markieren".to_string(),
-                std::time::Instant::now(),
-            ));
-            return;
-        }
-        // Remote selection -> materialize files/folders in temp, then put those
-        // local paths on the clipboard so they paste into Explorer or back here.
-        if self.remote.is_some() && cut {
-            self.cancel_clipboard_preparation();
-            self.error_msg = Some("Remote-Ausschneiden wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
-            return;
-        }
-        if let Some(rs) = &self.remote {
-            let snapshot = (self.recursive && self.filter_is_active())
-                .then(|| self.recursive_transfer_files());
-            let snapshot_root = self.root_prefix();
-            let items: Vec<(String, String, bool)> = self
-                .entries
-                .iter()
-                .filter(|e| self.selection.contains(&e.key()))
-                .map(|e| (e.path.to_string(), e.name.to_string(), e.is_dir))
-                .collect();
-            if items.is_empty() {
-                self.notice = Some((
-                    "Remote: nichts fuer die Zwischenablage ausgewaehlt.".to_string(),
-                    std::time::Instant::now(),
-                ));
+        let view = match self.view_selection(cut) {
+            Ok(view) => view,
+            Err(SelectionIssue::Empty(hint)) => {
+                self.notice = Some((hint, Instant::now()));
                 return;
             }
-            let filter = (items.iter().any(|(_, _, is_dir)| *is_dir) && self.filter_is_active())
-                .then(|| (self.filter.clone(), self.root_prefix()));
-            let backend = rs.backend.clone();
-            let Some(stamp) = self.begin_clipboard_preparation() else {
+            Err(SelectionIssue::Invalid(error)) => {
+                self.error_msg = Some(error);
                 return;
+            }
+        };
+        let hint = if cut && view.has_dir && self.filter_is_active() {
+            " — Hinweis: Ausschneiden überträgt ganze Ordner, Filter gelten dabei nicht"
+        } else {
+            ""
+        };
+        self.cancel_clipboard_preparation();
+        let clip = AppClip::new(view.selection.clone(), cut);
+        let clip = if clipboard_file_ops_supported() {
+            self.offer_to_other_programs(clip, view, cut)
+        } else {
+            clip.guarded_by_marker(clip_marker_text(&view.roots))
+        };
+        self.notice = Some((format!("{}{hint}", clip.copied_notice()), Instant::now()));
+        self.clip = Some(clip);
+    }
+
+    /// The OS file clipboard gets what other programs understand; our own
+    /// entry stays current under the sequence numbers this produces.
+    fn offer_to_other_programs(
+        &mut self,
+        clip: AppClip,
+        view: ViewSelection,
+        cut: bool,
+    ) -> AppClip {
+        let mut clip = clip.guarded_by_sequence(virtual_clipboard_sequence());
+        if let Some(backend) = clip.selection.source.backend().cloned() {
+            if !remote_clipboard_supported() {
+                // No virtual files here: the entry stays with the app.
+                return clip;
+            }
+            let source = crate::transfer::SelectionSource {
+                backend,
+                paths: view.roots,
+                filter: view.view_filter,
+                label: clip.selection.source.label.clone(),
             };
-            let n = items.len();
-            let (tx, rx) = unbounded();
-            let spawn = std::thread::Builder::new()
-                .name("clip-download".into())
-                .spawn(move || {
-                    let result = match snapshot {
-                        Some(files) => {
-                            super::recursive_clipboard::clipboard_snapshot(files, &snapshot_root)
-                                .and_then(|files| download_clipboard_snapshot(&*backend, files))
-                        }
-                        None => download_remote_clipboard_items(&*backend, &items, filter),
-                    }
-                    .map(PreparedTempClipboard::new);
-                    // The owned result also cleans up if this receiver was replaced.
-                    let _ = tx.send(PreparationResult { stamp, result });
-                });
-            match spawn {
-                Ok(_) => {
-                    self.clip_download_rx = Some(rx);
-                    self.notice = Some((
-                        format!("Bereite {} Element(e) fuer die Zwischenablage vor...", n),
-                        std::time::Instant::now(),
-                    ));
-                }
+            match set_remote_clipboard(source) {
+                Ok(sequence) => clip.add_sequence(sequence),
                 Err(error) => {
-                    self.cancel_clipboard_preparation();
                     self.error_msg = Some(format!(
-                        "Zwischenablage-Download konnte nicht gestartet werden: {error}"
+                        "Für andere Programme nicht bereitgestellt: {error} — Einfügen in Smart Explorer funktioniert"
                     ));
                 }
             }
-            return;
+            return clip;
         }
-        let has_dir = self
-            .entries
+        if !cut && (view.snapshot.is_some() || view.view_filter.is_some()) {
+            self.start_filtered_preparation(view);
+            return clip;
+        }
+        let paths: Vec<String> = view
+            .roots
             .iter()
-            .any(|e| e.is_dir && self.selection.contains(&e.key()));
-
-        // Filter-aware copy: when a filter is active and folders are selected,
-        // build a virtual-file data object so pasting (anywhere) recreates
-        // only the matching files with their folder structure.
-        if !cut && self.filter_is_active() && (self.recursive || has_dir) {
-            let recursive = self.recursive;
-            let seeds: Vec<FileEntry> = if recursive {
-                self.recursive_transfer_files()
-            } else {
-                self.entries
-                    .iter()
-                    .filter(|e| self.selection.contains(&e.key()))
-                    .cloned()
-                    .collect()
-            };
-            let filter = self.filter.clone();
-            let prefix = self.root_prefix();
-            let Some(stamp) = self.begin_clipboard_preparation() else {
-                return;
-            };
-            let (tx, rx) = unbounded();
-            let spawn = std::thread::Builder::new()
-                .name("clip-prepare".into())
-                .spawn(move || {
-                    let result = if recursive {
-                        super::recursive_clipboard::clipboard_snapshot(seeds, &prefix)
-                    } else {
-                        prepare_filtered_clipboard(seeds, filter, prefix)
-                    };
-                    let _ = tx.send(PreparationResult { stamp, result });
-                });
-            match spawn {
-                Ok(_) => {
-                    self.clip_prepare_rx = Some(rx);
-                    self.notice = Some((
-                        "Sammle gefilterte Dateien…".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                }
-                Err(error) => {
-                    self.cancel_clipboard_preparation();
-                    self.error_msg = Some(format!(
-                        "Gefilterte Zwischenablage konnte nicht gestartet werden: {error}"
-                    ));
-                }
-            }
-            return;
-        }
-
-        // Plain CF_HDROP path (no filter, or cut, or files only).
-        let paths =
-            super::recursive_clipboard::plain_selection_paths(&self.entries, &self.selection);
+            .map(|path| path.replace('/', "\\"))
+            .collect();
         let effect = if cut {
             ClipboardEffect::Move
         } else {
             ClipboardEffect::Copy
         };
-        self.cancel_clipboard_preparation();
         match write_clipboard_files(&paths, effect) {
-            Ok(_) => {
-                self.virtual_clip = None;
-                let hint = if cut && has_dir && self.filter_is_active() {
-                    " — Hinweis: Ausschneiden überträgt ganze Ordner, Filter gelten dabei nicht"
-                } else {
-                    ""
-                };
-                self.notice = Some((
-                    format!(
-                        "✓ {} Datei(en) {} — in Explorer einfügbar mit Ctrl+V{}",
-                        paths.len(),
-                        if cut { "ausgeschnitten" } else { "kopiert" },
-                        hint
-                    ),
-                    std::time::Instant::now(),
+            Ok(()) => {
+                if let Some(sequence) = virtual_clipboard_sequence() {
+                    clip.add_sequence(sequence);
+                }
+            }
+            Err(error) => {
+                self.error_msg = Some(format!(
+                    "Zwischenablage für andere Programme: {error} — Einfügen in Smart Explorer funktioniert"
                 ));
             }
-            Err(e) => {
-                self.error_msg = Some(format!("Zwischenablage: {}", e));
-            }
         }
+        clip
     }
 
+    /// Menu "Einfügen" (no clipboard text involved).
     pub(in crate::app) fn clipboard_paste_files(&mut self) {
-        if !clipboard_file_ops_supported() {
-            self.error_msg =
-                Some("Datei-Zwischenablage ist auf dieser Plattform nicht verfügbar.".to_string());
-            return;
-        }
-        if self.clipboard_paste_is_pending() {
-            return;
-        }
+        self.clipboard_paste_with_text(None);
+    }
+
+    /// Ctrl+V; `pasted_text` is the text the keyboard paste brought, which
+    /// tells on Linux whether another program copied since our copy.
+    pub(in crate::app) fn clipboard_paste_with_text(&mut self, pasted_text: Option<&str>) {
         if self.root_path.is_empty() {
             self.notice = Some((
-                "Ctrl+V: kein Zielordner geöffnet".to_string(),
-                std::time::Instant::now(),
+                "Strg+V: kein Zielordner geöffnet".to_string(),
+                Instant::now(),
             ));
             return;
         }
-        // Resolve our virtual payload BEFORE choosing local copy or remote
-        // upload: a descriptor/stream clipboard need not contain CF_HDROP.
-        if let Some((seq, pairs)) = self.virtual_clip.clone() {
-            if virtual_clipboard_sequence() == Some(seq) {
-                if let Some(rs) = &self.remote {
-                    self.start_filtered_remote_upload(
-                        pairs,
-                        rs.backend.clone(),
-                        self.root_path.clone(),
-                    );
-                    return;
-                }
-                let dest =
-                    PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-                let count = pairs.len();
-                if self.start_copy_job(CopyMode::Copy, true, move |tx| {
-                    crate::copy::start_copy_pairs(pairs, dest, Conflict::Rename, tx)
-                }) {
-                    self.notice = Some((
-                        format!("📥 Einfügen (gefiltert): {} Datei(en)", count),
-                        std::time::Instant::now(),
-                    ));
-                }
-                return;
-            } else {
-                self.virtual_clip = None;
+        let Some((target, target_dir)) = self.tab_place(self.active_tab) else {
+            return;
+        };
+        let own = self
+            .clip
+            .as_ref()
+            .filter(|clip| clip.is_current(virtual_clipboard_sequence(), pasted_text))
+            .map(|clip| (clip.selection.clone(), clip.cut));
+        if let Some((selection, cut)) = own {
+            let mode = if cut { CopyMode::Move } else { CopyMode::Copy };
+            // Moved sources are gone; the entry cannot be pasted again.
+            if self.submit_paste(&selection, &target, &target_dir, mode) && cut {
+                self.clip = None;
             }
+            return;
         }
-
+        let replaced = self.clip.take().is_some();
+        if !clipboard_file_ops_supported() {
+            let hint = if replaced {
+                "Die Zwischenablage wurde in einem anderen Programm geändert — bitte in Smart Explorer erneut kopieren"
+            } else {
+                "Strg+V: die Zwischenablage enthält keine in Smart Explorer kopierten Dateien"
+            };
+            self.notice = Some((hint.to_string(), Instant::now()));
+            return;
+        }
         let (paths, is_cut) = match read_clipboard_files() {
-            Ok(Some(v)) => v,
+            Ok(Some(files)) => files,
             Ok(None) => {
                 self.notice = Some((
-                    "Ctrl+V erkannt — aber Zwischenablage enthält keine Dateien".to_string(),
-                    std::time::Instant::now(),
+                    "Strg+V erkannt — aber die Zwischenablage enthält keine Dateien".to_string(),
+                    Instant::now(),
                 ));
                 return;
             }
@@ -228,84 +163,18 @@ impl App {
                 return;
             }
         };
-        if paths.is_empty() {
+        let Some(selection) = os_paths_selection(paths) else {
             self.notice = Some((
-                "Ctrl+V erkannt — Zwischenablage enthält keine Dateien".to_string(),
-                std::time::Instant::now(),
+                "Strg+V erkannt — die Zwischenablage enthält keine Dateien".to_string(),
+                Instant::now(),
             ));
             return;
-        }
-        if let Some(rs) = &self.remote {
-            if is_cut {
-                self.error_msg = Some("Verschieben zu Remote wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
-                return;
-            }
-            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
-            return;
-        }
-        let dest = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let count = paths.len();
+        };
         let mode = if is_cut {
             CopyMode::Move
         } else {
             CopyMode::Copy
         };
-        let common_parent = PathBuf::from(&paths[0])
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let opts = CopyOptions {
-            root: common_parent,
-            dest,
-            preserve_structure: true,
-            conflict: Conflict::Rename,
-            mode,
-        };
-        if self.start_copy_job(mode, true, move |tx| start_copy_from_paths(paths, opts, tx)) {
-            self.notice = Some((
-                format!(
-                    "📥 Füge {} {} ein…",
-                    count,
-                    if is_cut {
-                        "Datei(en) (verschieben)"
-                    } else {
-                        "Datei(en)"
-                    }
-                ),
-                std::time::Instant::now(),
-            ));
-        }
-    }
-
-    // ─── Drag-and-drop into the app ─────────────────────────────────────
-
-    /// Copy (or move) OS paths into `dest`, on the copy worker. Conflicts
-    /// auto-rename so a drop never overwrites. Shared by the OS drop handler.
-    pub(in crate::app) fn copy_paths_into(
-        &mut self,
-        paths: Vec<String>,
-        dest: PathBuf,
-        move_files: bool,
-    ) -> bool {
-        if paths.is_empty() {
-            return false;
-        }
-        let mode = if move_files {
-            CopyMode::Move
-        } else {
-            CopyMode::Copy
-        };
-        let common_parent = PathBuf::from(&paths[0])
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let opts = CopyOptions {
-            root: common_parent,
-            dest,
-            preserve_structure: true,
-            conflict: Conflict::Rename,
-            mode,
-        };
-        self.start_copy_job(mode, true, move |tx| start_copy_from_paths(paths, opts, tx))
+        self.submit_paste(&selection, &target, &target_dir, mode);
     }
 }

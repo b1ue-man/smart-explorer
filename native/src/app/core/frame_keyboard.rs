@@ -1,3 +1,4 @@
+use super::clipboard_keys::take_clipboard_keys;
 use super::prelude::*;
 use super::*;
 
@@ -88,9 +89,7 @@ impl App {
         let mut jump_text = String::new();
         // Clipboard ops are driven by egui's semantic Copy/Cut/Paste events
         // (and key-combos as a fallback) — see the event scan below.
-        let mut do_copy = false;
-        let mut do_cut = false;
-        let mut do_paste = false;
+        let mut keys = super::clipboard_keys::ClipboardKeys::default();
 
         ctx.input_mut(|i| {
             use egui::{Key, Modifiers};
@@ -173,33 +172,23 @@ impl App {
                 if i.consume_key(Modifiers::COMMAND, Key::A) {
                     acts.push(KbdAct::SelectAll);
                 }
-                // Ctrl+C / Ctrl+X / Ctrl+V do NOT arrive as Key events — the
-                // winit backend turns them into semantic Copy/Cut/Paste events
-                // (so text widgets work). consume_key on V/C/X therefore never
-                // matches; we read the semantic events instead. The key-combo
-                // checks below are kept only as a belt-and-braces fallback for
-                // backends that DO emit them.
-                for ev in &i.events {
-                    match ev {
-                        egui::Event::Copy => do_copy = true,
-                        egui::Event::Cut => do_cut = true,
-                        egui::Event::Paste(_) => do_paste = true,
-                        _ => {}
-                    }
-                }
+                // Ctrl+C / Ctrl+X / Ctrl+V arrive as semantic events; the
+                // key-combo checks below are kept only as a belt-and-braces
+                // fallback for backends that DO emit key events for them.
+                keys.read_events(&i.events);
                 if i.consume_key(Modifiers::COMMAND, Key::C) {
-                    do_copy = true;
+                    keys.copy = true;
                 }
                 if i.consume_key(Modifiers::COMMAND, Key::X) {
-                    do_cut = true;
+                    keys.cut = true;
                 }
                 if i.consume_key(Modifiers::COMMAND, Key::V) {
-                    do_paste = true;
+                    keys.paste = true;
                 }
                 // Ctrl+Shift+C means "copy paths as text" — don't also fire the
                 // file copy from the Event::Copy the backend emits for it.
                 if copy_paths {
-                    do_copy = false;
+                    keys.copy = false;
                 }
                 if i.consume_key(Modifiers::COMMAND, Key::R) {
                     acts.push(KbdAct::ToggleRecursive);
@@ -429,22 +418,12 @@ impl App {
         // Drain the background clipboard-key poller (Windows). This is what
         // actually makes Ctrl+V work for a file clipboard — see clip_key_rx.
         if !typing && !renaming {
-            do_copy |= clipboard_keys[0];
-            do_cut |= clipboard_keys[1];
-            do_paste |= clipboard_keys[2];
+            keys.add_polled(clipboard_keys);
         }
 
         // File-clipboard ops, triggered by egui's semantic Copy/Cut/Paste
         // events, the OS-level key poller above, or the key-combo fallback.
-        if do_copy {
-            self.clipboard_copy_files(false);
-        }
-        if do_cut {
-            self.clipboard_copy_files(true);
-        }
-        if do_paste {
-            self.clipboard_paste_files();
-        }
+        self.run_clipboard_keys(keys);
     }
 
     fn blocks_explorer_shortcuts(&self) -> bool {
@@ -468,23 +447,3 @@ impl App {
             || (self.show_update_dialog && self.update_ready.is_some())
     }
 }
-
-fn take_clipboard_keys(rx: Option<&Receiver<ClipKey>>) -> ([bool; 3], bool) {
-    let mut actions = [false; 3];
-    let Some(rx) = rx else {
-        return (actions, false);
-    };
-    loop {
-        match rx.try_recv() {
-            Ok(ClipKey::Copy) => actions[0] = true,
-            Ok(ClipKey::Cut) => actions[1] = true,
-            Ok(ClipKey::Paste) => actions[2] = true,
-            Err(crossbeam_channel::TryRecvError::Empty) => return (actions, false),
-            Err(crossbeam_channel::TryRecvError::Disconnected) => return (actions, true),
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "copy_paste_keyboard_task_tests.rs"]
-mod copy_paste_keyboard_task_tests;

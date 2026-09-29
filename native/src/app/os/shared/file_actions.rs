@@ -395,35 +395,42 @@ impl App {
         }
     }
 
+    /// "Kopieren/Verschieben nach…": starts the transfer and closes the
+    /// dialog; progress is in the transfer list, several may run at once.
     pub(in crate::app) fn confirm_copy(&mut self) {
-        // Selection seeds; the worker thread expands directories recursively
-        // and applies the current filter (no UI freeze on big subtrees).
-        let seeds: Vec<FileEntry> = if self.recursive && self.filter_is_active() {
-            self.recursive_transfer_files()
-        } else {
-            self.entries
-                .iter()
-                .filter(|e| self.selection.contains(&e.key()))
-                .cloned()
-                .collect()
-        };
-        if seeds.is_empty() || self.copy_dest.is_empty() {
+        let dest = self
+            .copy_dest
+            .trim()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        if dest.is_empty() {
             return;
         }
-        let opts = CopyOptions {
-            root: PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR)),
-            dest: PathBuf::from(&self.copy_dest),
-            preserve_structure: self.copy_preserve || (self.recursive && self.filter_is_active()),
-            conflict: self.copy_conflict,
-            mode: self.copy_mode_pending,
+        let selection = match self.dialog_selection() {
+            Ok(selection) => selection,
+            Err(super::transfer_selection::SelectionIssue::Empty(hint)) => {
+                self.notice = Some((hint, std::time::Instant::now()));
+                return;
+            }
+            Err(super::transfer_selection::SelectionIssue::Invalid(error)) => {
+                self.error_msg = Some(error);
+                return;
+            }
         };
-        let mode = opts.mode;
-        let filter = self
-            .filter_is_active()
-            .then(|| (self.filter.clone(), self.root_prefix()));
-        self.start_copy_job(mode, false, move |tx| {
-            start_copy_expanded(seeds, filter, opts, tx)
-        });
+        let preserve = self.copy_preserve || (self.recursive && self.filter_is_active());
+        match super::transfer_route::dialog_job(
+            &selection,
+            &ensure_dir_root(&dest),
+            preserve,
+            self.copy_conflict,
+            self.copy_mode_pending,
+        ) {
+            Ok(job) => {
+                if self.submit_job(job) {
+                    self.copy_open = false;
+                }
+            }
+            Err(error) => self.error_msg = Some(error),
+        }
     }
 
     // ─── Clipboard ──────────────────────────────────────────────────────
