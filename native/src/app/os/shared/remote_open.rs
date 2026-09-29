@@ -15,6 +15,29 @@ fn failure_after_recovery_sync(message: String, remote_edits: &[RemoteEdit]) -> 
     }
 }
 
+fn save_remote_edit(
+    backend: &dyn crate::vfs::Backend,
+    temp: &Path,
+    remote: &str,
+    known: i64,
+) -> SaveResult {
+    let current = match backend.stat(remote) {
+        Ok(metadata) => metadata.mtime_ms,
+        Err(error) if known != 0 => {
+            return SaveResult::Failed(format!("Remote-Änderungen konnten nicht geprüft werden: {error}"));
+        }
+        // Preserve providers that could never supply a revision at download.
+        Err(_) => 0,
+    };
+    if known != 0 && current > known {
+        return SaveResult::Conflict(current);
+    }
+    match upload_file(backend, temp, remote) {
+        Ok(()) => SaveResult::Ok(backend.stat(remote).map(|meta| meta.mtime_ms).unwrap_or(0)),
+        Err(error) => SaveResult::Failed(error),
+    }
+}
+
 #[cfg(test)]
 #[path = "remote_open_tests.rs"]
 mod tests;
@@ -86,12 +109,7 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("remote-open".into())
             .spawn(move || {
-                // Capture the remote's mtime at download time so save-back can
-                // detect a concurrent remote change before overwriting.
-                let res = download_to_id(&*backend, &path, id.as_deref(), &dest_t).map(|p| {
-                    let rm = backend.stat(&path).map(|m| m.mtime_ms).unwrap_or(0);
-                    (p, rm)
-                });
+                let res = download_for_edit(&*backend, &path, id.as_deref(), &dest_t);
                 let _ = tx.send(res);
             });
         match spawn {
@@ -159,41 +177,46 @@ impl App {
         }
         self.file_open_rx = pending;
         for (p, remote_mtime, mode, temp) in to_open {
-            // Baseline the edit-watch to the freshly downloaded content so we
-            // don't immediately re-upload it; only the user's saves count. Record
-            // the remote's mtime so save-back can detect a concurrent change.
-            // Publish the durable recovery manifest before handing the file to
-            // an editor that may immediately replace it (for example Obsidian).
-            let m = file_mtime_ms(&temp);
-            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
-                e.phase = RemoteEditPhase::Downloaded;
-                e.baseline_mtime = m;
-                e.seen_mtime = m;
-                e.remote_known_mtime = remote_mtime;
-                e.dirty = false;
-            } else {
-                cleanup_temp_copy(&temp);
-                continue;
-            }
-            if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
-                self.remote_edits.retain(|edit| edit.temp != temp);
-                cleanup_temp_copy(&temp);
-                self.error_msg = Some(failure_after_recovery_sync(
-                    format!(
-                        "Remote-Datei kann ohne Wiederherstellungsmanifest nicht sicher geöffnet werden: {error}"
-                    ),
-                    &self.remote_edits,
-                ));
-                continue;
-            }
-            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
-                e.phase = RemoteEditPhase::Editing;
+            match self.prepare_downloaded_edit(&temp, remote_mtime) {
+                Ok(true) => {}
+                Ok(false) => {
+                    cleanup_temp_copy(&temp);
+                    continue;
+                }
+                Err(error) => {
+                    self.remote_edits.retain(|edit| edit.temp != temp);
+                    cleanup_temp_copy(&temp);
+                    self.error_msg = Some(failure_after_recovery_sync(
+                        format!(
+                            "Remote-Datei kann ohne Wiederherstellungsmanifest nicht sicher geöffnet werden: {error}"
+                        ),
+                        &self.remote_edits,
+                    ));
+                    continue;
+                }
             }
             let process = self.launch_for_edit(&p, mode);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
                 e.process = process;
             }
         }
+    }
+
+    fn prepare_downloaded_edit(&mut self, temp: &Path, remote_mtime: i64) -> std::io::Result<bool> {
+        let Some(index) = self.remote_edits.iter().position(|edit| edit.temp == temp) else {
+            return Ok(false);
+        };
+        let edit = &mut self.remote_edits[index];
+        edit.phase = RemoteEditPhase::Downloaded;
+        edit.baseline_mtime = file_mtime_ms(temp);
+        edit.seen_mtime = edit.baseline_mtime;
+        edit.remote_known_mtime = remote_mtime;
+        edit.dirty = false;
+        // The durable manifest is the gate for editor ownership, even when
+        // another download is pending or an older editor is replacing its file.
+        sync_recovery_manifest(&self.remote_edits)?;
+        self.remote_edits[index].phase = RemoteEditPhase::Editing;
+        Ok(true)
     }
 
     /// Poll temp-mode edit copies; re-upload to the remote when one is saved
@@ -268,20 +291,7 @@ impl App {
             let spawn = std::thread::Builder::new()
                 .name("remote-edit-save".into())
                 .spawn(move || {
-                    // Conflict guard: if the remote advanced past what we last
-                    // knew, it changed underneath us — don't overwrite.
-                    let current = be.stat(&remote).map(|m| m.mtime_ms).unwrap_or(0);
-                    let res = if known != 0 && current > known {
-                        SaveResult::Conflict(current)
-                    } else {
-                        match upload_file(&*be, &temp, &remote) {
-                            Ok(()) => {
-                                let nm = be.stat(&remote).map(|m| m.mtime_ms).unwrap_or(0);
-                                SaveResult::Ok(nm)
-                            }
-                            Err(e) => SaveResult::Failed(e),
-                        }
-                    };
+                    let res = save_remote_edit(&*be, &temp, &remote, known);
                     let _ = tx.send((temp, res));
                 });
             match spawn {

@@ -1,6 +1,6 @@
 //! Command-palette matching. Local download staging (`download_to_id`) lives
 //! in `crate::transfer` and is re-exported here under its previous name.
-pub(in crate::app) use crate::transfer::download_to_id;
+pub(in crate::app) use crate::transfer::download_for_edit;
 
 /// Case-insensitive subsequence match (fuzzy), used to filter command palette
 /// entries by the text typed after `>`.

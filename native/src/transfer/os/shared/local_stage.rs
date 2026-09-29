@@ -66,47 +66,5 @@ pub fn download_to_id(
     id: Option<&str>,
     dest: &Path,
 ) -> Result<String, String> {
-    use std::io::Write;
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let expected = be
-        .stat(path)
-        .ok()
-        .filter(|m| !m.is_dir)
-        .map(|m| m.size)
-        .unwrap_or(0);
-    ensure_local_space(dest, expected)?;
-    let mut r = be.open_read_id(path, id).map_err(|e| e.to_string())?;
-    let (part, mut f) = match create_download_part(dest) {
-        Ok(part) => part,
-        Err(e) => {
-            return Err(e.to_string());
-        }
-    };
-    let copied = match std::io::copy(&mut r, &mut f) {
-        Ok(n) => n,
-        Err(e) => {
-            cleanup_partial(&part);
-            return Err(e.to_string());
-        }
-    };
-    if let Err(e) = f.flush().and_then(|_| f.sync_all()) {
-        cleanup_partial(&part);
-        return Err(e.to_string());
-    }
-    drop(f);
-    if expected != 0 && copied != expected {
-        cleanup_partial(&part);
-        return Err(format!(
-            "Download unvollstaendig: {} von {} Bytes",
-            copied, expected
-        ));
-    }
-    if let Err(e) = super::platform::replace_file_atomic(&part, dest) {
-        cleanup_partial(&part);
-        return Err(e.to_string());
-    }
-    Ok(dest.to_string_lossy().to_string())
+    super::edit_download::download_for_edit(be, path, id, dest).map(|(path, _)| path)
 }
