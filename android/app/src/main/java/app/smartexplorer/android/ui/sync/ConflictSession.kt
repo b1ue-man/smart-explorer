@@ -129,9 +129,9 @@ internal class ConflictSession(
     }
 
     /** [choice] is `"a"` or `"b"`. */
-    fun resolve(item: SyncConflict, choice: String) {
+    fun resolve(item: SyncConflict, choice: String, variantId: String? = null) {
         launchTracked {
-            val failure = resolveOne(item, choice)
+            val failure = resolveOne(item, choice, variantId)
             if (failure != null) Snackbars.show("${fileName(item)}: nicht gelöst", "Details") { showDetails(failure) }
             reload()
         }
@@ -162,10 +162,14 @@ internal class ConflictSession(
     }
 
     /** `null` on success, else the failure text. */
-    private suspend fun resolveOne(item: SyncConflict, choice: String): String? {
+    private suspend fun resolveOne(item: SyncConflict, choice: String, variantId: String? = null): String? {
+        val side = if (choice == "a") item.a else item.b
+        if (variantId == null && side?.needsVariantChoice == true) {
+            return "Auf Seite ${choice.uppercase()} liegen verschiedene Versionen. Bitte eine Version einzeln auswählen."
+        }
         busy[item.key] = true
         return try {
-            val end = SyncApi.awaitTask(SyncApi.resolve(job.id, item.cid, choice))
+            val end = SyncApi.awaitTask(SyncApi.resolve(job.id, item.cid, choice, variantId))
             if (end.state == "done") {
                 markResolved(item)
                 null

@@ -19,7 +19,7 @@ impl App {
             return;
         }
 
-        let mut keep: Option<(usize, ConflictSide)> = None;
+        let mut keep: Option<(usize, ConflictSide, Option<String>)> = None;
         let mut skip = None;
         let mut merge_req = None;
         let mut close = false;
@@ -40,7 +40,7 @@ impl App {
             .constrain_to(ctx.screen_rect().shrink(16.0))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Beide Seiten wurden geändert. Wähle, welche Version gilt — die andere wird vorher reversibel gesichert.");
+                ui.label("Wähle die Version für beide Seiten. Ersetzte Versionen werden gesichert; doppelte Dateien anschließend entfernt.");
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
@@ -77,41 +77,14 @@ impl App {
                             for index in visible_rows {
                                 let conflict = &self.bisync_conflicts[index];
                                 ui.horizontal(|ui| {
-                                    let a = conflict
-                                        .a
-                                        .map(|sig| {
-                                            format!("{} B, {}", sig.size, fmt_ms(sig.mtime_ms))
-                                        })
-                                        .unwrap_or_else(|| "gelöscht".into());
-                                    let b = conflict
-                                        .b
-                                        .map(|sig| {
-                                            format!("{} B, {}", sig.size, fmt_ms(sig.mtime_ms))
-                                        })
-                                        .unwrap_or_else(|| "gelöscht".into());
-                                    if ui
-                                        .add_enabled(
-                                            !choices_disabled,
-                                            egui::Button::new("A verwenden (A → B)").small(),
-                                        )
-                                        .on_hover_text(format!("A: {a}"))
-                                        .clicked()
-                                    {
-                                        keep = Some((index, ConflictSide::A));
+                                    for side in [ConflictSide::A, ConflictSide::B] {
+                                        if let Some(id) = variant_choice(ui, conflict, side, !choices_disabled) {
+                                            keep = Some((index, side, id));
+                                        }
                                     }
                                     if ui
                                         .add_enabled(
-                                            !choices_disabled,
-                                            egui::Button::new("B verwenden (B → A)").small(),
-                                        )
-                                        .on_hover_text(format!("B: {b}"))
-                                        .clicked()
-                                    {
-                                        keep = Some((index, ConflictSide::B));
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            !choices_disabled,
+                                            !choices_disabled && conflict.duplicates.is_none(),
                                             egui::Button::new("⇄ Zeilen").small(),
                                         )
                                         .on_hover_text("Zeilenweise zusammenführen")
@@ -166,8 +139,8 @@ impl App {
         }
         if close {
             self.finish_bisync_conflicts();
-        } else if let Some((index, side)) = keep {
-            self.start_conflict_resolution(index, side, false);
+        } else if let Some((index, side, id)) = keep {
+            self.start_conflict_variant_resolution(index, side, false, id);
         } else if let Some(index) = skip {
             if index < self.bisync_conflicts.len() {
                 self.bisync_conflicts.swap_remove(index);
@@ -262,4 +235,36 @@ fn resolve_phase_label(phase: crate::bisync::ResolvePhase) -> &'static str {
         crate::bisync::ResolvePhase::Deleting => "übernimmt die Löschung",
         crate::bisync::ResolvePhase::ReadingSignatures => "prüft das Ergebnis",
     }
+}
+
+fn variant_choice(
+    ui: &mut egui::Ui, conflict: &crate::bisync::Conflict,
+    side: ConflictSide, enabled: bool,
+) -> Option<Option<String>> {
+    let letter = if side.keep_a() { "A" } else { "B" };
+    let mut selected = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        if let Some(group) = conflict.duplicates.as_ref().filter(|d| d.needs_variant_choice(side.keep_a())) {
+            ui.menu_button(format!("{letter}: Version wählen…"), |ui| {
+                ui.label("Mehrere Dateien mit demselben Namen. Diese Version bleibt auf beiden Seiten:");
+                for (index, variant) in group.variants(side.keep_a()).iter().enumerate() {
+                    let label = format!("Version {} · {} B · {} · Inhalt {}", index + 1,
+                        variant.content_size, fmt_ms(variant.signature.mtime_ms),
+                        &variant.content_md5[..8]);
+                    if ui.button(label).on_hover_text(format!("Datei-ID: {}\nPrüfsumme: {}",
+                        variant.id.as_deref().unwrap_or("Pfad"), variant.content_md5)).clicked() {
+                        selected = Some(variant.id.clone());
+                        ui.close_menu();
+                    }
+                }
+            });
+        } else {
+            let signature = if side.keep_a() { conflict.a } else { conflict.b };
+            let detail = signature.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms)))
+                .unwrap_or_else(|| "gelöscht".into());
+            if ui.small_button(format!("{letter} verwenden ({})", side.direction()))
+                .on_hover_text(detail).clicked() { selected = Some(None); }
+        }
+    });
+    selected
 }

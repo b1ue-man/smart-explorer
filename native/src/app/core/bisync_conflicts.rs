@@ -9,7 +9,7 @@ pub(in crate::app) enum ConflictSide {
 }
 
 impl ConflictSide {
-    fn keep_a(self) -> bool {
+    pub(in crate::app) fn keep_a(self) -> bool {
         self == Self::A
     }
 
@@ -95,6 +95,12 @@ impl App {
         side: ConflictSide,
         from_bulk: bool,
     ) -> bool {
+        self.start_conflict_variant_resolution(index, side, from_bulk, None)
+    }
+
+    pub(in crate::app) fn start_conflict_variant_resolution(
+        &mut self, index: usize, side: ConflictSide, from_bulk: bool, variant_id: Option<String>,
+    ) -> bool {
         if self.conflict_resolution.is_some() {
             self.error_msg = Some("Es läuft bereits eine Konfliktauflösung.".into());
             return false;
@@ -110,6 +116,11 @@ impl App {
             self.error_msg = Some("Der ausgewählte Konflikt ist nicht mehr vorhanden.".into());
             return false;
         };
+        if variant_id.is_none() && conflict.duplicates.as_ref()
+            .is_some_and(|d| d.needs_variant_choice(side.keep_a())) {
+            self.error_msg = Some(format!("„{}“ enthält auf dieser Seite verschiedene Versionen. Bitte eine Version einzeln auswählen.", conflict.rel));
+            return false;
+        }
         let Some(context) = self.bisync_ctx.as_ref() else {
             self.error_msg = Some("Konfliktlösung: Synchronisationskontext fehlt".into());
             return false;
@@ -130,13 +141,14 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("bisync-conflict".into())
             .spawn(move || {
-                let result = crate::bisync::resolve_checked(
+                let result = crate::bisync::resolve_variant_checked(
                     &*a,
                     &root_a,
                     &*b,
                     &root_b,
                     &conflict,
                     side.keep_a(),
+                    variant_id.as_deref(),
                     &pair,
                     &worker_cancel,
                     |phase| {

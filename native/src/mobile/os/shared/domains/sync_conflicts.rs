@@ -197,11 +197,19 @@ pub(super) fn settle_before_run(job_id: &str) -> Result<(), ApiError> {
     save_resolved(job_id).map_err(|error| ApiError::new("conflict", error.message))
 }
 
-fn side(signature: Option<Sig>) -> Value {
-    match signature {
+fn side(signature: Option<Sig>, duplicates: Option<&crate::bisync::DuplicateConflict>, keep_a: bool) -> Value {
+    let mut value = match signature {
         Some(sig) => json!({ "exists": true, "size": sig.size, "mtimeMs": sig.mtime_ms }),
         None => json!({ "exists": false, "size": 0, "mtimeMs": 0 }),
+    };
+    if let Some(group) = duplicates {
+        value["needsVariantChoice"] = json!(group.needs_variant_choice(keep_a));
+        value["variants"] = json!(group.variants(keep_a).iter().map(|v| json!({
+            "id": v.id, "size": v.content_size, "mtimeMs": v.signature.mtime_ms,
+            "checksum": v.content_md5,
+        })).collect::<Vec<_>>());
     }
+    value
 }
 
 pub(super) fn conflicts(args: &Value) -> Result<Value, ApiError> {
@@ -213,14 +221,14 @@ pub(super) fn conflicts(args: &Value) -> Result<Value, ApiError> {
                 .items
                 .iter()
                 .map(|(cid, conflict)| {
-                    let text = [conflict.a, conflict.b]
+                    let text = conflict.duplicates.is_none() && [conflict.a, conflict.b]
                         .iter()
                         .all(|sig| sig.is_some_and(|sig| sig.size <= MAX_MERGE_BYTES));
                     json!({
                         "cid": cid,
                         "path": conflict.rel,
-                        "a": side(conflict.a),
-                        "b": side(conflict.b),
+                        "a": side(conflict.a, conflict.duplicates.as_ref(), true),
+                        "b": side(conflict.b, conflict.duplicates.as_ref(), false),
                         "text": text,
                     })
                 })
@@ -278,17 +286,21 @@ pub(super) fn resolve(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         other => return Err(invalid(format!("Unbekannte Wahl „{other}“."))),
     };
     let (pair, conflict) = lookup(&job_id, &cid)?;
+    let variant_id = args.get("variantId").filter(|v| !v.is_null())
+        .map(|v| v.as_str().map(str::to_owned).ok_or_else(|| invalid("Ungültige Datei-ID")))
+        .transpose()?;
     let title = format!("Konflikt lösen: {}", conflict.rel);
     let owner = job_id.clone();
     let task = spawn_for_job(rt, &owner, title, move |ctx| {
         let cancel = ctx.cancel_flag();
-        let signatures = crate::bisync::resolve_checked(
+        let signatures = crate::bisync::resolve_variant_checked(
             &*pair.a,
             &pair.root_a,
             &*pair.b,
             &pair.root_b,
             &conflict,
             keep_a,
+            variant_id.as_deref(),
             &pair.pair,
             &cancel,
             |phase| ctx.message(phase_label(phase)),
