@@ -40,6 +40,11 @@ impl AttemptError {
     pub(super) fn into_io(self) -> io::Error {
         self.error
     }
+
+    /// The cause, so the flow can tell congestion from failure.
+    pub(super) fn error(&self) -> &io::Error {
+        &self.error
+    }
 }
 
 pub(super) fn run_with_retry<T>(

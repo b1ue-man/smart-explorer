@@ -2,6 +2,17 @@ use crate::vfs::{Backend, VfsMeta};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Streaming block of one copy: large enough that per-call overhead of
+/// remote readers and writers stays small, small enough that the flows'
+/// highest concurrency (256 operations) holds at most 64 MiB of buffers.
+const COPY_BUFFER: usize = 256 * 1024;
+
+/// Copies one file into a private stage next to `destination_path` and
+/// publishes it (create when `destination_expected` is `None`, replace
+/// otherwise). The destination folder exists already: the mirror pass
+/// creates every folder once before it queues the files inside. `progress`
+/// receives every streamed block.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn copy_stream(
     source: &dyn Backend,
     source_path: &str,
@@ -10,10 +21,8 @@ pub(super) fn copy_stream(
     destination_path: &str,
     destination_expected: Option<&VfsMeta>,
     cancel: &AtomicBool,
+    progress: &dyn Fn(u64),
 ) -> io::Result<u64> {
-    if let Some(parent) = parent_of(destination_path) {
-        destination.mkdir_all(&parent)?;
-    }
     let staged = crate::vfs::unique_staging_path(destination, destination_path, "sync")?;
     let result = (|| {
         let source_before = source.stat(source_path)?;
@@ -21,7 +30,7 @@ pub(super) fn copy_stream(
         let mut reader = source.open_read(source_path)?;
         let mut writer = destination.open_write(&staged)?;
         let mut copied = 0u64;
-        let mut buffer = [0u8; 256 * 1024];
+        let mut buffer = vec![0u8; COPY_BUFFER];
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "sync canceled"));
@@ -32,6 +41,7 @@ pub(super) fn copy_stream(
             }
             writer.write_all(&buffer[..read])?;
             copied = copied.saturating_add(read as u64);
+            progress(read as u64);
         }
         writer.flush()?;
         drop(writer);
@@ -104,15 +114,4 @@ fn validate_destination(
         )),
         (Some(_), Err(error)) => Err(error),
     }
-}
-
-fn parent_of(path: &str) -> Option<String> {
-    let trimmed = path.trim_end_matches('/');
-    trimmed.rfind('/').map(|index| {
-        if index == 0 {
-            "/".to_string()
-        } else {
-            trimmed[..index].to_string()
-        }
-    })
 }

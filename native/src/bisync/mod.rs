@@ -22,6 +22,8 @@ mod apply;
 mod apply_delete;
 #[path = "os/shared/apply_guard.rs"]
 mod apply_guard;
+#[path = "os/shared/apply_pool.rs"]
+mod apply_pool;
 #[path = "os/shared/apply_retry.rs"]
 mod apply_retry;
 #[path = "os/shared/apply_transfer.rs"]
@@ -36,10 +38,10 @@ mod incremental_changes;
 mod incremental_collect;
 #[path = "os/shared/move_finalize.rs"]
 mod move_finalize;
-#[path = "os/shared/orchestration.rs"]
-mod orchestration;
 #[path = "core/omissions.rs"]
 mod omissions;
+#[path = "os/shared/orchestration.rs"]
+mod orchestration;
 #[path = "core/paths.rs"]
 mod paths;
 #[path = "os/shared/persistence.rs"]
@@ -52,6 +54,8 @@ mod resolve_conflict;
 mod snapshot;
 #[path = "os/shared/snapshot_agent.rs"]
 mod snapshot_agent;
+#[path = "os/shared/snapshot_dir.rs"]
+mod snapshot_dir;
 #[path = "os/shared/snapshot_hash.rs"]
 mod snapshot_hash;
 #[path = "os/shared/snapshot_pair.rs"]
@@ -62,17 +66,19 @@ mod state_store;
 mod state_types;
 #[path = "os/shared/state_validation.rs"]
 mod state_validation;
+#[path = "os/shared/sync_flows.rs"]
+pub(crate) mod sync_flows;
 #[path = "core/types.rs"]
 mod types;
 
 pub use apply::apply;
 pub use core::{plan, update_baseline};
-pub use orchestration::{run, Outcome};
-pub use preview::{preview, Preview};
 pub use omissions::SyncOmissions;
+pub use orchestration::{run, Outcome};
 pub use persistence::{
     baseline_path, load_baseline, pair_id, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
+pub use preview::{preview, Preview};
 pub use resolve_conflict::{resolve, resolve_checked, ResolvePhase};
 pub use snapshot::{empty_globset, walk_files, HashMode, WalkFilter};
 pub use types::{
@@ -80,12 +86,15 @@ pub use types::{
     DeletePolicy, Direction, Sig, Throttle, Tree, Versioning, VersioningScheme,
 };
 
-#[cfg(test)]
-#[path = "os/shared/tests.rs"]
-mod tests;
 #[cfg(all(test, windows))]
 #[path = "os/windows/link_fixture.rs"]
 pub(crate) mod link_fixture;
 #[cfg(all(test, unix))]
 #[path = "os/linux_os/link_fixture.rs"]
 pub(crate) mod link_fixture;
+#[cfg(test)]
+#[path = "os/shared/test_remote.rs"]
+pub(crate) mod test_remote;
+#[cfg(test)]
+#[path = "os/shared/tests.rs"]
+mod tests;

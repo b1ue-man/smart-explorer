@@ -87,6 +87,22 @@ fn transfer_engine_task_flow_overload_halves_once_per_window() {
 }
 
 #[test]
+fn transfer_engine_task_flow_never_grows_without_measured_work() {
+    let mut now = 0;
+    let mut control = FlowControl::new(RESOURCE_CEILING, now);
+    // Long operations fill the limit but neither finish nor report bytes.
+    let nothing = |_: usize| 0;
+    for _ in 0..20 {
+        window(&mut control, &mut now, &nothing, true);
+    }
+    assert_eq!(control.limit(), 2);
+    // Once work is measured, slow start proceeds from there.
+    let linear = |limit: usize| limit as u64 * MB;
+    window(&mut control, &mut now, &linear, true);
+    assert_eq!(control.limit(), 4);
+}
+
+#[test]
 fn transfer_engine_task_flow_keeps_limit_without_demand() {
     let mut now = 0;
     let mut control = FlowControl::new(64, now);

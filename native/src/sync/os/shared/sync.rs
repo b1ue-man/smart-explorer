@@ -11,16 +11,21 @@
 //!
 //! Streaming copy goes through `open_read`/`open_write` + an explicit `flush`
 //! so remote writers (FTP/WebDAV buffer-then-PUT) surface upload errors.
+//!
+//! The copy pass lists and copies in parallel, as fast as the flows of both
+//! connections allow (`sync_pass`); each destination folder is listed once
+//! and compared, not probed per file. The delete pass stays serial and runs
+//! only after an error-free copy pass.
 // The result/progress structs expose more than the current minimal "mirror to a
 // folder" UI consumes (per-file `current`, `errors` list, `elapsed_ms`); they're
 // the engine's stable API for a richer sync UI later.
 #![allow(dead_code)]
 
-use super::sync_copy::copy_stream;
+use super::sync_pass::{copy_pass, Report};
+use super::sync_scan::Target;
 use crate::bisync::SyncOmissions;
 use crate::vfs::{Backend, BackendHandle};
 use crossbeam_channel::Sender;
-use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -186,10 +191,9 @@ fn run(
     let start = Instant::now();
     let mut stats = SyncStats::default();
     let mut errors: Vec<(String, String)> = Vec::new();
-    let mut omissions = SyncOmissions::new(
+    let omissions = SyncOmissions::new(
         !src.case_sensitive_paths(&src_root) || !dst.case_sensitive_paths(&dst_root),
     );
-    let mut last_progress = Instant::now();
 
     if let Err(error) = crate::vfs::validate_sync_roots(&*src, &src_root, &*dst, &dst_root) {
         record_error(&mut stats, &mut errors, "Sync-Pfade", error.to_string());
@@ -218,7 +222,9 @@ fn run(
         return;
     }
 
-    if !opts.dry_run || dst.try_exists(&dst_root).unwrap_or(true) {
+    // A dry run leaves a missing destination root missing: everything below
+    // it counts as "would copy" without any destination listing.
+    let root_target = if !opts.dry_run || dst.try_exists(&dst_root).unwrap_or(true) {
         if let Err(error) = require_plain_directory(&*dst, &dst_root, !opts.dry_run) {
             record_error(
                 &mut stats,
@@ -234,158 +240,32 @@ fn run(
             }));
             return;
         }
-    }
-
-    // ── copy/update pass (BFS over src) ──
-    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
-    let mut source_budget = WalkBudget::default();
-    if let Err(error) = source_budget.record(&src_root, 0) {
-        record_error(&mut stats, &mut errors, src_root.clone(), error);
+        Target::Listed
     } else {
-        queue.push_back((src_root.clone(), 0));
-    }
-    'copy_walk: while let Some((dir, depth)) = queue.pop_front() {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        if let Err(error) = require_plain_directory(&*src, &dir, false) {
-            record_error(
-                &mut stats,
-                &mut errors,
-                dir.clone(),
-                format!("source directory changed before traversal: {error}"),
-            );
-            continue;
-        }
-        let entries = match src.list_dir(&dir) {
-            Ok(e) => e,
-            Err(e) => {
-                record_error(&mut stats, &mut errors, dir, e.to_string());
-                continue;
-            }
-        };
-        let mut child_names = std::collections::HashSet::new();
-        for m in entries {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            if let Err(error) = crate::vfs::validate_child_name(&m.name) {
-                record_error(&mut stats, &mut errors, dir.clone(), error.to_string());
-                continue;
-            }
-            if !child_names.insert(m.name.clone()) {
-                record_error(
-                    &mut stats,
-                    &mut errors,
-                    dir.clone(),
-                    format!("backend returned duplicate child name: {:?}", m.name),
-                );
-                continue;
-            }
-            let sp = join(&dir, &m.name);
-            if let Err(error) = source_budget.record(&sp, depth + 1) {
-                record_error(&mut stats, &mut errors, sp, error);
-                break 'copy_walk;
-            }
-            let rel = rel_of(&sp, &src_root);
-            let dp = join(&dst_root, &rel);
-            // The app trash and other apps' private storage (Android) are never
-            // mirrored: protected omissions.
-            if m.is_symlink
-                || crate::apptrash::excluded_name(&m.name)
-                || crate::apptrash::hidden_app_folders_in(&dir)
-            {
-                omissions.record(&rel, true);
-                continue;
-            }
-            if m.is_dir {
-                match dst.stat(&dp) {
-                    Ok(metadata) if metadata.is_symlink => {
-                        omissions.record(&rel, true);
-                        continue;
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        record_error(&mut stats, &mut errors, dp, error.to_string());
-                        continue;
-                    }
-                }
-                if !opts.dry_run {
-                    if let Err(error) = require_plain_directory(&*dst, &dp, true) {
-                        record_error(
-                            &mut stats,
-                            &mut errors,
-                            dp,
-                            format!("create destination directory: {error}"),
-                        );
-                        continue;
-                    }
-                }
-                queue.push_back((sp, depth + 1));
-                continue;
-            }
-            let (need, destination_expected) = match dst.stat(&dp) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (true, None),
-                Err(error) => {
-                    record_error(
-                        &mut stats,
-                        &mut errors,
-                        dp.clone(),
-                        format!("inspect destination: {error}"),
-                    );
-                    continue;
-                }
-                Ok(dm) if dm.is_symlink => {
-                    omissions.record(&rel, true);
-                    continue;
-                }
-                Ok(dm) if dm.is_dir => {
-                    record_error(
-                        &mut stats,
-                        &mut errors,
-                        dp.clone(),
-                        "destination is a directory or link-like entry",
-                    );
-                    continue;
-                }
-                Ok(dm) => (dm.size != m.size || m.mtime_ms > dm.mtime_ms, Some(dm)),
-            };
-            if !need {
-                stats.skipped += 1;
-                continue;
-            }
-            if opts.dry_run {
-                stats.copied += 1;
-            } else {
-                match copy_stream(
-                    &*src,
-                    &sp,
-                    &m,
-                    &*dst,
-                    &dp,
-                    destination_expected.as_ref(),
-                    &cancel,
-                ) {
-                    Ok(n) => {
-                        stats.copied += 1;
-                        stats.bytes += n;
-                    }
-                    Err(e) => {
-                        record_error(&mut stats, &mut errors, sp.clone(), e.to_string());
-                    }
-                }
-            }
-            if last_progress.elapsed().as_millis() > 150 {
-                let _ = tx.send(SyncMsg::Progress(SyncProgress {
-                    current: dp.clone(),
-                    stats: stats.clone(),
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                }));
-                last_progress = Instant::now();
-            }
-        }
-    }
+        Target::Absent
+    };
+
+    // ── copy/update pass: parallel listing and copying (`sync_pass`) ──
+    let Report {
+        mut stats,
+        mut errors,
+        mut omissions,
+    } = copy_pass(
+        &*src,
+        &src_root,
+        &*dst,
+        &dst_root,
+        opts.dry_run,
+        root_target,
+        &cancel,
+        Report {
+            stats,
+            errors,
+            omissions,
+        },
+        &tx,
+        start,
+    );
 
     // ── delete pass (mirror): remove dst entries with no src counterpart ──
     if opts.delete_extra && !cancel.load(Ordering::Relaxed) && stats.errors > 0 {
