@@ -10,7 +10,7 @@ use iroh::endpoint::{RecvStream, SendStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::share::core::eio;
-use crate::share::framing::{recv_tagged, reply, reply_err, TAG_CTRL, TAG_DATA};
+use crate::share::framing::{recv_data_frame, reply, reply_err, TAG_CTRL, TAG_DATA};
 use crate::share::fs::ResolvedTarget;
 use crate::share::fs_access::FsAccess;
 use crate::share::io_deadline;
@@ -55,12 +55,14 @@ enum Stop {
 }
 
 /// The `slot` (one transfer admission for the whole batch) stays held until
-/// the worker has published or discarded every entry.
+/// the worker has published or discarded every entry; a client that sends
+/// nothing for `stall` loses it (the batch is aborted, nothing published).
 pub(super) async fn serve<G: Send + 'static>(
     mut send: SendStream,
     mut recv: RecvStream,
     job: PutBatchJob,
     slot: G,
+    stall: Duration,
 ) -> io::Result<()> {
     if let Err(error) = batch_status::begin(&job.key) {
         return reply_err(&mut send, error).await;
@@ -75,7 +77,7 @@ pub(super) async fn serve<G: Send + 'static>(
     });
     // Accepted: the client may already be sending its bytes.
     let frames = match reply(&mut send, FsResponse::Ready).await {
-        Ok(()) => forward_frames(&mut recv, &commands, expected_lease.as_deref()).await,
+        Ok(()) => forward_frames(&mut recv, &commands, expected_lease.as_deref(), stall).await,
         Err(error) => Err(Stop::Transport(error)),
     };
     drop(commands);
@@ -87,7 +89,8 @@ pub(super) async fn serve<G: Send + 'static>(
     match (result, frames) {
         (PutResult::Committed(outcomes), _) => {
             let status = FsBatchStatus::Done { outcomes };
-            reply(&mut send, FsResponse::Batch { status }).await?;
+            let outcome = reply(&mut send, FsResponse::Batch { status });
+            io_deadline::run_for("Share batch outcome", stall, outcome).await?;
             await_delivery(&mut recv, &key).await;
             Ok(())
         }
@@ -102,11 +105,12 @@ async fn forward_frames(
     recv: &mut RecvStream,
     commands: &mpsc::Sender<PutCommand>,
     expected_lease: Option<&str>,
+    stall: Duration,
 ) -> Result<(), Stop> {
     loop {
-        // A stalled client releases its admission slot after one operation
-        // deadline; the client's own per-chunk deadline is the same.
-        let (tag, payload) = io_deadline::run("Share batch data", recv_tagged(recv))
+        // Data frames carry at most one chunk; a stalled client releases its
+        // admission slot after `stall`, the bound it puts on its own chunks.
+        let (tag, payload) = io_deadline::run_for("Share batch data", stall, recv_data_frame(recv))
             .await
             .map_err(Stop::Transport)?;
         if tag == TAG_DATA {

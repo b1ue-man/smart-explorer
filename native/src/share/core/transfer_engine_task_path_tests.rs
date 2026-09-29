@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 
 use super::transfer_engine_task_support::{get, pattern, put, RecordingSink, RefusingSink};
 use super::CopyPastePeerFixture;
-use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
+use crate::share::keepalive::{CONTROL_STREAM_RESERVE, TRANSFER_STREAMS_PER_CONNECTION};
 use crate::share::wire::{FsRequest, FsResponse, FsTransferCapabilities};
 
 #[test]
@@ -116,7 +116,7 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
     // Admission and flow identity follow the host's Capabilities.
     assert_eq!(
         backend.transfer_ceiling("/A"),
-        Some(TRANSFER_STREAMS_PER_CONNECTION as usize)
+        Some((TRANSFER_STREAMS_PER_CONNECTION - CONTROL_STREAM_RESERVE) as usize)
     );
     assert_eq!(backend.flow_key("/A/x"), backend.flow_key("/B/y"));
     assert!(backend.flow_key("/A").starts_with("share:direct:"));
@@ -151,25 +151,31 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
     assert_eq!(
         backend.server_copy_to_stage(
             "/B/source.bin",
-            "/B/copies/source.bin.se-copy-a",
+            "/B/copies/source.bin.se-upload-00000000000000a1",
             size,
             &std::sync::atomic::AtomicBool::new(false)
         )?,
         Some(size)
     );
-    backend.promote_copy_stage("/B/copies/source.bin.se-copy-a", "/B/copies/source.bin")?;
+    backend.promote_copy_stage(
+        "/B/copies/source.bin.se-upload-00000000000000a1",
+        "/B/copies/source.bin",
+    )?;
     assert_eq!(fs::read(copies.join("source.bin"))?, payload);
     assert_eq!(
         backend.server_copy_to_stage(
             "/B/source.bin",
-            "/B/copies/source.bin.se-copy-b",
+            "/B/copies/source.bin.se-upload-00000000000000b2",
             size,
             &std::sync::atomic::AtomicBool::new(false)
         )?,
         Some(size)
     );
     let taken = backend
-        .promote_copy_stage("/B/copies/source.bin.se-copy-b", "/B/copies/source.bin")
+        .promote_copy_stage(
+            "/B/copies/source.bin.se-upload-00000000000000b2",
+            "/B/copies/source.bin",
+        )
         .unwrap_err();
     assert_eq!(taken.kind(), io::ErrorKind::AlreadyExists);
 
@@ -181,12 +187,14 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
             .kind(),
         io::ErrorKind::Unsupported
     );
-    backend.discard_copy_stage("/B/copies/source.bin.se-copy-b")?;
-    assert!(!copies.join("source.bin.se-copy-b").exists());
+    backend.discard_copy_stage("/B/copies/source.bin.se-upload-00000000000000b2")?;
+    assert!(!copies
+        .join("source.bin.se-upload-00000000000000b2")
+        .exists());
     assert_eq!(fs::read(copies.join("source.bin"))?, payload);
     assert_eq!(
         backend
-            .discard_copy_stage("/B/copies/source.bin.se-copy-b")
+            .discard_copy_stage("/B/copies/source.bin.se-upload-00000000000000b2")
             .unwrap_err()
             .kind(),
         io::ErrorKind::Unsupported

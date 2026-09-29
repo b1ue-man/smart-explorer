@@ -20,7 +20,7 @@ use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
 
 const MOUNT_CAPABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(40);
 
-pub(super) use super::framing::{recv_tagged, reply, send_ctrl};
+pub(super) use super::framing::{reply, send_ctrl};
 pub(crate) use super::node::ShareIrohNode;
 
 #[path = "peer_batch_get.rs"]
@@ -271,16 +271,12 @@ impl Backend for PeerBackend {
     }
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.open_writer(
+        let writer = self.open_writer(
             FsRequest::WriteNew {
                 path: path.to_string(),
             },
             "peer exclusive write open",
-        )
-    }
-
-    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let writer = self.open_write_new(path)?;
+        )?;
         self.track_stage(path);
         Ok(writer)
     }
@@ -359,7 +355,10 @@ impl Backend for PeerBackend {
             src: src.to_string(),
             dst: dst.to_string(),
         })? {
-            FsResponse::Ok => Ok(()),
+            FsResponse::Ok => {
+                self.release_stage(src);
+                Ok(())
+            }
             _ => Err(eio("unerwartete Antwort auf rename")),
         }
     }
@@ -373,7 +372,10 @@ impl Backend for PeerBackend {
             src: src.to_string(),
             dst: dst.to_string(),
         })? {
-            FsResponse::Ok => Ok(()),
+            FsResponse::Ok => {
+                self.release_stage(src);
+                Ok(())
+            }
             _ => Err(eio("unerwartete Antwort auf rename_no_replace")),
         }
     }
@@ -383,7 +385,10 @@ impl Backend for PeerBackend {
             staged: staged.to_string(),
             destination: destination.to_string(),
         })? {
-            FsResponse::Ok => Ok(()),
+            FsResponse::Ok => {
+                self.release_stage(staged);
+                Ok(())
+            }
             _ => Err(eio("unerwartete Antwort auf promote_staged")),
         }
     }
@@ -392,7 +397,10 @@ impl Backend for PeerBackend {
         match self.request(FsRequest::RemoveFile {
             path: path.to_string(),
         })? {
-            FsResponse::Ok => Ok(()),
+            FsResponse::Ok => {
+                self.release_stage(path);
+                Ok(())
+            }
             _ => Err(eio("unerwartete Antwort auf remove_file")),
         }
     }

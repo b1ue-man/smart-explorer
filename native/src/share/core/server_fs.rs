@@ -15,7 +15,7 @@ use crate::share::node::ShareIrohNode;
 use crate::share::server_transfer::{ReadSource, WriteMode};
 use crate::share::session::{IncomingSession, PeerPrincipal};
 use crate::share::types::ShareAuthState;
-use crate::share::wire::{validate_get, validate_put, FsRequest, FsResponse};
+use crate::share::wire::{discardable_stage, validate_get, validate_put, FsRequest, FsResponse};
 
 use super::batch_status::{self, BatchKey};
 use super::StreamContext;
@@ -205,6 +205,15 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             reply_unit(&mut send, result).await
         }
         FsRequest::DiscardStage { path } => {
+            if !discardable_stage_path(&path) {
+                // Only the transfer engine's own upload stages; never a user
+                // file or a stage the host keeps (K17).
+                let refused = io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Nur private Upload-Stufen können verworfen werden",
+                );
+                return reply_err(&mut send, refused).await;
+            }
             simple(
                 &mut send,
                 path,
@@ -216,7 +225,8 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             .await
         }
         FsRequest::CopyFile { src, dst } => {
-            let slot = match context.admit().await {
+            let admitted = context.admit(&send).await;
+            let slot = match admitted {
                 Ok(slot) => slot,
                 Err(error) => return reply_err(&mut send, error).await,
             };
@@ -248,7 +258,8 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             if let Err(error) = validate_put(&nonce, &entries) {
                 return reply_err(&mut send, error).await;
             }
-            let slot = match context.admit().await {
+            let admitted = context.admit(&send).await;
+            let slot = match admitted {
                 Ok(slot) => slot,
                 Err(error) => return reply_err(&mut send, error).await,
             };
@@ -262,7 +273,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 authority: BatchAuthority::new(access, authorization, &context),
                 expected_lease,
             };
-            super::batch_put::serve(send, recv, job, slot).await
+            super::batch_put::serve(send, recv, job, slot, context.stall()).await
         }
         FsRequest::PutBatchStatus { nonce } => match batch_status::query(&principal, &nonce) {
             Some(status) => reply(&mut send, FsResponse::Batch { status }).await,
@@ -278,13 +289,22 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             if let Err(error) = validate_get(&items) {
                 return reply_err(&mut send, error).await;
             }
-            let slot = match context.admit().await {
+            let admitted = context.admit(&send).await;
+            let slot = match admitted {
                 Ok(slot) => slot,
                 Err(error) => return reply_err(&mut send, error).await,
             };
             let authority = BatchAuthority::new(access, authorization, &context);
-            super::batch_get::serve(send, items, authority, slot).await
+            super::batch_get::serve(send, items, authority, slot, context.stall()).await
         }
+    }
+}
+
+/// Whether `path` names a stage a client may have the host discard.
+fn discardable_stage_path(path: &str) -> bool {
+    match crate::share::fs_paths::split_clean(path) {
+        Ok(parts) => parts.last().is_some_and(|name| discardable_stage(name)),
+        Err(_) => false,
     }
 }
 
@@ -294,11 +314,12 @@ async fn read(
     source: ReadSource,
     access: FsAccess,
 ) -> io::Result<()> {
-    let slot = match context.admit().await {
+    let admitted = context.admit(&send).await;
+    let slot = match admitted {
         Ok(slot) => slot,
         Err(error) => return reply_err(&mut send, error).await,
     };
-    crate::share::server_transfer::read_file(send, source, access, slot).await
+    crate::share::server_transfer::read_file(send, source, access, slot, context.stall()).await
 }
 
 async fn write(
@@ -309,7 +330,8 @@ async fn write(
     access: FsAccess,
     authorization: Option<MountLeaseAuthorization>,
 ) -> io::Result<()> {
-    let slot = match context.admit().await {
+    let admitted = context.admit(&send).await;
+    let slot = match admitted {
         Ok(slot) => slot,
         Err(error) => return reply_err(&mut send, error).await,
     };
@@ -318,7 +340,8 @@ async fn write(
         mode,
         authorization,
     };
-    crate::share::server_transfer::write_file(send, recv, target, access, slot).await
+    crate::share::server_transfer::write_file(send, recv, target, access, slot, context.stall())
+        .await
 }
 
 async fn simple<F>(

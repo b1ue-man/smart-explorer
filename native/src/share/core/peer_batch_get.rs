@@ -8,7 +8,7 @@ use std::ops::Range;
 use iroh::endpoint::RecvStream;
 
 use crate::share::core::eio;
-use crate::share::framing::{recv_resp_wire, recv_tagged, send_ctrl, TAG_CTRL, TAG_DATA};
+use crate::share::framing::{recv_data_frame, recv_resp_wire, send_ctrl, TAG_CTRL, TAG_DATA};
 use crate::share::fs_error::into_io;
 use crate::share::io_deadline;
 use crate::share::node_sessions::OpenedPeerStream;
@@ -143,7 +143,7 @@ impl PeerBackend {
         while remaining > 0 {
             let (tag, payload) = self
                 .node
-                .block_on(io_deadline::run("peer batch data", recv_tagged(recv)))
+                .block_on(io_deadline::run("peer batch data", recv_data_frame(recv)))
                 .map_err(GetFailure::Transport)?;
             if tag != TAG_DATA {
                 // The host ends an item early only with its failure.

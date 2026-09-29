@@ -1,13 +1,17 @@
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::endpoint::{RecvStream, SendStream};
 use tokio::sync::{mpsc, oneshot};
 
 use super::blocking;
 use super::core::eio;
-use super::framing::{recv_tagged, reply, reply_err, send_tagged, TAG_DATA};
+use super::framing::{recv_data_frame, reply, reply_err, send_tagged, TAG_DATA};
 use super::fs;
 use super::fs_access::FsAccess;
+use super::io_deadline;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::wire::{Ctrl, FsRequest, FsResponse};
 use crate::vfs::{Backend, VfsMeta};
@@ -63,12 +67,14 @@ pub(super) fn stat_item(
         })
 }
 
-/// The `slot` (transfer admission) stays held until the worker ends.
+/// The `slot` (transfer admission) stays held until the worker ends; a
+/// client that reads nothing for `stall` loses it.
 pub(super) async fn read_file<G: Send + 'static>(
     mut send: SendStream,
     source: ReadSource,
     access: FsAccess,
     slot: G,
+    stall: Duration,
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
@@ -81,9 +87,13 @@ pub(super) async fn read_file<G: Send + 'static>(
         Ok(Err(error)) => return reply_err(&mut send, error).await,
         Err(_) => return Err(worker.join().await.unwrap_err_or_worker_exit("Share read")),
     };
-    reply(&mut send, FsResponse::Data { size }).await?;
+    let header = reply(&mut send, FsResponse::Data { size });
+    io_deadline::run_for("Share read data", stall, header).await?;
     while let Some(chunk) = data_rx.recv().await {
-        send_tagged(&mut send, TAG_DATA, &chunk?).await?;
+        let chunk = chunk?;
+        let sent = send_tagged(&mut send, TAG_DATA, &chunk);
+        // Returning drops the channel: the worker stops and frees the slot.
+        io_deadline::run_for("Share read data", stall, sent).await?;
     }
     worker.join().await
 }
@@ -155,38 +165,49 @@ fn open_source(access: &FsAccess, source: &ReadSource) -> io::Result<(u64, Box<d
     Ok((remaining, reader))
 }
 
-/// The `slot` (transfer admission) stays held until the worker ends.
+/// The `slot` (transfer admission) stays held until the worker ends; a
+/// client that sends nothing for `stall` loses it.
 pub(super) async fn write_file<G: Send + 'static>(
     mut send: SendStream,
     mut recv: RecvStream,
     target: WriteTarget,
     access: FsAccess,
     slot: G,
+    stall: Duration,
 ) -> io::Result<()> {
-    let WriteTarget {
-        path,
-        mode,
-        authorization: lease_authorization,
-    } = target;
+    let expected_lease = target
+        .authorization
+        .as_ref()
+        .map(|authorization| authorization.token().to_string());
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
-    let expected_lease = lease_authorization
-        .as_ref()
-        .map(|authorization| authorization.token().to_string());
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let job = WriteJob {
+        target,
+        access,
+        abandoned: abandoned.clone(),
+    };
     let worker = blocking::spawn_holding("Share staged write", slot, move || {
-        write_worker(
-            path,
-            access,
-            mode,
-            lease_authorization,
-            ready_tx,
-            command_rx,
-            done_tx,
-        )
+        write_worker(job, ready_tx, command_rx, done_tx)
     });
 
-    match ready_rx.await {
+    let stopped = send.stopped();
+    let ready = tokio::select! {
+        ready = ready_rx => ready,
+        _ = stopped => {
+            // The client gave up before its target was open: it must not be
+            // created afterwards (a WriteNew target would stay behind).
+            abandoned.store(true, Ordering::Release);
+            drop(command_tx);
+            await_write_cleanup(&mut Some(done_rx), &mut Some(worker)).await;
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "Client hat das Schreiben vor dem Öffnen aufgegeben",
+            ));
+        }
+    };
+    match ready {
         Ok(Ok(())) => reply(&mut send, FsResponse::Ready).await?,
         Ok(Err(error)) => return reply_err(&mut send, error).await,
         Err(_) => {
@@ -200,7 +221,8 @@ pub(super) async fn write_file<G: Send + 'static>(
     let mut done_rx = Some(done_rx);
     let mut worker = Some(worker);
     loop {
-        let (tag, payload) = match recv_tagged(&mut recv).await {
+        let frame = io_deadline::run_for("Share write data", stall, recv_data_frame(&mut recv));
+        let (tag, payload) = match frame.await {
             Ok(frame) => frame,
             Err(error) => {
                 drop(command_tx);
@@ -269,15 +291,36 @@ enum WriteCommand {
     Finish,
 }
 
-fn write_worker(
-    path: String,
+/// What the write worker opens, and whether its client already left.
+struct WriteJob {
+    target: WriteTarget,
     access: FsAccess,
-    mode: WriteMode,
-    lease_authorization: Option<MountLeaseAuthorization>,
+    abandoned: Arc<AtomicBool>,
+}
+
+fn write_worker(
+    job: WriteJob,
     ready: oneshot::Sender<io::Result<()>>,
     mut commands: mpsc::Receiver<WriteCommand>,
     done: oneshot::Sender<io::Result<()>>,
 ) -> io::Result<()> {
+    let WriteJob {
+        target:
+            WriteTarget {
+                path,
+                mode,
+                authorization: lease_authorization,
+            },
+        access,
+        abandoned,
+    } = job;
+    if abandoned.load(Ordering::Acquire) {
+        let _ = ready.send(Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "Client hat das Schreiben vor dem Öffnen aufgegeben",
+        )));
+        return Ok(());
+    }
     // Opening the private stage/new target is the first mutation admission.
     let prepared = run_authorized(lease_authorization.as_ref(), || {
         let target = access.resolve(&path)?;
@@ -404,3 +447,7 @@ impl<T> WorkerExit<T> for io::Result<T> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "server_transfer_tests.rs"]
+mod tests;

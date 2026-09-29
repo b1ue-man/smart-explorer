@@ -2,6 +2,7 @@
 //! Each item is announced with its length (or fails on its own), streamed,
 //! and closed with a result that reports a source changed while it was read.
 use std::io::{self, Read};
+use std::time::Duration;
 
 use iroh::endpoint::SendStream;
 use tokio::sync::mpsc;
@@ -9,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::share::framing::{reply, reply_err, send_tagged, TAG_DATA};
 use crate::share::fs::{ResolvedTarget, CHUNK};
 use crate::share::fs_access::FsAccess;
+use crate::share::io_deadline;
 use crate::share::server_transfer::{stat_item, STREAM_BUFFER_CHUNKS};
 use crate::share::wire::{FsBatchGet, FsResponse};
 use crate::vfs::VfsMeta;
@@ -26,12 +28,14 @@ enum Event {
 }
 
 /// The `slot` (one transfer admission for the whole batch) stays held until
-/// the worker has read every item or the client went away.
+/// the worker has read every item or the client went away; a client that
+/// reads nothing for `stall` loses it.
 pub(super) async fn serve<G: Send + 'static>(
     mut send: SendStream,
     items: Vec<FsBatchGet>,
     authority: BatchAuthority,
     slot: G,
+    stall: Duration,
 ) -> io::Result<()> {
     let (events_tx, mut events) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let worker = crate::share::blocking::spawn_holding("Share batch download", slot, move || {
@@ -42,21 +46,38 @@ pub(super) async fn serve<G: Send + 'static>(
         }
         Ok(())
     });
-    let sent = forward(&mut send, &mut events).await;
+    let sent = forward(&mut send, &mut events, stall).await;
     // A vanished client stops the worker at its next item or chunk.
     drop(events);
     worker.join().await?;
     sent
 }
 
-async fn forward(send: &mut SendStream, events: &mut mpsc::Receiver<Event>) -> io::Result<()> {
-    reply(send, FsResponse::Ready).await?;
+async fn forward(
+    send: &mut SendStream,
+    events: &mut mpsc::Receiver<Event>,
+    stall: Duration,
+) -> io::Result<()> {
+    io_deadline::run_for("Share batch data", stall, reply(send, FsResponse::Ready)).await?;
     while let Some(event) = events.recv().await {
+        // Every frame is bounded: a client that stops reading ends the batch.
         match event {
-            Event::Begin(size) => reply(send, FsResponse::Data { size }).await?,
-            Event::Data(bytes) => send_tagged(send, TAG_DATA, &bytes).await?,
-            Event::Done => reply(send, FsResponse::Ok).await?,
-            Event::Fail(error) => reply_err(send, error).await?,
+            Event::Begin(size) => {
+                let header = reply(send, FsResponse::Data { size });
+                io_deadline::run_for("Share batch data", stall, header).await?;
+            }
+            Event::Data(bytes) => {
+                let chunk = send_tagged(send, TAG_DATA, &bytes);
+                io_deadline::run_for("Share batch data", stall, chunk).await?;
+            }
+            Event::Done => {
+                let end = reply(send, FsResponse::Ok);
+                io_deadline::run_for("Share batch data", stall, end).await?;
+            }
+            Event::Fail(error) => {
+                let failure = reply_err(send, error);
+                io_deadline::run_for("Share batch data", stall, failure).await?;
+            }
         }
     }
     Ok(())

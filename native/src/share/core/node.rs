@@ -52,6 +52,10 @@ pub(crate) struct ShareIrohNode {
     /// Tests pose this host as one before transfer v1.
     #[cfg(test)]
     legacy_transfer_host: AtomicBool,
+    /// Tests shorten the stall bound of transfers (milliseconds, 0 = as
+    /// in production) to observe a stalled client losing its slot.
+    #[cfg(test)]
+    transfer_stall_millis: AtomicU64,
 }
 
 impl ShareIrohNode {
@@ -129,6 +133,8 @@ impl ShareIrohNode {
             routes,
             #[cfg(test)]
             legacy_transfer_host: AtomicBool::new(false),
+            #[cfg(test)]
+            transfer_stall_millis: AtomicU64::new(0),
         });
         node.spawn_accept_loop();
         Ok(node)
@@ -330,6 +336,28 @@ impl ShareIrohNode {
     #[cfg(test)]
     pub(super) fn pose_as_legacy_transfer_host(&self) {
         self.legacy_transfer_host.store(true, Ordering::Release);
+    }
+
+    /// Longest one chunk of a transfer may stall (a client that neither
+    /// reads nor sends): the operation deadline, the same bound the client
+    /// puts on each of its own chunks. Past it the host frees the slot.
+    #[cfg(not(test))]
+    pub(super) fn transfer_stall(&self) -> std::time::Duration {
+        io_deadline::PEER_OP_TIMEOUT
+    }
+
+    #[cfg(test)]
+    pub(super) fn transfer_stall(&self) -> std::time::Duration {
+        match self.transfer_stall_millis.load(Ordering::Acquire) {
+            0 => io_deadline::PEER_OP_TIMEOUT,
+            millis => std::time::Duration::from_millis(millis),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn shorten_transfer_stall_for_test(&self, stall: std::time::Duration) {
+        let millis = u64::try_from(stall.as_millis()).unwrap_or(u64::MAX).max(1);
+        self.transfer_stall_millis.store(millis, Ordering::Release);
     }
 }
 
