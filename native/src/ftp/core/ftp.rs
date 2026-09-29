@@ -40,7 +40,7 @@ fn systime_ms(t: SystemTime) -> i64 {
     }
 }
 
-fn basename(path: &str) -> String {
+pub(super) fn basename(path: &str) -> String {
     path.trim_end_matches('/')
         .rsplit('/')
         .next()
@@ -48,7 +48,7 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
-fn parent_dir(path: &str) -> String {
+pub(super) fn parent_dir(path: &str) -> String {
     let t = path.trim_end_matches('/');
     match t.rfind('/') {
         Some(0) | None => "/".to_string(),
@@ -71,7 +71,7 @@ fn dir_meta(name: String) -> VfsMeta {
     }
 }
 
-fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
+pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
     let file = line.parse::<suppaftp::list::File>().map_err(|error| {
         let preview: String = line.chars().take(160).collect();
         io::Error::new(
@@ -140,6 +140,15 @@ fn transfer_err(error: io::Error) -> io::Error {
 }
 
 impl FtpBackend {
+    /// Publishes a stage on a pooled connection when one is free, else on
+    /// the browsing connection, so it never fails for want of a connection.
+    fn publish(&self, staged: &str, destination: &str, replace: bool) -> VfsResult<()> {
+        match self.pool.lease() {
+            Ok(lease) => super::staging::publish(lease.connection(), staged, destination, replace),
+            Err(_) => super::staging::publish(self.pool.primary(), staged, destination, replace),
+        }
+    }
+
     /// One MKD. An existing real folder is fine unless `exclusive`: the
     /// server's MKD refuses an existing name atomically, the entry is only
     /// looked at afterwards to tell `AlreadyExists` from other refusals.
@@ -263,14 +272,15 @@ impl Backend for FtpBackend {
 
     /// With the length known, STOR streams on a pool connection instead of
     /// spooling the whole file to a local temp file first; a writer that did
-    /// not get exactly `size` bytes fails `flush`.
+    /// not get exactly `size` bytes fails `flush`. The stage's name is checked
+    /// on the same connection (staging.rs).
     fn open_write_copy_stage_sized(
         &self,
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        super::staging::require_absent(self, path)?;
-        let lease = self.pool.lease()?;
+        let lease = self.pool.lease().map_err(transfer_err)?;
+        super::staging::require_stage_free(lease.connection(), path)?;
         let writer = lease
             .connection()
             .open_store(path, size)
@@ -281,14 +291,11 @@ impl Backend for FtpBackend {
     // `rename_no_replace` stays unsupported (trait contract); only publishing a
     // stage uses the absence check (FTP exception on `vfs::promote_staged_create`).
     fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        crate::vfs::promote_staged_no_replace_with(self, staged, destination, |from, to| {
-            super::staging::require_absent(self, to)?;
-            self.rename(from, to)
-        })
+        self.publish(staged, destination, false)
     }
 
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        crate::vfs::promote_staged_with(self, staged, destination, |from, to| self.rename(from, to))
+        self.publish(staged, destination, true)
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
