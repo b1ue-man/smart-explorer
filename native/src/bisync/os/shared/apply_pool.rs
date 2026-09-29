@@ -91,14 +91,15 @@ pub(super) fn run_actions<'p>(
         .report
 }
 
-/// An action may run again after overload unless it keeps both versions: a
-/// keep-both action publishes its conflict copy first, and repeating it after
-/// its copy failed would publish a second conflict copy (the attempt error
-/// does not tell whether that happened). Every other action captures and
-/// revalidates both sides against the plan, so a repeat after an unclear
-/// commit reports the drift instead of acting twice.
-fn repeatable(action: &Action) -> bool {
-    !matches!(action, Action::KeepBothAtoB(_) | Action::KeepBothBtoA(_))
+/// An action may run again after overload unless it keeps both versions and
+/// its failure may have come after a commit: a keep-both action publishes its
+/// conflict copy first, and repeating it after that copy was published would
+/// publish a second one. A failure before any commit published nothing, so
+/// it repeats like every other action; those capture and revalidate both
+/// sides against the plan, so a repeat after an unclear commit reports the
+/// drift instead of acting twice.
+fn repeatable(action: &Action, error: &AttemptError) -> bool {
+    error.before_commit() || !matches!(action, Action::KeepBothAtoB(_) | Action::KeepBothBtoA(_))
 }
 
 impl Pool<'_> {
@@ -259,7 +260,7 @@ impl Pool<'_> {
                 }
                 Err(error) => {
                     permits.finish(classify_error(error.error()));
-                    if repeatable(action) {
+                    if repeatable(action, error) {
                         backoff.pause(error.error())
                     } else {
                         None

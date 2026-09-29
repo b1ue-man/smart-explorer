@@ -1,15 +1,15 @@
 //! One file's bytes on their way from the connection to Explorer: a bounded
-//! buffer filled by a producer thread (under the connection's flow and the
-//! memory budget) and drained by Explorer's stream reads.
-use super::handoff::{Handoff, Held};
+//! buffer filled by a producer thread (`producer.rs`, under the connection's
+//! flow and the memory budget) and drained by Explorer's stream reads.
+use super::handoff::Held;
 use super::signal::{Signal, WAIT_SLICE};
-use crate::transfer::{classify_error, FlowPermit, ListedEntry, OpOutcome};
+use crate::transfer::ListedEntry;
 use std::collections::VecDeque;
-use std::io::{self, Read};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use windows::core::HRESULT;
-use windows::Win32::Foundation::{E_ABORT, STG_E_MEDIUMFULL, STG_E_READFAULT};
+use windows::Win32::Foundation::{E_ABORT, E_UNEXPECTED, STG_E_MEDIUMFULL, STG_E_READFAULT};
 
 /// Read-ahead per streamed file and the largest file prefetched whole: one
 /// bandwidth-delay product at 1 Gbit/s and 130 ms (125 MB/s × 0.13 s). Up to
@@ -27,21 +27,26 @@ const MIN_BUFFER: usize = 4 << 10;
 /// the producer resumes as soon as Explorer made room.
 const SCRATCH: usize = 256 << 10;
 
-/// Buffer sizes for one entry; `reserve` bytes are held from the budget
+/// Buffer sizes for one fetch; `reserve` bytes are held from the budget
 /// while the fetch buffers anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct BufferPlan {
     capacity: usize,
-    scratch: usize,
+    pub(super) scratch: usize,
     initial: usize,
 }
 
 impl BufferPlan {
     pub(super) fn for_entry(entry: &ListedEntry) -> Self {
-        let size = usize::try_from(entry.size).unwrap_or(usize::MAX);
+        Self::from_offset(entry, 0)
+    }
+
+    /// For the bytes from `start` to the end.
+    pub(super) fn from_offset(entry: &ListedEntry, start: u64) -> Self {
+        let rest = usize::try_from(entry.size.saturating_sub(start)).unwrap_or(usize::MAX);
         let (capacity, initial) = if entry.size_known {
-            let capacity = size.clamp(MIN_BUFFER, READ_AHEAD);
-            (capacity, capacity.min(size))
+            let capacity = rest.clamp(MIN_BUFFER, READ_AHEAD);
+            (capacity, capacity.min(rest))
         } else {
             (READ_AHEAD, 0)
         };
@@ -66,19 +71,25 @@ impl BufferPlan {
 pub(super) struct FetchError {
     pub(super) code: HRESULT,
     pub(super) message: String,
-    /// The connection asked to slow down (retrying later can succeed).
-    overload: bool,
 }
 
 impl FetchError {
-    fn from_io(error: &io::Error) -> Self {
+    pub(super) fn from_io(error: &io::Error) -> Self {
         Self {
             code: error
                 .raw_os_error()
                 .map(|code| HRESULT::from_win32(code as u32))
                 .unwrap_or(STG_E_READFAULT),
             message: error.to_string(),
-            overload: classify_error(error) == OpOutcome::Overload,
+        }
+    }
+
+    /// A panic in the producer: no bytes will come, but Explorer gets an
+    /// answer instead of waiting forever.
+    pub(super) fn internal() -> Self {
+        Self {
+            code: E_UNEXPECTED,
+            message: "Interner Fehler beim Lesen".to_string(),
         }
     }
 
@@ -86,7 +97,6 @@ impl FetchError {
         Self {
             code: E_ABORT,
             message: "Übergabe abgebrochen".to_string(),
-            overload: false,
         }
     }
 
@@ -94,7 +104,6 @@ impl FetchError {
         Self {
             code: STG_E_MEDIUMFULL,
             message: "Größe unbekannt und zu groß zum Zwischenspeichern".to_string(),
-            overload: false,
         }
     }
 }
@@ -111,20 +120,36 @@ struct Buffered {
 
 pub(super) struct Fetch {
     pub(super) entry: ListedEntry,
-    plan: BufferPlan,
+    /// File offset of the first byte this fetch delivers.
+    pub(super) start: u64,
+    pub(super) plan: BufferPlan,
     state: Mutex<Buffered>,
     room: Condvar,
     data: Signal,
-    cancel: AtomicBool,
+    pub(super) cancel: AtomicBool,
+}
+
+/// What one take from the buffer yielded.
+pub(super) struct Taken {
+    pub(super) count: usize,
+    /// The file ended; short counts without it mean an error is pending,
+    /// delivered by the next take.
+    pub(super) ended: bool,
 }
 
 impl Fetch {
-    pub(super) fn new(entry: ListedEntry, plan: BufferPlan) -> windows::core::Result<Arc<Self>> {
+    pub(super) fn new(
+        entry: ListedEntry,
+        start: u64,
+        plan: BufferPlan,
+    ) -> windows::core::Result<Arc<Self>> {
         Ok(Arc::new(Self {
             entry,
+            start,
             plan,
             state: Mutex::new(Buffered {
-                ring: VecDeque::with_capacity(plan.initial),
+                // Allocated only once the reservation is held (`keep`, K7).
+                ring: VecDeque::new(),
                 produced: 0,
                 done: false,
                 error: None,
@@ -142,19 +167,30 @@ impl Fetch {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn cancel(&self) {
+    fn stop(&self) {
         self.cancel.store(true, Ordering::Release);
         self.room.notify_all();
         self.data.notify();
     }
 
-    pub(super) fn failed_with_overload(&self) -> bool {
-        matches!(&self.lock().error, Some(error) if error.overload)
+    /// The fetch ended with an error (bytes before it may still wait).
+    pub(super) fn has_error(&self) -> bool {
+        self.lock().error.is_some()
     }
 
-    /// Fills `out` unless the file ends first; waits COM-safely for bytes.
-    /// Returns the byte count and whether the file is fully read.
-    pub(super) fn read(&self, out: &mut [u8]) -> Result<(usize, bool), FetchError> {
+    /// Nothing more will come: an error and every byte before it taken.
+    pub(super) fn failed(&self) -> bool {
+        let state = self.lock();
+        state.error.is_some() && state.ring.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn buffer_capacity(&self) -> usize {
+        self.lock().ring.capacity()
+    }
+
+    /// Fills `out` unless the file ends or fails first; waits COM-safely.
+    pub(super) fn read(&self, out: &mut [u8]) -> Result<Taken, FetchError> {
         let mut filled = 0;
         self.take(out.len(), |chunk| {
             out[filled..filled + chunk.len()].copy_from_slice(chunk);
@@ -162,18 +198,10 @@ impl Fetch {
         })
     }
 
-    /// Discards `count` bytes (a forward seek); fewer at the end of the file.
-    pub(super) fn skip(&self, count: u64) -> Result<u64, FetchError> {
-        let mut skipped = 0;
-        while skipped < count {
-            let step = usize::try_from(count - skipped).unwrap_or(usize::MAX);
-            let (taken, ended) = self.take(step, |_| {})?;
-            skipped += taken as u64;
-            if ended || taken < step {
-                break;
-            }
-        }
-        Ok(skipped)
+    /// Discards up to `count` bytes (a forward seek).
+    pub(super) fn skip(&self, count: u64) -> Result<Taken, FetchError> {
+        let step = usize::try_from(count).unwrap_or(usize::MAX);
+        self.take(step, |_| {})
     }
 
     /// The file's full length, for sizes the listing could not know: waits
@@ -183,7 +211,7 @@ impl Fetch {
             {
                 let state = self.lock();
                 if state.done {
-                    return Ok(state.produced);
+                    return Ok(self.start + state.produced);
                 }
                 if let Some(error) = &state.error {
                     return Err(error.clone());
@@ -199,7 +227,9 @@ impl Fetch {
         }
     }
 
-    fn take(&self, count: usize, mut sink: impl FnMut(&[u8])) -> Result<(usize, bool), FetchError> {
+    /// Takes up to `count` bytes. Bytes taken before an error are returned
+    /// first; the error comes with the next take.
+    fn take(&self, count: usize, mut sink: impl FnMut(&[u8])) -> Result<Taken, FetchError> {
         let mut taken = 0;
         loop {
             let (ended, error) = {
@@ -219,14 +249,20 @@ impl Fetch {
             if taken > 0 {
                 self.room.notify_all();
             }
-            if taken == count {
-                return Ok((taken, ended));
+            if taken == count || ended {
+                return Ok(Taken {
+                    count: taken,
+                    ended,
+                });
             }
             if let Some(error) = error {
-                return Err(error);
-            }
-            if ended {
-                return Ok((taken, true));
+                return match taken {
+                    0 => Err(error),
+                    _ => Ok(Taken {
+                        count: taken,
+                        ended: false,
+                    }),
+                };
             }
             if self.cancel.load(Ordering::Acquire) {
                 return Err(FetchError::canceled());
@@ -236,7 +272,7 @@ impl Fetch {
     }
 
     /// Moves as much of `bytes` into the buffer as fits; returns the count.
-    fn push(&self, bytes: &[u8]) -> usize {
+    pub(super) fn push(&self, bytes: &[u8]) -> usize {
         let pushed = {
             let mut state = self.lock();
             let room = self.plan.capacity.saturating_sub(state.ring.len());
@@ -253,7 +289,7 @@ impl Fetch {
 
     /// Waits until Explorer drained half the buffer (fewer, larger resumes
     /// than refilling byte by byte); false once canceled.
-    fn wait_for_room(&self) -> bool {
+    pub(super) fn wait_for_room(&self) -> bool {
         let mut state = self.lock();
         loop {
             if self.cancel.load(Ordering::Acquire) {
@@ -269,13 +305,21 @@ impl Fetch {
         }
     }
 
-    fn keep(&self, held: Held) {
-        self.lock()._held = Some(held);
+    /// Keeps the reservation with the buffer and only now allocates it.
+    pub(super) fn keep(&self, held: Held) {
+        let mut state = self.lock();
+        state._held = Some(held);
+        let initial = self.plan.initial;
+        state.ring.reserve_exact(initial);
     }
 
-    fn end(&self, error: Option<FetchError>) {
+    /// Ends the fetch once: done, or failed with `error`.
+    pub(super) fn end(&self, error: Option<FetchError>) {
         {
             let mut state = self.lock();
+            if state.done || state.error.is_some() {
+                return;
+            }
             match error {
                 Some(error) => state.error = Some(error),
                 None => state.done = true,
@@ -313,136 +357,6 @@ impl std::ops::Deref for FetchHandle {
 
 impl Drop for FetchHandle {
     fn drop(&mut self) {
-        self.0.cancel();
-    }
-}
-
-/// Memory and a connection permit obtained before the producer starts.
-pub(super) struct Grant {
-    pub(super) held: Held,
-    pub(super) permit: FlowPermit,
-}
-
-/// Starts the producer of `fetch`; without a grant it first waits for memory
-/// and a permit itself (in that order, K2).
-pub(super) fn spawn_producer(
-    handoff: Arc<Handoff>,
-    fetch: Arc<Fetch>,
-    job: u64,
-    grant: Option<Grant>,
-) {
-    let worker = fetch.clone();
-    let spawned = std::thread::Builder::new()
-        .name("remote-fetch".into())
-        .spawn(move || produce(&handoff, &worker, job, grant));
-    if let Err(error) = spawned {
-        fetch.end(Some(FetchError::from_io(&error)));
-    }
-}
-
-enum Ending {
-    Done,
-    Canceled,
-    Failed(io::Error),
-}
-
-fn produce(handoff: &Handoff, fetch: &Fetch, job: u64, grant: Option<Grant>) {
-    let (held, permit) = match grant {
-        Some(Grant { held, permit }) => (held, permit),
-        None => {
-            let Some(held) = handoff.memory.reserve(fetch.plan.reserve(), &fetch.cancel) else {
-                return;
-            };
-            let Some(permit) = handoff.flow.acquire_for(job, &fetch.cancel) else {
-                return;
-            };
-            (held, permit)
-        }
-    };
-    fetch.keep(held);
-    let mut permit = Some(permit);
-    if fetch.cancel.load(Ordering::Acquire) {
-        // Explorer went past this prefetch before it started.
-        return finish(fetch, permit, Ending::Canceled);
-    }
-    let mut reader = match handoff.source.open_entry(&fetch.entry) {
-        Ok(reader) => reader,
-        Err(error) => return finish(fetch, permit, Ending::Failed(error)),
-    };
-    let ending = pump(handoff, fetch, job, &mut *reader, &mut permit);
-    // Close the connection's stream before its permit goes back.
-    drop(reader);
-    finish(fetch, permit, ending);
-}
-
-fn pump(
-    handoff: &Handoff,
-    fetch: &Fetch,
-    job: u64,
-    reader: &mut dyn Read,
-    permit: &mut Option<FlowPermit>,
-) -> Ending {
-    let mut scratch = vec![0u8; fetch.plan.scratch];
-    let (mut start, mut end) = (0, 0);
-    loop {
-        if fetch.cancel.load(Ordering::Acquire) {
-            return Ending::Canceled;
-        }
-        if start < end {
-            start += fetch.push(&scratch[start..end]);
-            if start < end {
-                // K2: wait for Explorer without holding a connection permit.
-                if let Some(permit) = permit.take() {
-                    permit.finish(OpOutcome::Done);
-                }
-                if !fetch.wait_for_room() {
-                    return Ending::Canceled;
-                }
-            }
-            continue;
-        }
-        if permit.is_none() {
-            *permit = handoff.flow.acquire_for(job, &fetch.cancel);
-            if permit.is_none() {
-                return Ending::Canceled;
-            }
-        }
-        // The scratch buffer is read even when the ring is full, so a file
-        // that exactly fills it still sees its end and closes at once.
-        match reader.read(&mut scratch) {
-            Ok(0) => return Ending::Done,
-            Ok(read) => {
-                // Never trust a reader to stay inside the buffer it was given.
-                let read = read.min(scratch.len());
-                if let Some(permit) = permit.as_ref() {
-                    permit.progress(read as u64);
-                }
-                (start, end) = (0, read);
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Ending::Failed(error),
-        }
-    }
-}
-
-fn finish(fetch: &Fetch, permit: Option<FlowPermit>, ending: Ending) {
-    match ending {
-        Ending::Done => {
-            fetch.end(None);
-            if let Some(permit) = permit {
-                permit.finish(OpOutcome::Done);
-            }
-        }
-        Ending::Canceled => {
-            if let Some(permit) = permit {
-                permit.abandon();
-            }
-        }
-        Ending::Failed(error) => {
-            if let Some(permit) = permit {
-                permit.finish(classify_error(&error));
-            }
-            fetch.end(Some(FetchError::from_io(&error)));
-        }
+        self.0.stop();
     }
 }

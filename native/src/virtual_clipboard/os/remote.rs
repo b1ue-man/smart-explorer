@@ -11,8 +11,12 @@ mod data_object;
 mod fetch;
 #[path = "remote/handoff.rs"]
 mod handoff;
+#[path = "remote/names.rs"]
+mod names;
 #[path = "remote/prefetch.rs"]
 mod prefetch;
+#[path = "remote/producer.rs"]
+mod producer;
 #[path = "remote/session.rs"]
 mod session;
 #[path = "remote/signal.rs"]
@@ -23,14 +27,20 @@ mod stream;
 mod worker;
 
 #[cfg(test)]
+#[path = "remote/test_fakes.rs"]
+mod test_fakes;
+#[cfg(test)]
 #[path = "remote/test_support.rs"]
 mod test_support;
 #[cfg(test)]
 #[path = "remote/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "remote/tests_resilience.rs"]
+mod tests_resilience;
 
 use crate::transfer::{flow_for, Flow, ListedEntry, SelectionListing, SelectionSource};
-use handoff::{Config, Handoff, RemoteContent};
+use handoff::{skip_to, Config, Handoff, RemoteContent};
 use std::io::{self, Read};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -55,6 +65,20 @@ impl RemoteContent for SelectionSource {
 
     fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>> {
         self.open(entry)
+    }
+
+    fn open_entry_at(&self, entry: &ListedEntry, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+        if offset == 0 {
+            return self.open(entry);
+        }
+        // Resume where the backend can start mid-file, otherwise read past.
+        let resumed = self
+            .backend
+            .open_read_at(&entry.path, entry.id.as_deref(), offset)?;
+        match resumed {
+            Some(reader) => Ok(reader),
+            None => skip_to(self.open(entry)?, offset),
+        }
     }
 
     fn connection_flow(&self) -> Arc<Flow> {

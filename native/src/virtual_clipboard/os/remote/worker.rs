@@ -4,6 +4,7 @@
 //! `OleFlushClipboard`, which would render every file's contents at once.
 use super::data_object::RemoteDataObject;
 use super::handoff::Handoff;
+use super::session::IDLE_END;
 use super::signal::{Signal, WAIT_SLICE};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -23,8 +24,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, MSG, PM_NOREMOVE, WM_APP, WM_USER,
 };
 
-/// Back-stop tick of the worker's loop: a modal loop may swallow the
-/// wake-up message, so the thread notices its end within a second anyway.
+/// Tick of the worker's loop: a modal loop may swallow the wake-up message,
+/// so the thread notices its end within a second anyway; the same tick ends
+/// the transfer-list entry of a paste that went quiet (`IDLE_END`).
 const TICK_MS: u32 = 1_000;
 
 pub(super) const RELEASE_PENDING: u8 = 0;
@@ -177,7 +179,7 @@ fn run(
         handoff: handoff.clone(),
         control: control.clone(),
     });
-    let object: IDataObject = RemoteDataObject::new(handoff, life).into();
+    let object: IDataObject = RemoteDataObject::new(handoff.clone(), life).into();
     // This thread keeps no reference of its own on the clipboard (OLE holds
     // one while the object is current); a drag keeps one until the GUI
     // thread has its proxy. Every path moves `object`, so nothing here
@@ -205,7 +207,7 @@ fn run(
             }
         },
     };
-    pump(control, held);
+    pump(control, &handoff, held);
     unsafe { OleUninitialize() };
     control.exited.store(true, Ordering::Release);
 }
@@ -229,7 +231,7 @@ fn marshal(object: &IDataObject) -> Result<IStream> {
     }
 }
 
-fn pump(control: &Control, mut held: Option<IDataObject>) {
+fn pump(control: &Control, handoff: &Handoff, mut held: Option<IDataObject>) {
     let timer = unsafe { SetTimer(HWND::default(), 0, TICK_MS, None) };
     let mut message = MSG::default();
     loop {
@@ -244,6 +246,7 @@ fn pump(control: &Control, mut held: Option<IDataObject>) {
         if held.is_none() && control.ended.load(Ordering::Acquire) {
             break;
         }
+        handoff.sessions.expire(IDLE_END);
         let result = unsafe { GetMessageW(&mut message, HWND::default(), 0, 0) };
         if result.0 == 0 || result.0 == -1 {
             break;

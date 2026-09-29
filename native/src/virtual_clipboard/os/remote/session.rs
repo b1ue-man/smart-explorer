@@ -6,7 +6,7 @@ use crate::transfer::{register_external, ExternalTransfer};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// "sucht… N gefunden" is refreshed at most every 250 ms: four updates a
 /// second read as continuous progress, and hundreds of thousands of listed
@@ -16,6 +16,12 @@ const SEARCHING_NOTE: &str = "sucht…";
 const COPYING_NOTE: &str = "Explorer kopiert";
 const DONE_NOTE: &str = "vom Explorer übernommen";
 const ENDED_NOTE: &str = "Explorer-Übergabe beendet";
+/// Explorer holds a stream open while it copies a file and asks for the
+/// next one within milliseconds; a minute with no open stream and no request
+/// means the paste was cancelled, skipped the rest or waits for a decision in
+/// a dialog. The entry then ends as „beendet“ (a later continuation is a new
+/// entry), also when Windows could not take the file list at all.
+pub(super) const IDLE_END: Duration = Duration::from_secs(60);
 
 /// What the listing found; applies to every paste of the object.
 struct Summary {
@@ -37,6 +43,7 @@ struct Session {
     read: bool,
     errors: u64,
     too_large: bool,
+    last_activity: Instant,
 }
 
 impl Session {
@@ -50,12 +57,24 @@ impl Session {
             read: false,
             errors: 0,
             too_large: false,
+            last_activity: Instant::now(),
         };
         match summary {
             Some(summary) => session.apply(summary),
             None => session.progress.set_note(SEARCHING_NOTE),
         }
         session
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    /// Files that arrived or failed (a failed file that later arrived counts
+    /// once).
+    fn accounted(&self) -> u64 {
+        let failed_only = self.failed.difference(&self.delivered).count();
+        (self.delivered.len() + failed_only) as u64
     }
 
     fn apply(&mut self, summary: &Summary) {
@@ -83,8 +102,23 @@ struct Slot {
 impl Slot {
     fn session(&mut self, label: &str) -> &mut Session {
         let summary = self.summary.as_ref();
-        self.active
-            .get_or_insert_with(|| Session::start(label, summary))
+        let session = self
+            .active
+            .get_or_insert_with(|| Session::start(label, summary));
+        session.touch();
+        session
+    }
+
+    /// Ends the entry once no stream is open and every listed file arrived
+    /// or failed.
+    fn settle(&mut self) {
+        let Some(files) = self.summary.as_ref().map(|summary| summary.files) else {
+            return;
+        };
+        if matches!(&self.active, Some(session) if session.streams == 0 && session.accounted() >= files)
+        {
+            self.retire();
+        }
     }
 
     /// Ends the current entry; one where nothing was read and nothing went
@@ -187,34 +221,31 @@ impl Sessions {
     }
 
     pub(super) fn stream_closed(&self) {
-        if let Some(session) = self.lock().active.as_mut() {
+        let mut slot = self.lock();
+        if let Some(session) = slot.active.as_mut() {
             session.streams = session.streams.saturating_sub(1);
+            session.touch();
         }
+        slot.settle();
     }
 
     pub(super) fn bytes(&self, count: u64) {
-        if let Some(session) = self.lock().active.as_ref() {
+        if let Some(session) = self.lock().active.as_mut() {
             session.progress.add_bytes(count);
+            session.touch();
         }
     }
 
-    /// Explorer read file `index` to its end; the paste is complete once
-    /// every listed file arrived.
+    /// Explorer read file `index` to its end.
     pub(super) fn delivered(&self, index: usize) {
         let mut slot = self.lock();
-        let files = slot
-            .summary
-            .as_ref()
-            .map_or(u64::MAX, |summary| summary.files);
         let Some(session) = slot.active.as_mut() else {
             return;
         };
-        if !session.delivered.insert(index) {
-            return;
-        }
-        session.progress.file_done();
-        if session.delivered.len() as u64 >= files {
-            slot.retire();
+        session.touch();
+        if session.delivered.insert(index) {
+            session.progress.file_done();
+            slot.settle();
         }
     }
 
@@ -226,6 +257,7 @@ impl Sessions {
         if session.failed.insert(index) {
             session.errors += 1;
             session.progress.issue(rel, message);
+            slot.settle();
         }
     }
 
@@ -244,5 +276,14 @@ impl Sessions {
     /// Explorer finished its background copy, or the hand-off is over.
     pub(super) fn end(&self) {
         self.lock().retire();
+    }
+
+    /// Ends the entry after `idle` without an open stream or a request.
+    pub(super) fn expire(&self, idle: Duration) {
+        let mut slot = self.lock();
+        if matches!(&slot.active, Some(session) if session.streams == 0 && session.last_activity.elapsed() >= idle)
+        {
+            slot.retire();
+        }
     }
 }

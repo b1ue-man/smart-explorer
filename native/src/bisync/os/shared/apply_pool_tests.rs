@@ -283,3 +283,25 @@ fn transfer_engine_task_bisync_panicking_action_ends_the_run() {
         .contains(&Action::CopyAtoB("boom.txt".to_string())));
     assert!(!b.path().join("boom.txt").exists());
 }
+
+#[test]
+fn transfer_engine_task_bisync_keep_both_repeats_overload_only_before_commit() {
+    let overload = || crate::vfs::congestion_error("busy", None);
+    let keep = super::Action::KeepBothAtoB("a.txt".to_string());
+    let copy = super::Action::CopyAtoB("b.txt".to_string());
+    // Nothing published yet: repeating cannot create a second conflict copy.
+    assert!(super::repeatable(
+        &keep,
+        &super::AttemptError::pre_commit(overload())
+    ));
+    // The conflict copy may exist: never repeated.
+    assert!(!super::repeatable(
+        &keep,
+        &super::AttemptError::commit_attempted(overload())
+    ));
+    // Other actions revalidate both sides and may always repeat.
+    assert!(super::repeatable(
+        &copy,
+        &super::AttemptError::commit_attempted(overload())
+    ));
+}
