@@ -57,6 +57,9 @@ mod stage_ops;
 #[path = "os/shared/transfer.rs"]
 mod transfer;
 #[cfg(test)]
+#[path = "core/transfer_engine_task_bounds_tests.rs"]
+mod transfer_engine_task_bounds_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 #[path = "core/types.rs"]
@@ -65,8 +68,9 @@ mod types;
 mod write_new;
 
 pub use batch_limits::{
-    check_get_batch, check_put_batch, get_item_len, numbered_name, put_entry_len, split_batch,
-    BATCH_HEADER_MAX, BATCH_MAX_BYTES, BATCH_MAX_FILES, BATCH_UNKNOWN_MARKER,
+    check_get_batch, check_put_batch, clip_text, get_item_len, numbered_name, put_entry_len,
+    split_batch, BATCH_HEADER_MAX, BATCH_MAX_BYTES, BATCH_MAX_FILES, BATCH_UNKNOWN_MARKER,
+    ITEM_PATH_MAX, ITEM_TEXT_MAX,
 };
 pub use codec::{read_frame, write_frame};
 pub use credit::{

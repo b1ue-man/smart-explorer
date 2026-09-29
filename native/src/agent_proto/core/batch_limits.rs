@@ -20,6 +20,30 @@ pub const BATCH_HEADER_MAX: usize = CHUNK;
 pub const BATCH_UNKNOWN_MARKER: &str = "SE_BATCH_UNKNOWN_V1";
 /// Request id, tag and element count of a batch header.
 const HEADER_BASE: usize = 13;
+/// Longest error text in a batch item frame (`ItemEnd`, `ItemFailed`): a
+/// reason with one path fits. Item frames carry no credit, so their size
+/// bound keeps every receiver queue bounded in bytes; senders clip longer
+/// texts with `clip_text`.
+pub const ITEM_TEXT_MAX: usize = 4 * 1024;
+/// Longest path in `ItemPublished`: the longest NT path (32 767 UTF-16
+/// units) takes at most 98 301 UTF-8 bytes, so every real path fits.
+pub const ITEM_PATH_MAX: usize = 128 * 1024;
+/// Room a numbered name adds to a requested path (" (1000)" takes 7 bytes).
+const NUMBERED_SUFFIX_MAX: usize = 16;
+
+/// `text` shortened to `ITEM_TEXT_MAX` bytes on a character boundary.
+pub fn clip_text(mut text: String) -> String {
+    const ELLIPSIS: char = '…';
+    if text.len() > ITEM_TEXT_MAX {
+        let mut end = ITEM_TEXT_MAX - ELLIPSIS.len_utf8();
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push(ELLIPSIS);
+    }
+    text
+}
 
 /// Encoded header bytes of one upload entry (path, size, nonce).
 pub fn put_entry_len(entry: &BatchEntry) -> usize {
@@ -77,7 +101,9 @@ fn check(count: usize, header: usize, bytes: Option<u64>) -> io::Result<()> {
     Ok(())
 }
 
-/// Server side: refuse a batch upload beyond the bounds.
+/// Server side: refuse a batch upload beyond the bounds. Every published
+/// path (a requested one, maybe numbered) must fit its outcome frame, so a
+/// longer path is refused before anything is written.
 pub fn check_put_batch(entries: &[BatchEntry]) -> io::Result<()> {
     let header = entries.iter().fold(HEADER_BASE, |total, entry| {
         total.saturating_add(put_entry_len(entry))
@@ -85,7 +111,17 @@ pub fn check_put_batch(entries: &[BatchEntry]) -> io::Result<()> {
     let bytes = entries
         .iter()
         .try_fold(0u64, |total, entry| total.checked_add(entry.size));
-    check(entries.len(), header, bytes)
+    check(entries.len(), header, bytes)?;
+    if entries
+        .iter()
+        .any(|entry| entry.path.len() > ITEM_PATH_MAX - NUMBERED_SUFFIX_MAX)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Paket-Zielpfad ist zu lang",
+        ));
+    }
+    Ok(())
 }
 
 /// Server side: refuse a batch download beyond the bounds.

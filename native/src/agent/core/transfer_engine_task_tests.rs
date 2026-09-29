@@ -212,21 +212,28 @@ fn transfer_engine_task_agent_batches_number_taken_names_and_refuse_links() {
     assert!(!stage_left(&dst));
 
     symlink(dst.join("a.txt"), dst.join("link")).unwrap();
-    let items: Vec<BatchGet> = ["a.txt", "link", "missing", "taken (2).txt"]
-        .iter()
-        .map(|name| BatchGet {
-            path: fwd(&dst.join(name)),
-            id: None,
-            size: 5,
-        })
-        .collect();
+    // The last item is listed shorter than it is now: it fails unsent.
+    let items: Vec<BatchGet> = [
+        ("a.txt", 5),
+        ("link", 5),
+        ("missing", 5),
+        ("taken (2).txt", 3),
+        ("a.txt", 2),
+    ]
+    .iter()
+    .map(|(name, size)| BatchGet {
+        path: fwd(&dst.join(name)),
+        id: None,
+        size: *size,
+    })
+    .collect();
     let mut sink = RecordingSink::default();
     served.backend.get_batch(&items, &mut sink).unwrap();
     assert_eq!(sink.begun, vec![(0, 5), (3, 3)]);
     assert_eq!(sink.data[&0], b"alpha");
     assert_eq!(sink.data[&3], b"new");
     assert_eq!(sink.ended, vec![(0, None), (3, None)]);
-    assert_eq!(sink.failed, vec![1, 2]);
+    assert_eq!(sink.failed, vec![1, 2, 4]);
     served.finish();
     let _ = std::fs::remove_dir_all(root);
 }
@@ -330,7 +337,7 @@ fn transfer_engine_task_agent_stage_operations_stay_exclusive() {
     symlink(root.join("sub"), root.join("dirlink")).unwrap();
     assert!(backend.create_dir(&fwd(&root.join("dirlink"))).is_err());
 
-    let stage = fwd(&root.join("copy.txt.se-copy-1"));
+    let stage = fwd(&root.join("copy.txt.se-upload-0000000000000001"));
     let source = fwd(&root.join("a.txt"));
     assert_eq!(
         backend
@@ -347,27 +354,29 @@ fn transfer_engine_task_agent_stage_operations_stay_exclusive() {
         .promote_copy_stage(&stage, &fwd(&root.join("copy.txt")))
         .unwrap();
     assert_eq!(std::fs::read(root.join("copy.txt")).unwrap(), b"alpha");
-    let wrong = fwd(&root.join("wrong.se-copy-2"));
+    let wrong = root.join("wrong.se-upload-0000000000000002");
     assert!(backend
         .server_copy_to_stage(
             &source,
-            &wrong,
+            &fwd(&wrong),
             4,
             &std::sync::atomic::AtomicBool::new(false)
         )
         .is_err());
+    assert!(!wrong.exists(), "a wrong length creates no stage");
 
-    // Only stage names may be discarded; a published file stays.
-    assert!(backend
-        .discard_copy_stage(&fwd(&root.join("copy.txt")))
-        .is_err());
-    assert!(root.join("copy.txt").exists());
-    let written = fwd(&root.join("fresh.bin.se-copy-3"));
+    // Only generated stage names may be discarded; other files stay.
+    for kept in ["copy.txt", "fresh.bin.se-copy-3"] {
+        std::fs::write(root.join(kept), b"keep").unwrap();
+        assert!(backend.discard_copy_stage(&fwd(&root.join(kept))).is_err());
+        assert!(root.join(kept).exists());
+    }
+    let written = fwd(&root.join("fresh.bin.se-upload-0000000000000003"));
     let mut writer = backend.open_write_copy_stage(&written).unwrap();
     writer.write_all(b"partial").unwrap();
     writer.flush().unwrap();
     backend.discard_copy_stage(&written).unwrap();
-    assert!(!root.join("fresh.bin.se-copy-3").exists());
+    assert!(!root.join("fresh.bin.se-upload-0000000000000003").exists());
 
     let mut tail = String::new();
     backend
@@ -379,6 +388,41 @@ fn transfer_engine_task_agent_stage_operations_stay_exclusive() {
     assert_eq!(tail, "pha");
     assert!(backend.flow_key(&source).starts_with("agent:"));
     assert_eq!(backend.transfer_ceiling(&source), Some(62));
+    served.finish();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn transfer_engine_task_agent_server_copy_cancel_leaves_no_stage() {
+    let root = temp_root("agent_copy_cancel");
+    let big = vec![3u8; 32 * 1024 * 1024];
+    std::fs::write(root.join("big.bin"), &big).unwrap();
+    let served = serve_agent();
+    let stage = root.join("big.copy.se-upload-00000000000000aa");
+    let canceled = std::sync::atomic::AtomicBool::new(true);
+    let result = served.backend.server_copy_to_stage(
+        &fwd(&root.join("big.bin")),
+        &fwd(&stage),
+        big.len() as u64,
+        &canceled,
+    );
+    match result {
+        // The copy may finish before the agent reads the cancellation.
+        Ok(copied) => {
+            assert_eq!(copied, Some(big.len() as u64));
+            assert_eq!(std::fs::metadata(&stage).unwrap().len(), big.len() as u64);
+        }
+        Err(error) => {
+            assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+            assert!(!stage.exists(), "the agent removes its canceled stage");
+        }
+    }
+    let expected = if stage.exists() { 2 } else { 1 };
+    assert_eq!(
+        served.backend.list_dir(&fwd(&root)).unwrap().len(),
+        expected
+    );
     served.finish();
     let _ = std::fs::remove_dir_all(root);
 }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-use super::batch_limits::{check_put_batch, numbered_name};
+use super::batch_limits::{check_put_batch, clip_text, numbered_name};
 use super::promotion::{ensure_destination_parent_plain, promote_staged_no_replace};
 use super::session::{emit, Inbound, Sink};
 use super::{BatchEntry, Frame};
@@ -214,7 +214,7 @@ pub(crate) fn handle_put_batch(
             Ok(path) => Frame::ItemPublished { index, path },
             Err(error) => Frame::ItemFailed {
                 index,
-                message: error.to_string(),
+                message: clip_text(error.to_string()),
             },
         };
         emit(sink, id, &reply)?;

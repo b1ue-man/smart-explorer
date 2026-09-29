@@ -21,8 +21,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 enum UploadSender {
     /// Former behaviour: a bounded queue that holds the reader back.
     Bounded(SyncSender<Frame>),
-    /// Credit mode: bounded in bytes by the granted credit, never blocking.
-    Credited(Sender<Frame>, Arc<RecvWindow>),
+    /// Credit mode, never blocking: stream frames are bounded by the granted
+    /// credit, free frames (size-bounded by the codec) by their count.
+    Credited {
+        sender: Sender<Frame>,
+        window: Arc<RecvWindow>,
+        free_left: usize,
+    },
 }
 
 /// What a request worker needs: its own sink, its upload frames and its
@@ -54,6 +59,15 @@ pub(crate) fn is_upload(request: &Frame) -> bool {
         request,
         Frame::Write(_) | Frame::WriteNew(_) | Frame::PutTree(_) | Frame::BatchPut { .. }
     )
+}
+
+/// Frames without credit an upload may carry: one trailer per batch entry
+/// and the final `End`; every other upload only its `End`.
+fn free_frames(request: &Frame) -> usize {
+    match request {
+        Frame::BatchPut { entries } => entries.len().saturating_add(1),
+        _ => 1,
+    }
 }
 
 impl ServerSession {
@@ -112,15 +126,26 @@ impl ServerSession {
     fn route_upload(&self, id: u64, frame: Frame) {
         let is_end = matches!(frame, Frame::End);
         let mut uploads = lock(&self.uploads);
-        let violated = match uploads.get(&id) {
+        let violated = match uploads.get_mut(&id) {
             None => return,
-            Some(UploadSender::Credited(sender, window)) => {
-                if window.receive(credit_cost(&frame)) {
-                    let _ = sender.send(frame);
-                    false
+            Some(UploadSender::Credited {
+                sender,
+                window,
+                free_left,
+            }) => {
+                let cost = credit_cost(&frame);
+                let allowed = if cost == 0 {
+                    // Free frames cannot exhaust credit; their count can.
+                    let allowed = *free_left > 0;
+                    *free_left = free_left.saturating_sub(1);
+                    allowed
                 } else {
-                    true
+                    window.receive(cost)
+                };
+                if allowed {
+                    let _ = sender.send(frame);
                 }
+                !allowed
             }
             Some(UploadSender::Bounded(sender)) => {
                 let sender = sender.clone();
@@ -139,7 +164,8 @@ impl ServerSession {
         }
         drop(uploads);
         if violated {
-            // The client exceeded its credit: end only this request.
+            // The client exceeded its credit or its free frames: end only
+            // this request.
             self.cancel(id);
         }
     }
@@ -161,7 +187,7 @@ impl ServerSession {
         } else {
             self.sink.clone()
         };
-        let inbound = is_upload(request).then(|| self.open_upload(id, credit_mode));
+        let inbound = is_upload(request).then(|| self.open_upload(id, credit_mode, request));
         RequestContext {
             sink,
             inbound,
@@ -169,11 +195,18 @@ impl ServerSession {
         }
     }
 
-    fn open_upload(&self, id: u64, credit_mode: bool) -> Box<dyn Inbound + Send> {
+    fn open_upload(&self, id: u64, credit_mode: bool, request: &Frame) -> Box<dyn Inbound + Send> {
         if credit_mode {
             let (sender, frames) = channel();
             let window = Arc::new(RecvWindow::new(self.streams.clone()));
-            lock(&self.uploads).insert(id, UploadSender::Credited(sender, window.clone()));
+            lock(&self.uploads).insert(
+                id,
+                UploadSender::Credited {
+                    sender,
+                    window: window.clone(),
+                    free_left: free_frames(request),
+                },
+            );
             Box::new(CreditedInbound {
                 frames,
                 window,

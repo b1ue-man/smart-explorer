@@ -4,6 +4,10 @@
 //! of implicit credit in each direction. The receiver of a stream returns
 //! credit with `Frame::Credit` as its consumer takes frames, so no sender
 //! ever has more stream bytes queued at the receiver than it was granted.
+//! Frames without credit are small by protocol (texts of batch item frames
+//! are limited, see `batch_limits`) and few: an upload may carry one trailer
+//! per batch entry and its `End`; a server sends one reply per request, one
+//! or two item frames per batch item and progress at most every 200 ms.
 //! Receivers therefore queue without bound in frames but bounded in bytes,
 //! and a reader thread never blocks on one slow consumer (head-of-line).
 use std::io;

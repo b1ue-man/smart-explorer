@@ -298,7 +298,7 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
         Frame::CopyToStage { src, stage, size } => reply(
             sink,
             id,
-            copy_to_stage(&src, &stage, size).map(|copied| Frame::Copied(Some(copied))),
+            copy_to_stage(&src, &stage, size, cancel).map(|copied| Frame::Copied(Some(copied))),
         ),
         Frame::CreateDir { path, exclusive } => reply(
             sink,
