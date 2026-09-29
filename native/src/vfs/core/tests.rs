@@ -113,6 +113,10 @@ fn copy_file_default_impl_streams() {
         fn open_write(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> {
             self.0.open_write(p)
         }
+        // The default copy stages through an exclusively created file.
+        fn open_write_new(&self, p: &str) -> VfsResult<Box<dyn Write + Send>> {
+            self.0.open_write_new(p)
+        }
         fn rename(&self, s: &str, d: &str) -> VfsResult<()> {
             self.0.rename(s, d)
         }
