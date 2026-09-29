@@ -2,6 +2,11 @@
 //! bounded by the memory its entries hold, not by a count: discovery runs far
 //! ahead (the totals shown are known early) while a million-file tree never
 //! sits in memory at once. It grows on demand; nothing is allocated upfront.
+//!
+//! Files go before folders: a folder with files is created by its first file
+//! (the folder register), so a listing's folders never hold back the first
+//! files (twenty folders at 50 ms cost a second before any file otherwise),
+//! and folder work only matters for empty folders and a move's cleanup.
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -86,11 +91,23 @@ impl Work {
 
 #[derive(Default)]
 struct State {
+    /// Files, in discovery order.
     items: VecDeque<Work>,
+    /// Folders, taken when no file is queued.
+    dirs: VecDeque<Work>,
     bytes: usize,
     producing: bool,
     workers: usize,
     idle: usize,
+}
+
+impl State {
+    fn lane(&mut self, work: &Work) -> &mut VecDeque<Work> {
+        match work {
+            Work::Dir { .. } => &mut self.dirs,
+            Work::File(_) => &mut self.items,
+        }
+    }
 }
 
 /// Counts for the dispatcher's spawning decision.
@@ -142,7 +159,7 @@ impl WorkQueue {
             state = self.wait(state, WAIT_SLICE);
         }
         state.bytes = state.bytes.saturating_add(bytes);
-        state.items.push_back(work);
+        state.lane(&work).push_back(work);
         drop(state);
         self.changed.notify_all();
         true
@@ -153,7 +170,7 @@ impl WorkQueue {
     pub(crate) fn push_front(&self, work: Work) {
         let mut state = self.lock();
         state.bytes = state.bytes.saturating_add(work.bytes());
-        state.items.push_front(work);
+        state.lane(&work).push_front(work);
         drop(state);
         self.changed.notify_all();
     }
@@ -174,7 +191,7 @@ impl WorkQueue {
             if stop.load(Ordering::Acquire) {
                 break None;
             }
-            if let Some(work) = state.items.pop_front() {
+            if let Some(work) = state.items.pop_front().or_else(|| state.dirs.pop_front()) {
                 state.bytes = state.bytes.saturating_sub(work.bytes());
                 break Some(work);
             }
@@ -233,7 +250,7 @@ impl WorkQueue {
     pub(crate) fn view(&self) -> QueueView {
         let state = self.lock();
         QueueView {
-            queued: state.items.len(),
+            queued: state.items.len() + state.dirs.len(),
             workers: state.workers,
             idle: state.idle,
             producing: state.producing,
@@ -260,6 +277,7 @@ impl WorkQueue {
             .filter(|work| matches!(work, Work::File(_)))
             .count() as u64;
         state.items.clear();
+        state.dirs.clear();
         state.bytes = 0;
         drop(state);
         self.changed.notify_all();
