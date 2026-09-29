@@ -428,6 +428,9 @@ fn gate_root(items: &JobItems) -> String {
 #[path = "test_backend.rs"]
 mod test_backend;
 #[cfg(test)]
+#[path = "test_run.rs"]
+mod test_run;
+#[cfg(test)]
 #[path = "tests_batch.rs"]
 mod tests_batch;
 #[cfg(test)]

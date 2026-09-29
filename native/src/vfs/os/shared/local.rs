@@ -179,6 +179,17 @@ impl Backend for LocalBackend {
     fn create_dir_new(&self, path: &str) -> VfsResult<()> {
         std::fs::create_dir(local_platform::to_os(path))
     }
+    /// The kernel copies into the new stage: on an SMB share (UNC
+    /// connections) the server copies itself (`CopyFile2`: offload/COPYCHUNK),
+    /// on NFS/CIFS `copy_file_range` does, so no byte passes this machine.
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        crate::copy::copy_to_new_file(
+            &local_platform::to_os(src),
+            &local_platform::to_os(stage),
+            size,
+        )
+        .map(Some)
+    }
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
         let path = local_platform::to_os(stage);
         let metadata = std::fs::symlink_metadata(&path)?;

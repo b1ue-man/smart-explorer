@@ -32,7 +32,6 @@ pub(crate) enum LocalFailure {
 }
 
 impl LocalFailure {
-    #[cfg(test)]
     pub(crate) fn into_error(self) -> io::Error {
         match self {
             LocalFailure::Source(error)
@@ -66,19 +65,7 @@ pub(super) fn stage_copy(
     durable: bool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
-    let link_metadata =
-        crate::local_access::symlink_metadata(source).map_err(LocalFailure::Source)?;
-    if platform::metadata_is_link_like(&link_metadata) || !link_metadata.is_file() {
-        return Err(LocalFailure::Source(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "source became a link or non-regular file",
-        )));
-    }
-    let reader = crate::local_access::open_read(source).map_err(LocalFailure::Source)?;
-    let before = source_snapshot_file(&reader).map_err(LocalFailure::Source)?;
-    if source_snapshot_path(source).map_err(LocalFailure::Source)? != before {
-        return Err(LocalFailure::Source(source_changed_error(source)));
-    }
+    let (reader, before) = open_source(source)?;
     if !durable {
         if let Some(staged) = stage_by_path(source, target, &reader, &before, cancel, progress)? {
             return Ok(staged);
@@ -120,6 +107,28 @@ pub(super) fn stage_copy(
         bytes: copied,
         snapshot: before,
     }))
+}
+
+/// Opens the source of a copy: a regular file (never a link, junction or
+/// special file), observed so a change during the copy is noticed.
+pub(super) fn open_source(source: &Path) -> Result<(File, SourceSnapshot), LocalFailure> {
+    let link_metadata =
+        crate::local_access::symlink_metadata(source).map_err(LocalFailure::Source)?;
+    if platform::metadata_is_link_like(&link_metadata) || !link_metadata.is_file() {
+        return Err(LocalFailure::Source(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{}: keine reguläre Datei (Links, Reparse-Punkte und Spezialdateien werden nicht übertragen)",
+                source.display()
+            ),
+        )));
+    }
+    let reader = crate::local_access::open_read(source).map_err(LocalFailure::Source)?;
+    let before = source_snapshot_file(&reader).map_err(LocalFailure::Source)?;
+    if source_snapshot_path(source).map_err(LocalFailure::Source)? != before {
+        return Err(LocalFailure::Source(source_changed_error(source)));
+    }
+    Ok((reader, before))
 }
 
 /// Platforms that copy by path in the kernel (Windows `CopyFile2`) do it
@@ -166,7 +175,11 @@ fn stage_by_path(
     Ok(None)
 }
 
-fn unchanged(source: &Path, reader: &File, before: &SourceSnapshot) -> Result<(), LocalFailure> {
+pub(super) fn unchanged(
+    source: &Path,
+    reader: &File,
+    before: &SourceSnapshot,
+) -> Result<(), LocalFailure> {
     let after = source_snapshot_file(reader).map_err(LocalFailure::Source)?;
     if after != *before || source_snapshot_path(source).map_err(LocalFailure::Source)? != *before {
         return Err(LocalFailure::Source(source_changed_error(source)));

@@ -1,5 +1,8 @@
 //! Local filesystem adapter with deterministic faults at transfer boundaries.
-use crate::transfer::{TransferMsg, TransferProgress};
+use crate::transfer::{
+    copy_remote_paths_progress, download_paths_progress, upload_paths_progress, TransferMsg,
+    TransferProgress,
+};
 use crate::vfs::{Backend, LocalBackend, Scheme, VfsMeta, VfsResult};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -78,10 +81,67 @@ pub(super) enum StageFault {
     ForeignOnFlush,
 }
 
+/// Readers and writers of one fixture connection open at the same time.
+#[derive(Default)]
+pub(super) struct Sessions {
+    readers: AtomicUsize,
+    writers: AtomicUsize,
+    pub(super) overlapped: AtomicBool,
+}
+
+/// One open reader or writer, counted while it lives.
+struct SessionUse {
+    sessions: Arc<Sessions>,
+    reading: bool,
+}
+
+impl SessionUse {
+    fn new(sessions: &Arc<Sessions>, reading: bool) -> Self {
+        let (mine, other) = if reading {
+            (&sessions.readers, &sessions.writers)
+        } else {
+            (&sessions.writers, &sessions.readers)
+        };
+        mine.fetch_add(1, Ordering::SeqCst);
+        if other.load(Ordering::SeqCst) > 0 {
+            sessions.overlapped.store(true, Ordering::SeqCst);
+        }
+        Self {
+            sessions: sessions.clone(),
+            reading,
+        }
+    }
+}
+
+impl Drop for SessionUse {
+    fn drop(&mut self) {
+        let mine = if self.reading {
+            &self.sessions.readers
+        } else {
+            &self.sessions.writers
+        };
+        mine.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct TaskReader {
+    inner: Box<dyn Read + Send>,
+    _session: SessionUse,
+}
+
+impl Read for TaskReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buffer)
+    }
+}
+
 pub(super) struct TaskBackend {
     inner: LocalBackend,
     pub(super) stage_fault: StageFault,
+    /// The first publication finds a foreign file created at its
+    /// destination in the meantime (later ones do not).
     pub(super) race_on_promote: bool,
+    raced: AtomicBool,
     pub(super) race_on_read: Option<PathBuf>,
     pub(super) read_bytes: Option<Vec<u8>>,
     pub(super) unknown_read_size: bool,
@@ -98,6 +158,16 @@ pub(super) struct TaskBackend {
     pub(super) remove_calls: AtomicUsize,
     pub(super) stages: Mutex<Vec<PathBuf>>,
     pub(super) bulk_destinations: Mutex<Vec<PathBuf>>,
+    /// The connection's bound on concurrent transfer operations.
+    pub(super) ceiling: Option<usize>,
+    /// Stages this client created may be removed again (otherwise their
+    /// ownership is unprovable and they are only reported).
+    pub(super) discard_stages: bool,
+    /// One session that cannot read and write at once (FTP-like).
+    pub(super) single_session: bool,
+    /// Copies inside the connection run on the server (UNC share).
+    pub(super) server_copy: bool,
+    pub(super) sessions: Arc<Sessions>,
 }
 
 impl TaskBackend {
@@ -106,6 +176,7 @@ impl TaskBackend {
             inner: LocalBackend::new(&fwd(root)),
             stage_fault: StageFault::None,
             race_on_promote: false,
+            raced: AtomicBool::new(false),
             race_on_read: None,
             read_bytes: None,
             unknown_read_size: false,
@@ -122,8 +193,75 @@ impl TaskBackend {
             remove_calls: AtomicUsize::new(0),
             stages: Mutex::new(Vec::new()),
             bulk_destinations: Mutex::new(Vec::new()),
+            ceiling: None,
+            discard_stages: false,
+            single_session: false,
+            server_copy: false,
+            sessions: Arc::new(Sessions::default()),
         }
     }
+}
+
+/// Uploads `source` into `target` like a paste and returns its end.
+pub(super) fn upload(
+    backend: &TaskBackend,
+    source: &Path,
+    target: &Path,
+) -> (TransferProgress, Vec<String>, bool) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    upload_paths_progress(
+        backend,
+        &[fwd(source)],
+        &fwd(target),
+        &tx,
+        &AtomicBool::new(false),
+    );
+    done(&rx)
+}
+
+pub(super) fn download(
+    backend: &TaskBackend,
+    source: &Path,
+    target: &Path,
+) -> (TransferProgress, Vec<String>, bool) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    download_paths_progress(
+        backend,
+        &[fwd(source)],
+        &fwd(target),
+        None,
+        &tx,
+        &AtomicBool::new(false),
+    );
+    done(&rx)
+}
+
+pub(super) fn succeeded(result: (TransferProgress, Vec<String>, bool), files: u64) {
+    let (progress, errors, canceled) = result;
+    assert!(!canceled);
+    assert_eq!(progress.files_done, files, "{errors:?}");
+    assert_eq!(progress.errors, 0, "{errors:?}");
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+/// Copies `source` to `target` on the same connection (both ends one handle).
+pub(super) fn same_backend_copy(
+    backend: &TaskBackend,
+    source: &Path,
+    target: &Path,
+) -> (TransferProgress, Vec<String>, bool) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    copy_remote_paths_progress(
+        backend,
+        &[fwd(source)],
+        backend,
+        &fwd(target),
+        true,
+        None,
+        &tx,
+        &AtomicBool::new(false),
+    );
+    done(&rx)
 }
 
 fn create_foreign(path: &Path) -> io::Result<()> {
@@ -139,6 +277,7 @@ struct StageWriter {
     path: PathBuf,
     foreign_on_flush: bool,
     mutate_source: Option<PathBuf>,
+    _session: SessionUse,
 }
 
 impl Write for StageWriter {
@@ -197,10 +336,14 @@ impl Backend for TaskBackend {
         if let Some(destination) = &self.race_on_read {
             create_foreign(destination)?;
         }
-        if let Some(bytes) = &self.read_bytes {
-            return Ok(Box::new(io::Cursor::new(bytes.clone())));
-        }
-        self.inner.open_read(path)
+        let inner: Box<dyn Read + Send> = match &self.read_bytes {
+            Some(bytes) => Box::new(io::Cursor::new(bytes.clone())),
+            None => self.inner.open_read(path)?,
+        };
+        Ok(Box::new(TaskReader {
+            inner,
+            _session: SessionUse::new(&self.sessions, true),
+        }))
     }
     fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.mutations.fetch_add(1, Ordering::Relaxed);
@@ -233,11 +376,12 @@ impl Backend for TaskBackend {
             path: PathBuf::from(path),
             foreign_on_flush: self.stage_fault == StageFault::ForeignOnFlush,
             mutate_source: self.mutate_source.clone(),
+            _session: SessionUse::new(&self.sessions, false),
         }))
     }
     fn promote_copy_stage(&self, stage: &str, destination: &str) -> VfsResult<()> {
         self.mutations.fetch_add(1, Ordering::Relaxed);
-        if self.race_on_promote {
+        if self.race_on_promote && !self.raced.swap(true, Ordering::SeqCst) {
             create_foreign(Path::new(destination))?;
         }
         self.inner.promote_staged_no_replace(stage, destination)?;
@@ -275,6 +419,28 @@ impl Backend for TaskBackend {
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         self.mutations.fetch_add(1, Ordering::Relaxed);
         self.inner.mkdir_all(path)
+    }
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        if self.discard_stages {
+            return self.inner.discard_copy_stage(stage);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "fixture cannot prove the stage is still its own",
+        ))
+    }
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        if !self.server_copy {
+            return Ok(None);
+        }
+        self.mutations.fetch_add(1, Ordering::Relaxed);
+        self.inner.server_copy_to_stage(src, stage, size)
+    }
+    fn transfer_ceiling(&self, _path: &str) -> Option<usize> {
+        self.ceiling
+    }
+    fn concurrent_read_write(&self) -> bool {
+        !self.single_session
     }
     fn supports_bulk_tree(&self) -> bool {
         true

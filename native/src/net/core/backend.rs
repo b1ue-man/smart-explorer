@@ -140,6 +140,12 @@ impl Backend for UncBackend {
         self.local.discard_copy_stage(stage)
     }
 
+    /// Copies inside the share on the server (SMB offload); the lease held by
+    /// `self` stays for the whole call.
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        self.local.server_copy_to_stage(src, stage, size)
+    }
+
     fn open_read_at(
         &self,
         path: &str,

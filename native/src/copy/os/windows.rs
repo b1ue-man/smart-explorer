@@ -144,20 +144,34 @@ pub(super) fn copy_by_path(
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> Option<io::Result<Option<(u64, File)>>> {
-    Some(
-        kernel_copy_file(source, stage, cancel, progress).and_then(|copied| match copied {
-            Some(bytes) => match open_staged(stage) {
-                Ok(file) => Ok(Some((bytes, file))),
-                Err(error) => {
-                    // Not a plain file (a link copied from a swapped source):
-                    // remove that entry itself, never what it points to.
-                    let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
-                    Err(error)
-                }
-            },
-            None => Ok(None),
-        }),
-    )
+    Some(copy_to_fresh(source, stage, cancel, progress))
+}
+
+/// `CopyFile2` onto `stage`, then the stage opened without following a
+/// reparse point. Its length on disk is the copied size: an offloaded copy
+/// (SMB, ReFS) may report fewer progress chunks than bytes.
+fn copy_to_fresh(
+    source: &Path,
+    stage: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<Option<(u64, File)>> {
+    let Some(reported) = kernel_copy_file(source, stage, cancel, progress)? else {
+        return Ok(None);
+    };
+    let (file, length) = match open_staged(stage) {
+        Ok(staged) => staged,
+        Err(error) => {
+            // Not a plain file (a link copied from a swapped source): remove
+            // that entry itself, never what it points to.
+            let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
+            return Err(error);
+        }
+    };
+    if length > reported {
+        progress(length - reported);
+    }
+    Ok(Some((length, file)))
 }
 
 /// Copies through the opened handles (sources readable only through
@@ -275,7 +289,10 @@ fn kernel_copy_file(
     }
     let error = hresult_error(result);
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
-        let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
+        // A name that was already taken (FAIL_IF_EXISTS) is never ours.
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
+        }
         return Ok(None);
     }
     Err(error)
@@ -296,8 +313,9 @@ fn hresult_error(result: i32) -> io::Error {
 }
 
 /// Opens the stage a kernel copy produced without following a reparse
-/// point, and accepts only a plain regular file (K12 identity check).
-fn open_staged(stage: &Path) -> io::Result<File> {
+/// point, and accepts only a plain regular file (K12 identity check); with
+/// its length on disk.
+fn open_staged(stage: &Path) -> io::Result<(File, u64)> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -313,7 +331,7 @@ fn open_staged(stage: &Path) -> io::Result<File> {
             "Kopierstufe ist keine direkte reguläre Datei",
         ));
     }
-    Ok(file)
+    Ok((file, metadata.len()))
 }
 
 pub(super) fn sync_parent(_path: &Path) -> io::Result<()> {
