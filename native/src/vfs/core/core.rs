@@ -69,10 +69,7 @@ pub trait Backend: Send + Sync {
     /// actor's file. Backends must use one protocol/OS exclusive-create call.
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         let _ = path;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "backend has no atomic exclusive-create writer",
-        ))
+        super::meta::unsupported("backend has no atomic exclusive-create writer")
     }
 
     /// Private copy stage that updates no existing identity: exclusive creation
@@ -98,6 +95,18 @@ pub trait Backend: Send + Sync {
     ) -> VfsResult<Box<dyn Write + Send>> {
         let _ = size;
         self.open_write_copy_stage(path)
+    }
+
+    /// Stage for a copy whose source stays (paste, drag, download to a
+    /// remote): published by `promote_copy_stage` like any stage, but not
+    /// forced to stable storage first (Explorer/cp semantics, spec decision
+    /// 1). Sync, mounts and replacements keep `open_write_copy_stage_sized`.
+    fn open_write_copy_stage_unsynced(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_write_copy_stage_sized(path, size)
     }
 
     /// Server-side copy of `src` (length `size`) into the new private stage
@@ -159,10 +168,7 @@ pub trait Backend: Send + Sync {
     /// Backends without a protocol/OS no-replace primitive stay unsupported.
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         let _ = (src, dst);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "backend has no atomic no-replace rename",
-        ))
+        super::meta::unsupported("backend has no atomic no-replace rename")
     }
 
     /// Commit a complete staged file without exposing partial content or
@@ -205,10 +211,7 @@ pub trait Backend: Send + Sync {
     /// `Unsupported` where ownership of the name cannot be proven.
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
         let _ = stage;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "stage cleanup unsupported",
-        ))
+        super::meta::unsupported("stage cleanup unsupported")
     }
 
     /// Semantics of `remove_*`: permanent for most protocols, recoverable for
@@ -409,20 +412,14 @@ pub trait Backend: Send + Sync {
     /// returns the number of files written.
     fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
         let _ = (root, dst);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "bulk tree transfer not supported",
-        ))
+        super::meta::unsupported("bulk tree transfer not supported")
     }
 
     /// Upload the contents of local `src` into `root` in one session; returns
     /// the number of files sent.
     fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
         let _ = (src, root);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "bulk tree transfer not supported",
-        ))
+        super::meta::unsupported("bulk tree transfer not supported")
     }
 
     /// Batch limits when this backend (and its peer) move many small whole
@@ -441,19 +438,13 @@ pub trait Backend: Send + Sync {
         data: &mut dyn Read,
     ) -> VfsResult<Vec<BatchPutOutcome>> {
         let _ = (entries, data);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "batch upload not supported",
-        ))
+        super::meta::unsupported("batch upload not supported")
     }
 
     /// Read every item and hand it to `sink` in request order.
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
         let _ = (items, sink);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "batch download not supported",
-        ))
+        super::meta::unsupported("batch download not supported")
     }
 
     /// Recursive search on the server (the agent's `Search`), streaming matches?

@@ -8,7 +8,6 @@ use super::queue::FileWork;
 use super::source::LocalSource;
 use super::Engine;
 use crate::vfs::Backend;
-use std::io::Write;
 
 pub(super) fn upload(
     engine: &Engine<'_>,

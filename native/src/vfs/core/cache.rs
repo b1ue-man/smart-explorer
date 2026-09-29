@@ -225,6 +225,22 @@ impl Backend for CachingBackend {
             )) as Box<dyn Write + Send>
         })
     }
+    fn open_write_copy_stage_unsynced(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.invalidate(path);
+        let result = self.inner.open_write_copy_stage_unsynced(path, size);
+        self.invalidate(path);
+        result.map(|writer| {
+            Box::new(InvalidatingWriter::new(
+                writer,
+                Arc::clone(&self.cache),
+                path,
+            )) as Box<dyn Write + Send>
+        })
+    }
     fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
         let result = self.inner.server_copy_to_stage(src, stage, size);
         self.invalidate(stage);

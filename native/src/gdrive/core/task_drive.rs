@@ -11,11 +11,14 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Open upload sessions: metadata, announced length and the bytes so far.
+type Sessions = HashMap<String, (Value, u64, Vec<u8>)>;
+
 #[derive(Default)]
 pub(super) struct FakeDrive {
     next: AtomicUsize,
     objects: Mutex<HashMap<String, Value>>,
-    sessions: Mutex<HashMap<String, (Value, u64, Vec<u8>)>>,
+    sessions: Mutex<Sessions>,
 }
 
 impl FakeDrive {

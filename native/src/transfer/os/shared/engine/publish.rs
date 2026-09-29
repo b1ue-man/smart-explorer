@@ -67,7 +67,9 @@ pub(crate) fn open(
 }
 
 /// A private stage for `destination`: random name, no probe, a new name when
-/// that one exists (never adopting it).
+/// that one exists (never adopting it). Engine jobs are copies whose sources
+/// stay, so a stage of known size is not forced to stable storage before it
+/// is published (spec decision 1); sync keeps its durable stages.
 pub(crate) fn open_stage(
     target: &dyn Backend,
     destination: &str,
@@ -77,7 +79,7 @@ pub(crate) fn open_stage(
     for _ in 0..STAGE_ATTEMPTS {
         let stage = stage_name(destination);
         let opened = match size {
-            Some(size) => target.open_write_copy_stage_sized(&stage, size),
+            Some(size) => target.open_write_copy_stage_unsynced(&stage, size),
             None => target.open_write_copy_stage(&stage),
         };
         match opened {

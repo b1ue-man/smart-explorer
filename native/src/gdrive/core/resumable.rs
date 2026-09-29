@@ -67,6 +67,7 @@ impl Resumable {
     /// when `limit` is the total) in requests of at most `max_chunk` bytes,
     /// resending whatever the server did not keep, until it confirmed `limit`
     /// or completed the upload.
+    #[allow(clippy::result_large_err)]
     pub(super) fn send_until(
         &mut self,
         source: &mut dyn ChunkSource,
