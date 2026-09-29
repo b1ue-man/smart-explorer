@@ -85,6 +85,10 @@ The manifest-failure path also collected uploads and launched them despite a
 failed safety check. M2 retains those edits for retry and suppresses that launch.
 M4 also keeps a failed remote stat from bypassing an already known conflict
 baseline during save-back; the local edit remains dirty and retryable instead.
+The desktop Share open path wraps its daemon backend in `CachingBackend`.
+Revision checks therefore invalidate that browsing cache before Share download
+snapshots, after completed reads, and before save-back conflict checks. The same
+cached boundary is included in the source-drift and real-peer acceptance cases.
 
 ## Stage two: final milestone plan
 

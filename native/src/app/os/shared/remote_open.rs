@@ -21,6 +21,9 @@ fn save_remote_edit(
     remote: &str,
     known: i64,
 ) -> SaveResult {
+    if backend.scheme() == crate::vfs::Scheme::Peer {
+        backend.invalidate_cache();
+    }
     let current = match backend.stat(remote) {
         Ok(metadata) => metadata.mtime_ms,
         Err(error) if known != 0 => {
