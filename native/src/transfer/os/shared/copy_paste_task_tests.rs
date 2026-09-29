@@ -1,50 +1,12 @@
-use super::copy_paste_task_backend::{done, fwd, Sandbox, StageFault, TaskBackend, FOREIGN};
+use super::copy_paste_task_backend::{
+    done, download, fwd, same_backend_copy, succeeded, upload, Sandbox, StageFault, TaskBackend,
+    FOREIGN,
+};
 use super::*;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-fn upload(
-    backend: &TaskBackend,
-    source: &Path,
-    target: &Path,
-) -> (TransferProgress, Vec<String>, bool) {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    upload_paths_progress(
-        backend,
-        &[fwd(source)],
-        &fwd(target),
-        &tx,
-        &AtomicBool::new(false),
-    );
-    done(&rx)
-}
-
-fn download(
-    backend: &TaskBackend,
-    source: &Path,
-    target: &Path,
-) -> (TransferProgress, Vec<String>, bool) {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    download_paths_progress(
-        backend,
-        &[fwd(source)],
-        &fwd(target),
-        None,
-        &tx,
-        &AtomicBool::new(false),
-    );
-    done(&rx)
-}
-
-fn succeeded(result: (TransferProgress, Vec<String>, bool), files: u64) {
-    let (progress, errors, canceled) = result;
-    assert!(!canceled);
-    assert_eq!(progress.files_done, files, "{errors:?}");
-    assert_eq!(progress.errors, 0, "{errors:?}");
-    assert!(errors.is_empty(), "{errors:?}");
-}
 
 #[test]
 #[ignore = "requires isolated remote copy/paste task runner"]
@@ -170,16 +132,20 @@ fn copy_paste_task_transfer_upload_collisions_and_explicit_saveback() {
     upload_file(&backend, &source, &fwd(&target.join("note.txt"))).unwrap();
     assert_eq!(fs::read(target.join("note.txt")).unwrap(), b"source bytes");
 
+    // A foreign file appears at the destination after the target listing:
+    // the create-only publication fails for that name and the copy takes the
+    // next free "Name (n)" (umsetzung.md Block A.6, K14). Formerly the file
+    // failed; either way the foreign file is never replaced.
     let target = sandbox.dir("raced");
     let mut backend = TaskBackend::new(&target);
     backend.race_on_promote = true;
-    let (progress, errors, _) = upload(&backend, &source, &target);
-    assert_eq!(progress.files_done, 0);
-    assert!(
-        errors.iter().any(|error| error.contains("AlreadyExists")),
-        "{errors:?}"
-    );
+    succeeded(upload(&backend, &source, &target), 1);
     assert_eq!(fs::read(target.join("note.txt")).unwrap(), FOREIGN);
+    assert_eq!(
+        fs::read(target.join("note (2).txt")).unwrap(),
+        b"source bytes"
+    );
+    assert_eq!(backend.replacing_writes.load(Ordering::Relaxed), 0);
     assert_eq!(fs::read(&source).unwrap(), b"source bytes");
 }
 
@@ -198,13 +164,19 @@ fn copy_paste_task_transfer_download_collisions_and_read_size() {
         } else {
             fs::write(target.join("note.txt"), FOREIGN).unwrap();
         }
-        let (progress, errors, _) = download(&backend, &source, &target);
-        assert_eq!(progress.files_done, 0);
-        assert!(!errors.is_empty());
+        // A taken name at a local target keeps both: the download lands as
+        // "note (2).txt" (spec F7, umsetzung.md Block A.2/A.6; formerly an
+        // error). The foreign file, present before or created during the
+        // read, is never replaced.
+        succeeded(download(&backend, &source, &target), 1);
         assert_eq!(fs::read(target.join("note.txt")).unwrap(), FOREIGN);
         assert_eq!(
+            fs::read(target.join("note (2).txt")).unwrap(),
+            b"source bytes"
+        );
+        assert_eq!(
             fs::read_dir(target).unwrap().count(),
-            1,
+            2,
             "owned download part must be cleaned"
         );
     }
@@ -225,6 +197,11 @@ fn copy_paste_task_transfer_download_collisions_and_read_size() {
             assert_eq!(result.0.files_done, 0);
             assert!(result.1.iter().any(|error| error.contains("gewachsen")));
             assert!(!target.join("zero.txt").exists());
+            assert_eq!(
+                fs::read_dir(&target).unwrap().count(),
+                0,
+                "a grown source leaves no part behind"
+            );
         }
     }
     assert_eq!(fs::read(&source).unwrap(), b"source bytes");
@@ -251,16 +228,45 @@ fn copy_paste_task_transfer_stage_failures_preserve_foreign_data() {
         assert!(!canceled);
         assert_eq!(progress.files_done, 0);
         assert!(!errors.is_empty());
-        let stages = backend.stages.lock().unwrap();
-        assert_eq!(stages.len(), 1, "no unsafe fallback or blind retry");
-        assert!(
-            errors.iter().any(|error| error.contains(&fwd(&stages[0]))),
-            "{errors:?}"
-        );
-        if fault == StageFault::Unsupported {
-            assert!(!stages[0].exists());
-        } else {
-            assert_eq!(fs::read(&stages[0]).unwrap(), FOREIGN);
+        let stages = backend.stages.lock().unwrap().clone();
+        match fault {
+            StageFault::Unsupported => {
+                // No exclusive writer: the file fails, never a replacing
+                // fallback, and nothing is created.
+                assert_eq!(stages.len(), 1, "no unsafe fallback");
+                assert!(
+                    errors.iter().any(|error| error.contains(&fwd(&stages[0]))),
+                    "{errors:?}"
+                );
+                assert!(!stages[0].exists());
+            }
+            StageFault::ForeignOnOpen => {
+                // A taken stage name is never adopted: the engine opens a new
+                // random name instead (umsetzung.md Block A.6; formerly the
+                // file failed at once). Every foreign file stays as it was.
+                assert!(stages.len() > 1, "a fresh name after a taken one");
+                let mut distinct = stages.clone();
+                distinct.sort();
+                distinct.dedup();
+                assert_eq!(distinct.len(), stages.len(), "never the same name twice");
+                for stage in &stages {
+                    assert_eq!(fs::read(stage).unwrap(), FOREIGN);
+                }
+            }
+            StageFault::ForeignOnFlush | StageFault::None => {
+                // A failed stage flush published nothing, so the transient
+                // failure is retried exactly once with a new stage
+                // (umsetzung.md Block A.7; formerly never). Neither stage can
+                // be proven ours: both stay and are reported (K17).
+                assert_eq!(stages.len(), 2, "one retry, not more");
+                for stage in &stages {
+                    assert_eq!(fs::read(stage).unwrap(), FOREIGN);
+                    assert!(
+                        errors.iter().any(|error| error.contains(&fwd(stage))),
+                        "{errors:?}"
+                    );
+                }
+            }
         }
         assert_eq!(backend.remove_calls.load(Ordering::Relaxed), 0);
         assert_eq!(backend.replacing_writes.load(Ordering::Relaxed), 0);
@@ -305,6 +311,12 @@ fn copy_paste_task_transfer_cancellation_counts_acknowledged_commit() {
     let cancel = Arc::new(AtomicBool::new(false));
     let mut backend = TaskBackend::new(&target);
     backend.cancel_after_promote = Some(cancel.clone());
+    // One operation at a time on this connection, so the other file can
+    // only start after the first commit was acknowledged and the cancel was
+    // requested; the engine otherwise runs files in parallel (Block A.5).
+    backend.ceiling = Some(1);
+    // A stage the canceled file may already have opened is removed.
+    backend.discard_stages = true;
     let (tx, rx) = crossbeam_channel::unbounded();
     upload_paths_progress(
         &backend,
@@ -315,11 +327,25 @@ fn copy_paste_task_transfer_cancellation_counts_acknowledged_commit() {
     );
     let (progress, errors, canceled) = done(&rx);
     assert!(canceled);
-    assert_eq!(progress.files_done, 1);
+    assert_eq!(progress.files_done, 1, "the acknowledged commit counts");
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(fs::read(target.join("one.txt")).unwrap(), b"one");
-    assert!(!target.join("two.txt").exists());
-    assert_eq!(backend.stages.lock().unwrap().len(), 1);
+    // Discovery lists both selected files in parallel, so either may be the
+    // one that went first.
+    let published: Vec<&str> = ["one.txt", "two.txt"]
+        .into_iter()
+        .filter(|name| target.join(name).exists())
+        .collect();
+    assert_eq!(published.len(), 1, "nothing is published after the cancel");
+    assert_eq!(
+        fs::read(target.join(published[0])).unwrap(),
+        fs::read(source.join(published[0])).unwrap()
+    );
+    assert_eq!(
+        fs::read_dir(&target).unwrap().count(),
+        1,
+        "no stage is left"
+    );
+    assert_eq!(fs::read(source.join("one.txt")).unwrap(), b"one");
     assert_eq!(fs::read(source.join("two.txt")).unwrap(), b"two");
 }
 
@@ -371,40 +397,63 @@ fn copy_paste_task_transfer_private_clipboard_bulk_and_honest_failure() {
 fn copy_paste_task_transfer_same_backend_uses_protected_bridge() {
     let sandbox = Sandbox::new("same-backend");
     let source = sandbox.dir("source");
-    let target = sandbox.dir("target");
     fs::write(source.join("note.txt"), b"source bytes").unwrap();
-    let mut backend = TaskBackend::new(&sandbox.0);
-    let healthy = sandbox.dir("healthy");
-    let (tx, rx) = crossbeam_channel::unbounded();
-    copy_remote_paths_progress(
-        &backend,
-        &[fwd(&source.join("note.txt"))],
-        &backend,
-        &fwd(&healthy),
-        true,
-        None,
-        &tx,
-        &AtomicBool::new(false),
+    let note = source.join("note.txt");
+    let length = b"source bytes".len() as u64;
+
+    // Reads and writes may overlap on this connection: the bytes stream
+    // directly, each counted once (umsetzung.md Block A.6; formerly always a
+    // local temp bridge counting every byte twice).
+    let backend = TaskBackend::new(&sandbox.0);
+    let streamed = sandbox.dir("streamed");
+    let result = same_backend_copy(&backend, &note, &streamed);
+    assert_eq!(result.0.bytes_total, length);
+    succeeded(result, 1);
+    assert_eq!(
+        fs::read(streamed.join("note.txt")).unwrap(),
+        b"source bytes"
     );
-    succeeded(done(&rx), 1);
-    assert_eq!(fs::read(healthy.join("note.txt")).unwrap(), b"source bytes");
-    backend.race_on_promote = true;
-    let (tx, rx) = crossbeam_channel::unbounded::<TransferMsg>();
-    copy_remote_paths_progress(
-        &backend,
-        &[fwd(&source.join("note.txt"))],
-        &backend,
-        &fwd(&target),
-        true,
-        None,
-        &tx,
-        &AtomicBool::new(false),
-    );
-    let (progress, errors, _) = done(&rx);
-    assert_eq!(progress.files_done, 0);
-    assert_eq!(progress.bytes_total, 2 * b"source bytes".len() as u64);
-    assert!(!errors.is_empty());
     assert_eq!(backend.copy_calls.load(Ordering::Relaxed), 0);
+
+    // One session that cannot read and write at once (FTP-like): the engine
+    // bridges through a local temporary file and never holds a reader and a
+    // writer open together.
+    let mut backend = TaskBackend::new(&sandbox.0);
+    backend.single_session = true;
+    let bridged = sandbox.dir("bridged");
+    succeeded(same_backend_copy(&backend, &note, &bridged), 1);
+    assert!(
+        !backend.sessions.overlapped.load(Ordering::SeqCst),
+        "the bridge never overlaps reading and writing"
+    );
+    assert_eq!(fs::read(bridged.join("note.txt")).unwrap(), b"source bytes");
+    assert_eq!(backend.copy_calls.load(Ordering::Relaxed), 0);
+
+    // Inside one share the server copies into a private stage (Block A.6),
+    // never through the replacing `copy_file`.
+    let mut backend = TaskBackend::new(&sandbox.0);
+    backend.server_copy = true;
+    let served = sandbox.dir("served");
+    succeeded(same_backend_copy(&backend, &note, &served), 1);
+    assert_eq!(
+        backend.read_calls.load(Ordering::Relaxed),
+        0,
+        "no client read"
+    );
+    assert_eq!(backend.copy_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(fs::read(served.join("note.txt")).unwrap(), b"source bytes");
+
+    // A foreign file appearing at the destination is never replaced: the
+    // copy takes "note (2).txt" (Block A.6, K14; formerly the file failed).
+    let mut backend = TaskBackend::new(&sandbox.0);
+    backend.race_on_promote = true;
+    let target = sandbox.dir("target");
+    succeeded(same_backend_copy(&backend, &note, &target), 1);
     assert_eq!(fs::read(target.join("note.txt")).unwrap(), FOREIGN);
-    assert_eq!(fs::read(source.join("note.txt")).unwrap(), b"source bytes");
+    assert_eq!(
+        fs::read(target.join("note (2).txt")).unwrap(),
+        b"source bytes"
+    );
+    assert_eq!(backend.replacing_writes.load(Ordering::Relaxed), 0);
+    assert_eq!(fs::read(&note).unwrap(), b"source bytes");
 }

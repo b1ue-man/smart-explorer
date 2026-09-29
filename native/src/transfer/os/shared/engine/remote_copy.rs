@@ -53,6 +53,10 @@ pub(super) fn copy(
 }
 
 /// `Ok(None)` when the target cannot copy on the server (stream instead).
+/// A server copy is only a shortcut: when it fails for any other reason than
+/// a taken stage name or congestion, its stage is discarded and the file is
+/// streamed, which attributes a real problem to the side that has it (a
+/// locked source must not end the job as a refusing target).
 fn server_copy(
     engine: &Engine<'_>,
     pair: Pair<'_>,
@@ -86,9 +90,16 @@ fn server_copy(
                 return publish::publish(engine, pair.target, file, &stage, path).map(Some);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
+            Err(error) if crate::vfs::congestion_of(&error).is_some() => {
                 publish::discard(engine, pair.target, &stage);
                 return Err(OpError::target(error));
+            }
+            Err(_) => {
+                publish::discard(engine, pair.target, &stage);
+                if engine.stopped() {
+                    return Err(OpError::canceled());
+                }
+                return Ok(None);
             }
         }
     }

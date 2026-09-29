@@ -160,6 +160,38 @@ fn transfer_engine_task_server_copy_inside_one_account() {
 }
 
 #[test]
+fn transfer_engine_task_failed_server_copy_falls_back_to_streaming() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("remote/Vault");
+    write(&source.join("a.txt"), b"alpha");
+    write(&source.join("sub/b.txt"), b"beta");
+    let dest = root.path().join("remote/copies");
+    fs::create_dir_all(&dest).expect("dest");
+    let mut fake = Fake::new("server-copy-refused");
+    fake.server_copy = true;
+    // A locked source on a share: the shortcut fails, the stream decides.
+    fake.server_copy_error = Some(std::io::ErrorKind::PermissionDenied);
+    let (fake, handle) = fake.handle();
+    let finished = run(job(
+        Endpoint::Remote(handle.clone()),
+        Endpoint::Remote(handle),
+        &dest,
+        &[&source],
+    ));
+    assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+    assert_eq!(finished.progress.files_done, 2);
+    assert_eq!(
+        fs::read(dest.join("Vault/a.txt")).expect("copied"),
+        b"alpha"
+    );
+    assert_eq!(fake.counters.server_copies.load(Ordering::SeqCst), 2);
+    assert!(
+        fake.counters.opens.load(Ordering::SeqCst) > 0,
+        "streamed instead"
+    );
+}
+
+#[test]
 fn transfer_engine_task_bridge_when_one_connection_cannot_read_and_write() {
     let root = tempfile::tempdir().expect("temp dir");
     let source = root.path().join("remote/Vault");

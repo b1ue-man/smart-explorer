@@ -26,6 +26,8 @@ mod planning;
 mod prune;
 #[path = "safe_file.rs"]
 mod safe_file;
+#[path = "server_copy.rs"]
+mod server_copy;
 #[path = "staging.rs"]
 mod staging;
 
@@ -33,6 +35,7 @@ pub use pairs::start_copy_pairs;
 pub(crate) use path_guard::validate_directory_target;
 pub(crate) use prune::prune_empty_dirs;
 pub(crate) use safe_file::{transfer_local, LocalOutcome, LocalRequest};
+pub(crate) use server_copy::copy_to_new_file;
 pub(crate) use staging::LocalFailure;
 
 use bridge::LocalJob;

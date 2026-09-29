@@ -10,6 +10,6 @@ mod platform;
 pub use imp::*;
 // The streaming transfer engine runs local files through these.
 pub(crate) use imp::{
-    move_folder, prune_empty_dirs, transfer_local, validate_directory_target, LocalFailure,
-    LocalOutcome, LocalRequest,
+    copy_to_new_file, move_folder, prune_empty_dirs, transfer_local, validate_directory_target,
+    LocalFailure, LocalOutcome, LocalRequest,
 };
