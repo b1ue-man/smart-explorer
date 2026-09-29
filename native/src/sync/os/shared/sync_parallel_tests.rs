@@ -5,7 +5,7 @@
 use super::*;
 use crate::bisync::link_fixture;
 use crate::bisync::test_remote::{FakeRemote, REMOTE_ROOT};
-use crate::vfs::{BackendHandle, LocalBackend};
+use crate::vfs::{BackendHandle, LocalBackend, Scheme};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -290,7 +290,9 @@ fn transfer_engine_task_sync_lists_destination_once_instead_of_stat_per_file() {
             files.push(rel);
         }
     }
-    let destination = Arc::new(FakeRemote::new(b.path(), "counting"));
+    // An FTP server: a `stat` there lists the parent folder, so the listing
+    // alone decides (other servers confirm listed files with a `stat`).
+    let destination = Arc::new(FakeRemote::new(b.path(), "counting").with_scheme(Scheme::Ftp));
     let run = || {
         let source: BackendHandle = Arc::new(LocalBackend::new(&forward(a.path())));
         let destination_handle: BackendHandle = destination.clone();
@@ -329,9 +331,10 @@ fn transfer_engine_task_sync_lists_destination_once_instead_of_stat_per_file() {
     assert!(second.errors.is_empty(), "{:?}", second.errors);
     assert_eq!(second.stats.copied, 0);
     assert_eq!(second.stats.skipped, 35);
-    // One listing per folder, no `stat` per file: only the root check.
+    // One listing per folder and no `stat` per file: only the root check
+    // before the pass and one plain-folder check per listed folder.
     assert_eq!(calls.list.load(Ordering::SeqCst), 3);
-    assert_eq!(calls.stat.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.stat.load(Ordering::SeqCst), 4);
     assert_eq!(calls.mkdir_all.load(Ordering::SeqCst), 0);
 }
 

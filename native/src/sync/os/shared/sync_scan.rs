@@ -4,11 +4,16 @@
 //! `stat` lists the parent folder, which made the serial pass quadratic). A
 //! name the listing cannot answer for sure (listed twice, or only in another
 //! letter case) is still looked up with a `stat`, so case-insensitive and
-//! duplicate-name destinations behave as before.
+//! duplicate-name destinations behave as before; where a `stat` is cheap,
+//! every listed file is confirmed by one (see `copy_pass`). A destination
+//! folder is checked to be a plain folder right before it is listed, and
+//! every listing or `stat` is repeated after overload (`under_permits`).
 use super::imp::{join, rel_of, require_plain_directory};
 use super::sync_pass::Pass;
-use crate::bisync::sync_flows::{finish_listing, PairSide};
+use crate::bisync::sync_flows::PairSide;
+use crate::bisync::sync_overload::under_permits;
 use crate::vfs::VfsMeta;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::io;
 
@@ -35,8 +40,38 @@ pub(super) enum Target {
 pub(super) struct FileTask {
     pub(super) source: String,
     pub(super) destination: String,
+    pub(super) rel: String,
     pub(super) meta: VfsMeta,
     pub(super) expected: Option<VfsMeta>,
+    /// The destination entry was listed but must be confirmed by a `stat`
+    /// before anything is decided (see `copy_pass`); `expected` is unused.
+    pub(super) confirm: bool,
+}
+
+/// What to do about one source file, given its destination counterpart.
+pub(super) enum Decision {
+    Copy(Option<VfsMeta>),
+    Skip,
+    /// A link at the destination: a protected omission.
+    Omit,
+    Fail(String),
+}
+
+/// The serial pass's rule: copy when the destination is missing, differs in
+/// size or is older than the source.
+pub(super) fn decide(meta: &VfsMeta, counterpart: io::Result<Option<VfsMeta>>) -> Decision {
+    match counterpart {
+        Err(error) => Decision::Fail(format!("inspect destination: {error}")),
+        Ok(None) => Decision::Copy(None),
+        Ok(Some(found)) if found.is_symlink => Decision::Omit,
+        Ok(Some(found)) if found.is_dir => {
+            Decision::Fail("destination is a directory or link-like entry".to_string())
+        }
+        Ok(Some(found)) if found.size != meta.size || meta.mtime_ms > found.mtime_ms => {
+            Decision::Copy(Some(found))
+        }
+        Ok(Some(_)) => Decision::Skip,
+    }
 }
 
 enum Listed {
@@ -148,21 +183,30 @@ pub(super) fn scan_directory(pass: &Pass, task: DirTask) {
 /// The source folder is still a plain folder (a link swapped in after it was
 /// queued is refused before listing), then its entries.
 fn source_entries(pass: &Pass, dir: &str) -> Option<Vec<VfsMeta>> {
-    let permit = pass.listing_permit(PairSide::A)?;
-    let result = require_plain_directory(pass.src, dir, false)
-        .map_err(|error| (error, true))
-        .and_then(|()| pass.src.list_dir(dir).map_err(|error| (error, false)));
-    finish_listing(permit, result.as_ref().err().map(|(error, _)| error));
+    let changed = Cell::new(false);
+    let result = under_permits(
+        pass.cancel,
+        &pass.progress,
+        || pass.listing_permit(PairSide::A),
+        |_| {
+            changed.set(false);
+            if let Err(error) = require_plain_directory(pass.src, dir, false) {
+                changed.set(true);
+                return Err(error);
+            }
+            pass.src.list_dir(dir)
+        },
+    )?;
     match result {
         Ok(entries) => Some(entries),
-        Err((error, true)) => {
+        Err(error) if changed.get() => {
             pass.error(
                 dir,
                 format!("source directory changed before traversal: {error}"),
             );
             None
         }
-        Err((error, false)) => {
+        Err(error) => {
             pass.error(dir, error.to_string());
             None
         }
@@ -173,9 +217,17 @@ fn destination_entries(pass: &Pass, task: &DirTask, dir: &str) -> Option<Destina
     match task.target {
         Target::Absent => Some(Destination::default()),
         Target::Listed => {
-            let permit = pass.listing_permit(PairSide::B)?;
-            let listed = pass.dst.list_dir(dir);
-            finish_listing(permit, listed.as_ref().err());
+            // Still a plain folder, not a link swapped in since the parent
+            // was listed: a listing would follow it and copies land outside.
+            let listed = under_permits(
+                pass.cancel,
+                &pass.progress,
+                || pass.listing_permit(PairSide::B),
+                |_| {
+                    require_plain_directory(pass.dst, dir, false)?;
+                    pass.dst.list_dir(dir)
+                },
+            )?;
             match listed {
                 Ok(entries) => Some(Destination::of(entries)),
                 Err(error) => {
@@ -196,9 +248,12 @@ fn destination_entries(pass: &Pass, task: &DirTask, dir: &str) -> Option<Destina
             }
             // Created now, or meanwhile by someone else: a plain folder
             // either way, never a link that could redirect the copies.
-            let permit = pass.listing_permit(PairSide::B)?;
-            let checked = require_plain_directory(pass.dst, dir, false);
-            finish_listing(permit, checked.as_ref().err());
+            let checked = under_permits(
+                pass.cancel,
+                &pass.progress,
+                || pass.listing_permit(PairSide::B),
+                |_| require_plain_directory(pass.dst, dir, false),
+            )?;
             if let Err(error) = checked {
                 pass.error(dir, format!("create destination directory: {error}"));
                 return None;
@@ -213,14 +268,16 @@ fn destination_entries(pass: &Pass, task: &DirTask, dir: &str) -> Option<Destina
 /// The per-name `stat` of the serial pass, for names the destination
 /// listing cannot answer for sure; `None` once canceled.
 fn probe(pass: &Pass, path: &str) -> Option<io::Result<Option<VfsMeta>>> {
-    let permit = pass.listing_permit(PairSide::B)?;
-    let result = match pass.dst.stat(path) {
-        Ok(meta) => Ok(Some(meta)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    };
-    finish_listing(permit, result.as_ref().err());
-    Some(result)
+    under_permits(
+        pass.cancel,
+        &pass.progress,
+        || pass.listing_permit(PairSide::B),
+        |_| match pass.dst.stat(path) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        },
+    )
 }
 
 fn directory(
@@ -268,32 +325,42 @@ fn file(
     destination_path: String,
     counterpart: io::Result<Option<VfsMeta>>,
 ) -> bool {
-    let (need, expected) = match counterpart {
-        Err(error) => {
-            pass.error(destination_path, format!("inspect destination: {error}"));
+    let counterpart = match counterpart {
+        Ok(Some(listed)) if pass.confirm_listing => {
+            if !pass.dry_run && !pass.dst.is_local() {
+                // A remote `stat` costs a round trip: the copy workers
+                // confirm in parallel before they decide.
+                return pass.queue_file(FileTask {
+                    source: source_path,
+                    destination: destination_path,
+                    rel,
+                    meta,
+                    expected: Some(listed),
+                    confirm: true,
+                });
+            }
+            match probe(pass, &destination_path) {
+                Some(confirmed) => confirmed,
+                None => return false,
+            }
+        }
+        other => other,
+    };
+    let expected = match decide(&meta, counterpart) {
+        Decision::Copy(expected) => expected,
+        Decision::Skip => {
+            pass.skipped();
             return true;
         }
-        Ok(None) => (true, None),
-        Ok(Some(found)) if found.is_symlink => {
+        Decision::Omit => {
             pass.omit(&rel);
             return true;
         }
-        Ok(Some(found)) if found.is_dir => {
-            pass.error(
-                destination_path,
-                "destination is a directory or link-like entry",
-            );
+        Decision::Fail(message) => {
+            pass.error(destination_path, message);
             return true;
         }
-        Ok(Some(found)) => (
-            found.size != meta.size || meta.mtime_ms > found.mtime_ms,
-            Some(found),
-        ),
     };
-    if !need {
-        pass.skipped();
-        return true;
-    }
     if pass.dry_run {
         pass.would_copy(&destination_path);
         return true;
@@ -301,7 +368,9 @@ fn file(
     pass.queue_file(FileTask {
         source: source_path,
         destination: destination_path,
+        rel,
         meta,
         expected,
+        confirm: false,
     })
 }

@@ -1,10 +1,12 @@
 //! Test backend: a remote-like view of a local folder below `/data` with its
 //! own namespace and flow (like a second server), call counters, optional
 //! delays that make concurrency visible, a per-operation hook, injectable
-//! write failures and a naive, racy folder creation (like a plain SFTP
-//! client). It reports `parallelism() == 1`, as SFTP and FTP did, so tests
-//! show where the flows now run work concurrently.
+//! write failures, overload replies and stale listings, and a naive, racy
+//! folder creation (like a plain SFTP client). It reports
+//! `parallelism() == 1`, as SFTP and FTP did, so tests show where the flows
+//! now run work concurrently.
 use crate::vfs::{Backend, LocalBackend, Scheme, VfsMeta, VfsResult};
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const REMOTE_ROOT: &str = "/data";
+/// The delay an injected overload reply asks for (short: tests stay fast).
+pub(crate) const OVERLOAD_RETRY_AFTER: Duration = Duration::from_millis(5);
 
 static NEXT_REMOTE: AtomicUsize = AtomicUsize::new(0);
 
@@ -25,6 +29,8 @@ pub(crate) struct Calls {
     pub(crate) reads: AtomicUsize,
     pub(crate) peak_reads: AtomicUsize,
     pub(crate) peak_lists: AtomicUsize,
+    /// Injected overload replies given.
+    pub(crate) congested: AtomicUsize,
     /// Every `stat` path, in call order.
     pub(crate) stat_paths: Mutex<Vec<String>>,
     open_reads: AtomicUsize,
@@ -53,6 +59,11 @@ pub(crate) struct FakeRemote {
     fail_writes_to: Option<String>,
     racy_folders: bool,
     hook: Option<Hook>,
+    scheme: Option<Scheme>,
+    /// Operation → overload replies still to give before it succeeds.
+    overload: Mutex<HashMap<&'static str, usize>>,
+    /// A listed file whose directory entry shows a stale size.
+    stale: Option<(String, u64)>,
     pub(crate) calls: Arc<Calls>,
 }
 
@@ -74,6 +85,9 @@ impl FakeRemote {
             fail_writes_to: None,
             racy_folders: false,
             hook: None,
+            scheme: None,
+            overload: Mutex::new(HashMap::new()),
+            stale: None,
             calls: Arc::new(Calls::default()),
         }
     }
@@ -107,6 +121,47 @@ impl FakeRemote {
     pub(crate) fn with_hook(mut self, hook: Hook) -> Self {
         self.hook = Some(hook);
         self
+    }
+
+    /// Reports `scheme` (default: that of the local folder).
+    pub(crate) fn with_scheme(mut self, scheme: Scheme) -> Self {
+        self.scheme = Some(scheme);
+        self
+    }
+
+    /// The first `times` calls of `operation` ("list", "stat", "read",
+    /// "write") are refused as overload (`vfs::congestion_error`).
+    pub(crate) fn with_overload(self, operation: &'static str, times: usize) -> Self {
+        self.overload
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(operation, times);
+        self
+    }
+
+    /// Listings show `size` for the file `name` (`stat` shows the truth), like
+    /// the stale directory entry of a hard-linked file on NTFS or SMB.
+    pub(crate) fn with_stale_listing(mut self, name: &str, size: u64) -> Self {
+        self.stale = Some((name.to_string(), size));
+        self
+    }
+
+    fn overloaded(&self, operation: &str) -> VfsResult<()> {
+        let mut overload = self
+            .overload
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match overload.get_mut(operation) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                self.calls.congested.fetch_add(1, Ordering::SeqCst);
+                Err(crate::vfs::congestion_error(
+                    "injected overload",
+                    Some(OVERLOAD_RETRY_AFTER),
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn real(&self, path: &str) -> io::Result<String> {
@@ -166,7 +221,7 @@ impl Drop for Tracked {
 
 impl Backend for FakeRemote {
     fn scheme(&self) -> Scheme {
-        self.inner.scheme()
+        self.scheme.unwrap_or_else(|| self.inner.scheme())
     }
 
     fn root_display(&self) -> String {
@@ -184,12 +239,19 @@ impl Backend for FakeRemote {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         self.calls.list.fetch_add(1, Ordering::SeqCst);
         self.call_hook("list", path);
+        self.overloaded("list")?;
         let open = self.calls.open_lists.fetch_add(1, Ordering::SeqCst) + 1;
         self.calls.peak_lists.fetch_max(open, Ordering::SeqCst);
         std::thread::sleep(self.delay);
         let result = self.real(path).and_then(|real| self.inner.list_dir(&real));
         self.calls.open_lists.fetch_sub(1, Ordering::SeqCst);
-        result
+        let mut entries = result?;
+        if let Some((name, size)) = &self.stale {
+            for entry in entries.iter_mut().filter(|entry| &entry.name == name) {
+                entry.size = *size;
+            }
+        }
+        Ok(entries)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
@@ -199,12 +261,14 @@ impl Backend for FakeRemote {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(path.to_string());
+        self.overloaded("stat")?;
         self.inner.stat(&self.real(path)?)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         self.calls.reads.fetch_add(1, Ordering::SeqCst);
         self.call_hook("read", path);
+        self.overloaded("read")?;
         let open = self.calls.open_reads.fetch_add(1, Ordering::SeqCst) + 1;
         self.calls.peak_reads.fetch_max(open, Ordering::SeqCst);
         std::thread::sleep(self.delay);
@@ -221,6 +285,7 @@ impl Backend for FakeRemote {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.overloaded("write")?;
         let name = path.rsplit('/').next().unwrap_or(path);
         if let Some(failing) = &self.fail_writes_to {
             if name.starts_with(failing.as_str()) {

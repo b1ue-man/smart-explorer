@@ -19,3 +19,6 @@ mod sync_link_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_parallel_tests.rs"]
 mod sync_parallel_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_robustness_tests.rs"]
+mod sync_robustness_tests;

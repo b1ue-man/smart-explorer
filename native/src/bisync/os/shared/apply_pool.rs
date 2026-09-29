@@ -5,15 +5,18 @@
 //! so a run always queues for its turn on a shared flow without parking idle
 //! threads on it.
 //!
-//! Actions whose paths differ only in letter case run one after another in
-//! plan order: a case-insensitive side sees them as one file (a rename that
-//! only changes case deletes one spelling and copies the other). Every action
-//! keeps its own safety logic (capture, revalidation, backup, conflict copy);
-//! this module only schedules them.
+//! Related actions (same path in another letter case, or one path inside the
+//! other) run one after another (`apply_groups`). Every action keeps its own
+//! safety logic (capture, revalidation, backup, conflict copy); this module
+//! only schedules them and repeats an action the peer refused with overload
+//! (`sync_overload`).
+use super::apply_groups::action_groups;
 use super::apply_retry::AttemptError;
+use super::sync_overload::{Backoff, Progress};
 use super::types::{Action, BisyncStats};
+use crate::transfer::engine::sleep_unless;
 use crate::transfer::{classify_error, OpOutcome, PermitPair};
-use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::thread::Scope;
@@ -57,6 +60,7 @@ struct Pool<'p> {
     cancel: &'p AtomicBool,
     admit: &'p Admit<'p>,
     execute: &'p Execute<'p>,
+    progress: Progress,
     state: Mutex<PoolState>,
     changed: Condvar,
 }
@@ -71,11 +75,12 @@ pub(super) fn run_actions<'p>(
 ) -> PoolReport {
     let pool = Pool {
         actions,
-        groups: case_groups(actions),
+        groups: action_groups(actions),
         max_transfers,
         cancel,
         admit,
         execute,
+        progress: Progress::default(),
         state: Mutex::new(PoolState::default()),
         changed: Condvar::new(),
     };
@@ -86,34 +91,14 @@ pub(super) fn run_actions<'p>(
         .report
 }
 
-/// Action indices grouped by their case-folded path, in plan order.
-fn case_groups(actions: &[Action]) -> Vec<Vec<usize>> {
-    let mut index: HashMap<String, usize> = HashMap::new();
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    for (position, action) in actions.iter().enumerate() {
-        let key = rel_of(action).to_lowercase();
-        match index.get(&key) {
-            Some(&group) => groups[group].push(position),
-            None => {
-                index.insert(key, groups.len());
-                groups.push(vec![position]);
-            }
-        }
-    }
-    groups
-}
-
-fn rel_of(action: &Action) -> &str {
-    match action {
-        Action::CopyAtoB(rel)
-        | Action::CopyBtoA(rel)
-        | Action::FinalizeMoveAtoB(rel)
-        | Action::FinalizeMoveBtoA(rel)
-        | Action::DeleteA(rel)
-        | Action::DeleteB(rel)
-        | Action::KeepBothAtoB(rel)
-        | Action::KeepBothBtoA(rel) => rel,
-    }
+/// An action may run again after overload unless it keeps both versions: a
+/// keep-both action publishes its conflict copy first, and repeating it after
+/// its copy failed would publish a second conflict copy (the attempt error
+/// does not tell whether that happened). Every other action captures and
+/// revalidates both sides against the plan, so a repeat after an unclear
+/// commit reports the drift instead of acting twice.
+fn repeatable(action: &Action) -> bool {
+    !matches!(action, Action::KeepBothAtoB(_) | Action::KeepBothBtoA(_))
 }
 
 impl Pool<'_> {
@@ -169,11 +154,15 @@ impl Pool<'_> {
             && (self.max_transfers == 0 || state.running < self.max_transfers)
     }
 
-    /// Starts one worker; false when the system refused the thread.
+    /// Starts one worker; false when the system refused the thread. A panic
+    /// ends the run through the worker's `Enlisted` guard and is caught here,
+    /// so the scope never re-raises it in the caller.
     fn spawn<'s>(&'s self, scope: &'s Scope<'s, '_>) -> bool {
         let spawned = std::thread::Builder::new()
             .name("sync-apply".to_string())
-            .spawn_scoped(scope, move || self.worker());
+            .spawn_scoped(scope, move || {
+                let _ = std::panic::catch_unwind(AssertUnwindSafe(|| self.worker()));
+            });
         let Err(error) = spawned else {
             return true;
         };
@@ -195,6 +184,11 @@ impl Pool<'_> {
     }
 
     fn worker(&self) {
+        let mut enlisted = Enlisted {
+            pool: self,
+            busy: false,
+            waiting: false,
+        };
         loop {
             let group = {
                 let mut state = self.lock();
@@ -211,44 +205,79 @@ impl Pool<'_> {
             let Some(group) = group else {
                 break;
             };
-            self.run_group(&self.groups[group]);
+            enlisted.busy = true;
+            enlisted.waiting = true;
+            self.run_group(&self.groups[group], &mut enlisted);
+            enlisted.busy = false;
             self.lock().busy -= 1;
             self.changed.notify_all();
         }
-        self.lock().running -= 1;
-        self.changed.notify_all();
     }
 
     /// Entered counted as waiting (set when the group was taken).
-    fn run_group(&self, group: &[usize]) {
-        let mut counted = true;
+    fn run_group(&self, group: &[usize], enlisted: &mut Enlisted<'_, '_>) {
         for &position in group {
             if self.canceled() {
                 break;
             }
             let action = &self.actions[position];
-            if !counted {
-                self.lock().waiting += 1;
-            }
-            let permits = (self.admit)(action);
-            self.lock().waiting -= 1;
-            counted = false;
-            self.changed.notify_all();
-            // `None`: canceled before the action started; nothing to report.
-            let Some(permits) = permits else {
+            // `None`: canceled before the action finished starting.
+            let Some(result) = self.attempt(action, enlisted) else {
                 break;
             };
-            let result = (self.execute)(action);
-            match &result {
-                Ok(stats) => {
-                    permits.progress(stats.bytes);
-                    permits.finish(OpOutcome::Done);
-                }
-                Err(error) => permits.finish(classify_error(error.error())),
+            if result.is_ok() {
+                self.progress.touch();
             }
             self.record(action, result);
         }
-        if counted {
+        self.stop_waiting(enlisted);
+    }
+
+    /// Runs one action under its permits. Overload gives them back as such,
+    /// waits the peer's delay without them and runs the action again while
+    /// `Backoff` allows it; `None` once canceled.
+    fn attempt(
+        &self,
+        action: &Action,
+        enlisted: &mut Enlisted<'_, '_>,
+    ) -> Option<Result<BisyncStats, AttemptError>> {
+        let mut backoff = Backoff::new(&self.progress);
+        loop {
+            if !enlisted.waiting {
+                self.lock().waiting += 1;
+                enlisted.waiting = true;
+            }
+            let permits = (self.admit)(action);
+            self.stop_waiting(enlisted);
+            let permits = permits?;
+            let result = (self.execute)(action);
+            let delay = match &result {
+                Ok(stats) => {
+                    permits.progress(stats.bytes);
+                    permits.finish(OpOutcome::Done);
+                    None
+                }
+                Err(error) => {
+                    permits.finish(classify_error(error.error()));
+                    if repeatable(action) {
+                        backoff.pause(error.error())
+                    } else {
+                        None
+                    }
+                }
+            };
+            let Some(delay) = delay else {
+                return Some(result);
+            };
+            if !sleep_unless(self.cancel, delay) {
+                return Some(result);
+            }
+        }
+    }
+
+    fn stop_waiting(&self, enlisted: &mut Enlisted<'_, '_>) {
+        if enlisted.waiting {
+            enlisted.waiting = false;
             self.lock().waiting -= 1;
             self.changed.notify_all();
         }
@@ -274,6 +303,42 @@ impl Pool<'_> {
                 }
             }
         }
+    }
+}
+
+/// A worker's place in the pool, given back when it ends. A panic in an
+/// action gives it back as well and ends the run with an error (the action's
+/// outcome is unknown, so it never counts as completed), instead of leaving
+/// the coordinator waiting for a worker that is gone.
+struct Enlisted<'w, 'p> {
+    pool: &'w Pool<'p>,
+    /// Holding a group.
+    busy: bool,
+    /// Counted as waiting for permits.
+    waiting: bool,
+}
+
+impl Drop for Enlisted<'_, '_> {
+    fn drop(&mut self) {
+        let mut state = self.pool.lock();
+        state.running -= 1;
+        if self.busy {
+            state.busy -= 1;
+        }
+        if self.waiting {
+            state.waiting -= 1;
+        }
+        if std::thread::panicking() {
+            state.report.stats.errors += 1;
+            state.report.errors.push((
+                "sync-apply".to_string(),
+                "a sync worker stopped unexpectedly; its action's outcome is unknown and the run ends"
+                    .to_string(),
+            ));
+            state.finished = true;
+        }
+        drop(state);
+        self.pool.changed.notify_all();
     }
 }
 

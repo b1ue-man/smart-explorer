@@ -1,14 +1,15 @@
 //! Two-way/one-way apply over the flows: concurrent where the old fixed
 //! `min(parallelism)` was serial, `max_transfers` still an upper bound, new
-//! folders created once, case variants in plan order, failures never
-//! completed.
+//! folders created once, related paths in one group (deletions first),
+//! failures never completed, overload waited out, a panic ends the run.
 use super::super::apply::{apply_planned_with_results, ApplyReport};
+use super::super::apply_groups::action_groups;
 use super::super::test_remote::{FakeRemote, REMOTE_ROOT};
 use super::super::*;
-use super::case_groups;
 use crate::vfs::{Backend, LocalBackend};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn forward(path: &Path) -> String {
@@ -192,5 +193,93 @@ fn transfer_engine_task_bisync_case_variants_run_in_plan_order() {
         Action::CopyAtoB("foo.txt".to_string()),
         Action::CopyAtoB("dir/FOO.txt".to_string()),
     ];
-    assert_eq!(case_groups(&actions), vec![vec![0, 2], vec![1], vec![3]]);
+    assert_eq!(action_groups(&actions), vec![vec![0, 2], vec![1], vec![3]]);
+}
+
+#[test]
+fn transfer_engine_task_bisync_related_paths_share_a_group_deletions_first() {
+    let actions = [
+        Action::CopyAtoB("dir/file.txt".to_string()),
+        Action::DeleteB("dir".to_string()),
+        Action::CopyAtoB("other.txt".to_string()),
+        Action::CopyAtoB("Foo.txt".to_string()),
+        Action::DeleteB("foo.txt".to_string()),
+        Action::CopyAtoB("DIR/second.txt".to_string()),
+        Action::CopyAtoB("dir-sibling/file.txt".to_string()),
+    ];
+    // A file `dir` replaced by a folder: its deletion runs first, then both
+    // copies below it; `dir-sibling` is no descendant of `dir`.
+    assert_eq!(
+        action_groups(&actions),
+        vec![vec![1, 0, 5], vec![2], vec![4, 3], vec![6]]
+    );
+}
+
+#[test]
+fn transfer_engine_task_bisync_overload_is_waited_out_before_publication() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let versions = tempfile::tempdir().unwrap();
+    for index in 0..6 {
+        write(a.path(), &format!("f{index}.txt"), b"payload");
+    }
+    let source = LocalBackend::new(&forward(a.path()));
+    // Four stage uploads are refused as overload before they succeed.
+    let target = FakeRemote::new(b.path(), "apply-busy").with_overload("write", 4);
+
+    let (report, errors) = apply_a_to_b(
+        &source,
+        &forward(a.path()),
+        &target,
+        REMOTE_ROOT,
+        0,
+        versions.path(),
+    );
+
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(report.stats.a_to_b, 6);
+    assert_eq!(report.completed.len(), 6);
+    assert_eq!(target.calls.congested.load(Ordering::SeqCst), 4);
+    for index in 0..6 {
+        assert_eq!(
+            std::fs::read(b.path().join(format!("f{index}.txt"))).unwrap(),
+            b"payload"
+        );
+    }
+}
+
+#[test]
+fn transfer_engine_task_bisync_panicking_action_ends_the_run() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let versions = tempfile::tempdir().unwrap();
+    for index in 0..4 {
+        write(a.path(), &format!("f{index}.txt"), b"payload");
+    }
+    write(a.path(), "boom.txt", b"payload");
+    let source = FakeRemote::new(a.path(), "apply-panic").with_hook(Arc::new(
+        |operation: &str, path: &str| {
+            if operation == "read" && path.ends_with("boom.txt") {
+                panic!("injected action panic");
+            }
+        },
+    ));
+    let target = LocalBackend::new(&forward(b.path()));
+
+    let (report, errors) = apply_a_to_b(
+        &source,
+        REMOTE_ROOT,
+        &target,
+        &forward(b.path()),
+        0,
+        versions.path(),
+    );
+
+    assert!(errors
+        .iter()
+        .any(|(_, message)| message.contains("stopped unexpectedly")));
+    assert!(!report
+        .completed
+        .contains(&Action::CopyAtoB("boom.txt".to_string())));
+    assert!(!b.path().join("boom.txt").exists());
 }

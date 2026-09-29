@@ -12,12 +12,14 @@
 use super::imp::{record_error, SyncMsg, SyncProgress, SyncStats, WalkBudget};
 use super::sync_scan::{scan_directory, DirTask, FileTask, Target};
 use crate::bisync::sync_flows::{PairFlows, PairSide};
+use crate::bisync::sync_overload::Progress;
 use crate::bisync::SyncOmissions;
 use crate::transfer::engine::folders::FolderRegister;
 use crate::transfer::Side;
-use crate::vfs::Backend;
+use crate::vfs::{Backend, Scheme};
 use crossbeam_channel::Sender;
 use std::collections::VecDeque;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::thread::Scope;
@@ -103,8 +105,10 @@ impl State {
         }
     }
 
+    /// No listing is running and none will start (nothing queued, or the
+    /// budget stopped discovery and the queue is dropped).
     fn discovery_over(&self) -> bool {
-        self.dirs.is_empty() && self.scanners.busy == 0
+        (self.dirs.is_empty() || self.scan_stopped) && self.scanners.busy == 0
     }
 }
 
@@ -121,6 +125,12 @@ pub(super) struct Pass<'a> {
     /// Copies at once when both sides are one remote connection
     /// (`PairFlows::shared_connection_cap`); unbounded otherwise.
     copy_cap: usize,
+    /// When the pass last got an operation through (overload patience).
+    pub(super) progress: Progress,
+    /// A local destination: every copy re-checks its parent chain for links.
+    pub(super) guard_parent: bool,
+    /// A listed destination file is confirmed by a `stat` (see `copy_pass`).
+    pub(super) confirm_listing: bool,
     pub(super) state: Mutex<State>,
     pub(super) changed: Condvar,
     /// Bytes of running copies, shown in progress before they complete.
@@ -143,6 +153,13 @@ pub(super) fn copy_pass(
     let flows = PairFlows::new(src, src_root, dst, dst_root);
     let folders = FolderRegister::new(Side::Remote(dst), dst_root, flows.flow(PairSide::B).clone());
     let copy_cap = flows.shared_connection_cap(src, dst).unwrap_or(usize::MAX);
+    // Directory entries on NTFS and SMB shares can be stale for hard-linked
+    // files (only the name used for a change is updated), so the decision
+    // about a listed file is confirmed by a `stat` (in the scan for a local
+    // destination, in parallel by the copy workers for a remote one); FTP,
+    // WebDAV and Drive, where a `stat` costs a listing or a request of its
+    // own, rely on the listing alone.
+    let confirm_listing = !matches!(dst.scheme(), Scheme::Ftp | Scheme::Webdav | Scheme::GDrive);
     let pass = Pass {
         src,
         src_root,
@@ -153,6 +170,9 @@ pub(super) fn copy_pass(
         flows,
         folders,
         copy_cap,
+        progress: Progress::default(),
+        guard_parent: dst.is_local(),
+        confirm_listing,
         state: Mutex::new(State {
             dirs: VecDeque::new(),
             files: VecDeque::new(),
@@ -299,11 +319,15 @@ impl Pass<'_> {
             Kind::Scanner => "sync-scan",
             Kind::Copier => "sync-copy",
         };
+        // A panic ends the pass through the worker's `Enlisted` guard and is
+        // caught here, so the scope never re-raises it in the mirror driver.
         let spawned = std::thread::Builder::new()
             .name(name.to_string())
-            .spawn_scoped(scope, move || match kind {
-                Kind::Scanner => self.scanner(),
-                Kind::Copier => self.copier(),
+            .spawn_scoped(scope, move || {
+                let _ = std::panic::catch_unwind(AssertUnwindSafe(|| match kind {
+                    Kind::Scanner => self.scanner(),
+                    Kind::Copier => self.copier(),
+                }));
             });
         let Err(error) = spawned else {
             return true;
@@ -357,6 +381,11 @@ impl Pass<'_> {
     /// One worker: takes tasks while there are any, lingers briefly when more
     /// may come, ends when the pass is over.
     fn work<T>(&self, kind: Kind, take: impl Fn(&mut State) -> Option<T>, run: impl Fn(&Self, T)) {
+        let mut enlisted = Enlisted {
+            pass: self,
+            kind,
+            busy: false,
+        };
         let mut idle_since: Option<Instant> = None;
         loop {
             let task = {
@@ -391,12 +420,45 @@ impl Pass<'_> {
             let Some(task) = task else {
                 break;
             };
+            enlisted.busy = true;
             idle_since = None;
             run(self, task);
+            enlisted.busy = false;
             self.lock().crew(kind).busy -= 1;
             self.changed.notify_all();
         }
-        self.lock().crew(kind).running -= 1;
-        self.changed.notify_all();
+    }
+}
+
+/// A worker's place in its crew, given back when the worker ends. A panic in
+/// a task gives it back as well and ends the pass with an error, instead of
+/// leaving the coordinator waiting for a worker that is gone.
+struct Enlisted<'p, 'a> {
+    pass: &'p Pass<'a>,
+    kind: Kind,
+    /// Holding a task.
+    busy: bool,
+}
+
+impl Drop for Enlisted<'_, '_> {
+    fn drop(&mut self) {
+        let mut guard = self.pass.lock();
+        let state = &mut *guard;
+        let crew = state.crew(self.kind);
+        crew.running -= 1;
+        if self.busy {
+            crew.busy -= 1;
+        }
+        if std::thread::panicking() {
+            record_error(
+                &mut state.report.stats,
+                &mut state.report.errors,
+                "sync worker",
+                "sync worker stopped unexpectedly; the pass ends",
+            );
+            state.finished = true;
+        }
+        drop(guard);
+        self.pass.changed.notify_all();
     }
 }

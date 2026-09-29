@@ -20,6 +20,8 @@
 mod apply;
 #[path = "os/shared/apply_delete.rs"]
 mod apply_delete;
+#[path = "os/shared/apply_groups.rs"]
+mod apply_groups;
 #[path = "os/shared/apply_guard.rs"]
 mod apply_guard;
 #[path = "os/shared/apply_pool.rs"]
@@ -60,6 +62,8 @@ mod snapshot_dir;
 mod snapshot_hash;
 #[path = "os/shared/snapshot_pair.rs"]
 mod snapshot_pair;
+#[path = "os/shared/snapshot_walk.rs"]
+mod snapshot_walk;
 #[path = "os/shared/state_store.rs"]
 mod state_store;
 #[path = "os/shared/state_types.rs"]
@@ -68,6 +72,8 @@ mod state_types;
 mod state_validation;
 #[path = "os/shared/sync_flows.rs"]
 pub(crate) mod sync_flows;
+#[path = "os/shared/sync_overload.rs"]
+pub(crate) mod sync_overload;
 #[path = "core/types.rs"]
 mod types;
 

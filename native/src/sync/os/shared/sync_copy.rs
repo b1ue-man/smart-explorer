@@ -7,10 +7,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// highest concurrency (256 operations) holds at most 64 MiB of buffers.
 const COPY_BUFFER: usize = 256 * 1024;
 
+/// A failed copy and how far it got.
+pub(super) struct CopyError {
+    pub(super) error: io::Error,
+    /// Publication was attempted: its outcome is unknown, so the copy is
+    /// never repeated (a repeat could publish a second time).
+    pub(super) publishing: bool,
+}
+
 /// Copies one file into a private stage next to `destination_path` and
 /// publishes it (create when `destination_expected` is `None`, replace
 /// otherwise). The destination folder exists already: the mirror pass
-/// creates every folder once before it queues the files inside. `progress`
+/// creates every folder once before it queues the files inside. With
+/// `guard_parent` (a local destination) the whole parent chain is checked
+/// for links and junctions right before the stage is written and again right
+/// before publishing, as the serial mirror's per-file `mkdir_all` did
+/// (`LocalBackend::mkdir_all` refuses them on every level). `progress`
 /// receives every streamed block.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn copy_stream(
@@ -20,14 +32,23 @@ pub(super) fn copy_stream(
     destination: &dyn Backend,
     destination_path: &str,
     destination_expected: Option<&VfsMeta>,
+    guard_parent: bool,
     cancel: &AtomicBool,
     progress: &dyn Fn(u64),
-) -> io::Result<u64> {
-    let staged = crate::vfs::unique_staging_path(destination, destination_path, "sync")?;
-    let result = (|| {
+) -> Result<u64, CopyError> {
+    let staged = crate::vfs::unique_staging_path(destination, destination_path, "sync").map_err(
+        |error| CopyError {
+            error,
+            publishing: false,
+        },
+    )?;
+    let prepared = (|| {
         let source_before = source.stat(source_path)?;
         validate_unchanged_source(source_path, source_expected, &source_before, "before")?;
         let mut reader = source.open_read(source_path)?;
+        if guard_parent {
+            plain_parent(destination, destination_path)?;
+        }
         let mut writer = destination.open_write(&staged)?;
         let mut copied = 0u64;
         let mut buffer = vec![0u8; COPY_BUFFER];
@@ -54,17 +75,45 @@ pub(super) fn copy_stream(
             ));
         }
         validate_destination(destination, destination_path, destination_expected)?;
-        if destination_expected.is_some() {
-            crate::vfs::promote_staged_replace(destination, &staged, destination_path)?;
-        } else {
-            crate::vfs::promote_staged_create(destination, &staged, destination_path)?;
+        if guard_parent {
+            plain_parent(destination, destination_path)?;
         }
         Ok(copied)
     })();
-    if result.is_err() {
+    let copied = match prepared {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = destination.remove_file(&staged);
+            return Err(CopyError {
+                error,
+                publishing: false,
+            });
+        }
+    };
+    let published = if destination_expected.is_some() {
+        crate::vfs::promote_staged_replace(destination, &staged, destination_path)
+    } else {
+        crate::vfs::promote_staged_create(destination, &staged, destination_path)
+    };
+    if let Err(error) = published {
         let _ = destination.remove_file(&staged);
+        return Err(CopyError {
+            error,
+            publishing: true,
+        });
     }
-    result
+    Ok(copied)
+}
+
+/// The destination's parent chain consists of plain folders (created when
+/// missing); a link or junction anywhere in it is refused.
+fn plain_parent(destination: &dyn Backend, path: &str) -> io::Result<()> {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(0) => destination.mkdir_all("/"),
+        Some(index) => destination.mkdir_all(&trimmed[..index]),
+        None => Ok(()),
+    }
 }
 
 fn validate_unchanged_source(
