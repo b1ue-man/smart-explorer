@@ -44,20 +44,20 @@ Plan-Kritik (28 Befunde, 2026-09-28) ist eingearbeitet; Befundnummern stehen als
 
 | Block | Inhalt | Zustand |
 |---|---|---|
-| W1 | Grundlagen und Verträge (unten) | fertig; Commits ea7a8da, 8e47d9b, 4d2b6be, 315a00b, 6659839; enger Remote-Check: Linux Bibliothek+Tests kompilieren (Run 36497664619), Windows-Target nach Stub-Fix offen bis zur nächsten Prüfung |
-| A | Engine + lokale Kopie + Lane | läuft (Welle 1) |
-| B1 | Share-Peer-Protokoll (Iroh): Pakete, Aufnahmegrenze, Server-Kopie, QUIC-Fenster | umgesetzt (unkompiliert): `fs_transfer_v1` (PutBatch/Status/GetBatch/ReadAt/CreateDir/PromoteNoReplace/DiscardStage), `Busy` statt Warteschlange, Aufnahme 60, Fenster 16 MiB/Strom; `peer_fs_logging.rs` vom Orchestrator ergänzt |
-| B2 | Agent-Protokoll, Dienst-Weiterleitung, AgentBackend, IPC-Flusskontrolle | umgesetzt (unkompiliert): Kredit je Anfrage (`+credit-v1`), Pakete (`+batch-v1`), Stufen-Frames, Exec-Kanal-Pool; K18e-Statusabfrage nicht umgesetzt (kein Trait), eingecheckte Agent-Binaries alt (neue Frames erst nach Release) |
-| C | Google Drive | umgesetzt (unkompiliert): 1 API-Aufruf je neuer Datei ≤ 5 MB, gepoolte Agents, Cache im Hintergrund, Schlüssel-Sperren, Congestion; Suite: alle `gdrive::`-Tests + `copy_paste_task_provider_drive_*`/`gui_design_task_drive_*` |
-| D | SFTP, SMB, FTP, WebDAV, ZIP | läuft (Welle 1) |
-| F | Windows: virtuelle Dateien für Remote (Zwischenablage, Ziehen) | umgesetzt (unkompiliert); offen für T: `ExternalTransfer::issue(path, message)`, Ref-Nachtrag `MSHCTX_LOCAL` |
-| H | App-Integration, Übertragungsfenster, Android | umgesetzt (unkompiliert); offen für A/T: `MAX_ACTIVE_TRANSFERS` entfernen, `base` ohne Schrägstrich, `progress.source/target` |
-| G | Sync: paralleles Spiegeln, Zwei-Wege mit Regelung | offen (Welle 2, nach A) |
-| T | Task-Suite, Workflow, Doku, Graph | Workflow mit allen Jobs und Messtest (`native/tests/transfer_throughput.rs`) angelegt; Suite-Modus des Skripts, Doku, Graph offen |
+| W1 | Grundlagen und Verträge (unten) | fertig; ea7a8da, 8e47d9b, 4d2b6be, 315a00b, 6659839 |
+| A | Engine + lokale Kopie + Lane | fertig; 704539f, ba79b8a, 1df938d (UNC-Serverkopie), 2678692 (Überlast als Gegendruck, Paketregeln, Download-Ziel einmal aufgelöst) |
+| B1 | Share-Peer-Protokoll (Iroh): Pakete, Aufnahmegrenze, Server-Kopie, QUIC-Fenster | fertig; 704539f, 1acc4d6 (Zulassung je Prinzipal 60, Host 256, Fristen je Block, begrenzter Statusspeicher, Stufen-Aufräumen) |
+| B2 | Agent-Protokoll, Dienst-Weiterleitung, AgentBackend, IPC-Flusskontrolle | fertig; 704539f, 9038053 (begrenzte Pakete/Frames, nur erzeugte Stufen verwerfen), Dauerfehler am Ziel (voll/Kontingent/schreibgeschützt) aus Agent-Texten erkannt; eingecheckte Agent-Binaries alt (neue Frames erst nach dem Release) |
+| C | Google Drive | fertig; 704539f, ba79b8a |
+| D | SFTP, SMB, FTP, WebDAV, ZIP | fertig; d7d3eb4, f3f1abd (`copy-data`/COPYCHUNK, Kopien ohne fsync/FLUSH, Abbrechen) |
+| F | Windows: virtuelle Dateien für Remote (Zwischenablage, Ziehen) | fertig; 704539f, 7bdb662 |
+| H | App-Integration, Übertragungsfenster, Android | fertig; 704539f, 315a00b |
+| G | Sync: paralleles Spiegeln, Zwei-Wege mit Regelung | fertig; 5889a99, 310890d (Überlast abwarten, paralleles Einlesen mit gemeinsamem Stopp), 7bdb662 (Keep-both nur vor dem Commit wiederholen) |
+| T | Task-Suite, Workflow, Doku, Graph | Suite `native/test-transfer-engine-task.sh` + `transfer-engine-task.yml` (16fad4d), Doku `docs/TRANSFER_ENGINE.md` (f756cf0 + Nachtrag Überlast/Fehler); Graph und Suite-Lauf am Ende |
 
-Welle 1 läuft parallel gegen die W1-Verträge (7 Agents). G startet, sobald A das Ordner-Register
-und `run_job` geliefert hat (K27). Nach jeder Welle: Integration, enger Remote-Check
-(`transfer-engine-task.yml`, Modus `check`), Fixes.
+Reviews (Sicherheit, Sync, Engine, COM) sind eingearbeitet (9038053 … 2678692). Remote-Checks:
+Linux und Windows-Target kompilieren bis 09d5ab0 (Runs 36503690971, 36503879920, 36508510130);
+der Stand danach geht in den Check vor der Suite.
 
 ## W1 Grundlagen – Verträge (fest; Abweichungen melden)
 

@@ -89,15 +89,40 @@ Sync-Jobs im Hintergrund-Dienst regeln getrennt von der GUI.
 
 | Protokoll | Was es erlaubt | Was die Engine nutzt | Grenzen und Zahlen |
 |---|---|---|---|
-| Lokal | Kernel-Kopie | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung), kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung | fsync nur bei Verschieben und Überschreiben |
-| Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB; voller Host antwortet „busy“ statt heimlich zu warten |
+| Lokal, UNC | Kernel-Kopie, Server-Offload | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung); innerhalb einer UNC-Freigabe kopiert so der SMB-Server selbst (Offload/COPYCHUNK); kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung | fsync nur bei Verschieben und Überschreiben; Abbrechen wirkt zwischen den Kopierblöcken |
+| Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen je Gegenstelle (Host-Zulassung), davon nutzt der Flow höchstens 56, 4 bleiben für Vordergrund-Lesen; Host gesamt 256 (halbe Tokio-Blocking-Threads); alte Hosts 32; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB je nach Speicher; voller Host antwortet „busy“ statt heimlich zu warten, alte Clients warten höchstens 45 s (ihre Frist ist 60 s) |
 | SSH-Agent / Hintergrund-Dienst | Anfragen mit IDs über einen Kanal | Kredit je Anfrage (`+credit-v1`: ein langsamer Download blockiert kein Blättern), Pakete (`+batch-v1`), Stufen-Frames, Pool zusätzlicher Exec-Kanäle | 64 MiB Budget je Verbindung, 1 MiB Anfangskredit, Fenster bis 8 MiB je Strom; Kanal-Pool bis MaxSessions − 2 |
-| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs, Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten | Tiefe ≤ Fenster/Block = 64, SSH-Fenster 16 MiB, Paket 32 KiB; Pool bis zur Ablehnung, 2 Kanäle Reserve |
+| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs, Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt) | Tiefe ≤ Fenster/Block = 64, SSH-Fenster 16 MiB, Paket 32 KiB; Pool bis zur Ablehnung, 2 Kanäle Reserve |
 | FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST | Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung; eine Verbindung bleibt fürs Blättern |
 | WebDAV | viele HTTP-Verbindungen, COPY | gepoolte Mutationen, gestreamtes PUT mit Länge und `If-None-Match: *`, serverseitiges COPY, Range | 429/503 → Überlast mit `Retry-After`; DELETE und leeres PUT ungepoolt (ureq würde sie wiederholen) |
 | Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken, ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy` | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
-| SMB | Credits, COPYCHUNK | mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits |
+| SMB | Credits, COPYCHUNK | mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
 | ZIP (Quelle) | – | ein Parse je Archiv, Einträge gestreamt | Parallelität = Kernzahl (Entpacken ist CPU-gebunden) |
+
+## Überlast, Fehler und Wiederholung
+
+- **Überlast ist Gegendruck, kein Dateifehler.** Meldet eine Verbindung „zu viele Anfragen“
+  (FTP-Pool voll, WebDAV 429/503, Drive-Ratenlimit, Share „busy“, Agent/Dienst ausgelastet),
+  gibt der Worker seine Erlaubnis als Überlast zurück (der Flow halbiert), wartet die genannte
+  Zeit (`Retry-After`, sonst 1 s ± 50 %, höchstens 60 s) ohne Erlaubnis und versucht es erneut –
+  solange nichts veröffentlicht ist und die Verbindung innerhalb von 5 Minuten irgendeinen
+  Fortschritt macht (`OVERLOAD_PATIENCE`, gleich in Engine, Ordneranlage und Sync). Dieselbe
+  Regel gilt im Einweg-Spiegeln und im Zwei-Wege-Sync.
+- **Andere vorübergehende Fehler** (Verbindungsabbruch, Timeout) werden je Datei einmal
+  wiederholt, nur vor der Veröffentlichung; Downloads setzen dabei ab dem geschriebenen Stand
+  fort, wo das Protokoll Offsets kann.
+- **Dauerfehler am Ziel** (voll, Kontingent erschöpft, schreibgeschützt, keine Rechte) beenden
+  die Übertragung mit Klartext; der Grund steht in der Fehlerliste immer an erster Stelle.
+- **Leistungsschalter:** viele Verbindungsfehler in Folge ohne jeden Erfolg (mindestens 8, sonst
+  doppelt so viele wie gleichzeitig laufen) beenden die Übertragung; ein verlorenes Paket zählt
+  dabei einmal.
+- **Pakete:** eine Datei, die sich während des Sendens ändert, wird nicht veröffentlicht;
+  wiederholt werden nur Mitglieder, die sicher nicht veröffentlicht wurden (sonst „Ergebnis
+  unbekannt“, nie ein Duplikat).
+- **Download-Ziel hinter einem Link** (z. B. `/home` als Link, verlegter Downloads-Ordner): der
+  gewählte Ordner wird einmal aufgelöst; Links werden nur in Ordnern geprüft, die die
+  Übertragung selbst anlegt.
+- **Verschieben** (lokal) entfernt einen Quellordner erst, wenn sein Gegenstück am Ziel existiert.
 
 ## Explorer-Übergabe (Windows)
 
