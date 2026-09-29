@@ -41,6 +41,16 @@ fn kind_from_message(message: &str) -> io::ErrorKind {
         io::ErrorKind::AlreadyExists
     } else if lower.contains("permission denied") || lower.contains("access is denied") {
         io::ErrorKind::PermissionDenied
+    } else if lower.contains("no space left on device")
+        || lower.contains("not enough space on the disk")
+    {
+        // ENOSPC / ERROR_DISK_FULL by their texts (their codes differ per OS):
+        // a full target ends a transfer instead of failing every file.
+        io::ErrorKind::StorageFull
+    } else if lower.contains("disk quota exceeded") {
+        io::ErrorKind::QuotaExceeded
+    } else if lower.contains("read-only file system") {
+        io::ErrorKind::ReadOnlyFilesystem
     } else {
         io::ErrorKind::Other
     }
@@ -130,6 +140,30 @@ mod tests {
             let error = agent_error(message.into());
             assert_eq!(error.kind(), io::ErrorKind::Other, "{message}");
             assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
+    fn transfer_engine_task_agent_errors_recover_permanent_target_kinds() {
+        for (message, kind) in [
+            (
+                "write: No space left on device (os error 28)",
+                io::ErrorKind::StorageFull,
+            ),
+            (
+                "There is not enough space on the disk. (os error 112)",
+                io::ErrorKind::StorageFull,
+            ),
+            (
+                "Disk quota exceeded (os error 122)",
+                io::ErrorKind::QuotaExceeded,
+            ),
+            (
+                "Read-only file system (os error 30)",
+                io::ErrorKind::ReadOnlyFilesystem,
+            ),
+        ] {
+            assert_eq!(agent_error(message.into()).kind(), kind, "{message}");
         }
     }
 }
