@@ -1,5 +1,4 @@
-//! Command-palette matching. Local download staging (`download_to_id`) lives
-//! in `crate::transfer` and is re-exported here under its previous name.
+//! Command-palette matching and the transfer-owned editor download boundary.
 pub(in crate::app) use crate::transfer::download_for_edit;
 
 /// Case-insensitive subsequence match (fuzzy), used to filter command palette

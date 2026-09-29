@@ -129,6 +129,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_open_task_quic_failure_keeps_underlying_disconnect_cause() {
+        let error = read_exact_error(ReadExactError::ReadError(
+            iroh::endpoint::ReadError::ConnectionLost(iroh::endpoint::ConnectionError::TimedOut)));
+        assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+        assert!(error.to_string().contains("connection lost:"));
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
     fn operation_specific_frame_limits_are_stricter_than_response_budget() {
         const {
             assert!(MAX_HANDSHAKE_CTRL_FRAME < MAX_REQUEST_CTRL_FRAME);

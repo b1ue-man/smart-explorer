@@ -357,6 +357,19 @@ callbacks and unloads normally.
 See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must
 not invoke this task entrypoint on the workstation.
 
+For the Direct Android-to-desktop file-opening repair, dispatch only
+`.github/workflows/direct-open-task.yml` with the full pushed `candidate_sha`.
+Its single `python native/test-direct-open-task.py` entrypoint runs the focused
+editor/recovery/download cases and directly affected transport integrations on
+Windows and Linux. It uses one source/hash-bound development library fixture per
+host, reusing cached output or incrementally building that library when needed.
+Job/entrypoint timeouts are 190/185 minutes. Tests use isolated profiles and a
+Windows credential namespace. Real authenticated Direct and Room loopback peers
+cross daemon/agent IPC with a forced connection drop; this does not emulate
+Android Doze or a physical Wi-Fi transition. Evidence and limits are recorded in
+[the task plan](DIRECT_REMOTE_OPEN_REPAIR.md). After this suite succeeds, use the
+same terminal complete-release path below, without a separate verification run.
+
 For remote automation, dispatch `.github/workflows/build.yml` exactly once from
 the `main` ref with `complete_release_source_sha` set to the full current
 `origin/main` object ID. Leave `verify_release_candidate` and `publish_release`
