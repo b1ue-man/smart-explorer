@@ -13,7 +13,7 @@ No local builds, native commands or tests are permitted.
 
 The reported log contains `editor temp copy is temporarily absent`, refusal to
 open without a recovery manifest, and `Datei oeffnen: connection lost`.
-Current source establishes:
+Inspection before M1 established:
 
 - `app/os/shared/remote_open.rs::open_file` registers an edit before downloading.
   `poll_remote_edits` observes the absent final filename after 1.5 seconds, before
@@ -74,7 +74,7 @@ transport kinds in a backward-compatible string envelope; leave unrecognized and
 ordinary filesystem messages on their existing path. Decode on the agent side
 without adding mutation retries. Retain the underlying QUIC cause for diagnosis.
 
-`download_to_id` is currently only consumed by desktop opening. Keep its public
+Before this change, `download_to_id` was only consumed by desktop opening. Keep its public
 path-only API as a wrapper; a new edit-download result carries the metadata from
 the successful attempt, so an unrelated later stat cannot silently adopt a newer
 conflict baseline. Respect `read_size` and stable IDs for transformed Drive files
