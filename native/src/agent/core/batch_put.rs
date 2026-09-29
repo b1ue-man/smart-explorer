@@ -9,7 +9,7 @@ use super::backend::AgentBackend;
 use super::mux::Mux;
 use super::route::RequestRx;
 use crate::agent_proto::{
-    put_entry_len, split_batch, BatchEntry, Frame, BATCH_UNKNOWN_MARKER, CHUNK,
+    clip_text, put_entry_len, split_batch, BatchEntry, Frame, BATCH_UNKNOWN_MARKER, CHUNK,
 };
 use crate::vfs::{BatchPut, BatchPutOutcome};
 use crossbeam_channel::TryRecvError;
@@ -200,7 +200,7 @@ impl AgentBackend {
                     id,
                     Frame::ItemEnd {
                         index,
-                        error: failure.as_ref().map(ToString::to_string),
+                        error: failure.as_ref().map(|error| clip_text(error.to_string())),
                     },
                 )?;
                 sent = local + 1;

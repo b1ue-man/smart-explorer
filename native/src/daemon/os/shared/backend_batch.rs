@@ -9,7 +9,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use crate::agent_proto::{check_get_batch, check_put_batch, BatchEntry, BatchItem, Frame, Inbound};
-use crate::agent_proto::{BATCH_UNKNOWN_MARKER, CHUNK};
+use crate::agent_proto::{clip_text, BATCH_UNKNOWN_MARKER, CHUNK, ITEM_PATH_MAX};
 use crate::vfs::{BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink};
 
 use super::backend_server::{emit, error_text, Sink};
@@ -322,10 +322,21 @@ pub(super) fn handle_put_batch_backend(
             let index =
                 u32::try_from(range.start + offset).map_err(|_| protocol("Paket-Index zu groß"))?;
             let reply = match outcome {
+                // A published path the protocol cannot carry leaves the
+                // outcome unknown to the client; never report it as failed.
+                BatchPutOutcome::Published(path) if path.len() > ITEM_PATH_MAX => {
+                    return emit(
+                        sink,
+                        id,
+                        &Frame::Err(format!(
+                            "{BATCH_UNKNOWN_MARKER} Veröffentlichter Pfad ist zu lang"
+                        )),
+                    );
+                }
                 BatchPutOutcome::Published(path) => Frame::ItemPublished { index, path },
                 BatchPutOutcome::Failed(error) => Frame::ItemFailed {
                     index,
-                    message: error_text(&error, credit),
+                    message: clip_text(error_text(&error, credit)),
                 },
             };
             emit(sink, id, &reply)?;
@@ -379,13 +390,15 @@ impl BatchSink for ForwardSink<'_> {
 
     fn end(&mut self, index: usize, result: io::Result<()>) -> io::Result<()> {
         let index = self.index(index)?;
-        let error = result.err().map(|error| error_text(&error, self.credit));
+        let error = result
+            .err()
+            .map(|error| clip_text(error_text(&error, self.credit)));
         emit(self.sink, self.id, &Frame::ItemEnd { index, error })
     }
 
     fn failed(&mut self, index: usize, error: io::Error) -> io::Result<()> {
         let index = self.index(index)?;
-        let message = error_text(&error, self.credit);
+        let message = clip_text(error_text(&error, self.credit));
         emit(self.sink, self.id, &Frame::ItemFailed { index, message })
     }
 }

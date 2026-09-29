@@ -4,6 +4,7 @@
 //! the same little-endian, length-prefixed rules.
 use std::io;
 
+use super::super::super::batch_limits::{BATCH_MAX_FILES, ITEM_PATH_MAX, ITEM_TEXT_MAX};
 use super::super::super::types::{BatchEntry, BatchItem, Frame};
 use super::super::{bad, Reader};
 use super::{
@@ -23,10 +24,15 @@ pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> 
         Frame::BatchPut { entries } => entries_len(entries),
         Frame::BatchGet { items } => items_len(items),
         Frame::ItemBegin { .. } => Ok(12),
-        Frame::ItemEnd { error, .. } => optional_string_len(error).and_then(|len| sum(4, len)),
-        Frame::ItemPublished { path: text, .. } | Frame::ItemFailed { message: text, .. } => {
-            string_len(text).and_then(|len| sum(4, len))
-        }
+        Frame::ItemEnd { error, .. } => within(error.as_deref(), ITEM_TEXT_MAX)
+            .and_then(|()| optional_string_len(error))
+            .and_then(|len| sum(4, len)),
+        Frame::ItemPublished { path, .. } => within(Some(path.as_str()), ITEM_PATH_MAX)
+            .and_then(|()| string_len(path))
+            .and_then(|len| sum(4, len)),
+        Frame::ItemFailed { message, .. } => within(Some(message.as_str()), ITEM_TEXT_MAX)
+            .and_then(|()| string_len(message))
+            .and_then(|len| sum(4, len)),
         Frame::CopyToStage { src, stage, .. } => string_len(src)
             .and_then(|src| sum(src, string_len(stage)?))
             .and_then(|len| sum(len, 8)),
@@ -114,7 +120,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
     Ok(Some(match tag {
         34 => Frame::Credit { bytes: r.u64()? },
         35 => {
-            let count = r.u32()? as usize;
+            let count = batch_count(r)?;
             if count > r.remaining() / MIN_BATCH_ENTRY_BYTES {
                 return Err(bad("batch entry count exceeds the remaining frame bytes"));
             }
@@ -129,7 +135,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             Frame::BatchPut { entries }
         }
         36 => {
-            let count = r.u32()? as usize;
+            let count = batch_count(r)?;
             if count > r.remaining() / MIN_BATCH_ITEM_BYTES {
                 return Err(bad("batch item count exceeds the remaining frame bytes"));
             }
@@ -149,15 +155,19 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
         },
         38 => Frame::ItemEnd {
             index: r.u32()?,
-            error: r.opt_str()?,
+            error: if r.bool()? {
+                Some(bounded_string(r, ITEM_TEXT_MAX)?)
+            } else {
+                None
+            },
         },
         39 => Frame::ItemPublished {
             index: r.u32()?,
-            path: r.string()?,
+            path: bounded_string(r, ITEM_PATH_MAX)?,
         },
         40 => Frame::ItemFailed {
             index: r.u32()?,
-            message: r.string()?,
+            message: bounded_string(r, ITEM_TEXT_MAX)?,
         },
         41 => Frame::CopyToStage {
             src: r.string()?,
@@ -174,8 +184,37 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
     }))
 }
 
+/// The element count of a batch header, refused above the protocol limit
+/// before anything is allocated for it.
+fn batch_count(r: &mut Reader) -> io::Result<usize> {
+    let count = r.u32()? as usize;
+    if count > BATCH_MAX_FILES {
+        return Err(bad("batch exceeds its file limit"));
+    }
+    Ok(count)
+}
+
+/// A string field of at most `max` bytes, refused before it is copied.
+fn bounded_string(r: &mut Reader, max: usize) -> io::Result<String> {
+    let length = r.u32()? as usize;
+    if length > max {
+        return Err(bad("text field exceeds its protocol limit"));
+    }
+    String::from_utf8(r.take(length)?.to_vec()).map_err(|_| bad("invalid utf8"))
+}
+
+/// Refuse to encode a text the receiver would refuse to decode.
+fn within(text: Option<&str>, max: usize) -> io::Result<()> {
+    if text.is_some_and(|text| text.len() > max) {
+        return Err(bad("text field exceeds its protocol limit"));
+    }
+    Ok(())
+}
+
 fn entries_len(entries: &[BatchEntry]) -> io::Result<usize> {
-    u32::try_from(entries.len()).map_err(|_| bad("frame too large"))?;
+    if entries.len() > BATCH_MAX_FILES {
+        return Err(bad("batch exceeds its file limit"));
+    }
     let mut length = 4;
     for entry in entries {
         add_len(&mut length, string_len(&entry.path)?)?;
@@ -185,7 +224,9 @@ fn entries_len(entries: &[BatchEntry]) -> io::Result<usize> {
 }
 
 fn items_len(items: &[BatchItem]) -> io::Result<usize> {
-    u32::try_from(items.len()).map_err(|_| bad("frame too large"))?;
+    if items.len() > BATCH_MAX_FILES {
+        return Err(bad("batch exceeds its file limit"));
+    }
     let mut length = 4;
     for item in items {
         add_len(&mut length, string_len(&item.path)?)?;

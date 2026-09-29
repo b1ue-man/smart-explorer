@@ -1,14 +1,16 @@
 //! Batch download from the agent's local filesystem (`batch-v1`): per item a
-//! header with the length it had when opened, exactly that many bytes and an
-//! end frame that reports a change during the read. Links and special files
-//! are refused like in the tree download; nothing is buffered beyond one
-//! chunk.
+//! header with its length, exactly that many bytes and an end frame that
+//! reports a change during the read. An item whose length differs from the
+//! requested one fails before any byte is sent (like the Share host), so a
+//! grown file never pushes the batch past its byte limit. Links and special
+//! files are refused like in the tree download; nothing is buffered beyond
+//! one chunk.
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-use super::batch_limits::check_get_batch;
+use super::batch_limits::{check_get_batch, clip_text};
 use super::fs::is_pseudo_dir;
 use super::local_platform::FileIdentity;
 use super::local_platform::{file_identity, metadata_is_link_like, path_matches_identity};
@@ -99,6 +101,21 @@ fn send_item(
     Ok((!unchanged).then(|| changed().to_string()))
 }
 
+/// Open an item that still has the requested length.
+fn open_requested(item: &BatchItem) -> io::Result<(std::fs::File, Snapshot)> {
+    let (file, snapshot) = open_item(&item.path)?;
+    if snapshot.size != item.size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Quelle wurde seit der Auflistung geändert ({} statt {} Bytes)",
+                snapshot.size, item.size
+            ),
+        ));
+    }
+    Ok((file, snapshot))
+}
+
 /// `BatchGet`: every item in request order, then `End`.
 pub(crate) fn handle_get_batch(
     sink: &Sink,
@@ -114,7 +131,7 @@ pub(crate) fn handle_get_batch(
         }
         let index = u32::try_from(position)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Paket-Index zu groß"))?;
-        let (mut file, snapshot) = match open_item(&item.path) {
+        let (mut file, snapshot) = match open_requested(item) {
             Ok(opened) => opened,
             Err(error) => {
                 emit(
@@ -122,7 +139,7 @@ pub(crate) fn handle_get_batch(
                     id,
                     &Frame::ItemFailed {
                         index,
-                        message: error.to_string(),
+                        message: clip_text(error.to_string()),
                     },
                 )?;
                 continue;
@@ -136,7 +153,7 @@ pub(crate) fn handle_get_batch(
                 size: snapshot.size,
             },
         )?;
-        let error = send_item(sink, id, &mut file, &snapshot, &mut buffer, cancel)?;
+        let error = send_item(sink, id, &mut file, &snapshot, &mut buffer, cancel)?.map(clip_text);
         emit(sink, id, &Frame::ItemEnd { index, error })?;
     }
     emit(sink, id, &Frame::End)

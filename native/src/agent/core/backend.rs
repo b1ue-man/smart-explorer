@@ -303,7 +303,7 @@ impl Backend for AgentBackend {
             // on the server (SFTP `copy-data`); a proxied peer answers `None`.
             return self.inner.server_copy_to_stage(src, stage, size, cancel);
         }
-        self.agent_copy_to_stage(src, stage, size)
+        self.agent_copy_to_stage(src, stage, size, cancel)
     }
 
     fn download_name(&self, path: &str, name: &str) -> String {
