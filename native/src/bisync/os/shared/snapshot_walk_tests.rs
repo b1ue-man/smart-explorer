@@ -157,3 +157,72 @@ fn transfer_engine_task_bisync_remote_walk_cancel_fails_closed() {
 
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
 }
+
+#[test]
+fn transfer_engine_task_bisync_remote_walk_waits_out_overload() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..6 {
+        write(
+            root.path(),
+            &format!("sub{}/f{index}.bin", index % 3),
+            &[index as u8].repeat(1_000 + index),
+        );
+    }
+    let globs = empty_globset();
+    let filter = WalkFilter::basic(true, &globs);
+    let cancel = AtomicBool::new(false);
+    let local = LocalBackend::new(&forward(root.path()));
+    // Listings and checksum reads are refused as overload a few times.
+    let remote = FakeRemote::new(root.path(), "walk-busy")
+        .with_overload("list", 3)
+        .with_overload("read", 2);
+
+    let expected = walk_files(
+        &local,
+        &forward(root.path()),
+        &cancel,
+        &filter,
+        HashMode::FullFresh,
+        None,
+    )
+    .unwrap();
+    let walked = walk_files(
+        &remote,
+        REMOTE_ROOT,
+        &cancel,
+        &filter,
+        HashMode::FullFresh,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(walked, expected);
+    assert_eq!(walked.len(), 6);
+    assert_eq!(remote.calls.congested.load(Ordering::SeqCst), 5);
+}
+
+#[test]
+fn transfer_engine_task_bisync_remote_walk_worker_panic_fails_the_walk() {
+    let root = tempfile::tempdir().unwrap();
+    for folder in 0..4 {
+        write(root.path(), &format!("folder{folder}/file.txt"), b"x");
+    }
+    let remote = FakeRemote::new(root.path(), "walk-panic").with_hook(Arc::new(
+        |operation: &str, path: &str| {
+            if operation == "list" && path.ends_with("folder2") {
+                panic!("injected walk panic");
+            }
+        },
+    ));
+    let globs = empty_globset();
+    let filter = WalkFilter::basic(true, &globs);
+    let cancel = AtomicBool::new(false);
+
+    let error = walk_files(&remote, REMOTE_ROOT, &cancel, &filter, HashMode::None, None)
+        .expect_err("a walk with a failed worker never yields a tree");
+
+    assert!(
+        error.to_string().contains("stopped unexpectedly"),
+        "{error}"
+    );
+}

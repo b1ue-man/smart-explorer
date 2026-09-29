@@ -1,16 +1,32 @@
 //! What the workers of a mirror's copy pass do to its shared state: copying
-//! one file under the pair's transfer permits, and the bookkeeping of the
-//! listing workers (errors, omissions, budget, queues). Permits are always
-//! taken last and released before any wait on the queues (plan rule K2).
+//! one file under the pair's transfer permits (again after overload, see
+//! `bisync::sync_overload`), and the bookkeeping of the listing workers
+//! (errors, omissions, budget, queues). Permits are always taken last and
+//! released before any wait on the queues or a backoff (plan rule K2).
 use super::imp::record_error;
-use super::sync_copy::copy_stream;
+use super::sync_copy::{copy_stream, CopyError};
 use super::sync_pass::{Pass, WAIT_SLICE};
-use super::sync_scan::{DirTask, FileTask};
-use crate::bisync::sync_flows::{outcome, PairSide};
+use super::sync_scan::{decide, Decision, DirTask, FileTask};
+use crate::bisync::sync_flows::PairSide;
+use crate::bisync::sync_overload::Backoff;
 use crate::transfer::engine::folders::FolderError;
-use crate::transfer::FlowPermit;
+use crate::transfer::engine::sleep_unless;
+use crate::transfer::{classify_error, FlowPermit, OpOutcome};
+use crate::vfs::VfsMeta;
 use std::cell::Cell;
+use std::io;
 use std::sync::atomic::Ordering;
+
+/// How one copy task ended short of an error.
+enum Finished {
+    Copied(u64),
+    /// A confirmed destination turned out unchanged.
+    Skipped,
+    /// A confirmed destination turned out to be a link.
+    Omitted,
+    /// A confirmed destination cannot take the file (reported, final).
+    Refused(String),
+}
 
 /// Files found but not yet copied. Discovery runs at most this far ahead of
 /// the copies: 4096 tasks (a few hundred bytes each, about 2 MiB) keep even
@@ -20,51 +36,128 @@ const FILE_QUEUE_LIMIT: usize = 4096;
 
 impl Pass<'_> {
     /// Copies one queued file; its worker was counted as waiting until the
-    /// permits are granted.
+    /// permits are granted. Overload before publication gives the permits
+    /// back as overload, waits the peer's delay without them and copies
+    /// again (`Backoff`); every other outcome is final.
     pub(super) fn copy_file(&self, task: FileTask) {
-        let permits = self.flows.transfer(self.cancel);
-        {
-            let mut state = self.lock();
-            state.copiers.waiting -= 1;
-            if permits.is_some() {
-                state.current = task.destination.clone();
+        let mut backoff = Backoff::new(&self.progress);
+        let mut counted = true;
+        loop {
+            if !counted {
+                self.lock().copiers.waiting += 1;
+            }
+            let permits = self.flows.transfer(self.cancel);
+            {
+                let mut state = self.lock();
+                state.copiers.waiting -= 1;
+                if permits.is_some() {
+                    state.current = task.destination.clone();
+                }
+            }
+            counted = false;
+            self.changed.notify_all();
+            // `None`: canceled before the copy started; nothing to report.
+            let Some(permits) = permits else {
+                return;
+            };
+            let streamed = Cell::new(0u64);
+            let on_block = |bytes: u64| {
+                permits.progress(bytes);
+                streamed.set(streamed.get().saturating_add(bytes));
+                self.streaming.fetch_add(bytes, Ordering::Relaxed);
+            };
+            let result = self.confirm_and_copy(&task, &on_block);
+            permits.finish(match &result {
+                Ok(Finished::Refused(_)) => OpOutcome::Failed,
+                Ok(_) => OpOutcome::Done,
+                Err(failure) => classify_error(&failure.error),
+            });
+            let delay = match &result {
+                Err(failure) if !failure.publishing => backoff.pause(&failure.error),
+                _ => None,
+            };
+            let Some(delay) = delay else {
+                self.copied(&task, streamed.get(), result);
+                return;
+            };
+            self.streaming.fetch_sub(streamed.get(), Ordering::Relaxed);
+            if !sleep_unless(self.cancel, delay) {
+                return;
             }
         }
-        self.changed.notify_all();
-        // `None`: canceled before the copy started; nothing to report.
-        let Some(permits) = permits else {
-            return;
+    }
+
+    /// One attempt of a task under its permits: a listed destination that
+    /// needs confirming is looked up first (overload there is retried like
+    /// the copy), then the file is copied if the serial rule says so.
+    fn confirm_and_copy(
+        &self,
+        task: &FileTask,
+        on_block: &dyn Fn(u64),
+    ) -> Result<Finished, CopyError> {
+        let confirmed: Option<VfsMeta>;
+        let expected = if task.confirm {
+            let found = match self.dst.stat(&task.destination) {
+                Ok(found) => Ok(Some(found)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(error) if classify_error(&error) == OpOutcome::Overload => {
+                    return Err(CopyError {
+                        error,
+                        publishing: false,
+                    })
+                }
+                Err(error) => Err(error),
+            };
+            confirmed = match decide(&task.meta, found) {
+                Decision::Copy(expected) => expected,
+                Decision::Skip => return Ok(Finished::Skipped),
+                Decision::Omit => return Ok(Finished::Omitted),
+                Decision::Fail(message) => return Ok(Finished::Refused(message)),
+            };
+            confirmed.as_ref()
+        } else {
+            task.expected.as_ref()
         };
-        let streamed = Cell::new(0u64);
-        let on_block = |bytes: u64| {
-            permits.progress(bytes);
-            streamed.set(streamed.get().saturating_add(bytes));
-            self.streaming.fetch_add(bytes, Ordering::Relaxed);
-        };
-        let result = copy_stream(
+        copy_stream(
             self.src,
             &task.source,
             &task.meta,
             self.dst,
             &task.destination,
-            task.expected.as_ref(),
+            expected,
+            self.guard_parent,
             self.cancel,
-            &on_block,
-        );
-        permits.finish(outcome(&result));
+            on_block,
+        )
+        .map(Finished::Copied)
+    }
+
+    /// Books one finished task (the bytes it streamed leave `streaming`).
+    fn copied(&self, task: &FileTask, streamed: u64, result: Result<Finished, CopyError>) {
+        if result.is_ok() {
+            self.progress.touch();
+        }
         let mut guard = self.lock();
         let state = &mut *guard;
-        self.streaming.fetch_sub(streamed.get(), Ordering::Relaxed);
+        self.streaming.fetch_sub(streamed, Ordering::Relaxed);
         match result {
-            Ok(bytes) => {
+            Ok(Finished::Copied(bytes)) => {
                 state.report.stats.copied += 1;
                 state.report.stats.bytes += bytes;
             }
-            Err(error) => record_error(
+            Ok(Finished::Skipped) => state.report.stats.skipped += 1,
+            Ok(Finished::Omitted) => state.report.omissions.record(&task.rel, true),
+            Ok(Finished::Refused(message)) => record_error(
                 &mut state.report.stats,
                 &mut state.report.errors,
-                task.source,
-                error.to_string(),
+                task.destination.as_str(),
+                message,
+            ),
+            Err(failure) => record_error(
+                &mut state.report.stats,
+                &mut state.report.errors,
+                task.source.as_str(),
+                failure.error.to_string(),
             ),
         }
     }
@@ -140,8 +233,16 @@ impl Pass<'_> {
         false
     }
 
+    /// Queues a folder to list, unless discovery stopped (budget) or the pass
+    /// ended meanwhile: then the folder is dropped, never left waiting for a
+    /// listing worker that will not come.
     pub(super) fn queue_dir(&self, task: DirTask) {
-        self.lock().dirs.push_back(task);
+        let mut state = self.lock();
+        if state.scan_stopped || state.finished {
+            return;
+        }
+        state.dirs.push_back(task);
+        drop(state);
         self.changed.notify_all();
     }
 

@@ -13,11 +13,8 @@
 //! their flows with each other but not with the GUI process, whose flows learn
 //! their own limits for the same connections (K24). Overload replies of the
 //! server halve the limit in each process on its own.
-use crate::transfer::{
-    acquire_pair, classify_error, flow_for, Flow, FlowPermit, OpOutcome, PermitPair,
-};
+use crate::transfer::{acquire_pair, flow_for, Flow, FlowPermit, PermitPair};
 use crate::vfs::Backend;
-use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -30,15 +27,6 @@ static NEXT_SYNC_JOB: AtomicU64 = AtomicU64::new(FIRST_SYNC_JOB);
 /// A fresh job id for one sync run (fair turns between runs on one flow).
 pub(crate) fn next_job() -> u64 {
     NEXT_SYNC_JOB.fetch_add(1, Ordering::Relaxed)
-}
-
-/// How an operation ended, for the flow controller: overload (rate limits,
-/// "too many requests", timeouts) halves the limit, other failures do not.
-pub(crate) fn outcome<T>(result: &io::Result<T>) -> OpOutcome {
-    match result {
-        Ok(_) => OpOutcome::Done,
-        Err(error) => classify_error(error),
-    }
 }
 
 /// One side of a sync pair: `A` is the source of a one-way mirror.
@@ -141,12 +129,5 @@ impl PairFlows {
             }
         };
         limit_of(PairSide::A).max(limit_of(PairSide::B)).max(1)
-    }
-}
-
-/// Ends an optional listing permit: done, or failed with `error`.
-pub(crate) fn finish_listing(permit: Option<FlowPermit>, error: Option<&io::Error>) {
-    if let Some(permit) = permit {
-        permit.finish(error.map_or(OpOutcome::Done, classify_error));
     }
 }

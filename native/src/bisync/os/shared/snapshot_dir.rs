@@ -13,7 +13,7 @@ use super::omissions::SyncOmissions;
 use super::paths::{join, rel_of};
 use super::snapshot::{WalkFilter, MAX_WALK_NODES, MAX_WALK_TEXT_BYTES};
 use super::snapshot_hash::{hash_file, md5_hex_to_u64, md5_to_u64, HashMode};
-use super::sync_flows::outcome;
+use super::sync_overload::{under_permits, Progress};
 use super::types::{Sig, Tree};
 
 /// Checksum reads stream in blocks of this size (as `hash_file` does).
@@ -34,6 +34,8 @@ pub(super) struct WalkContext<'a> {
     /// A remote side reads file contents (checksums) under a permit of its
     /// flow, with this job id; a local side reads freely, as before.
     pub(super) reads: Option<(Arc<Flow>, u64)>,
+    /// When the walk last got a listing or read through (overload patience).
+    pub(super) progress: Progress,
 }
 
 /// What one folder contributes to the snapshot.
@@ -181,17 +183,19 @@ fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io:
 }
 
 /// Reads one file to hash it: locally as before, on a remote side under a
-/// permit of its flow, reporting the streamed bytes to it.
+/// permit of its flow, reporting the streamed bytes to it and reading again
+/// after overload.
 fn content_hash(ctx: &WalkContext<'_>, path: &str) -> io::Result<u64> {
     let Some((flow, job)) = &ctx.reads else {
         return hash_file(ctx.be, path, ctx.cancel);
     };
-    let Some(permit) = flow.acquire_for(*job, ctx.cancel) else {
-        return Err(canceled());
-    };
-    let result = hash_streamed(ctx.be, path, ctx.cancel, &|bytes| permit.progress(bytes));
-    permit.finish(outcome(&result));
-    result
+    under_permits(
+        ctx.cancel,
+        &ctx.progress,
+        || flow.acquire_for(*job, ctx.cancel),
+        |permit| hash_streamed(ctx.be, path, ctx.cancel, &|bytes| permit.progress(bytes)),
+    )
+    .unwrap_or_else(|| Err(canceled()))
 }
 
 fn hash_streamed(
