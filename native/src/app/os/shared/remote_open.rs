@@ -69,11 +69,12 @@ impl App {
         };
         self.remote_edits.retain(|e| e.temp != dest);
         self.remote_edits.push(RemoteEdit {
+            phase: RemoteEditPhase::Downloading,
             temp: dest.clone(),
             backend: backend.clone(),
             remote_path: path.clone(),
             name: name.clone(),
-            baseline_mtime: i64::MAX, // real value set once downloaded
+            baseline_mtime: 0, // real value set once downloaded
             seen_mtime: 0,
             remote_known_mtime: 0, // captured after download (below)
             dirty: false,
@@ -165,6 +166,7 @@ impl App {
             // an editor that may immediately replace it (for example Obsidian).
             let m = file_mtime_ms(&temp);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
+                e.phase = RemoteEditPhase::Downloaded;
                 e.baseline_mtime = m;
                 e.seen_mtime = m;
                 e.remote_known_mtime = remote_mtime;
@@ -183,6 +185,9 @@ impl App {
                     &self.remote_edits,
                 ));
                 continue;
+            }
+            if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
+                e.phase = RemoteEditPhase::Editing;
             }
             let process = self.launch_for_edit(&p, mode);
             if let Some(e) = self.remote_edits.iter_mut().find(|e| e.temp == temp) {
@@ -203,7 +208,11 @@ impl App {
         self.last_edit_poll = std::time::Instant::now();
         let mut launch: Vec<(PathBuf, crate::vfs::BackendHandle, String, String, i64)> = Vec::new();
         let mut manifest_changed = false;
-        for e in self.remote_edits.iter_mut().filter(|e| !e.uploading) {
+        for e in self
+            .remote_edits
+            .iter_mut()
+            .filter(|e| e.phase == RemoteEditPhase::Editing && !e.uploading)
+        {
             let m = file_mtime_ms(&e.temp);
             if missing_temp_requires_recovery(m) {
                 // ShellExecute may expose only a short-lived launcher for a
@@ -217,16 +226,6 @@ impl App {
                     e.seen_mtime = 0;
                     manifest_changed = true;
                 }
-                continue;
-            }
-            // Sentinel: first time we actually see the file (e.g. after CfAPI
-            // hydration), just baseline it — don't treat the initial content as
-            // an edit to re-upload.
-            if e.baseline_mtime == i64::MAX {
-                e.baseline_mtime = m;
-                e.seen_mtime = m;
-                e.dirty = false;
-                manifest_changed = true;
                 continue;
             }
             if m == e.baseline_mtime {
@@ -250,7 +249,16 @@ impl App {
         }
         if manifest_changed {
             if let Err(error) = sync_recovery_manifest(&self.remote_edits) {
+                // A failed safety check must not still launch the uploads that
+                // were collected above. Keep edits retryable and recoverable.
+                for (temp, ..) in &launch {
+                    if let Some(edit) = self.remote_edits.iter_mut().find(|e| e.temp == *temp) {
+                        edit.uploading = false;
+                        edit.baseline_mtime = 0;
+                    }
+                }
                 self.error_msg = Some(format!("Remote-Wiederherstellung aktualisieren: {error}"));
+                return;
             }
         }
         let mut launch_manifest_changed = false;
