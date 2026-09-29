@@ -72,7 +72,9 @@ pub(super) fn try_incremental_mirror(
     filter: &WalkFilter,
     store_path: Option<&Path>,
 ) -> Option<Outcome> {
-    if opts.dry_run {
+    if opts.dry_run || endpoints.a.has_duplicate_file_names() || endpoints.b.has_duplicate_file_names() {
+        // A change-feed cursor cannot prove that the other side has no newly
+        // duplicated names. Only a complete paired observation can authorize repair.
         return None;
     }
     if cancel.load(Ordering::Relaxed) {

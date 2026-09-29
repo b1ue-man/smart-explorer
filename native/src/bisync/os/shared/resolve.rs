@@ -80,12 +80,31 @@ pub fn resolve_checked(
     keep_a: bool,
     pair: &str,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(ResolvePhase),
+    progress: impl FnMut(ResolvePhase),
+) -> io::Result<(Option<Sig>, Option<Sig>)> {
+    resolve_variant_checked(a, root_a, b, root_b, conflict, keep_a, None, pair, cancel, progress)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_variant_checked(
+    a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str,
+    conflict: &Conflict, keep_a: bool, variant_id: Option<&str>, pair: &str,
+    cancel: &AtomicBool, mut progress: impl FnMut(ResolvePhase),
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
     if cancel.load(Ordering::Acquire) {
         return Err(interrupted());
     }
     progress(ResolvePhase::Preparing);
+
+    if conflict.duplicates.is_some() {
+        return super::duplicate_apply::resolve(
+            super::incremental::SyncEndpoints::new(a, root_a, b, root_b), conflict,
+            keep_a, variant_id, &versions_dir(pair), cancel, 0, progress,
+        );
+    }
+    if variant_id.is_some() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Dieser Konflikt hat keine auswählbare Datei-ID"));
+    }
 
     let versions = versions_dir(pair);
     let path_a = join(root_a, &conflict.rel);

@@ -18,6 +18,7 @@ pub struct Preview {
     pub b_files: usize,
     pub error: Option<String>,
     pub omissions: SyncOmissions,
+    pub duplicate_removals: u64,
 }
 
 pub fn preview(
@@ -40,10 +41,12 @@ pub fn preview(
             error: Some(format!("{path}: {error}")), ..Default::default()
         },
     };
-    let base = snapshot.omissions.planning_baseline(&base);
-    let (actions, conflicts, _) = plan(&snapshot.a, &snapshot.b, &base, opts);
+    let (actions, conflicts, _) = snapshot.plan(&base, opts);
+    let duplicate_removals = snapshot.repairs.iter().filter_map(|c| c.duplicates.as_ref())
+        .map(|d| d.redundant_count()).sum();
     Preview {
         actions, conflicts, a_files: snapshot.a.len(), b_files: snapshot.b.len(),
         error: None, omissions: snapshot.omissions,
+        duplicate_removals,
     }
 }

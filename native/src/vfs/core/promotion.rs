@@ -6,6 +6,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const UNIQUE_ATTEMPTS: u32 = 1000;
 
+pub(super) fn promote_to_id<B: Backend + ?Sized>(
+    backend: &B, staged: &str, destination: &str, id: Option<&str>,
+) -> io::Result<()> {
+    if backend.has_duplicate_file_names() {
+        return Err(io::Error::new(io::ErrorKind::Unsupported,
+            "provider cannot replace a selected duplicate by ID"));
+    }
+    if backend.stat(destination)?.id.as_deref() != id {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "destination identity changed"));
+    }
+    backend.promote_staged(staged, destination)
+}
+
 /// Allocate an absent, hard-to-guess sibling name. Probe failures are errors,
 /// never interpreted as a free path.
 pub fn unique_staging_path<B: Backend + ?Sized>(

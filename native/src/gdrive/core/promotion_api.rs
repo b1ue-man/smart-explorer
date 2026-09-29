@@ -76,12 +76,20 @@ impl GDriveBackend {
         else {
             return Ok(None);
         };
+        self.exact_named_object(parent_id, plain, &id).map(Some)
+    }
+
+    pub(super) fn exact_named_object(
+        &self, parent_id: &str, plain: &str, id: &str,
+    ) -> VfsResult<DriveObject> {
         let url = self.api_url(&format!(
             "files/{}?fields=id,name,mimeType,size,md5Checksum,parents,trashed",
-            cloud_urlenc(&id)
+            cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
-        parse_object(&json, parent_id, plain).map(Some)
+        let object = parse_object(&json, parent_id, plain)?;
+        if object.id != id { return Err(invalid("Drive returned a different selected object ID")); }
+        Ok(object)
     }
 
     /// Change the name/parent of one exact Drive ID. The caller owns namespace

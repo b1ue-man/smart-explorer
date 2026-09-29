@@ -34,6 +34,14 @@ pub trait Backend: Send + Sync {
         None
     }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>>;
+    /// Sync observes actual same-name files, without browsing-only aliases.
+    fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.list_dir(path)
+    }
+    /// Such providers require complete duplicate observations before mutation.
+    fn has_duplicate_file_names(&self) -> bool {
+        false
+    }
     fn stat(&self, path: &str) -> VfsResult<VfsMeta>;
 
     /// Check whether `path` exists without treating access, transport, or
@@ -185,6 +193,10 @@ pub trait Backend: Send + Sync {
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         super::promotion::default_promote_staged(self, staged, destination)
     }
+    /// Replace the captured object; duplicate-capable providers must bind by ID.
+    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+        super::promotion::promote_to_id(self, staged, destination, id)
+    }
 
     /// Commit a complete staged regular file only if `destination` is still
     /// absent. This must be one atomic no-replace operation; callers use it
@@ -323,20 +335,7 @@ pub trait Backend: Send + Sync {
     /// Apply a previously preflighted cleanup plan. ID-addressed backends must
     /// delete the exact recorded ID rather than resolving the path again.
     fn apply_dedupe_plan(&self, plan: &[DedupeCandidate]) -> VfsResult<usize> {
-        let mut removed = 0usize;
-        for candidate in plan {
-            if let Err(error) = self.remove_file_id(&candidate.path, candidate.id.as_deref()) {
-                return Err(io::Error::new(
-                    error.kind(),
-                    format!(
-                        "duplicate cleanup stopped after {removed}/{} exact removals at {} (id {:?}): {error}",
-                        plan.len(), candidate.path, candidate.id
-                    ),
-                ));
-            }
-            removed += 1;
-        }
-        Ok(removed)
+        super::dedupe::apply(self, plan)
     }
 
     /// Make a mirror destination exact where duplicate names exist (Drive): for
