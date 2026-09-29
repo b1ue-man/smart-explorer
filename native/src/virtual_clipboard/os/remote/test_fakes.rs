@@ -276,10 +276,6 @@ impl RemoteContent for FakeRemote {
         }
     }
 
-    fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>> {
-        self.reader(entry, 0)
-    }
-
     fn open_entry_at(&self, entry: &ListedEntry, offset: u64) -> io::Result<Box<dyn Read + Send>> {
         if self.seekable {
             self.reader(entry, offset)

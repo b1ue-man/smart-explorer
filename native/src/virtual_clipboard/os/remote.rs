@@ -63,10 +63,6 @@ impl RemoteContent for SelectionSource {
         self.list_all(cancel, on_found)
     }
 
-    fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>> {
-        self.open(entry)
-    }
-
     fn open_entry_at(&self, entry: &ListedEntry, offset: u64) -> io::Result<Box<dyn Read + Send>> {
         if offset == 0 {
             return self.open(entry);
