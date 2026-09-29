@@ -53,11 +53,14 @@ Plan-Kritik (28 Befunde, 2026-09-28) ist eingearbeitet; Befundnummern stehen als
 | F | Windows: virtuelle Dateien für Remote (Zwischenablage, Ziehen) | fertig; 704539f, 7bdb662 |
 | H | App-Integration, Übertragungsfenster, Android | fertig; 704539f, 315a00b |
 | G | Sync: paralleles Spiegeln, Zwei-Wege mit Regelung | fertig; 5889a99, 310890d (Überlast abwarten, paralleles Einlesen mit gemeinsamem Stopp), 7bdb662 (Keep-both nur vor dem Commit wiederholen) |
-| T | Task-Suite, Workflow, Doku, Graph | Suite `native/test-transfer-engine-task.sh` + `transfer-engine-task.yml` (16fad4d), Doku `docs/TRANSFER_ENGINE.md` (f756cf0 + Nachtrag Überlast/Fehler); Graph und Suite-Lauf am Ende |
+| T | Task-Suite, Workflow, Doku, Graph | fertig: Suite `native/test-transfer-engine-task.sh` + `transfer-engine-task.yml` (16fad4d, Stufen laufen seit 082c774 alle durch), Doku `docs/TRANSFER_ENGINE.md`, Graph df20171; Release v0.5.166 (Runs 36525861000, 36535178233) |
 
-Reviews (Sicherheit, Sync, Engine, COM) sind eingearbeitet (9038053 … 2678692). Remote-Checks:
-Linux und Windows-Target kompilieren bis 09d5ab0 (Runs 36503690971, 36503879920, 36508510130);
-der Stand danach geht in den Check vor der Suite.
+Reviews (Sicherheit, Sync, Engine, COM) sind eingearbeitet (9038053 … 2678692). Suite-Läufe:
+36516591958 und 36518722644 fanden Fehler (Tests, FTP-Upload seriell auf der Blätter-Verbindung,
+Ordner vor Dateien, Sync-Index-Fallback, Stufen-Aufräumen hinter altem Agent), alle behoben;
+36523120834 wurde auf Wunsch vor dem Ende des Linux-Jobs gestoppt: bis dahin alles grün bis auf den
+SFTP-Download über die geformte Leitung (danach behoben in b495581, ungetestet); die Share-Raum-E2E
+(parallele Downloads) blieb unbestätigt – offen als TODO TE2.
 
 ## W1 Grundlagen – Verträge (fest; Abweichungen melden)
 
