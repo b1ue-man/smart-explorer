@@ -21,6 +21,10 @@ use windows::Win32::System::Com::{
 
 /// CopyTo moves data in blocks of the fetch's network read size.
 const COPY_BLOCK: usize = 256 << 10;
+/// Fresh fetches per Read after a failure: a connection that broke mid-file
+/// continues where it broke without Explorer noticing; one that fails again
+/// at once reports its error instead of retrying blindly.
+const RENEWALS: u32 = 1;
 
 struct Cursor {
     fetch: Option<FetchHandle>,
@@ -87,36 +91,40 @@ impl RemoteStream {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The fetch to read from and how far to skip first. A position behind
-    /// what was taken (rewind) or a stream without a fetch (Clone) starts a
-    /// fresh fetch from the beginning.
-    fn prepare(&self) -> Result<(Arc<Fetch>, u64)> {
+    /// The fetch to read from, how far to skip first, and whether it replaces
+    /// a failed one. A fresh fetch starts at the position when there is none
+    /// (Clone), when Explorer moved back, or (if `renew` allows) when the
+    /// current one failed and has nothing left to deliver.
+    fn prepare(&self, renew: bool) -> Result<(Arc<Fetch>, u64, bool)> {
         let mut cursor = self.lock();
-        let fresh = match &cursor.fetch {
-            Some(_) if cursor.position >= cursor.taken => None,
-            _ => Some(self.handoff.demand_fetch(&self.entry)?),
+        let (fresh, renewed) = match &cursor.fetch {
+            Some(_) if cursor.position < cursor.taken => (true, false),
+            Some(fetch) if fetch.failed() => (renew, renew),
+            Some(_) => (false, false),
+            None => (true, false),
         };
-        if let Some(fetch) = fresh {
+        if fresh {
+            let start = cursor.position;
             // The old fetch (if any) stops when its handle drops here.
-            cursor.fetch = Some(fetch);
-            cursor.taken = 0;
+            cursor.fetch = Some(self.handoff.demand_fetch(&self.entry, start)?);
+            cursor.taken = start;
         }
         let fetch = cursor
             .fetch
             .as_ref()
             .map(FetchHandle::shared)
             .ok_or_else(|| Error::from(STG_E_INVALIDFUNCTION))?;
-        Ok((fetch, cursor.position - cursor.taken))
+        Ok((fetch, cursor.position - cursor.taken, renewed))
     }
 
-    /// Records bytes taken from `fetch` unless a concurrent rewind replaced it.
-    fn advance(&self, fetch: &Arc<Fetch>, bytes: u64) -> u64 {
+    /// Records bytes taken from `fetch` unless a concurrent rewind replaced
+    /// it; a seek target further ahead stays the position.
+    fn advance(&self, fetch: &Arc<Fetch>, bytes: u64) {
         let mut cursor = self.lock();
         if matches!(&cursor.fetch, Some(current) if std::ptr::eq(&**current, &**fetch)) {
             cursor.taken += bytes;
-            cursor.position = cursor.taken;
+            cursor.position = cursor.position.max(cursor.taken);
         }
-        cursor.taken
     }
 
     /// Fills `out` unless the file ends first; short counts mean the end.
@@ -124,23 +132,44 @@ impl RemoteStream {
         if self.entry.is_dir {
             return Ok(0);
         }
-        let (fetch, skip) = self.prepare()?;
-        let mut skipped = 0;
-        if skip > 0 {
-            skipped = fetch.skip(skip).map_err(|error| self.failed(error))?;
-            if skipped < skip {
-                self.advance(&fetch, skipped);
-                return Ok(0);
+        self.handoff.prefetch.touch();
+        let origin = self.lock().position;
+        let (mut filled, mut ended, mut renewals) = (0, false, 0);
+        while filled < out.len() && !ended {
+            let (fetch, skip, renewed) = self.prepare(renewals < RENEWALS)?;
+            renewals += u32::from(renewed);
+            let step = if skip > 0 {
+                fetch.skip(skip)
+            } else {
+                fetch.read(&mut out[filled..])
+            };
+            match step {
+                Ok(taken) => {
+                    if skip == 0 {
+                        filled += taken.count;
+                    }
+                    self.advance(&fetch, taken.count as u64);
+                    // A short take without the end leaves an error pending:
+                    // the next round continues with a fresh fetch.
+                    ended = taken.ended;
+                }
+                // Nothing buffered is left: the next round starts a fresh fetch.
+                Err(_) if renewals < RENEWALS && fetch.failed() => {}
+                Err(error) => {
+                    // Explorer may repeat the Read: it starts from the same
+                    // position, not after bytes it never received.
+                    self.lock().position = origin;
+                    return Err(self.failed(error));
+                }
             }
         }
-        let (count, ended) = fetch.read(out).map_err(|error| self.failed(error))?;
-        let taken = self.advance(&fetch, skipped + count as u64);
-        self.handoff.sessions.bytes(count as u64);
+        let taken = self.lock().taken;
+        self.handoff.sessions.bytes(filled as u64);
         let whole = self.entry.size_known && taken >= self.entry.size;
-        if ended || count < out.len() || whole {
+        if ended || whole {
             self.handoff.sessions.delivered(self.index);
         }
-        Ok(count)
+        Ok(filled)
     }
 
     fn failed(&self, error: FetchError) -> Error {
@@ -157,7 +186,7 @@ impl RemoteStream {
         if self.entry.size_known {
             return Ok(self.entry.size);
         }
-        let (fetch, _) = self.prepare()?;
+        let (fetch, _, _) = self.prepare(true)?;
         fetch.total().map_err(to_error)
     }
 

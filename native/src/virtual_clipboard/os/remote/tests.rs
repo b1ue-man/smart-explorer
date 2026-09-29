@@ -2,17 +2,18 @@
 //! marshaled proxy of the worker's object (drag), directly (clipboard paste
 //! semantics) and, on the isolated clipboard runner, via the real clipboard.
 use super::catalog::{Catalog, TOO_LARGE_NOTE};
-use super::data_object::{Formats, RemoteDataObject};
-use super::handoff::{Config, Handoff};
+use super::data_object::Formats;
+use super::handoff::Config;
+use super::names::LONG_NAME;
+use super::test_fakes::FakeRemote;
 use super::test_support::*;
-use super::worker::LifeToken;
 use super::{set_clipboard_with, start_drag_with};
 use crate::transfer::{ListedEntry, SelectionListing};
 use std::sync::Arc;
 use std::time::Duration;
-use windows::core::{Error, Interface, Result};
+use windows::core::Interface;
 use windows::Win32::Foundation::{
-    E_OUTOFMEMORY, HGLOBAL, STG_E_ACCESSDENIED, STG_E_MEDIUMFULL, STG_E_READFAULT, S_FALSE, S_OK,
+    STG_E_ACCESSDENIED, STG_E_MEDIUMFULL, STG_E_READFAULT, S_FALSE, S_OK,
 };
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 use windows::Win32::System::Com::{
@@ -33,9 +34,25 @@ fn has(flags: u32, flag: i32) -> bool {
     flags & flag as u32 != 0
 }
 
-fn in_process(remote: FakeRemote, config: Config) -> IDataObject {
-    let handoff = Handoff::new(Arc::new(remote), config).expect("hand-off state");
-    RemoteDataObject::new(handoff.clone(), LifeToken::detached(handoff)).into()
+fn listed(rel: &str, is_dir: bool) -> ListedEntry {
+    ListedEntry {
+        rel: rel.to_string(),
+        path: format!("/r/{rel}"),
+        id: None,
+        size: 1,
+        size_known: true,
+        mtime_ms: 0,
+        is_dir,
+    }
+}
+
+fn catalog_of(entries: Vec<ListedEntry>, problems: Vec<(String, String)>) -> Catalog {
+    Catalog::from_listing(SelectionListing {
+        entries,
+        problems,
+        omitted: 0,
+        complete: true,
+    })
 }
 
 fn stat_size(stream: &IStream) -> u64 {
@@ -52,17 +69,11 @@ fn seek(stream: &IStream, offset: i64, origin: windows::Win32::System::Com::STRE
 
 #[test]
 fn transfer_engine_task_remote_catalog_keeps_windows_limits() {
-    let entry = |rel: &str, is_dir: bool| ListedEntry {
-        rel: rel.to_string(),
-        path: format!("/r/{rel}"),
-        id: None,
-        size: 1,
-        size_known: true,
-        mtime_ms: 0,
-        is_dir,
-    };
-    let edge = format!("a/{}", "e".repeat(257));
-    let over = format!("a/{}", "o".repeat(258));
+    let parent = "d".repeat(128);
+    let edge = format!("{parent}/{}", "e".repeat(130));
+    let over = format!("{parent}/{}", "o".repeat(131));
+    let part_255 = format!("a/{}", "x".repeat(255));
+    let part_256 = format!("a/{}", "y".repeat(256));
     assert_eq!(
         (edge.encode_utf16().count(), over.encode_utf16().count()),
         (259, 260)
@@ -77,27 +88,31 @@ fn transfer_engine_task_remote_catalog_keeps_windows_limits() {
         "a/com1",
         "a/ende.",
     ];
-    let mut entries = vec![entry("a", true), entry(&edge, false), entry(&over, false)];
-    entries.extend(unsafe_names.iter().copied().map(|rel| entry(rel, false)));
-    entries.push(entry("a/.versteckt", false));
-    entries.push(entry("a/COM10.txt", false));
-    let catalog = Catalog::from_listing(SelectionListing {
-        entries,
-        problems: vec![("/r/b".to_string(), "Zugriff verweigert".to_string())],
-        omitted: 0,
-        complete: true,
-    });
+    let mut entries = vec![
+        listed("a", true),
+        listed(&edge, false),
+        listed(&over, false),
+    ];
+    entries.extend(unsafe_names.iter().copied().map(|rel| listed(rel, false)));
+    entries.push(listed(&part_255, false));
+    entries.push(listed(&part_256, false));
+    entries.push(listed("a/.versteckt", false));
+    entries.push(listed("a/COM10.txt", false));
+    let problem = ("/r/b".to_string(), "Zugriff verweigert".to_string());
+    let catalog = catalog_of(entries, vec![problem]);
     let kept: Vec<&str> = catalog.entries.iter().map(|e| e.rel.as_str()).collect();
-    assert_eq!(kept, ["a", edge.as_str(), "a/.versteckt", "a/COM10.txt"]);
-    assert_eq!(catalog.files, 3);
+    let expected_kept = ["a", &edge, &part_255, "a/.versteckt", "a/COM10.txt"];
+    assert_eq!(kept, expected_kept);
+    assert_eq!(catalog.files, 4);
     assert_eq!(catalog.too_long, [over]);
-    let refused: Vec<&str> = catalog.problems[1..]
+    let mut refused: Vec<String> = unsafe_names.iter().map(|rel| format!("/r/{rel}")).collect();
+    refused.push(format!("/r/{part_256}"));
+    let reported: Vec<&str> = catalog.problems[1..]
         .iter()
         .map(|(path, _)| path.as_str())
         .collect();
-    let expected: Vec<String> = unsafe_names.iter().map(|rel| format!("/r/{rel}")).collect();
     assert_eq!(
-        refused, expected,
+        reported, refused,
         "every unsafe name is reported, none handed over"
     );
     let reserved = &catalog.problems[5].1;
@@ -105,7 +120,8 @@ fn transfer_engine_task_remote_catalog_keeps_windows_limits() {
         reserved.contains("in Smart Explorer einfügen"),
         "{reserved}"
     );
-    assert_eq!(catalog.errors(), 1 + 1 + unsafe_names.len() as u64);
+    assert_eq!(catalog.problems[8].1, LONG_NAME, "256 units exceed a name");
+    assert_eq!(catalog.errors(), 1 + 1 + refused.len() as u64);
     let note = catalog.note().expect("a note explains the omission");
     assert!(
         note.starts_with("1 Eintrag mit Pfaden ab 260 Zeichen"),
@@ -115,6 +131,51 @@ fn transfer_engine_task_remote_catalog_keeps_windows_limits() {
         note.ends_with("in Smart Explorer einfügen überträgt sie"),
         "{note}"
     );
+}
+
+#[test]
+fn transfer_engine_task_remote_catalog_numbers_case_twins() {
+    let entries = vec![
+        listed("Doku", true),
+        listed("Doku/Readme.txt", false),
+        listed("Doku/README.txt", false),
+        listed("Doku/readme (2).txt", false),
+        listed("doku", true),
+        listed("doku/Plan.txt", false),
+        listed("doku/PLAN.TXT", false),
+        listed("Data", false),
+        listed("DATA", true),
+        listed("DATA/x.txt", false),
+        listed("DATA/Sub", true),
+        listed("DATA/Sub/y.txt", false),
+    ];
+    let catalog = catalog_of(entries, Vec::new());
+    let placed: Vec<(&str, &str)> = catalog
+        .entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.rel.as_str()))
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            ("/r/Doku", "Doku"),
+            ("/r/Doku/Readme.txt", "Doku/Readme.txt"),
+            // "(2)" belongs to a listed file already.
+            ("/r/Doku/README.txt", "Doku/README (3).txt"),
+            ("/r/Doku/readme (2).txt", "Doku/readme (2).txt"),
+            // "doku" is the same Windows folder as "Doku": no entry of its own.
+            ("/r/doku/Plan.txt", "doku/Plan.txt"),
+            ("/r/doku/PLAN.TXT", "doku/PLAN (2).TXT"),
+            ("/r/Data", "Data"),
+            // A folder cannot share a file's name: it is numbered with its tree.
+            ("/r/DATA", "DATA (2)"),
+            ("/r/DATA/x.txt", "DATA (2)/x.txt"),
+            ("/r/DATA/Sub", "DATA (2)/Sub"),
+            ("/r/DATA/Sub/y.txt", "DATA (2)/Sub/y.txt"),
+        ]
+    );
+    assert_eq!(catalog.files, 8);
+    assert_eq!(catalog.errors(), 0, "numbered, not refused");
 }
 
 #[test]
@@ -213,11 +274,12 @@ fn transfer_engine_task_remote_handoff_ole_roundtrip_lists_and_streams() {
         b"edge"
     );
 
+    // The entry ends once the last stream closed (released asynchronously).
+    wait_until("the paste completes", || external(label).finished);
     let entry = external(label);
     assert_eq!((entry.files_total, entry.files_done), (4, 4));
     assert_eq!(entry.bytes_done, alpha.len() as u64 + 5_000 + 4);
     assert_eq!(entry.errors, 2, "the long path and the listing problem");
-    assert!(entry.finished, "the paste ends once every file arrived");
     let note = entry.note.unwrap_or_default();
     assert!(
         note.starts_with("1 Eintrag mit Pfaden ab 260 Zeichen"),
@@ -229,17 +291,13 @@ fn transfer_engine_task_remote_handoff_ole_roundtrip_lists_and_streams() {
     wait_until("the worker thread ends", || control.exited());
 }
 
-fn refuse(_bytes: usize) -> Result<HGLOBAL> {
-    Err(Error::from(E_OUTOFMEMORY))
-}
-
 #[test]
 fn transfer_engine_task_remote_descriptor_alloc_failure_is_medium_full() {
     let _apartment = Apartment::enter();
     let label = "transfer_engine_task too large";
     let remote = FakeRemote::new(label).file("a.txt", b"a".to_vec(), 0);
     let config = Config {
-        alloc: refuse,
+        alloc: refuse_alloc,
         ..Config::default()
     };
     let mut drag = start_drag_with(Arc::new(remote), config).expect("worker starts");
@@ -266,7 +324,7 @@ fn transfer_engine_task_remote_stream_seek_clone_stat_and_read_errors() {
     let remote = FakeRemote::new(label)
         .file("daten.bin", data.clone(), 0)
         .failing("kaputt.bin", vec![1; 50_000], 10_000);
-    let object = in_process(remote, Config::default());
+    let (object, _handoff) = in_process(remote, Config::default());
     let formats = Formats::register();
     assert_eq!(descriptor(&object, &formats).unwrap().len(), 2);
 
@@ -338,7 +396,7 @@ fn transfer_engine_task_remote_prefetch_runs_ahead_within_budget_and_flow() {
         memory: Arc::new(TestMemory(budget)),
         ..Config::default()
     };
-    let object = in_process(remote, config);
+    let (object, _handoff) = in_process(remote, config);
     let formats = Formats::register();
     assert_eq!(descriptor(&object, &formats).unwrap().len(), 8);
 
@@ -375,7 +433,7 @@ fn transfer_engine_task_remote_async_capability_ends_the_paste() {
     let remote = FakeRemote::new(label)
         .file("a.txt", b"eins".to_vec(), 0)
         .file("b.txt", b"zwei".to_vec(), 0);
-    let object = in_process(remote, Config::default());
+    let (object, _handoff) = in_process(remote, Config::default());
     let operation: IDataObjectAsyncCapability = object.cast().expect("async capability");
     assert!(unsafe { operation.GetAsyncMode() }.unwrap().as_bool());
     unsafe { operation.StartOperation(None::<&IBindCtx>) }.unwrap();

@@ -2,21 +2,25 @@
 //! drag): the connection's content, the file list (listed once, on
 //! Explorer's first request), prefetching, progress and the async mode.
 use super::catalog::{allocate_global, Catalog, DescriptorAlloc};
-use super::fetch::{spawn_producer, BufferPlan, Fetch, FetchHandle};
-use super::prefetch::Prefetcher;
+use super::fetch::{BufferPlan, Fetch, FetchHandle};
+use super::prefetch::{Prefetcher, IDLE_RELEASE};
+use super::producer::spawn_producer;
 use super::session::Sessions;
 use super::signal::{Signal, WAIT_SLICE};
 use crate::transfer::{Flow, ListedEntry, SelectionListing};
 use std::any::Any;
 use std::io::{self, Read};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use windows::core::{Error, Result};
 use windows::Win32::Foundation::{E_OUTOFMEMORY, E_UNEXPECTED};
 
 /// Flow job ids of hand-offs start above any transfer number, so the flow
 /// serves Explorer's reads in turn with the app's own jobs.
 const EXTERNAL_JOBS: u64 = 1 << 48;
+const LISTING_FAILED: &str = "Die Auflistung ist unerwartet abgebrochen";
 
 /// What is handed over: a remote selection (`SelectionSource` in the app).
 pub(super) trait RemoteContent: Send + Sync {
@@ -27,7 +31,20 @@ pub(super) trait RemoteContent: Send + Sync {
         on_found: &(dyn Fn(u64) + Sync),
     ) -> SelectionListing;
     fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>>;
+    /// Reads from byte `offset` on (a broken read continues where it broke).
+    fn open_entry_at(&self, entry: &ListedEntry, offset: u64) -> io::Result<Box<dyn Read + Send>>;
     fn connection_flow(&self) -> Arc<Flow>;
+}
+
+/// `reader` moved to byte `offset` by reading past the bytes before it, for
+/// connections that cannot start mid-file.
+pub(super) fn skip_to(
+    mut reader: Box<dyn Read + Send>,
+    offset: u64,
+) -> io::Result<Box<dyn Read + Send>> {
+    // A shorter file just ends early; the reader then yields nothing.
+    io::copy(&mut reader.by_ref().take(offset), &mut io::sink())?;
+    Ok(reader)
 }
 
 /// Memory held from a budget until dropped.
@@ -37,6 +54,8 @@ pub(super) trait Memory: Send + Sync {
     fn capacity(&self) -> u64;
     /// Waits until `bytes` fit; `None` once `cancel` is set.
     fn reserve(&self, bytes: u64, cancel: &AtomicBool) -> Option<Held>;
+    /// Reserves only if `bytes` fit right now.
+    fn try_reserve(&self, bytes: u64) -> Option<Held>;
 }
 
 /// The process-wide transfer memory budget.
@@ -50,11 +69,17 @@ impl Memory for SharedBudget {
     fn reserve(&self, bytes: u64, cancel: &AtomicBool) -> Option<Held> {
         crate::transfer::reserve_memory(bytes, cancel).map(|held| Box::new(held) as Held)
     }
+
+    fn try_reserve(&self, bytes: u64) -> Option<Held> {
+        crate::transfer::try_reserve_memory(bytes).map(|held| Box::new(held) as Held)
+    }
 }
 
 pub(super) struct Config {
     pub(super) memory: Arc<dyn Memory>,
     pub(super) alloc: DescriptorAlloc,
+    /// How long prefetched files wait for a quiet Explorer.
+    pub(super) prefetch_idle: Duration,
 }
 
 impl Default for Config {
@@ -62,6 +87,7 @@ impl Default for Config {
         Self {
             memory: Arc::new(SharedBudget),
             alloc: allocate_global,
+            prefetch_idle: IDLE_RELEASE,
         }
     }
 }
@@ -105,7 +131,7 @@ impl Handoff {
             prefetch_job,
             demand_job: prefetch_job + 1,
             closed: AtomicBool::new(false),
-            prefetch: Prefetcher::default(),
+            prefetch: Prefetcher::new(config.prefetch_idle),
             listing: Mutex::new(Listing::Idle),
             listed: Signal::new(true)?,
             // Explorer may copy in the background (IDataObjectAsyncCapability).
@@ -168,9 +194,16 @@ impl Handoff {
     }
 
     fn run_listing(&self) {
-        let listing = self
-            .source
-            .list_entries(&self.closed, &|found| self.sessions.found(found));
+        let listed = catch_unwind(AssertUnwindSafe(|| {
+            self.source
+                .list_entries(&self.closed, &|found| self.sessions.found(found))
+        }));
+        // A panic still answers Explorer: with an error instead of a list.
+        let listing = listed.unwrap_or_else(|_| SelectionListing {
+            problems: vec![(String::new(), LISTING_FAILED.to_string())],
+            complete: false,
+            ..SelectionListing::default()
+        });
         let catalog = Arc::new(Catalog::from_listing(listing));
         self.sessions.listed(&catalog);
         *self.lock_listing() = Listing::Ready(catalog);
@@ -192,13 +225,18 @@ impl Handoff {
         self.prefetch.ensure_running(self, catalog);
         match prefetched {
             Some(handle) => Ok(Some(handle)),
-            None => self.demand_fetch(entry).map(Some),
+            None => self.demand_fetch(entry, 0).map(Some),
         }
     }
 
-    /// Fetches `entry` from its start for a waiting reader.
-    pub(super) fn demand_fetch(self: &Arc<Self>, entry: &ListedEntry) -> Result<FetchHandle> {
-        let fetch = Fetch::new(entry.clone(), BufferPlan::for_entry(entry))?;
+    /// Fetches `entry` from byte `start` on for a waiting reader.
+    pub(super) fn demand_fetch(
+        self: &Arc<Self>,
+        entry: &ListedEntry,
+        start: u64,
+    ) -> Result<FetchHandle> {
+        let plan = BufferPlan::from_offset(entry, start);
+        let fetch = Fetch::new(entry.clone(), start, plan)?;
         let handle = FetchHandle::new(fetch.clone());
         spawn_producer(self.clone(), fetch, self.demand_job, None);
         Ok(handle)

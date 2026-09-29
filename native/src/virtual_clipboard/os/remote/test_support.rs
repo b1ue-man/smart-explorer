@@ -1,16 +1,16 @@
-//! Test doubles for remote virtual files: an in-memory remote with counters
-//! and gates, a small memory budget, an OLE apartment guard and descriptor
-//! parsing the way Explorer reads it.
-use super::data_object::Formats;
-use super::handoff::{Held, Memory, RemoteContent};
-use crate::transfer::{flow, ExternalSnapshot, Flow, ListedEntry, SelectionListing};
-use std::collections::HashSet;
-use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+//! Test support for remote virtual files: a small memory budget, an OLE
+//! apartment guard, in-process objects and descriptor parsing the way
+//! Explorer reads it. The fake remote is in `test_fakes.rs`.
+use super::data_object::{Formats, RemoteDataObject};
+use super::handoff::{Config, Handoff, Held, Memory};
+use super::test_fakes::FakeRemote;
+use super::worker::LifeToken;
+use crate::transfer::ExternalSnapshot;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Error, Result};
-use windows::Win32::Foundation::{E_UNEXPECTED, HGLOBAL, S_FALSE};
+use windows::Win32::Foundation::{E_OUTOFMEMORY, E_UNEXPECTED, HGLOBAL, S_FALSE};
 use windows::Win32::System::Com::{
     IDataObject, IStream, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED, TYMED_HGLOBAL,
     TYMED_ISTREAM,
@@ -20,7 +20,7 @@ use windows::Win32::System::Ole::{OleInitialize, OleUninitialize, ReleaseStgMedi
 use windows::Win32::UI::Shell::FILEDESCRIPTORW;
 
 /// Generous for slow runners; waits end as soon as the condition holds.
-const DEADLINE: Duration = Duration::from_secs(20);
+pub(super) const DEADLINE: Duration = Duration::from_secs(20);
 
 pub(super) fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + DEADLINE;
@@ -46,257 +46,18 @@ impl Drop for Apartment {
     }
 }
 
-#[derive(Clone)]
-struct FakeEntry {
-    rel: String,
-    bytes: Vec<u8>,
-    is_dir: bool,
-    size_known: bool,
-    mtime_ms: i64,
-    fail_after: Option<usize>,
-    wait_for: Option<String>,
+/// The data object without a worker thread, called directly on the test
+/// thread, and its shared state.
+pub(super) fn in_process(remote: FakeRemote, config: Config) -> (IDataObject, Arc<Handoff>) {
+    let handoff = Handoff::new(Arc::new(remote), config).expect("hand-off state");
+    let life = LifeToken::detached(handoff.clone());
+    let object = RemoteDataObject::new(handoff.clone(), life).into();
+    (object, handoff)
 }
 
-impl FakeEntry {
-    fn file(rel: &str, bytes: Vec<u8>) -> Self {
-        Self {
-            rel: rel.to_string(),
-            bytes,
-            is_dir: false,
-            size_known: true,
-            mtime_ms: 0,
-            fail_after: None,
-            wait_for: None,
-        }
-    }
-}
-
-/// What the remote saw: listings, opened and fully read files, and how many
-/// readers were open at once.
-#[derive(Default)]
-pub(super) struct Stats {
-    listings: AtomicUsize,
-    open_now: AtomicUsize,
-    max_open: AtomicUsize,
-    opened: Mutex<Vec<String>>,
-    finished: Mutex<HashSet<String>>,
-    changed: Condvar,
-}
-
-impl Stats {
-    pub(super) fn listings(&self) -> usize {
-        self.listings.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn max_open(&self) -> usize {
-        self.max_open.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn opened(&self, rel: &str) -> bool {
-        self.opened.lock().unwrap().iter().any(|name| name == rel)
-    }
-
-    pub(super) fn finished(&self, rel: &str) -> bool {
-        self.finished.lock().unwrap().contains(rel)
-    }
-
-    fn open(&self, rel: &str) {
-        let now = self.open_now.fetch_add(1, Ordering::SeqCst) + 1;
-        self.max_open.fetch_max(now, Ordering::SeqCst);
-        self.opened.lock().unwrap().push(rel.to_string());
-        self.changed.notify_all();
-    }
-
-    /// Blocks a reader until `rel` was opened (bounded, so a broken
-    /// prefetch fails the test instead of hanging it).
-    fn wait_opened(&self, rel: &str) {
-        let deadline = Instant::now() + DEADLINE;
-        let mut opened = self.opened.lock().unwrap();
-        while !opened.iter().any(|name| name == rel) && Instant::now() < deadline {
-            opened = self
-                .changed
-                .wait_timeout(opened, Duration::from_millis(20))
-                .unwrap()
-                .0;
-        }
-    }
-}
-
-pub(super) struct FakeRemote {
-    label: String,
-    ceiling: usize,
-    entries: Vec<FakeEntry>,
-    problems: Vec<(String, String)>,
-    pub(super) stats: Arc<Stats>,
-}
-
-impl FakeRemote {
-    pub(super) fn new(label: &str) -> Self {
-        Self {
-            label: label.to_string(),
-            ceiling: 4,
-            entries: Vec::new(),
-            problems: Vec::new(),
-            stats: Arc::new(Stats::default()),
-        }
-    }
-
-    pub(super) fn ceiling(mut self, ceiling: usize) -> Self {
-        self.ceiling = ceiling;
-        self
-    }
-
-    pub(super) fn dir(mut self, rel: &str) -> Self {
-        let mut entry = FakeEntry::file(rel, Vec::new());
-        entry.is_dir = true;
-        self.entries.push(entry);
-        self
-    }
-
-    pub(super) fn file(mut self, rel: &str, bytes: Vec<u8>, mtime_ms: i64) -> Self {
-        let mut entry = FakeEntry::file(rel, bytes);
-        entry.mtime_ms = mtime_ms;
-        self.entries.push(entry);
-        self
-    }
-
-    /// A provider export: its size is only known after reading it.
-    pub(super) fn export(mut self, rel: &str, bytes: Vec<u8>) -> Self {
-        let mut entry = FakeEntry::file(rel, bytes);
-        entry.size_known = false;
-        self.entries.push(entry);
-        self
-    }
-
-    /// Fails with a connection error after `after` bytes.
-    pub(super) fn failing(mut self, rel: &str, bytes: Vec<u8>, after: usize) -> Self {
-        let mut entry = FakeEntry::file(rel, bytes);
-        entry.fail_after = Some(after);
-        self.entries.push(entry);
-        self
-    }
-
-    /// An entry the listing could not read.
-    pub(super) fn problem(mut self, path: &str, message: &str) -> Self {
-        self.problems.push((path.to_string(), message.to_string()));
-        self
-    }
-
-    /// Its reader waits until `other` was opened.
-    pub(super) fn gated(mut self, rel: &str, bytes: Vec<u8>, other: &str) -> Self {
-        let mut entry = FakeEntry::file(rel, bytes);
-        entry.wait_for = Some(other.to_string());
-        self.entries.push(entry);
-        self
-    }
-
-    fn path(rel: &str) -> String {
-        format!("/fake/{rel}")
-    }
-}
-
-impl RemoteContent for FakeRemote {
-    fn display_label(&self) -> String {
-        self.label.clone()
-    }
-
-    fn list_entries(
-        &self,
-        _cancel: &AtomicBool,
-        on_found: &(dyn Fn(u64) + Sync),
-    ) -> SelectionListing {
-        self.stats.listings.fetch_add(1, Ordering::SeqCst);
-        let entries: Vec<ListedEntry> = self
-            .entries
-            .iter()
-            .map(|entry| ListedEntry {
-                rel: entry.rel.clone(),
-                path: Self::path(&entry.rel),
-                id: None,
-                size: if entry.size_known {
-                    entry.bytes.len() as u64
-                } else {
-                    0
-                },
-                size_known: entry.size_known,
-                mtime_ms: entry.mtime_ms,
-                is_dir: entry.is_dir,
-            })
-            .collect();
-        on_found(entries.len() as u64);
-        SelectionListing {
-            entries,
-            problems: self.problems.clone(),
-            omitted: 0,
-            complete: true,
-        }
-    }
-
-    fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>> {
-        let fake = self
-            .entries
-            .iter()
-            .find(|fake| Self::path(&fake.rel) == entry.path)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unbekannte Testdatei"))?;
-        self.stats.open(&fake.rel);
-        Ok(Box::new(FakeReader {
-            entry: fake.clone(),
-            position: 0,
-            stats: self.stats.clone(),
-        }))
-    }
-
-    fn connection_flow(&self) -> Arc<Flow> {
-        // A key of its own: learned limits of other tests do not leak in.
-        flow(
-            format!("transfer_engine_task {}", self.label),
-            Some(self.ceiling),
-        )
-    }
-}
-
-struct FakeReader {
-    entry: FakeEntry,
-    position: usize,
-    stats: Arc<Stats>,
-}
-
-impl Read for FakeReader {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if let Some(other) = self.entry.wait_for.take() {
-            self.stats.wait_opened(&other);
-        }
-        let limit = self.entry.fail_after.unwrap_or(usize::MAX);
-        if self.position >= limit {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                "Verbindung getrennt",
-            ));
-        }
-        let end = self
-            .entry
-            .bytes
-            .len()
-            .min(limit)
-            .min(self.position + out.len());
-        let count = end - self.position;
-        out[..count].copy_from_slice(&self.entry.bytes[self.position..end]);
-        self.position = end;
-        if count == 0 && !out.is_empty() {
-            self.stats
-                .finished
-                .lock()
-                .unwrap()
-                .insert(self.entry.rel.clone());
-        }
-        Ok(count)
-    }
-}
-
-impl Drop for FakeReader {
-    fn drop(&mut self) {
-        self.stats.open_now.fetch_sub(1, Ordering::SeqCst);
-    }
+/// A descriptor allocation Windows refuses (K19).
+pub(super) fn refuse_alloc(_bytes: usize) -> Result<HGLOBAL> {
+    Err(Error::from(E_OUTOFMEMORY))
 }
 
 /// A budget of a few files, to watch the prefetch stay inside it.
@@ -364,6 +125,18 @@ impl Memory for TestMemory {
                 .unwrap()
                 .0;
         }
+    }
+
+    fn try_reserve(&self, bytes: u64) -> Option<Held> {
+        let budget = self.0;
+        let bytes = bytes.min(budget.capacity);
+        let mut used = budget.used.lock().unwrap();
+        if *used + bytes > budget.capacity {
+            return None;
+        }
+        *used += bytes;
+        budget.max_used.fetch_max(*used, Ordering::SeqCst);
+        Some(Box::new(TestHeld { budget, bytes }))
     }
 }
 

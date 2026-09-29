@@ -1,5 +1,7 @@
-//! The file list Explorer receives: which listed entries it can take, why
-//! the others are left out, and the FILEGROUPDESCRIPTORW describing them.
+//! The file list Explorer receives: which listed entries it can take (and
+//! under which names), why the others are left out, and the
+//! FILEGROUPDESCRIPTORW describing them.
+use super::names::{long_part, name_problem, Namer, Placement, LONG_NAME};
 use crate::transfer::{ListedEntry, SelectionListing};
 use windows::core::{Error, Result};
 use windows::Win32::Foundation::{GlobalFree, FILETIME, HGLOBAL, STG_E_MEDIUMFULL};
@@ -20,9 +22,6 @@ const ENTRY_BYTES: usize = std::mem::size_of::<FILEDESCRIPTORW>();
 
 pub(super) const TOO_LARGE_NOTE: &str =
     "Auswahl zu groß für den Explorer – bitte in Smart Explorer einfügen";
-const INVALID_NAME: &str = "Der Name enthält Zeichen, die Windows nicht zulässt";
-const RESERVED_NAME: &str =
-    "Windows reserviert diesen Namen – in Smart Explorer einfügen überträgt ihn";
 const TOO_LONG_REASON: &str =
     "Pfad ab 260 Zeichen – nicht an den Explorer übergeben; in Smart Explorer einfügen überträgt ihn";
 /// Omitted entries listed with their reasons, as many as a transfer lists.
@@ -63,14 +62,24 @@ impl Catalog {
             problems,
             complete,
         };
+        let mut namer = Namer::new(listed.iter().map(|entry| entry.rel.as_str()));
         for entry in listed {
             if let Some(reason) = name_problem(&entry.rel) {
                 catalog.problems.push((entry.path, reason.to_string()));
-            } else if entry.rel.encode_utf16().count() >= NAME_UNITS {
-                catalog.too_long.push(entry.rel);
+                continue;
+            }
+            let rel = match namer.place(&entry.rel, entry.is_dir) {
+                Placement::At(rel) => rel,
+                Placement::Merged => continue,
+            };
+            // A number can lengthen a name past the limits.
+            if long_part(&rel) {
+                catalog.problems.push((entry.path, LONG_NAME.to_string()));
+            } else if rel.encode_utf16().count() >= NAME_UNITS {
+                catalog.too_long.push(rel);
             } else {
                 catalog.files += u64::from(!entry.is_dir);
-                catalog.entries.push(entry);
+                catalog.entries.push(ListedEntry { rel, ..entry });
             }
         }
         catalog
@@ -106,44 +115,6 @@ impl Catalog {
             more => format!("{path}: {message} (und {more} weitere)"),
         })
     }
-}
-
-/// Why Explorer could not create `rel` as named, if so. Explorer turns the
-/// descriptor name into a path as it is: a server's `..` would leave the
-/// target folder, `name:stream` would write an NTFS stream, a backslash would
-/// split the name, and Win32 strips trailing dots and spaces or opens a device.
-fn name_problem(rel: &str) -> Option<&'static str> {
-    for part in rel.split('/') {
-        let invalid = |c: char| c < ' ' || "<>:\"|?*\\".contains(c);
-        if part.is_empty() || part == "." || part == ".." || part.contains(invalid) {
-            return Some(INVALID_NAME);
-        }
-        if part.ends_with('.') || part.ends_with(' ') || is_device_name(part) {
-            return Some(RESERVED_NAME);
-        }
-    }
-    None
-}
-
-/// Reserved device names (Microsoft's file naming rules), which Win32
-/// resolves in any folder and with any extension.
-fn is_device_name(part: &str) -> bool {
-    let stem = part
-        .split('.')
-        .next()
-        .unwrap_or(part)
-        .trim_end()
-        .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) {
-        return true;
-    }
-    let mut digit = stem.get(3..).unwrap_or_default().chars();
-    matches!(stem.get(..3), Some("COM" | "LPT"))
-        && matches!(digit.next(), Some('0'..='9' | '¹' | '²' | '³'))
-        && digit.next().is_none()
 }
 
 fn entries_text(count: usize) -> String {

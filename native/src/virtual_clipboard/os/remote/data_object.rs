@@ -71,7 +71,11 @@ impl RemoteDataObject {
         let catalog = self.handoff.catalog()?;
         if !catalog.complete {
             // Never hand Explorer a partial list.
-            return Err(Error::new(E_UNEXPECTED, "Die Übergabe wurde beendet"));
+            let reason = catalog.problems.first().map(|(_, reason)| reason.as_str());
+            return Err(Error::new(
+                E_UNEXPECTED,
+                reason.unwrap_or("Die Übergabe wurde beendet"),
+            ));
         }
         match render(&catalog.entries, self.handoff.alloc) {
             Ok(handle) => Ok(hglobal_medium(handle)),

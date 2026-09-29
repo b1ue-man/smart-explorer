@@ -45,6 +45,12 @@ impl AttemptError {
     pub(super) fn error(&self) -> &io::Error {
         &self.error
     }
+
+    /// The failure came before any commit was attempted: nothing of this
+    /// attempt was published.
+    pub(super) fn before_commit(&self) -> bool {
+        self.phase == FailurePhase::PreCommit
+    }
 }
 
 pub(super) fn run_with_retry<T>(
