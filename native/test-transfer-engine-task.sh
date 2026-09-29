@@ -111,6 +111,26 @@ if [[ "${#batch_files[@]}" -eq 0 ]]; then
     echo "no batch source files found relative to $batch_base" >&2
     exit 1
 fi
+# In the complete suite a failing stage is recorded and the next one still
+# runs, so one remote run reports every problem; the suite fails at its end.
+# The check mode stops at the first failure.
+failed_stages=()
+stage_failed() {
+    failed_stages+=("$1")
+    echo "transfer engine task suite: FAILED: $1" >&2
+    if [[ "$suite_mode" == check ]]; then
+        exit 1
+    fi
+}
+finish_suite() {
+    if [[ "${#failed_stages[@]}" -ne 0 ]]; then
+        printf 'transfer engine task suite: failed stage: %s\n' "${failed_stages[@]}" >&2
+        exit 1
+    fi
+    suite_succeeded=true
+    echo "$1"
+}
+
 format_failures=0
 for batch_file in "${batch_files[@]}"; do
     format_diff="$(rustfmt --check --color never --edition 2021 < "$repo_root/$batch_file")"
@@ -120,10 +140,10 @@ for batch_file in "${batch_files[@]}"; do
     fi
 done
 if [[ "$format_failures" -ne 0 ]]; then
-    echo "$format_failures batch source files are not rustfmt-clean" >&2
-    exit 1
+    stage_failed "rustfmt: $format_failures batch source files are not rustfmt-clean"
+else
+    echo "transfer engine task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
 fi
-echo "transfer engine task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
 
 batch_ranges="$suite_tmp/batch-ranges.txt"
 : > "$batch_ranges"
@@ -179,11 +199,14 @@ for clippy_target in "${clippy_targets[@]}"; do
     if [[ "$clippy_target" != host ]]; then
         target_arguments=(--target "$clippy_target")
     fi
-    (
+    if ! (
         cd "$repo_root/native"
         run_task cargo clippy --locked "${target_arguments[@]}" --all-targets \
             --message-format short
-    ) 2>&1 | tee "$clippy_log"
+    ) 2>&1 | tee "$clippy_log"; then
+        stage_failed "clippy ($clippy_target) did not complete"
+        continue
+    fi
     batch_diagnostic_lines="$(batch_diagnostics "$clippy_log")"
     if [[ -n "$batch_diagnostic_lines" ]]; then
         printf '%s\n' "$batch_diagnostic_lines" >&2
@@ -193,8 +216,8 @@ for clippy_target in "${clippy_targets[@]}"; do
             echo "clippy ($clippy_target): diagnostics on changed lines (reported, not gating in --check)" >&2
             continue
         fi
-        echo "clippy ($clippy_target) reported diagnostics on lines this batch changed" >&2
-        exit 1
+        stage_failed "clippy ($clippy_target) reported diagnostics on lines this batch changed"
+        continue
     fi
     echo "transfer engine task suite: clippy ($clippy_target) is clean on the lines this batch changed"
 done
@@ -212,21 +235,19 @@ fi
 # wrong cfg) fails the suite instead of shrinking it.
 milestone_log="$suite_tmp/milestones.log"
 echo "transfer engine task suite: milestone tests ($platform)"
-(
+if ! (
     cd "$repo_root/native"
     run_task cargo test --locked --lib transfer_engine_task_ -- --test-threads=1
-) 2>&1 | tee "$milestone_log"
-passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
-if [[ -z "$passed_line" ]]; then
-    echo "milestone tests did not pass" >&2
-    exit 1
+) 2>&1 | tee "$milestone_log"; then
+    stage_failed "milestone tests"
 fi
+passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
 mapfile -t source_tests < <(
     grep -rhoE 'fn transfer_engine_task_[A-Za-z0-9_]+' "$repo_root/native/src" |
         sed 's/^fn //' | sort -u
 )
 mapfile -t compiled_tests < <(
-    { grep -oE '^test [^ ]+ \.\.\. (ok|ignored)' "$milestone_log" || true; } |
+    { grep -oE '^test [^ ]+ \.\.\. (ok|ignored|FAILED)' "$milestone_log" || true; } |
         awk '{print $2}' | sed 's/.*:://' | sort -u
 )
 mapfile -t missing_tests < <(comm -23 <(printf '%s\n' "${source_tests[@]}") \
@@ -270,10 +291,28 @@ for name in "${missing_tests[@]}"; do
 done
 if [[ "${#unexpected[@]}" -ne 0 ]]; then
     printf 'not compiled on %s: %s\n' "$platform" "${unexpected[@]}" >&2
-    echo "milestone tests defined in the source did not run" >&2
-    exit 1
+    stage_failed "milestone tests defined in the source did not run"
 fi
-echo "transfer engine task suite: ${#compiled_tests[@]} milestone tests passed ($passed_line)"
+echo "transfer engine task suite: ${#compiled_tests[@]} milestone tests compiled (${passed_line:-no passing summary})"
+
+# Milestones that need the isolated, sequential task runner (the Windows
+# clipboard round trip through OLE) are ignored by default; this throwaway
+# runner is one, so they run here with their switch.
+mapfile -t runner_milestones < <(
+    { grep -oE '^test [^ ]+ \.\.\. ignored' "$milestone_log" || true; } | awk '{print $2}' | sort -u
+)
+if [[ "${#runner_milestones[@]}" -ne 0 ]]; then
+    runner_log="$suite_tmp/milestones-runner.log"
+    echo "transfer engine task suite: ${#runner_milestones[@]} runner-only milestone tests"
+    if ! (
+        cd "$repo_root/native"
+        SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --lib -- --ignored --exact \
+            --test-threads=1 "${runner_milestones[@]}"
+    ) 2>&1 | tee "$runner_log" ||
+        ! grep -Eq "^test result: ok\. ${#runner_milestones[@]} passed; 0 failed" "$runner_log"; then
+        stage_failed "runner-only milestone tests: ${runner_milestones[*]}"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # The copy/paste safety tests (foreign data survives, no unsafe fallback,
@@ -281,47 +320,49 @@ echo "transfer engine task suite: ${#compiled_tests[@]} milestone tests passed (
 # engine; they are ignored by default and need their fixture switch.
 copy_paste_log="$suite_tmp/copy-paste.log"
 echo "transfer engine task suite: copy/paste safety tests"
-(
+if ! (
     cd "$repo_root/native"
     SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --lib copy_paste_task_transfer_ \
         -- --ignored --test-threads=1
-) 2>&1 | tee "$copy_paste_log"
-grep -Eq '^test result: ok\. 9 passed; 0 failed' "$copy_paste_log" || {
-    echo "the nine copy/paste safety tests did not all pass" >&2
-    exit 1
-}
+) 2>&1 | tee "$copy_paste_log" ||
+    ! grep -Eq '^test result: ok\. 9 passed; 0 failed' "$copy_paste_log"; then
+    stage_failed "the nine copy/paste safety tests"
+fi
 
 # ---------------------------------------------------------------------------
 # Directly affected integrations: every test of every module this batch
 # changed, so behavior the batch did not mean to change (sync, mounts,
 # remote paths, stored locations, the folder picker, CLI transfers) is
 # checked as it is. One thread: several of these tests set process-wide
-# state (the app trash volumes, environment switches).
+# state (the app trash volumes, environment switches). The opt-in switches
+# of the suites these tests come from are set, as android/test-android-task.sh
+# G2 sets them: the App task constructors and the loopback Share peer fixture
+# refuse to run without them.
 affected_modules=(
     transfer:: copy:: vfs:: net:: sync:: bisync:: syncjobs:: connect:: gdrive:: ftp:: webdav::
     sftp:: smb:: zipfs:: agent:: agent_proto:: daemon:: share:: app:: cli:: mobile::
     virtual_clipboard:: dragout::
 )
-skip_arguments=()
+# The daemon's Windows analysis bridge needs the Windows remote suite's own
+# switch and isolated profile (native/test-windows-remote-task.ps1).
+skip_arguments=(--skip windows_analysis_task_tests)
 if [[ "$platform" == windows ]]; then
     # Fails on Windows since before this batch (docs/TODO.md, H1).
     skip_arguments+=(--skip vfs::tests::copy_file_default_impl_streams)
 fi
 modules_log="$suite_tmp/modules.log"
 echo "transfer engine task suite: tests of the affected modules"
-(
+if ! (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib -- --test-threads=1 "${skip_arguments[@]}" \
-        "${affected_modules[@]}"
-) 2>&1 | tee "$modules_log"
-grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log" || {
-    echo "tests of the affected modules failed" >&2
-    exit 1
-}
+    SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task cargo test --locked --lib -- \
+        --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
+) 2>&1 | tee "$modules_log" ||
+    ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log"; then
+    stage_failed "tests of the affected modules"
+fi
 
 if [[ "$platform" != linux ]]; then
-    suite_succeeded=true
-    echo "task-level suite passed on $platform"
+    finish_suite "task-level suite passed on $platform"
     exit 0
 fi
 
@@ -347,13 +388,6 @@ stop_servers() {
     docker rm -f se-engine-sftp se-engine-ftp >/dev/null 2>&1 || true
 }
 trap 'stop_servers; cleanup' EXIT
-stop_servers
-docker run -d --name se-engine-sftp -p "$sftp_port:22" atmoz/sftp:latest \
-    "$sftp_user:$sftp_pass:::upload" >/dev/null
-docker run -d --name se-engine-ftp -p 21:21 -p 21000-21010:21000-21010 \
-    -e USERS="$ftp_user|$ftp_pass" delfer/alpine-ftp-server:latest \
-    vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=21000 \
-    -opasv_max_port=21010 -opasv_address=127.0.0.1 >/dev/null
 wait_banner() {
     local name=$1 port=$2 prefix=$3 deadline=$((SECONDS + 180)) banner=""
     while ((SECONDS < deadline)); do
@@ -368,43 +402,64 @@ wait_banner() {
     docker logs "se-engine-$name" >&2 || true
     return 1
 }
-wait_banner sftp "$sftp_port" "SSH-"
-wait_banner ftp 21 "220"
-export SE_TASK_SFTP="127.0.0.1:$sftp_port:$sftp_user:$sftp_pass:/upload"
-export SE_TASK_FTP_URL="ftp://$ftp_user:$ftp_pass@127.0.0.1:21/ftp/$ftp_user"
-(
+stop_servers
+servers_ready=true
+docker run -d --name se-engine-sftp -p "$sftp_port:22" atmoz/sftp:latest \
+    "$sftp_user:$sftp_pass:::upload" >/dev/null || servers_ready=false
+# vsftpd on the host network: its data connections need no published port
+# range (a PASV that finds no free port in its few random tries ends the
+# session), and the shaped loopback carries them directly. No client
+# limits: the engine's own flow finds the server's capacity.
+docker run -d --name se-engine-ftp --network host \
+    -e USERS="$ftp_user|$ftp_pass" delfer/alpine-ftp-server:latest \
+    vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=21000 \
+    -opasv_max_port=21999 -opasv_address=127.0.0.1 -omax_clients=0 -omax_per_ip=0 \
+    >/dev/null || servers_ready=false
+if [[ "$servers_ready" == true ]]; then
+    wait_banner sftp "$sftp_port" "SSH-" || servers_ready=false
+    wait_banner ftp 21 "220" || servers_ready=false
+fi
+if [[ "$servers_ready" != true ]]; then
+    stage_failed "the SFTP/FTP test servers did not start (server and throughput checks not run)"
+elif ! (
     cd "$repo_root/native"
     run_task cargo test --locked --test transfer_containers --test transfer_throughput --no-run
-)
-containers_log="$suite_tmp/containers.log"
-echo "transfer engine task suite: whole trees against the servers"
-(
-    cd "$repo_root/native"
-    run_task cargo test --locked --test transfer_containers -- --ignored --test-threads=1
-) 2>&1 | tee "$containers_log"
-grep -Eq '^test result: ok\. 6 passed; 0 failed' "$containers_log" || {
-    echo "transfers against the servers failed" >&2
-    exit 1
-}
+); then
+    stage_failed "the server and throughput checks did not build"
+else
+    export SE_TASK_SFTP="127.0.0.1:$sftp_port:$sftp_user:$sftp_pass:/upload"
+    export SE_TASK_FTP_URL="ftp://$ftp_user:$ftp_pass@127.0.0.1:21/ftp/$ftp_user"
+    containers_log="$suite_tmp/containers.log"
+    echo "transfer engine task suite: whole trees against the servers"
+    if ! (
+        cd "$repo_root/native"
+        run_task cargo test --locked --test transfer_containers -- --ignored --test-threads=1
+    ) 2>&1 | tee "$containers_log" ||
+        ! grep -Eq '^test result: ok\. 6 passed; 0 failed' "$containers_log"; then
+        stage_failed "transfers against the servers"
+    fi
 
-# Shaped loopback: 25 ms each way (50 ms round trip) at 100 Mbit/s, a common
-# remote link, so concurrency and pipelining have to earn the throughput.
-throughput_log="$suite_tmp/throughput.log"
-echo "transfer engine task suite: throughput over a shaped link (50 ms, 100 Mbit/s)"
-sudo -n tc qdisc add dev lo root netem delay 25ms rate 100mbit
-netem_active=true
-(
-    cd "$repo_root/native"
-    SE_TASK_NETEM_RTT_MS=50 SE_TASK_NETEM_RATE_MBIT=100 run_task cargo test --locked \
-        --test transfer_throughput -- --ignored --test-threads=1 --nocapture
-) 2>&1 | tee "$throughput_log"
-sudo -n tc qdisc del dev lo root
-netem_active=false
-grep -E '^throughput ' "$throughput_log" || true
-grep -Eq '^test result: ok\. 5 passed; 0 failed' "$throughput_log" || {
-    echo "throughput over the shaped link missed its bounds" >&2
-    exit 1
-}
+    # Shaped loopback: 25 ms each way (50 ms round trip) at 100 Mbit/s, a
+    # common remote link, so concurrency and pipelining have to earn the
+    # throughput.
+    throughput_log="$suite_tmp/throughput.log"
+    echo "transfer engine task suite: throughput over a shaped link (50 ms, 100 Mbit/s)"
+    if sudo -n tc qdisc add dev lo root netem delay 25ms rate 100mbit; then
+        netem_active=true
+        (
+            cd "$repo_root/native"
+            SE_TASK_NETEM_RTT_MS=50 SE_TASK_NETEM_RATE_MBIT=100 run_task cargo test --locked \
+                --test transfer_throughput -- --ignored --test-threads=1 --nocapture
+        ) 2>&1 | tee "$throughput_log" || true
+        sudo -n tc qdisc del dev lo root || true
+        netem_active=false
+        grep -E '^throughput ' "$throughput_log" || true
+        grep -Eq '^test result: ok\. 5 passed; 0 failed' "$throughput_log" ||
+            stage_failed "throughput over the shaped link missed its bounds"
+    else
+        stage_failed "the shaped link (netem on loopback) could not be set up"
+    fi
+fi
 stop_servers
 
 # ---------------------------------------------------------------------------
@@ -414,18 +469,22 @@ stop_servers
 e2e_log="$suite_tmp/share-e2e.log"
 echo "transfer engine task suite: Share Room end to end"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/native/target}"
+e2e_built=true
 (
     cd "$repo_root/native"
     run_task cargo build --locked --bin se
-)
+) || e2e_built=false
 (
     cd "$repo_root/share-server"
     CARGO_TARGET_DIR="$repo_root/share-server/target" run_task cargo build --locked --bin se-share-server
-)
-SMART_EXPLORER_SE_BINARY="$CARGO_TARGET_DIR/debug/se" \
-SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
-    bash "$repo_root/native/test-share-room-e2e.sh" 2>&1 | tee "$e2e_log"
-grep -Fq 'Room lifecycle passed:' "$e2e_log"
+) || e2e_built=false
+if [[ "$e2e_built" != true ]]; then
+    stage_failed "Share Room end to end: se or se-share-server did not build"
+else
+    SMART_EXPLORER_SE_BINARY="$CARGO_TARGET_DIR/debug/se" \
+    SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
+        bash "$repo_root/native/test-share-room-e2e.sh" 2>&1 | tee "$e2e_log" || true
+    grep -Fq 'Room lifecycle passed:' "$e2e_log" || stage_failed "Share Room end to end"
+fi
 
-suite_succeeded=true
-echo "task-level suite passed with milestones, safety tests, affected modules, servers, throughput and Share end to end"
+finish_suite "task-level suite passed with milestones, safety tests, affected modules, servers, throughput and Share end to end"

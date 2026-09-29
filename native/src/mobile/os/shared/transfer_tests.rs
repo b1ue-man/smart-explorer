@@ -104,7 +104,7 @@ fn transfer_engine_task_android_connection_targets_never_replace() {
 }
 
 #[test]
-fn transfer_engine_task_android_task_shows_the_search_and_notes() {
+fn transfer_engine_task_android_transfer_shows_the_search_and_notes() {
     let mut progress = TransferProgress::new(TransferKind::Upload, "Upload", 0, 0);
     assert_eq!(task_message(&progress), None);
     progress.discovering = true;

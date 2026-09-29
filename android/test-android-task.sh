@@ -7,6 +7,11 @@
 #                         (Linux + Windows-GNU type check via clippy, moved tests under their new
 #                         paths, explorer-command metadata, rustfmt/clippy on the batch's lines),
 #                         G7 static release path
+#   host --without-batch-gates
+#                         the same without the rustfmt/clippy gates on the batch's lines: for a
+#                         later batch's suite that gates its own lines and type-checks both
+#                         targets, since the ranges since this batch's base now include the
+#                         code of every later batch
 #   desktop-bins --out D  G5 prerequisites: only the Linux `se` and `se-share-server` dev binaries
 #   android-build --out D G3: Android dependency tree, NDK/cargo-ndk, arm64 check, x86_64 .so with
 #                         16 KB alignment, debug APK + test APK, JVM unit tests
@@ -18,7 +23,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit
 
 usage() {
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 report_failure() {
@@ -411,15 +416,20 @@ PS1
 }
 
 cmd_host() {
+  local batch_gates=$1
   require_tools cargo rustup rustfmt git grep awk sed sort tee python3
   ensure_batch_base
   run_g7
   run_g1
   run_g2_moved_tests
   run_g2_explorer_command
-  run_g2_rustfmt
-  run_g2_check_and_clippy
-  step "host job passed: G1 (${#g1_tests[@]} tests), G2, G7"
+  if [[ "$batch_gates" == true ]]; then
+    run_g2_rustfmt
+    run_g2_check_and_clippy
+    step "host job passed: G1 (${#g1_tests[@]} tests), G2, G7"
+  else
+    step "host job passed: G1 (${#g1_tests[@]} tests), G2 without the batch-line gates, G7"
+  fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -835,8 +845,14 @@ command_name=$1
 shift
 case "$command_name" in
   host)
-    [[ "$#" -eq 0 ]] || { usage; exit 2; }
-    cmd_host
+    if [[ "$#" -eq 0 ]]; then
+      cmd_host true
+    elif [[ "$#" -eq 1 && "$1" == --without-batch-gates ]]; then
+      cmd_host false
+    else
+      usage
+      exit 2
+    fi
     ;;
   desktop-bins | android-build)
     [[ "$#" -eq 2 && "$1" == --out ]] || { usage; exit 2; }

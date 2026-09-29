@@ -9,7 +9,8 @@ name: transfer-engine-task
 #   linux          milestone tests, affected integrations, container transfers,
 #                  throughput over shaped loopback, batch gates (host + Windows)
 #   windows        Windows milestones (virtual files, local kernel copy) and gates
-#   android-host   the Android batch's host checks (mobile facade unchanged)
+#   android-host   the Android batch's host checks (mobile facade unchanged),
+#                  without its line gates (this suite gates its own lines)
 #   desktop-bins   Linux `se` + `se-share-server` for the device Share check
 #   android-build  Android tree, NDK, APKs, JVM tests
 #   device         the Android device suite on an emulator (transfers included)
@@ -251,7 +252,11 @@ jobs:
         timeout-minutes: 170
         run: |
           set -Eeuo pipefail
-          bash android/test-android-task.sh host 2>&1 | tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-host.log"
+          # The Android batch's own rustfmt/clippy line gates would now cover
+          # every later batch too; this suite gates its own lines (linux job)
+          # and type-checks both targets there.
+          bash android/test-android-task.sh host --without-batch-gates 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-host.log"
 
       - name: Upload failure diagnostics
         if: ${{ failure() || cancelled() }}
