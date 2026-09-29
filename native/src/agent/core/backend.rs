@@ -1,14 +1,17 @@
 use super::agent_error::agent_error;
 use super::metadata::wire_to_vfs;
+use super::pool::AgentPool;
 #[cfg(test)]
 use super::transport::HeartbeatPolicy;
 use super::transport::{AgentConnection, AgentReconnect};
-use crate::agent_proto::Frame;
-use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
+use crate::agent_proto::{Frame, ServerFeatures, BATCH_MAX_BYTES, BATCH_MAX_FILES};
+use crate::vfs::{
+    Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme,
+    VfsMeta, VfsResult,
+};
 use crossbeam_channel::Sender;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,13 +19,9 @@ const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct AgentBackend {
     pub(super) inner: BackendHandle,
-    pub(super) connection: Arc<AgentConnection>,
+    pub(super) pool: Arc<AgentPool>,
     version: String,
     root_confined: Option<String>,
-}
-
-fn operation_canceled(message: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, message)
 }
 
 impl AgentBackend {
@@ -44,6 +43,8 @@ impl AgentBackend {
         Self::from_streams_inner((r, w), inner, Some(reconnect), None)
     }
 
+    /// The SSH-deployed agent: its reconnect also opens further exec
+    /// channels, so this backend may spread requests over a channel pool.
     pub(super) fn from_root_confined_streams_with_reconnect(
         r: Box<dyn Read + Send>,
         w: Box<dyn Write + Send>,
@@ -64,9 +65,28 @@ impl AgentBackend {
     ) -> io::Result<Self> {
         let (connection, version) =
             AgentConnection::new_with_heartbeat((r, w), Some(reconnect), heartbeat)?;
+        let pool = AgentPool::single(connection, ServerFeatures::parse(&version));
         Ok(Self {
             inner,
-            connection,
+            pool,
+            version,
+            root_confined: None,
+        })
+    }
+
+    /// A pool over test streams: `opener` provides further channels.
+    #[cfg(test)]
+    pub(super) fn pooled_for_test(
+        r: Box<dyn Read + Send>,
+        w: Box<dyn Write + Send>,
+        inner: BackendHandle,
+        opener: AgentReconnect,
+    ) -> io::Result<Self> {
+        let (connection, version) = AgentConnection::new((r, w), Some(opener.clone()))?;
+        let pool = AgentPool::growable(connection, ServerFeatures::parse(&version), opener);
+        Ok(Self {
+            inner,
+            pool,
             version,
             root_confined: None,
         })
@@ -78,10 +98,15 @@ impl AgentBackend {
         reconnect: Option<AgentReconnect>,
         root_confined: Option<String>,
     ) -> io::Result<Self> {
-        let (connection, version) = AgentConnection::new(streams, reconnect)?;
+        let (connection, version) = AgentConnection::new(streams, reconnect.clone())?;
+        let features = ServerFeatures::parse(&version);
+        let pool = match (reconnect, root_confined.is_some()) {
+            (Some(opener), true) => AgentPool::growable(connection, features, opener),
+            _ => AgentPool::single(connection, features),
+        };
         Ok(AgentBackend {
             inner,
-            connection,
+            pool,
             version,
             root_confined,
         })
@@ -90,6 +115,28 @@ impl AgentBackend {
     pub fn version(&self) -> &str {
         &self.version
     }
+
+    pub(super) fn features(&self) -> ServerFeatures {
+        self.pool.features()
+    }
+
+    /// Agent channels currently open (the pool of an SSH-deployed agent).
+    pub fn channel_count(&self) -> usize {
+        self.pool.channel_count()
+    }
+
+    fn metadata_call(&self, request: Frame) -> VfsResult<Frame> {
+        self.pool
+            .lease()
+            .safe_call_timeout(request, METADATA_REQUEST_TIMEOUT)
+    }
+}
+
+fn unexpected(what: &str, other: &Frame) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("unexpected agent {what} reply: {other:?}"),
+    )
 }
 
 impl Backend for AgentBackend {
@@ -109,44 +156,26 @@ impl Backend for AgentBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self
-            .connection
-            .safe_call_timeout(Frame::ListDir(path.to_string()), METADATA_REQUEST_TIMEOUT)?
-        {
+        match self.metadata_call(Frame::ListDir(path.to_string()))? {
             Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
             Frame::Err(e) => Err(agent_error(e)),
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent directory reply: {other:?}"),
-            )),
+            other => Err(unexpected("directory", &other)),
         }
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        match self
-            .connection
-            .safe_call_timeout(Frame::Stat(path.to_string()), METADATA_REQUEST_TIMEOUT)?
-        {
+        match self.metadata_call(Frame::Stat(path.to_string()))? {
             Frame::Meta(m) => Ok(wire_to_vfs(m)),
             Frame::Err(e) => Err(agent_error(e)),
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent metadata reply: {other:?}"),
-            )),
+            other => Err(unexpected("metadata", &other)),
         }
     }
 
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        match self
-            .connection
-            .safe_call_timeout(Frame::TryExists(path.to_string()), METADATA_REQUEST_TIMEOUT)?
-        {
+        match self.metadata_call(Frame::TryExists(path.to_string()))? {
             Frame::Exists(exists) => Ok(exists),
             Frame::Err(error) => Err(agent_error(error)),
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected agent existence reply: {other:?}"),
-            )),
+            other => Err(unexpected("existence", &other)),
         }
     }
 
@@ -154,13 +183,19 @@ impl Backend for AgentBackend {
         true
     }
 
-    fn walk_tree(&self, root: &str, on_progress: &(dyn Fn(u64, u64) -> bool + Sync))
-        -> VfsResult<Option<crate::agent_proto::WireNode>> {
+    fn walk_tree(
+        &self,
+        root: &str,
+        on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+    ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
         self.walk_tree_impl(root, on_progress)
     }
 
-    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
-        -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+    fn scan_storage(
+        &self,
+        root: &str,
+        progress: &crate::analytics::Progress,
+    ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
         self.inner.scan_storage(root, progress)
     }
 
@@ -180,6 +215,26 @@ impl Backend for AgentBackend {
         self.agent_put_tree(src, root)
     }
 
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        let _ = dir;
+        self.features().batches().then_some(BatchLimits {
+            max_files: BATCH_MAX_FILES,
+            max_bytes: BATCH_MAX_BYTES,
+        })
+    }
+
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        self.agent_put_batch(entries, data)
+    }
+
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        self.agent_get_batch(items, sink)
+    }
+
     fn supports_search(&self) -> bool {
         true
     }
@@ -191,68 +246,7 @@ impl Backend for AgentBackend {
         tx: Sender<crate::vfs::SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let mux = self.connection.mux()?;
-        let (id, rx) = mux.register();
-        let result = (|| {
-            mux.send(
-                id,
-                Frame::Search {
-                    root: root.to_string(),
-                    spec: spec.clone(),
-                },
-            )?;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = mux.send(id, Frame::Cancel);
-                    return Err(operation_canceled("agent search canceled"));
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(Frame::Match {
-                        rel,
-                        is_dir,
-                        size,
-                        mtime_ms,
-                    }) => tx
-                        .send(crate::vfs::SearchHit {
-                            rel,
-                            is_dir,
-                            size,
-                            mtime_ms,
-                        })
-                        .map_err(|_| {
-                            if cancel.load(Ordering::Relaxed) {
-                                operation_canceled("agent search canceled")
-                            } else {
-                                io::Error::new(
-                                    io::ErrorKind::BrokenPipe,
-                                    "agent search result receiver closed",
-                                )
-                            }
-                        })?,
-                    Ok(Frame::End) => return Ok(true),
-                    Ok(Frame::Err(error)) => return Err(agent_error(error)),
-                    Ok(other) => {
-                        let _ = mux.send(id, Frame::Cancel);
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("unexpected agent search reply: {other:?}"),
-                        ));
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "agent search stream closed",
-                        ));
-                    }
-                }
-            }
-        })();
-        if result.is_err() {
-            let _ = mux.send(id, Frame::Cancel);
-        }
-        mux.unregister(id);
-        result
+        self.agent_search(root, spec, tx, cancel)
     }
 
     fn supports_walk_hashed(&self) -> bool {
@@ -266,82 +260,27 @@ impl Backend for AgentBackend {
         tx: Sender<crate::vfs::HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let mux = self.connection.mux()?;
-        if !mux.link_aware_hash.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-        let (id, rx) = mux.register();
-        let result = (|| {
-            mux.send(
-                id,
-                Frame::WalkHashed {
-                    root: root.to_string(),
-                    want_hash,
-                },
-            )?;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = mux.send(id, Frame::Cancel);
-                    return Err(operation_canceled("agent hash walk canceled"));
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(Frame::HashEntry {
-                        rel,
-                        is_dir,
-                        size,
-                        mtime_ms,
-                        md5,
-                    }) => tx
-                        .send(crate::vfs::HashHit {
-                            rel,
-                            is_dir,
-                            size,
-                            mtime_ms,
-                            md5,
-                        })
-                        .map_err(|_| {
-                            if cancel.load(Ordering::Relaxed) {
-                                operation_canceled("agent hash walk canceled")
-                            } else {
-                                io::Error::new(
-                                    io::ErrorKind::BrokenPipe,
-                                    "agent hash-walk result receiver closed",
-                                )
-                            }
-                        })?,
-                    Ok(Frame::End) => return Ok(true),
-                    Ok(Frame::Err(error)) => return Err(agent_error(error)),
-                    Ok(other) => {
-                        let _ = mux.send(id, Frame::Cancel);
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("unexpected agent hash-walk reply: {other:?}"),
-                        ));
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "agent hash-walk stream closed",
-                        ));
-                    }
-                }
-            }
-        })();
-        if result.is_err() {
-            let _ = mux.send(id, Frame::Cancel);
-        }
-        mux.unregister(id);
-        result
+        self.agent_walk_hashed(root, want_hash, tx, cancel)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.agent_open_read(path)
+        self.agent_open_read_at(path, 0)
     }
 
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
         let _ = id;
         self.open_read(path)
+    }
+
+    /// Every agent and service reads from an offset (`Read.offset`).
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        self.agent_open_read_at(path, offset).map(Some)
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
@@ -350,6 +289,13 @@ impl Backend for AgentBackend {
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.agent_open_write_new(path)
+    }
+
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        if !self.features().stage {
+            return Ok(None);
+        }
+        self.agent_copy_to_stage(src, stage, size)
     }
 
     fn download_name(&self, path: &str, name: &str) -> String {
@@ -372,7 +318,8 @@ impl Backend for AgentBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let (mux, reply) = self.connection.mutation_call(Frame::RenameNoReplace {
+        let lease = self.pool.lease();
+        let (mux, reply) = lease.mutation_call(Frame::RenameNoReplace {
             src: src.to_string(),
             dst: dst.to_string(),
         })?;
@@ -380,11 +327,8 @@ impl Backend for AgentBackend {
             Frame::Ok => Ok(()),
             Frame::Err(error) => Err(agent_error(error)),
             other => {
-                self.connection.invalidate(&mux);
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unexpected agent no-replace reply: {other:?}"),
-                ))
+                lease.invalidate(&mux);
+                Err(unexpected("no-replace", &other))
             }
         }
     }
@@ -425,8 +369,53 @@ impl Backend for AgentBackend {
         self.agent_unit_op(Frame::Mkdir(path.to_string()))
     }
 
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        if self.features().stage {
+            self.agent_create_dir(path, false)
+        } else {
+            self.mkdir_all(path)
+        }
+    }
+
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        if self.features().stage {
+            return self.agent_create_dir(path, true);
+        }
+        // Older servers: the trait's probing default.
+        if self.try_exists(path)? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                path.to_string(),
+            ));
+        }
+        self.create_dir(path)
+    }
+
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        if self.features().stage {
+            self.agent_discard_stage(stage)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "stage cleanup unsupported",
+            ))
+        }
+    }
+
     fn parallelism(&self) -> usize {
         self.inner.parallelism()
+    }
+
+    /// One controller per remote account: host and user for SSH, the share
+    /// for Share/Room connections through the service.
+    fn flow_key(&self, path: &str) -> String {
+        let _ = path;
+        format!("agent:{}", self.inner.namespace_identity())
+    }
+
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        let _ = path;
+        self.pool.transfer_ceiling()
     }
 
     fn rename_overwrites(&self) -> bool {

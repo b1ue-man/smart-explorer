@@ -1,9 +1,13 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
 use super::super::platform;
 
-pub(super) fn validate_directory_target(src: &Path, target: &Path) -> io::Result<()> {
+/// Refuses to copy or move the folder `src` to `target` when `target` is
+/// `src` itself or lies below it, compared on canonical paths (links and case
+/// variants resolved as far as the paths exist).
+pub(crate) fn validate_directory_target(src: &Path, target: &Path) -> io::Result<()> {
     let source = comparable_path(src)?;
     let target = comparable_path(target)?;
     let prefix = if source.ends_with('/') {
@@ -24,11 +28,9 @@ pub(super) fn validate_directory_target(src: &Path, target: &Path) -> io::Result
     Ok(())
 }
 
-pub(super) fn prepare_target_directory(root: &Path, target: &Path) -> io::Result<()> {
-    prepare_target_parent(root, target)?;
-    ensure_plain_directory(target)
-}
-
+/// The older per-file folder preparation (the engine's folder register does
+/// this once per folder now); kept for the safety regression tests.
+#[cfg(test)]
 pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()> {
     let root = absolute_normalized(root)?;
     let target = absolute_normalized(target)?;
@@ -88,6 +90,7 @@ pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()
     }
 }
 
+#[cfg(test)]
 fn ensure_plain_directory_tree(path: &Path) -> io::Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -110,6 +113,7 @@ fn ensure_plain_directory_tree(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_plain_directory(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => validate_plain_directory(path, &metadata),
@@ -125,6 +129,7 @@ fn ensure_plain_directory(path: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn validate_plain_directory(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
     if platform::metadata_is_link_like(metadata) {
         return Err(io::Error::new(

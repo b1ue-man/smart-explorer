@@ -1,5 +1,5 @@
-use super::backend::AgentBackend;
 use super::agent_error::agent_error;
+use super::backend::AgentBackend;
 use crate::{agent_proto::Frame, vfs::VfsResult};
 use std::{io, time::Duration};
 
@@ -9,7 +9,8 @@ impl AgentBackend {
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
     ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
-        let mux = self.connection.mux()?;
+        let lease = self.pool.lease();
+        let mux = lease.mux()?;
         let (id, rx) = mux.register();
         let result = (|| {
             mux.send(id, Frame::WalkTree(root.to_string()))?;
@@ -55,5 +56,4 @@ impl AgentBackend {
         mux.unregister(id);
         result
     }
-
 }

@@ -3,14 +3,14 @@
 //! under `<cache>/open/<editId>/`; the register survives restarts, and a
 //! changed copy is announced with an `edits` event.
 use super::args::{bool_or, nonempty_list, opt_str, str_arg};
-use super::drive::run_transfer;
+use super::drive::{run_job, transfer_job};
 use super::edits_store::{self as store, EditRecord, MAX_EDITS};
 use super::entry::mime_of;
 use super::error::ApiError;
 use super::fs_list::{reject_trash, require_writable};
 use super::location::{parent_path, Loc};
 use super::runtime::{Runtime, TaskCtx};
-use crate::transfer::TransferRequest;
+use crate::transfer::Endpoint;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -112,16 +112,15 @@ fn download_one(
     std::fs::create_dir_all(&dir)
         .map_err(|error| ApiError::from(error).context("Zwischenspeicher anlegen"))?;
     let result = (|| -> Result<PathBuf, ApiError> {
-        run_transfer(
-            ctx,
-            TransferRequest::Download {
-                backend,
-                files: vec![path],
-                dest_local: dir.to_string_lossy().into_owned(),
-                filter: None,
-            },
-        )?
-        .into_result(ctx)?;
+        let job = transfer_job(
+            Endpoint::Remote(backend),
+            vec![path],
+            Endpoint::Local,
+            dir.to_string_lossy().into_owned(),
+            loc.location(),
+            "Zwischenspeicher".to_string(),
+        );
+        run_job(ctx, job)?.into_result(ctx)?;
         single_file(&dir)
     })();
     match result {
@@ -351,15 +350,15 @@ fn run_upload_copy(
     let (backend, _) = rt.resolve_live(loc)?;
     let parent = parent_path(&loc.path).unwrap_or("/").to_string();
     let snapshot = store::file_state(Path::new(&record.local_path));
-    run_transfer(
-        ctx,
-        TransferRequest::Upload {
-            paths: vec![record.local_path.clone()],
-            backend,
-            dest_root: parent.clone(),
-        },
-    )?
-    .into_result(ctx)?;
+    let job = transfer_job(
+        Endpoint::Local,
+        vec![record.local_path.clone()],
+        Endpoint::Remote(backend),
+        parent.clone(),
+        record.local_path.clone(),
+        loc.at(&parent),
+    );
+    run_job(ctx, job)?.into_result(ctx)?;
     rebase(rt, &record.edit_id, snapshot, None);
     Ok(json!({ "location": loc.at(&parent) }))
 }

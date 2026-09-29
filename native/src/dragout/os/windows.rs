@@ -167,7 +167,7 @@ impl IDataObject_Impl for FileData_Impl {
 // ─── Minimal IDropSource ─────────────────────────────────────────────────────
 
 #[implement(IDropSource)]
-struct DropSource;
+pub(super) struct DropSource;
 
 impl IDropSource_Impl for DropSource_Impl {
     fn QueryContinueDrag(
@@ -192,7 +192,7 @@ impl IDropSource_Impl for DropSource_Impl {
 
 // ─── Public entry point ──────────────────────────────────────────────────────
 
-fn classify_drag_result(hr: HRESULT, effect: DROPEFFECT) -> Result<DragOutOutcome> {
+pub(super) fn classify_drag_result(hr: HRESULT, effect: DROPEFFECT) -> Result<DragOutOutcome> {
     if hr == DRAGDROP_S_CANCEL {
         return Ok(DragOutOutcome::Cancelled);
     }

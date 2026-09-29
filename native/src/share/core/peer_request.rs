@@ -11,7 +11,7 @@ use super::node_sessions::OpenedPeerStream;
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
 pub(super) const CONTROL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
-const IDEMPOTENT_CONTROL_BUDGET: Duration = Duration::from_secs(40);
+pub(super) const IDEMPOTENT_CONTROL_BUDGET: Duration = Duration::from_secs(40);
 
 impl PeerBackend {
     pub(super) fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
@@ -127,7 +127,43 @@ impl PeerBackend {
         result
     }
 
+    /// One request whose reply may take `budget`, such as a host-side copy
+    /// of a large file; never replayed, since it mutates.
+    pub(super) fn request_with_budget(
+        &self,
+        req: FsRequest,
+        budget: Duration,
+    ) -> io::Result<FsResponse> {
+        let lease = self.mount_lease.current()?;
+        let operation = super::peer_fs_logging::request_label(&req);
+        let started = Instant::now();
+        let endpoint = self.current_endpoint()?;
+        let opened = self.node.open_stream_until(
+            &endpoint,
+            &self.identity,
+            Instant::now() + CONTROL_ATTEMPT_TIMEOUT,
+        )?;
+        let response =
+            decode_resp(self.request_once(opened, req, lease, Instant::now() + budget)?)?;
+        super::peer_telemetry::report_fs_success(&self.node.ev, operation, started, &response);
+        Ok(response)
+    }
+
     pub(super) fn open_reader(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        self.open_read_request(
+            FsRequest::Read {
+                path: path.to_string(),
+            },
+            "peer read open",
+        )
+    }
+
+    /// Opens a Read or ReadAt stream; both are replayable until data flows.
+    pub(super) fn open_read_request(
+        &self,
+        request: FsRequest,
+        operation: &'static str,
+    ) -> VfsResult<Box<dyn Read + Send>> {
         let deadline = Instant::now() + IDEMPOTENT_CONTROL_BUDGET;
         let lease = self.mount_lease.current()?;
         let mut last_error = None;
@@ -145,7 +181,7 @@ impl PeerBackend {
                         continue;
                     }
                 };
-            let timeout = match io_deadline::remaining(attempt_deadline, "peer read open") {
+            let timeout = match io_deadline::remaining(attempt_deadline, operation) {
                 Ok(timeout) => timeout,
                 Err(error) => {
                     io_deadline::abort(&mut opened.send, &mut opened.recv);
@@ -156,21 +192,19 @@ impl PeerBackend {
                     continue;
                 }
             };
-            let result =
-                self.node
-                    .block_on(io_deadline::run_for("peer read open", timeout, async {
-                        send_ctrl(
-                            &mut opened.send,
-                            &Ctrl::Fs {
-                                req: FsRequest::Read {
-                                    path: path.to_string(),
-                                },
-                                lease: lease.clone(),
-                            },
-                        )
-                        .await?;
-                        recv_resp_wire(&mut opened.recv).await
-                    }));
+            let result = self
+                .node
+                .block_on(io_deadline::run_for(operation, timeout, async {
+                    send_ctrl(
+                        &mut opened.send,
+                        &Ctrl::Fs {
+                            req: request.clone(),
+                            lease: lease.clone(),
+                        },
+                    )
+                    .await?;
+                    recv_resp_wire(&mut opened.recv).await
+                }));
             match result {
                 Ok(response) => match decode_resp(response) {
                     Ok(FsResponse::Data { size }) => {
@@ -282,7 +316,10 @@ fn control_attempt_deadline(overall: Instant) -> io::Result<Instant> {
 fn is_retryable_read(request: &FsRequest) -> bool {
     matches!(
         request,
-        FsRequest::Capabilities { .. } | FsRequest::ListDir { .. } | FsRequest::Stat { .. }
+        FsRequest::Capabilities { .. }
+            | FsRequest::ListDir { .. }
+            | FsRequest::Stat { .. }
+            | FsRequest::PutBatchStatus { .. }
     )
 }
 
@@ -300,17 +337,24 @@ fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
         FsRequest::Rename { .. }
         | FsRequest::RenameNoReplace { .. }
         | FsRequest::PromoteStaged { .. }
+        | FsRequest::PromoteNoReplace { .. }
         | FsRequest::RemoveFile { .. }
         | FsRequest::RemoveDir { .. }
         | FsRequest::MkdirAll { .. }
+        | FsRequest::CreateDir { .. }
+        | FsRequest::DiscardStage { .. }
         | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
+        FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),
         FsRequest::Read { .. }
+        | FsRequest::ReadAt { .. }
         | FsRequest::Write { .. }
         | FsRequest::WriteNew { .. }
         | FsRequest::WriteDone
         | FsRequest::WalkTree { .. }
         | FsRequest::StorageSnapshot { .. }
-        | FsRequest::StorageAnalysis { .. } => false,
+        | FsRequest::StorageAnalysis { .. }
+        | FsRequest::PutBatch { .. }
+        | FsRequest::GetBatch { .. } => false,
     }
 }
 
@@ -337,5 +381,46 @@ mod tests {
             path: "/x".into()
         }));
         assert!(!is_retryable_read(&FsRequest::ReleaseLease));
+    }
+
+    #[test]
+    fn transfer_engine_task_only_batch_status_is_replayable() {
+        assert!(is_retryable_read(&FsRequest::PutBatchStatus {
+            nonce: "0123456789abcdef".into(),
+        }));
+        assert!(!is_retryable_read(&FsRequest::PutBatch {
+            nonce: "0123456789abcdef".into(),
+            entries: Vec::new(),
+        }));
+        assert!(!is_retryable_read(&FsRequest::CreateDir {
+            path: "/A/x".into(),
+            exclusive: true,
+        }));
+        assert!(!is_retryable_read(&FsRequest::PromoteNoReplace {
+            staged: "/A/x.stage".into(),
+            destination: "/A/x".into(),
+            copy: true,
+        }));
+        assert!(response_matches(
+            &FsRequest::PutBatchStatus {
+                nonce: "0123456789abcdef".into(),
+            },
+            &FsResponse::Batch {
+                status: super::super::wire::FsBatchStatus::Pending,
+            }
+        ));
+        assert!(!response_matches(
+            &FsRequest::CreateDir {
+                path: "/A/x".into(),
+                exclusive: false,
+            },
+            &FsResponse::Ready
+        ));
+        assert!(response_matches(
+            &FsRequest::DiscardStage {
+                path: "/A/x.stage".into(),
+            },
+            &FsResponse::Ok
+        ));
     }
 }

@@ -73,7 +73,9 @@ fn scripted_agent(
             hello_id,
             &Frame::HelloOk {
                 proto: PROTO_VERSION,
-                version: "test".into(),
+                // Link-aware hash walks are only requested from agents that
+                // announce them; no credit label keeps the scripted frames.
+                version: "test+sync-links-v1".into(),
             },
         )
         .unwrap();

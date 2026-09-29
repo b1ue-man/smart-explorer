@@ -157,12 +157,17 @@ windows = { version = "0.58", features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    # Remote virtual files: the drag hands the worker thread's data object to
+    # the GUI thread as a marshaled proxy (CoMarshalInterface).
+    "Win32_System_Com_Marshal",
     "Win32_System_Power",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_SystemServices",
+    # Remote virtual files: COM-safe event waits and the worker's thread id.
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",

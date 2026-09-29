@@ -14,6 +14,9 @@ impl eframe::App for App {
         self.update_background(ctx);
         self.update_keyboard(ctx);
         self.update_layout(ctx);
+        // A copy made by a key or a menu in this frame leaves its marker text
+        // on the system clipboard at once, before any later paste reads it.
+        self.flush_clip_marker(ctx);
         self.update_repaint(ctx);
         if self.post_update_startup_pending {
             if let Err(error) = crate::updater::acknowledge_update_startup() {
@@ -63,7 +66,6 @@ impl App {
         }
 
         self.drain_inactive_tabs();
-        self.drain_copy();
         self.drain_index();
         self.drain_index_save();
         self.drain_watcher();
@@ -178,7 +180,6 @@ impl App {
         // Repaint while background work is active
         if self.scan_running
             || self.tabs.iter().any(|t| t.scan_running)
-            || matches!(&self.copy_progress, Some(p) if !p.done)
             || self.sync_running
             || self.bisync_running
             || self.preview_running
@@ -189,7 +190,7 @@ impl App {
             || self.index_save_active()
             || self.band_active
             || !self.file_open_rx.is_empty()
-            || !self.transfers.is_idle()
+            || !self.transfer_center.is_idle()
             || self.remote_op_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()
@@ -213,9 +214,22 @@ impl App {
             || self.share_profiles.auto_connect
             || !self.remote_edits.is_empty()
             || self.quickshare.is_some()
+            || self.transfer_center.running_count() > 0
         {
-            // Poll for incoming share offers / roster changes at a calm cadence.
+            // Poll for incoming share offers / roster changes and the counts
+            // of Explorer hand-overs at a calm cadence.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        } else if self.transfer_center.window_open
+            || (clipboard_file_ops_supported()
+                && self
+                    .clip
+                    .as_ref()
+                    .is_some_and(|clip| !clip.selection.source.is_local()))
+        {
+            // Another program may paste our remote entries at any time: its
+            // hand-over is taken into the list within a second, before the
+            // provider can drop it with its notes (K20).
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
     }
 }

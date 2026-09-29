@@ -1,29 +1,38 @@
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::agent_proto::{self, Frame, WireMeta, CHUNK, PROTO_VERSION, TRANSFER_FRAME_BACKLOG};
+use crate::agent_proto::{
+    self, busy_message, Frame, RequestContext, ServerSession, WireMeta, PROTO_VERSION,
+};
 use crate::vfs::{BackendHandle, VfsMeta};
 
+use super::backend_batch::{handle_get_batch_backend, handle_put_batch_backend};
 use super::backend_delete::remove_tree_backend;
+use super::backend_stream::{handle_read_backend, handle_write_backend, WriteMode};
 use super::backend_transfer::handle_put_tree_backend;
 use super::backend_tree_send::handle_get_tree_backend;
 use super::backend_walk::{
     handle_search_backend, handle_walk_hashed_backend, handle_walk_tree_backend, remove_one_backend,
 };
-use super::locks::lock_or_recover;
-use super::request_workers::RequestWorkers;
+use super::request_workers::{RequestWorkers, LEGACY_MAX_REQUEST_WORKERS};
 
 pub(super) type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
-type InboundSender = SyncSender<Frame>;
 
 pub(super) fn emit(sink: &Sink, id: u64, frame: &Frame) -> io::Result<()> {
     let mut w = sink
         .lock()
         .map_err(|_| io::Error::other("daemon backend writer locked"))?;
     agent_proto::write_frame(&mut *w, id, frame)
+}
+
+/// Error text for the client; a credit client reads congestion of the peer
+/// (rate limit, busy host) as congestion instead of as a failure.
+pub(super) fn error_text(error: &io::Error, credit: bool) -> String {
+    match crate::vfs::congestion_of(error) {
+        Some(congestion) if credit => busy_message(congestion.retry_after, &congestion.message),
+        _ => error.to_string(),
+    }
 }
 
 fn canceled_request_lost_client(
@@ -46,30 +55,14 @@ fn canceled_request_lost_client(
         )
 }
 
-fn abort_requests(
-    inbound: &Mutex<HashMap<u64, InboundSender>>,
-    cancels: &Mutex<HashMap<u64, Arc<AtomicBool>>>,
-) {
-    for cancel in lock_or_recover(cancels).values() {
-        cancel.store(true, Ordering::Relaxed);
-    }
-    lock_or_recover(inbound).clear();
-}
-
-fn cancel_request(
-    id: u64,
-    inbound: &Mutex<HashMap<u64, InboundSender>>,
-    cancels: &Mutex<HashMap<u64, Arc<AtomicBool>>>,
-) {
-    if let Some(cancel) = lock_or_recover(cancels).get(&id) {
-        cancel.store(true, Ordering::Relaxed);
-    }
-    // Dropping the final sender wakes handlers currently blocked in recv.
-    lock_or_recover(inbound).remove(&id);
-}
-
-fn transfer_channel() -> (InboundSender, Receiver<Frame>) {
-    sync_channel(TRANSFER_FRAME_BACKLOG)
+/// The version this service announces for `backend`: batches only when the
+/// peer moves them itself (never emulated file by file), and no more
+/// transfer slots than the peer admits.
+fn service_version(backend: &BackendHandle) -> String {
+    let root = backend.root_display();
+    let batch = backend.batch_limits(&root).is_some();
+    let slots = agent_proto::service_slots(backend.transfer_ceiling(&root));
+    format!("{} worker", agent_proto::server_version_with(batch, slots))
 }
 
 pub(crate) fn serve_backend(
@@ -77,16 +70,15 @@ pub(crate) fn serve_backend(
     w: impl Write + Send + 'static,
     backend: BackendHandle,
 ) -> io::Result<()> {
-    let sink: Sink = Arc::new(Mutex::new(Box::new(w)));
-    let inbound: Arc<Mutex<HashMap<u64, InboundSender>>> = Arc::new(Mutex::new(HashMap::new()));
-    let cancels: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let session = ServerSession::new(Arc::new(Mutex::new(Box::new(w))));
+    let version = Arc::new(OnceLock::new());
     let mut workers = RequestWorkers::default();
 
     loop {
         let next = match agent_proto::read_frame(&mut r) {
             Ok(next) => next,
             Err(error) => {
-                abort_requests(&inbound, &cancels);
+                session.abort_all();
                 return match workers.shutdown() {
                     Ok(()) => Err(error),
                     Err(shutdown) => Err(io::Error::new(
@@ -101,140 +93,122 @@ pub(crate) fn serve_backend(
         let Some((id, frame)) = next else {
             break;
         };
-        match frame {
-            Frame::Data(_) | Frame::TreeEntry { .. } | Frame::End => {
-                let tx = lock_or_recover(&inbound).get(&id).cloned();
-                if let Some(tx) = tx {
-                    let is_end = matches!(frame, Frame::End);
-                    let _ = tx.send(frame);
-                    if is_end {
-                        lock_or_recover(&inbound).remove(&id);
-                    }
-                }
-            }
-            Frame::Cancel => {
-                cancel_request(id, &inbound, &cancels);
-            }
-            req => {
-                let has_capacity = match workers.has_capacity() {
-                    Ok(has_capacity) => has_capacity,
-                    Err(worker_error) => {
-                        abort_requests(&inbound, &cancels);
-                        return match workers.shutdown() {
-                            Ok(()) => Err(worker_error),
-                            Err(shutdown_error) => Err(io::Error::other(format!(
-                                "backend request worker failed ({worker_error}); worker shutdown failed: {shutdown_error}"
-                            ))),
-                        };
-                    }
+        let Some(req) = session.route(id, frame) else {
+            continue;
+        };
+        let limit = session.request_limit(LEGACY_MAX_REQUEST_WORKERS);
+        let has_capacity = match workers.has_capacity(limit) {
+            Ok(has_capacity) => has_capacity,
+            Err(worker_error) => {
+                session.abort_all();
+                return match workers.shutdown() {
+                    Ok(()) => Err(worker_error),
+                    Err(shutdown_error) => Err(io::Error::other(format!(
+                        "backend request worker failed ({worker_error}); worker shutdown failed: {shutdown_error}"
+                    ))),
                 };
-                if !has_capacity {
-                    emit(
-                        &sink,
-                        id,
-                        &Frame::Err("too many concurrent backend requests".into()),
-                    )?;
-                    continue;
-                }
-                if lock_or_recover(&cancels).contains_key(&id) {
-                    emit(&sink, id, &Frame::Err("duplicate active request id".into()))?;
-                    continue;
-                }
-                let cancel = Arc::new(AtomicBool::new(false));
-                lock_or_recover(&cancels).insert(id, cancel.clone());
-                let rx = match &req {
-                    Frame::Write(_) | Frame::WriteNew(_) | Frame::PutTree(_) => {
-                        let (tx, rx) = transfer_channel();
-                        lock_or_recover(&inbound).insert(id, tx);
-                        Some(rx)
-                    }
-                    _ => None,
-                };
-                let sink2 = sink.clone();
-                let cancels2 = cancels.clone();
-                let inbound2 = inbound.clone();
-                let backend2 = backend.clone();
-                match std::thread::Builder::new()
-                    .name(format!("daemon-backend-request-{id}"))
-                    .spawn(move || {
-                        let result = dispatch_backend(&sink2, id, backend2, req, rx.as_ref(), &cancel);
-                        let result = match result {
-                            Ok(()) => Ok(()),
-                            Err(error) => match emit(&sink2, id, &Frame::Err(error.to_string())) {
-                                // The request failure has been surfaced to the
-                                // client; only a reporting failure remains a
-                                // worker-level error that tears down the link.
-                                Ok(()) => Ok(()),
-                                Err(report_error)
-                                    if canceled_request_lost_client(
-                                        &error,
-                                        &report_error,
-                                        cancel.load(Ordering::Relaxed),
-                                    ) =>
-                                {
-                                    Ok(())
-                                }
-                                Err(report_error) => Err(io::Error::new(
-                                    error.kind(),
-                                    format!("request failed ({error}); reporting it failed: {report_error}"),
-                                )),
-                            },
-                        };
-                        lock_or_recover(&cancels2).remove(&id);
-                        lock_or_recover(&inbound2).remove(&id);
-                        result
-                    }) {
-                    Ok(worker) => workers.push(worker),
+            }
+        };
+        if !has_capacity {
+            session.reject_busy(id, "too many concurrent backend requests")?;
+            continue;
+        }
+        if session.is_active(id) {
+            emit(
+                session.sink(),
+                id,
+                &Frame::Err("duplicate active request id".into()),
+            )?;
+            continue;
+        }
+        let context = session.open(id, &req);
+        let credit = session.credit_mode();
+        let worker_session = session.clone();
+        let backend2 = backend.clone();
+        let version2 = version.clone();
+        match std::thread::Builder::new()
+            .name(format!("daemon-backend-request-{id}"))
+            .spawn(move || {
+                let result = dispatch_backend(&context, id, backend2, req, &version2, credit);
+                let result = match result {
+                    Ok(()) => Ok(()),
                     Err(error) => {
-                        lock_or_recover(&cancels).remove(&id);
-                        lock_or_recover(&inbound).remove(&id);
-                        emit(
-                            &sink,
-                            id,
-                            &Frame::Err(format!("backend worker could not start: {error}")),
-                        )?;
+                        match emit(&context.sink, id, &Frame::Err(error_text(&error, credit))) {
+                            // The request failure has been surfaced to the
+                            // client; only a reporting failure remains a
+                            // worker-level error that tears down the link.
+                            Ok(()) => Ok(()),
+                            Err(report_error)
+                                if canceled_request_lost_client(
+                                    &error,
+                                    &report_error,
+                                    context.cancel.load(Ordering::Relaxed),
+                                ) =>
+                            {
+                                Ok(())
+                            }
+                            Err(report_error) => Err(io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "request failed ({error}); reporting it failed: {report_error}"
+                                ),
+                            )),
+                        }
                     }
-                }
+                };
+                worker_session.close(id);
+                result
+            }) {
+            Ok(worker) => workers.push(worker),
+            Err(error) => {
+                session.discard(id);
+                emit(
+                    session.sink(),
+                    id,
+                    &Frame::Err(format!("backend worker could not start: {error}")),
+                )?;
             }
         }
     }
-    abort_requests(&inbound, &cancels);
+    session.abort_all();
     workers.shutdown()
 }
 
+fn reply(sink: &Sink, id: u64, result: io::Result<Frame>, credit: bool) -> io::Result<()> {
+    match result {
+        Ok(frame) => emit(sink, id, &frame),
+        Err(error) => emit(sink, id, &Frame::Err(error_text(&error, credit))),
+    }
+}
+
 fn dispatch_backend(
-    sink: &Sink,
+    context: &RequestContext,
     id: u64,
     backend: BackendHandle,
     req: Frame,
-    inbound: Option<&Receiver<Frame>>,
-    cancel: &AtomicBool,
+    version: &OnceLock<String>,
+    credit: bool,
 ) -> io::Result<()> {
+    let sink = &context.sink;
+    let cancel: &AtomicBool = &context.cancel;
+    let inbound = context.inbound.as_deref();
+    let answer = |result: io::Result<Frame>| reply(sink, id, result, credit);
     match req {
         Frame::Hello { .. } => emit(
             sink,
             id,
             &Frame::HelloOk {
                 proto: PROTO_VERSION,
-                version: format!("{} worker", agent_proto::HASH_WALK_SERVER_VERSION),
+                version: version.get_or_init(|| service_version(&backend)).clone(),
             },
         ),
-        Frame::ListDir(p) => match backend.list_dir(&p) {
-            Ok(v) => emit(
-                sink,
-                id,
-                &Frame::Dir(v.into_iter().map(vfs_to_wire).collect()),
-            ),
-            Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-        },
-        Frame::Stat(p) => match backend.stat(&p) {
-            Ok(m) => emit(sink, id, &Frame::Meta(vfs_to_wire(m))),
-            Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-        },
-        Frame::TryExists(p) => match backend.try_exists(&p) {
-            Ok(exists) => emit(sink, id, &Frame::Exists(exists)),
-            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
-        },
+        Frame::ListDir(p) => answer(
+            backend
+                .list_dir(&p)
+                .map(|v| Frame::Dir(v.into_iter().map(vfs_to_wire).collect())),
+        ),
+        Frame::Stat(p) => answer(backend.stat(&p).map(|m| Frame::Meta(vfs_to_wire(m)))),
+        Frame::TryExists(p) => answer(backend.try_exists(&p).map(Frame::Exists)),
         Frame::WalkTree(root) => handle_walk_tree_backend(sink, id, &backend, &root, cancel),
         Frame::Read { path, offset, len } => {
             handle_read_backend(sink, id, &backend, &path, offset, len, cancel)
@@ -255,47 +229,36 @@ fn dispatch_backend(
                 &Frame::Err("write-new: no inbound channel".into()),
             ),
         },
-        Frame::Copy { src, dst } => match backend.copy_file(&src, &dst) {
-            Ok(_) => emit(sink, id, &Frame::Ok),
-            Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-        },
-        Frame::Rename { src, dst } => match backend.rename(&src, &dst) {
-            Ok(_) => emit(sink, id, &Frame::Ok),
-            Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-        },
-        Frame::RenameNoReplace { src, dst } => match backend.rename_no_replace(&src, &dst) {
-            Ok(_) => emit(sink, id, &Frame::Ok),
-            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
-        },
+        Frame::Copy { src, dst } => answer(backend.copy_file(&src, &dst).map(|_| Frame::Ok)),
+        Frame::Rename { src, dst } => answer(backend.rename(&src, &dst).map(|()| Frame::Ok)),
+        Frame::RenameNoReplace { src, dst } => {
+            answer(backend.rename_no_replace(&src, &dst).map(|()| Frame::Ok))
+        }
         Frame::Promote {
             staged,
             destination,
-        } => match backend.promote_staged(&staged, &destination) {
-            Ok(()) => emit(sink, id, &Frame::Ok),
-            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
-        },
+        } => answer(
+            backend
+                .promote_staged(&staged, &destination)
+                .map(|()| Frame::Ok),
+        ),
         Frame::PromoteNoReplace {
             staged,
             destination,
-        } => match backend.promote_staged_no_replace(&staged, &destination) {
-            Ok(()) => emit(sink, id, &Frame::Ok),
-            Err(error) => emit(sink, id, &Frame::Err(error.to_string())),
-        },
+        } => answer(
+            backend
+                .promote_staged_no_replace(&staged, &destination)
+                .map(|()| Frame::Ok),
+        ),
         Frame::Remove { path, recursive } => {
             let res = if recursive {
                 remove_tree_backend(&backend, &path, cancel)
             } else {
                 remove_one_backend(&backend, &path)
             };
-            match res {
-                Ok(_) => emit(sink, id, &Frame::Ok),
-                Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-            }
+            answer(res.map(|_| Frame::Ok))
         }
-        Frame::Mkdir(p) => match backend.mkdir_all(&p) {
-            Ok(_) => emit(sink, id, &Frame::Ok),
-            Err(e) => emit(sink, id, &Frame::Err(e.to_string())),
-        },
+        Frame::Mkdir(p) => answer(backend.mkdir_all(&p).map(|()| Frame::Ok)),
         Frame::GetTree(root) => handle_get_tree_backend(sink, id, &backend, &root, cancel),
         Frame::PutTree(root) => match inbound {
             Some(rx) => handle_put_tree_backend(sink, id, &backend, &root, rx, cancel),
@@ -306,6 +269,29 @@ fn dispatch_backend(
         }
         Frame::WalkHashed { root, want_hash } => {
             handle_walk_hashed_backend(sink, id, &backend, &root, want_hash, cancel)
+        }
+        Frame::BatchPut { entries } => match inbound {
+            Some(rx) => handle_put_batch_backend(sink, id, &backend, &entries, rx, cancel, credit),
+            None => emit(sink, id, &Frame::Err("batch: no inbound channel".into())),
+        },
+        Frame::BatchGet { items } => {
+            handle_get_batch_backend(sink, id, &backend, &items, cancel, credit)
+        }
+        Frame::CopyToStage { src, stage, size } => answer(
+            backend
+                .server_copy_to_stage(&src, &stage, size)
+                .map(Frame::Copied),
+        ),
+        Frame::CreateDir { path, exclusive } => answer(
+            if exclusive {
+                backend.create_dir_new(&path)
+            } else {
+                backend.create_dir(&path)
+            }
+            .map(|()| Frame::Ok),
+        ),
+        Frame::DiscardStage(stage) => {
+            answer(backend.discard_copy_stage(&stage).map(|()| Frame::Ok))
         }
         other => emit(
             sink,
@@ -324,112 +310,6 @@ fn vfs_to_wire(m: VfsMeta) -> WireMeta {
         mtime_ms: m.mtime_ms,
         content_md5: m.content_md5,
     }
-}
-
-fn handle_read_backend(
-    sink: &Sink,
-    id: u64,
-    backend: &BackendHandle,
-    path: &str,
-    offset: u64,
-    len: u64,
-    cancel: &AtomicBool,
-) -> io::Result<()> {
-    let mut r = backend.open_read(path)?;
-    if offset > 0 {
-        let mut skip = (&mut r).take(offset);
-        io::copy(&mut skip, &mut io::sink())?;
-    }
-    let mut remaining = if len == 0 { u64::MAX } else { len };
-    let mut buf = vec![0u8; CHUNK];
-    while remaining > 0 {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let want = remaining.min(buf.len() as u64) as usize;
-        let n = r.read(&mut buf[..want])?;
-        if n == 0 {
-            break;
-        }
-        emit(sink, id, &Frame::Data(buf[..n].to_vec()))?;
-        remaining -= n as u64;
-    }
-    emit(sink, id, &Frame::End)
-}
-
-fn handle_write_backend(
-    sink: &Sink,
-    id: u64,
-    backend: &BackendHandle,
-    path: &str,
-    inbound: &Receiver<Frame>,
-    cancel: &AtomicBool,
-    mode: WriteMode,
-) -> io::Result<()> {
-    let (staged, mut writer, replace_after_upload) = match mode {
-        WriteMode::Replace => {
-            let staged = crate::vfs::unique_staging_path(&**backend, path, "daemon")?;
-            let writer = backend.open_write_new(&staged)?;
-            (staged, writer, true)
-        }
-        WriteMode::Create => {
-            let writer = backend.open_write_new(path)?;
-            (path.to_string(), writer, false)
-        }
-    };
-    if let Err(error) = emit(sink, id, &Frame::Progress { done: 0, total: 0 }) {
-        drop(writer);
-        // The exclusive open transferred ownership at the backend boundary,
-        // but this generic layer has no stable item identity. Retain the entry:
-        // a concurrent actor may already have moved it and reused its spelling.
-        return Err(error);
-    }
-    let transfer = loop {
-        if cancel.load(Ordering::Relaxed) {
-            break Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "upload canceled",
-            ));
-        }
-        match inbound.recv() {
-            Ok(Frame::Data(data)) => {
-                if let Err(error) = writer.write_all(&data) {
-                    break Err(error);
-                }
-            }
-            Ok(Frame::End) => break writer.flush(),
-            Ok(_) => {}
-            Err(_) => {
-                break Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "daemon backend upload aborted",
-                ));
-            }
-        }
-    };
-    drop(writer);
-    if let Err(error) = transfer {
-        // A nested writer may have committed before its final acknowledgement
-        // was lost. Path-based cleanup could delete a replacement entry.
-        return Err(error);
-    }
-    let promotion = if replace_after_upload {
-        crate::vfs::promote_staged_replace(&**backend, &staged, path)
-    } else {
-        Ok(())
-    };
-    if let Err(error) = promotion {
-        // Promotion responses are ambiguous across reconnects. Preserve the
-        // staging name as recovery evidence instead of deleting by spelling.
-        return Err(error);
-    }
-    emit(sink, id, &Frame::Ok)
-}
-
-#[derive(Clone, Copy)]
-enum WriteMode {
-    Replace,
-    Create,
 }
 
 #[cfg(test)]

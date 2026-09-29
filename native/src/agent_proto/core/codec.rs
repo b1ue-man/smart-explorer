@@ -238,7 +238,10 @@ impl Frame {
                 destination: r.string()?,
             },
             33 => Frame::WriteNew(r.string()?),
-            t => return Err(bad(&format!("unknown frame tag {t}"))),
+            t => match frame_encode::frame_ext::decode(t, &mut r)? {
+                Some(frame) => frame,
+                None => return Err(bad(&format!("unknown frame tag {t}"))),
+            },
         };
         if !r.is_finished() {
             return Err(bad("trailing bytes after frame payload"));

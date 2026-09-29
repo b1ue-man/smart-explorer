@@ -28,6 +28,7 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
             RemoteContextAction::OpenWith,
             RemoteContextAction::DownloadTo,
             RemoteContextAction::CopyToClipboard,
+            RemoteContextAction::ProvideForPrograms,
             RemoteContextAction::Rename,
             RemoteContextAction::Delete,
             RemoteContextAction::CopyPath,
@@ -56,6 +57,28 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
     );
     assert!(!no_chooser.contains(&RemoteContextAction::OpenWith));
     assert_eq!(super::OPEN_WITH_CHOOSER_SUPPORTED, cfg!(windows));
+    assert_eq!(
+        RemoteContextAction::ProvideForPrograms.target(),
+        RemoteContextActionTarget::CurrentSelection
+    );
+
+    // Without an OS file clipboard (Linux) copy and paste stay in the app;
+    // only handing files to other programs is left out.
+    let internal = RemoteContextCapabilities {
+        open_with_chooser: false,
+        file_clipboard: false,
+    };
+    let linux_row = plan_remote_context_menu(
+        RemoteContextSubject::Row {
+            entry_kind: RemoteContextEntryKind::File,
+            selection: RemoteRowSelection::ClickedOnly,
+        },
+        internal,
+    );
+    assert!(linux_row.contains(&RemoteContextAction::CopyToClipboard));
+    assert!(!linux_row.contains(&RemoteContextAction::ProvideForPrograms));
+    let linux_background = plan_remote_context_menu(RemoteContextSubject::Background, internal);
+    assert_eq!(linux_background.first(), Some(&RemoteContextAction::Paste));
 
     let directory = plan_remote_context_menu(
         RemoteContextSubject::Row {
@@ -78,6 +101,7 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
         supported,
     );
     assert!(!outside.contains(&RemoteContextAction::CopyToClipboard));
+    assert!(!outside.contains(&RemoteContextAction::ProvideForPrograms));
     assert!(!outside.contains(&RemoteContextAction::Delete));
 
     let background = plan_remote_context_menu(RemoteContextSubject::Background, supported);
@@ -183,11 +207,7 @@ fn share_remote_task_discovery_ui_tracks_duration_list_renewal_and_cancel() {
     let (_, exchange) = state.exchange_for_discovery("live").unwrap();
     assert!(matches!(exchange.state, DiscoveryExchangeState::Cancelled));
 
-    state.exchange_completed(
-        "exchange-complete".into(),
-        "complete".into(),
-        "Peer".into(),
-    );
+    state.exchange_completed("exchange-complete".into(), "complete".into(), "Peer".into());
     let (_, exchange) = state.exchange_for_discovery("complete").unwrap();
     assert!(matches!(
         &exchange.state,

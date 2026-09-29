@@ -8,8 +8,13 @@
 use std::io;
 
 /// Rebuild the `io::ErrorKind` a remote `io::Error` most likely carried from
-/// the message the agent protocol forwarded.
+/// the message the agent protocol forwarded. A server at its request limit
+/// (or a peer behind the service that asked to slow down) is congestion, so
+/// transfers back off instead of failing.
 pub(super) fn agent_error(message: String) -> io::Error {
+    if let Some((retry_after, text)) = crate::agent_proto::parse_busy(&message) {
+        return crate::vfs::congestion_error(text, retry_after);
+    }
     io::Error::new(kind_from_message(&message), message)
 }
 
@@ -84,6 +89,33 @@ mod tests {
         assert_eq!(
             agent_error("Access is denied. (os error 5)".into()).kind(),
             io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn transfer_engine_task_busy_replies_become_congestion() {
+        for message in [
+            "too many concurrent agent requests",
+            "too many concurrent backend requests",
+        ] {
+            let error = agent_error(message.into());
+            assert!(crate::vfs::congestion_of(&error).is_some(), "{message}");
+            assert_eq!(error.to_string(), message);
+        }
+        let marked = crate::agent_proto::busy_message(
+            Some(std::time::Duration::from_millis(1500)),
+            "Gegenstelle ausgelastet",
+        );
+        let error = agent_error(marked);
+        let congestion = crate::vfs::congestion_of(&error).expect("congestion");
+        assert_eq!(
+            congestion.retry_after,
+            Some(std::time::Duration::from_millis(1500))
+        );
+        assert_eq!(error.to_string(), "Gegenstelle ausgelastet");
+        assert!(
+            crate::vfs::congestion_of(&agent_error("Permission denied (os error 13)".into()))
+                .is_none()
         );
     }
 

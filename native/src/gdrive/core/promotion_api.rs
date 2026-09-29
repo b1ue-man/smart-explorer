@@ -104,7 +104,7 @@ impl GDriveBackend {
         let bearer = format!("Bearer {}", self.bearer()?);
         let payload = serde_json::json!({ "name": destination_name }).to_string();
         let response = mutation_once(drive_request(
-            self.timed_request(ureq::request("PATCH", &url))
+            self.timed_request(self.http.api().request("PATCH", &url))
                 .set("Authorization", &bearer)
                 .set("Content-Type", "application/json")
                 .send_string(&payload),

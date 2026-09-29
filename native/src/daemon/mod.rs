@@ -16,12 +16,16 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
+#[path = "os/shared/backend_batch.rs"]
+mod backend_batch;
 #[path = "os/shared/backend_budget.rs"]
 mod backend_budget;
 #[path = "os/shared/backend_delete.rs"]
 mod backend_delete;
 #[path = "os/shared/backend_server.rs"]
 mod backend_server;
+#[path = "os/shared/backend_stream.rs"]
+mod backend_stream;
 #[path = "os/shared/backend_transfer.rs"]
 mod backend_transfer;
 #[path = "os/shared/backend_tree_send.rs"]
@@ -208,8 +212,12 @@ pub(crate) fn windows_remote_task_rooted(
     backend: crate::vfs::BackendHandle,
     mode: crate::mount::MountMode,
 ) -> std::io::Result<crate::vfs::BackendHandle> {
-    rooted_backend::RootedBackend::new(backend, &crate::mount::BackendRoot::parse("/")?,
-        mode, crate::mount::MountRootSecurity::Trusted)
+    rooted_backend::RootedBackend::new(
+        backend,
+        &crate::mount::BackendRoot::parse("/")?,
+        mode,
+        crate::mount::MountRootSecurity::Trusted,
+    )
 }
 
 #[cfg(test)]

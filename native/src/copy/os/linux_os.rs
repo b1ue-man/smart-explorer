@@ -63,6 +63,47 @@ pub(super) fn sync_parent(path: &Path) -> io::Result<()> {
     File::open(parent)?.sync_all()
 }
 
+/// Bytes per kernel copy call: cancel and progress are seen at least every
+/// ~80 ms on a 100 MB/s disk, while one syscall per 8 MiB costs nothing.
+const KERNEL_CHUNK: u64 = 8 * 1024 * 1024;
+
+/// No copy by path here: the stage is created exclusively and filled
+/// through the handles (`copy_handles`).
+pub(super) fn copy_by_path(
+    _source: &Path,
+    _stage: &Path,
+    _cancel: &std::sync::atomic::AtomicBool,
+    _progress: &mut dyn FnMut(u64),
+) -> Option<io::Result<Option<(u64, File)>>> {
+    None
+}
+
+/// Copies `reader` to the end into the exclusively created stage `writer`
+/// in the kernel (`std::io::copy` between two files uses copy_file_range,
+/// which reflinks on btrfs/xfs and copies server-side on NFS). `None` when
+/// canceled.
+pub(super) fn copy_handles(
+    reader: &File,
+    writer: &mut File,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<Option<u64>> {
+    use std::io::Read;
+    let mut copied = 0u64;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(None);
+        }
+        let mut chunk = Read::take(reader, KERNEL_CHUNK);
+        let moved = std::io::copy(&mut chunk, writer)?;
+        if moved == 0 {
+            return Ok(Some(copied));
+        }
+        copied = copied.saturating_add(moved);
+        progress(moved);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     let source = std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(|_| {

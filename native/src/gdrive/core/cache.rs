@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const CACHE_VERSION: u32 = 2;
 const CACHE_FILE: &str = "path_cache.json";
@@ -24,13 +25,13 @@ pub(super) fn load() -> LoadedCache {
     load_from_path(&cache_path()).unwrap_or_default()
 }
 
-fn cache_path() -> PathBuf {
+pub(super) fn cache_path() -> PathBuf {
     crate::support_dirs::app_data_dir()
         .join("gdrive")
         .join(CACHE_FILE)
 }
 
-fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
+pub(super) fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
     let text = std::fs::read_to_string(path)?;
     let disk: DiskCache = serde_json::from_str(&text).map_err(io::Error::other)?;
     if disk.version != CACHE_VERSION {
@@ -42,29 +43,42 @@ fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
     })
 }
 
-fn save_to_path(
+/// Write the cache as compact JSON through a private temporary file and a
+/// rename, so readers never see a partial file.
+pub(super) fn save_to_path(
     path: &Path,
-    ids: &HashMap<String, String>,
-    mimes: &HashMap<String, String>,
+    ids: HashMap<String, String>,
+    mimes: HashMap<String, String>,
 ) -> io::Result<()> {
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let disk = DiskCache {
         version: CACHE_VERSION,
-        ids: clean_map(ids.clone()),
-        mimes: clean_map(mimes.clone()),
+        ids: clean_map(ids),
+        mimes: clean_map(mimes),
     };
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&disk).map_err(io::Error::other)?,
-    )?;
+    let bytes = serde_json::to_vec(&disk).map_err(io::Error::other)?;
+    // Unique per write: two connections of one process never share a
+    // temporary file.
+    let tmp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(error) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(first) => {
             let _ = std::fs::remove_file(path);
-            std::fs::rename(&tmp, path).map_err(|_| first)
+            std::fs::rename(&tmp, path).map_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+                first
+            })
         }
     }
 }
@@ -111,10 +125,18 @@ impl GDriveBackend {
     }
 
     pub(super) fn remember_path(&self, key: &str, id: &str, mime: Option<&str>) -> io::Result<()> {
-        self.ids_guard()?.insert(key.to_string(), id.to_string());
-        if let Some(mime) = mime.filter(|m| !m.is_empty()) {
-            self.mimes_guard()?
-                .insert(key.to_string(), mime.to_string());
+        let previous = self.ids_guard()?.insert(key.to_string(), id.to_string());
+        match mime.filter(|m| !m.is_empty()) {
+            Some(mime) => {
+                self.mimes_guard()?
+                    .insert(key.to_string(), mime.to_string());
+            }
+            // A MIME type learned for another object at this path would be
+            // stale now (a download could pick the wrong export format).
+            None if previous.as_deref().is_some_and(|previous| previous != id) => {
+                self.mimes_guard()?.remove(key);
+            }
+            None => {}
         }
         self.untrusted_guard()?.remove(key);
         Ok(())
@@ -137,17 +159,14 @@ impl GDriveBackend {
         self.persist_path_cache();
     }
 
+    /// Mark the path cache changed; the background writer saves it soon.
     pub(super) fn persist_path_cache(&self) {
-        let _ = self.persist_path_cache_checked();
+        self.cache_store.mark_dirty();
     }
 
+    /// Save the path cache before returning (folder-journal ordering).
     pub(super) fn persist_path_cache_checked(&self) -> io::Result<()> {
-        if !self.persist_cache {
-            return Ok(());
-        }
-        let ids = self.ids_guard()?;
-        let mimes = self.mimes_guard()?;
-        save_to_path(&cache_path(), &ids, &mimes)
+        self.cache_store.write_now()
     }
 }
 
@@ -190,7 +209,7 @@ mod tests {
             ("docs/a.txt".to_string(), "text/plain".to_string()),
             ("".to_string(), "ignored".to_string()),
         ]);
-        save_to_path(&path, &ids, &mimes).unwrap();
+        save_to_path(&path, ids.clone(), mimes).unwrap();
         ids.clear();
         let loaded = load_from_path(&path).unwrap();
         assert_eq!(loaded.ids.get("docs").map(String::as_str), Some("id-docs"));

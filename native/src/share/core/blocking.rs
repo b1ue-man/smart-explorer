@@ -6,9 +6,13 @@ use tokio::task::JoinHandle;
 
 use super::core::eio;
 
-// Blocking backends are authenticated Share work, but a trusted peer can still
-// open many streams accidentally. Bound the blocking pool pressure while permit
-// acquisition stays asynchronous and therefore never occupies an Iroh worker.
+// Control pool: short metadata operations (listing, stat, renames, removals)
+// and the tree walks. Transfers no longer draw from it; they hold their own
+// admission slot (`spawn_holding`), so long reads and writes never delay
+// browsing. A Share mount keeps at most eight requests live (daemon request
+// workers), so 32 serve four busy mounts or browsers at once and leave most of
+// Tokio's 512 blocking threads to transfers. Acquisition stays asynchronous
+// and therefore never occupies an Iroh worker.
 const MAX_BLOCKING_OPERATIONS: usize = 32;
 
 fn slots() -> Arc<Semaphore> {
@@ -56,6 +60,30 @@ where
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
     spawn(operation, work).await?.join().await
+}
+
+/// Runs a transfer on the blocking pool while `slot` (its admission) stays
+/// held; it bypasses the control pool, which the slot already bounds.
+pub(super) fn spawn_holding<T, G, F>(operation: &'static str, slot: G, work: F) -> BlockingTask<T>
+where
+    T: Send + 'static,
+    G: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    let handle = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        work()
+    });
+    BlockingTask { operation, handle }
+}
+
+pub(super) async fn run_holding<T, G, F>(operation: &'static str, slot: G, work: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    G: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    spawn_holding(operation, slot, work).join().await
 }
 
 #[cfg(test)]

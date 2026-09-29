@@ -8,6 +8,11 @@ pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
     metadata.file_attributes() & 0x400 != 0
 }
 
+/// `\` separates path components on Windows; it is never part of a name.
+pub(crate) fn backslash_is_name_char() -> bool {
+    false
+}
+
 pub(crate) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,

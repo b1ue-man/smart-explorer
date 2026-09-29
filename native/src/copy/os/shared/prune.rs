@@ -1,51 +1,33 @@
-use crate::types::FileEntry;
+//! After a move, the source folders that became empty are removed, deepest
+//! first, never outside the selected folders and never a folder that still
+//! holds anything (a file that could not be moved keeps its folders).
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub(super) fn selected_directory_roots(entries: &[FileEntry]) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = entries
-        .iter()
-        .filter(|entry| entry.is_dir && !entry.is_symlink)
-        .filter_map(|entry| lexical_absolute(Path::new(entry.path.as_ref())).ok())
-        .collect();
-    roots.sort();
-    roots.dedup();
-    roots
-}
+/// Reported cleanup problems per move (the rest is counted by the caller's
+/// issue log anyway).
+const MAX_PRUNE_ERRORS: usize = 100;
 
-pub(super) fn prune_empty_dirs(roots: &[PathBuf], entries: &[FileEntry]) -> Vec<(String, String)> {
-    let mut directories = HashSet::new();
-    for entry in entries {
-        let Ok(path) = lexical_absolute(Path::new(entry.path.as_ref())) else {
-            continue;
-        };
-        let Some(root) = roots
-            .iter()
-            .filter(|root| path.starts_with(root))
-            .max_by_key(|root| root.components().count())
-        else {
-            continue;
-        };
-        let mut current = if entry.is_dir {
-            Some(path.as_path())
-        } else {
-            path.parent()
-        };
-        while let Some(directory) = current {
-            if !directory.starts_with(root) {
-                break;
-            }
-            directories.insert(directory.to_path_buf());
-            if directory == root {
-                break;
-            }
-            current = directory.parent();
-        }
-    }
-    let mut directories: Vec<_> = directories.into_iter().collect();
-    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+/// Removes the empty ones among `directories` that lie inside one of the
+/// selected folders `roots`.
+pub(crate) fn prune_empty_dirs(
+    roots: &[PathBuf],
+    directories: &[PathBuf],
+) -> Vec<(String, String)> {
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|root| lexical_absolute(root).ok())
+        .collect();
+    let mut inside: Vec<PathBuf> = directories
+        .iter()
+        .filter_map(|directory| lexical_absolute(directory).ok())
+        .filter(|directory| roots.iter().any(|root| directory.starts_with(root)))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    inside.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     let mut errors = Vec::new();
-    for directory in directories {
+    for directory in inside {
         match std::fs::remove_dir(&directory) {
             Ok(()) => {}
             Err(error)
@@ -53,7 +35,7 @@ pub(super) fn prune_empty_dirs(roots: &[PathBuf], entries: &[FileEntry]) -> Vec<
                     error.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
                 ) => {}
-            Err(error) if errors.len() < 100 => {
+            Err(error) if errors.len() < MAX_PRUNE_ERRORS => {
                 errors.push((directory.to_string_lossy().into_owned(), error.to_string()));
             }
             Err(_) => {}
@@ -73,7 +55,6 @@ fn lexical_absolute(path: &Path) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn pruning_never_crosses_an_explicit_directory_root() {
@@ -83,23 +64,16 @@ mod tests {
         let unrelated = base.join("unrelated/child");
         std::fs::create_dir_all(&selected).unwrap();
         std::fs::create_dir_all(&unrelated).unwrap();
-        let entry = FileEntry {
-            path: Arc::from(unrelated.join("gone").to_string_lossy().as_ref()),
-            parent: Arc::from(unrelated.to_string_lossy().as_ref()),
-            name: Arc::from("gone"),
-            ext: Arc::from(""),
-            size: 0,
-            mtime_ms: 0,
-            btime_ms: 0,
-            is_dir: false,
-            is_symlink: false,
-            hidden: false,
-            system: false,
-            depth: 0,
-            id: None,
-        };
-        assert!(prune_empty_dirs(&[base.join("selected")], &[entry]).is_empty());
+        let errors = prune_empty_dirs(
+            &[base.join("selected")],
+            &[unrelated.clone(), base.join("unrelated"), selected.clone()],
+        );
+        assert!(errors.is_empty(), "{errors:?}");
         assert!(unrelated.exists());
+        assert!(
+            !selected.exists(),
+            "an empty folder inside the selection goes"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::transfer_rows::{counts_line, kind_icon, rate_line, transfer_title};
 use super::*;
 use crate::app::theme;
 
@@ -54,19 +55,23 @@ impl App {
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
         let sel_bytes = self.selection_bytes();
         let progress = self.progress.clone();
-        let transfers: Vec<(usize, TransferProgress, bool)> = self
-            .transfers
+        let transfers: Vec<(usize, TransferProgress, String, bool)> = self
+            .transfer_center
+            .lane
             .active
             .iter()
             .enumerate()
             .filter(|(_, transfer)| !transfer.progress.done)
-            .map(|(index, transfer)| (index, transfer.progress.clone(), transfer.canceling()))
+            .map(|(index, transfer)| {
+                (
+                    index,
+                    transfer.progress.clone(),
+                    transfer_title(&transfer.progress, transfer.job.as_deref()),
+                    transfer.canceling(),
+                )
+            })
             .collect();
-        let copy = self
-            .copy_progress
-            .as_ref()
-            .filter(|progress| !progress.done)
-            .cloned();
+        let connecting = self.transfer_center.connecting.len();
         let sync_progress = self.sync_progress.clone();
         let delete_progress = self.trash_progress.clone();
         let delete_canceling = self
@@ -118,7 +123,9 @@ impl App {
                 }
             });
             let has_details = !transfers.is_empty()
-                || copy.is_some()
+                || connecting > 0
+                || self.transfer_center.total_count() > 0
+                || self.transfer_center.window_open
                 || self.sync_running
                 || self.bisync_running
                 || delete_progress.is_some()
@@ -134,8 +141,12 @@ impl App {
                 return;
             }
             ui.horizontal_wrapped(|ui| {
-                for (index, p, canceling) in &transfers {
-                    ui_transfer_chip(ui, p);
+                self.ui_transfers_button(ui);
+                if connecting > 0 {
+                    ui.colored_label(theme::muted(ui), format!("⇄ verbindet… ({connecting})"));
+                }
+                for (index, p, title, canceling) in &transfers {
+                    ui_transfer_chip(ui, p, title);
                     if *canceling {
                         ui.colored_label(theme::warning(ui), "Übertragung wird abgebrochen…");
                     } else if ui
@@ -145,7 +156,7 @@ impl App {
                         )
                         .clicked()
                     {
-                        self.transfers.cancel(*index);
+                        self.transfer_center.lane.cancel(*index);
                     }
                 }
                 if transfers.len() > 1
@@ -153,17 +164,7 @@ impl App {
                         .add(egui::Button::new("Alle Übertragungen abbrechen").small())
                         .clicked()
                 {
-                    self.transfers.cancel_all();
-                }
-                if let Some(p) = &copy {
-                    ui_copy_chip(ui, p);
-                    if ui
-                        .add(egui::Button::new("Kopie abbrechen").small())
-                        .on_hover_text("Laufenden Kopier- oder Verschiebevorgang abbrechen")
-                        .clicked()
-                    {
-                        self.cancel_copy_job();
-                    }
+                    self.transfer_center.lane.cancel_all();
                 }
                 if self.sync_running {
                     ui_sync_chip(ui, sync_progress.as_ref());
@@ -236,41 +237,21 @@ impl App {
     }
 }
 
-fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress) {
-    let title = if p.label.trim().is_empty() {
-        p.kind.label().to_string()
-    } else if p.label == p.kind.label() {
-        p.label.clone()
-    } else {
-        format!("{}: {}", p.kind.label(), p.label)
-    };
-    let detail = transfer_detail(
-        p.bytes_done,
-        p.bytes_total,
-        p.files_done,
-        p.files_total,
-        p.elapsed_ms,
-        p.errors,
-    );
-    let current = short_current(&p.current);
-    let text = if current.is_empty() {
-        format!("{title}: {detail}")
-    } else {
-        format!("{title}: {detail} · {current}")
-    };
+/// Compact chip of a running transfer: direction, source → target, counts,
+/// the current rate (or "sucht…" while files are still being found).
+fn ui_transfer_chip(ui: &mut egui::Ui, p: &TransferProgress, title: &str) {
+    let mut text = format!("{} {title}: {}", kind_icon(p.kind), counts_line(p));
+    if p.discovering {
+        text.push_str(" · sucht…");
+    }
+    if let Some(rate) = rate_line(p) {
+        text.push_str(" · ");
+        text.push_str(&rate);
+    }
+    if p.errors > 0 {
+        text.push_str(&format!(" · {} Fehler", p.errors));
+    }
     ui_progress_chip(ui, &text, Some(p.fraction()));
-}
-
-fn ui_copy_chip(ui: &mut egui::Ui, p: &CopyProgress) {
-    let detail = transfer_detail(
-        p.bytes_done,
-        p.bytes_total,
-        p.files_done,
-        p.files_total,
-        p.elapsed_ms,
-        p.errors,
-    );
-    ui_progress_chip(ui, &format!("Kopie: {detail}"), Some(copy_fraction(p)));
 }
 
 fn ui_sync_chip(ui: &mut egui::Ui, progress: Option<&crate::sync::SyncProgress>) {
@@ -333,52 +314,10 @@ fn notice_color(ui: &egui::Ui, message: &str) -> Color32 {
     }
 }
 
-fn transfer_detail(
-    bytes_done: u64,
-    bytes_total: u64,
-    files_done: u64,
-    files_total: u64,
-    elapsed_ms: u64,
-    errors: u64,
-) -> String {
-    let bytes = if bytes_total > 0 {
-        format!("{}/{}", format_bytes(bytes_done), format_bytes(bytes_total))
-    } else {
-        format_bytes(bytes_done)
-    };
-    let files = if files_total > 0 {
-        format!("{} von {}", files_done, files_total)
-    } else {
-        format!("{} Dateien", files_done)
-    };
-    let err = if errors > 0 {
-        format!(" | {} Fehler", errors)
-    } else {
-        String::new()
-    };
-    format!(
-        "{} | {} | {}{}",
-        bytes,
-        rate_text(bytes_done, elapsed_ms),
-        files,
-        err
-    )
-}
-
 fn rate_text(bytes_done: u64, elapsed_ms: u64) -> String {
     if elapsed_ms == 0 {
         return "0 B/s".to_string();
     }
     let bps = (bytes_done as f64 / elapsed_ms as f64 * 1000.0).max(0.0);
     format!("{}/s", format_bytes(bps as u64))
-}
-
-fn copy_fraction(p: &CopyProgress) -> f32 {
-    if p.bytes_total > 0 {
-        (p.bytes_done as f32 / p.bytes_total as f32).clamp(0.0, 1.0)
-    } else if p.files_total > 0 {
-        (p.files_done as f32 / p.files_total as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
 }

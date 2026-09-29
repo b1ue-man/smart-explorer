@@ -1,5 +1,7 @@
-use super::mux::{close_transport, make_out_channel, route_frame, Mux};
-use crate::agent_proto::{self, Frame};
+use super::lanes::{make_out_channel, run_writer};
+use super::mux::Mux;
+use super::route::{close_transport, route_frame};
+use crate::agent_proto::{self, Frame, ServerFeatures};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -214,11 +216,11 @@ impl AgentConnection {
 }
 
 fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(Arc<Mux>, String)> {
-    let (out_tx, out_rx) = make_out_channel();
+    let (lanes, receivers) = make_out_channel();
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let closed = Arc::new(AtomicBool::new(false));
     let mux = Arc::new(Mux::new_with_stall_timeout(
-        out_tx,
+        lanes.clone(),
         pending.clone(),
         closed.clone(),
         handshake_deadline,
@@ -229,35 +231,21 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
     let activity_w = mux.activity();
     std::thread::Builder::new()
         .name("agent-writer".into())
-        .spawn(move || {
-            let mut w = w;
-            loop {
-                if closed_w.load(Ordering::Acquire) {
-                    break;
-                }
-                match out_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok((id, frame)) => {
-                        if agent_proto::write_frame(&mut w, id, &frame).is_err() {
-                            break;
-                        }
-                        activity_w.touch();
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-            close_transport(&closed_w, &pending_w);
-        })?;
+        .spawn(move || run_writer(receivers, w, closed_w, pending_w, activity_w))?;
 
     let pending_r = pending.clone();
     let closed_r = closed.clone();
     let activity_r = mux.activity();
+    // The reader only needs the control lane (cancellations); holding the
+    // data lane would keep the writer alive after the multiplexer is gone.
+    let control_r = lanes.control;
     if let Err(error) = std::thread::Builder::new()
         .name("agent-reader".into())
         .spawn(move || {
             let mut r = r;
             loop {
-                if !route_frame(&pending_r, &activity_r, agent_proto::read_frame(&mut r)) {
+                let read = agent_proto::read_frame(&mut r);
+                if !route_frame(&pending_r, &activity_r, &control_r, read) {
                     break;
                 }
             }
@@ -290,7 +278,12 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
             ));
         }
     };
-    mux.link_aware_hash.store(agent_proto::has_link_aware_hash(&version), Ordering::Release);
+    let features = ServerFeatures::parse(&version);
+    mux.link_aware_hash
+        .store(features.link_aware_hash, Ordering::Release);
+    if features.credit {
+        mux.enable_credit()?;
+    }
     Ok((mux, version))
 }
 

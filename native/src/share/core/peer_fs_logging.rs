@@ -20,6 +20,13 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::CopyFile { .. } => "copy_file",
         FsRequest::RemoveFile { .. } => "remove_file",
         FsRequest::RemoveDir { .. } => "remove_dir",
+        FsRequest::PutBatch { .. } => "put_batch",
+        FsRequest::PutBatchStatus { .. } => "put_batch_status",
+        FsRequest::GetBatch { .. } => "get_batch",
+        FsRequest::ReadAt { .. } => "read_at",
+        FsRequest::CreateDir { .. } => "create_dir",
+        FsRequest::PromoteNoReplace { .. } => "promote_no_replace",
+        FsRequest::DiscardStage { .. } => "discard_stage",
     }
 }
 
@@ -98,6 +105,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         FsResponse::Data { size } => format!("{size} bytes"),
         FsResponse::Ready => "bereit".into(),
         FsResponse::Ok => "ok".into(),
+        FsResponse::Batch { status } => status.summary(),
         FsResponse::Err { msg, .. } => format!("fehler={msg}"),
     }
 }

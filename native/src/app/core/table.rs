@@ -307,7 +307,7 @@ impl App {
                 // From a local view we only carry local paths; from a remote view
                 // the paths are remote and `drag_src` is the source backend.
                 if self.remote.is_none() {
-                    files.retain(|p| is_local_style(p));
+                    files.retain(|p| is_local_path(p));
                 }
                 if !files.is_empty() {
                     let has_dir = if self.selection.contains(&dragged) {

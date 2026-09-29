@@ -21,25 +21,24 @@ impl App {
         egui::TopBottomPanel::top("toolbar")
             .min_height(28.0)
             .show(ctx, |ui| self.ui_toolbar(ui));
-        egui::TopBottomPanel::top("filterbar")
-            .show(ctx, |ui| {
-                if self.name_filter_focus || self.folder_search_focus {
-                    self.show_filters = true;
-                }
-                let title = if self.filter_is_active() {
-                    "Filter & Suche · aktiv"
-                } else {
-                    "Filter & Suche"
-                };
-                let response = egui::CollapsingHeader::new(title)
-                    .id_salt("filter_panel")
-                    .open(Some(self.show_filters))
-                    .show(ui, |ui| self.ui_filterbar(ui));
-                if response.header_response.clicked() {
-                    self.show_filters = !self.show_filters;
-                    self.save_ui_state();
-                }
-            });
+        egui::TopBottomPanel::top("filterbar").show(ctx, |ui| {
+            if self.name_filter_focus || self.folder_search_focus {
+                self.show_filters = true;
+            }
+            let title = if self.filter_is_active() {
+                "Filter & Suche · aktiv"
+            } else {
+                "Filter & Suche"
+            };
+            let response = egui::CollapsingHeader::new(title)
+                .id_salt("filter_panel")
+                .open(Some(self.show_filters))
+                .show(ui, |ui| self.ui_filterbar(ui));
+            if response.header_response.clicked() {
+                self.show_filters = !self.show_filters;
+                self.save_ui_state();
+            }
+        });
 
         egui::TopBottomPanel::bottom("status")
             .min_height(22.0)
@@ -71,6 +70,7 @@ impl App {
         if self.copy_open {
             self.ui_copy_dialog(ctx);
         }
+        self.ui_transfer_window(ctx);
         if self.show_errors_dialog {
             self.ui_errors_dialog(ctx);
         }

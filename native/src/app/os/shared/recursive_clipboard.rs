@@ -5,8 +5,10 @@ use crate::types::FileEntry;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Whole-folder clipboard operations need only the outer selected roots.
-pub(in crate::app) fn plain_selection_paths(
+/// Whole-folder operations need only the outer selected roots (forward
+/// slashes, in view order, each path once: whole entries are addressed by
+/// path).
+pub(in crate::app) fn outer_selection_roots(
     entries: &[FileEntry],
     selected: &HashSet<Arc<str>>,
 ) -> Vec<String> {
@@ -15,6 +17,7 @@ pub(in crate::app) fn plain_selection_paths(
         .filter(|entry| entry.is_dir && selected.contains(&entry.key()))
         .map(|entry| entry.path.trim_end_matches('/'))
         .collect();
+    let mut seen = HashSet::new();
     entries
         .iter()
         .filter(|entry| selected.contains(&entry.key()))
@@ -31,6 +34,7 @@ pub(in crate::app) fn plain_selection_paths(
             }
             true
         })
-        .map(|entry| entry.path.replace('/', "\\"))
+        .filter(|entry| seen.insert(entry.path.clone()))
+        .map(|entry| entry.path.to_string())
         .collect()
 }

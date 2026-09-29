@@ -9,7 +9,10 @@ pub const HASH_WALK_LINK_BOUNDARY: &str = "SE_HASH_WALK_LINK_BOUNDARY_V1";
 pub const HASH_WALK_SERVER_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+sync-links-v1");
 
 pub fn has_link_aware_hash(version: &str) -> bool {
-    version.split_whitespace().next().and_then(|text| text.split_once('+'))
+    version
+        .split_whitespace()
+        .next()
+        .and_then(|text| text.split_once('+'))
         .is_some_and(|(_, labels)| labels.split('.').any(|label| label == "sync-links-v1"))
 }
 
@@ -38,6 +41,25 @@ pub struct WireNode {
     pub size: u64,
     pub is_dir: bool,
     pub children: Vec<WireNode>,
+}
+
+/// One new file of a batch upload: final path, exact length and the client
+/// nonce that names its private stage, so the stage of an ambiguous outcome
+/// can be identified later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchEntry {
+    pub path: String,
+    pub size: u64,
+    pub nonce: u64,
+}
+
+/// One file of a batch download. `id` is forwarded to ID-addressed backends
+/// behind the background service; a plain filesystem ignores it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchItem {
+    pub path: String,
+    pub id: Option<String>,
+    pub size: u64,
 }
 
 /// A server-side search request.
@@ -157,4 +179,55 @@ pub enum Frame {
     End,
     Err(String),
     Cancel,
+    /// Flow control (`credit-v1`): the receiver of a request's stream allows
+    /// its peer `bytes` more stream bytes. Request id 0 switches the whole
+    /// connection to credit mode; only a client sends that.
+    Credit {
+        bytes: u64,
+    },
+    /// Batch upload header (`batch-v1`); per entry `Data`* then `ItemEnd`,
+    /// finally `End`. Replies `ItemPublished`/`ItemFailed` per entry, `Ok`.
+    BatchPut {
+        entries: Vec<BatchEntry>,
+    },
+    /// Batch download; replies per item `ItemBegin` `Data`* `ItemEnd` or
+    /// `ItemFailed`, finally `End`.
+    BatchGet {
+        items: Vec<BatchItem>,
+    },
+    ItemBegin {
+        index: u32,
+        size: u64,
+    },
+    /// End of one batch item's bytes; `error` = the bytes must be discarded
+    /// (source changed or could not be read completely).
+    ItemEnd {
+        index: u32,
+        error: Option<String>,
+    },
+    ItemPublished {
+        index: u32,
+        path: String,
+    },
+    ItemFailed {
+        index: u32,
+        message: String,
+    },
+    /// Server-side copy of `src` (expected length `size`) into the new,
+    /// exclusively created private stage `stage` (`stage-v1`).
+    CopyToStage {
+        src: String,
+        stage: String,
+        size: u64,
+    },
+    /// Reply to `CopyToStage`: copied bytes, `None` = copy there by streaming.
+    Copied(Option<u64>),
+    /// Create one directory whose parent exists (`stage-v1`); `exclusive`
+    /// fails with "already exists" when the name is taken.
+    CreateDir {
+        path: String,
+        exclusive: bool,
+    },
+    /// Remove an unpublished private stage this client created (`stage-v1`).
+    DiscardStage(String),
 }

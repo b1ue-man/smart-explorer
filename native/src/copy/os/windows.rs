@@ -133,6 +133,189 @@ pub(super) fn is_cross_device(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::CrossesDevices || error.raw_os_error() == Some(17)
 }
 
+/// Buffer of the handle copy (protected sources, moves, replacements): the
+/// size the older copy loop used, large enough for sequential disk speed.
+const HANDLE_COPY_BUFFER: usize = 1024 * 1024;
+
+/// New copies go through `CopyFile2` onto the fresh stage name.
+pub(super) fn copy_by_path(
+    source: &Path,
+    stage: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Option<io::Result<Option<(u64, File)>>> {
+    Some(
+        kernel_copy_file(source, stage, cancel, progress).and_then(|copied| match copied {
+            Some(bytes) => match open_staged(stage) {
+                Ok(file) => Ok(Some((bytes, file))),
+                Err(error) => {
+                    // Not a plain file (a link copied from a swapped source):
+                    // remove that entry itself, never what it points to.
+                    let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
+                    Err(error)
+                }
+            },
+            None => Ok(None),
+        }),
+    )
+}
+
+/// Copies through the opened handles (sources readable only through
+/// `local_access`, durable moves and replacements). `None` when canceled.
+pub(super) fn copy_handles(
+    reader: &File,
+    writer: &mut File,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<Option<u64>> {
+    use std::io::{Read, Write};
+    let mut reader = reader;
+    let mut buffer = vec![0u8; HANDLE_COPY_BUFFER];
+    let mut copied = 0u64;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(None);
+        }
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if read == 0 {
+            return Ok(Some(copied));
+        }
+        writer.write_all(&buffer[..read])?;
+        copied = copied.saturating_add(read as u64);
+        progress(read as u64);
+    }
+}
+
+/// `COPY_FILE_FAIL_IF_EXISTS` (WinBase.h; windows-sys 0.59 lists it under
+/// `Win32::System::WindowsProgramming`, value 1): never replace the stage name.
+const COPY_FILE_FAIL_IF_EXISTS: u32 = 1;
+/// `COPY_FILE_COPY_SYMLINK` (value 0x800): a source swapped for a link is
+/// copied as a link, which the reparse check of the stage then refuses.
+const COPY_FILE_COPY_SYMLINK: u32 = 0x800;
+
+struct CopyContext<'a> {
+    cancel: &'a std::sync::atomic::AtomicBool,
+    progress: &'a mut dyn FnMut(u64),
+    reported: u64,
+}
+
+extern "system" fn copy_progress(
+    message: *const windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE,
+    context: *const c_void,
+) -> windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE_ACTION {
+    use windows_sys::Win32::Storage::FileSystem::{
+        COPYFILE2_CALLBACK_CHUNK_FINISHED, COPYFILE2_PROGRESS_CANCEL, COPYFILE2_PROGRESS_CONTINUE,
+    };
+    if message.is_null() || context.is_null() {
+        return COPYFILE2_PROGRESS_CONTINUE;
+    }
+    // SAFETY: CopyFile2 calls back synchronously on the copying thread with
+    // the context pointer `kernel_copy_file` passed, which outlives the call.
+    let context = unsafe { &mut *(context as *mut CopyContext<'_>) };
+    if context.cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return COPYFILE2_PROGRESS_CANCEL;
+    }
+    // SAFETY: `message` is valid for this callback; `Type` selects the union
+    // member, and only the chunk-finished member is read.
+    let total = unsafe {
+        let message = &*message;
+        if message.Type == COPYFILE2_CALLBACK_CHUNK_FINISHED {
+            Some(message.Info.ChunkFinished.uliTotalBytesTransferred)
+        } else {
+            None
+        }
+    };
+    if let Some(total) = total {
+        if total > context.reported {
+            (context.progress)(total - context.reported);
+            context.reported = total;
+        }
+    }
+    COPYFILE2_PROGRESS_CONTINUE
+}
+
+/// Copies `source` to the new name `stage` in the kernel (`CopyFile2`: SMB
+/// server offload, ReFS block cloning), failing instead of replacing an
+/// existing `stage`. `None` when canceled (the partial copy is removed).
+fn kernel_copy_file(
+    source: &Path,
+    stage: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<Option<u64>> {
+    use windows_sys::Win32::Storage::FileSystem::{CopyFile2, COPYFILE2_EXTENDED_PARAMETERS};
+    let source_wide = wide(&crate::local_access::normalize_scan_root(source));
+    let stage_wide = wide(&crate::local_access::normalize_scan_root(stage));
+    let mut context = CopyContext {
+        cancel,
+        progress,
+        reported: 0,
+    };
+    let routine: unsafe extern "system" fn(
+        *const windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE,
+        *const c_void,
+    ) -> windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE_ACTION = copy_progress;
+    let parameters = COPYFILE2_EXTENDED_PARAMETERS {
+        dwSize: std::mem::size_of::<COPYFILE2_EXTENDED_PARAMETERS>() as u32,
+        dwCopyFlags: COPY_FILE_FAIL_IF_EXISTS | COPY_FILE_COPY_SYMLINK,
+        pfCancel: std::ptr::null_mut(),
+        pProgressRoutine: Some(routine),
+        pvCallbackContext: &mut context as *mut CopyContext<'_> as *mut c_void,
+    };
+    // SAFETY: both paths are NUL-terminated wide strings and `parameters`
+    // (with the context it points to) lives until CopyFile2 returns.
+    let result = unsafe { CopyFile2(source_wide.as_ptr(), stage_wide.as_ptr(), &parameters) };
+    let reported = context.reported;
+    if result >= 0 {
+        return Ok(Some(reported));
+    }
+    let error = hresult_error(result);
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
+        return Ok(None);
+    }
+    Err(error)
+}
+
+fn wide(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// A failed HRESULT as the Win32 error it wraps (`HRESULT_FROM_WIN32`).
+fn hresult_error(result: i32) -> io::Error {
+    let code = result as u32;
+    if code & 0xFFFF_0000 == 0x8007_0000 {
+        io::Error::from_raw_os_error((code & 0xFFFF) as i32)
+    } else {
+        io::Error::other(format!("CopyFile2 schlug fehl (HRESULT 0x{code:08x})"))
+    }
+}
+
+/// Opens the stage a kernel copy produced without following a reparse
+/// point, and accepts only a plain regular file (K12 identity check).
+fn open_staged(stage: &Path) -> io::Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(crate::local_access::normalize_scan_root(stage))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Kopierstufe ist keine direkte reguläre Datei",
+        ));
+    }
+    Ok(file)
+}
+
 pub(super) fn sync_parent(_path: &Path) -> io::Result<()> {
     // MOVEFILE_WRITE_THROUGH is used by replacement commits. Opening a
     // directory for FlushFileBuffers requires extra Win32 privileges and is

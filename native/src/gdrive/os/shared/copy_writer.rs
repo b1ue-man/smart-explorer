@@ -1,7 +1,6 @@
 //! Disk-backed private copy stages own a Drive ID, never an existing path ID.
 //! This is not atomic name reservation: Drive permits duplicate sibling names.
 
-use super::api::parse_generated_id;
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::resumable;
 use super::transfer::initiate;
@@ -87,11 +86,9 @@ impl CopyWriter {
 
         // Do not reuse pending_upload_ids or any cached/found path identity:
         // those may belong to another writer or an ordinary replacement upload.
-        let generated = self.backend.get_json(
-            &self.backend.api_url("files/generateIds?count=1&space=drive&type=files"),
-        )?;
+        // A pooled ID was never handed out before.
         let stage = OwnedStage {
-            id: parse_generated_id(&generated)?,
+            id: self.backend.take_generated_id()?,
             parent_id,
             name: name.to_string(),
             size: self.size,
@@ -103,14 +100,22 @@ impl CopyWriter {
             "name": &stage.name,
             "parents": [&stage.parent_id],
             "mimeType": MEDIA_TYPE,
-        }).to_string();
-        let upload_url = format!("{}?uploadType=resumable&fields=id", self.backend.upload_url());
+        })
+        .to_string();
+        let upload_url = format!(
+            "{}?uploadType=resumable&fields=id",
+            self.backend.upload_url()
+        );
         self.state = CopyState::Pending(stage.clone());
+        // From here the ID may exist: only this exact ID may be discarded.
+        self.backend.own_stage(&self.path, &stage.id)?;
+        let agent = self.backend.http.api();
         let uploaded = (|| {
             // Even a 409 or lost initiation response is reconciled below by
             // this generated ID. Never switch to PATCH when an ID is present.
-            let session = initiate("POST", &upload_url, &bearer, stage.size, &metadata)?;
+            let session = initiate(&agent, "POST", &upload_url, &bearer, stage.size, &metadata)?;
             resumable::upload(
+                &agent,
                 &session,
                 self.spool.as_mut().ok_or_else(closed_spool)?,
                 stage.size,
@@ -135,7 +140,8 @@ impl CopyWriter {
 
     fn finish_verified(&mut self, stage: &OwnedStage) -> io::Result<()> {
         let mime = verify_stage(&self.backend, stage)?;
-        self.backend.remember_path(&self.path, &stage.id, Some(&mime))?;
+        self.backend
+            .remember_path(&self.path, &stage.id, Some(&mime))?;
         self.backend.persist_path_cache();
         self.state = CopyState::Committed;
         drop(self.spool.take());
@@ -190,12 +196,18 @@ fn verify_stage(backend: &GDriveBackend, stage: &OwnedStage) -> io::Result<Strin
             } else {
                 io::ErrorKind::AlreadyExists
             },
-            format!("Drive copy staging name does not uniquely identify owned ID {}", stage.id),
+            format!(
+                "Drive copy staging name does not uniquely identify owned ID {}",
+                stage.id
+            ),
         ));
     }
     let object = &objects[0];
     if object.size != Some(stage.size)
-        || !object.md5.as_deref().is_some_and(|md5| md5.eq_ignore_ascii_case(&stage.md5))
+        || !object
+            .md5
+            .as_deref()
+            .is_some_and(|md5| md5.eq_ignore_ascii_case(&stage.md5))
         || !binary_mime(&object.mime_type)
     {
         return Err(io::Error::new(
@@ -213,8 +225,13 @@ fn matches_stage(json: &serde_json::Value, stage: &OwnedStage) -> bool {
         && json["parents"].as_array().is_some_and(|parents| {
             parents.len() == 1 && parents[0].as_str() == Some(stage.parent_id.as_str())
         })
-        && json["size"].as_str().and_then(|size| size.parse::<u64>().ok()) == Some(stage.size)
-        && json["md5Checksum"].as_str().is_some_and(|md5| md5.eq_ignore_ascii_case(&stage.md5))
+        && json["size"]
+            .as_str()
+            .and_then(|size| size.parse::<u64>().ok())
+            == Some(stage.size)
+        && json["md5Checksum"]
+            .as_str()
+            .is_some_and(|md5| md5.eq_ignore_ascii_case(&stage.md5))
         && json["mimeType"].as_str().is_some_and(binary_mime)
 }
 
@@ -227,5 +244,8 @@ fn closed_spool() -> io::Error {
 }
 
 fn size_overflow() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "Drive copy stage exceeds supported size")
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "Drive copy stage exceeds supported size",
+    )
 }

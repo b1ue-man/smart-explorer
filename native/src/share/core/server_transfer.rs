@@ -10,8 +10,11 @@ use super::fs;
 use super::fs_access::FsAccess;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::wire::{Ctrl, FsRequest, FsResponse};
+use crate::vfs::{Backend, VfsMeta};
 
-const STREAM_BUFFER_CHUNKS: usize = 2;
+/// Chunks a transfer worker may run ahead of its stream (512 KiB): one disk
+/// read overlaps one network send; admission reserves this memory per worker.
+pub(super) const STREAM_BUFFER_CHUNKS: usize = 2;
 
 #[derive(Clone, Copy)]
 pub(super) enum WriteMode {
@@ -19,17 +22,59 @@ pub(super) enum WriteMode {
     Create,
 }
 
-pub(super) async fn read_file(
+/// What a Read or ReadAt names: the whole file, a provider ID among equal
+/// names, or the rest from `offset` (resume).
+pub(super) struct ReadSource {
+    pub(super) path: String,
+    pub(super) id: Option<String>,
+    pub(super) offset: u64,
+}
+
+/// What a Write or WriteNew names and the lease its commit repeats.
+pub(super) struct WriteTarget {
+    pub(super) path: String,
+    pub(super) mode: WriteMode,
+    pub(super) authorization: Option<MountLeaseAuthorization>,
+}
+
+/// Metadata of `path`, or of the item `id` among equal names in its folder
+/// (ID providers behind an export); without an ID exactly `stat`.
+pub(super) fn stat_item(
+    backend: &dyn Backend,
+    path: &str,
+    id: Option<&str>,
+) -> io::Result<VfsMeta> {
+    let Some(id) = id else {
+        return backend.stat(path);
+    };
+    let (parent, name) = path
+        .rsplit_once('/')
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Pfad ohne Ordner"))?;
+    let parent = if parent.is_empty() { "/" } else { parent };
+    backend
+        .list_dir(parent)?
+        .into_iter()
+        .find(|entry| entry.name == name && entry.id.as_deref() == Some(id))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Datei mit der Kennung {id} fehlt: {path}"),
+            )
+        })
+}
+
+/// The `slot` (transfer admission) stays held until the worker ends.
+pub(super) async fn read_file<G: Send + 'static>(
     mut send: SendStream,
-    path: String,
+    source: ReadSource,
     access: FsAccess,
+    slot: G,
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
-    let worker = blocking::spawn("Share read", move || {
-        read_worker(path, access, ready_tx, data_tx)
-    })
-    .await?;
+    let worker = blocking::spawn_holding("Share read", slot, move || {
+        read_worker(source, access, ready_tx, data_tx)
+    });
 
     let size = match ready_rx.await {
         Ok(Ok(size)) => size,
@@ -44,31 +89,13 @@ pub(super) async fn read_file(
 }
 
 fn read_worker(
-    path: String,
+    source: ReadSource,
     access: FsAccess,
     ready: oneshot::Sender<io::Result<u64>>,
     chunks: mpsc::Sender<io::Result<Vec<u8>>>,
 ) -> io::Result<()> {
-    let target = match access.resolve(&path) {
-        Ok(target) => target,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return Ok(());
-        }
-    };
-    let size = match target.backend.stat(&target.path) {
-        Ok(metadata) if !metadata.is_dir => metadata.size,
-        Ok(_) => {
-            let _ = ready.send(Err(eio("Ordner kann nicht als Datei gelesen werden")));
-            return Ok(());
-        }
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return Ok(());
-        }
-    };
-    let mut reader = match target.backend.open_read(&target.path) {
-        Ok(reader) => reader,
+    let (size, mut reader) = match open_source(&access, &source) {
+        Ok(opened) => opened,
         Err(error) => {
             let _ = ready.send(Err(error));
             return Ok(());
@@ -96,21 +123,58 @@ fn read_worker(
     }
 }
 
-pub(super) async fn write_file(
+/// Bytes a Read or ReadAt announces and the reader that delivers them.
+fn open_source(access: &FsAccess, source: &ReadSource) -> io::Result<(u64, Box<dyn Read + Send>)> {
+    let target = access.resolve(&source.path)?;
+    let metadata = stat_item(&*target.backend, &target.path, source.id.as_deref())?;
+    if metadata.is_dir {
+        return Err(eio("Ordner kann nicht als Datei gelesen werden"));
+    }
+    if source.offset == 0 {
+        let reader = match source.id.as_deref() {
+            None => target.backend.open_read(&target.path)?,
+            Some(id) => target.backend.open_read_id(&target.path, Some(id))?,
+        };
+        return Ok((metadata.size, reader));
+    }
+    let remaining = metadata.size.checked_sub(source.offset).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Fortsetzungspunkt liegt hinter dem Dateiende",
+        )
+    })?;
+    let reader = target
+        .backend
+        .open_read_at(&target.path, source.id.as_deref(), source.offset)?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Diese Freigabe kann nicht mitten in der Datei weiterlesen",
+            )
+        })?;
+    Ok((remaining, reader))
+}
+
+/// The `slot` (transfer admission) stays held until the worker ends.
+pub(super) async fn write_file<G: Send + 'static>(
     mut send: SendStream,
     mut recv: RecvStream,
-    path: String,
+    target: WriteTarget,
     access: FsAccess,
-    mode: WriteMode,
-    lease_authorization: Option<MountLeaseAuthorization>,
+    slot: G,
 ) -> io::Result<()> {
+    let WriteTarget {
+        path,
+        mode,
+        authorization: lease_authorization,
+    } = target;
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
     let expected_lease = lease_authorization
         .as_ref()
         .map(|authorization| authorization.token().to_string());
-    let worker = blocking::spawn("Share staged write", move || {
+    let worker = blocking::spawn_holding("Share staged write", slot, move || {
         write_worker(
             path,
             access,
@@ -120,8 +184,7 @@ pub(super) async fn write_file(
             command_rx,
             done_tx,
         )
-    })
-    .await?;
+    });
 
     match ready_rx.await {
         Ok(Ok(())) => reply(&mut send, FsResponse::Ready).await?,

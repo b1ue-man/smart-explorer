@@ -278,6 +278,12 @@ where P0: windows_core::Param<super::IStream>, T: windows_core::Interface;
   `DRAGDROP_S_CANCEL`/`E_UNSPEC`. Runs on the GUI thread with the unmarshaled proxy; calls the drop target
   makes afterward land wherever COM dispatches them (§5) — not necessarily the worker thread, so internal
   thread-safety is what matters, not apartment ownership.
+- **Decision in the transfer-engine batch (2026-09-28, Block F):** the drag hands the worker's data
+  object to the GUI thread with `CoMarshalInterface(..., MSHCTX_LOCAL, ...)` + `CoUnmarshalInterface`
+  instead of `CoMarshalInterThreadInterfaceInStream`. Reason: the in-process context of the latter hands
+  an agile `#[implement]` object over as a direct pointer (see above), so Explorer's calls during a drop
+  would run on the GUI thread and freeze it while the selection is listed; the local marshal context
+  forces a real stub on the worker's STA. Both calls need `Win32_System_Com_Marshal` (now enabled).
 - Alternative for a longer-lived (non one-shot) registration:
   `IGlobalInterfaceTable` (`Com/mod.rs:2526-2540`, methods
   `RegisterInterfaceInGlobal`/`RevokeInterfaceFromGlobal`/`GetInterfaceFromGlobal`,

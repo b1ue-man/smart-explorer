@@ -1,18 +1,19 @@
-//! `fs.transfer` (api.md §4.3): local→local through the desktop copy engine
-//! (move and the conflict choice only there), everything involving a remote
-//! through the desktop transfer workers (numbered names, never replacing).
-//! With `filter` + `baseDir` only matching files go, keeping their paths
-//! relative to `baseDir`.
+//! `fs.transfer` (api.md §4.3): local→local through the copy module (move
+//! and the conflict choice only there), everything involving a connection as
+//! one transfer-engine job that starts at once: selected folders are walked
+//! while the first files already copy (no scan before), occupied names are
+//! numbered and nothing is replaced. With `filter` + `baseDir` only matching
+//! files go, keeping their paths relative to `baseDir`.
 use super::args::{filter_arg, nonempty_list, opt_str, str_arg};
 use super::crumbs;
-use super::drive::{drain_copy, run_transfer, Outcome};
+use super::drive::{drain_copy, run_job, Outcome};
 use super::entry::extension;
 use super::error::ApiError;
 use super::fs_list::{reject_trash, require_writable};
 use super::location::{is_same_or_below, parent_path, Loc};
 use super::runtime::{Runtime, TaskCtx};
 use crate::filter::CompiledFilter;
-use crate::transfer::TransferRequest;
+use crate::transfer::{Endpoint, JobItems, Layout, TransferJob};
 use crate::types::{Conflict, CopyMode, CopyOptions, FileEntry, FilterDef};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -39,7 +40,7 @@ pub(crate) fn transfer(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         crumbs::title(&plan.target, &rt.volumes())
     );
     let runtime = rt.clone();
-    let id = rt.spawn_transfer_task("transfer", title, move |ctx| {
+    let id = rt.spawn_task("transfer", title, move |ctx| {
         run(&runtime, ctx, &plan)?.into_result(ctx)
     });
     Ok(json!({ "taskId": id }))
@@ -132,40 +133,61 @@ fn run(rt: &Runtime, ctx: &TaskCtx, plan: &Plan) -> Result<Outcome, ApiError> {
         .iter()
         .map(|source| source.path.clone())
         .collect();
-    let source_local = plan.sources[0].is_local();
-    let dest_root = plan.target.path.clone();
-    let request = match (source_local, plan.target.is_local()) {
-        (true, true) => return local_copy(ctx, plan, paths),
-        (true, false) => {
-            let (backend, _) = rt.resolve_live(&plan.target)?;
-            match &plan.filter {
-                Some((filter, base)) => TransferRequest::UploadPairs {
-                    pairs: local_snapshot(ctx, &plan.sources, filter, base)?,
-                    backend,
-                    dest_root,
-                },
-                None => TransferRequest::Upload {
-                    paths,
-                    backend,
-                    dest_root,
-                },
-            }
-        }
-        (false, true) => TransferRequest::Download {
-            backend: rt.resolve_live(&plan.sources[0])?.0,
-            files: paths,
-            dest_local: dest_root,
-            filter: plan.filter.clone(),
+    if plan.sources[0].is_local() && plan.target.is_local() {
+        return local_copy(ctx, plan, paths);
+    }
+    let source = endpoint(rt, &plan.sources[0])?;
+    let target = endpoint(rt, &plan.target)?;
+    let volumes = rt.volumes();
+    let labels = (
+        crumbs::title(&plan.sources[0], &volumes),
+        crumbs::title(&plan.target, &volumes),
+    );
+    run_job(ctx, plan_job(plan, paths, source, target, labels))
+}
+
+/// The local filesystem or the live connection of `loc`.
+fn endpoint(rt: &Runtime, loc: &Loc) -> Result<Endpoint, ApiError> {
+    if loc.is_local() {
+        Ok(Endpoint::Local)
+    } else {
+        Ok(Endpoint::Remote(rt.resolve_live(loc)?.0))
+    }
+}
+
+/// The engine job of a transfer that involves a connection: the selected
+/// entries under their names, or with `filter` + `baseDir` the matching
+/// files below them at their paths relative to `baseDir` (found while
+/// copying). `conflict` applies to local→local only (api.md): here occupied
+/// names are numbered and nothing is replaced.
+fn plan_job(
+    plan: &Plan,
+    paths: Vec<String>,
+    source: Endpoint,
+    target: Endpoint,
+    (source_label, target_label): (String, String),
+) -> TransferJob {
+    TransferJob {
+        source,
+        target,
+        target_dir: plan.target.path.clone(),
+        items: JobItems::Roots {
+            paths,
+            // Destinations are cut below the base without its trailing slash
+            // (a volume root `/` becomes the empty base).
+            base: plan
+                .filter
+                .as_ref()
+                .map(|(_, base)| base.trim_end_matches('/').to_string()),
         },
-        (false, false) => TransferRequest::RemoteCopy {
-            src: rt.resolve_live(&plan.sources[0])?.0,
-            files: paths,
-            tgt: rt.resolve_live(&plan.target)?.0,
-            dest_root,
-            filter: plan.filter.clone(),
-        },
-    };
-    run_transfer(ctx, request)
+        layout: Layout::Tree,
+        filter: plan.filter.clone(),
+        conflict: Conflict::Rename,
+        mode: plan.mode,
+        source_label,
+        target_label,
+        resume: None,
+    }
 }
 
 fn local_copy(ctx: &TaskCtx, plan: &Plan, paths: Vec<String>) -> Result<Outcome, ApiError> {
@@ -282,53 +304,6 @@ fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
         .map_or(0, |duration| duration.as_millis() as i64)
 }
 
-/// Matching local files below the selection as `(absolute, relative)` pairs.
-fn local_snapshot(
-    ctx: &TaskCtx,
-    sources: &[Loc],
-    filter: &FilterDef,
-    base: &str,
-) -> Result<Vec<(String, String)>, ApiError> {
-    let compiled = CompiledFilter::compile(filter);
-    let cancel = ctx.cancel_flag();
-    let mut files = Vec::new();
-    for seed in seeds(sources, base)? {
-        if !seed.is_dir {
-            files.push(seed);
-            continue;
-        }
-        if seed.is_symlink {
-            continue;
-        }
-        let outcome = crate::scanner::collect_recursive(
-            Path::new(seed.path.as_ref()),
-            false,
-            seed.depth + 1,
-            &cancel,
-        );
-        if outcome.canceled {
-            return Err(ApiError::canceled());
-        }
-        if let Some(issue) = outcome.issues.first() {
-            return Err(ApiError::internal(format!(
-                "Auswahl unvollständig: {}: {}",
-                issue.path, issue.detail
-            )));
-        }
-        if !outcome.is_complete() {
-            return Err(ApiError::internal("Auswahl unvollständig"));
-        }
-        files.extend(
-            outcome
-                .entries
-                .into_iter()
-                .filter(|entry| !entry.is_dir && compiled.matches(entry, base)),
-        );
-    }
-    let snapshot =
-        crate::filter::tree::clipboard_snapshot(files, base).map_err(ApiError::invalid)?;
-    Ok(snapshot
-        .into_iter()
-        .map(|file| (file.abs, file.rel))
-        .collect())
-}
+#[cfg(test)]
+#[path = "transfer_tests.rs"]
+mod tests;

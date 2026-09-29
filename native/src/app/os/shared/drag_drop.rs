@@ -1,13 +1,15 @@
 use super::prelude::*;
+use super::transfer_route::{parent_dir, TransferPlace, TransferSelection, REMOTE_MOVE_REFUSED};
+use super::transfer_selection::os_paths_selection;
 use super::*;
 
 impl App {
-    /// Whether the current view can accept dropped files — a local folder, or a
-    /// remote folder (files are uploaded via the backend).
+    /// The folder the current view accepts dropped files into — any open
+    /// local or remote folder.
     pub(in crate::app) fn drop_target(&self) -> Option<String> {
         if self.root_path.is_empty() {
             None
-        } else if self.remote.is_some() || is_local_style(&self.root_path) {
+        } else if self.remote.is_some() || is_local_path(&self.root_path) {
             Some(self.root_path.clone())
         } else {
             None
@@ -15,7 +17,8 @@ impl App {
     }
 
     /// Handle files dropped onto the window from the OS (Explorer, desktop, …).
-    /// They land in the current folder — copy by default, move with Shift held.
+    /// They land in the current folder — copy by default, move with Shift held
+    /// (local folders only). Starts at once like a paste.
     pub(in crate::app) fn handle_os_drop(&mut self, ctx: &egui::Context) {
         let (paths, shift) = ctx.input(|i| {
             let p: Vec<String> = i
@@ -30,33 +33,22 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        // Remote view → upload the dropped files into the current remote folder.
-        if let Some(rs) = &self.remote {
-            if shift {
-                self.error_msg = Some("Verschieben zu Remote wird nicht unterstützt. Bitte ohne Umschalttaste kopieren; die Quellen bleiben unverändert.".to_string());
-                return;
-            }
-            self.start_remote_upload(paths, rs.backend.clone(), self.root_path.clone());
+        if self.drop_target().is_none() {
+            self.error_msg = Some("Ablegen nur in einem geöffneten Ordner möglich.".to_string());
             return;
         }
-        let dest = match self.drop_target() {
-            Some(p) => PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR)),
-            None => {
-                self.error_msg = Some("Ablegen nur in einem lokalen Ordner möglich.".to_string());
-                return;
-            }
+        let Some((target, target_dir)) = self.tab_place(self.active_tab) else {
+            return;
         };
-        let n = paths.len();
-        if self.copy_paths_into(paths, dest, shift) {
-            self.notice = Some((
-                format!(
-                    "📥 {} Element(e) werden {}…",
-                    n,
-                    if shift { "verschoben" } else { "kopiert" }
-                ),
-                std::time::Instant::now(),
-            ));
-        }
+        let Some(selection) = os_paths_selection(paths) else {
+            return;
+        };
+        let mode = if shift {
+            CopyMode::Move
+        } else {
+            CopyMode::Copy
+        };
+        self.submit_paste(&selection, &target, &target_dir, mode);
     }
 
     /// Which tab a screen point drops onto — a tab header, or (in split) a
@@ -71,47 +63,44 @@ impl App {
         None
     }
 
-    /// Drop the dragged files into tab `t`'s folder. Handles every combination
-    /// of local/remote source and target: local→local copy/move, local→remote
-    /// upload, remote→local download, remote→remote copy. Remote moves are
-    /// explicitly unsupported and must never silently become copies.
+    /// Drop the dragged files into tab `t`'s folder: every combination of
+    /// local and remote source and target runs as one engine job. Remote
+    /// moves are explicitly unsupported and never silently become copies.
     pub(in crate::app) fn drop_files_into_tab(&mut self, t: usize, move_files: bool) {
-        // Target backend: Some(handle) if the target tab is a remote view.
-        let (dest_str, tgt_backend) = if t == self.active_tab {
-            (
-                self.root_path.clone(),
-                self.remote.as_ref().map(|rs| rs.backend.clone()),
-            )
-        } else {
-            match self.tabs.get(t) {
-                Some(x) => (
-                    x.root_path.clone(),
-                    x.remote.as_ref().map(|rs| rs.backend.clone()),
-                ),
-                None => return,
-            }
-        };
-        if dest_str.is_empty() {
-            return;
-        }
-        // Keep a root's trailing slash (notably C:/); C: is drive-relative.
-        let dest_fwd = dest_str;
         let src_backend = self.drag_src.take();
         let src_filter = self.drag_filter.take();
-        if move_files && (src_backend.is_some() || tgt_backend.is_some()) {
-            self.drag_files.clear();
-            self.error_msg = Some("Remote-Verschieben wird nicht unterstützt. Bitte kopieren; die Quelldateien bleiben unverändert.".to_string());
+        let dragged = std::mem::take(&mut self.drag_files);
+        let Some((target, target_dir)) = self.tab_place(t) else {
+            return;
+        };
+        let source = match src_backend {
+            Some(backend) => {
+                let label = self
+                    .tab_place(self.drag_source_tab)
+                    .map(|(place, _)| place.label)
+                    .unwrap_or_default();
+                TransferPlace::remote(backend, label)
+            }
+            None => TransferPlace::local(),
+        };
+        if move_files && !(source.is_local() && target.is_local()) {
+            self.error_msg = Some(REMOTE_MOVE_REFUSED.to_string());
             return;
         }
-        let same_namespace = same_drop_namespace(src_backend.as_ref(), tgt_backend.as_ref());
-        let files: Vec<String> = std::mem::take(&mut self.drag_files)
+        if target.is_local() && !is_local_path(&target_dir) {
+            self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
+            return;
+        }
+        // Entries dropped onto their own folder change nothing; entries below
+        // another dragged folder travel with it.
+        let same_place = source.same_place(&target);
+        let files = outermost(dragged)
             .into_iter()
-            .filter(|p| {
-                !same_namespace
-                    || p.rsplit_once('/').map(|(par, _)| par)
-                        != Some(dest_fwd.trim_end_matches('/'))
+            .filter(|path| {
+                !same_place
+                    || parent_dir(path).trim_end_matches('/') != target_dir.trim_end_matches('/')
             })
-            .collect();
+            .collect::<Vec<_>>();
         if files.is_empty() {
             self.notice = Some((
                 "Dateien sind bereits im Ziel-Ordner.".to_string(),
@@ -119,82 +108,20 @@ impl App {
             ));
             return;
         }
-        let n = files.len();
-        match (src_backend, tgt_backend) {
-            // local → local
-            (None, None) => {
-                if !is_local_style(&dest_fwd) {
-                    self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
-                    return;
-                }
-                let dest = PathBuf::from(dest_fwd.replace('/', std::path::MAIN_SEPARATOR_STR));
-                if self.copy_paths_into(files, dest, move_files) {
-                    self.notice = Some((
-                        format!(
-                            "{} Element(e) werden {}…",
-                            n,
-                            if move_files { "verschoben" } else { "kopiert" }
-                        ),
-                        std::time::Instant::now(),
-                    ));
-                }
-            }
-            // local → remote (upload)
-            (None, Some(be)) => {
-                self.start_remote_upload(files, be, dest_fwd);
-            }
-            // remote → local (download)
-            (Some(be), None) => {
-                if !is_local_style(&dest_fwd) {
-                    self.error_msg = Some("Ziel ist kein lokaler Ordner.".to_string());
-                    return;
-                }
-                self.start_remote_download(be, files, dest_fwd, src_filter);
-            }
-            // remote → remote
-            // remote → remote (cross-backend: download to temp, then upload)
-            (Some(src), Some(tgt)) => {
-                self.start_remote_to_remote(src, files, tgt, dest_fwd, src_filter);
-            }
-        }
-    }
-
-    /// Copy remote `files` into another remote folder. Source and target on
-    /// the SAME connection (`Arc::ptr_eq`) copy server-locally through the
-    /// backend when it can; cross-connection copies stream each file through
-    /// a local bridge. Runs as one of several concurrent transfers.
-    pub(in crate::app) fn start_remote_to_remote(
-        &mut self,
-        src: crate::vfs::BackendHandle,
-        files: Vec<String>,
-        tgt: crate::vfs::BackendHandle,
-        dest_root: String,
-        filter: Option<(FilterDef, String)>,
-    ) {
-        self.submit_transfer(super::transfer_jobs::TransferRequest::RemoteCopy {
-            src,
-            files,
-            tgt,
-            dest_root,
-            filter,
-        });
-    }
-
-    /// Download remote `files` into a local folder as one of several
-    /// concurrent transfers, off the UI thread.
-    pub(in crate::app) fn start_remote_download(
-        &mut self,
-        backend: crate::vfs::BackendHandle,
-        files: Vec<String>,
-        dest_local: String,
-        filter: Option<(FilterDef, String)>,
-    ) {
-        self.submit_transfer(super::transfer_jobs::TransferRequest::Download {
-            backend,
-            files,
-            dest_local,
-            filter,
-        });
+        // Local drags carry whole folders as the file clipboard did; remote
+        // drags keep the source view's filter for selected folders.
+        let (base, filter) = if source.is_local() {
+            (Some(parent_dir(&files[0])), None)
+        } else {
+            (None, src_filter)
+        };
+        let selection = TransferSelection::roots(source, files, base).with_filter(filter);
+        let mode = if move_files {
+            CopyMode::Move
+        } else {
+            CopyMode::Copy
+        };
+        self.submit_paste(&selection, &target, &target_dir, mode);
     }
 
     /// Drive an active internal file drag each frame: paint a cursor chip,
@@ -219,53 +146,7 @@ impl App {
                 if !ctx.screen_rect().contains(p) {
                     self.drag_out_started = true;
                     self.drag_active = false;
-                    let files = std::mem::take(&mut self.drag_files);
-                    if shift && self.drag_src.is_some() {
-                        self.drag_src = None;
-                        self.drag_filter = None;
-                        self.error_msg = Some("Remote-Verschieben wird nicht unterstützt. Bitte ohne Umschalttaste kopieren; die Quellen bleiben unverändert.".to_string());
-                        return;
-                    }
-                    let mut cleanup_after_drag = false;
-                    // Remote source → materialize to temp copies first (Explorer
-                    // needs real local paths). May briefly block on the download.
-                    let files = if let Some(be) = self.drag_src.take() {
-                        cleanup_after_drag = true;
-                        match download_remote_paths_for_clipboard(
-                            &*be,
-                            &files,
-                            self.drag_filter.take(),
-                        ) {
-                            Ok(files) => files,
-                            Err(error) => {
-                                self.error_msg = Some(format!("Drag-and-drop: {error}"));
-                                return;
-                            }
-                        }
-                    } else {
-                        self.drag_filter = None;
-                        files
-                    };
-                    let outcome = drag_out_files(&files);
-                    if cleanup_after_drag {
-                        for f in &files {
-                            cleanup_temp_copy(Path::new(f));
-                        }
-                    }
-                    match outcome {
-                        Ok(crate::dragout::DragOutOutcome::Dropped(
-                            crate::dragout::DragOutEffect::Move,
-                        )) if !cleanup_after_drag => self.rescan(),
-                        Ok(crate::dragout::DragOutOutcome::Dropped(
-                            crate::dragout::DragOutEffect::Move,
-                        )) => {
-                            self.error_msg = Some("Das Ziel hat Verschieben gewählt; übertragen wurde nur die temporäre Kopie. Die Remote-Quelldateien bleiben unverändert.".to_string());
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            self.error_msg = Some(format!("Drag-and-drop: {error}"));
-                        }
-                    }
+                    self.drag_out(shift);
                     return;
                 }
             }
@@ -310,18 +191,72 @@ impl App {
         }
     }
 
-    // ─── In-app folder picker (#17) ─────────────────────────────────────
+    /// Hand the dragged entries to the platform's file manager: local files
+    /// as they are, remote entries as virtual files the target reads on
+    /// demand (nothing is downloaded before the drop).
+    fn drag_out(&mut self, shift: bool) {
+        let files = std::mem::take(&mut self.drag_files);
+        let filter = self.drag_filter.take();
+        let Some(backend) = self.drag_src.take() else {
+            match drag_out_files(&files) {
+                Ok(crate::dragout::DragOutOutcome::Dropped(
+                    crate::dragout::DragOutEffect::Move,
+                )) => self.rescan(),
+                Ok(_) => {}
+                Err(error) => self.error_msg = Some(format!("Drag-and-drop: {error}")),
+            }
+            return;
+        };
+        if shift {
+            self.error_msg = Some("Remote-Verschieben wird nicht unterstützt. Bitte ohne Umschalttaste kopieren; die Quellen bleiben unverändert.".to_string());
+            return;
+        }
+        let label = self
+            .tab_place(self.drag_source_tab)
+            .map(|(place, _)| place.label)
+            .unwrap_or_default();
+        let source = crate::transfer::SelectionSource {
+            backend,
+            paths: outermost(files),
+            filter,
+            label,
+        };
+        match drag_out_remote(source) {
+            Ok(crate::dragout::DragOutOutcome::Dropped(crate::dragout::DragOutEffect::Move)) => {
+                self.error_msg = Some("Das Ziel hat Verschieben gewählt; kopiert wurde nur der Inhalt. Die Remote-Quelldateien bleiben unverändert.".to_string());
+            }
+            Ok(_) => {}
+            Err(error) => self.error_msg = Some(format!("Drag-and-drop: {error}")),
+        }
+    }
 }
 
-/// Identical path strings imply identical locations only inside one namespace.
-/// Different backend handles are deliberately treated as different endpoints.
-pub(in crate::app) fn same_drop_namespace(
-    source: Option<&crate::vfs::BackendHandle>,
-    target: Option<&crate::vfs::BackendHandle>,
-) -> bool {
-    match (source, target) {
-        (None, None) => true,
-        (Some(source), Some(target)) => Arc::ptr_eq(source, target),
-        _ => false,
-    }
+/// Dragged paths without those below another dragged folder (a recursive
+/// view can select a folder and its contents together); each ancestor is
+/// looked up once, so large selections stay linear.
+fn outermost(mut paths: Vec<String>) -> Vec<String> {
+    paths.sort();
+    paths.dedup();
+    let dragged: HashSet<&str> = paths
+        .iter()
+        .map(|path| path.trim_end_matches('/'))
+        .collect();
+    let below_dragged = |path: &str| {
+        let mut current = path.trim_end_matches('/');
+        while let Some((parent, _)) = current.rsplit_once('/') {
+            if parent.is_empty() {
+                return false;
+            }
+            if dragged.contains(parent) {
+                return true;
+            }
+            current = parent;
+        }
+        false
+    };
+    paths
+        .iter()
+        .filter(|path| !below_dragged(path.as_str()))
+        .cloned()
+        .collect()
 }

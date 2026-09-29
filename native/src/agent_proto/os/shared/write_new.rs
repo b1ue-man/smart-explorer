@@ -1,11 +1,11 @@
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use super::promotion::ensure_destination_parent_plain;
-use super::session::{emit, Sink};
+use super::session::{emit, Inbound, Sink};
 use super::{Frame, CHUNK};
 
 /// Receive a stream directly into one exclusively created path. The Ready
@@ -15,7 +15,7 @@ pub(crate) fn handle_write_new(
     sink: &Sink,
     id: u64,
     path: &str,
-    inbound: &Receiver<Frame>,
+    inbound: &dyn Inbound,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     ensure_destination_parent_plain(Path::new(path))?;

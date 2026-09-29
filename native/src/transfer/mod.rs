@@ -19,7 +19,11 @@ mod download_file;
 #[path = "os/shared/downloads.rs"]
 mod downloads;
 #[path = "os/shared/engine/mod.rs"]
-mod engine;
+pub(crate) mod engine;
+#[path = "core/engine_names.rs"]
+pub(crate) mod engine_names;
+#[path = "core/engine_policy.rs"]
+pub(crate) mod engine_policy;
 #[path = "os/shared/entries.rs"]
 pub(crate) mod entries;
 #[path = "os/shared/external.rs"]
@@ -88,6 +92,8 @@ pub use access::{AccessAnswer, AccessGate};
 pub use downloads::{
     download_paths_progress, download_remote_clipboard_items, download_remote_paths_for_clipboard,
 };
+pub(crate) use engine::{run_view, JobView, Side};
+pub(crate) use engine_names::parent_path;
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
 pub use flow::{
     acquire_pair, classify_error, flow, flow_for, local_flow, Flow, FlowPermit, FlowSnapshot,
@@ -97,7 +103,7 @@ pub use flow_control::OpOutcome;
 pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, TransferJob};
 pub use lane::{
     launch_transfer, ActiveTransfer, FinishedTransfer, LaunchTransfer, TransferLane,
-    TransferRequest, MAX_ACTIVE_TRANSFERS,
+    TransferRequest,
 };
 pub use local_stage::download_to_id;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};

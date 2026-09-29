@@ -1,4 +1,4 @@
-use super::api::{drive_request, open_once, parse_generated_id};
+use super::api::{drain, drive_request, open_once};
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::resumable::{self, Completion, REQUEST_TIMEOUT};
 use super::GDriveBackend;
@@ -91,7 +91,8 @@ impl GDriveBackend {
             ),
             None => ("POST", format!("{upload}?uploadType=resumable&fields=id")),
         };
-        let session = match initiate(method, &init_url, &bearer, size, &metadata) {
+        let agent = self.http.api();
+        let session = match initiate(&agent, method, &init_url, &bearer, size, &metadata) {
             Ok(location) => location,
             Err(error) => {
                 // A retried create can receive 409 after the original request
@@ -109,6 +110,7 @@ impl GDriveBackend {
             }
         };
         if resumable::upload(
+            &agent,
             &session,
             spool,
             size,
@@ -145,7 +147,8 @@ impl GDriveBackend {
             cloud_urlenc(target_id)
         );
         let bearer = format!("Bearer {}", self.bearer()?);
-        let session = match initiate("PATCH", &url, &bearer, size, "{}") {
+        let agent = self.http.api();
+        let session = match initiate(&agent, "PATCH", &url, &bearer, size, "{}") {
             Ok(location) => location,
             Err(error) => {
                 if self
@@ -158,6 +161,7 @@ impl GDriveBackend {
             }
         };
         resumable::upload(
+            &agent,
             &session,
             spool,
             size,
@@ -171,19 +175,20 @@ impl GDriveBackend {
         self.verify_uploaded_id(target_id, size, expected_md5)
     }
 
-    fn generate_upload_id(&self) -> VfsResult<String> {
-        let url = self.api_url("files/generateIds?count=1&space=drive&type=files");
-        parse_generated_id(&self.get_json(&url)?)
-    }
-
+    /// The ID a create at `key` uses: the one an earlier, possibly committed
+    /// attempt reserved, else a new one that stays reserved until the upload
+    /// is verified (a retry then gets 409 instead of a second file).
     fn reserved_upload_id(&self, key: &str) -> VfsResult<String> {
         if let Some(id) = self.pending_upload_ids_guard()?.get(key).cloned() {
             return Ok(id);
         }
-        let id = self.generate_upload_id()?;
-        self.pending_upload_ids_guard()?
-            .insert(key.to_string(), id.clone());
-        Ok(id)
+        let id = self.take_generated_id()?;
+        // A concurrent writer of the same path may have reserved one meanwhile.
+        Ok(self
+            .pending_upload_ids_guard()?
+            .entry(key.to_string())
+            .or_insert(id)
+            .clone())
     }
 
     fn uploaded_id_matches(
@@ -193,7 +198,8 @@ impl GDriveBackend {
         expected_md5: &str,
     ) -> VfsResult<bool> {
         let url = self.api_url(&format!(
-            "files/{}?fields=id,size,trashed,md5Checksum", cloud_urlenc(id)
+            "files/{}?fields=id,size,trashed,md5Checksum",
+            cloud_urlenc(id)
         ));
         Ok(uploaded_metadata_matches(
             &self.get_json(&url)?,
@@ -232,13 +238,13 @@ impl GDriveBackend {
 }
 
 pub(super) fn initiate(
+    agent: &ureq::Agent,
     method: &str,
     url: &str,
     bearer: &str,
     size: u64,
     metadata: &str,
 ) -> VfsResult<String> {
-    let agent = ureq::AgentBuilder::new().redirects(0).build();
     let size = size.to_string();
     let response = open_once(drive_request(
         agent
@@ -261,15 +267,14 @@ fn initiation_location(response: ureq::Response) -> VfsResult<String> {
             "Drive resumable initiation returned HTTP {status}: {body}"
         )));
     }
-    response
-        .header("Location")
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Drive resumable initiation has no Location header",
-            )
-        })
+    let location = response.header("Location").map(str::to_owned);
+    drain(response);
+    location.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Drive resumable initiation has no Location header",
+        )
+    })
 }
 
 fn uploaded_metadata_matches(
@@ -375,8 +380,13 @@ mod tests {
     #[test]
     fn generated_id_and_uploaded_metadata_are_strict() {
         let generated = serde_json::json!({"ids": ["known-id"]});
-        assert_eq!(parse_generated_id(&generated).unwrap(), "known-id");
-        assert!(parse_generated_id(&serde_json::json!({"ids": []})).is_err());
+        assert_eq!(
+            super::super::id_pool::parse_generated_ids(&generated).unwrap(),
+            ["known-id"]
+        );
+        assert!(
+            super::super::id_pool::parse_generated_ids(&serde_json::json!({"ids": []})).is_err()
+        );
 
         let ok: ureq::Response =
             "HTTP/1.1 200 OK\r\nLocation: https://www.googleapis.com/upload/x\r\n\r\n"

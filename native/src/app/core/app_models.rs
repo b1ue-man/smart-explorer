@@ -1,8 +1,6 @@
 use super::prelude::*;
 
 pub(in crate::app) const APP_ERROR_LOG_LIMIT: usize = 200;
-#[cfg(all(test, windows))]
-pub(in crate::app) use crate::transfer::TransferMsg;
 pub(in crate::app) use crate::transfer::{TransferProgress, TEMP_SESSION_PID_FILE};
 
 // ─── Own context-menu command IDs (>= shell_menu::OWN_ID_BASE) ─────────────

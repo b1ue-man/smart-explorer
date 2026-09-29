@@ -1,12 +1,19 @@
-use super::api::is_rate_limited;
+use super::api::drain;
+use super::overload::{jittered, pause, Backoff};
+pub(super) use super::resumable_session::Bearer;
+use super::resumable_session::{request_failure, send_authenticated, RequestFailure, Session};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::time::Duration;
 
-const CHUNK_SIZE: usize = 8 * 1024 * 1024;
+pub(super) const CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const MAX_RETRIES: usize = 6;
 const MAX_NO_PROGRESS: usize = 6;
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// First wait after a failed chunk request, then doubling: the former
+/// schedule (250 ms << failures, from 500 ms up to 8 s), now with jitter.
+const FIRST_RETRY: Duration = Duration::from_millis(500);
+const MAX_RETRY: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Completion {
@@ -14,10 +21,178 @@ pub(super) enum Completion {
     VerifyExpected,
 }
 
+/// The upload's bytes by offset: a disk spool, or the chunk a streaming writer
+/// still holds in memory. Bodies stream from there, so a chunk request needs
+/// no copy of its bytes (and no unreserved buffer, plan K7).
+pub(super) trait ChunkSource {
+    /// Exactly `len` bytes of the upload starting at `offset`.
+    fn body(&mut self, offset: u64, len: usize) -> io::Result<Box<dyn Read + '_>>;
+}
+
+/// Where `Resumable::send_until` stopped.
+pub(super) enum Sent {
+    /// The server keeps every byte below this offset.
+    Confirmed(u64),
+    Complete(Completion),
+}
+
+/// One resumable upload session and the bytes the server confirmed. Content
+/// requests are never replayed blindly: after a failure the session status
+/// tells which bytes arrived, and only the rest is sent again.
+pub(super) struct Resumable {
+    session: Session,
+    total: u64,
+    expected_id: String,
+    confirmed: u64,
+    sent: u64,
+}
+
+impl Resumable {
+    pub(super) fn new(
+        agent: ureq::Agent,
+        location: &str,
+        total: u64,
+        expected_id: &str,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            session: Session::new(agent, location)?,
+            total,
+            expected_id: expected_id.to_string(),
+            confirmed: 0,
+            sent: 0,
+        })
+    }
+
+    /// Send the bytes from the confirmed offset up to `limit` (the whole rest
+    /// when `limit` is the total) in requests of at most `max_chunk` bytes,
+    /// resending whatever the server did not keep, until it confirmed `limit`
+    /// or completed the upload.
+    pub(super) fn send_until(
+        &mut self,
+        source: &mut dyn ChunkSource,
+        limit: u64,
+        max_chunk: usize,
+        bearer: &mut Bearer<'_>,
+    ) -> io::Result<Sent> {
+        let mut offset = self.confirmed;
+        let mut failures = 0usize;
+        let mut no_progress = 0usize;
+        let mut query_status = false;
+        let mut completion_possible = false;
+        let mut backoff = Backoff::new(FIRST_RETRY, MAX_RETRY);
+        loop {
+            if !query_status && offset >= limit {
+                // Nothing left below `limit` (the caller asked for bytes that
+                // are already confirmed).
+                return Ok(if limit >= self.total {
+                    Sent::Complete(Completion::VerifyExpected)
+                } else {
+                    Sent::Confirmed(offset)
+                });
+            }
+            let (result, submitted) = if query_status {
+                let result = send_authenticated(bearer, |auth| {
+                    self.session
+                        .status_request(auth, self.total)
+                        .send_bytes(&[])
+                })?;
+                (result, self.sent)
+            } else {
+                let wanted = (limit - offset).min(max_chunk as u64) as usize;
+                // A source that no longer holds these bytes fails here, not
+                // as a transport error that would be retried.
+                drop(source.body(offset, wanted)?);
+                let end = offset + wanted as u64;
+                completion_possible = end == self.total;
+                let result = send_authenticated(bearer, |auth| {
+                    let body = source.body(offset, wanted).map_err(ureq::Error::from)?;
+                    // The explicit length keeps ureq from chunking the body.
+                    self.session
+                        .content_request(auth)
+                        .set("Content-Length", &wanted.to_string())
+                        .set(
+                            "Content-Range",
+                            &format!("bytes {offset}-{}/{}", end.saturating_sub(1), self.total),
+                        )
+                        .send(body)
+                })?;
+                self.sent = self.sent.max(end);
+                (result, end)
+            };
+
+            match result {
+                Ok(response) => {
+                    failures = 0;
+                    match classify(
+                        response,
+                        &mut self.session,
+                        self.total,
+                        self.confirmed,
+                        Some(submitted),
+                        &self.expected_id,
+                    )? {
+                        UploadStatus::Complete(done) => return Ok(Sent::Complete(done)),
+                        UploadStatus::Offset(next) => {
+                            completion_possible = false;
+                            if next <= self.confirmed {
+                                wait_for_progress(
+                                    &mut no_progress,
+                                    "Drive upload made no progress",
+                                )?;
+                            } else {
+                                self.confirmed = next;
+                                no_progress = 0;
+                            }
+                            offset = next;
+                            query_status = false;
+                            if next >= limit {
+                                return Ok(Sent::Confirmed(next));
+                            }
+                        }
+                    }
+                }
+                Err(error) => match request_failure(error) {
+                    RequestFailure::Transient(error) => {
+                        failures += 1;
+                        let wait = if failures > MAX_RETRIES {
+                            None
+                        } else {
+                            backoff.wait_after(&error)
+                        };
+                        let Some(wait) = wait else {
+                            return ambiguous_or_error(completion_possible, error)
+                                .map(Sent::Complete);
+                        };
+                        pause(wait);
+                        query_status = true;
+                    }
+                    RequestFailure::Hard(_) if query_status && completion_possible => {
+                        return Ok(Sent::Complete(Completion::VerifyExpected));
+                    }
+                    RequestFailure::Hard(error) => return Err(error),
+                },
+            }
+        }
+    }
+}
+
+struct SpoolSource<'a> {
+    spool: &'a mut File,
+}
+
+impl ChunkSource for SpoolSource<'_> {
+    fn body(&mut self, offset: u64, len: usize) -> io::Result<Box<dyn Read + '_>> {
+        self.spool.seek(SeekFrom::Start(offset))?;
+        Ok(Box::new(self.spool.by_ref().take(len as u64)))
+    }
+}
+
+/// Upload a complete spool through one session in chunks of `CHUNK_SIZE`.
 // `ureq::Error` remains intact so status responses can be retried and classified
 // with their response bodies without changing the caller-visible error behavior.
 #[allow(clippy::result_large_err)]
 pub(super) fn upload<GetBearer, RefreshBearer>(
+    agent: &ureq::Agent,
     location: &str,
     spool: &mut File,
     total: u64,
@@ -29,118 +204,53 @@ where
     GetBearer: FnMut() -> io::Result<String>,
     RefreshBearer: FnMut() -> io::Result<String>,
 {
-    let mut session = Session::new(location)?;
+    let mut bearer = Bearer {
+        get: &mut get_bearer,
+        refresh: &mut refresh_bearer,
+    };
+    let mut upload = Resumable::new(agent.clone(), location, total, expected_id)?;
     if total == 0 {
-        return upload_empty(
-            &mut session,
-            expected_id,
-            &mut get_bearer,
-            &mut refresh_bearer,
-        );
+        return upload_empty(&mut upload.session, expected_id, &mut bearer);
     }
+    send_spool(&mut upload, spool, &mut bearer)
+}
 
-    let mut buffer = vec![0u8; CHUNK_SIZE];
-    let mut offset = 0u64;
-    let mut high_water = 0u64;
-    let mut failures = 0usize;
-    let mut no_progress = 0usize;
-    let mut query_status = false;
-    let mut completion_possible = false;
-    loop {
-        let (result, submitted_limit) = if query_status {
-            (
-                send_authenticated(&mut get_bearer, &mut refresh_bearer, |bearer| {
-                    session.status_request(bearer, total).send_bytes(&[])
-                })?,
-                None,
-            )
-        } else {
-            spool.seek(SeekFrom::Start(offset))?;
-            let wanted = (total - offset).min(buffer.len() as u64) as usize;
-            spool.read_exact(&mut buffer[..wanted])?;
-            let limit = offset + wanted as u64;
-            completion_possible = limit == total;
-            let result = send_authenticated(&mut get_bearer, &mut refresh_bearer, |bearer| {
-                session
-                    .content_request(bearer)
-                    .set("Content-Length", &wanted.to_string())
-                    .set(
-                        "Content-Range",
-                        &format!("bytes {offset}-{}/{total}", limit - 1),
-                    )
-                    .send_bytes(&buffer[..wanted])
-            })?;
-            (result, Some(limit))
-        };
-
-        match result {
-            Ok(response) => {
-                failures = 0;
-                match classify(
-                    response,
-                    &mut session,
-                    total,
-                    high_water,
-                    submitted_limit,
-                    expected_id,
-                )? {
-                    UploadStatus::Complete(done) => return Ok(done),
-                    UploadStatus::Offset(next) => {
-                        completion_possible = false;
-                        if next <= high_water {
-                            wait_for_progress(&mut no_progress, "Drive upload made no progress")?;
-                        } else {
-                            high_water = next;
-                            no_progress = 0;
-                        }
-                        offset = next;
-                        query_status = false;
-                    }
-                }
-            }
-            Err(error) => match request_failure(error) {
-                RequestFailure::Transient(error) => {
-                    failures += 1;
-                    if failures > MAX_RETRIES {
-                        return ambiguous_or_error(completion_possible, error);
-                    }
-                    std::thread::sleep(retry_delay(failures));
-                    query_status = true;
-                }
-                RequestFailure::Hard(_) if query_status && completion_possible => {
-                    return Ok(Completion::VerifyExpected);
-                }
-                RequestFailure::Hard(error) => return Err(error),
-            },
-        }
+/// Send the whole (non-empty) spool through `upload` in `CHUNK_SIZE` requests.
+pub(super) fn send_spool(
+    upload: &mut Resumable,
+    spool: &mut File,
+    bearer: &mut Bearer<'_>,
+) -> io::Result<Completion> {
+    let total = upload.total;
+    let mut source = SpoolSource { spool };
+    match upload.send_until(&mut source, total, CHUNK_SIZE, bearer)? {
+        Sent::Complete(done) => Ok(done),
+        // Every byte confirmed without a final answer: verify by exact ID.
+        Sent::Confirmed(_) => Ok(Completion::VerifyExpected),
     }
 }
 
 #[allow(clippy::result_large_err)]
-fn upload_empty<GetBearer, RefreshBearer>(
+fn upload_empty(
     session: &mut Session,
     expected_id: &str,
-    get_bearer: &mut GetBearer,
-    refresh_bearer: &mut RefreshBearer,
-) -> io::Result<Completion>
-where
-    GetBearer: FnMut() -> io::Result<String>,
-    RefreshBearer: FnMut() -> io::Result<String>,
-{
+    bearer: &mut Bearer<'_>,
+) -> io::Result<Completion> {
     let mut failures = 0usize;
     let mut no_progress = 0usize;
     let mut query_status = false;
     let mut completion_possible = false;
+    let mut backoff = Backoff::new(FIRST_RETRY, MAX_RETRY);
     loop {
         let result = if query_status {
-            send_authenticated(get_bearer, refresh_bearer, |bearer| {
-                session.status_request(bearer, 0).send_bytes(&[])
+            send_authenticated(bearer, |auth| {
+                session.status_request(auth, 0).send_bytes(&[])
             })?
         } else {
             completion_possible = true;
-            send_authenticated(get_bearer, refresh_bearer, |bearer| {
+            send_authenticated(bearer, |auth| {
                 session
-                    .content_request(bearer)
+                    .content_request(auth)
                     .set("Content-Length", "0")
                     .send_bytes(&[])
             })?
@@ -160,10 +270,15 @@ where
             Err(error) => match request_failure(error) {
                 RequestFailure::Transient(error) => {
                     failures += 1;
-                    if failures > MAX_RETRIES {
+                    let wait = if failures > MAX_RETRIES {
+                        None
+                    } else {
+                        backoff.wait_after(&error)
+                    };
+                    let Some(wait) = wait else {
                         return ambiguous_or_error(completion_possible, error);
-                    }
-                    std::thread::sleep(retry_delay(failures));
+                    };
+                    pause(wait);
                     query_status = true;
                 }
                 RequestFailure::Hard(_) if query_status && completion_possible => {
@@ -192,7 +307,9 @@ fn classify(
         200 | 201 => completion(response, expected_id).map(UploadStatus::Complete),
         308 => {
             session.update_from(&response)?;
-            let next = confirmed_offset(&response, total, minimum, submitted_limit)?;
+            let next = confirmed_offset(&response, total, minimum, submitted_limit);
+            drain(response);
+            let next = next?;
             if total > 0 && next == total {
                 Ok(UploadStatus::Complete(Completion::VerifyExpected))
             } else {
@@ -245,127 +362,11 @@ fn confirmed_offset(
     Ok(next)
 }
 
-struct Session {
-    url: String,
-    agent: ureq::Agent,
-}
-
-impl Session {
-    fn new(location: &str) -> io::Result<Self> {
-        validate_session_url(location)?;
-        Ok(Self {
-            url: location.to_string(),
-            agent: ureq::AgentBuilder::new().redirects(0).build(),
-        })
-    }
-
-    fn update_from(&mut self, response: &ureq::Response) -> io::Result<()> {
-        let Some(location) = response.header("Location") else {
-            return Ok(());
-        };
-        validate_session_url(location)?;
-        self.url = location.to_string();
-        Ok(())
-    }
-
-    fn content_request(&self, bearer: &str) -> ureq::Request {
-        self.request(bearer)
-    }
-
-    fn status_request(&self, bearer: &str, total: u64) -> ureq::Request {
-        self.request(bearer)
-            .set("Content-Length", "0")
-            .set("Content-Range", &format!("bytes */{total}"))
-    }
-
-    fn request(&self, bearer: &str) -> ureq::Request {
-        self.agent
-            .put(&self.url)
-            .timeout(REQUEST_TIMEOUT)
-            .set("Authorization", bearer)
-    }
-}
-
-fn validate_session_url(location: &str) -> io::Result<()> {
-    let request = ureq::put(location);
-    let parsed = request.request_url().map_err(request_error)?;
-    let url = parsed.as_url();
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Drive upload Location contains credentials or a fragment",
-        ));
-    }
-    let scheme = parsed.scheme().to_ascii_lowercase();
-    let host = parsed.host().to_ascii_lowercase();
-    let google = scheme == "https"
-        && url.port_or_known_default() == Some(443)
-        && (host == "googleapis.com" || host.ends_with(".googleapis.com"));
-    let test_local = cfg!(test)
-        && scheme == "http"
-        && matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
-    if !google && !test_local {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Drive upload Location is not a trusted Google HTTPS URL",
-        ));
-    }
-    Ok(())
-}
-
 fn ambiguous_or_error(possible: bool, error: io::Error) -> io::Result<Completion> {
     if possible {
         Ok(Completion::VerifyExpected)
     } else {
         Err(error)
-    }
-}
-
-fn send_authenticated<GetBearer, RefreshBearer, Build>(
-    get_bearer: &mut GetBearer,
-    refresh_bearer: &mut RefreshBearer,
-    mut build: Build,
-) -> io::Result<Result<ureq::Response, ureq::Error>>
-where
-    GetBearer: FnMut() -> io::Result<String>,
-    RefreshBearer: FnMut() -> io::Result<String>,
-    Build: FnMut(&str) -> Result<ureq::Response, ureq::Error>,
-{
-    let bearer = format!("Bearer {}", get_bearer()?);
-    match build(&bearer) {
-        Err(ureq::Error::Status(401, _)) => {
-            let bearer = format!("Bearer {}", refresh_bearer()?);
-            Ok(build(&bearer))
-        }
-        result => Ok(result),
-    }
-}
-
-enum RequestFailure {
-    Transient(io::Error),
-    Hard(io::Error),
-}
-
-fn request_failure(error: ureq::Error) -> RequestFailure {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let body = response.into_string().unwrap_or_default();
-            let error = io::Error::other(format!("Drive upload HTTP {code}: {body}"));
-            if is_rate_limited(code, &body) {
-                RequestFailure::Transient(error)
-            } else {
-                RequestFailure::Hard(error)
-            }
-        }
-        ureq::Error::Transport(error) => {
-            RequestFailure::Transient(io::Error::other(error.to_string()))
-        }
-    }
-}
-
-fn request_error(error: ureq::Error) -> io::Error {
-    match request_failure(error) {
-        RequestFailure::Transient(error) | RequestFailure::Hard(error) => error,
     }
 }
 
@@ -381,16 +382,14 @@ fn wait_for_progress(retries: &mut usize, message: &'static str) -> io::Result<(
     if *retries > MAX_NO_PROGRESS {
         return Err(io::Error::new(io::ErrorKind::TimedOut, message));
     }
-    std::thread::sleep(retry_delay(*retries));
+    pause(retry_delay(*retries));
     Ok(())
 }
 
 fn retry_delay(failures: usize) -> Duration {
-    if cfg!(test) {
-        Duration::ZERO
-    } else {
-        Duration::from_millis((250u64 << failures.min(5)).min(8_000))
-    }
+    jittered(Duration::from_millis(
+        (250u64 << failures.min(5)).min(8_000),
+    ))
 }
 
 #[cfg(test)]

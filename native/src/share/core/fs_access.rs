@@ -74,7 +74,10 @@ impl FsAccess {
             source.backend.copy_file(&source.path, &destination.path)
         } else {
             super::fs_copy::copy_between(
-                &*source.backend, &source.path, &*destination.backend, &destination.path,
+                &*source.backend,
+                &source.path,
+                &*destination.backend,
+                &destination.path,
             )
         }
     }
@@ -110,6 +113,29 @@ impl FsAccess {
         staged
             .backend
             .promote_staged(&staged.path, &destination.path)
+    }
+
+    /// Publishes a complete stage only while `destination` is absent; the
+    /// host validates the stage itself, saving the client a round trip.
+    /// `copy` commits a copy stage (ID providers verify their own naming).
+    pub(super) fn promote_no_replace(
+        &self,
+        staged: &str,
+        destination: &str,
+        copy: bool,
+    ) -> io::Result<()> {
+        let staged = self.resolve(staged)?;
+        let destination = self.resolve(destination)?;
+        self.require_same_backend(&staged, &destination)?;
+        if copy {
+            staged
+                .backend
+                .promote_copy_stage(&staged.path, &destination.path)
+        } else {
+            staged
+                .backend
+                .promote_staged_no_replace(&staged.path, &destination.path)
+        }
     }
 
     pub(super) fn require_same_backend(

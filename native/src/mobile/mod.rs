@@ -54,8 +54,6 @@ mod runtime;
 mod scan;
 #[path = "core/scanview.rs"]
 mod scanview;
-#[path = "core/slots.rs"]
-mod slots;
 #[path = "os/shared/store.rs"]
 mod store;
 #[path = "os/shared/sys.rs"]

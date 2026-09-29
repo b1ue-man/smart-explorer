@@ -25,7 +25,8 @@ pub(crate) struct CopyPastePeerFixture {
     host_auth: Arc<Mutex<ShareAuthState>>,
     // Fields drop in declaration order: close both endpoints before removing
     // their exported roots. Backend clones held by a caller then fail closed.
-    _nodes: [NodeGuard; 2],
+    // Index 0 is the client node, index 1 the host node.
+    nodes: [NodeGuard; 2],
     _temporary: tempfile::TempDir,
 }
 
@@ -53,6 +54,22 @@ impl CopyPastePeerFixture {
                 "copy/paste task fixture is not enabled",
             ));
         }
+        Self::loopback(labels)
+    }
+
+    /// Loopback peers for the transfer-engine task tests: two real Iroh nodes
+    /// on 127.0.0.1 without relay, like `backend_tests`, so no runner opt-in
+    /// is needed.
+    pub(super) fn for_transfer_engine_task() -> io::Result<Self> {
+        Self::loopback(["A", "B"])
+    }
+
+    /// The host answers like one before transfer v1 from now on.
+    pub(super) fn pose_as_legacy_host(&self) {
+        self.nodes[1].0.pose_as_legacy_transfer_host();
+    }
+
+    fn loopback(labels: [&str; 2]) -> io::Result<Self> {
         let options = super::transport_options::load(NO_RELAY);
         if options.relay_only || !options.relay_urls.is_empty() {
             return Err(io::Error::new(
@@ -168,7 +185,7 @@ impl CopyPastePeerFixture {
             root_a,
             root_b,
             host_auth,
-            _nodes: [client_node, host_node],
+            nodes: [client_node, host_node],
             _temporary: temporary,
         })
     }
@@ -182,6 +199,13 @@ impl CopyPastePeerFixture {
         Ok(())
     }
 }
+
+#[path = "transfer_engine_task_path_tests.rs"]
+mod transfer_engine_task_path_tests;
+#[path = "transfer_engine_task_support.rs"]
+mod transfer_engine_task_support;
+#[path = "transfer_engine_task_tests.rs"]
+mod transfer_engine_task_tests;
 
 fn identity(name: &str) -> io::Result<ShareIdentity> {
     let secret = iroh::SecretKey::from_bytes(&random_bytes::<32>().map_err(io::Error::other)?);

@@ -47,15 +47,16 @@ pub struct VirtualFile {
     pub mtime_ms: i64,
 }
 
-fn register(name: &str) -> u16 {
+pub(super) fn register(name: &str) -> u16 {
     let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
     (unsafe { RegisterClipboardFormatW(PCWSTR(wide.as_ptr())) }) as u16
 }
 
-/// Unix milliseconds → Windows FILETIME (100ns ticks since 1601).
-fn filetime_from_ms(ms: i64) -> FILETIME {
+/// Unix milliseconds → Windows FILETIME (100ns ticks since 1601). Saturating:
+/// remote servers can report any timestamp.
+pub(super) fn filetime_from_ms(ms: i64) -> FILETIME {
     const EPOCH_DIFF_MS: i64 = 11_644_473_600_000;
-    let ticks = (ms + EPOCH_DIFF_MS).max(0) as u64 * 10_000;
+    let ticks = (ms.saturating_add(EPOCH_DIFF_MS).max(0) as u64).saturating_mul(10_000);
     FILETIME {
         dwLowDateTime: (ticks & 0xFFFF_FFFF) as u32,
         dwHighDateTime: (ticks >> 32) as u32,

@@ -1,10 +1,10 @@
-//! Windows task-runner acceptance for the actual GUI clipboard routing.
-//! The task entrypoint isolates app data and serializes native clipboard tests.
+//! Windows task-runner acceptance for the actual GUI clipboard routing: every
+//! copy only remembers the selection (and offers it to Explorer), every paste
+//! or drop starts one engine job at once. The task entrypoint isolates app
+//! data and serializes native clipboard tests.
 
-use super::clipboard_lifecycle::PreparedTempClipboard;
-use super::clipboard_state::PreparationResult;
-use super::drag_drop::same_drop_namespace;
 use super::prelude::*;
+use super::transfer_route::TransferPlace;
 use super::*;
 use crate::app::shared_platform_helpers::ClipboardEffect;
 use std::time::Duration;
@@ -72,7 +72,7 @@ fn entry(path: &str, is_dir: bool, size: u64) -> FileEntry {
         is_symlink: false,
         hidden: false,
         system: false,
-        depth: 0,
+        depth: 1,
         id: None,
     }
 }
@@ -97,59 +97,41 @@ fn remote(backend: &crate::vfs::BackendHandle) -> crate::connect::RemoteState {
     }
 }
 
-fn finish_upload(app: &mut App, files: u64, transferred_bytes: u64) {
+/// Exactly one transfer was started; wait until the list shows it finished
+/// with `files` files and `bytes` bytes and without any issue.
+fn finish_transfer(app: &mut App, files: u64, bytes: u64) {
     assert_eq!(
-        app.transfers.active.len(),
+        app.transfer_center.lane.active.len(),
         1,
         "exactly one transfer must run: {:?}; {:?}",
         app.error_msg,
         app.notice
     );
-    let mut transfer = app.transfers.active.pop().unwrap_or_else(|| {
-        panic!(
-            "GUI did not start an upload: {:?}; {:?}",
-            app.error_msg, app.notice
-        )
-    });
     let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        let message = transfer
-            .rx
-            .recv_timeout(left)
-            .expect("upload must report terminal completion");
-        if let TransferMsg::Done {
-            progress,
-            errors,
-            canceled,
-            ..
-        } = message
-        {
-            assert!(!canceled, "unexpected transfer cancellation");
-            assert!(errors.is_empty(), "transfer errors: {errors:?}");
-            assert_eq!(progress.errors, 0);
-            assert_eq!(progress.files_done, files);
-            assert_eq!(progress.bytes_done, transferred_bytes);
-            break;
-        }
+    while !app.transfer_center.is_idle() {
+        app.drain_transfers();
+        assert!(Instant::now() < deadline, "transfer never completed");
+        std::thread::sleep(Duration::from_millis(5));
     }
-    transfer
-        .worker
-        .take()
-        .unwrap()
-        .join()
-        .expect("upload worker panicked");
+    let finished = app
+        .transfer_center
+        .finished
+        .front()
+        .expect("the transfer is listed as finished");
+    assert!(!finished.canceled, "unexpected transfer cancellation");
+    assert!(finished.failure.is_none(), "{:?}", finished.failure);
+    assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+    assert_eq!(finished.progress.errors, 0, "{:?}", finished.errors);
+    assert_eq!(finished.progress.files_done, files);
+    assert_eq!(finished.progress.bytes_done, bytes);
     assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
 }
 
-fn finish_preparation(app: &mut App, remote_download: bool) {
+fn finish_preparation(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while app.clip_prepare_rx.is_some() || app.clip_download_rx.is_some() {
-        if remote_download {
-            app.drain_clip_download();
-        } else {
-            app.drain_clip_prepare();
-        }
+        app.drain_clip_prepare();
+        app.drain_clip_download();
         assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
         assert!(
             Instant::now() < deadline,
@@ -158,30 +140,6 @@ fn finish_preparation(app: &mut App, remote_download: bool) {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(app.clipboard_preparation.pending().is_none());
-}
-
-fn assert_owned_result_cleanup(owned: &mut OwnedFiles) {
-    let queued = owned.file("discarded-queued.txt", b"queued");
-    let (tx, rx) = unbounded();
-    assert!(tx
-        .send(PreparedTempClipboard::new(vec![path_text(&queued)]))
-        .is_ok());
-    drop(rx);
-    assert!(
-        !queued.exists(),
-        "dropping queued receiver must release its result"
-    );
-
-    let late = owned.file("discarded-late.txt", b"late");
-    let (tx, rx) = unbounded();
-    drop(rx);
-    let failed_send = tx.send(PreparedTempClipboard::new(vec![path_text(&late)]));
-    assert!(failed_send.is_err());
-    drop(failed_send);
-    assert!(
-        !late.exists(),
-        "a worker completing after receiver disposal must clean up"
-    );
 }
 
 #[test]
@@ -206,9 +164,9 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
         app.update_rx.is_none(),
         "task construction must not launch an update check"
     );
-    assert_owned_result_cleanup(&mut owned);
 
-    // Real local Ctrl+C -> real Windows CF_HDROP -> GUI remote Ctrl+V -> Share.
+    // Local Ctrl+C: real CF_HDROP for Explorer, our entry for the app; the
+    // paste into the Share starts at once (no preparation to wait for).
     let plain_bytes = b"local clipboard -> Share, exact bytes\0\xff";
     let plain = owned.file("local-über.txt", plain_bytes);
     app.root_path = path_text(plain.parent().unwrap());
@@ -222,81 +180,66 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
     assert!(!cut);
     assert_eq!(copied.len(), 1);
     assert_eq!(PathBuf::from(&copied[0]), plain);
+    assert!(app
+        .clip
+        .as_ref()
+        .is_some_and(|clip| clip.is_current(virtual_clipboard_sequence(), None)));
     app.remote = Some(remote(&peer.backend));
     app.root_path = "/A".into();
     app.clipboard_paste_files();
-    finish_upload(&mut app, 1, plain_bytes.len() as u64);
+    finish_transfer(&mut app, 1, plain_bytes.len() as u64);
     assert_eq!(
         std::fs::read(peer.root_a.join("local-über.txt")).unwrap(),
         plain_bytes
     );
     assert_eq!(std::fs::read(&plain).unwrap(), plain_bytes);
 
-    // Pending paste cannot upload the earlier CF_HDROP. A newer local copy
-    // replaces both preparations even if the old worker completes afterwards.
-    let stamp = app.begin_clipboard_preparation().unwrap();
-    let (old_tx, old_rx) = unbounded();
-    app.clip_download_rx = Some(old_rx);
+    // Another program copies: our entry is no longer current and the paste
+    // takes the OS file clipboard instead.
+    let external_bytes = b"copied in Explorer";
+    let external = owned.file("explorer-copy.txt", external_bytes);
+    write_clipboard_files(&[path_text(&external)], ClipboardEffect::Copy).unwrap();
+    assert!(app
+        .clip
+        .as_ref()
+        .is_some_and(|clip| !clip.is_current(virtual_clipboard_sequence(), None)));
+    app.root_path = "/B".into();
     app.clipboard_paste_files();
-    assert!(app.transfers.is_idle());
-    assert_eq!(app.clipboard_preparation.pending(), Some(stamp));
-    assert!(app.notice.as_ref().unwrap().0.contains("vorbereitet"));
-    app.remote = None;
-    app.clipboard_copy_files(false);
-    assert!(app.clip_download_rx.is_none());
-    assert!(app.clipboard_preparation.pending().is_none());
-    let late = owned.file("superseded-worker.txt", b"old worker");
-    let old_result = old_tx.send(PreparationResult {
-        stamp,
-        result: Ok(PreparedTempClipboard::new(vec![path_text(&late)])),
-    });
-    assert!(old_result.is_err());
-    drop(old_result);
-    assert!(!late.exists());
+    finish_transfer(&mut app, 1, external_bytes.len() as u64);
+    assert_eq!(
+        std::fs::read(peer.root_b.join("explorer-copy.txt")).unwrap(),
+        external_bytes
+    );
+    assert!(app.clip.is_none(), "the stale entry is dropped");
 
-    // An external sequence change discards a queued downloaded result without
-    // changing the newer Windows clipboard.
-    let stale = owned.file("externally-superseded.txt", b"stale");
-    let stamp = app.begin_clipboard_preparation().unwrap();
-    let (tx, rx) = unbounded();
-    app.clip_download_rx = Some(rx);
-    assert!(tx
-        .send(PreparationResult {
-            stamp,
-            result: Ok(PreparedTempClipboard::new(vec![path_text(&stale)])),
-        })
-        .is_ok());
-    write_clipboard_files(&[path_text(&plain)], ClipboardEffect::Copy).unwrap();
-    let external_sequence = virtual_clipboard_sequence();
-    app.drain_clip_download();
-    assert!(!stale.exists());
-    assert!(app.clipboard_preparation.pending().is_none());
-    assert_eq!(virtual_clipboard_sequence(), external_sequence);
-
-    // Real filtered preparation publishes OLE descriptors, then own-payload
-    // remote paste keeps the selected folder and nested relative hierarchy.
+    // A filtered local folder: pasting in the app does not wait for the
+    // virtual files Explorer gets; only matching files keep their folders.
     let vault = open_temp_path("vault").unwrap();
     owned.0.push(vault.clone());
     std::fs::create_dir_all(vault.join("docs")).unwrap();
     std::fs::write(vault.join("keep-root.md"), b"root note").unwrap();
     std::fs::write(vault.join("docs/keep-note.md"), b"nested note").unwrap();
     std::fs::write(vault.join("ignored.txt"), b"must not upload").unwrap();
+    app.remote = None;
     app.root_path = path_text(vault.parent().unwrap());
     app.filter = FilterDef::new();
     app.filter.text = "keep".into();
     select(&mut app, entry(&path_text(&vault), true, 0));
     app.clipboard_copy_files(false);
-    assert!(app.clip_prepare_rx.is_some());
-    finish_preparation(&mut app, false);
-    assert_eq!(app.virtual_clip.as_ref().unwrap().1.len(), 2);
+    assert!(app.clip_prepare_rx.is_some(), "virtual files are prepared");
     app.remote = Some(remote(&peer.backend));
     app.root_path = "/B".into();
     app.clipboard_paste_files();
-    finish_upload(
+    finish_transfer(
         &mut app,
         2,
         (b"root note".len() + b"nested note".len()) as u64,
     );
+    finish_preparation(&mut app);
+    assert!(app
+        .clip
+        .as_ref()
+        .is_some_and(|clip| clip.is_current(virtual_clipboard_sequence(), None)));
     assert_eq!(
         std::fs::read(peer.root_b.join("vault/keep-root.md")).unwrap(),
         b"root note"
@@ -311,7 +254,8 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
         "hierarchy must not flatten"
     );
 
-    // Real remote copy/download publication keeps its owned temp file alive.
+    // Remote Ctrl+C downloads nothing; the paste into a local folder is one
+    // engine download.
     app.filter = FilterDef::new();
     app.root_path = "/A".into();
     select(
@@ -319,17 +263,28 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
         entry("/A/local-über.txt", false, plain_bytes.len() as u64),
     );
     app.clipboard_copy_files(false);
-    assert!(app.clip_download_rx.is_some());
-    finish_preparation(&mut app, true);
-    let (downloaded, cut) = read_clipboard_files().unwrap().unwrap();
-    assert!(!cut);
-    assert_eq!(downloaded.len(), 1);
-    let retained = PathBuf::from(&downloaded[0]);
-    owned.0.push(retained.clone());
-    assert_ne!(retained, plain);
-    assert_eq!(std::fs::read(&retained).unwrap(), plain_bytes);
+    assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
+    assert!(app.transfer_center.is_idle(), "copying starts no transfer");
+    let download_dir = open_temp_path("download-target").unwrap();
+    owned.0.push(download_dir.clone());
+    std::fs::create_dir_all(&download_dir).unwrap();
+    app.remote = None;
+    app.root_path = path_text(&download_dir);
+    app.entries.clear();
+    app.clipboard_paste_files();
+    finish_transfer(&mut app, 1, plain_bytes.len() as u64);
+    assert_eq!(
+        std::fs::read(download_dir.join("local-über.txt")).unwrap(),
+        plain_bytes
+    );
 
     // Neither a remote cut nor a local cut pasted to remote may silently copy.
+    app.remote = Some(remote(&peer.backend));
+    app.root_path = "/A".into();
+    select(
+        &mut app,
+        entry("/A/local-über.txt", false, plain_bytes.len() as u64),
+    );
     let sequence = virtual_clipboard_sequence();
     app.clipboard_copy_files(true);
     assert!(app
@@ -337,18 +292,12 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
         .as_deref()
         .unwrap()
         .contains("nicht unterstützt"));
-    assert!(app.clip_download_rx.is_none());
     assert_eq!(virtual_clipboard_sequence(), sequence);
-    assert_eq!(
-        std::fs::read(peer.root_a.join("local-über.txt")).unwrap(),
-        plain_bytes
-    );
-    assert!(retained.exists());
     app.error_msg = None;
     write_clipboard_files(&[path_text(&plain)], ClipboardEffect::Move).unwrap();
     app.root_path = "/B".into();
     app.clipboard_paste_files();
-    assert!(app.transfers.is_idle());
+    assert!(app.transfer_center.is_idle());
     assert!(app
         .error_msg
         .as_deref()
@@ -357,25 +306,16 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
     assert_eq!(std::fs::read(&plain).unwrap(), plain_bytes);
     assert!(!peer.root_b.join("local-über.txt").exists());
 
-    // Same textual /A parent on different actual peer handles must transfer.
-    assert!(same_drop_namespace(None, None));
-    assert!(same_drop_namespace(
-        Some(&peer.backend),
-        Some(&peer.backend.clone())
-    ));
-    assert!(!same_drop_namespace(None, Some(&peer.backend)));
-    assert!(!same_drop_namespace(
-        Some(&peer.backend),
-        Some(&other.backend)
-    ));
+    // Equal textual /A paths on two different peers are two places.
+    assert!(!TransferPlace::remote(peer.backend.clone(), "eins")
+        .same_place(&TransferPlace::remote(other.backend.clone(), "zwei")));
     app.error_msg = None;
     app.remote = Some(remote(&other.backend));
     app.root_path = "/A".into();
     app.drag_src = Some(peer.backend.clone());
     app.drag_files = vec!["/A/local-über.txt".into()];
     app.drop_files_into_tab(app.active_tab, false);
-    // Cross-peer accounting includes the download and upload transfer legs.
-    finish_upload(&mut app, 1, plain_bytes.len() as u64 * 2);
+    finish_transfer(&mut app, 1, plain_bytes.len() as u64);
     assert_eq!(
         std::fs::read(other.root_a.join("local-über.txt")).unwrap(),
         plain_bytes
@@ -385,17 +325,17 @@ fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
         plain_bytes
     );
 
-    // Same handle + same parent remains a no-op; a requested remote move is
-    // rejected before starting a worker or mutating either tree.
+    // Dropping onto the same folder of the same peer changes nothing; a
+    // requested remote move is refused before any transfer starts.
     app.drag_src = Some(other.backend.clone());
     app.drag_files = vec!["/A/local-über.txt".into()];
     app.drop_files_into_tab(app.active_tab, false);
-    assert!(app.transfers.is_idle());
+    assert!(app.transfer_center.is_idle());
     app.drag_src = Some(peer.backend.clone());
     app.drag_files = vec!["/A/local-über.txt".into()];
     app.root_path = "/B".into();
     app.drop_files_into_tab(app.active_tab, true);
-    assert!(app.transfers.is_idle());
+    assert!(app.transfer_center.is_idle());
     assert!(app
         .error_msg
         .as_deref()
