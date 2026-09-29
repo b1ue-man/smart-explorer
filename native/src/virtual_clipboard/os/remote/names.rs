@@ -91,7 +91,7 @@ pub(super) struct Namer {
 }
 
 impl Namer {
-    pub(super) fn new(listed: impl Iterator<Item = &str>) -> Self {
+    pub(super) fn new<'a>(listed: impl Iterator<Item = &'a str>) -> Self {
         Self {
             listed: listed.map(fold).collect(),
             placed: HashMap::new(),
