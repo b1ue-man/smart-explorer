@@ -65,7 +65,18 @@ pub(in crate::app) fn file_mtime_ms(p: &Path) -> i64 {
 }
 
 /// A remote file opened for editing in temp mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum RemoteEditPhase {
+    /// Only a private download stage may exist; no editor owns this path yet.
+    Downloading,
+    /// Published locally, but not yet protected by a durable recovery manifest.
+    Downloaded,
+    /// Manifested before handing the path to an editor, which may replace it.
+    Editing,
+}
+
 pub(in crate::app) struct RemoteEdit {
+    pub(in crate::app) phase: RemoteEditPhase,
     pub(in crate::app) temp: PathBuf,
     pub(in crate::app) backend: crate::vfs::BackendHandle,
     pub(in crate::app) remote_path: String,

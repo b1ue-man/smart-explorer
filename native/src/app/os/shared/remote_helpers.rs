@@ -23,7 +23,7 @@ pub(in crate::app) use recovery_manifest::sync_recovery_manifest;
 pub(in crate::app) use temp::safe_temp_name;
 pub(in crate::app) use temp::{
     cleanup_session_temp, cleanup_temp_copy, file_mtime_ms, init_temp_session, open_temp_path,
-    temp_root, RemoteEdit, SaveResult,
+    temp_root, RemoteEdit, RemoteEditPhase, SaveResult,
 };
 
 /// Line-merge editor state: a side-by-side aligned diff of the two versions.

@@ -1,5 +1,6 @@
 use super::temp::{
-    read_session_pid, session_tag, session_temp_dir, temp_root, RemoteEdit, PRESERVE_MARKER,
+    read_session_pid, session_tag, session_temp_dir, temp_root, RemoteEdit, RemoteEditPhase,
+    PRESERVE_MARKER,
 };
 use crate::app::app_models::TEMP_SESSION_PID_FILE;
 use crate::app::platform_helpers::{process_running, replace_file_atomic};
@@ -222,6 +223,11 @@ pub(in crate::app) fn sync_recovery_manifest(remote_edits: &[RemoteEdit]) -> io:
 }
 
 fn recovery_manifest_entry(edit: &RemoteEdit) -> io::Result<Option<RecoveryManifestEntry>> {
+    if edit.phase == RemoteEditPhase::Downloading {
+        // A worker may still be writing its private .part, or waiting for the
+        // network. It has never handed user-editable content to an application.
+        return Ok(None);
+    }
     let directory = session_temp_dir();
     require_safe_session_directory(&directory)?;
     let Some(parent) = edit.temp.parent() else {
@@ -239,53 +245,12 @@ fn recovery_manifest_entry(edit: &RemoteEdit) -> io::Result<Option<RecoveryManif
             ),
         ));
     }
-    let parent_metadata = match std::fs::symlink_metadata(parent) {
-        Ok(metadata) => metadata,
-        // A registered edit had a real downloaded file before it was handed
-        // to the editor. NotFound can be the brief delete/rename window of an
-        // atomic Obsidian save, so fail closed and keep the previous manifest.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "editor temp parent is temporarily absent: {}",
-                    parent.display()
-                ),
-            ));
-        }
-        Err(error) => return Err(error),
-    };
-    if !parent_metadata.is_dir() || crate::app::upload_is_link_like(&parent_metadata) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "editor temp parent is not a safe directory: {}",
-                parent.display()
-            ),
-        ));
-    }
-    let metadata = match std::fs::symlink_metadata(&edit.temp) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "editor temp copy is temporarily absent: {}",
-                    edit.temp.display()
-                ),
-            ));
-        }
-        Err(error) => return Err(error),
-    };
-    if !metadata.is_file() || crate::app::upload_is_link_like(&metadata) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "editor temp copy is not a safe regular file: {}",
-                edit.temp.display()
-            ),
-        ));
-    }
+    // Only a copy already durably registered before editor launch can be
+    // absent during an atomic save. Retain that entry in the new snapshot so
+    // it neither loses recovery nor blocks a different completed download.
+    let allow_missing = edit.phase == RemoteEditPhase::Editing;
+    validate_edit_path(parent, true, allow_missing)?;
+    validate_edit_path(&edit.temp, false, allow_missing)?;
     Ok(Some(RecoveryManifestEntry {
         name: edit.name.clone(),
         local: edit.temp.to_string_lossy().into_owned(),
@@ -293,6 +258,24 @@ fn recovery_manifest_entry(edit: &RemoteEdit) -> io::Result<Option<RecoveryManif
         dirty: edit.dirty,
         uploading: edit.uploading,
     }))
+}
+
+fn validate_edit_path(path: &Path, directory: bool, allow_missing: bool) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata)
+            if !crate::app::upload_is_link_like(&metadata)
+                && if directory { metadata.is_dir() } else { metadata.is_file() } =>
+        {
+            Ok(())
+        }
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("editor temp path is not a safe {}: {}",
+                if directory { "directory" } else { "regular file" }, path.display()),
+        )),
+        Err(error) if allow_missing && error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn remove_current_manifest(directory: &Path) -> io::Result<()> {
